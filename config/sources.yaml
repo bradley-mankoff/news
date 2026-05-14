@@ -1,0 +1,194 @@
+# Bias-aware topic discovery providers.
+#
+# Stage flags:
+# - can_seed_topics: headlines can become topic candidates.
+# - can_validate_topics: headlines can validate topic candidates generated elsewhere.
+# - can_enrich_coverage: provider is used later for article gathering, not topic choice.
+#
+# This is deliberately soft and process-oriented. AP/Reuters can validate prominence
+# without seeding every topic, while BBC/Al Jazeera add broader world framing to the
+# seed pool. The final report is still synthesized only from gathered article summaries.
+top_funnel_providers:
+  - key: reddit_news
+    name: Reddit r/news Top Today
+    provider_type: social_aggregation
+    intended_role: broad public-interest topic seeding
+    region: us
+    frame: us/western
+    weight: 1.0
+    can_seed_topics: true
+    can_validate_topics: false
+    can_enrich_coverage: false
+    fetcher: reddit_top_json
+    url: https://www.reddit.com/r/news/top/.json?t=day&limit=50
+  - key: google_news_top
+    name: Google News Top Stories
+    provider_type: algorithmic_aggregation
+    intended_role: mainstream US-aware seed and validation signal
+    region: us
+    frame: us/western
+    weight: 1.0
+    can_seed_topics: true
+    can_validate_topics: true
+    can_enrich_coverage: false
+    fetcher: rss
+    url: https://news.google.com/rss?hl=en-US&gl=US&ceid=US:en
+  - key: bbc_world_top
+    name: BBC World News
+    provider_type: public_media_rss
+    intended_role: global western seed and validation counterweight
+    region: uk/global
+    frame: global/western
+    weight: 0.8
+    can_seed_topics: true
+    can_validate_topics: true
+    can_enrich_coverage: false
+    fetcher: rss
+    url: https://feeds.bbci.co.uk/news/world/rss.xml
+  - key: al_jazeera_top
+    name: Al Jazeera
+    provider_type: international_rss
+    intended_role: non-western and global-south seed and validation counterweight
+    region: qatar/global
+    frame: global south/non-western
+    weight: 0.9
+    can_seed_topics: true
+    can_validate_topics: true
+    can_enrich_coverage: false
+    fetcher: rss
+    url: https://www.aljazeera.com/xml/rss/all.xml
+  - key: ap_top
+    name: Associated Press
+    provider_type: wire_service_rss
+    intended_role: validation signal for broad mainstream prominence
+    region: us/global
+    frame: us/western
+    weight: 0.85
+    can_seed_topics: false
+    can_validate_topics: true
+    can_enrich_coverage: false
+    fetcher: rss
+    url: https://news.google.com/rss/search?q=when:24h+source:Associated+Press&hl=en-US&gl=US&ceid=US:en
+  - key: reuters_top
+    name: Reuters
+    provider_type: wire_service_rss
+    intended_role: validation signal for global market and geopolitical prominence
+    region: global
+    frame: global/western
+    weight: 0.85
+    can_seed_topics: false
+    can_validate_topics: true
+    can_enrich_coverage: false
+    fetcher: rss
+    url: https://news.google.com/rss/search?q=when:24h+source:Reuters&hl=en-US&gl=US&ceid=US:en
+
+# Article source pool used after topic discovery.
+#
+# Usage:
+# - Each item needs a stable key, display name, RSS/Atom URL, and optional homepage.
+# - Google News source-scoped RSS URLs are acceptable when an outlet does not expose
+#   a reliable direct feed.
+# - Article sources default to provider_type: article_feed, intended_role: article enrichment,
+#   weight: 1.0, can_seed_topics: false, can_validate_topics: false, can_enrich_coverage: true.
+# - This is deliberately flat: no Iran/US project forks.
+sources:
+  - key: Reuters
+    name: Reuters
+    region: global/western
+    url: https://news.google.com/rss/search?q=when:24h+source:Reuters&hl=en-US&gl=US&ceid=US:en
+    homepage: https://www.reuters.com/
+  - key: AP News
+    name: Associated Press
+    region: us/western
+    url: https://news.google.com/rss/search?q=when:24h+source:Associated+Press&hl=en-US&gl=US&ceid=US:en
+    homepage: https://apnews.com/
+  - key: AFP
+    name: Agence France-Presse
+    region: global/western
+    url: https://news.google.com/rss/search?q=when:24h+source:AFP&hl=en-US&gl=US&ceid=US:en
+    homepage: https://www.afp.com/
+  - key: UPI
+    name: United Press International
+    region: us/western
+    url: https://rss.upi.com/news/tn_int.rss
+    homepage: https://www.upi.com/
+  - key: NPR
+    name: NPR
+    region: us/western
+    url: https://feeds.npr.org/1001/rss.xml
+    homepage: https://www.npr.org/
+  - key: NPR Politics
+    name: NPR Politics
+    region: us/western
+    url: https://feeds.npr.org/1014/rss.xml
+    homepage: https://www.npr.org/politics
+  - key: Politico
+    name: POLITICO
+    region: us/western
+    url: https://rss.politico.com/politics-news.xml
+    homepage: https://www.politico.com/
+  - key: The Hill
+    name: The Hill
+    region: us/western
+    url: https://thehill.com/feed/
+    homepage: https://thehill.com/
+  - key: BBC World
+    name: BBC World News
+    region: uk/western
+    url: https://feeds.bbci.co.uk/news/world/rss.xml
+    homepage: https://www.bbc.com/news/world
+  - key: France 24
+    name: France 24
+    region: france/western
+    url: https://www.france24.com/en/rss
+    homepage: https://www.france24.com/en/
+  - key: Deutsche Welle
+    name: Deutsche Welle
+    region: germany/western
+    url: https://rss.dw.com/rss/en/top/rss.xml
+    homepage: https://www.dw.com/
+  - key: Al Jazeera
+    name: Al Jazeera
+    region: qatar/global south
+    url: https://www.aljazeera.com/xml/rss/all.xml
+    homepage: https://www.aljazeera.com/
+  - key: Xinhua
+    name: Xinhua News Agency
+    region: china/non-western
+    url: https://news.google.com/rss/search?q=when:24h+source:Xinhua&hl=en-US&gl=US&ceid=US:en
+    homepage: https://english.news.cn/
+  - key: Anadolu Agency
+    name: Anadolu Agency
+    region: turkey/non-western
+    url: https://news.google.com/rss/search?q=when:24h+source:Anadolu+Agency&hl=en-US&gl=US&ceid=US:en
+    homepage: https://www.aa.com.tr/en
+  - key: Yonhap
+    name: Yonhap News Agency
+    region: south korea/non-western
+    url: https://news.google.com/rss/search?q=when:24h+source:Yonhap&hl=en-US&gl=US&ceid=US:en
+    homepage: https://en.yna.co.kr/
+  - key: NDTV
+    name: NDTV
+    region: india/non-western
+    url: https://feeds.feedburner.com/ndtvnews-world-news
+    homepage: https://www.ndtv.com/
+  - key: Dawn
+    name: Dawn
+    region: pakistan/non-western
+    url: https://www.dawn.com/feeds/home
+    homepage: https://www.dawn.com/
+  - key: The Hindu
+    name: The Hindu
+    region: india/non-western
+    url: https://www.thehindu.com/feeder/default.rss
+    homepage: https://www.thehindu.com/
+  - key: SCMP
+    name: South China Morning Post
+    region: hong kong/non-western
+    url: https://news.google.com/rss/search?q=when:24h+source:South+China+Morning+Post&hl=en-US&gl=US&ceid=US:en
+    homepage: https://www.scmp.com/
+  - key: CNA
+    name: CNA
+    region: singapore/non-western
+    url: https://www.channelnewsasia.com/api/v1/rss-outbound-feed?_format=xml
+    homepage: https://www.channelnewsasia.com/

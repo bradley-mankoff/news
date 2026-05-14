@@ -1,0 +1,25 @@
+# Python/editor noise
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.DS_Store
+.cursor/
+.vscode/
+
+# Local secrets/config that should not be sent as context by accident
+.env
+env.json
+
+# Legacy generated output
+us_outputs/
+
+# >>> news-pipeline latest output >>>
+# Refreshed by news_pipeline.config.load_runtime_config().
+# Ignore dated run output folders, then re-include this run.
+output/daily_outputs/*
+!output/daily_outputs/2026-05-13/
+!output/daily_outputs/2026-05-13/**
+# <<< news-pipeline latest output <<<

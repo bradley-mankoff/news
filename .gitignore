@@ -1,0 +1,22 @@
+# Secrets
+env.json
+.env
+.env.*
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.python-version
+
+# Output / generated files
+output/
+
+# MacOS
+.DS_Store
+
+# VS Code
+.vscode/
+
+# Cursor
+.cursorignore
