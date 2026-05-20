@@ -1,0 +1,7 @@
+# Active topics for the default predefined-topic news run.
+#
+# Topic IDs must exist in config/topics.yaml. The order here is the report order.
+topic_ids:
+  - iran_war
+  - us_economy
+  - us_politics

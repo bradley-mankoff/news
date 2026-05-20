@@ -1,88 +1,4 @@
-# Bias-aware topic discovery providers.
-#
-# Stage flags:
-# - can_seed_topics: headlines can become topic candidates.
-# - can_validate_topics: headlines can validate topic candidates generated elsewhere.
-# - can_enrich_coverage: provider is used later for article gathering, not topic choice.
-#
-# This is deliberately soft and process-oriented. AP/Reuters can validate prominence
-# without seeding every topic, while BBC/Al Jazeera add broader world framing to the
-# seed pool. The final report is still synthesized only from gathered article summaries.
-top_funnel_providers:
-  - key: reddit_news
-    name: Reddit r/news Top Today
-    provider_type: social_aggregation
-    intended_role: broad public-interest topic seeding
-    region: us
-    frame: us/western
-    weight: 1.0
-    can_seed_topics: true
-    can_validate_topics: false
-    can_enrich_coverage: false
-    fetcher: reddit_top_json
-    url: https://www.reddit.com/r/news/top/.json?t=day&limit=50
-  - key: google_news_top
-    name: Google News Top Stories
-    provider_type: algorithmic_aggregation
-    intended_role: mainstream US-aware seed and validation signal
-    region: us
-    frame: us/western
-    weight: 1.0
-    can_seed_topics: true
-    can_validate_topics: true
-    can_enrich_coverage: false
-    fetcher: rss
-    url: https://news.google.com/rss?hl=en-US&gl=US&ceid=US:en
-  - key: bbc_world_top
-    name: BBC World News
-    provider_type: public_media_rss
-    intended_role: global western seed and validation counterweight
-    region: uk/global
-    frame: global/western
-    weight: 0.8
-    can_seed_topics: true
-    can_validate_topics: true
-    can_enrich_coverage: false
-    fetcher: rss
-    url: https://feeds.bbci.co.uk/news/world/rss.xml
-  - key: al_jazeera_top
-    name: Al Jazeera
-    provider_type: international_rss
-    intended_role: non-western and global-south seed and validation counterweight
-    region: qatar/global
-    frame: global south/non-western
-    weight: 0.9
-    can_seed_topics: true
-    can_validate_topics: true
-    can_enrich_coverage: false
-    fetcher: rss
-    url: https://www.aljazeera.com/xml/rss/all.xml
-  - key: ap_top
-    name: Associated Press
-    provider_type: wire_service_rss
-    intended_role: validation signal for broad mainstream prominence
-    region: us/global
-    frame: us/western
-    weight: 0.85
-    can_seed_topics: false
-    can_validate_topics: true
-    can_enrich_coverage: false
-    fetcher: rss
-    url: https://news.google.com/rss/search?q=when:24h+source:Associated+Press&hl=en-US&gl=US&ceid=US:en
-  - key: reuters_top
-    name: Reuters
-    provider_type: wire_service_rss
-    intended_role: validation signal for global market and geopolitical prominence
-    region: global
-    frame: global/western
-    weight: 0.85
-    can_seed_topics: false
-    can_validate_topics: true
-    can_enrich_coverage: false
-    fetcher: rss
-    url: https://news.google.com/rss/search?q=when:24h+source:Reuters&hl=en-US&gl=US&ceid=US:en
-
-# Article source pool used after topic discovery.
+# Article source pool used after predefined topic selection.
 #
 # Usage:
 # - Each item needs a stable key, display name, RSS/Atom URL, and optional homepage.
@@ -145,7 +61,7 @@ sources:
   - key: Deutsche Welle
     name: Deutsche Welle
     region: germany/western
-    url: https://rss.dw.com/rss/en/top/rss.xml
+    url: https://rss.dw.com/xml/rss-en-top
     homepage: https://www.dw.com/
   - key: Al Jazeera
     name: Al Jazeera

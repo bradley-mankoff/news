@@ -4,7 +4,7 @@ All runtime knobs are environment variables with the prefix `NEWS_`. Set them
 inline or export them before running:
 
 ```bash
-NEWS_DEV=0 NEWS_MODEL=gemma-26b-moe uv run todays_news.py
+NEWS_MODEL=gemma-26b-moe uv run news prod
 ```
 
 Two YAML files in `config/` handle the things that are too structured for env
@@ -16,10 +16,11 @@ vars: the source list and the recipient list. Everything else is below.
 
 | Variable | Default | Description |
 |---|---|---|
-| `NEWS_RUN_MODE` | _(derived from `NEWS_DEV`)_ | Explicit mode: `dev`, `local-prod`, or `prod`. `dev` uses the narrow test run and relaxed final-output blocking; `local-prod` uses production scope/history but sends only to `NEWS_DEV_RECIPIENT`; `prod` sends to the configured active recipients. |
+| `NEWS_RUN_MODE` | _(derived from `NEWS_DEV`)_ | Explicit mode: `dev`, `local-prod`, or `prod`. `dev` uses the narrow test run and relaxed final-output blocking; `local-prod` uses production source/topic/cap scope with isolated URL history and sends only to `NEWS_DEV_RECIPIENT`; `prod` sends to the configured active recipients and updates shared URL history. |
 | `NEWS_DEV` | `1` | Backward-compatible mode switch when `NEWS_RUN_MODE` is unset. `1` = `dev`; `0` = `prod`. |
 | `NEWS_DEV_RECIPIENT` | `bradley@mankoff.com` | Single recipient used by `dev` and `local-prod` modes. |
 | `NEWS_DEV_RELAXED_FINAL_GUARDS` | `1` | In `dev` mode only, allows short/degraded final synthesis text through so render/image/email paths can be tested even when the narrowed source pool produces sparse coverage. |
+| `NEWS_LOCAL_PROD_USE_SHARED_HISTORY` | `0` | `1` makes `local-prod` read/write the shared production URL history. The default keeps review runs from starving later runs or marking URLs as sent to the production audience. |
 
 ---
 
@@ -37,7 +38,7 @@ vars: the source list and the recipient list. Everything else is below.
 
 ## Model server (mlx_lm)
 
-These control the `mlx_lm.server` command that the pipeline builds and launches
+These control the MLX server command that the pipeline builds and launches
 automatically. They are part of the model runtime profile and can be overridden
 per-run.
 
@@ -53,7 +54,7 @@ per-run.
 Print the fully resolved command without running the pipeline:
 
 ```bash
-NEWS_MODEL=qwen-9b-dense uv run todays_news.py --model-server-command
+NEWS_MODEL=qwen-9b-dense uv run news model-server-command
 ```
 
 ---
@@ -127,33 +128,44 @@ default group.
 | `NEWS_MAX_ARTICLES_PER_SOURCE` | `6` | Maximum articles selected per source per topic during feed scanning. |
 | `NEWS_TOTAL_ARTICLE_SUMMARY_CAP` | profile-dependent | Hard ceiling on total articles sent to the summarization pass. |
 | `NEWS_PER_TOPIC_ARTICLE_SUMMARY_CAP` | profile-dependent | Per-topic ceiling on articles sent to summarization. |
-| `NEWS_PER_SOURCE_TOPIC_ARTICLE_CAP` | `1` | Maximum articles from a single source for a single topic. Keeps source diversity. |
+| `NEWS_MAX_STORIES_PER_TOPIC` | `2` dev, `4` local-prod/prod | Maximum detected story clusters retained for each topic before article summaries. |
+| `NEWS_MAX_ARTICLES_PER_STORY` | `4` big_conservative, `5` small_aggressive | Maximum articles fully summarized from a retained story cluster. |
+| `NEWS_STORY_CLUSTER_SIMILARITY_THRESHOLD` | `0.22` | Full-text TF-IDF cosine threshold for linking articles into a story cluster. |
+| `NEWS_PER_SOURCE_TOPIC_ARTICLE_CAP` | `1` | Maximum articles from a single source for a topic; after story clustering, extra summaries are capped per source/story. |
 | `NEWS_ARTICLE_SUMMARY_CONCURRENCY` | profile-dependent | Number of article summaries run in parallel. Increase carefully; higher values stress the local model server. |
 
 ---
 
-## Topic discovery
+## Topic selection
 
 | Variable | Default | Description |
 |---|---|---|
-| `NEWS_NUM_TOP_TOPICS` | `4` | Final number of topics selected for the newsletter. |
-| `NEWS_TOP_TOPIC_PROBES` | `4` | Approximate number of headlines the LLM inspects per topic cluster during discovery. |
-| `NEWS_TOP_OF_FUNNEL_PER_PROVIDER` | `10` | Headlines fetched per top-of-funnel provider during discovery. |
+| `NEWS_TOPIC_MODE` | `predefined` | `predefined` loads fixed topic vocabulary from YAML. `dynamic` runs the legacy top-of-funnel discovery and LLM clustering path. |
+| `NEWS_CLIENT_YAML` | `config/client.yaml` | Client config listing active predefined topic IDs in report order. |
+| `NEWS_TOPICS_YAML` | `config/topics.yaml` | Predefined topic vocabulary and matching thresholds. |
+| `NEWS_NUM_TOP_TOPICS` | `4` | Dynamic mode only: final number of topics selected for the newsletter. |
+| `NEWS_TOP_TOPIC_PROBES` | `4` | Dynamic mode only: approximate number of headlines the LLM inspects per topic cluster during discovery. |
+| `NEWS_TOP_OF_FUNNEL_PER_PROVIDER` | `10` | Dynamic mode only: headlines fetched per top-of-funnel provider during discovery. |
 | `NEWS_DEV_SOURCE_LIMIT` | `3` | In `dev`, only this many article sources are scanned after topic selection. |
-| `NEWS_DEV_NUM_TOPICS` | `2` | In `dev`, cap the selected topic count to this many topics. |
-| `NEWS_SUMMARY_SCOPE` | `the top news stories of the day` | Descriptive phrase embedded in synthesis prompts that tells the model what kind of content this is. |
+| `NEWS_DEV_NUM_TOPICS` | `2` | In `dev`, cap predefined topics to the first N configured IDs; in dynamic mode, cap selected topics to N. |
+| `NEWS_SUMMARY_SCOPE` | `today's selected news topics` | Descriptive phrase embedded in synthesis prompts that tells the model what kind of content this is. |
 
-Topic frame nudging (the soft geographic balance between US/western/non-western
-topics) is currently hard-coded in `pipeline.py` as `TOPIC_FRAME_TARGETS` and
-`TOPIC_FRAME_NUDGE_STRENGTH`. These are intentional editorial choices rather than
-per-run knobs, so they live in code.
+Predefined mode is the default. The local LLM does not choose the topics or
+generate matching terms; it only summarizes and synthesizes articles after the
+configured vocabulary has selected them.
 
-If the LLM returns no usable topic clusters, fallback topic discovery is deterministic:
-it clusters top-of-funnel headlines by normalized keyword overlap, keeps only clusters
-with support from at least two providers, and uses stricter article matching.
+Dynamic mode is preserved as a fork. Topic frame nudging (the soft geographic
+balance between US/western/non-western topics) is hard-coded in `pipeline.py` as
+`TOPIC_FRAME_TARGETS` and `TOPIC_FRAME_NUDGE_STRENGTH`.
 
-In `dev`, article summaries are also narrowed after gathering: the effective budget
-is capped at two articles per selected topic and twice the selected topic count.
+In dynamic mode, if the LLM returns no usable topic clusters, fallback topic
+discovery is deterministic: it clusters top-of-funnel headlines by normalized
+keyword overlap, keeps only clusters with support from at least two providers,
+and uses stricter article matching.
+
+In `dev`, article summaries are also narrowed after gathering: the effective
+budget is capped at two articles per selected topic and twice the selected topic
+count.
 
 ---
 
@@ -188,7 +200,7 @@ is capped at two articles per selected topic and twice the selected topic count.
 |---|---|---|
 | `NEWS_IMAGE_ENABLED` | `1` | `0` skips image generation entirely. |
 | `NEWS_IMAGE_FAIL_ON_ERROR` | `0` | `1` makes image failures abort the run. Default is fail-open (warning logged, run continues). |
-| `NEWS_IMAGE_MODEL_ID` | `Runpod/FLUX.2-klein-4B-mflux-4bit` | mflux model identifier passed to `mflux-generate-flux2 --model`. |
+| `NEWS_IMAGE_MODEL_ID` | `Runpod/FLUX.2-klein-4B-mflux-4bit` | mflux model identifier passed to the FLUX.2 generator `--model` option. |
 | `NEWS_IMAGE_BASE_MODEL` | `flux2-klein-4b` | mflux base model family passed to `--base-model`. |
 | `NEWS_IMAGE_WIDTH` | `1024` | Generated image width in pixels. |
 | `NEWS_IMAGE_HEIGHT` | `1024` | Generated image height in pixels. |
@@ -211,11 +223,36 @@ is capped at two articles per selected topic and twice the selected topic count.
 
 ## YAML config files
 
+### `config/client.yaml`
+
+Client-level topic selection. Changes take effect on the next run.
+
+| Field | Required | Description |
+|---|---|---|
+| `topic_ids` | yes | Ordered list of predefined topic IDs from `config/topics.yaml`. |
+
+### `config/topics.yaml`
+
+Predefined topic vocabulary. Each entry is selected by ID from
+`config/client.yaml`.
+
+| Field | Required | Description |
+|---|---|---|
+| `id` | yes | Stable topic identifier used by client config and diagnostics. |
+| `title` | yes | Human-readable topic title used in reports. |
+| `rationale` | no | Short editorial scope note for diagnostics. |
+| `keywords` | conditionally | Relevance terms. Required if `boost_phrases` is empty. |
+| `boost_phrases` | conditionally | Stronger multi-word relevance phrases. Required if `keywords` is empty. |
+| `min_score` | no | Relevance score required for article selection. Defaults to `2`. |
+| `max_articles_per_source` | no | Per-source article cap for this topic. Defaults to `NEWS_MAX_ARTICLES_PER_SOURCE`. |
+| `frame_tags` | no | Diagnostic tags such as `us`, `western`, or `non_western`. |
+
 ### `config/sources.yaml`
 
-Two sections. Changes take effect on the next run without touching Python code.
+Article feeds plus legacy dynamic discovery providers. Changes take effect on
+the next run without touching Python code.
 
-**`top_funnel_providers`** — used only during topic discovery. Each entry needs:
+**`top_funnel_providers`** — used only when `NEWS_TOPIC_MODE=dynamic`. Each entry needs:
 
 | Field | Required | Description |
 |---|---|---|
@@ -254,10 +291,13 @@ Two sections. Changes take effect on the next run without touching Python code.
 
 ---
 
-## CLI flags
+## CLI commands
 
-| Flag | Description |
+| Command | Description |
 |---|---|
-| _(none)_ | Run the full pipeline. |
-| `--model-server-command` | Print the resolved `mlx_lm.server` command for the selected model and exit. Useful for starting the server manually in a second terminal. |
-| `--serve-unsubscribe` | Start the local HTTP unsubscribe endpoint instead of running the pipeline. |
+| `uv run news dev` | Narrow dev run. Sends only to `NEWS_DEV_RECIPIENT`. |
+| `uv run news local-prod` | Production-width review run. Sends only to `NEWS_DEV_RECIPIENT` and uses isolated URL history by default. |
+| `uv run news prod` | Production delivery and shared URL history. |
+| `uv run news model-server-command` | Print the resolved MLX server command for the selected model and exit. |
+| `uv run news check-sources` | Check configured source connectivity. Supports `--section`, `--timeout`, `--only-failures`, and `--json`. |
+| `uv run news serve-unsubscribe` | Start the local HTTP unsubscribe endpoint instead of running the pipeline. |

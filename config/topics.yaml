@@ -1,0 +1,261 @@
+# Predefined topic vocabulary for article relevance matching.
+#
+# The local LLM does not create these terms; it only summarizes articles selected
+# by this deterministic vocabulary.
+topics:
+  - id: iran_war
+    title: Iran War
+    rationale: Stories about direct US, Israeli, Iranian, or regional proxy conflict involving Iran.
+    keywords:
+      - iran israel
+      - israel iran
+      - us iran
+      - iran war
+      - iran conflict
+      - iranian retaliation
+      - iranian missile attack
+      - iranian drone attack
+      - iran nuclear
+      - iran sanctions
+      - iran oil
+      - tehran israel
+      - tehran washington
+      - israeli strike iran
+      - israeli airstrike iran
+      - israeli military iran
+      - idf iran
+      - irgc missile
+      - irgc commander
+      - khamenei israel
+      - khamenei trump
+      - netanyahu iran
+      - us military iran
+      - us strikes iran
+      - pentagon iran
+      - iran air defense
+      - iran ballistic missile
+      - iran nuclear facility
+      - iran nuclear site
+      - fordow nuclear
+      - natanz nuclear
+      - isfahan nuclear
+      - strait of hormuz
+      - persian gulf security
+      - gulf oil flows
+      - hormuz shipping
+      - hezbollah iran
+      - houthi iran
+      - iraq militia
+      - iran regional escalation
+      - iran ceasefire
+    boost_phrases:
+      - iran israel war
+      - israel iran conflict
+      - us strikes iran
+      - israeli strikes iran
+      - iran missile attack
+      - iran drone attack
+      - iranian retaliation
+      - iran nuclear sites
+      - iranian nuclear facilities
+      - strait of hormuz
+      - gulf oil flows
+      - middle east escalation
+      - us enters war
+      - pentagon deploys air defense
+      - irgc launches missiles
+      - proxy attacks on us forces
+    frame_tags:
+      - us
+      - western
+      - non_western
+
+  - id: us_economy
+    title: US Economy
+    rationale: Stories about US macro data, Federal Reserve policy, markets, housing, commodities, and major business conditions.
+    required_context_terms:
+      - united states
+      - u.s. economy
+      - u.s. inflation
+      - u.s. jobs
+      - u.s. labor
+      - u.s. markets
+      - u.s. stocks
+      - u.s. dollar
+      - us economy
+      - us inflation
+      - us jobs
+      - us labor
+      - us markets
+      - us stocks
+      - us dollar
+      - american consumers
+      - american economy
+      - federal reserve
+      - fomc
+      - fed decision
+      - fed rate
+      - fed cuts
+      - fed raises
+      - fed chair
+      - fed officials
+      - wall street
+      - dow jones
+      - nasdaq
+      - s&p 500
+      - treasury yield
+      - treasury yields
+      - treasuries
+      - jobless claims
+      - nonfarm payrolls
+      - personal consumption expenditures
+      - chapter 11
+      - bankruptcy protection
+      - new york stock exchange
+    keywords:
+      - jobs report
+      - nonfarm payrolls
+      - unemployment claims
+      - unemployment rate
+      - labor market
+      - wage growth
+      - inflation report
+      - cpi inflation
+      - core cpi
+      - pce inflation
+      - consumer price index
+      - producer price index
+      - gdp growth
+      - recession risk
+      - retail sales
+      - consumer spending
+      - consumer confidence
+      - federal reserve
+      - fed decision
+      - fomc decision
+      - interest rate
+      - rate cut
+      - rate hike
+      - mortgage rate
+      - treasury yields
+      - bond yields
+      - stock futures
+      - stock market
+      - wall street
+      - nasdaq composite
+      - dow jones
+      - housing starts
+      - home sales
+      - housing market
+      - oil prices
+      - gas prices
+      - crude oil
+      - gold prices
+      - commodity prices
+      - us dollar
+      - dollar index
+      - tariff impact
+      - tariff policy
+      - trade deficit
+      - corporate earnings
+      - earnings outlook
+      - job cuts
+      - mass layoffs
+      - bankruptcy filing
+      - chapter 11
+      - merger deal
+      - acquisition deal
+      - m&a
+      - ipo
+      - antitrust approval
+    boost_phrases:
+      - jobs report
+      - nonfarm payrolls
+      - weekly jobless claims
+      - inflation report
+      - consumer price index
+      - personal consumption expenditures
+      - federal reserve decision
+      - fomc rate decision
+      - fed cuts rates
+      - fed raises rates
+      - treasury yields rise
+      - stock market today
+      - stock futures rise
+      - stock futures fall
+      - mortgage rates
+      - home sales
+      - oil prices
+      - gas prices
+      - major merger
+      - antitrust approval
+      - bankruptcy protection
+      - wall street closes
+    frame_tags:
+      - us
+      - western
+
+  - id: us_politics
+    title: US Politics
+    rationale: Stories about US federal political power, elections, courts, Congress, and administration actions.
+    keywords:
+      - white house
+      - trump administration
+      - biden administration
+      - executive order
+      - oval office
+      - congress vote
+      - congressional hearing
+      - congressional investigation
+      - house committee
+      - senate committee
+      - senate vote
+      - house vote
+      - speaker johnson
+      - senate democrats
+      - senate republicans
+      - house democrats
+      - house republicans
+      - supreme court
+      - scotus ruling
+      - federal judge
+      - appeals court
+      - cabinet nomination
+      - senate confirmation
+      - campaign trail
+      - presidential campaign
+      - midterm election
+      - primary election
+      - election polling
+      - swing state
+      - campaign fundraising
+      - oversight subpoena
+      - impeachment inquiry
+      - ethics investigation
+      - government shutdown
+      - federal budget
+      - appropriations bill
+      - debt ceiling
+      - border policy
+      - immigration policy
+      - asylum policy
+      - deportation policy
+    boost_phrases:
+      - white house announces
+      - president signs executive order
+      - trump administration policy
+      - congress passes bill
+      - senate confirms nominee
+      - supreme court ruling
+      - federal judge blocks
+      - congressional oversight hearing
+      - house committee subpoenas
+      - government shutdown threat
+      - campaign fundraising report
+      - presidential election polling
+      - immigration enforcement policy
+      - border security bill
+      - impeachment inquiry opens
+    frame_tags:
+      - us
+      - western

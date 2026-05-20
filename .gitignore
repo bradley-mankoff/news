@@ -4,10 +4,15 @@ env.json
 .env.*
 
 # Python
+.venv/
+.venv-*/
 __pycache__/
 *.pyc
 *.pyo
-.python-version
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
 
 # Output / generated files
 output/
@@ -18,5 +23,7 @@ output/
 # VS Code
 .vscode/
 
-# Cursor
-.cursorignore
+# Local notes
+REVIEW.md
+TO_DO_LIST.txt
+git_cheat_sheet.txt

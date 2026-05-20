@@ -9,6 +9,7 @@ This module records the run in two formats:
 from __future__ import annotations
 
 import json
+from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -25,8 +26,10 @@ class RunDiagnostics:
     source_runs: list[dict[str, Any]] = field(default_factory=list)
     article_budget: dict[str, Any] = field(default_factory=dict)
     model_call_stats: dict[str, Any] = field(default_factory=dict)
+    activity_snapshots: list[dict[str, Any]] = field(default_factory=list)
     article_summary_count: int = 0
     reports: list[dict[str, Any]] = field(default_factory=list)
+    artifacts: dict[str, Any] = field(default_factory=dict)
 
     def event(self, label: str, **details: Any) -> None:
         self.events.append(
@@ -88,15 +91,11 @@ class RunDiagnostics:
                 "fallback_provider_support": topic.get("fallback_provider_support", []),
                 "keywords": topic.get("keywords", []),
                 "boost_phrases": topic.get("boost_phrases", []),
-                "min_score": topic.get("min_score"),
                 "max_articles_per_source": topic.get("max_articles_per_source"),
+                "configured_rank": topic.get("configured_rank"),
                 "candidate_rank": topic.get("candidate_rank"),
                 "selection_rank": topic.get("selection_rank"),
                 "selection_reason": topic.get("selection_reason"),
-                "selection_base_score": topic.get("selection_base_score"),
-                "selection_validation_score": topic.get("selection_validation_score"),
-                "selection_weight": topic.get("selection_weight"),
-                "selection_frame_nudge": topic.get("selection_frame_nudge"),
                 "seed_providers": topic.get("seed_providers", []),
                 "validation_providers": topic.get("validation_providers", []),
                 "frame_counts": topic.get("frame_counts", {}),
@@ -122,8 +121,14 @@ class RunDiagnostics:
     def record_model_call_stats(self, details: dict[str, Any]) -> None:
         self.model_call_stats = details
 
+    def record_activity_snapshot(self, details: dict[str, Any]) -> None:
+        self.activity_snapshots.append(details)
+
     def record_report(self, **details: Any) -> None:
         self.reports.append(details)
+
+    def record_artifact(self, name: str, path: str, **details: Any) -> None:
+        self.artifacts[name] = {"path": path, **details}
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -134,19 +139,191 @@ class RunDiagnostics:
             "source_runs": self.source_runs,
             "article_budget": self.article_budget,
             "model_call_stats": self.model_call_stats,
+            "activity_snapshots": self.activity_snapshots,
             "article_summary_count": self.article_summary_count,
             "reports": self.reports,
+            "artifacts": self.artifacts,
             "events": self.events,
         }
 
-    def write(self, output_dir: Path, timestamp: str) -> tuple[Path, Path]:
+    def write(self, output_dir: Path, timestamp: str) -> tuple[Path, Path, Path]:
         json_path = output_dir / f"run_details_{timestamp}.json"
         markdown_path = output_dir / f"run_details_{timestamp}.md"
+        summary_path = output_dir / f"run_summary_{timestamp}.md"
         with json_path.open("w", encoding="utf-8") as handle:
             json.dump(self.to_dict(), handle, indent=2)
             handle.write("\n")
         markdown_path.write_text(self.to_markdown(), encoding="utf-8")
-        return json_path, markdown_path
+        summary_path.write_text(self.to_summary_markdown(), encoding="utf-8")
+        return json_path, markdown_path, summary_path
+
+    def summary_stats(self) -> dict[str, Any]:
+        source_status_counts: Counter[str] = Counter()
+        rejection_counts: Counter[str] = Counter()
+        feed_item_count = 0
+        selected_item_count = 0
+        fresh_article_count = 0
+        problem_sources: list[str] = []
+
+        for source in self.source_runs:
+            status = str(source.get("status") or "unknown")
+            source_status_counts[status] += 1
+            feed_item_count += _safe_int(source.get("feed_item_count"))
+            selected_item_count += _safe_int(source.get("selected_item_count"))
+            fresh_article_count += _safe_int(source.get("fresh_article_count"))
+            rejection_counts.update(
+                {
+                    str(reason): _safe_int(count)
+                    for reason, count in (source.get("rejected_counts") or {}).items()
+                }
+            )
+            if status not in {"ok", "no_relevant_items"}:
+                problem_sources.append(f"{source.get('source') or 'Unknown source'} ({status})")
+
+        story_clustering = _last_event(self.events, "story_clustering")
+        coverage_deficit = _last_event(self.events, "story_coverage_deficit")
+        coverage_deficits = coverage_deficit.get("deficits") or {}
+
+        model_calls: Counter[str] = Counter()
+        for task_name, count in (self.model_call_stats.get("calls") or {}).items():
+            model_calls[_model_call_bucket(str(task_name))] += _safe_int(count)
+        reports_with_images = 0
+        image_warnings = 0
+        recipient_count = 0
+        for report in self.reports:
+            recipient_count += _safe_int(report.get("recipient_count"))
+            image_art = report.get("image_art") or {}
+            if image_art.get("final_image_path"):
+                reports_with_images += 1
+            if image_art.get("error") or image_art.get("art_prompt_error"):
+                image_warnings += 1
+
+        return {
+            "duration": _duration_label(self.run_started_at, self.events),
+            "topic_count": len(self.topics),
+            "source_status_counts": dict(source_status_counts),
+            "problem_sources": problem_sources,
+            "feed_item_count": feed_item_count,
+            "selected_item_count": selected_item_count,
+            "fresh_article_count": fresh_article_count,
+            "rejection_counts": dict(rejection_counts),
+            "story_count": _safe_int(story_clustering.get("story_count")),
+            "story_included_count": _safe_int(story_clustering.get("included_count")),
+            "story_dropped_count": _safe_int(story_clustering.get("dropped_count")),
+            "coverage_deficit_topic_count": len(coverage_deficits),
+            "coverage_deficit_total": sum(_safe_int(value) for value in coverage_deficits.values()),
+            "article_budget_candidate_count": _safe_int(self.article_budget.get("candidate_count")),
+            "article_budget_included_count": _safe_int(self.article_budget.get("included_count")),
+            "article_budget_dropped_count": _safe_int(self.article_budget.get("dropped_count")),
+            "article_summary_count": self.article_summary_count,
+            "model_call_count": sum(_safe_int(value) for value in model_calls.values()),
+            "model_calls": dict(model_calls),
+            "model_retries": _safe_int(self.model_call_stats.get("retries")),
+            "model_fallbacks": _safe_int(self.model_call_stats.get("fallbacks")),
+            "report_count": len(self.reports),
+            "recipient_count": recipient_count,
+            "reports_with_images": reports_with_images,
+            "image_warnings": image_warnings,
+        }
+
+    def to_summary_markdown(self) -> str:
+        stats = self.summary_stats()
+        source_status = stats["source_status_counts"]
+        rejection_counts = stats["rejection_counts"]
+        model_calls = stats["model_calls"]
+        run_log_path = _run_log_path(self.settings)
+        output_dir = self.settings.get("output_dir") or "N/A"
+
+        lines = [
+            "# Daily News Run Summary",
+            "",
+            f"- Started: {self.run_started_at}",
+            f"- Duration: {stats['duration']}",
+            f"- Run mode: {self.settings.get('run_mode') or ('dev' if self.settings.get('dev') else 'prod')}",
+            f"- Output folder: {output_dir}",
+            f"- Run log: {run_log_path}",
+            "",
+            "## At a Glance",
+            "",
+            f"- Topics selected: {stats['topic_count']}",
+            f"- Sources checked: {self.settings.get('source_count')}",
+            f"- Feed items parsed: {stats['feed_item_count']}",
+            f"- Candidate feed items selected: {stats['selected_item_count']}",
+            f"- Fresh article targets after history/dedupe: {stats['fresh_article_count']}",
+            f"- Story groups retained: {stats['story_count']}",
+            f"- Article targets retained after story grouping: {stats['story_included_count']}",
+            f"- Article targets dropped before budget: {stats['story_dropped_count']}",
+            f"- Article summaries generated: {stats['article_summary_count']}",
+            f"- Reports written: {stats['report_count']}",
+        ]
+
+        lines.extend(["", "## Source Health", ""])
+        if source_status:
+            lines.append(
+                "- Status counts: "
+                + ", ".join(f"{status}={count}" for status, count in sorted(source_status.items()))
+            )
+        else:
+            lines.append("- Status counts: N/A")
+        if stats["problem_sources"]:
+            lines.append("- Problem sources: " + ", ".join(stats["problem_sources"]))
+        else:
+            lines.append("- Problem sources: none")
+        if rejection_counts:
+            lines.append(
+                "- Rejections: "
+                + ", ".join(f"{reason}={count}" for reason, count in sorted(rejection_counts.items()))
+            )
+        else:
+            lines.append("- Rejections: none recorded")
+
+        lines.extend(
+            [
+                "",
+                "## Budget And Coverage",
+                "",
+                f"- Budget candidates: {stats['article_budget_candidate_count']}",
+                f"- Budget included: {stats['article_budget_included_count']}",
+                f"- Budget dropped: {stats['article_budget_dropped_count']}",
+                f"- Coverage deficits: {stats['coverage_deficit_topic_count']} topic(s), total shortfall {stats['coverage_deficit_total']}",
+            ]
+        )
+
+        lines.extend(["", "## Model Activity", ""])
+        if model_calls:
+            lines.append(
+                "- Calls by task: "
+                + ", ".join(f"{task}={count}" for task, count in sorted(model_calls.items()))
+            )
+        else:
+            lines.append("- Calls by task: none recorded")
+        lines.extend(
+            [
+                f"- Total model calls: {stats['model_call_count']}",
+                f"- Retries: {stats['model_retries']}",
+                f"- Fallbacks: {stats['model_fallbacks']}",
+            ]
+        )
+
+        lines.extend(
+            [
+                "",
+                "## Outputs",
+                "",
+                f"- Reports: {stats['report_count']}",
+                f"- Recipients covered: {stats['recipient_count']}",
+                f"- Reports with generated images: {stats['reports_with_images']}",
+                f"- Image warnings: {stats['image_warnings']}",
+                f"- Run URL log: {self.settings.get('run_used_urls_path')}",
+            ]
+        )
+        if self.artifacts:
+            lines.extend(["", "## Diagnostic Artifacts", ""])
+            for name, details in sorted(self.artifacts.items()):
+                path = details.get("path") if isinstance(details, dict) else details
+                lines.append(f"- {name}: {path}")
+        lines.append("")
+        return "\n".join(lines)
 
     def to_markdown(self) -> str:
         lines = [
@@ -156,33 +333,54 @@ class RunDiagnostics:
             f"- Run mode: {self.settings.get('run_mode') or ('dev' if self.settings.get('dev') else 'prod')}",
             f"- DEV mode: {self.settings.get('dev')}",
             f"- Bradley-only delivery: {self.settings.get('bradley_only_delivery', self.settings.get('dev'))}",
+            f"- Shared URL history: {self.settings.get('shared_url_history_enabled')}",
             f"- Source feeds: {self.settings.get('source_count')}",
+            f"- Topic mode: {self.settings.get('topic_mode') or 'predefined'}",
             f"- Top topics requested: {self.settings.get('num_top_topics')}",
             f"- Recent window hours: {self.settings.get('recent_window_hours')}",
+            f"- Topic relevance min score: {self.settings.get('topic_relevance_min_score')}",
             f"- Model: {self.settings.get('model')} ({self.settings.get('model_profile')})",
+            f"- Model backend: {self.settings.get('model_backend') or 'mlx-lm'}",
             f"- Model input cap: {self.settings.get('model_max_input_tokens')}",
             f"- Model default sampling: {self.settings.get('model_default_sampling')}",
             f"- Model reasoning sampling: {self.settings.get('model_reasoning_sampling')}",
             f"- Model task sampling: {self.settings.get('model_task_sampling')}",
-            "",
-            "## Top-of-Funnel Discovery",
-            "",
+            f"- Run log: {_run_log_path(self.settings)}",
+            f"- Run URL log: {self.settings.get('run_used_urls_path')}",
+            f"- Activity snapshots: {len(self.activity_snapshots)}",
         ]
-        provider_counts = self.top_funnel.get("provider_counts", {})
-        if provider_counts:
-            for provider, count in provider_counts.items():
-                lines.append(f"- {provider}: {count} headline(s)")
-        lines.extend(
-            [
-                f"- Unique merged headlines: {self.top_funnel.get('merged_count', 0)}",
-                f"- Seed-capable merged headlines: {self.top_funnel.get('seed_merged_count', 0)}",
-                f"- Validation-capable merged headlines: {self.top_funnel.get('validation_merged_count', 0)}",
-                f"- Exact URL/title duplicates across providers: {self.top_funnel.get('multi_provider_count', 0)}",
-                "",
-                "## Topics and Search Vocabulary",
-                "",
-            ]
-        )
+        if self.settings.get("topic_mode") == "predefined":
+            active_topic_ids = ", ".join(self.settings.get("active_topic_ids") or []) or "N/A"
+            lines.extend(
+                [
+                    "",
+                    "## Predefined Topics",
+                    "",
+                    f"- Client config: {self.settings.get('client_path')}",
+                    f"- Topic definitions: {self.settings.get('topics_path')}",
+                    f"- Active topic IDs: {active_topic_ids}",
+                    "",
+                    "## Topics and Search Vocabulary",
+                    "",
+                ]
+            )
+        else:
+            lines.extend(["", "## Top-of-Funnel Discovery", ""])
+            provider_counts = self.top_funnel.get("provider_counts", {})
+            if provider_counts:
+                for provider, count in provider_counts.items():
+                    lines.append(f"- {provider}: {count} headline(s)")
+            lines.extend(
+                [
+                    f"- Unique merged headlines: {self.top_funnel.get('merged_count', 0)}",
+                    f"- Seed-capable merged headlines: {self.top_funnel.get('seed_merged_count', 0)}",
+                    f"- Validation-capable merged headlines: {self.top_funnel.get('validation_merged_count', 0)}",
+                    f"- Exact URL/title duplicates across providers: {self.top_funnel.get('multi_provider_count', 0)}",
+                    "",
+                    "## Topics and Search Vocabulary",
+                    "",
+                ]
+            )
         for topic in self.topics:
             lines.extend(
                 [
@@ -222,6 +420,20 @@ class RunDiagnostics:
                     "- Rejections: "
                     + ", ".join(f"{reason}={count}" for reason, count in rejected.items())
                 )
+            post_scrape_rejections = source.get("post_scrape_rejections") or []
+            if post_scrape_rejections:
+                lines.append(
+                    f"- Post-scrape relevance rejections: {len(post_scrape_rejections)}"
+                )
+            scrape_status_counts = source.get("scrape_status_counts") or {}
+            if scrape_status_counts:
+                lines.append(
+                    "- Scrape statuses: "
+                    + ", ".join(
+                        f"{status}={count}"
+                        for status, count in sorted(scrape_status_counts.items())
+                    )
+                )
             lines.append("")
         lines.extend(
             [
@@ -234,6 +446,14 @@ class RunDiagnostics:
                 f"- Model retries: {self.model_call_stats.get('retries', 0)}",
             ]
         )
+        if self.activity_snapshots:
+            latest_activity = self.activity_snapshots[-1]
+            activity_parts = [f"latest={latest_activity.get('label')}"]
+            if latest_activity.get("memory_free_pct") is not None:
+                activity_parts.append(f"memory_free={latest_activity.get('memory_free_pct')}%")
+            if latest_activity.get("swapouts") is not None:
+                activity_parts.append(f"swapouts={latest_activity.get('swapouts')}")
+            lines.append("- Activity: " + ", ".join(activity_parts))
         for report in self.reports:
             lines.append(f"- Report: {report.get('path')} ({report.get('recipient_count')} recipient(s))")
             image_art = report.get("image_art") or {}
@@ -241,6 +461,11 @@ class RunDiagnostics:
                 lines.append(f"  - Image: {image_art.get('final_image_path')}")
             elif image_art.get("error"):
                 lines.append(f"  - Image warning: {image_art.get('error')}")
+        if self.artifacts:
+            lines.append("- Diagnostic artifacts:")
+            for name, details in sorted(self.artifacts.items()):
+                path = details.get("path") if isinstance(details, dict) else details
+                lines.append(f"  - {name}: {path}")
         lines.append("")
         return "\n".join(lines)
 
@@ -258,3 +483,58 @@ def _story_digest(story: dict[str, Any], *, rank: int) -> dict[str, Any]:
         "num_comments": story.get("num_comments", 0),
         "match_score": story.get("match_score"),
     }
+
+
+def _safe_int(value: Any) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _last_event(events: list[dict[str, Any]], label: str) -> dict[str, Any]:
+    for event in reversed(events):
+        if event.get("label") == label:
+            return event
+    return {}
+
+
+def _model_call_bucket(task_name: str) -> str:
+    normalized = task_name.strip().lower()
+    if normalized.startswith("analysis for final synthesis"):
+        return "final_synthesis"
+    if normalized.startswith("analysis for "):
+        return "article_summary"
+    clean = normalized.replace(" ", "_")
+    return clean or "unknown"
+
+
+def _duration_label(run_started_at: str, events: list[dict[str, Any]]) -> str:
+    try:
+        started_at = datetime.fromisoformat(run_started_at)
+    except ValueError:
+        return "N/A"
+
+    ended_at: datetime | None = None
+    for event in reversed(events):
+        if event.get("at"):
+            try:
+                ended_at = datetime.fromisoformat(str(event["at"]))
+                break
+            except ValueError:
+                continue
+    if ended_at is None:
+        return "N/A"
+
+    elapsed_seconds = max(0, int(round((ended_at - started_at).total_seconds())))
+    minutes, seconds = divmod(elapsed_seconds, 60)
+    hours, minutes = divmod(minutes, 60)
+    if hours:
+        return f"{hours}h {minutes}m {seconds}s"
+    if minutes:
+        return f"{minutes}m {seconds}s"
+    return f"{seconds}s"
+
+
+def _run_log_path(settings: dict[str, Any]) -> Any:
+    return settings.get("run_log_path") or settings.get("terminal_output_log") or "N/A"

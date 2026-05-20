@@ -3,6 +3,7 @@ from __future__ import annotations
 import tempfile
 import unittest
 from contextlib import redirect_stdout
+from datetime import datetime, timezone
 from io import StringIO
 from pathlib import Path
 from unittest.mock import patch
@@ -15,32 +16,49 @@ from news_pipeline.config import (
     _configured_run_mode,
     _configured_model_reference,
     _sync_cursorignore_latest_output,
+    build_model_server_command,
+    configured_max_articles_per_story,
+    configured_max_stories_per_topic,
+    configured_story_cluster_similarity_threshold,
+    configured_topic_mode,
     configured_model_profile,
     infer_model_profile_key,
+    load_client_config,
+    load_predefined_topics,
     load_sources,
+    load_topic_definitions,
     load_top_funnel_providers,
     resolve_model_name,
 )
+from news_pipeline import cli
 from news_pipeline.pipeline import (
     ProgressTracker,
     _cluster_supported_fallback_topics,
     _enforce_text_free_image_prompt,
     _sanitize_overlay_headline,
+    _select_per_topic_feed_items,
+    _report_reference_key,
     _score_topic_against_story,
     _score_topic_relevance,
     annotate_topic_discovery_signals,
     budget_article_targets,
     build_article_summary_prompt_messages,
+    build_chat_model,
     build_dev_final_synthesis_preview,
     build_final_synthesis_payload,
     build_report_body,
     build_top_funnel_article_targets_for_coverage_gaps,
+    capture_activity_snapshot,
     clean_synthesis_for_publication,
     describe_final_synthesis_rejection,
     estimate_message_token_count,
+    filter_reports_for_references,
     get_default_final_synthesis_instructions,
     is_valid_final_synthesis_response,
+    organize_article_targets_into_stories,
     prepare_candidate_topics_for_selection,
+    load_predefined_topics_for_run,
+    select_topics_for_run,
     select_topics_soft_weighted,
     should_continue,
     strip_model_artifacts,
@@ -49,6 +67,18 @@ from news_pipeline.pipeline import (
 
 
 class ConfigAndTopicSelectionTests(unittest.TestCase):
+    def test_build_chat_model_disables_hidden_template_thinking(self) -> None:
+        with patch("news_pipeline.pipeline.ChatOpenAI") as chat_model_class:
+            build_chat_model(max_tokens=123, task="final_synthesis")
+
+        kwargs = chat_model_class.call_args.kwargs
+        self.assertEqual(kwargs["max_tokens"], 123)
+        self.assertEqual(
+            kwargs["extra_body"]["chat_template_kwargs"],
+            {"enable_thinking": False},
+        )
+        self.assertIn("top_p", kwargs["extra_body"])
+
     def test_progress_tracker_allocates_article_summary_progress(self) -> None:
         tracker = ProgressTracker()
         with redirect_stdout(StringIO()):
@@ -57,24 +87,30 @@ class ConfigAndTopicSelectionTests(unittest.TestCase):
                 tracker.start_source(source_index)
                 tracker.source_completed()
 
-            self.assertEqual(tracker._percent(), 60)
+            self.assertEqual(tracker.current_step, "sources")
+            self.assertEqual(tracker.meter_done, 20)
+            self.assertEqual(tracker.meter_total, 20)
+            self.assertEqual(tracker.meter_unit, "sources")
 
             tracker.start_article_summary(12)
-            self.assertEqual(tracker._percent(), 60)
+            self.assertEqual(tracker.current_step, "summaries")
+            self.assertEqual(tracker.meter_done, 0)
+            self.assertEqual(tracker.meter_total, 12)
+            self.assertEqual(tracker.meter_unit, "articles")
 
             for _ in range(6):
                 tracker.article_completed()
-            self.assertEqual(tracker._percent(), 75)
+            self.assertEqual(tracker.meter_done, 6)
 
             for _ in range(6):
                 tracker.article_completed()
-            self.assertEqual(tracker._percent(), 90)
+            self.assertEqual(tracker.meter_done, 12)
 
             tracker.set_final_step("reports", 1)
-            self.assertEqual(tracker._percent(), 92)
+            self.assertEqual(tracker.current_step, "report")
 
             tracker.finish("done")
-            self.assertEqual(tracker._percent(), 100)
+            self.assertEqual(tracker.current_step, "finalize")
 
     def test_progress_tracker_keeps_article_count_after_summary_phase(self) -> None:
         tracker = ProgressTracker()
@@ -88,23 +124,29 @@ class ConfigAndTopicSelectionTests(unittest.TestCase):
             tracker.article_completed()
             tracker.set_final_step("reports", 1)
 
-        self.assertIn("article 2/2", output.getvalue())
-        self.assertNotIn("article 0/0", output.getvalue())
+        self.assertIn("2/2 articles", output.getvalue())
+        self.assertNotIn("0/0 articles", output.getvalue())
 
     def _write_config(self, payload: dict) -> Path:
+        return self._write_yaml(payload, "sources.yaml")
+
+    def _write_yaml(self, payload: dict, filename: str) -> Path:
         temp_dir = tempfile.TemporaryDirectory()
         self.addCleanup(temp_dir.cleanup)
-        path = Path(temp_dir.name) / "sources.yaml"
+        path = Path(temp_dir.name) / filename
         path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
         return path
 
-    def test_cursorignore_manager_keeps_only_current_run_visible(self) -> None:
+    def test_assistant_ignore_manager_keeps_core_and_current_output_visible(self) -> None:
         temp_dir = tempfile.TemporaryDirectory()
         self.addCleanup(temp_dir.cleanup)
         root_dir = Path(temp_dir.name)
         output_dir = root_dir / "output" / "daily_outputs"
         run_output_dir = output_dir / "2026-05-02"
         run_output_dir.mkdir(parents=True)
+        (run_output_dir / "run_details_2026-05-02_09-00-00.json").write_text("{}", encoding="utf-8")
+        (run_output_dir / "news_report_2026-05-02_10-30-00_big.txt").write_text("latest", encoding="utf-8")
+        (run_output_dir / "topics_2026-05-02_10-30-00.json").write_text("{}", encoding="utf-8")
         cursorignore_path = root_dir / ".cursorignore"
         cursorignore_path.write_text(
             "custom-rule\n\n"
@@ -118,12 +160,21 @@ class ConfigAndTopicSelectionTests(unittest.TestCase):
 
         _sync_cursorignore_latest_output(root_dir, output_dir, run_output_dir)
 
-        cursorignore = cursorignore_path.read_text(encoding="utf-8")
-        self.assertIn("custom-rule", cursorignore)
-        self.assertIn("output/daily_outputs/*", cursorignore)
-        self.assertIn("!output/daily_outputs/2026-05-02/", cursorignore)
-        self.assertIn("!output/daily_outputs/2026-05-02/**", cursorignore)
-        self.assertNotIn("2026-05-01", cursorignore)
+        for ignore_name in (".codexignore", ".cursorignore", ".continueignore"):
+            with self.subTest(ignore_name=ignore_name):
+                assistant_ignore = (root_dir / ignore_name).read_text(encoding="utf-8")
+                if ignore_name == ".cursorignore":
+                    self.assertIn("custom-rule", assistant_ignore)
+                self.assertIn("!news_pipeline/**", assistant_ignore)
+                self.assertIn("!config/sources.yaml", assistant_ignore)
+                self.assertIn("!todays_news.py", assistant_ignore)
+                self.assertIn("output/daily_outputs/*", assistant_ignore)
+                self.assertIn("!output/daily_outputs/2026-05-02/", assistant_ignore)
+                self.assertIn("!output/daily_outputs/2026-05-02/news_report_2026-05-02_10-30-00_big.txt", assistant_ignore)
+                self.assertIn("!output/daily_outputs/2026-05-02/topics_2026-05-02_10-30-00.json", assistant_ignore)
+                self.assertNotIn("2026-05-02_09-00-00", assistant_ignore)
+                self.assertNotIn("!output/daily_outputs/2026-05-02/**", assistant_ignore)
+                self.assertNotIn("2026-05-01", assistant_ignore)
 
     def test_model_aliases_resolve_to_latest_repo_ids(self) -> None:
         self.assertEqual(
@@ -176,6 +227,133 @@ class ConfigAndTopicSelectionTests(unittest.TestCase):
         ):
             self.assertEqual(_configured_run_mode(), "local-prod")
 
+    def test_cli_run_mode_commands_set_environment(self) -> None:
+        with patch.dict("os.environ", {}, clear=True) as env:
+            with patch("news_pipeline.cli._run_pipeline_command", return_value=0) as run_pipeline:
+                self.assertEqual(cli.main(["local-prod", "--dynamic-topics"]), 0)
+
+            run_pipeline.assert_called_once_with()
+            self.assertEqual(env["NEWS_RUN_MODE"], "local-prod")
+            self.assertEqual(env["NEWS_TOPIC_MODE"], "dynamic")
+
+    def test_cli_source_check_command_delegates_options(self) -> None:
+        with patch("news_pipeline.source_checks.main", return_value=0) as source_checks:
+            self.assertEqual(cli.main(["check-sources", "--section", "sources"]), 0)
+
+        source_checks.assert_called_once_with(["--section", "sources"])
+
+    def test_story_cap_defaults_follow_run_mode_and_model_profile(self) -> None:
+        with patch.dict("os.environ", {}, clear=True):
+            self.assertEqual(configured_max_stories_per_topic("dev"), 2)
+            self.assertEqual(configured_max_stories_per_topic("local-prod"), 4)
+            self.assertEqual(configured_max_stories_per_topic("prod"), 4)
+            self.assertEqual(configured_max_articles_per_story("big_conservative"), 4)
+            self.assertEqual(configured_max_articles_per_story("small_aggressive"), 5)
+            self.assertEqual(configured_story_cluster_similarity_threshold(), 0.22)
+
+        with patch.dict(
+            "os.environ",
+            {
+                "NEWS_MAX_STORIES_PER_TOPIC": "6",
+                "NEWS_MAX_ARTICLES_PER_STORY": "7",
+                "NEWS_STORY_CLUSTER_SIMILARITY_THRESHOLD": "0.31",
+            },
+            clear=True,
+        ):
+            self.assertEqual(configured_max_stories_per_topic("dev"), 6)
+            self.assertEqual(configured_max_articles_per_story("big_conservative"), 7)
+            self.assertEqual(configured_story_cluster_similarity_threshold(), 0.31)
+
+    def test_topic_mode_defaults_to_predefined(self) -> None:
+        with patch.dict("os.environ", {}, clear=True):
+            self.assertEqual(configured_topic_mode(), "predefined")
+
+        with patch.dict("os.environ", {"NEWS_TOPIC_MODE": "dynamic"}, clear=True):
+            self.assertEqual(configured_topic_mode(), "dynamic")
+
+    def test_loads_predefined_topics_in_client_order_with_defaults(self) -> None:
+        client_path = self._write_yaml(
+            {"topic_ids": ["iran_war", "us_economy"]},
+            "client.yaml",
+        )
+        topics_path = self._write_yaml(
+            {
+                "topics": [
+                    {
+                        "id": "us_economy",
+                        "title": "US Economy",
+                        "keywords": ["Fed", "stocks", "stocks"],
+                        "boost_phrases": ["jobs report"],
+                    },
+                    {
+                        "id": "iran_war",
+                        "title": "Iran War",
+                        "keywords": ["Iran", "Israel"],
+                        "boost_phrases": ["iran israel war"],
+                        "frame_tags": ["US", "non_western"],
+                    },
+                ]
+            },
+            "topics.yaml",
+        )
+
+        self.assertEqual(load_client_config(client_path)["topic_ids"], ["iran_war", "us_economy"])
+        definitions = load_topic_definitions(topics_path)
+        self.assertEqual(definitions["us_economy"]["keywords"], ["fed", "stocks"])
+
+        topics = load_predefined_topics(
+            client_path=client_path,
+            topics_path=topics_path,
+            default_max_articles_per_source=5,
+        )
+
+        self.assertEqual([topic["key"] for topic in topics], ["iran_war", "us_economy"])
+        self.assertEqual(topics[0]["min_score"], 2)
+        self.assertEqual(topics[0]["max_articles_per_source"], 5)
+        self.assertEqual(topics[0]["frame_tags"], ["us", "non_western"])
+
+    def test_predefined_topic_config_validation_errors(self) -> None:
+        duplicate_topics_path = self._write_yaml(
+            {
+                "topics": [
+                    {"id": "topic_a", "title": "Topic A", "keywords": ["alpha"]},
+                    {"id": "topic_a", "title": "Topic A Again", "keywords": ["beta"]},
+                ]
+            },
+            "topics.yaml",
+        )
+        with self.assertRaisesRegex(ValueError, "duplicate topic ids"):
+            load_topic_definitions(duplicate_topics_path)
+
+        missing_title_path = self._write_yaml(
+            {"topics": [{"id": "topic_a", "keywords": ["alpha"]}]},
+            "topics.yaml",
+        )
+        with self.assertRaisesRegex(ValueError, "must define a title"):
+            load_topic_definitions(missing_title_path)
+
+        missing_terms_path = self._write_yaml(
+            {"topics": [{"id": "topic_a", "title": "Topic A"}]},
+            "topics.yaml",
+        )
+        with self.assertRaisesRegex(ValueError, "keywords or boost_phrases"):
+            load_topic_definitions(missing_terms_path)
+
+        duplicate_client_path = self._write_yaml(
+            {"topic_ids": ["topic_a", "topic_a"]},
+            "client.yaml",
+        )
+        with self.assertRaisesRegex(ValueError, "duplicate topic_ids"):
+            load_client_config(duplicate_client_path)
+
+        client_path = self._write_yaml({"topic_ids": ["missing"]}, "client.yaml")
+        topics_path = self._write_yaml(
+            {"topics": [{"id": "topic_a", "title": "Topic A", "keywords": ["alpha"]}]},
+            "topics.yaml",
+        )
+        with self.assertRaisesRegex(ValueError, "unknown topic_id"):
+            load_predefined_topics(client_path=client_path, topics_path=topics_path)
+
     def test_selected_model_overrides_default_model(self) -> None:
         with patch.dict(
             "os.environ",
@@ -219,6 +397,16 @@ class ConfigAndTopicSelectionTests(unittest.TestCase):
         self.assertEqual(profile.server_decode_concurrency, 2)
         self.assertEqual(profile.server_prompt_concurrency, 2)
         self.assertEqual(profile.server_prompt_cache_bytes, "3GB")
+
+    def test_model_server_command_uses_module_entrypoint(self) -> None:
+        profile = configured_model_profile("gemma-26b-moe")
+        command = build_model_server_command(
+            "mlx-community/gemma-4-26B-A4B-it-heretic-4bit",
+            profile,
+        )
+        self.assertTrue(command.startswith("uv run python -m mlx_lm server "))
+        self.assertIn("--model mlx-community/gemma-4-26B-A4B-it-heretic-4bit", command)
+        self.assertIn("--prompt-cache-bytes 512MB", command)
 
     def test_qwen_profiles_use_hf_card_sampling_presets(self) -> None:
         profile = configured_model_profile("qwen-9b-dense")
@@ -312,6 +500,58 @@ class ConfigAndTopicSelectionTests(unittest.TestCase):
         )
         self.assertIn("Generated image: output/report_image.png", report_body)
         self.assertIn("Overlay headline: Grid Politics Hit Home", report_body)
+
+    def test_references_use_synthesis_included_story_reports_only(self) -> None:
+        included = (
+            "### Barakah nuclear plant fire\n"
+            "Metadata:\n"
+            "- Source: AP\n"
+            "- Published: Sun, 17 May 2026 20:23:00 GMT\n"
+            "- URL: https://example.com/uae\n"
+            "- Topic: Iran War\n"
+            "- Story: UAE nuclear plant strike\n\n"
+            "Summary:\n"
+            "Officials reported a fire at the Barakah nuclear plant."
+        )
+        omitted = (
+            "### Felix Rosenqvist posts fastest qualifying average\n"
+            "Metadata:\n"
+            "- Source: AP\n"
+            "- Published: Sun, 17 May 2026 21:10:00 GMT\n"
+            "- URL: https://example.com/felix\n"
+            "- Topic: US Economy\n"
+            "- Story: Indianapolis qualifying\n\n"
+            "Summary:\n"
+            "Rosenqvist posted the fastest qualifying average."
+        )
+        reference_reports = filter_reports_for_references(
+            [included, omitted],
+            {"included_report_keys": [_report_reference_key(included)]},
+        )
+        report_body = build_report_body(
+            "Daily News",
+            "## IRAN WAR\nOfficials reported a nuclear-plant fire.",
+            reference_reports,
+            [{"key": "iran_war", "title": "Iran War"}],
+            None,
+        )
+
+        self.assertIn("[UAE nuclear plant strike] Barakah nuclear plant fire", report_body)
+        self.assertNotIn("Felix Rosenqvist", report_body)
+
+    def test_activity_snapshot_records_available_memory_signals(self) -> None:
+        with patch(
+            "news_pipeline.pipeline._run_activity_command",
+            side_effect=[
+                {"ok": True, "parsed": {"memory_free_pct": 72}, "output_tail": ""},
+                {"ok": True, "parsed": {"swapouts": 123, "swapins": 45}, "output_tail": ""},
+            ],
+        ):
+            snapshot = capture_activity_snapshot("after_model_server_ready")
+
+        self.assertEqual(snapshot["label"], "after_model_server_ready")
+        self.assertEqual(snapshot["memory_free_pct"], 72)
+        self.assertEqual(snapshot["swapouts"], 123)
 
     def test_model_artifact_stripper_removes_leaked_section_tags(self) -> None:
         cleaned = strip_model_artifacts("<analysis>\n## Topic\n<content>Copy</content>\n</analysis>")
@@ -550,6 +790,216 @@ class ConfigAndTopicSelectionTests(unittest.TestCase):
             ),
             4,
         )
+
+    def test_initial_predefined_topics_match_relevant_headlines(self) -> None:
+        topics = {
+            topic["key"]: topic
+            for topic in load_predefined_topics(default_max_articles_per_source=6)
+        }
+
+        self.assertGreaterEqual(
+            _score_topic_relevance(
+                {
+                    "title": "Israel says Iran fired missiles after US strikes near Fordow",
+                    "description": "The Pentagon said air defenses tracked drones over the Persian Gulf.",
+                },
+                topics["iran_war"],
+            ),
+            2,
+        )
+        self.assertGreaterEqual(
+            _score_topic_relevance(
+                {
+                    "title": "Fed decision lifts stocks as jobs report cools rate fears",
+                    "description": "Treasury yields fell after the latest payrolls data.",
+                },
+                topics["us_economy"],
+            ),
+            2,
+        )
+        self.assertEqual(
+            _score_topic_relevance(
+                {
+                    "title": "Federation chess tournament opens downtown",
+                    "description": "A goldfinch mural was unveiled near the venue.",
+                },
+                topics["us_economy"],
+            ),
+            0,
+        )
+        self.assertEqual(
+            _score_topic_relevance(
+                {
+                    "title": "Frontier Airlines adds flights after Denver schedule change",
+                    "description": "The carrier announced new service on Monday.",
+                },
+                topics["iran_war"],
+            ),
+            0,
+        )
+
+    def test_predefined_topic_matching_rejects_weak_single_token_hits(self) -> None:
+        topics = {
+            topic["key"]: topic
+            for topic in load_predefined_topics(default_max_articles_per_source=6)
+        }
+
+        weak_examples = [
+            (
+                "us_economy",
+                "Felix Rosenqvist posts fastest 4-lap average in 1st round of Indianapolis 500 qualifying",
+            ),
+            (
+                "us_economy",
+                "Gold jewellery, cash stolen from houses in Ranipet district",
+            ),
+            (
+                "iran_war",
+                "Samsung Electronics, labor union set to resume talks ahead of planned strike",
+            ),
+            (
+                "iran_war",
+                "Mali Military Drone Strikes Kill At Least 10 Civilians",
+            ),
+        ]
+
+        for topic_key, title in weak_examples:
+            with self.subTest(topic_key=topic_key, title=title):
+                self.assertEqual(
+                    _score_topic_relevance(
+                        {
+                            "title": title,
+                            "description": "",
+                        },
+                        topics[topic_key],
+                    ),
+                    0,
+                )
+
+    def test_feed_selection_uses_scan_depth_before_final_source_budget(self) -> None:
+        now_utc = datetime(2026, 5, 17, 18, 0, tzinfo=timezone.utc).replace(tzinfo=None)
+        topic = {
+            "key": "us_economy",
+            "title": "US Economy",
+            "keywords": ["fed", "inflation", "payrolls"],
+            "boost_phrases": ["federal reserve decision", "inflation report"],
+            "min_score": 2,
+            "max_articles_per_source": 3,
+        }
+        items = [
+            {
+                "title": "Fed decision lifts stocks after policy meeting",
+                "description": "Federal Reserve officials held rates steady.",
+                "link": "https://example.com/fed",
+                "published_at": now_utc,
+            },
+            {
+                "title": "Inflation report shows consumer prices cooling",
+                "description": "The latest inflation data shaped market expectations.",
+                "link": "https://example.com/inflation",
+                "published_at": now_utc,
+            },
+            {
+                "title": "Payrolls rise as employers add jobs",
+                "description": "The labor department reported stronger payrolls.",
+                "link": "https://example.com/payrolls",
+                "published_at": now_utc,
+            },
+        ]
+
+        with patch("news_pipeline.pipeline.PER_SOURCE_TOPIC_ARTICLE_CAP", 1):
+            selected = _select_per_topic_feed_items(items, [topic], now_utc=now_utc)
+
+        self.assertEqual([item["link"] for item in selected], [item["link"] for item in items])
+
+    def test_predefined_topic_selection_uses_configured_topics_without_discovery(self) -> None:
+        configured_topics = [
+            {
+                "id": "iran_war",
+                "key": "iran_war",
+                "title": "Iran War",
+                "rationale": "Configured",
+                "keywords": ["iran"],
+                "boost_phrases": ["iran israel war"],
+                "min_score": 2,
+                "max_articles_per_source": 6,
+                "frame_tags": ["us"],
+            },
+            {
+                "id": "us_economy",
+                "key": "us_economy",
+                "title": "US Economy",
+                "rationale": "Configured",
+                "keywords": ["fed"],
+                "boost_phrases": ["jobs report"],
+                "min_score": 2,
+                "max_articles_per_source": 6,
+                "frame_tags": ["us"],
+            },
+        ]
+
+        with patch("news_pipeline.pipeline.load_predefined_topics", return_value=configured_topics):
+            topics = load_predefined_topics_for_run(topic_limit=2)
+
+        self.assertEqual([topic["key"] for topic in topics], ["iran_war", "us_economy"])
+        self.assertEqual([topic["selection_rank"] for topic in topics], [1, 2])
+        self.assertTrue(all(topic["topic_source"] == "predefined_config" for topic in topics))
+
+    def test_topic_mode_branch_skips_or_preserves_dynamic_discovery(self) -> None:
+        configured_topics = [
+            {
+                "id": "iran_war",
+                "key": "iran_war",
+                "title": "Iran War",
+                "keywords": ["iran"],
+                "boost_phrases": ["iran israel war"],
+                "min_score": 2,
+                "max_articles_per_source": 6,
+            }
+        ]
+        with patch("news_pipeline.pipeline.TOPIC_MODE", "predefined"):
+            with patch("news_pipeline.pipeline.DEV", True):
+                with patch("news_pipeline.pipeline.load_predefined_topics", return_value=configured_topics):
+                    with patch("news_pipeline.pipeline.discover_top_stories_of_day") as discover:
+                        with patch("news_pipeline.pipeline.llm_cluster_top_topics") as cluster:
+                            with redirect_stdout(StringIO()):
+                                topics, top_stories = select_topics_for_run(1)
+
+        self.assertEqual([topic["key"] for topic in topics], ["iran_war"])
+        self.assertEqual(top_stories, [])
+        discover.assert_not_called()
+        cluster.assert_not_called()
+
+        dynamic_story = {
+            "title": "Congress budget fight intensifies",
+            "description": "",
+            "providers": ["google_news_top"],
+            "provider_details": [{"key": "google_news_top", "frame": "us/western", "weight": 1.0}],
+            "url": "https://example.com/budget",
+        }
+        dynamic_topic = {
+            "key": "topic_budget",
+            "title": "US Congress budget fight",
+            "rationale": "A funding deadline is approaching.",
+            "keywords": ["congress", "budget", "funding"],
+            "boost_phrases": ["congress budget fight"],
+            "min_score": 2,
+        }
+        top_funnel = {
+            "all_stories": [dynamic_story],
+            "seed_stories": [dynamic_story],
+            "validation_stories": [dynamic_story],
+        }
+        with patch("news_pipeline.pipeline.TOPIC_MODE", "dynamic"):
+            with patch("news_pipeline.pipeline.discover_top_stories_of_day", return_value=top_funnel) as discover:
+                with patch("news_pipeline.pipeline.llm_cluster_top_topics", return_value=[dynamic_topic]) as cluster:
+                    with redirect_stdout(StringIO()):
+                        topics, top_stories = select_topics_for_run(1)
+
+        self.assertEqual([topic["title"] for topic in topics], ["US Congress budget fight"])
+        self.assertEqual(top_stories, [dynamic_story])
+        discover.assert_called_once()
+        cluster.assert_called_once()
 
     def test_supported_fallback_clusters_require_shared_provider_evidence(self) -> None:
         topics = _cluster_supported_fallback_topics(
@@ -835,6 +1285,71 @@ class ConfigAndTopicSelectionTests(unittest.TestCase):
         self.assertEqual(stats["included_by_source_topic"]["Topic A | Reuters"], 1)
         self.assertEqual(stats["included_by_source_topic"]["Topic A | AP"], 1)
 
+    def test_story_aware_budget_never_selects_single_article_story(self) -> None:
+        topics = [{"key": "topic_a", "title": "Topic A"}]
+        articles = [
+            {
+                "article_id": "s1-a1",
+                "source": "Reuters",
+                "topic_key": "topic_a",
+                "topic_title": "Topic A",
+                "story_key": "story_1",
+                "story_title": "Story One",
+                "story_article_count": 2,
+                "story_average_similarity": 0.5,
+                "relevance_score": 10,
+                "pub_date": "Sat, 02 May 2026 10:00:00 GMT",
+            },
+            {
+                "article_id": "s1-a2",
+                "source": "AP",
+                "topic_key": "topic_a",
+                "topic_title": "Topic A",
+                "story_key": "story_1",
+                "story_title": "Story One",
+                "story_article_count": 2,
+                "story_average_similarity": 0.5,
+                "relevance_score": 9,
+                "pub_date": "Sat, 02 May 2026 09:00:00 GMT",
+            },
+            {
+                "article_id": "s2-a1",
+                "source": "BBC",
+                "topic_key": "topic_a",
+                "topic_title": "Topic A",
+                "story_key": "story_2",
+                "story_title": "Story Two",
+                "story_article_count": 2,
+                "story_average_similarity": 0.4,
+                "relevance_score": 8,
+                "pub_date": "Sat, 02 May 2026 08:00:00 GMT",
+            },
+            {
+                "article_id": "s2-a2",
+                "source": "Al Jazeera",
+                "topic_key": "topic_a",
+                "topic_title": "Topic A",
+                "story_key": "story_2",
+                "story_title": "Story Two",
+                "story_article_count": 2,
+                "story_average_similarity": 0.4,
+                "relevance_score": 7,
+                "pub_date": "Sat, 02 May 2026 07:00:00 GMT",
+            },
+        ]
+
+        selected, stats = budget_article_targets(
+            articles,
+            topics,
+            total_cap=3,
+            per_topic_cap=3,
+            per_source_topic_cap=1,
+        )
+
+        self.assertEqual([article["article_id"] for article in selected], ["s1-a1", "s1-a2"])
+        self.assertTrue(stats["story_aware"])
+        self.assertEqual(stats["selected_story_count"], 1)
+
     def test_final_synthesis_payload_trims_to_model_input_cap(self) -> None:
         topics = [{"key": "topic_a", "title": "Topic A"}]
         reports = [
@@ -891,6 +1406,329 @@ class ConfigAndTopicSelectionTests(unittest.TestCase):
         self.assertIn("2. Officials said the second reported development", payload)
         self.assertNotIn("[Topic:", payload)
         self.assertNotIn("<topic>", payload)
+
+    def test_story_clustering_uses_full_text_similarity_for_three_article_story(self) -> None:
+        topics = [{"key": "topic_a", "title": "Topic A", "keywords": ["topic"], "boost_phrases": []}]
+        articles = [
+            {
+                "article_id": "a1",
+                "source": "Reuters",
+                "topic_key": "topic_a",
+                "topic_title": "Topic A",
+                "title": "Ministry confirms Novorossiysk refinery drone strike",
+                "description": "Officials said drones hit the Novorossiysk refinery overnight.",
+                "text": (
+                    "A drone strike hit the Novorossiysk refinery overnight, igniting fuel tanks. "
+                    "Regional officials said firefighters contained the refinery blaze and assessed damage."
+                ),
+            },
+            {
+                "article_id": "a2",
+                "source": "AP",
+                "topic_key": "topic_a",
+                "topic_title": "Topic A",
+                "title": "Governor says drone attack damages Novorossiysk refinery",
+                "description": "The governor said the same refinery was damaged by drones.",
+                "text": (
+                    "The Novorossiysk refinery was damaged after drones struck fuel storage tanks overnight. "
+                    "Firefighters worked at the refinery while authorities reported no casualties."
+                ),
+            },
+            {
+                "article_id": "a3",
+                "source": "BBC",
+                "topic_key": "topic_a",
+                "topic_title": "Topic A",
+                "title": "Crews extinguish fire after refinery drone attack",
+                "description": "Emergency crews extinguished a fire from the refinery drone strike.",
+                "text": (
+                    "Emergency crews extinguished a fire at the Novorossiysk refinery after an overnight "
+                    "drone attack on fuel tanks, local authorities said."
+                ),
+            },
+            {
+                "article_id": "a4",
+                "source": "France 24",
+                "topic_key": "topic_a",
+                "topic_title": "Topic A",
+                "title": "Court schedules opposition leader appeal",
+                "description": "Judges set a date for a separate political case.",
+                "text": "Judges scheduled an appeal hearing in a separate opposition leader case.",
+            },
+        ]
+
+        selected, stats = organize_article_targets_into_stories(
+            articles,
+            topics,
+            min_articles_per_story=2,
+            max_stories_per_topic=4,
+            max_articles_per_story=5,
+            similarity_threshold=0.18,
+        )
+
+        self.assertEqual([article["article_id"] for article in selected], ["a1", "a2", "a3"])
+        self.assertEqual(len({article["story_key"] for article in selected}), 1)
+        self.assertEqual({article["story_article_count"] for article in selected}, {3})
+        self.assertEqual(stats["story_count"], 1)
+        self.assertEqual(stats["dropped_count"], 1)
+
+    def test_story_clustering_rejects_weak_loose_chain(self) -> None:
+        topics = [{"key": "topic_a", "title": "Topic A", "keywords": [], "boost_phrases": []}]
+        articles = [
+            {
+                "article_id": "a1",
+                "source": "One",
+                "topic_key": "topic_a",
+                "topic_title": "Topic A",
+                "title": "Alpha plant outage",
+                "description": "Alpha corridor outage affects one plant.",
+                "text": "alpha alpha plant outage corridor bridge",
+            },
+            {
+                "article_id": "a2",
+                "source": "Two",
+                "topic_key": "topic_a",
+                "topic_title": "Topic A",
+                "title": "Bridge corridor tariff review",
+                "description": "Bridge corridor tariff review begins.",
+                "text": "bridge bridge corridor corridor tariff tariff review",
+            },
+            {
+                "article_id": "a3",
+                "source": "Three",
+                "topic_key": "topic_a",
+                "topic_title": "Topic A",
+                "title": "Tariff ministry filing",
+                "description": "Tariff ministry filing lands in court.",
+                "text": "tariff tariff ministry filing court docket",
+            },
+        ]
+
+        selected, stats = organize_article_targets_into_stories(
+            articles,
+            topics,
+            min_articles_per_story=2,
+            max_stories_per_topic=4,
+            max_articles_per_story=5,
+            similarity_threshold=0.20,
+        )
+
+        self.assertEqual(selected, [])
+        self.assertEqual(stats["story_count"], 0)
+        self.assertEqual(stats["dropped_count"], 3)
+
+    def test_story_clustering_does_not_link_dayone_and_felix(self) -> None:
+        topics = [
+            {
+                "key": "us_economy",
+                "title": "US Economy",
+                "rationale": "Macro, markets, housing, rates, commodities, currency, and major business news affecting the US economy.",
+                "keywords": ["ipo", "stocks", "stock market"],
+                "boost_phrases": ["stock market today"],
+            }
+        ]
+        articles = [
+            {
+                "article_id": "dayone",
+                "source": "Reuters",
+                "topic_key": "us_economy",
+                "topic_title": "US Economy",
+                "title": "Data center operator DayOne considering dual IPO in Singapore and US",
+                "description": "A source said DayOne is considering a listing.",
+                "text": (
+                    "A source said the company is considering a dual initial public offering. "
+                    "The article includes market context and routine source language."
+                ),
+            },
+            {
+                "article_id": "felix",
+                "source": "AP",
+                "topic_key": "us_economy",
+                "topic_title": "US Economy",
+                "title": "Felix Rosenqvist posts fastest 4-lap average in Indianapolis 500 qualifying",
+                "description": "Rosenqvist led the first qualifying round.",
+                "text": (
+                    "A source said the driver posted the fastest qualifying average. "
+                    "The article includes market context and routine source language."
+                ),
+            },
+        ]
+
+        selected, stats = organize_article_targets_into_stories(
+            articles,
+            topics,
+            min_articles_per_story=2,
+            max_stories_per_topic=4,
+            max_articles_per_story=4,
+            similarity_threshold=0.10,
+        )
+
+        self.assertEqual(selected, [])
+        self.assertEqual(stats["story_count"], 0)
+
+    def test_story_clustering_links_uae_nuclear_plant_coverage_and_excludes_false_hits(self) -> None:
+        topics = [
+            {
+                "key": "iran_war",
+                "title": "Iran War",
+                "rationale": "Stories about the 2026 US/Israel war with Iran and its regional consequences.",
+                "keywords": ["iran", "drone", "strike", "nuclear", "ceasefire"],
+                "boost_phrases": ["iran israel war"],
+            }
+        ]
+        articles = [
+            {
+                "article_id": "ap-uae",
+                "source": "AP",
+                "topic_key": "iran_war",
+                "topic_title": "Iran War",
+                "title": "Drone strikes UAE nuclear plant as US and Iran signal they are prepared to resume war",
+                "description": "The Barakah nuclear plant in Abu Dhabi was struck by drones.",
+                "text": "The UAE said drones hit the Barakah nuclear plant near Abu Dhabi and caused a fire.",
+            },
+            {
+                "article_id": "upi-uae",
+                "source": "UPI",
+                "topic_key": "iran_war",
+                "topic_title": "Iran War",
+                "title": "Drone strike sparks fire at Abu Dhabi nuclear plant",
+                "description": "Officials reported a fire at the Barakah nuclear plant.",
+                "text": "A drone strike sparked a fire at the Barakah nuclear plant in Abu Dhabi, UAE.",
+            },
+            {
+                "article_id": "france-uae",
+                "source": "France 24",
+                "topic_key": "iran_war",
+                "topic_title": "Iran War",
+                "title": "Drone strike sparks a fire on the edge of UAE nuclear facility",
+                "description": "The Barakah facility near Abu Dhabi was hit during regional tensions.",
+                "text": "The UAE nuclear facility at Barakah near Abu Dhabi reported a fire after a drone strike.",
+            },
+            {
+                "article_id": "scmp-uae",
+                "source": "SCMP",
+                "topic_key": "iran_war",
+                "topic_title": "Iran War",
+                "title": "Drone targets UAE nuclear power plant, straining Iran war ceasefire",
+                "description": "The Barakah nuclear power plant was targeted.",
+                "text": "A drone targeted the Barakah nuclear power plant in the UAE, officials said.",
+            },
+            {
+                "article_id": "mali",
+                "source": "AFP",
+                "topic_key": "iran_war",
+                "topic_title": "Iran War",
+                "title": "Mali Military Drone Strikes Kill At Least 10 Civilians",
+                "description": "The strike happened in Mali.",
+                "text": "Mali officials reported casualties after a military drone strike.",
+            },
+            {
+                "article_id": "samsung",
+                "source": "Yonhap",
+                "topic_key": "iran_war",
+                "topic_title": "Iran War",
+                "title": "Samsung Electronics labor union set to resume talks ahead of planned strike",
+                "description": "The labor dispute continued in South Korea.",
+                "text": "Samsung and its labor union planned further talks before a strike.",
+            },
+        ]
+
+        selected, stats = organize_article_targets_into_stories(
+            articles,
+            topics,
+            min_articles_per_story=2,
+            max_stories_per_topic=4,
+            max_articles_per_story=4,
+            similarity_threshold=0.18,
+        )
+
+        self.assertEqual(
+            {article["article_id"] for article in selected},
+            {"ap-uae", "upi-uae", "france-uae", "scmp-uae"},
+        )
+        self.assertEqual(stats["story_count"], 1)
+        self.assertEqual(stats["dropped_by_topic"], {"Iran War": 2})
+
+    def test_story_clustering_caps_summaries_without_shrinking_detected_cluster(self) -> None:
+        topics = [{"key": "topic_a", "title": "Topic A", "keywords": [], "boost_phrases": []}]
+        articles = [
+            {
+                "article_id": f"a{index}",
+                "source": f"Source {index}",
+                "topic_key": "topic_a",
+                "topic_title": "Topic A",
+                "title": f"Harbor refinery drone damage report {index}",
+                "description": "Harbor refinery drone attack damages fuel tanks.",
+                "text": (
+                    "The harbor refinery drone attack damaged fuel tanks and started a fire. "
+                    "Firefighters contained the refinery blaze while officials inspected the site."
+                ),
+                "relevance_score": 10 - index,
+            }
+            for index in range(1, 6)
+        ]
+
+        selected, stats = organize_article_targets_into_stories(
+            articles,
+            topics,
+            min_articles_per_story=2,
+            max_stories_per_topic=4,
+            max_articles_per_story=3,
+            similarity_threshold=0.18,
+        )
+
+        self.assertEqual(len(selected), 3)
+        story = stats["stories_by_topic"]["Topic A"][0]
+        self.assertEqual(story["cluster_article_count"], 5)
+        self.assertEqual(story["selected_article_count"], 3)
+        self.assertEqual(stats["dropped_count"], 2)
+
+    def test_explicit_story_payload_drops_story_blocks_below_floor(self) -> None:
+        topics = [{"key": "topic_a", "title": "Topic A"}]
+        reports = [
+            (
+                "### Article One\n"
+                "Metadata:\n"
+                "- Source: Reuters\n"
+                "- Published: Sat, 02 May 2026 10:00:00 GMT\n"
+                "- URL: https://example.com/1\n"
+                "- Topic: Topic A\n"
+                "- Story: Refinery drone strike\n\n"
+                "Summary:\n"
+                "Officials said drones hit the refinery overnight."
+            ),
+            (
+                "### Article Two\n"
+                "Metadata:\n"
+                "- Source: AP\n"
+                "- Published: Sat, 02 May 2026 11:00:00 GMT\n"
+                "- URL: https://example.com/2\n"
+                "- Topic: Topic A\n"
+                "- Story: Refinery drone strike\n\n"
+                "Summary:\n"
+                "The governor said the same refinery was damaged by drones."
+            ),
+            (
+                "### Article Three\n"
+                "Metadata:\n"
+                "- Source: BBC\n"
+                "- Published: Sat, 02 May 2026 12:00:00 GMT\n"
+                "- URL: https://example.com/3\n"
+                "- Topic: Topic A\n"
+                "- Story: Court appeal\n\n"
+                "Summary:\n"
+                "Judges set a date for a separate political case."
+            ),
+        ]
+
+        messages, _ = build_final_synthesis_payload(reports, "May 02, 2026", topics)
+        payload = messages[0].content
+
+        self.assertIn("Story: Refinery drone strike", payload)
+        self.assertIn("1. Officials said drones hit the refinery", payload)
+        self.assertIn("2. The governor said the same refinery", payload)
+        self.assertNotIn("Story: Court appeal", payload)
+        self.assertIn("distinct paragraph per Story block", payload)
 
     def test_final_synthesis_validation_rejects_topic_tag_leaks(self) -> None:
         topics = [{"key": "topic_a", "title": "Topic A"}]
