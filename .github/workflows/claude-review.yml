@@ -1,67 +1,40 @@
-
 name: Claude PR Review
 
 on:
-
   pull_request:
-
     types: [opened, synchronize, reopened]
 
 concurrency:
-
   group: claude-review-${{ github.event.pull_request.number }}
-
   cancel-in-progress: true
 
 permissions:
-
   contents: read
-
   pull-requests: write
-
   id-token: write
-
   issues: write
 
 jobs:
-
   review:
-
     name: AI Code Review
-
     runs-on: ubuntu-latest
-
     timeout-minutes: 10
 
     steps:
-
       - name: Checkout repository
-
         uses: actions/checkout@v4
-
         with:
-
           fetch-depth: 0
 
       - name: Run Claude Code Review
-
         uses: anthropics/claude-code-action@v1
-
         with:
-
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
-
-          claude_args: "--model claude-opus-4-7 --max-turns 5"
-
+          claude_args: "--model claude-opus-4-7 --max-turns 15"
           prompt: |
-
             Review the pull request at ${{ github.repository }}/pull/${{ github.event.pull_request.number }}.
-
             Read REVIEW.md in the repo root for the review standards.
-
             Note: this code is authored by GPT-5.5 on high reasoning. Focus on catching things that a model with different priors than GPT might miss — not stylistic preferences.
-
             Post inline comments on specific lines using the GitHub inline comment tool.
-
             Always finish by posting one summary comment on the PR with your verdict, even if there are no issues.
-
+            Be efficient — don't re-read files you've already read.
