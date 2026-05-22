@@ -72,121 +72,274 @@ topics:
 
   - id: us_economy
     title: US Economy
-    rationale: Stories about US macro data, Federal Reserve policy, markets, housing, commodities, and major business conditions.
+    rationale: Stories about US macro data, Federal Reserve policy, market moves, housing, consumers, commodities, and major US business conditions.
     required_context_terms:
-      - united states
+      - united states economy
+      - united states inflation
+      - united states jobs
+      - united states labor market
+      - united states stock market
+      - united states treasury
       - u.s. economy
       - u.s. inflation
       - u.s. jobs
       - u.s. labor
+      - u.s. consumers
+      - u.s. business
+      - u.s. companies
       - u.s. markets
       - u.s. stocks
+      - u.s. equities
+      - u.s. bonds
       - u.s. dollar
+      - u.s. treasury
       - us economy
       - us inflation
       - us jobs
       - us labor
+      - us consumers
+      - us business
+      - us companies
       - us markets
       - us stocks
+      - us equities
+      - us bonds
       - us dollar
+      - us treasury
       - american consumers
+      - american households
+      - american workers
+      - american businesses
       - american economy
       - federal reserve
+      - fed
       - fomc
+      - fed minutes
       - fed decision
       - fed rate
       - fed cuts
       - fed raises
       - fed chair
       - fed officials
+      - powell
       - wall street
       - dow jones
       - nasdaq
       - s&p 500
+      - russell 2000
       - treasury yield
       - treasury yields
+      - treasury market
       - treasuries
+      - bond market
+      - bond yields
+      - 10-year treasury
+      - 30-year treasury
+      - dollar index
       - jobless claims
       - nonfarm payrolls
+      - private payrolls
+      - labor market
+      - consumer sentiment
+      - consumer confidence
+      - consumer spending
+      - retail sales
+      - consumer price index
+      - producer price index
       - personal consumption expenditures
+      - gross domestic product
+      - gdp
+      - ism manufacturing
+      - ism services
+      - durable goods
+      - factory orders
+      - mortgage rates
+      - housing starts
+      - home sales
+      - tariff impact
+      - tariff policy
+      - trade deficit
       - chapter 11
       - bankruptcy protection
       - new york stock exchange
     keywords:
+      - economic data
+      - economic growth
+      - growth forecast
+      - business activity
+      - manufacturing activity
+      - services activity
+      - soft landing
       - jobs report
       - nonfarm payrolls
+      - employment report
+      - payroll growth
       - unemployment claims
       - unemployment rate
       - labor market
+      - job market
+      - hiring slowdown
       - wage growth
+      - adp jobs
+      - jolts
+      - job openings
+      - initial jobless claims
+      - continuing claims
+      - labor force participation
       - inflation report
       - cpi inflation
       - core cpi
       - pce inflation
+      - inflation expectations
       - consumer price index
       - producer price index
+      - wholesale prices
       - gdp growth
+      - gross domestic product
+      - durable goods orders
+      - factory orders
+      - ism manufacturing
+      - ism services
+      - purchasing managers index
       - recession risk
       - retail sales
       - consumer spending
       - consumer confidence
+      - consumer sentiment
+      - household spending
+      - consumer debt
+      - credit card debt
       - federal reserve
+      - fed chair
+      - fed minutes
+      - fed officials
+      - jerome powell
       - fed decision
       - fomc decision
+      - fed rate outlook
+      - fed rate cut
+      - fed rate hike
+      - rate cut bets
       - interest rate
       - rate cut
       - rate hike
+      - borrowing costs
       - mortgage rate
+      - mortgage applications
       - treasury yields
+      - treasury market
+      - us treasury yields
+      - 10-year treasury
+      - 30-year treasury
+      - yield curve
       - bond yields
+      - us bond yields
+      - bond market
       - stock futures
       - stock market
+      - us stocks
+      - us equities
       - wall street
       - nasdaq composite
       - dow jones
+      - s&p 500
+      - russell 2000
+      - market rally
+      - market selloff
+      - market volatility
+      - risk sentiment
       - housing starts
       - home sales
+      - existing home sales
+      - new home sales
+      - home prices
+      - housing inventory
+      - homebuilder confidence
       - housing market
       - oil prices
       - gas prices
+      - gasoline prices
       - crude oil
       - gold prices
       - commodity prices
       - us dollar
       - dollar index
+      - dollar weakens
+      - dollar strengthens
       - tariff impact
       - tariff policy
+      - import prices
+      - export prices
       - trade deficit
       - corporate earnings
+      - quarterly results
       - earnings outlook
+      - revenue forecast
+      - profit warning
       - job cuts
       - mass layoffs
+      - workforce reduction
+      - full-time workforce
       - bankruptcy filing
       - chapter 11
       - merger deal
       - acquisition deal
       - m&a
       - ipo
+      - initial public offering
       - antitrust approval
     boost_phrases:
+      - economic data
+      - growth forecast
       - jobs report
       - nonfarm payrolls
       - weekly jobless claims
+      - initial jobless claims
+      - jolts job openings
       - inflation report
       - consumer price index
+      - producer price index
       - personal consumption expenditures
+      - gross domestic product
+      - durable goods orders
+      - ism manufacturing
+      - ism services
+      - consumer sentiment
+      - inflation expectations
       - federal reserve decision
       - fomc rate decision
+      - fed minutes
+      - fed rate outlook
+      - fed rate cut bets
       - fed cuts rates
       - fed raises rates
+      - us treasury yields
       - treasury yields rise
+      - treasury yields fall
+      - bond yields rise
+      - bond yields fall
       - stock market today
+      - us stocks rise
+      - us stocks fall
+      - us stocks end higher
+      - us stocks end lower
       - stock futures rise
       - stock futures fall
+      - wall street closes higher
+      - wall street closes lower
       - mortgage rates
+      - mortgage applications
+      - existing home sales
+      - new home sales
       - home sales
       - oil prices
+      - oil prices rise
+      - oil prices fall
+      - oil prices ease
       - gas prices
+      - dollar index
+      - dollar weakens
+      - dollar strengthens
       - major merger
       - antitrust approval
       - bankruptcy protection

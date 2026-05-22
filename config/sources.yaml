@@ -76,12 +76,12 @@ sources:
   - key: Anadolu Agency
     name: Anadolu Agency
     region: turkey/non-western
-    url: https://news.google.com/rss/search?q=when:24h+source:Anadolu+Agency&hl=en-US&gl=US&ceid=US:en
+    url: https://www.aa.com.tr/en/rss/default?cat=live
     homepage: https://www.aa.com.tr/en
   - key: Yonhap
     name: Yonhap News Agency
     region: south korea/non-western
-    url: https://news.google.com/rss/search?q=when:24h+source:Yonhap&hl=en-US&gl=US&ceid=US:en
+    url: https://en.yna.co.kr/RSS/news.xml
     homepage: https://en.yna.co.kr/
   - key: NDTV
     name: NDTV
