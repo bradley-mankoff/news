@@ -14,6 +14,19 @@ Primary entry points:
 - Production run: `uv run news prod`
 - Installed CLI: `news` and `todays-news` map to `news_pipeline.cli:main`
 
+Run-mode source and delivery behavior:
+
+- `dev` uses exactly the English `tier: dev` sources from `config/sources.yaml`,
+  sends only to `NEWS_DEV_RECIPIENT`, defaults to `gemma-e2b-tiny`, and keeps
+  image generation off unless overridden.
+- `local-prod` uses English `tier: dev` plus `tier: core` sources, sends only to
+  `NEWS_DEV_RECIPIENT`, defaults to the large Gemma model, keeps image
+  generation on, and uses isolated URL history by default.
+- `prod` uses the same English `dev`/`core` source set as `local-prod`, sends to
+  configured active recipients, and updates shared URL history.
+- `tier: peripheral` and non-English sources are retained in the master source
+  file but are not selected by any run mode.
+
 Codex model safety:
 
 - Codex must not run the managed model server or model-calling checks against
@@ -67,6 +80,7 @@ If the task is vague, do one small targeted pass and ask one concrete question.
 
 - Pipeline behavior or orchestration: start in `news_pipeline/`.
 - Topic/source/client changes: start with the relevant file in `config/`.
+  `config/sources.yaml` is the only source-list YAML.
 - Dev execution issues: start with `todays_news.py`, `news_pipeline/cli.py`, and
   the exact traceback or current output the user mentions.
 - Local production review issues: start with `news_pipeline/cli.py` and run-mode

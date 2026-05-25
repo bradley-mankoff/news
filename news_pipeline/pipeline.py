@@ -8,10 +8,11 @@ Common usage:
 Development vs. real sends:
     uv run news dev
         Default. Sends only to NEWS_DEV_RECIPIENT, writes dev_used_urls.txt,
-        and does not add URLs to the long-lived seen_urls.txt history.
+        uses the English dev source tier, and does not add URLs to the
+        long-lived seen_urls.txt history.
 
     uv run news local-prod
-        Production-width run with isolated URL history, but delivery is
+        English core source run with isolated URL history, but delivery is
         limited to NEWS_DEV_RECIPIENT for review and manual forwarding.
 
     uv run news prod
@@ -19,9 +20,9 @@ Development vs. real sends:
         and records seen URLs globally so future runs avoid them.
 
 Model selection:
-    NEWS_MODEL=gemma-26b-moe uv run news dev
-    NEWS_MODEL=qwen-9b-dense uv run news dev
     NEWS_MODEL=gemma-e2b-tiny uv run news dev
+    NEWS_MODEL=gemma-26b-moe uv run news local-prod
+    NEWS_MODEL=qwen-9b-dense uv run news local-prod
 
     NEWS_MODEL accepts either a friendly alias above or a full model repo/name.
     NEWS_MODEL_NAME is still honored as a lower-priority legacy override, and
@@ -78,16 +79,12 @@ import tempfile
 import trafilatura
 from collections import Counter
 from contextlib import contextmanager
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from threading import Lock
-from typing import Annotated, Any, TextIO, TypedDict, List
+from threading import Lock, current_thread, main_thread
+from typing import Any, TextIO, List
 import requests
 from bs4 import BeautifulSoup
 from langchain_openai import ChatOpenAI
-from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage, BaseMessage, AIMessage, RemoveMessage
-from langgraph.graph import StateGraph, END
-from langgraph.graph.message import add_messages
-from ddgs import DDGS
+from langchain_core.messages import HumanMessage, SystemMessage, BaseMessage, AIMessage
 from datetime import datetime, timezone, timedelta
 from email.message import EmailMessage
 from email.utils import make_msgid, parsedate_to_datetime
@@ -107,6 +104,16 @@ from .config import (
     update_recipient_pause_setting,
 )
 from .diagnostics import RunDiagnostics
+from . import article_summarization as article_summarization_stage
+from . import story_clustering as story_clustering_stage
+from . import story_drafting as story_drafting_stage
+from . import story_topic_assignment as story_topic_assignment_stage
+from .text_cleaning import (
+    clean_article_text as _clean_article_text,
+    clean_content_text as _clean_content_text,
+    clean_feed_text as _clean_feed_text,
+    clean_feed_url as _clean_feed_url,
+)
 
 try:
     import tiktoken
@@ -131,6 +138,18 @@ MODEL_LOAD_PROBE_TIMEOUT_SECONDS = max(
     10,
     _int_env("NEWS_MODEL_LOAD_PROBE_TIMEOUT_SECONDS", 120),
 )
+ARTICLE_DOWNLOAD_TIMEOUT_SECONDS = max(
+    5,
+    _int_env("NEWS_ARTICLE_DOWNLOAD_TIMEOUT_SECONDS", 20),
+)
+ARTICLE_SCRAPE_TOTAL_TIMEOUT_SECONDS = max(
+    ARTICLE_DOWNLOAD_TIMEOUT_SECONDS,
+    _int_env("NEWS_ARTICLE_SCRAPE_TOTAL_TIMEOUT_SECONDS", 30),
+)
+SLOW_SOURCE_WARNING_SECONDS = max(
+    5,
+    _int_env("NEWS_SLOW_SOURCE_WARNING_SECONDS", 60),
+)
 CONFIG = load_runtime_config()
 MODEL_NAME = CONFIG.model_name
 MODEL_REFERENCE = CONFIG.model_reference
@@ -144,6 +163,11 @@ USER_AGENT = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"
 )
+ARTICLE_DOWNLOAD_HEADERS = {
+    "User-Agent": USER_AGENT,
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+}
 
 LAST_TOP_FUNNEL_PROVIDER_STORIES: dict[str, list[dict]] = {}
 LAST_TOP_FUNNEL_PROVIDER_METADATA: dict[str, dict] = {}
@@ -158,8 +182,6 @@ NUM_TOP_TOPICS = CONFIG.num_top_topics
 TOP_TOPIC_PROBES = CONFIG.top_topic_probes
 TOP_OF_FUNNEL_PER_PROVIDER = CONFIG.top_of_funnel_per_provider
 PROJECT_SUMMARY_SCOPE_LABEL = CONFIG.summary_scope_label
-DEV_SOURCE_LIMIT = max(1, CONFIG.dev_source_limit)
-DEV_NUM_TOPICS = max(1, CONFIG.dev_num_topics)
 
 RUN_STARTED_AT = CONFIG.run_started_at
 RUN_DATE = CONFIG.run_date
@@ -202,24 +224,41 @@ TRANSLATION_MAX_TOKENS = max(100, MODEL_PROFILE.translation_max_tokens)
 ARTICLE_SUMMARY_MAX_TOKENS = max(100, MODEL_PROFILE.article_summary_max_tokens)
 FINAL_SYNTHESIS_MAX_TOKENS = max(100, MODEL_PROFILE.final_synthesis_max_tokens)
 TITLE_GENERATION_MAX_TOKENS = max(20, MODEL_PROFILE.title_generation_max_tokens)
+
+
+def _bounded_env_float(name: str, default: float, *, lower: float = 0.0, upper: float = 1.0) -> float:
+    try:
+        value = float(os.getenv(name, str(default)))
+    except ValueError:
+        value = default
+    return min(upper, max(lower, value))
+
+
 try:
-    MIN_ARTICLES_PER_STORY = max(2, int(os.getenv("NEWS_MIN_ARTICLES_PER_STORY", "2")))
+    MIN_ARTICLES_PER_STORY = max(2, int(os.getenv("NEWS_MIN_ARTICLES_PER_STORY", "4")))
 except ValueError:
     MIN_ARTICLES_PER_STORY = 2
 try:
-    TOPIC_RELEVANCE_MIN_SCORE = max(1, int(os.getenv("NEWS_TOPIC_RELEVANCE_MIN_SCORE", "6")))
+    TOPIC_RELEVANCE_MIN_SCORE = max(1, int(os.getenv("NEWS_TOPIC_RELEVANCE_MIN_SCORE", "8")))
 except ValueError:
     TOPIC_RELEVANCE_MIN_SCORE = 6
+try:
+    STORY_TOPIC_FIT_MIN_SCORE = max(
+        1,
+        int(os.getenv("NEWS_STORY_TOPIC_FIT_MIN_SCORE", str(TOPIC_RELEVANCE_MIN_SCORE))),
+    )
+except ValueError:
+    STORY_TOPIC_FIT_MIN_SCORE = TOPIC_RELEVANCE_MIN_SCORE
 MAX_STORIES_PER_TOPIC = max(1, CONFIG.max_stories_per_topic)
 MAX_ARTICLES_PER_STORY = max(MIN_ARTICLES_PER_STORY, CONFIG.max_articles_per_story)
 STORY_CLUSTER_SIMILARITY_THRESHOLD = min(
     1.0,
     max(0.0, CONFIG.story_cluster_similarity_threshold),
 )
-STORY_SIMILARITY_TITLE_WEIGHT = 1
-STORY_SIMILARITY_DESCRIPTION_WEIGHT = 1
-STORY_SIMILARITY_TEXT_WEIGHT = 4
-STORY_MIN_SOURCE_COUNT = 2
+TOPIC_STORY_DIVERSITY_MIN_DISTANCE = _bounded_env_float(
+    "NEWS_TOPIC_STORY_DIVERSITY_MIN_DISTANCE",
+    0.50,
+)
 IMAGE_GENERATION_ENABLED = CONFIG.image_generation_enabled
 IMAGE_GENERATION_FAIL_ON_ERROR = CONFIG.image_generation_fail_on_error
 IMAGE_WIDTH = max(256, CONFIG.image_width)
@@ -286,6 +325,34 @@ def _record_run_urls(urls: list[str]) -> None:
     _append_unique_urls(RUN_USED_URLS_PATH, urls)
     if SHARED_URL_HISTORY_ENABLED:
         _append_unique_urls(LEGACY_SEEN_URLS_PATH, urls)
+
+
+def _ordered_unique_urls(urls: list[str]) -> list[str]:
+    seen_urls: set[str] = set()
+    unique_urls: list[str] = []
+    for url in urls:
+        clean_url = str(url or "").strip()
+        if not clean_url or clean_url in seen_urls:
+            continue
+        seen_urls.add(clean_url)
+        unique_urls.append(clean_url)
+    return unique_urls
+
+
+def _persist_url_list_debug(urls: list[str], label: str) -> tuple[str, int] | None:
+    unique_urls = _ordered_unique_urls(urls)
+    if not unique_urls:
+        return None
+
+    safe_label = re.sub(r"[^a-zA-Z0-9_]+", "_", label).strip("_") or "urls"
+    debug_path = os.path.join(RUN_OUTPUT_DIR, f"{safe_label}_{timestamp}.txt")
+    try:
+        with open(debug_path, "w", encoding="utf-8") as debug_file:
+            for url in unique_urls:
+                debug_file.write(url + "\n")
+        return debug_path, len(unique_urls)
+    except Exception:
+        return None
 
 
 def _run_article_topic_key(url: str, topic_key: Any) -> tuple[str, str]:
@@ -419,7 +486,63 @@ def _is_excluded_feed_item(title: str | None, source: str | None, link: str | No
         return _is_excluded_news_source(title_text.rsplit(" - ", 1)[-1])
     return False
 
-SOURCE_FEEDS = load_sources(CONFIG.sources_path)
+
+def _feed_title_source_suffix(title: str | None) -> str:
+    title_text = str(title or "").strip()
+    if " - " not in title_text:
+        return ""
+    suffix = title_text.rsplit(" - ", 1)[-1].strip()
+    return suffix
+
+
+def _source_match_aliases(source_name: str, source_config: dict[str, Any]) -> set[str]:
+    aliases = {
+        str(source_name or "").strip(),
+        str(source_config.get("name") or "").strip(),
+    }
+    aliases.update(str(alias or "").strip() for alias in source_config.get("source_match_aliases") or [])
+    return {_normalize_source_label(alias) for alias in aliases if _normalize_source_label(alias)}
+
+
+def _feed_item_source_labels(item: dict[str, Any]) -> list[str]:
+    labels: list[str] = []
+    feed_source = str(item.get("source") or "").strip()
+    title_suffix = _feed_title_source_suffix(str(item.get("title") or ""))
+    for label in (feed_source, title_suffix):
+        clean_label = label.strip()
+        if clean_label and clean_label not in labels:
+            labels.append(clean_label)
+    return labels
+
+
+def _feed_item_matches_configured_source(
+    source_name: str,
+    source_config: dict[str, Any],
+    item: dict[str, Any],
+) -> tuple[bool, dict[str, Any] | None]:
+    if not bool(source_config.get("strict_source_match")):
+        return True, None
+
+    aliases = _source_match_aliases(source_name, source_config)
+    labels = _feed_item_source_labels(item)
+    normalized_labels = [_normalize_source_label(label) for label in labels]
+    observed_labels = [label for label in normalized_labels if label]
+    matched = bool(observed_labels) and all(label in aliases for label in observed_labels)
+    if matched:
+        return True, None
+
+    return False, {
+        "reason": "wrong_feed_source",
+        "source": source_name,
+        "title": item.get("title", ""),
+        "link": item.get("link", ""),
+        "feed_source": item.get("source", ""),
+        "title_source_suffix": _feed_title_source_suffix(str(item.get("title") or "")),
+        "accepted_aliases": sorted(aliases),
+        "observed_source_labels": labels,
+    }
+
+SOURCE_FEEDS = load_sources(CONFIG.sources_path, run_mode=CONFIG.run_mode)
 TOP_FUNNEL_PROVIDERS: dict[str, dict[str, Any]] = {}
 
 LOW_CONFIDENCE_SUMMARY_PATTERNS = [
@@ -643,7 +766,6 @@ BOILERPLATE_CONTENT_STOPWORDS = {
     "www",
 }
 
-STORY_PAIR_DEBUG_LIMIT = 250
 FEED_DESCRIPTION_RELEVANCE_CHARS = 500
 
 
@@ -730,11 +852,13 @@ class ProgressTracker:
         else:
             self.step("sources", "No source feeds configured.")
 
-    def start_source(self, source_index: int) -> None:
+    def start_source(self, source_index: int, source_name: str | None = None) -> None:
         if self.current_step != "sources":
             self.current_step = "sources"
         self.meter_done = max(0, min(self.meter_total, source_index - 1))
         self._render_meter()
+        if source_name:
+            self.detail(f"Starting source {source_index}/{self.meter_total}: {source_name}")
 
     def set_source_article_total(self, total_articles: int) -> None:
         del total_articles
@@ -829,6 +953,63 @@ class ProgressTracker:
 progress_tracker = ProgressTracker()
 
 
+def _article_summarization_runtime() -> article_summarization_stage.ArticleSummarizationRuntime:
+    return article_summarization_stage.ArticleSummarizationRuntime(
+        source_feeds=SOURCE_FEEDS,
+        recent_window_hours=RECENT_WINDOW_HOURS,
+        article_summary_concurrency=ARTICLE_SUMMARY_CONCURRENCY,
+        article_summary_max_tokens=ARTICLE_SUMMARY_MAX_TOKENS,
+        build_article_heading=_build_article_heading,
+        format_article_metadata=_format_article_metadata,
+        build_article_fallback_entry=build_article_fallback_entry,
+        build_chat_model=build_chat_model,
+        invoke_with_retries=invoke_with_retries,
+        has_structured_entry=has_structured_entry,
+        normalize_report_entry=normalize_report_entry,
+        article_completed=progress_tracker.article_completed,
+    )
+
+
+def _story_drafting_runtime() -> story_drafting_stage.StoryDraftingRuntime:
+    return story_drafting_stage.StoryDraftingRuntime(
+        article_summary_concurrency=ARTICLE_SUMMARY_CONCURRENCY,
+        final_synthesis_max_tokens=FINAL_SYNTHESIS_MAX_TOKENS,
+        model_reference=MODEL_REFERENCE,
+        model_name=MODEL_NAME,
+        model_backend=MODEL_BACKEND,
+        min_articles_per_story=MIN_ARTICLES_PER_STORY,
+        build_chat_model=build_chat_model,
+        invoke_with_retries=invoke_with_retries,
+        estimate_message_token_count=estimate_message_token_count,
+        extract_prompt_tokens_from_response=extract_prompt_tokens_from_response,
+        strip_prompt_echo_lines=_strip_prompt_echo_lines,
+        strip_model_artifacts=strip_model_artifacts,
+        is_low_coverage_synthesis_section=_is_low_coverage_synthesis_section,
+        dev_synthesis_paragraph_from_summaries=_dev_synthesis_paragraph_from_summaries,
+        final_synthesis_word_count=_final_synthesis_word_count,
+    )
+
+
+def _story_topic_runtime() -> story_topic_assignment_stage.StoryTopicRuntime:
+    return story_topic_assignment_stage.StoryTopicRuntime(
+        max_stories_per_topic=MAX_STORIES_PER_TOPIC,
+        min_score=STORY_TOPIC_FIT_MIN_SCORE,
+        diversity_min_distance=TOPIC_STORY_DIVERSITY_MIN_DISTANCE,
+        model_max_input_tokens=MODEL_MAX_INPUT_TOKENS,
+        model_profile_key=MODEL_PROFILE_KEY,
+        model_reference=MODEL_REFERENCE,
+        model_name=MODEL_NAME,
+        model_backend=MODEL_BACKEND,
+        relaxed_final_synthesis_guards=RELAXED_FINAL_SYNTHESIS_GUARDS,
+        build_article_heading=_build_article_heading,
+        format_article_metadata=_format_article_metadata,
+        format_topic_section_header=_format_topic_section_header,
+        final_synthesis_word_count=_final_synthesis_word_count,
+        is_low_confidence_report_entry=is_low_confidence_report_entry,
+        report_reference_key=_report_reference_key,
+    )
+
+
 @contextmanager
 def run_logging():
     global RUN_LOG_FILE
@@ -852,7 +1033,7 @@ def load_recipient_config() -> dict[str, dict]:
     recipient_config = load_recipients(CONFIG.recipients_path)
     if not recipient_config:
         return {
-            email: {"name": email, "personal_prompt": None, "pause": False}
+            email: {"name": email, "pause": False}
             for email in EMAIL_RECIPIENTS_FALLBACK
         }
     return recipient_config
@@ -986,7 +1167,6 @@ def get_active_recipient_config(recipient_config: dict[str, dict]) -> dict[str, 
         return {
             BRADLEY_ONLY_RECIPIENT: {
                 "name": BRADLEY_ONLY_RECIPIENT,
-                "personal_prompt": None,
                 "pause": False,
             }
         }
@@ -999,73 +1179,14 @@ def get_active_recipient_config(recipient_config: dict[str, dict]) -> dict[str, 
         }
 
     return {
-        email: {"name": email, "personal_prompt": None, "pause": False}
+        email: {"name": email, "pause": False}
         for email in EMAIL_RECIPIENTS_FALLBACK
     }
-
-
-def build_prompt_groups(recipient_config: dict[str, dict]) -> List[dict]:
-    default_group = {
-        "group_key": "default_prompt",
-        "custom_prompt_text": None,
-        "uses_default_prompt": True,
-        "recipient_emails": [],
-        "recipient_names": [],
-    }
-    custom_groups: List[dict] = []
-    custom_group_lookup: dict[str, dict] = {}
-
-    for email, settings in recipient_config.items():
-        personal_prompt = settings.get("personal_prompt")
-        target_group = default_group
-        if personal_prompt is not None:
-            target_group = custom_group_lookup.get(personal_prompt)
-            if target_group is None:
-                target_group = {
-                    "group_key": f"custom_prompt_{len(custom_groups) + 1:02d}",
-                    "custom_prompt_text": personal_prompt,
-                    "uses_default_prompt": False,
-                    "recipient_emails": [],
-                    "recipient_names": [],
-                }
-                custom_group_lookup[personal_prompt] = target_group
-                custom_groups.append(target_group)
-
-        target_group["recipient_emails"].append(email)
-        target_group["recipient_names"].append(settings.get("name") or email)
-
-    groups: List[dict] = []
-    if default_group["recipient_emails"]:
-        groups.append(default_group)
-    groups.extend(custom_groups)
-    return groups
 
 
 def _slugify_report_suffix(value: str) -> str:
     clean_value = re.sub(r"[^a-zA-Z0-9]+", "_", (value or "").strip().lower()).strip("_")
     return clean_value or "report"
-
-
-def build_report_path(group: dict) -> str:
-    if group.get("uses_default_prompt"):
-        suffix = "default_prompt"
-    elif len(group.get("recipient_emails", [])) == 1:
-        suffix = _slugify_report_suffix(group["recipient_emails"][0])
-    else:
-        suffix = group.get("group_key") or "prompt_group"
-
-    base_path = os.path.join(RUN_OUTPUT_DIR, f"news_report_{timestamp}_{MODEL_PROFILE_KEY}_{suffix}")
-    return f"{base_path}.txt"
-
-# --- TOOLS ---
-
-def internet_search(query: str) -> str:
-    try:
-        with DDGS() as ddgs:
-            results = [r for r in ddgs.text(query, max_results=4)]
-            return json.dumps(results)
-    except Exception as e:
-        return f"Search failed: {e}"
 
 
 def _is_google_news_url(url: str | None) -> bool:
@@ -1161,22 +1282,65 @@ def _resolve_google_news_url(url: str) -> str:
     return _resolve_google_news_url_details(url).get("resolved_url") or str(url or "").strip()
 
 
-def scrape_article_text(url: str) -> tuple[str, str]:
+class ArticleScrapeTimeoutError(TimeoutError):
+    """Raised when one article scrape exceeds the run's hard scrape deadline."""
+
+
+@contextmanager
+def _article_scrape_deadline(seconds: int):
+    if seconds <= 0 or current_thread() is not main_thread() or not hasattr(signal, "SIGALRM"):
+        yield
+        return
+
+    previous_handler = signal.getsignal(signal.SIGALRM)
+    previous_timer = signal.setitimer(signal.ITIMER_REAL, 0)
+
+    def _raise_timeout(_signum, _frame):
+        raise ArticleScrapeTimeoutError(f"article scrape exceeded {seconds}s")
+
+    signal.signal(signal.SIGALRM, _raise_timeout)
+    signal.setitimer(signal.ITIMER_REAL, seconds)
     try:
-        downloaded = trafilatura.fetch_url(url)
-        if downloaded:
-            content = trafilatura.extract(downloaded)
-            if content:
-                clean_content = _clean_content_text(content)
-                return (clean_content, "scraped") if clean_content else ("Scraper found no text.", "scraper_no_text")
-            return "Scraper found no text.", "scraper_no_text"
+        yield
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, previous_handler)
+        if previous_timer[0] > 0:
+            signal.setitimer(signal.ITIMER_REAL, previous_timer[0], previous_timer[1])
+
+
+def _download_article_html(url: str) -> str:
+    response = requests.get(
+        url,
+        headers=ARTICLE_DOWNLOAD_HEADERS,
+        timeout=ARTICLE_DOWNLOAD_TIMEOUT_SECONDS,
+    )
+    response.raise_for_status()
+    return response.text
+
+
+def scrape_article_text(
+    url: str,
+    *,
+    source: str | None = None,
+    title: str | None = None,
+) -> tuple[str, str]:
+    try:
+        with _article_scrape_deadline(ARTICLE_SCRAPE_TOTAL_TIMEOUT_SECONDS):
+            downloaded = _download_article_html(url)
+            if downloaded:
+                content = trafilatura.extract(downloaded, url=url)
+                if content:
+                    clean_content = _clean_article_text(content, source=source, url=url, title=title)
+                    return (clean_content, "scraped") if clean_content else ("Scraper found no text.", "scraper_no_text")
+                return "Scraper found no text.", "scraper_no_text"
+            return "Access Denied.", "access_denied"
+    except (ArticleScrapeTimeoutError, requests.Timeout):
+        return "Scrape timed out.", "scrape_timeout"
+    except requests.RequestException:
         return "Access Denied.", "access_denied"
     except Exception:
         return "Scrape Error.", "scrape_error"
-
-
-def web_scrape(url: str) -> str:
-    return scrape_article_text(url)[0]
 
 
 def _build_feed_fallback_text(title: str | None, description: str | None) -> str:
@@ -1197,7 +1361,9 @@ def _resolve_and_scrape_feed_article(
     *,
     title: str | None,
     description: str | None,
+    source: str | None = None,
 ) -> dict[str, Any]:
+    started_at = time.perf_counter()
     resolution = _resolve_google_news_url_details(original_url)
     resolved_url = resolution.get("resolved_url") or str(original_url or "").strip()
     fallback_text = _build_feed_fallback_text(title, description)
@@ -1208,6 +1374,7 @@ def _resolve_and_scrape_feed_article(
             "text": fallback_text,
             "scrape_status": "missing_url",
             "feed_fallback_used": bool(fallback_text),
+            "scrape_seconds": round(time.perf_counter() - started_at, 3),
         }
 
     if _is_google_news_url(resolved_url):
@@ -1217,9 +1384,15 @@ def _resolve_and_scrape_feed_article(
             "text": fallback_text,
             "scrape_status": "google_news_unresolved" if fallback_text else "google_news_unresolved_no_fallback",
             "feed_fallback_used": bool(fallback_text),
+            "scrape_seconds": round(time.perf_counter() - started_at, 3),
         }
 
-    article_text, scrape_status = scrape_article_text(resolved_url)
+    article_text, scrape_status = scrape_article_text(
+        resolved_url,
+        source=source,
+        title=title,
+    )
+    scrape_seconds = round(time.perf_counter() - started_at, 3)
     if scrape_status != "scraped":
         if fallback_text:
             return {
@@ -1228,6 +1401,7 @@ def _resolve_and_scrape_feed_article(
                 "text": fallback_text,
                 "scrape_status": f"{scrape_status}_feed_fallback",
                 "feed_fallback_used": True,
+                "scrape_seconds": scrape_seconds,
             }
         return {
             **resolution,
@@ -1235,6 +1409,7 @@ def _resolve_and_scrape_feed_article(
             "text": "",
             "scrape_status": scrape_status,
             "feed_fallback_used": False,
+            "scrape_seconds": scrape_seconds,
         }
 
     return {
@@ -1243,6 +1418,7 @@ def _resolve_and_scrape_feed_article(
         "text": article_text,
         "scrape_status": "scraped",
         "feed_fallback_used": False,
+        "scrape_seconds": scrape_seconds,
     }
 
 def _translate_if_needed(text: str, title: str = "") -> str:
@@ -1298,6 +1474,8 @@ def _format_article_metadata(article: dict) -> str:
         f"- Published: {article.get('pub_date') or 'Unknown publish time'}",
         f"- URL: {article.get('url') or 'N/A'}",
     ]
+    if article.get("article_id"):
+        metadata_lines.append(f"- Article ID: {article.get('article_id')}")
     if article.get("topic_title"):
         metadata_lines.append(f"- Topic: {article.get('topic_title')}")
     if article.get("story_title"):
@@ -1333,67 +1511,6 @@ def _parse_feed_datetime(raw_value: str | None) -> datetime | None:
         return parsed
     except Exception:
         return None
-
-
-def _clean_content_text(text: str | None) -> str:
-    """Normalize scraped/feed text before it reaches summarization or matching."""
-    clean_text = html.unescape(str(text or ""))
-    if not clean_text:
-        return ""
-
-    clean_text = re.sub(
-        r"(?is)<(?:script|style|noscript)\b.*?</(?:script|style|noscript)>",
-        " ",
-        clean_text,
-    )
-    if "<" in clean_text and ">" in clean_text:
-        try:
-            clean_text = BeautifulSoup(clean_text, "html.parser").get_text(" ", strip=True)
-        except Exception:
-            clean_text = re.sub(r"(?s)<[^>]+>", " ", clean_text)
-    else:
-        clean_text = re.sub(r"(?s)<[^>]+>", " ", clean_text)
-
-    clean_text = re.sub(r"https?://[^\s<>)\"']+", " ", clean_text, flags=re.IGNORECASE)
-    clean_text = re.sub(r"\bwww\.[^\s<>)\"']+", " ", clean_text, flags=re.IGNORECASE)
-    clean_text = re.sub(r"\{[^{}]{0,800}\}", " ", clean_text)
-    clean_text = re.sub(
-        r"\b(?:background(?:-color)?|border(?:-[a-z]+)?|box-sizing|color|display|"
-        r"font(?:-[a-z]+)?|height|letter-spacing|line-height|margin(?:-[a-z]+)?|"
-        r"max-width|min-width|padding(?:-[a-z]+)?|text-align|text-decoration|"
-        r"vertical-align|width)\s*:\s*[^;{}\n]+;?",
-        " ",
-        clean_text,
-        flags=re.IGNORECASE,
-    )
-    clean_text = re.sub(
-        r"\b(?:aria-[a-z-]+|class|data-[a-z-]+|href|rel|src|style|target)\s*=\s*"
-        r"(?:\"[^\"]*\"|'[^']*'|[^\s>]+)",
-        " ",
-        clean_text,
-        flags=re.IGNORECASE,
-    )
-    clean_text = clean_text.replace("_blank", " ")
-    clean_text = re.sub(r"&[a-zA-Z0-9#]+;", " ", clean_text)
-    clean_text = re.sub(r"\b\d+(?:px|em|rem|pt|vh|vw|%)\b", " ", clean_text, flags=re.IGNORECASE)
-    clean_text = re.sub(
-        r"\b(?:href|https?|rss|nbsp|font|target|blank|noopener|noreferrer)\b",
-        " ",
-        clean_text,
-        flags=re.IGNORECASE,
-    )
-    clean_text = re.sub(r"\s+", " ", clean_text)
-    return clean_text.strip()
-
-
-def _clean_feed_text(text: str | None) -> str:
-    return _clean_content_text(text)
-
-
-def _clean_feed_url(text: str | None) -> str:
-    clean_url = html.unescape(str(text or "")).strip()
-    clean_url = re.sub(r"\s+", "", clean_url)
-    return clean_url
 
 
 def _extract_feed_items(feed_xml: str) -> List[dict]:
@@ -2616,8 +2733,7 @@ def select_topics_for_run(
     *,
     diagnostics: RunDiagnostics | None = None,
 ) -> tuple[list[dict], list[dict]]:
-    topic_limit = effective_num_topics if DEV else None
-    topics = load_predefined_topics_for_run(topic_limit)
+    topics = load_predefined_topics_for_run()
     if diagnostics is not None:
         diagnostics.settings["active_topic_ids"] = [topic.get("key") for topic in topics]
         diagnostics.record_topics(topics)
@@ -2712,6 +2828,312 @@ def _select_per_topic_feed_items(items: List[dict], topics: List[dict], *, now_u
 
 # --- PER-SOURCE FETCH ---
 
+def get_direct_source_article_context(source_name: str) -> dict:
+    source_config = SOURCE_FEEDS.get(source_name)
+    if not source_config or not isinstance(source_config, dict):
+        return {
+            "articles": [],
+            "status": "missing_source_config",
+            "feed_item_count": 0,
+            "recent_item_count": 0,
+            "selected_item_count": 0,
+            "selected_items": [],
+            "scrape_attempts": [],
+            "scrape_status_counts": {},
+        }
+    feed_url = source_config.get("url")
+    if not feed_url:
+        return {
+            "articles": [],
+            "status": "missing_feed_url",
+            "feed_item_count": 0,
+            "recent_item_count": 0,
+            "selected_item_count": 0,
+            "selected_items": [],
+            "scrape_attempts": [],
+            "scrape_status_counts": {},
+        }
+
+    try:
+        response = requests.get(
+            feed_url,
+            headers={"User-Agent": USER_AGENT},
+            timeout=10,
+        )
+        response.raise_for_status()
+    except Exception as error:
+        return {
+            "articles": [],
+            "status": "feed_error",
+            "reason": str(error),
+            "feed_item_count": 0,
+            "recent_item_count": 0,
+            "selected_item_count": 0,
+            "selected_items": [],
+            "scrape_attempts": [],
+            "scrape_status_counts": {},
+        }
+
+    content_type = response.headers.get("Content-Type", "")
+    if (
+        "xml" not in content_type
+        and "rss" not in content_type
+        and "<rss" not in response.text[:500]
+        and "<feed" not in response.text[:500]
+    ):
+        return {
+            "articles": [],
+            "status": "not_xml",
+            "reason": f"Got Content-Type: {content_type}",
+            "feed_item_count": 0,
+            "recent_item_count": 0,
+            "selected_item_count": 0,
+            "selected_items": [],
+            "scrape_attempts": [],
+            "scrape_status_counts": {},
+        }
+
+    items = _extract_feed_items(response.text)
+    now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
+    articles: list[dict] = []
+    selected_items: list[dict] = []
+    scrape_attempts: list[dict[str, Any]] = []
+    scrape_status_counts: Counter[str] = Counter()
+    scrape_cache: dict[str, dict[str, Any]] = {}
+    feed_rejected_counts: Counter[str] = Counter()
+    feed_rejections: list[dict[str, Any]] = []
+    recent_item_count = 0
+
+    for item in items:
+        original_rss_url = str(item.get("link") or "").strip()
+        if not original_rss_url:
+            continue
+        if not _is_within_recent_window(item.get("published_at"), now_utc):
+            continue
+        recent_item_count += 1
+
+        source_matches, source_rejection = _feed_item_matches_configured_source(
+            source_name,
+            source_config,
+            item,
+        )
+        if not source_matches:
+            reason = str((source_rejection or {}).get("reason") or "wrong_feed_source")
+            feed_rejected_counts[reason] += 1
+            if len(feed_rejections) < 50 and source_rejection:
+                feed_rejections.append(source_rejection)
+            continue
+
+        if original_rss_url in scrape_cache:
+            scrape_result = scrape_cache[original_rss_url]
+        else:
+            scrape_result = _resolve_and_scrape_feed_article(
+                original_rss_url,
+                title=item.get("title"),
+                description=item.get("description"),
+                source=source_name,
+            )
+            scrape_cache[original_rss_url] = scrape_result
+
+        selected_url = str(scrape_result.get("resolved_url") or "").strip()
+        scrape_status = str(scrape_result.get("scrape_status") or "unknown")
+        scrape_status_counts[scrape_status] += 1
+        attempt: dict[str, Any] = {
+            "title": item.get("title", ""),
+            "original_rss_url": original_rss_url,
+            "resolved_url": selected_url,
+            "feed_source": item.get("source", ""),
+            "title_source_suffix": _feed_title_source_suffix(str(item.get("title") or "")),
+            "resolution_status": scrape_result.get("resolution_status"),
+            "resolution_error": scrape_result.get("resolution_error"),
+            "scrape_status": scrape_status,
+            "scrape_seconds": scrape_result.get("scrape_seconds"),
+            "feed_fallback_used": bool(scrape_result.get("feed_fallback_used")),
+        }
+        if not selected_url:
+            scrape_attempts.append(attempt)
+            continue
+
+        article_text = str(scrape_result.get("text") or "").strip()
+        if not article_text:
+            scrape_attempts.append(attempt)
+            continue
+
+        article_text = _translate_if_needed(article_text, item.get("title", ""))
+        clean_article_text = _clean_article_text(
+            article_text,
+            source=source_name,
+            url=selected_url,
+            title=item.get("title", ""),
+        )
+        if not clean_article_text:
+            scrape_attempts.append(attempt)
+            continue
+
+        summary_text = truncate_text_to_token_limit(clean_article_text, ARTICLE_TEXT_TOKEN_LIMIT)
+        article_record = {
+            **item,
+            "url": selected_url,
+            "original_rss_url": original_rss_url,
+            "resolved_url": selected_url,
+            "resolution_status": scrape_result.get("resolution_status"),
+            "scrape_status": scrape_status,
+            "scrape_seconds": scrape_result.get("scrape_seconds"),
+            "feed_fallback_used": bool(scrape_result.get("feed_fallback_used")),
+            "feed_source": item.get("source", ""),
+            "title_source_suffix": _feed_title_source_suffix(str(item.get("title") or "")),
+            "text": summary_text,
+            "title": item.get("title", ""),
+            "pub_date": item.get("pub_date", ""),
+            "description": item.get("description", ""),
+        }
+        articles.append(article_record)
+        selected_items.append(
+            {
+                "title": article_record.get("title", ""),
+                "link": article_record.get("original_rss_url", ""),
+                "original_rss_url": article_record.get("original_rss_url", ""),
+                "resolved_url": article_record.get("resolved_url", ""),
+                "pub_date": article_record.get("pub_date", ""),
+                "feed_source": article_record.get("feed_source", ""),
+                "title_source_suffix": article_record.get("title_source_suffix", ""),
+                "scrape_status": article_record.get("scrape_status"),
+                "scrape_seconds": article_record.get("scrape_seconds"),
+            }
+        )
+        scrape_attempts.append(attempt)
+
+    if not articles:
+        empty_status = "no_recent_items" if recent_item_count == 0 else "no_scraped_recent_items"
+        if scrape_status_counts and all(
+            str(status).startswith("google_news_unresolved")
+            for status in scrape_status_counts
+        ):
+            empty_status = "google_news_unresolved"
+        return {
+            "articles": [],
+            "status": empty_status,
+            "feed_item_count": len(items),
+            "recent_item_count": recent_item_count,
+            "selected_item_count": 0,
+            "selected_items": selected_items,
+            "scrape_attempts": scrape_attempts,
+            "scrape_status_counts": dict(scrape_status_counts),
+            "feed_rejected_counts": dict(feed_rejected_counts),
+            "feed_rejections": feed_rejections,
+        }
+
+    return {
+        "articles": articles,
+        "status": "ok",
+        "feed_item_count": len(items),
+        "recent_item_count": recent_item_count,
+        "selected_item_count": len(articles),
+        "selected_items": selected_items,
+        "scrape_attempts": scrape_attempts,
+        "scrape_status_counts": dict(scrape_status_counts),
+        "feed_rejected_counts": dict(feed_rejected_counts),
+        "feed_rejections": feed_rejections,
+    }
+
+
+def gather_article_candidates_for_source(
+    source_name: str,
+    seen_urls: set[str],
+    run_seen_urls: set[str],
+) -> tuple[List[dict], List[str], dict]:
+    direct_context = get_direct_source_article_context(source_name)
+    articles = direct_context.get("articles", []) if direct_context else []
+    feed_rejected_counts = dict((direct_context or {}).get("feed_rejected_counts") or {})
+    source_run = {
+        "source": source_name,
+        "status": (direct_context or {}).get("status", "missing_source_config"),
+        "reason": (direct_context or {}).get("reason"),
+        "feed_item_count": (direct_context or {}).get("feed_item_count", 0),
+        "recent_item_count": (direct_context or {}).get("recent_item_count", 0),
+        "selected_item_count": (direct_context or {}).get("selected_item_count", 0),
+        "selected_items": (direct_context or {}).get("selected_items", []),
+        "selected_by_topic": {},
+        "post_scrape_rejections": [],
+        "feed_rejections": (direct_context or {}).get("feed_rejections", []),
+        "scrape_attempts": (direct_context or {}).get("scrape_attempts", []),
+        "scrape_status_counts": (direct_context or {}).get("scrape_status_counts", {}),
+        "fresh_article_count": 0,
+        "fresh_articles": [],
+        "rejected_counts": {
+            "duplicate_this_run": 0,
+            "seen_in_history": 0,
+            "missing_url": 0,
+            **feed_rejected_counts,
+        },
+    }
+    if not articles:
+        return [], [], source_run
+
+    fresh_articles = []
+    new_urls: List[str] = []
+    for article in articles:
+        url = str(article.get("url") or "").strip()
+        run_dedupe_key = _normalize_url_for_dedupe(url) or url
+        if not url:
+            source_run["rejected_counts"]["missing_url"] += 1
+            continue
+        if run_dedupe_key in run_seen_urls:
+            source_run["rejected_counts"]["duplicate_this_run"] += 1
+            continue
+        if SHARED_URL_HISTORY_ENABLED and url in seen_urls:
+            source_run["rejected_counts"]["seen_in_history"] += 1
+            continue
+
+        fresh_articles.append(article)
+        new_urls.append(url)
+        run_seen_urls.add(run_dedupe_key)
+
+    if not fresh_articles:
+        return [], [], source_run
+
+    article_targets: List[dict] = []
+    for index, article in enumerate(fresh_articles, start=1):
+        article_targets.append(
+            {
+                "article_id": f"{source_name}-article-{index}",
+                "source": source_name,
+                "title": article.get("title", ""),
+                "pub_date": article.get("pub_date", ""),
+                "url": article.get("url", ""),
+                "original_rss_url": article.get("original_rss_url", ""),
+                "resolved_url": article.get("resolved_url") or article.get("url", ""),
+                "resolution_status": article.get("resolution_status"),
+                "scrape_status": article.get("scrape_status"),
+                "feed_fallback_used": article.get("feed_fallback_used"),
+                "feed_source": article.get("feed_source", ""),
+                "title_source_suffix": article.get("title_source_suffix", ""),
+                "description": article.get("description", ""),
+                "text": article.get("text", ""),
+                "topic_key": "",
+                "topic_title": "",
+                "relevance_score": 0,
+            }
+        )
+    source_run["fresh_article_count"] = len(article_targets)
+    source_run["fresh_articles"] = [
+        {
+            "article_id": article.get("article_id"),
+            "title": article.get("title"),
+            "url": article.get("url"),
+            "original_rss_url": article.get("original_rss_url"),
+            "resolved_url": article.get("resolved_url"),
+            "topic_title": "",
+            "relevance_score": 0,
+            "feed_source": article.get("feed_source", ""),
+            "title_source_suffix": article.get("title_source_suffix", ""),
+            "scrape_status": article.get("scrape_status"),
+        }
+        for article in article_targets
+    ]
+    return article_targets, new_urls, source_run
+
+
 def get_direct_source_context(source_name: str, topics: List[dict]) -> dict | None:
     source_config = SOURCE_FEEDS.get(source_name)
     if not source_config or not isinstance(source_config, dict):
@@ -2778,6 +3200,7 @@ def get_direct_source_context(source_name: str, topics: List[dict]) -> dict | No
                 original_rss_url,
                 title=item.get("title"),
                 description=item.get("description"),
+                source=source_name,
             )
             scrape_cache[original_rss_url] = scrape_result
         selected_url = str(scrape_result.get("resolved_url") or "").strip()
@@ -2790,6 +3213,7 @@ def get_direct_source_context(source_name: str, topics: List[dict]) -> dict | No
             "resolution_status": scrape_result.get("resolution_status"),
             "resolution_error": scrape_result.get("resolution_error"),
             "scrape_status": scrape_status,
+            "scrape_seconds": scrape_result.get("scrape_seconds"),
             "feed_fallback_used": bool(scrape_result.get("feed_fallback_used")),
             "matched_topics": [],
         }
@@ -2803,7 +3227,12 @@ def get_direct_source_context(source_name: str, topics: List[dict]) -> dict | No
             continue
 
         article_text = _translate_if_needed(article_text, item.get("title", ""))
-        clean_article_text = _clean_content_text(article_text)
+        clean_article_text = _clean_article_text(
+            article_text,
+            source=source_name,
+            url=selected_url,
+            title=item.get("title", ""),
+        )
         if not clean_article_text:
             scrape_attempts.append(attempt)
             continue
@@ -2838,6 +3267,7 @@ def get_direct_source_context(source_name: str, topics: List[dict]) -> dict | No
                     "resolved_url": selected_url,
                     "resolution_status": scrape_result.get("resolution_status"),
                     "scrape_status": scrape_status,
+                    "scrape_seconds": scrape_result.get("scrape_seconds"),
                     "feed_fallback_used": bool(scrape_result.get("feed_fallback_used")),
                     "text": summary_text,
                     "title": item.get("title", ""),
@@ -2867,6 +3297,7 @@ def get_direct_source_context(source_name: str, topics: List[dict]) -> dict | No
                 "topic_key": article.get("topic_key"),
                 "relevance_score": article.get("relevance_score", 0),
                 "scrape_status": article.get("scrape_status"),
+                "scrape_seconds": article.get("scrape_seconds"),
             }
         )
 
@@ -3058,10 +3489,12 @@ def build_top_funnel_article_targets_for_coverage_gaps(
         topic_added = 0
         for story in candidates:
             original_rss_url = str(story.get("url") or "").strip()
+            story_source = _story_source_label(story)
             scrape_result = _resolve_and_scrape_feed_article(
                 original_rss_url,
                 title=str(story.get("title") or ""),
                 description=str(story.get("description") or ""),
+                source=story_source,
             )
             selected_url = str(scrape_result.get("resolved_url") or "").strip()
             scrape_status = str(scrape_result.get("scrape_status") or "unknown")
@@ -3074,6 +3507,7 @@ def build_top_funnel_article_targets_for_coverage_gaps(
                     "resolution_status": scrape_result.get("resolution_status"),
                     "resolution_error": scrape_result.get("resolution_error"),
                     "scrape_status": scrape_status,
+                    "scrape_seconds": scrape_result.get("scrape_seconds"),
                     "feed_fallback_used": bool(scrape_result.get("feed_fallback_used")),
                     "topic_title": topic_title,
                     "topic_key": topic_key,
@@ -3096,7 +3530,7 @@ def build_top_funnel_article_targets_for_coverage_gaps(
             fallback_targets.append(
                 {
                     "article_id": f"top-funnel-{topic_key}-{target_index}",
-                    "source": _story_source_label(story),
+                    "source": story_source,
                     "title": story.get("title", ""),
                     "pub_date": _story_pub_date(story),
                     "url": selected_url,
@@ -3106,7 +3540,12 @@ def build_top_funnel_article_targets_for_coverage_gaps(
                     "scrape_status": scrape_status,
                     "feed_fallback_used": bool(scrape_result.get("feed_fallback_used")),
                     "description": story.get("description", ""),
-                    "text": prepare_article_text_for_summary(article_text),
+                    "text": prepare_article_text_for_summary(
+                        article_text,
+                        source=story_source,
+                        url=selected_url,
+                        title=str(story.get("title") or ""),
+                    ),
                     "topic_key": topic_key,
                     "topic_title": topic_title,
                     "relevance_score": _score_topic_against_story(topic, story),
@@ -3130,870 +3569,6 @@ def build_top_funnel_article_targets_for_coverage_gaps(
         "scrape_attempts": scrape_attempts,
         "scrape_status_counts": dict(scrape_status_counts),
     }
-
-
-def _story_slug(value: str, fallback: str = "story") -> str:
-    slug = re.sub(r"[^a-zA-Z0-9]+", "_", (value or "").strip().lower()).strip("_")
-    return slug or fallback
-
-
-def _clean_story_title(value: str, topic: dict, articles: list[dict]) -> str:
-    clean_value = _strip_inline_markdown(strip_model_artifacts(value or ""))
-    clean_value = re.sub(r"[\r\n]+", " ", clean_value)
-    clean_value = re.sub(r"\s+", " ", clean_value).strip(" \"'")
-    topic_title = str(topic.get("title") or "").strip()
-    if not clean_value or clean_value.lower() == topic_title.lower():
-        first_title = str((articles[0] if articles else {}).get("title") or "").strip()
-        clean_value = _clean_topic_source_title(first_title) or topic_title or "News update"
-    words = clean_value.split()
-    if len(words) > 14:
-        clean_value = " ".join(words[:14])
-    return clean_value[:120].strip() or "News update"
-
-
-def _story_similarity_stopwords(topic: dict) -> set[str]:
-    broad_topic_terms = set(
-        _ordered_topic_match_terms(topic.get("key"), topic.get("title"), topic.get("rationale"))
-    )
-    generic_terms = TOPIC_MATCH_STOPWORDS | {
-        "article",
-        "briefing",
-        "coverage",
-        "daily",
-        "development",
-        "developments",
-        "newsletter",
-        "official",
-        "officials",
-        "reported",
-        "report",
-        "reports",
-        "said",
-        "says",
-        "source",
-        "story",
-        "update",
-        "updates",
-    }
-    return broad_topic_terms | generic_terms | WEAK_TOPIC_MATCH_TERMS | BOILERPLATE_CONTENT_STOPWORDS
-
-
-def _normalize_story_similarity_token(token: str) -> str:
-    normalized = token.strip("'")
-    if normalized.endswith("'s"):
-        normalized = normalized[:-2]
-    if normalized == "hits":
-        normalized = "hit"
-    elif len(normalized) > 4 and normalized.endswith("ies"):
-        normalized = normalized[:-3] + "y"
-    elif (
-        len(normalized) > 4
-        and normalized.endswith("s")
-        and not normalized.endswith(("ss", "virus"))
-    ):
-        normalized = normalized[:-1]
-    return normalized
-
-
-def _story_similarity_terms(text: str, stopwords: set[str]) -> list[str]:
-    terms: list[str] = []
-    clean_text = _clean_content_text(text)
-    for token in re.findall(r"[a-z0-9][a-z0-9'-]{2,}", clean_text.lower()):
-        token_variants = [token]
-        if "-" in token:
-            token_variants.extend(part for part in token.split("-") if part)
-        for variant in token_variants:
-            normalized = _normalize_story_similarity_token(variant)
-            if len(normalized) < 3 or normalized.isdigit() or normalized in stopwords:
-                continue
-            terms.append(normalized)
-    return terms
-
-
-def _story_weighted_term_counts(article: dict, topic: dict) -> Counter[str]:
-    stopwords = _story_similarity_stopwords(topic)
-    weighted_parts = [
-        (
-            _clean_content_text(_clean_topic_source_title(str(article.get("title") or ""))),
-            STORY_SIMILARITY_TITLE_WEIGHT,
-        ),
-        (_clean_content_text(str(article.get("description") or "")), STORY_SIMILARITY_DESCRIPTION_WEIGHT),
-        (_clean_content_text(str(article.get("text") or "")), STORY_SIMILARITY_TEXT_WEIGHT),
-    ]
-    counts: Counter[str] = Counter()
-    for text, weight in weighted_parts:
-        for term in _story_similarity_terms(text, stopwords):
-            counts[term] += weight
-    return counts
-
-
-def _build_story_tfidf_vectors(
-    topic: dict,
-    articles: list[dict],
-) -> tuple[list[dict[str, float]], list[float]]:
-    document_counts = [_story_weighted_term_counts(article, topic) for article in articles]
-    document_frequency: Counter[str] = Counter()
-    for counts in document_counts:
-        document_frequency.update(counts.keys())
-
-    total_documents = max(1, len(document_counts))
-    vectors: list[dict[str, float]] = []
-    norms: list[float] = []
-    for counts in document_counts:
-        vector: dict[str, float] = {}
-        for term, count in counts.items():
-            tf = 1.0 + math.log(max(1, count))
-            idf = math.log((1 + total_documents) / (1 + document_frequency[term])) + 1.0
-            vector[term] = tf * idf
-        norm = math.sqrt(sum(weight * weight for weight in vector.values()))
-        vectors.append(vector)
-        norms.append(norm)
-    return vectors, norms
-
-
-def _cosine_similarity(
-    left: dict[str, float],
-    left_norm: float,
-    right: dict[str, float],
-    right_norm: float,
-) -> float:
-    if not left_norm or not right_norm:
-        return 0.0
-    if len(left) > len(right):
-        left, right = right, left
-    dot_product = sum(weight * right.get(term, 0.0) for term, weight in left.items())
-    if dot_product <= 0.0:
-        return 0.0
-    return dot_product / (left_norm * right_norm)
-
-
-def _story_pair_key(left_index: int, right_index: int) -> tuple[int, int]:
-    return (left_index, right_index) if left_index < right_index else (right_index, left_index)
-
-
-def _story_pair_similarity(
-    similarities: dict[tuple[int, int], float],
-    left_index: int,
-    right_index: int,
-) -> float:
-    if left_index == right_index:
-        return 1.0
-    return similarities.get(_story_pair_key(left_index, right_index), 0.0)
-
-
-def _story_component_average_similarity(
-    component: list[int],
-    similarities: dict[tuple[int, int], float],
-) -> float:
-    if len(component) < 2:
-        return 0.0
-    total = 0.0
-    pair_count = 0
-    for offset, left_index in enumerate(component):
-        for right_index in component[offset + 1 :]:
-            total += _story_pair_similarity(similarities, left_index, right_index)
-            pair_count += 1
-    return total / pair_count if pair_count else 0.0
-
-
-def _story_component_pair_count(component: list[int]) -> int:
-    size = len(component)
-    return (size * (size - 1)) // 2
-
-
-def _story_component_edge_count(
-    component: list[int],
-    similarities: dict[tuple[int, int], float],
-    similarity_threshold: float,
-) -> int:
-    edge_count = 0
-    for offset, left_index in enumerate(component):
-        for right_index in component[offset + 1 :]:
-            if _story_pair_similarity(similarities, left_index, right_index) >= similarity_threshold:
-                edge_count += 1
-    return edge_count
-
-
-def _story_component_best_similarities(
-    component: list[int],
-    similarities: dict[tuple[int, int], float],
-) -> list[float]:
-    best_scores: list[float] = []
-    for index in component:
-        other_scores = [
-            _story_pair_similarity(similarities, index, other_index)
-            for other_index in component
-            if other_index != index
-        ]
-        best_scores.append(max(other_scores, default=0.0))
-    return best_scores
-
-
-def _minimum_story_edge_density(component_size: int) -> float:
-    if component_size <= 2:
-        return 1.0
-    if component_size == 3:
-        return 2.0 / 3.0
-    if component_size <= 5:
-        return 0.50
-    return 0.45
-
-
-def _story_component_connectedness_metrics(
-    component: list[int],
-    similarities: dict[tuple[int, int], float],
-    similarity_threshold: float,
-) -> dict[str, float | int]:
-    pair_count = _story_component_pair_count(component)
-    edge_count = _story_component_edge_count(component, similarities, similarity_threshold)
-    average_similarity = _story_component_average_similarity(component, similarities)
-    best_scores = _story_component_best_similarities(component, similarities)
-    mean_best_similarity = sum(best_scores) / len(best_scores) if best_scores else 0.0
-    min_best_similarity = min(best_scores, default=0.0)
-    edge_density = edge_count / pair_count if pair_count else 0.0
-    connectedness_score = (
-        (mean_best_similarity * 0.40)
-        + (average_similarity * 0.25)
-        + (edge_density * 0.20)
-        + (min_best_similarity * 0.15)
-    )
-    support_multiplier = math.log1p(max(1, len(component)))
-    story_strength_score = connectedness_score * support_multiplier
-    return {
-        "pair_count": pair_count,
-        "edge_count": edge_count,
-        "edge_density": edge_density,
-        "average_similarity": average_similarity,
-        "mean_best_similarity": mean_best_similarity,
-        "min_best_similarity": min_best_similarity,
-        "connectedness_score": connectedness_score,
-        "story_strength_score": story_strength_score,
-    }
-
-
-def _story_component_source_count(component: list[int], source_identities: list[str]) -> int:
-    return len({source_identities[index] for index in component})
-
-
-def _story_component_has_source_diversity(component: list[int], source_identities: list[str]) -> bool:
-    return _story_component_source_count(component, source_identities) >= min(
-        STORY_MIN_SOURCE_COUNT,
-        len(component),
-    )
-
-
-def _story_subcomponents_from_adjacency(
-    component: list[int],
-    adjacency: dict[int, set[int]],
-) -> list[list[int]]:
-    component_set = set(component)
-    subcomponents: list[list[int]] = []
-    visited: set[int] = set()
-    for start_index in sorted(component):
-        if start_index in visited:
-            continue
-        stack = [start_index]
-        visited.add(start_index)
-        subcomponent: list[int] = []
-        while stack:
-            index = stack.pop()
-            subcomponent.append(index)
-            for neighbor in adjacency.get(index, set()):
-                if neighbor not in component_set or neighbor in visited:
-                    continue
-                visited.add(neighbor)
-                stack.append(neighbor)
-        subcomponents.append(sorted(subcomponent))
-    return subcomponents
-
-
-def _story_similarity_edges(
-    component: list[int],
-    similarities: dict[tuple[int, int], float],
-    similarity_threshold: float,
-) -> list[tuple[float, int, int]]:
-    edges: list[tuple[float, int, int]] = []
-    for offset, left_index in enumerate(component):
-        for right_index in component[offset + 1 :]:
-            score = _story_pair_similarity(similarities, left_index, right_index)
-            if score >= similarity_threshold:
-                edges.append((score, left_index, right_index))
-    return edges
-
-
-def _story_component_meets_connectedness_floor(
-    component: list[int],
-    source_identities: list[str],
-    similarities: dict[tuple[int, int], float],
-    similarity_threshold: float,
-    *,
-    min_articles_per_story: int,
-) -> bool:
-    if len(component) < min_articles_per_story:
-        return False
-    if not _story_component_has_source_diversity(component, source_identities):
-        return False
-    metrics = _story_component_connectedness_metrics(component, similarities, similarity_threshold)
-    if float(metrics["min_best_similarity"]) < similarity_threshold:
-        return False
-    return float(metrics["edge_density"]) >= _minimum_story_edge_density(len(component))
-
-
-def _split_story_component_by_weak_bridges(
-    component: list[int],
-    source_identities: list[str],
-    similarities: dict[tuple[int, int], float],
-    similarity_threshold: float,
-    *,
-    min_articles_per_story: int,
-) -> list[list[int]]:
-    if len(component) < min_articles_per_story:
-        return []
-    edges = _story_similarity_edges(component, similarities, similarity_threshold)
-    if not edges:
-        return []
-
-    base_metrics = _story_component_connectedness_metrics(component, similarities, similarity_threshold)
-    base_strength = float(base_metrics["story_strength_score"])
-    for _, left_index, right_index in sorted(edges, key=lambda edge: (edge[0], edge[1], edge[2])):
-        adjacency: dict[int, set[int]] = {index: set() for index in component}
-        for edge_score, edge_left, edge_right in edges:
-            if (edge_left, edge_right) == (left_index, right_index):
-                continue
-            adjacency[edge_left].add(edge_right)
-            adjacency[edge_right].add(edge_left)
-        subcomponents = _story_subcomponents_from_adjacency(component, adjacency)
-        if len(subcomponents) <= 1:
-            continue
-        retained = [
-            subcomponent
-            for subcomponent in subcomponents
-            if _story_component_meets_connectedness_floor(
-                subcomponent,
-                source_identities,
-                similarities,
-                similarity_threshold,
-                min_articles_per_story=min_articles_per_story,
-            )
-        ]
-        if len(retained) < 2:
-            continue
-        split_strength = sum(
-            float(
-                _story_component_connectedness_metrics(
-                    subcomponent,
-                    similarities,
-                    similarity_threshold,
-                )["story_strength_score"]
-            )
-            for subcomponent in retained
-        )
-        if split_strength <= base_strength * 1.05:
-            continue
-        split_components: list[list[int]] = []
-        for subcomponent in retained:
-            split_components.extend(
-                _split_story_component_by_weak_bridges(
-                    subcomponent,
-                    source_identities,
-                    similarities,
-                    similarity_threshold,
-                    min_articles_per_story=min_articles_per_story,
-                )
-            )
-        return split_components
-
-    if _story_component_meets_connectedness_floor(
-        component,
-        source_identities,
-        similarities,
-        similarity_threshold,
-        min_articles_per_story=min_articles_per_story,
-    ):
-        return [component]
-    return []
-
-
-def _story_index_average_similarity(
-    index: int,
-    component: list[int],
-    similarities: dict[tuple[int, int], float],
-) -> float:
-    other_indexes = [other_index for other_index in component if other_index != index]
-    if not other_indexes:
-        return 0.0
-    return sum(
-        _story_pair_similarity(similarities, index, other_index)
-        for other_index in other_indexes
-    ) / len(other_indexes)
-
-
-def _story_component_medoid_index(
-    component: list[int],
-    articles: list[dict],
-    similarities: dict[tuple[int, int], float],
-) -> int:
-    def rank(index: int) -> tuple:
-        article = articles[index]
-        return (
-            -_story_index_average_similarity(index, component, similarities),
-            -int(article.get("relevance_score") or 0),
-            tuple(-value for value in _article_time_rank(article)),
-            index,
-        )
-
-    return sorted(component, key=rank)[0]
-
-
-def _story_cluster_relevance_score(component: list[int], articles: list[dict]) -> float:
-    if not component:
-        return 0.0
-    return sum(float(articles[index].get("relevance_score") or 0.0) for index in component) / len(component)
-
-
-def _story_cluster_recency_rank(component: list[int], articles: list[dict]) -> tuple[int, int, int]:
-    if not component:
-        return (0, 0, 0)
-    return max(_article_time_rank(articles[index]) for index in component)
-
-
-def _article_source_identity(article: dict) -> str:
-    source = str(article.get("source") or "").strip().lower()
-    if source:
-        return re.sub(r"\s+", " ", source)
-    for key in ("resolved_url", "url", "original_rss_url"):
-        parsed = urlparse(str(article.get(key) or ""))
-        host = parsed.netloc.lower().removeprefix("www.")
-        if host:
-            return host
-    return "unknown"
-
-
-def _select_story_article_indexes(
-    component: list[int],
-    medoid_index: int,
-    articles: list[dict],
-    similarities: dict[tuple[int, int], float],
-    *,
-    max_articles_per_story: int,
-) -> list[int]:
-    limit = max(1, max_articles_per_story)
-
-    def article_rank(index: int) -> tuple:
-        article = articles[index]
-        return (
-            0 if index == medoid_index else 1,
-            -_story_index_average_similarity(index, component, similarities),
-            -int(article.get("relevance_score") or 0),
-            tuple(-value for value in _article_time_rank(article)),
-            str(article.get("source") or ""),
-            index,
-        )
-
-    ranked_indexes = sorted(component, key=article_rank)
-    source_count = len({_article_source_identity(articles[index]) for index in component})
-    selected: list[int] = []
-    selected_sources: set[str] = set()
-
-    for index in ranked_indexes:
-        if len(selected) >= limit:
-            break
-        source = _article_source_identity(articles[index])
-        if source in selected_sources and len(selected_sources) < source_count:
-            continue
-        selected.append(index)
-        selected_sources.add(source)
-
-    for index in ranked_indexes:
-        if len(selected) >= limit:
-            break
-        if index not in selected:
-            selected.append(index)
-
-    return selected
-
-
-def cluster_topic_stories_by_similarity(
-    topic: dict,
-    articles: list[dict],
-    *,
-    min_articles_per_story: int = MIN_ARTICLES_PER_STORY,
-    max_articles_per_story: int = MAX_ARTICLES_PER_STORY,
-    similarity_threshold: float = STORY_CLUSTER_SIMILARITY_THRESHOLD,
-) -> list[dict]:
-    if len(articles) < min_articles_per_story:
-        return []
-
-    vectors, norms = _build_story_tfidf_vectors(topic, articles)
-    source_identities = [_article_source_identity(article) for article in articles]
-    similarities: dict[tuple[int, int], float] = {}
-    adjacency: dict[int, set[int]] = {index: set() for index in range(len(articles))}
-    max_similarity_by_index: dict[int, float] = {index: 0.0 for index in range(len(articles))}
-    pair_debug: list[dict[str, Any]] = []
-    for left_index in range(len(articles)):
-        for right_index in range(left_index + 1, len(articles)):
-            score = _cosine_similarity(
-                vectors[left_index],
-                norms[left_index],
-                vectors[right_index],
-                norms[right_index],
-            )
-            if score > 0.0:
-                similarities[(left_index, right_index)] = score
-            max_similarity_by_index[left_index] = max(max_similarity_by_index[left_index], score)
-            max_similarity_by_index[right_index] = max(max_similarity_by_index[right_index], score)
-            distinct_source_pair = source_identities[left_index] != source_identities[right_index]
-            linked = score >= similarity_threshold
-            if linked:
-                adjacency[left_index].add(right_index)
-                adjacency[right_index].add(left_index)
-            if score > 0.0 or linked:
-                pair_debug.append(
-                    {
-                        "left_article_id": articles[left_index].get("article_id"),
-                        "right_article_id": articles[right_index].get("article_id"),
-                        "similarity": round(score, 4),
-                        "similarity_threshold": round(similarity_threshold, 4),
-                        "linked": linked,
-                        "distinct_source_pair": distinct_source_pair,
-                    }
-                )
-
-    components: list[list[int]] = []
-    visited: set[int] = set()
-    eligible_indexes = {
-        index
-        for index, max_similarity in max_similarity_by_index.items()
-        if max_similarity >= similarity_threshold
-    }
-    for start_index in range(len(articles)):
-        if start_index not in eligible_indexes:
-            continue
-        if start_index in visited:
-            continue
-        stack = [start_index]
-        component: list[int] = []
-        visited.add(start_index)
-        while stack:
-            index = stack.pop()
-            component.append(index)
-            for neighbor in adjacency[index]:
-                if neighbor in visited:
-                    continue
-                visited.add(neighbor)
-                stack.append(neighbor)
-        if len(component) >= min_articles_per_story:
-            components.extend(
-                _split_story_component_by_weak_bridges(
-                    sorted(component),
-                    source_identities,
-                    similarities,
-                    similarity_threshold,
-                    min_articles_per_story=min_articles_per_story,
-                )
-            )
-
-    article_id_by_index = {
-        index: str(article.get("article_id") or "")
-        for index, article in enumerate(articles)
-    }
-    story_groups: list[dict] = []
-    for component in components:
-        if not _story_component_meets_connectedness_floor(
-            component,
-            source_identities,
-            similarities,
-            similarity_threshold,
-            min_articles_per_story=min_articles_per_story,
-        ):
-            continue
-        metrics = _story_component_connectedness_metrics(component, similarities, similarity_threshold)
-        source_count = _story_component_source_count(component, source_identities)
-        medoid_index = _story_component_medoid_index(component, articles, similarities)
-        selected_indexes = _select_story_article_indexes(
-            component,
-            medoid_index,
-            articles,
-            similarities,
-            max_articles_per_story=max(max_articles_per_story, min_articles_per_story),
-        )
-        if len(selected_indexes) < min_articles_per_story:
-            continue
-        story_groups.append(
-            {
-                "title": _clean_story_title(
-                    _clean_topic_source_title(str(articles[medoid_index].get("title") or "")),
-                    topic,
-                    [articles[medoid_index]],
-                ),
-                "article_ids": [
-                    article_id_by_index[index]
-                    for index in selected_indexes
-                    if article_id_by_index[index]
-                ],
-                "cluster_article_ids": [
-                    article_id_by_index[index]
-                    for index in component
-                    if article_id_by_index[index]
-                ],
-                "article_count": len(component),
-                "selected_article_count": len(selected_indexes),
-                "average_similarity": round(float(metrics["average_similarity"]), 4),
-                "connectedness_score": round(float(metrics["connectedness_score"]), 4),
-                "story_strength_score": round(float(metrics["story_strength_score"]), 4),
-                "edge_density": round(float(metrics["edge_density"]), 4),
-                "edge_count": int(metrics["edge_count"]),
-                "mean_best_similarity": round(float(metrics["mean_best_similarity"]), 4),
-                "min_best_similarity": round(float(metrics["min_best_similarity"]), 4),
-                "source_count": source_count,
-                "relevance_score": _story_cluster_relevance_score(component, articles),
-                "latest_rank": _story_cluster_recency_rank(component, articles),
-                "_medoid_index": medoid_index,
-            }
-        )
-
-    def story_rank(story: dict) -> tuple:
-        return (
-            -float(story.get("story_strength_score") or 0.0),
-            -float(story.get("connectedness_score") or 0.0),
-            -int(story.get("article_count") or 0),
-            -int(story.get("source_count") or 0),
-            -float(story.get("relevance_score") or 0.0),
-            tuple(-value for value in story.get("latest_rank", (0, 0, 0))),
-            int(story.get("_medoid_index") or 0),
-        )
-
-    ranked_groups = sorted(story_groups, key=story_rank)
-    for story in ranked_groups:
-        story.pop("_medoid_index", None)
-        story.pop("latest_rank", None)
-    ranked_groups_debug = sorted(
-        pair_debug,
-        key=lambda entry: (
-            not entry.get("linked"),
-            -float(entry.get("similarity") or 0.0),
-            str(entry.get("left_article_id") or ""),
-            str(entry.get("right_article_id") or ""),
-        ),
-    )
-    for story in ranked_groups:
-        story["_pair_debug"] = ranked_groups_debug[:STORY_PAIR_DEBUG_LIMIT]
-    return ranked_groups
-
-
-def organize_article_targets_into_stories(
-    article_targets: List[dict],
-    topics: List[dict],
-    *,
-    min_articles_per_story: int = MIN_ARTICLES_PER_STORY,
-    max_stories_per_topic: int = MAX_STORIES_PER_TOPIC,
-    max_articles_per_story: int = MAX_ARTICLES_PER_STORY,
-    similarity_threshold: float = STORY_CLUSTER_SIMILARITY_THRESHOLD,
-) -> tuple[List[dict], dict[str, Any]]:
-    if min_articles_per_story <= 1:
-        return article_targets, {
-            "enabled": False,
-            "candidate_count": len(article_targets),
-            "included_count": len(article_targets),
-            "dropped_count": 0,
-            "min_articles_per_story": min_articles_per_story,
-            "max_stories_per_topic": max_stories_per_topic,
-            "max_articles_per_story": max_articles_per_story,
-            "similarity_threshold": similarity_threshold,
-        }
-
-    topic_by_key = {str(topic.get("key") or ""): topic for topic in topics}
-    topic_order = [str(topic.get("key") or "") for topic in topics]
-    articles_by_topic: dict[str, list[dict]] = {key: [] for key in topic_order}
-    for article in article_targets:
-        topic_key = str(article.get("topic_key") or "")
-        articles_by_topic.setdefault(topic_key, []).append(article)
-
-    annotated_by_original_id: dict[int, dict] = {}
-    stories_by_topic: dict[str, list[dict]] = {}
-    pair_debug_by_topic: dict[str, list[dict[str, Any]]] = {}
-    dropped_articles_by_topic: dict[str, list[dict[str, Any]]] = {}
-    dropped_by_topic: Counter[str] = Counter()
-
-    for topic_key in topic_order + sorted(key for key in articles_by_topic if key not in topic_order):
-        articles = articles_by_topic.get(topic_key) or []
-        if not articles:
-            continue
-        topic = topic_by_key.get(
-            topic_key,
-            {
-                "key": topic_key,
-                "title": articles[0].get("topic_title") or topic_key or "Unknown topic",
-                "keywords": [],
-                "boost_phrases": [],
-            },
-        )
-        topic_title = str(topic.get("title") or topic_key or "Unknown topic")
-        all_story_groups = cluster_topic_stories_by_similarity(
-            topic,
-            articles,
-            min_articles_per_story=min_articles_per_story,
-            max_articles_per_story=max_articles_per_story,
-            similarity_threshold=similarity_threshold,
-        )
-        story_groups = all_story_groups[:max_stories_per_topic]
-        if all_story_groups:
-            pair_debug_by_topic[topic_title] = (
-                all_story_groups[0].get("_pair_debug", [])[:STORY_PAIR_DEBUG_LIMIT]
-            )
-        if not story_groups:
-            dropped_by_topic[topic_title] += len(articles)
-            dropped_articles_by_topic[topic_title] = [
-                {
-                    "article_id": article.get("article_id"),
-                    "source": article.get("source"),
-                    "title": article.get("title"),
-                    "relevance_score": article.get("relevance_score"),
-                    "reason": "no_supported_story_cluster",
-                }
-                for article in articles
-            ]
-            continue
-
-        article_lookup = {str(article.get("article_id") or ""): article for article in articles}
-        topic_story_records: list[dict] = []
-        for story_index, story in enumerate(story_groups, start=1):
-            story_title = _clean_story_title(str(story.get("title") or ""), topic, articles)
-            article_ids = [
-                str(article_id)
-                for article_id in story.get("article_ids", [])
-                if str(article_id) in article_lookup
-            ]
-            if len(article_ids) < min_articles_per_story:
-                continue
-            story_key = (
-                f"{_story_slug(topic_key or topic_title, 'topic')}"
-                f"-story-{story_index:02d}-{_story_slug(story_title)}"
-            )
-            topic_story_records.append(
-                {
-                    "story_key": story_key,
-                    "story_title": story_title,
-                    "article_count": len(article_ids),
-                    "cluster_article_count": int(story.get("article_count") or len(article_ids)),
-                    "selected_article_count": len(article_ids),
-                    "article_ids": article_ids,
-                    "cluster_article_ids": story.get("cluster_article_ids", article_ids),
-                    "average_similarity": story.get("average_similarity"),
-                    "connectedness_score": story.get("connectedness_score"),
-                    "story_strength_score": story.get("story_strength_score"),
-                    "edge_density": story.get("edge_density"),
-                    "mean_best_similarity": story.get("mean_best_similarity"),
-                    "min_best_similarity": story.get("min_best_similarity"),
-                    "source_count": story.get("source_count"),
-                }
-            )
-            for article_id in article_ids:
-                original_article = article_lookup[article_id]
-                annotated_by_original_id[id(original_article)] = {
-                    **original_article,
-                    "story_key": story_key,
-                    "story_title": story_title,
-                    "story_article_count": int(story.get("article_count") or len(article_ids)),
-                    "story_selected_article_count": len(article_ids),
-                    "story_average_similarity": story.get("average_similarity"),
-                    "story_connectedness_score": story.get("connectedness_score"),
-                    "story_strength_score": story.get("story_strength_score"),
-                    "story_edge_density": story.get("edge_density"),
-                    "story_source_count": story.get("source_count"),
-                }
-        included_ids = {
-            id(article_lookup[article_id])
-            for record in topic_story_records
-            for article_id in record["article_ids"]
-            if article_id in article_lookup
-        }
-        dropped_by_topic[topic_title] += len([article for article in articles if id(article) not in included_ids])
-        dropped_articles = [article for article in articles if id(article) not in included_ids]
-        if dropped_articles:
-            dropped_articles_by_topic[topic_title] = [
-                {
-                    "article_id": article.get("article_id"),
-                    "source": article.get("source"),
-                    "title": article.get("title"),
-                    "relevance_score": article.get("relevance_score"),
-                    "reason": "outside_retained_story_or_article_cap",
-                }
-                for article in dropped_articles
-            ]
-        if topic_story_records:
-            stories_by_topic[topic_title] = topic_story_records
-
-    selected_targets = [
-        annotated_by_original_id[id(article)]
-        for article in article_targets
-        if id(article) in annotated_by_original_id
-    ]
-    stats = {
-        "enabled": True,
-        "candidate_count": len(article_targets),
-        "included_count": len(selected_targets),
-        "dropped_count": len(article_targets) - len(selected_targets),
-        "min_articles_per_story": min_articles_per_story,
-        "max_stories_per_topic": max_stories_per_topic,
-        "max_articles_per_story": max_articles_per_story,
-        "similarity_threshold": similarity_threshold,
-        "clustering_method": "cleaned_body_weighted_tfidf_similarity_graph",
-        "story_count": sum(len(stories) for stories in stories_by_topic.values()),
-        "stories_by_topic": stories_by_topic,
-        "dropped_by_topic": dict(dropped_by_topic),
-        "dropped_articles_by_topic": dropped_articles_by_topic,
-        "pair_debug_by_topic": pair_debug_by_topic,
-    }
-    return selected_targets, stats
-
-
-def filter_budgeted_targets_by_story_floor(
-    article_targets: List[dict],
-    *,
-    min_articles_per_story: int = MIN_ARTICLES_PER_STORY,
-) -> tuple[List[dict], dict[str, Any]]:
-    if min_articles_per_story <= 1:
-        return article_targets, {
-            "enabled": False,
-            "candidate_count": len(article_targets),
-            "included_count": len(article_targets),
-            "dropped_count": 0,
-            "min_articles_per_story": min_articles_per_story,
-        }
-
-    grouped: dict[str, list[dict]] = {}
-    for article in article_targets:
-        story_key = str(article.get("story_key") or "").strip()
-        if not story_key:
-            continue
-        grouped.setdefault(story_key, []).append(article)
-
-    eligible_story_keys = {
-        story_key
-        for story_key, story_articles in grouped.items()
-        if len(story_articles) >= min_articles_per_story
-    }
-    selected = [
-        article
-        for article in article_targets
-        if str(article.get("story_key") or "").strip() in eligible_story_keys
-    ]
-    dropped = [
-        article
-        for article in article_targets
-        if str(article.get("story_key") or "").strip() not in eligible_story_keys
-    ]
-
-    return selected, {
-        "enabled": True,
-        "candidate_count": len(article_targets),
-        "included_count": len(selected),
-        "dropped_count": len(dropped),
-        "min_articles_per_story": min_articles_per_story,
-        "dropped_article_ids": [article.get("article_id") for article in dropped],
-    }
-
 
 # --- TITLE GEN / SYNTHESIS ---
 
@@ -4196,8 +3771,17 @@ def truncate_text_to_token_limit(text: str, token_limit: int) -> str:
     return truncated + " ..."
 
 
-def prepare_article_text_for_summary(text: str) -> str:
-    return truncate_text_to_token_limit(_clean_content_text(text), ARTICLE_TEXT_TOKEN_LIMIT)
+def prepare_article_text_for_summary(
+    text: str,
+    *,
+    source: str | None = None,
+    url: str | None = None,
+    title: str | None = None,
+) -> str:
+    return truncate_text_to_token_limit(
+        _clean_article_text(text, source=source, url=url, title=title),
+        ARTICLE_TEXT_TOKEN_LIMIT,
+    )
 
 
 def extract_prompt_tokens_from_response(message: AIMessage) -> int | None:
@@ -4229,29 +3813,6 @@ def extract_prompt_tokens_from_response(message: AIMessage) -> int | None:
                     return value
     return None
 
-# --- STATE ---
-
-class AgentState(TypedDict):
-    messages: Annotated[list[BaseMessage], add_messages]
-    final_reports: List[str]
-    articles_remaining: List[dict]
-    empty_response_count: int
-    final_synthesis_token_stats: dict
-    generate_final_synthesis: bool
-    final_prompt_text: str | None
-    topics: List[dict]
-
-
-def _is_empty_ai_response(message: BaseMessage) -> bool:
-    if not isinstance(message, AIMessage):
-        return False
-    if getattr(message, "tool_calls", None):
-        return False
-    content = message.content if isinstance(message.content, str) else str(message.content or "")
-    clean_text = re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL).strip()
-    return not clean_text
-
-
 def strip_model_artifacts(text: str) -> str:
     text = text or ""
     text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
@@ -4271,95 +3832,6 @@ def _contains_disallowed_final_markup(text: str) -> bool:
 
 def _final_synthesis_word_count(text: str) -> int:
     return len(re.findall(r"\b\w+\b", text or ""))
-
-
-def _final_synthesis_heading_count(text: str) -> int:
-    return len(re.findall(r"(?m)^##+\s+\S", text or ""))
-
-
-def _normalize_synthesis_heading_label(value: str) -> str:
-    clean_value = _strip_inline_markdown(strip_model_artifacts(value or ""))
-    clean_value = re.sub(r"[^a-z0-9]+", " ", clean_value.lower()).strip()
-    return clean_value
-
-
-def _final_synthesis_heading_labels(text: str) -> list[str]:
-    clean_text = _strip_prompt_echo_lines(strip_model_artifacts(text or ""))
-    return [
-        match.group(1).strip()
-        for match in re.finditer(r"(?m)^##+\s+(.+?)\s*$", clean_text)
-    ]
-
-
-def _missing_required_topic_headings(text: str, required_headings: list[str]) -> list[str]:
-    present = {
-        _normalize_synthesis_heading_label(label)
-        for label in _final_synthesis_heading_labels(text)
-    }
-    missing: list[str] = []
-    for heading in required_headings:
-        normalized = _normalize_synthesis_heading_label(heading)
-        if normalized and normalized not in present:
-            missing.append(heading)
-    return missing
-
-
-def describe_final_synthesis_rejection(
-    text: str,
-    topics: List[dict],
-    *,
-    uses_custom_prompt: bool,
-    relaxed: bool = False,
-    validation: dict[str, Any] | None = None,
-) -> str:
-    if _contains_disallowed_final_markup(text):
-        return "disallowed topic markup"
-
-    clean_text = _strip_prompt_echo_lines(strip_model_artifacts(text or ""))
-    if not clean_text:
-        return "empty after cleanup"
-    if uses_custom_prompt:
-        return ""
-
-    heading_count = _final_synthesis_heading_count(clean_text)
-    word_count = _final_synthesis_word_count(clean_text)
-    required_headings = [
-        str(heading)
-        for heading in (validation or {}).get("required_topic_headings", [])
-        if str(heading).strip()
-    ]
-
-    if required_headings:
-        missing_headings = _missing_required_topic_headings(clean_text, required_headings)
-        if missing_headings:
-            return "missing required topic heading(s): " + ", ".join(missing_headings)
-    elif heading_count == 0:
-        return "missing markdown section heading"
-
-    if relaxed:
-        minimum_words = min(40, max(12, max(1, len(required_headings) or len(topics)) * 8))
-    else:
-        minimum_words = min(120, max(50, max(1, len(required_headings) or len(topics)) * 35))
-    if word_count < minimum_words:
-        return f"too short ({word_count}/{minimum_words} words)"
-    return ""
-
-
-def is_valid_final_synthesis_response(
-    text: str,
-    topics: List[dict],
-    *,
-    uses_custom_prompt: bool,
-    relaxed: bool = False,
-    validation: dict[str, Any] | None = None,
-) -> bool:
-    return not describe_final_synthesis_rejection(
-        text,
-        topics,
-        uses_custom_prompt=uses_custom_prompt,
-        relaxed=relaxed,
-        validation=validation,
-    )
 
 
 def _is_low_coverage_synthesis_section(section_text: str) -> bool:
@@ -4461,45 +3933,8 @@ def is_low_confidence_report_entry(entry: str) -> bool:
     return any(pattern in summary_text for pattern in LOW_CONFIDENCE_SUMMARY_PATTERNS)
 
 
-# --- DEFAULT FINAL SYNTHESIS INSTRUCTIONS (DYNAMIC, ONE SECTION PER TOPIC) ---
-
 def _format_topic_section_header(topic_title: str) -> str:
     return topic_title.upper()
-
-
-def get_default_final_synthesis_instructions(topics: List[dict]) -> str:
-    section_lines = "\n".join(
-        f"       ## {_format_topic_section_header(topic['title'])}"
-        for topic in topics
-    )
-    return textwrap.dedent(f"""
-        TASK:
-        1) Output ONLY this exact structure (one section per selected topic, in order):
-{section_lines}
-        2) Use only claims supported by PRIMARY_DATASET; if support is weak or conflicting, place
-           that point in the same section with explicit uncertainty language.
-        3) PRIMARY_DATASET is divided into Topic/Story blocks. Within each topic section, write one
-           distinct paragraph per Story block. Do not merge different Story blocks into the same
-           paragraph, and do not shift to a new Story block mid-paragraph.
-        4) Treat a Story block as eligible only when it has at least {MIN_ARTICLES_PER_STORY} source
-           summaries. Ignore any singleton, broad background recap, explainer, or generic state-of-play
-           material. Do not compensate for omitted singleton stories by writing a broader recap.
-        5) Lead each paragraph with today's reported development. Avoid opening sentences that recap a
-           longstanding conflict, market cycle, or policy debate unless the recap itself is newly reported.
-        6) Each story paragraph should be roughly 70-130 words of cohesive prose
-           (no bullets, no label-colon fragments). Read like a compact wire-service roundup.
-        7) Focus on concrete reported claims: who acted, what happened, where, when, casualties or
-           damage, official statements, deadlines, and what remains unconfirmed.
-        8) Do not include a preamble, methodology, or outlet-style commentary.
-        9) If a section has no credible updates in the dataset, omit that section entirely. Do not
-           explain missing coverage, apologize, or mention empty source material.
-        10) Write for newsletter recipients. Do not mention the user, the prompt, AI, PRIMARY_DATASET,
-           LOW_CONFIDENCE_DATASET, supplied coverage, or source-material limitations in the final copy.
-        11) Do not write XML/HTML-style topic tags, label-only lines, bullets, or headline lists.
-        12) Do not invent facts beyond what PRIMARY_DATASET supports. Treat LOW_CONFIDENCE_DATASET
-           entries as headline-only material; they may justify uncertainty language but never establish
-           a claim on their own.
-    """).strip()
 
 
 def _report_topic_label(entry: str) -> str:
@@ -4517,316 +3952,6 @@ def _report_summary_text(entry: str) -> str:
     return re.sub(r"\s+", " ", summary_match.group(1).strip()) if summary_match else ""
 
 
-def _collect_grouped_synthesis_blocks(
-    reports: List[str],
-    topics: List[dict],
-) -> tuple[list[str], dict[str, dict[str, list[str]]], list[str], bool]:
-    topic_order = [str(topic.get("title") or "").strip() for topic in topics if topic.get("title")]
-    grouped: dict[str, dict[str, list[str]]] = {topic_title: {} for topic_title in topic_order}
-    ungrouped: list[str] = []
-    explicit_story_mode = any(_report_story_label(report) for report in reports)
-
-    for report in reports:
-        summary_text = _report_summary_text(report)
-        if not summary_text:
-            continue
-        topic_label = _report_topic_label(report)
-        story_label = _report_story_label(report)
-        if explicit_story_mode and not story_label:
-            continue
-        story_label = story_label or topic_label or "General update"
-        if topic_label in grouped:
-            grouped[topic_label].setdefault(story_label, []).append(summary_text)
-        elif topic_label:
-            grouped.setdefault(topic_label, {}).setdefault(story_label, []).append(summary_text)
-        else:
-            ungrouped.append(summary_text)
-
-    return topic_order, grouped, ungrouped, explicit_story_mode
-
-
-def _required_synthesis_structure_for_reports(reports: List[str], topics: List[dict]) -> dict[str, Any]:
-    topic_order, grouped, _, explicit_story_mode = _collect_grouped_synthesis_blocks(reports, topics)
-    required_topic_titles: list[str] = []
-    story_blocks_by_topic: dict[str, list[str]] = {}
-    remaining_topics = [topic for topic in grouped.keys() if topic not in topic_order]
-    for topic_title in topic_order + sorted(remaining_topics):
-        story_map = grouped.get(topic_title) or {}
-        story_titles: list[str] = []
-        for story_title, summaries in story_map.items():
-            if explicit_story_mode and len(summaries) < MIN_ARTICLES_PER_STORY:
-                continue
-            if summaries:
-                story_titles.append(story_title)
-        if story_titles:
-            required_topic_titles.append(topic_title)
-            story_blocks_by_topic[topic_title] = story_titles
-    return {
-        "required_topic_titles": required_topic_titles,
-        "required_topic_headings": [
-            _format_topic_section_header(topic_title)
-            for topic_title in required_topic_titles
-        ],
-        "required_story_blocks_by_topic": story_blocks_by_topic,
-        "eligible_story_block_count": sum(len(stories) for stories in story_blocks_by_topic.values()),
-        "explicit_story_mode": explicit_story_mode,
-    }
-
-
-def _build_grouped_synthesis_dataset(reports: List[str], topics: List[dict]) -> str:
-    topic_order, grouped, ungrouped, explicit_story_mode = _collect_grouped_synthesis_blocks(reports, topics)
-    sections: list[str] = []
-    remaining_topics = [topic for topic in grouped.keys() if topic not in topic_order]
-    for topic_title in topic_order + sorted(remaining_topics):
-        story_map = grouped.get(topic_title) or {}
-        if not story_map:
-            continue
-        for story_title, summaries in story_map.items():
-            if explicit_story_mode and len(summaries) < MIN_ARTICLES_PER_STORY:
-                continue
-            lines = [f"Topic: {topic_title}", f"Story: {story_title}", "Source summaries:"]
-            for index, summary_text in enumerate(summaries, start=1):
-                lines.append(f"{index}. {summary_text}")
-            sections.append("\n".join(lines))
-
-    if ungrouped and not explicit_story_mode:
-        lines = ["Other source summaries:"]
-        for index, summary_text in enumerate(ungrouped, start=1):
-            lines.append(f"{index}. {summary_text}")
-        sections.append("\n".join(lines))
-
-    return "\n\n---\n\n".join(sections)
-
-
-def _eligible_story_synthesis_blocks(final_reports: List[str], topics: List[dict]) -> list[dict[str, Any]]:
-    topic_order, grouped, _, explicit_story_mode = _collect_grouped_synthesis_blocks(final_reports, topics)
-    blocks: list[dict[str, Any]] = []
-    remaining_topics = [topic for topic in grouped.keys() if topic not in topic_order]
-    for topic_index, topic_title in enumerate(topic_order + sorted(remaining_topics)):
-        story_map = grouped.get(topic_title) or {}
-        for story_index, (story_title, summaries) in enumerate(story_map.items()):
-            if explicit_story_mode and len(summaries) < MIN_ARTICLES_PER_STORY:
-                continue
-            if not summaries:
-                continue
-            blocks.append(
-                {
-                    "topic_title": topic_title,
-                    "story_title": story_title,
-                    "summaries": summaries,
-                    "topic_index": topic_index,
-                    "story_index": story_index,
-                }
-            )
-    return blocks
-
-
-def build_story_synthesis_prompt_messages(story_block: dict[str, Any], now_label: str) -> list[BaseMessage]:
-    topic_title = str(story_block.get("topic_title") or "Unknown topic")
-    story_title = str(story_block.get("story_title") or "Story update")
-    summaries = [str(summary or "").strip() for summary in story_block.get("summaries", []) if str(summary or "").strip()]
-    source_summary_lines = "\n".join(
-        f"{index}. {summary}"
-        for index, summary in enumerate(summaries, start=1)
-    )
-    system_prompt = SystemMessage(content=textwrap.dedent(f"""
-        Today: {now_label}.
-        You are synthesizing prewritten article summaries into one newsletter story paragraph.
-        Use only the supplied source summaries.
-        Write exactly one cohesive prose paragraph, roughly 70-130 words.
-        Lead with today's reported development. Include concrete reported claims, named actors,
-        places, timing, figures, damage, statements, deadlines, and uncertainty when supported.
-        Do not write a heading, bullets, labels, source-material notes, methodology, or preamble.
-        Do not merge in background material unless a source summary reports it as part of today's update.
-    """).strip())
-    user_prompt = HumanMessage(content=textwrap.dedent(f"""
-        Topic: {topic_title}
-        Story: {story_title}
-
-        Source summaries:
-        {source_summary_lines}
-
-        Return only the story paragraph.
-    """).strip())
-    return [system_prompt, user_prompt]
-
-
-def _clean_story_synthesis_paragraph(raw_text: str, summaries: list[str]) -> str:
-    clean_text = _strip_prompt_echo_lines(strip_model_artifacts(raw_text or ""))
-    clean_text = re.sub(r"(?m)^##+\s+.*$", "", clean_text)
-    clean_text = re.sub(r"(?mi)^(topic|story|source summaries?|paragraph)\s*:\s*.*$", "", clean_text)
-    clean_text = re.sub(r"(?m)^\s*[-*]\s+", "", clean_text)
-    clean_text = re.sub(r"\s+", " ", clean_text).strip()
-    if clean_text and not _is_low_coverage_synthesis_section(clean_text):
-        return clean_text
-    return _dev_synthesis_paragraph_from_summaries(summaries)
-
-
-def _run_story_synthesis_block(story_block: dict[str, Any], now_label: str) -> dict[str, Any]:
-    summaries = [str(summary or "").strip() for summary in story_block.get("summaries", []) if str(summary or "").strip()]
-    fallback_paragraph = _dev_synthesis_paragraph_from_summaries(summaries)
-    prompt_messages = build_story_synthesis_prompt_messages(story_block, now_label)
-    estimated_input_tokens = sum(estimate_message_token_count(message) for message in prompt_messages)
-    response = invoke_with_retries(
-        build_chat_model(
-            max_tokens=max(300, min(900, FINAL_SYNTHESIS_MAX_TOKENS)),
-            task="final_synthesis",
-        ),
-        prompt_messages,
-        task_name=f"story synthesis for {story_block.get('story_title') or 'story'}",
-        fallback_content=fallback_paragraph,
-    )
-    paragraph = _clean_story_synthesis_paragraph(response.content, summaries)
-    prompt_tokens = extract_prompt_tokens_from_response(response)
-    return {
-        **story_block,
-        "paragraph": paragraph,
-        "estimated_input_tokens": estimated_input_tokens,
-        "actual_prompt_tokens": prompt_tokens,
-        "word_count": _final_synthesis_word_count(paragraph),
-        "valid": bool(paragraph),
-        "reason": "accepted" if paragraph else "empty after cleanup",
-        "preview": paragraph[:500],
-    }
-
-
-def _run_story_synthesis_blocks(story_blocks: list[dict[str, Any]], now_label: str) -> list[dict[str, Any]]:
-    if ARTICLE_SUMMARY_CONCURRENCY > 1 and len(story_blocks) > 1:
-        ordered_results: list[tuple[int, dict[str, Any]]] = []
-        with ThreadPoolExecutor(max_workers=ARTICLE_SUMMARY_CONCURRENCY) as executor:
-            future_map = {
-                executor.submit(_run_story_synthesis_block, story_block, now_label): index
-                for index, story_block in enumerate(story_blocks)
-            }
-            for future in as_completed(future_map):
-                ordered_results.append((future_map[future], future.result()))
-        return [
-            result
-            for _, result in sorted(ordered_results, key=lambda item: item[0])
-        ]
-    return [_run_story_synthesis_block(story_block, now_label) for story_block in story_blocks]
-
-
-def _assemble_story_synthesis(results: list[dict[str, Any]], topics: List[dict]) -> str:
-    topic_order = [str(topic.get("title") or "").strip() for topic in topics if topic.get("title")]
-    grouped: dict[str, list[str]] = {topic_title: [] for topic_title in topic_order}
-    for result in results:
-        paragraph = str(result.get("paragraph") or "").strip()
-        if not paragraph:
-            continue
-        topic_title = str(result.get("topic_title") or "").strip()
-        grouped.setdefault(topic_title, []).append(paragraph)
-
-    sections: list[str] = []
-    remaining_topics = [topic_title for topic_title in grouped.keys() if topic_title not in topic_order]
-    for topic_title in topic_order + sorted(remaining_topics):
-        paragraphs = grouped.get(topic_title) or []
-        if not paragraphs:
-            continue
-        sections.append(
-            f"## {_format_topic_section_header(topic_title)}\n"
-            + "\n\n".join(paragraphs)
-        )
-    return "\n\n".join(sections)
-
-
-def run_story_synthesis_pass(
-    final_reports: List[str],
-    topics: List[dict],
-) -> tuple[str, dict, dict]:
-    now = datetime.now().strftime("%B %d, %Y")
-    story_blocks = _eligible_story_synthesis_blocks(final_reports, topics)
-    primary_dataset = _build_grouped_synthesis_dataset(final_reports, topics)
-    required_structure = _required_synthesis_structure_for_reports(final_reports, topics)
-    token_stats: dict[str, Any] = {
-        "synthesis_method": "per_story_parallel",
-        "story_synthesis_concurrency": ARTICLE_SUMMARY_CONCURRENCY,
-        "total_reports": len(final_reports),
-        "reports_included_in_synthesis": len(final_reports),
-        "reports_omitted_from_synthesis": 0,
-        "high_confidence_reports": len([entry for entry in final_reports if not is_low_confidence_report_entry(entry)]),
-        "low_confidence_reports": len([entry for entry in final_reports if is_low_confidence_report_entry(entry)]),
-        "story_blocks_included": len(story_blocks),
-        "model_max_input_tokens": MODEL_MAX_INPUT_TOKENS,
-        "model_profile": MODEL_PROFILE_KEY,
-        "model": MODEL_REFERENCE,
-        "model_name": MODEL_NAME,
-        "model_backend": MODEL_BACKEND,
-        "uses_custom_prompt": False,
-        "topic_count": len(topics),
-        "primary_dataset": primary_dataset,
-        "included_report_keys": [_report_reference_key(entry) for entry in final_reports],
-        **required_structure,
-    }
-    if not story_blocks:
-        fallback = build_dev_final_synthesis_preview(final_reports, topics)
-        return fallback, token_stats, {
-            "attempts": [],
-            "relaxed_guards": RELAXED_FINAL_SYNTHESIS_GUARDS,
-            "dev_fallback_used": bool(fallback),
-            "synthesis_method": "per_story_parallel",
-        }
-
-    results = _run_story_synthesis_blocks(story_blocks, now)
-    final_synthesis = _assemble_story_synthesis(results, topics)
-    token_stats["estimated_total_input_tokens"] = sum(
-        int(result.get("estimated_input_tokens") or 0)
-        for result in results
-    )
-    actual_prompt_tokens = [
-        int(result["actual_prompt_tokens"])
-        for result in results
-        if result.get("actual_prompt_tokens") is not None
-    ]
-    if actual_prompt_tokens:
-        token_stats["actual_prompt_tokens"] = sum(actual_prompt_tokens)
-    attempts = [
-        {
-            "topic": result.get("topic_title"),
-            "story": result.get("story_title"),
-            "valid": bool(result.get("valid")),
-            "reason": result.get("reason"),
-            "word_count": result.get("word_count"),
-            "preview": result.get("preview"),
-        }
-        for result in results
-    ]
-    debug = {
-        "attempts": attempts,
-        "relaxed_guards": RELAXED_FINAL_SYNTHESIS_GUARDS,
-        "dev_fallback_used": False,
-        "synthesis_method": "per_story_parallel",
-    }
-    if not final_synthesis and RELAXED_FINAL_SYNTHESIS_GUARDS:
-        final_synthesis = build_dev_final_synthesis_preview(final_reports, topics)
-        debug["dev_fallback_used"] = bool(final_synthesis)
-    return final_synthesis, token_stats, debug
-
-
-def _choose_report_index_to_trim(reports: list[str]) -> int:
-    topic_counts = Counter(_report_topic_label(report) for report in reports)
-    for index in range(len(reports) - 1, -1, -1):
-        topic_label = _report_topic_label(reports[index])
-        if is_low_confidence_report_entry(reports[index]) and topic_counts[topic_label] > 1:
-            return index
-    for index in range(len(reports) - 1, -1, -1):
-        topic_label = _report_topic_label(reports[index])
-        if topic_counts[topic_label] > 1:
-            return index
-    return len(reports) - 1
-
-
-def _truncate_report_for_input_budget(report: str, max_summary_chars: int) -> str:
-    summary_match = re.search(r"Summary:\s*(.*)", report or "", flags=re.DOTALL)
-    if not summary_match:
-        return (report or "")[:max_summary_chars]
-    summary_text = summary_match.group(1).strip()
-    truncated_summary = summary_text[:max_summary_chars].rsplit(" ", 1)[0].strip()
-    if len(summary_text) > len(truncated_summary):
-        truncated_summary = f"{truncated_summary} ..."
-    return report[: summary_match.start(1)] + truncated_summary
-
-
 def _report_reference_key(entry: str) -> str:
     return hashlib.sha1((entry or "").encode("utf-8")).hexdigest()
 
@@ -4840,157 +3965,6 @@ def filter_reports_for_references(final_reports: List[str], token_stats: dict[st
     if not included_keys:
         return final_reports
     return [entry for entry in final_reports if _report_reference_key(entry) in included_keys]
-
-
-def build_final_synthesis_payload(
-    final_reports: List[str],
-    now_label: str,
-    topics: List[dict],
-    custom_prompt_text: str | None = None,
-) -> tuple[list[BaseMessage], dict]:
-    def compose(reports_for_prompt: list[str]) -> tuple[list[BaseMessage], dict]:
-        high_confidence_reports = [
-            entry for entry in reports_for_prompt if not is_low_confidence_report_entry(entry)
-        ]
-        low_confidence_reports = [
-            entry for entry in reports_for_prompt if is_low_confidence_report_entry(entry)
-        ]
-        primary_reports = high_confidence_reports or reports_for_prompt
-
-        primary_dataset = _build_grouped_synthesis_dataset(primary_reports, topics)
-        required_structure = _required_synthesis_structure_for_reports(primary_reports, topics)
-        supplemental_dataset = "(Omitted to save context window)"
-
-        uses_custom_prompt = custom_prompt_text is not None
-        if uses_custom_prompt:
-            instruction_text = textwrap.dedent(
-                f"""
-                You are synthesizing prewritten article summaries about {PROJECT_SUMMARY_SCOPE_LABEL}.
-                Use only the supplied dataset.
-                Treat PRIMARY_DATASET as the stronger evidence base and LOW_CONFIDENCE_DATASET as sparse-support material.
-                Focus on concrete reported claims and avoid discussion of outlet style unless it changes the factual claim.
-                When PRIMARY_DATASET is divided into Topic/Story blocks, keep distinct Story blocks in
-                distinct paragraphs and do not use singleton or background-only story material as a basis
-                for final copy.
-                Do not quote, restate, or paraphrase the prompt instructions themselves.
-                Do not include meta labels like 'Title:' or 'Content:' in your final answer unless explicitly required by the user.
-                Do not write XML/HTML-style topic tags unless explicitly required by the user.
-                Write for newsletter recipients. Do not mention the user, the prompt, AI, PRIMARY_DATASET,
-                LOW_CONFIDENCE_DATASET, supplied coverage, or source-material limitations in the final copy.
-
-                USER REQUEST:
-                {custom_prompt_text}
-                """
-            ).strip()
-            system_prompt_text = textwrap.dedent(
-                f"""
-                Today: {now_label}.
-                {instruction_text}
-
-                PRIMARY_DATASET:
-                {primary_dataset}
-
-                LOW_CONFIDENCE_DATASET:
-                {supplemental_dataset}
-                """
-            ).strip()
-            user_prompt_text = (
-                "Produce the requested final output now, using only the supplied dataset. "
-                "Return only the final analysis content."
-            )
-        else:
-            instruction_text = get_default_final_synthesis_instructions(topics)
-            system_prompt_text = textwrap.dedent(
-                f"""
-                Today: {now_label}.
-                You are synthesizing prewritten article summaries covering {PROJECT_SUMMARY_SCOPE_LABEL}.
-                {instruction_text}
-
-                PRIMARY_DATASET:
-                {primary_dataset}
-
-                LOW_CONFIDENCE_DATASET:
-                {supplemental_dataset}
-                """
-            ).strip()
-            user_prompt_text = (
-                f"Produce the {len(topics)}-section daily news synthesis now using only the supplied dataset. "
-                "One section per selected topic, in the order listed in the TASK. "
-                "Return markdown ## headings followed by prose paragraphs only."
-            )
-        prompt_messages: list[BaseMessage] = [
-            SystemMessage(content=system_prompt_text),
-            HumanMessage(content=user_prompt_text),
-        ]
-
-        summary_only_tokens = 0
-        for entry in reports_for_prompt:
-            summary_match = re.search(r"Summary:\s*(.*)", entry, flags=re.DOTALL)
-            summary_only_tokens += estimate_token_count(
-                summary_match.group(1).strip() if summary_match else entry
-            )
-        article_entry_payload_tokens = sum(estimate_token_count(entry) for entry in reports_for_prompt)
-        prompt_instruction_tokens = estimate_token_count(instruction_text) + estimate_token_count(user_prompt_text)
-        estimated_total_input_tokens = sum(estimate_message_token_count(message) for message in prompt_messages)
-
-        stats = {
-            "article_summary_tokens_estimate": summary_only_tokens,
-            "article_entry_payload_tokens_estimate": article_entry_payload_tokens,
-            "prompt_instruction_tokens_estimate": prompt_instruction_tokens,
-            "estimated_total_input_tokens": estimated_total_input_tokens,
-            "total_reports": len(final_reports),
-            "reports_included_in_synthesis": len(reports_for_prompt),
-            "reports_omitted_from_synthesis": len(final_reports) - len(reports_for_prompt),
-            "high_confidence_reports": len(high_confidence_reports),
-            "low_confidence_reports": len(low_confidence_reports),
-            "model_max_input_tokens": MODEL_MAX_INPUT_TOKENS,
-            "model_profile": MODEL_PROFILE_KEY,
-            "model": MODEL_REFERENCE,
-            "model_name": MODEL_NAME,
-            "model_backend": MODEL_BACKEND,
-            "uses_custom_prompt": uses_custom_prompt,
-            "topic_count": len(topics),
-            **required_structure,
-            "primary_dataset": primary_dataset,
-            "included_report_keys": [
-                _report_reference_key(entry) for entry in reports_for_prompt
-            ],
-        }
-        if MODEL_MAX_INPUT_TOKENS > 0:
-            stats["estimated_input_utilization_pct"] = round(
-                (estimated_total_input_tokens / MODEL_MAX_INPUT_TOKENS) * 100, 1
-            )
-        return prompt_messages, stats
-
-    working_reports = list(final_reports)
-    prompt_messages, stats = compose(working_reports)
-    while (
-        MODEL_MAX_INPUT_TOKENS > 0
-        and stats["estimated_total_input_tokens"] > MODEL_MAX_INPUT_TOKENS
-        and len(working_reports) > 1
-    ):
-        working_reports.pop(_choose_report_index_to_trim(working_reports))
-        prompt_messages, stats = compose(working_reports)
-
-    emergency_summary_chars = max(250, MODEL_MAX_INPUT_TOKENS * 2)
-    while (
-        MODEL_MAX_INPUT_TOKENS > 0
-        and stats["estimated_total_input_tokens"] > MODEL_MAX_INPUT_TOKENS
-        and working_reports
-        and emergency_summary_chars >= 250
-    ):
-        working_reports = [
-            _truncate_report_for_input_budget(working_reports[0], emergency_summary_chars)
-        ]
-        prompt_messages, stats = compose(working_reports)
-        emergency_summary_chars //= 2
-
-    stats["input_budget_enforced"] = MODEL_MAX_INPUT_TOKENS > 0
-    stats["input_budget_satisfied"] = (
-        MODEL_MAX_INPUT_TOKENS <= 0
-        or stats["estimated_total_input_tokens"] <= MODEL_MAX_INPUT_TOKENS
-    )
-    return prompt_messages, stats
 
 
 def _extract_first_name(name_or_email: str) -> str:
@@ -5105,343 +4079,6 @@ def maybe_email_report(
 
     progress_tracker.detail(f"[email] Sent report to {', '.join(recipients)}")
 
-# --- NODES ---
-
-def build_article_summary_prompt_messages(current_article: dict, now_label: str) -> list[BaseMessage]:
-    source_name = current_article.get("source", "Unknown source")
-    source_config = SOURCE_FEEDS.get(source_name)
-    display_name = (
-        source_config.get("name", source_name)
-        if isinstance(source_config, dict)
-        else source_name
-    )
-    topic_title = current_article.get("topic_title")
-    target = _build_article_heading(current_article)
-    topic_format_line = f"\n- Topic: {topic_title}" if topic_title else ""
-    system_prompt = SystemMessage(content=textwrap.dedent(f"""
-        Today: {now_label}.
-        Current Task: Summarize one preselected article from the last {RECENT_WINDOW_HOURS} hours
-        covering one of today's selected news topics.
-        1. Use only the provided article metadata, URL, description, and article text.
-        2. Do not call tools in this step.
-        3. Ignore outlet style and focus on concrete reported claims.
-        4. Include key facts: what reportedly happened, where, timeline, named actors, casualties or damage if reported, and what remains unconfirmed.
-        5. If the article text is thin, summarize only what is actually supported by the provided text and metadata.
-        6. Do not recap the general history of a longstanding topic or conflict; include background only
-           when the article reports a new fact about it or one short clause is needed for orientation.
-        7. Start your response with 'DATABASE_ENTRY:' and then exactly the requested Markdown block.
-        8. Do not include any text before 'DATABASE_ENTRY:' or after the summary.
-    """).strip())
-    story_line = f"Story: {current_article.get('story_title')}\n" if current_article.get("story_title") else ""
-    article_payload = (
-        "Selected article:\n\n"
-        f"Title: {current_article.get('title') or 'N/A'}\n"
-        f"Source: {display_name}\n"
-        f"Published: {current_article.get('pub_date') or 'Unknown publish time'}\n"
-        f"URL: {current_article.get('url') or 'N/A'}\n"
-        f"Topic: {topic_title or 'general news topic'}\n"
-        f"{story_line}"
-        f"Description: {current_article.get('description') or 'N/A'}\n"
-        f"Article text:\n{current_article.get('text') or 'N/A'}\n\n"
-        "Return exactly this block, replacing only the summary text:\n\n"
-        "DATABASE_ENTRY:\n"
-        f"### {target}\n"
-        "Metadata:\n"
-        f"- Source: {display_name}\n"
-        f"- Published: {current_article.get('pub_date') or 'Unknown publish time'}\n"
-        f"- URL: {current_article.get('url') or 'N/A'}{topic_format_line}\n\n"
-        "Summary:\n"
-        "<4-7 sentence article summary in plain prose, no brackets>"
-    )
-    return [system_prompt, HumanMessage(content=article_payload)]
-
-
-def call_model(state: AgentState):
-    now = datetime.now().strftime("%B %d, %Y")
-
-    current_article = state["articles_remaining"][0] if state["articles_remaining"] else None
-    target = _build_article_heading(current_article) if current_article else "Final Synthesis"
-
-    if not state["articles_remaining"]:
-        llm = build_chat_model(
-            max_tokens=FINAL_SYNTHESIS_MAX_TOKENS,
-            task="final_synthesis",
-        )
-        if not state.get("generate_final_synthesis", True):
-            return {"messages": [AIMessage(content="ARTICLE_SUMMARIES_COMPLETE")], "empty_response_count": 0}
-
-        prompt_messages, token_stats = build_final_synthesis_payload(
-            state["final_reports"],
-            now,
-            state.get("topics") or [],
-            custom_prompt_text=state.get("final_prompt_text"),
-        )
-    else:
-        llm = build_chat_model(
-            max_tokens=ARTICLE_SUMMARY_MAX_TOKENS,
-            task="article_summary",
-        )
-        prompt_messages = build_article_summary_prompt_messages(current_article, now)
-
-    if state["articles_remaining"]:
-        fallback_content = build_article_fallback_entry(current_article)
-    else:
-        if state.get("final_prompt_text") is None:
-            topics = state.get("topics") or []
-            if topics:
-                fallback_sections = []
-                for topic in topics:
-                    fallback_sections.append(
-                        f"## {_format_topic_section_header(topic['title'])}\n"
-                        "Final synthesis unavailable because the model connection failed repeatedly."
-                    )
-                fallback_content = "\n\n".join(fallback_sections)
-            else:
-                fallback_content = (
-                    "## DAILY NEWS SUMMARY\n"
-                    "Final synthesis unavailable because the model connection failed repeatedly."
-                )
-        else:
-            fallback_content = (
-                "Final synthesis unavailable because the model connection failed repeatedly "
-                "before the custom final prompt could be completed."
-            )
-
-    response = invoke_with_retries(
-        llm,
-        prompt_messages,
-        task_name=f"analysis for {target}",
-        fallback_content=fallback_content,
-    )
-
-    token_stats_update = {}
-    if not state["articles_remaining"] and state.get("generate_final_synthesis", True):
-        prompt_tokens = extract_prompt_tokens_from_response(response)
-        if prompt_tokens is not None:
-            token_stats["actual_prompt_tokens"] = prompt_tokens
-        token_stats_update["final_synthesis_token_stats"] = token_stats
-
-    is_valid = False
-    if hasattr(response, "tool_calls") and response.tool_calls:
-        is_valid = True
-    elif has_structured_entry(response.content, target):
-        is_valid = True
-    elif not state["articles_remaining"] and is_valid_final_synthesis_response(
-        response.content,
-        state.get("topics") or [],
-        uses_custom_prompt=state.get("final_prompt_text") is not None,
-        relaxed=RELAXED_FINAL_SYNTHESIS_GUARDS,
-        validation=token_stats,
-    ):
-        is_valid = True
-
-    error_count = state.get("empty_response_count", 0)
-    if not is_valid:
-        error_count += 1
-    else:
-        error_count = 0
-
-    return {
-        "messages": [response],
-        "empty_response_count": error_count,
-        **token_stats_update,
-    }
-
-def call_tool(state: AgentState):
-    last_message = state['messages'][-1]
-    tool_results = []
-    for tool_call in last_message.tool_calls:
-        tool_name = tool_call.get("name", "")
-        args = tool_call.get("args") or {}
-        if not isinstance(args, dict):
-            args = {"input": str(args)}
-
-        if tool_name == "internet_search":
-            query = args.get("query") or args.get("input") or args.get("__arg1")
-            if not query:
-                res = "Tool call error: internet_search missing required argument 'query'."
-            else:
-                res = internet_search(str(query))
-        elif tool_name == "web_scrape":
-            url = args.get("url") or args.get("link") or args.get("input") or args.get("__arg1")
-            if not url:
-                res = "Tool call error: web_scrape missing required argument 'url'."
-            else:
-                res = web_scrape(str(url))
-        else:
-            res = f"Tool call error: unsupported tool '{tool_name}'."
-        tool_results.append(ToolMessage(tool_call_id=tool_call["id"], content=res))
-    return {"messages": tool_results, "empty_response_count": 0}
-
-
-def recover_from_empty_response(state: AgentState):
-    error_count = state.get("empty_response_count", 0)
-
-    if error_count >= 3:
-        if state["articles_remaining"]:
-            article = state["articles_remaining"][0]
-            fallback_summary = build_article_fallback_entry(article).split("DATABASE_ENTRY:\n", 1)[1]
-            wipe_messages = [RemoveMessage(id=m.id) for m in state['messages']]
-            progress_tracker.article_completed()
-            return {
-                "messages": wipe_messages + [HumanMessage(content="Proceed to next target.")],
-                "final_reports": state['final_reports'] + [fallback_summary],
-                "articles_remaining": state["articles_remaining"][1:],
-                "empty_response_count": 0
-            }
-
-        return {"empty_response_count": 0}
-
-    if not state["articles_remaining"]:
-        validation = state.get("final_synthesis_token_stats") or {}
-        required_headings = [
-            str(heading)
-            for heading in validation.get("required_topic_headings", [])
-            if str(heading).strip()
-        ]
-        rejection_reason = describe_final_synthesis_rejection(
-            state["messages"][-1].content if state.get("messages") else "",
-            state.get("topics") or [],
-            uses_custom_prompt=state.get("final_prompt_text") is not None,
-            relaxed=RELAXED_FINAL_SYNTHESIS_GUARDS,
-            validation=validation,
-        )
-        heading_instruction = ""
-        if required_headings:
-            heading_instruction = (
-                " Include every required heading exactly once, even if the prose must be shorter:\n"
-                + "\n".join(f"## {heading}" for heading in required_headings)
-                + "\n"
-            )
-        return {
-            "messages": [HumanMessage(content=(
-                f"The last response did not match the requested newsletter format ({rejection_reason}). "
-                "Provide the requested final synthesis now using only the supplied dataset. "
-                f"{heading_instruction}"
-                "Use markdown ## section headings, write one cohesive prose paragraph per story block, "
-                "shorten paragraphs if needed to preserve the required structure, "
-                "and return no tags, bullets, "
-                "preamble, methodology, or source-material labels."
-            ))]
-        }
-
-    return {
-        "messages": [HumanMessage(content=(
-            "Format Error: respond with exactly one article block only. "
-            "Use 'DATABASE_ENTRY:' followed by '### article title', then 'Metadata:' with Source/Published/URL bullets "
-            "(plus Topic when provided), then 'Summary:'. "
-            "Do not add commentary, correction text, code fences, or trailing notes."
-        ))]
-    }
-
-def database_save_and_clear(state: AgentState):
-    last_message = state['messages'][-1]
-
-    if state["articles_remaining"]:
-        current_article = state["articles_remaining"][0]
-        heading_name = _build_article_heading(current_article)
-    else:
-        current_article = None
-        heading_name = ""
-
-    if current_article and has_structured_entry(last_message.content, heading_name):
-        summary = normalize_report_entry(current_article, last_message.content)
-        progress_tracker.article_completed()
-
-        wipe_messages = [RemoveMessage(id=m.id) for m in state['messages']]
-        remaining_articles = state["articles_remaining"][1:]
-        next_prompt = [HumanMessage(content="Proceed to next target.")] if remaining_articles else []
-
-        return {
-            "messages": wipe_messages + next_prompt,
-            "final_reports": state['final_reports'] + [summary],
-            "articles_remaining": remaining_articles,
-            "empty_response_count": 0
-        }
-    return {}
-
-# --- LOGIC ---
-
-def should_continue(state: AgentState):
-    last_message = state['messages'][-1]
-
-    if hasattr(last_message, "tool_calls") and last_message.tool_calls:
-        return "tools"
-    if state["articles_remaining"] and has_structured_entry(
-        last_message.content,
-        _build_article_heading(state["articles_remaining"][0]),
-    ):
-        return "database"
-    if not state["articles_remaining"]:
-        if not state.get("generate_final_synthesis", True):
-            return END
-        if is_valid_final_synthesis_response(
-            last_message.content,
-            state.get("topics") or [],
-            uses_custom_prompt=state.get("final_prompt_text") is not None,
-            relaxed=RELAXED_FINAL_SYNTHESIS_GUARDS,
-            validation=state.get("final_synthesis_token_stats") or {},
-        ):
-            return END
-        if state.get("empty_response_count", 0) >= 3:
-            return END
-        return "recover"
-
-    return "recover"
-
-# --- BUILD ---
-
-workflow = StateGraph(AgentState)
-workflow.add_node("agent", call_model)
-workflow.add_node("tools", call_tool)
-workflow.add_node("database", database_save_and_clear)
-workflow.add_node("recover", recover_from_empty_response)
-
-workflow.set_entry_point("agent")
-workflow.add_conditional_edges("agent", should_continue)
-workflow.add_edge("tools", "agent")
-workflow.add_edge("database", "agent")
-workflow.add_edge("recover", "agent")
-
-app = workflow.compile()
-
-# --- RUN HELPERS ---
-
-def run_article_summary_pass(article_targets: List[dict], topics: List[dict]) -> List[str]:
-    if ARTICLE_SUMMARY_CONCURRENCY > 1 and len(article_targets) > 1:
-        ordered_results: list[tuple[int, List[str]]] = []
-        with ThreadPoolExecutor(max_workers=ARTICLE_SUMMARY_CONCURRENCY) as executor:
-            future_map = {
-                executor.submit(run_article_summary_pass, [article], topics): index
-                for index, article in enumerate(article_targets)
-            }
-            for future in as_completed(future_map):
-                ordered_results.append((future_map[future], future.result()))
-        final_reports: List[str] = []
-        for _, reports in sorted(ordered_results, key=lambda item: item[0]):
-            final_reports.extend(reports)
-        return final_reports
-
-    inputs: AgentState = {
-        "messages": [HumanMessage(content="Initialize research protocol.")],
-        "final_reports": [],
-        "articles_remaining": article_targets,
-        "empty_response_count": 0,
-        "final_synthesis_token_stats": {},
-        "generate_final_synthesis": False,
-        "final_prompt_text": None,
-        "topics": topics,
-    }
-
-    recursion_limit = max(80, (len(article_targets) * 12) + 20)
-    final_reports: List[str] = []
-    for output in app.stream(inputs, stream_mode="values", config={"recursion_limit": recursion_limit}):
-        if "final_reports" in output:
-            final_reports = output["final_reports"]
-
-    return final_reports
-
-
 def _first_sentences(text: str, max_sentences: int = 2, max_chars: int = 520) -> str:
     clean_text = re.sub(r"\s+", " ", strip_model_artifacts(text or "")).strip()
     if not clean_text:
@@ -5516,76 +4153,6 @@ def build_dev_final_synthesis_preview(final_reports: List[str], topics: List[dic
             )
 
     return "\n\n".join(sections)
-
-
-def run_final_synthesis_pass(
-    final_reports: List[str],
-    topics: List[dict],
-    final_prompt_text: str | None,
-) -> tuple[str, dict, dict]:
-    if final_prompt_text is None:
-        return run_story_synthesis_pass(final_reports, topics)
-
-    inputs: AgentState = {
-        "messages": [HumanMessage(content="Produce the final synthesis.")],
-        "final_reports": final_reports,
-        "articles_remaining": [],
-        "empty_response_count": 0,
-        "final_synthesis_token_stats": {},
-        "generate_final_synthesis": True,
-        "final_prompt_text": final_prompt_text,
-        "topics": topics,
-    }
-
-    final_synthesis = ""
-    token_stats: dict = {}
-    attempts: list[dict[str, Any]] = []
-    seen_ai_messages: set[str] = set()
-    for output in app.stream(inputs, stream_mode="values", config={"recursion_limit": 50}):
-        if "final_synthesis_token_stats" in output:
-            token_stats = output["final_synthesis_token_stats"]
-        if "messages" in output and output["messages"]:
-            msg = output["messages"][-1]
-            if isinstance(msg, AIMessage):
-                msg_id = str(getattr(msg, "id", "") or f"{len(attempts)}:{hash(msg.content)}")
-                if msg_id not in seen_ai_messages:
-                    seen_ai_messages.add(msg_id)
-                    clean_content = _strip_prompt_echo_lines(strip_model_artifacts(msg.content or ""))
-                    rejection_reason = describe_final_synthesis_rejection(
-                        msg.content,
-                        topics,
-                        uses_custom_prompt=final_prompt_text is not None,
-                        relaxed=RELAXED_FINAL_SYNTHESIS_GUARDS,
-                        validation=token_stats,
-                    )
-                    attempts.append(
-                        {
-                            "valid": not rejection_reason,
-                            "reason": rejection_reason or "accepted",
-                            "word_count": _final_synthesis_word_count(clean_content),
-                            "heading_count": _final_synthesis_heading_count(clean_content),
-                            "preview": clean_content[:500],
-                        }
-                    )
-                if is_valid_final_synthesis_response(
-                    msg.content,
-                    topics,
-                    uses_custom_prompt=final_prompt_text is not None,
-                    relaxed=RELAXED_FINAL_SYNTHESIS_GUARDS,
-                    validation=token_stats,
-                ):
-                    final_synthesis = strip_model_artifacts(msg.content)
-
-    debug = {
-        "attempts": attempts,
-        "relaxed_guards": RELAXED_FINAL_SYNTHESIS_GUARDS,
-        "dev_fallback_used": False,
-    }
-    if not final_synthesis and RELAXED_FINAL_SYNTHESIS_GUARDS:
-        final_synthesis = build_dev_final_synthesis_preview(final_reports, topics)
-        debug["dev_fallback_used"] = bool(final_synthesis)
-
-    return final_synthesis, token_stats, debug
 
 
 def _truncate_for_art_prompt(text: str, max_chars: int = 3800) -> str:
@@ -6274,6 +4841,7 @@ def _report_entry_debug_record(entry: str, index: int) -> dict[str, Any]:
     source_match = re.search(r"^- Source:\s*(.+)$", entry or "", flags=re.MULTILINE)
     published_match = re.search(r"^- Published:\s*(.+)$", entry or "", flags=re.MULTILINE)
     url_match = re.search(r"^- URL:\s*(.+)$", entry or "", flags=re.MULTILINE)
+    article_id_match = re.search(r"^- Article ID:\s*(.+)$", entry or "", flags=re.MULTILINE)
     topic_match = re.search(r"^- Topic:\s*(.+)$", entry or "", flags=re.MULTILINE)
     story_match = re.search(r"^- Story:\s*(.+)$", entry or "", flags=re.MULTILINE)
     return {
@@ -6282,6 +4850,7 @@ def _report_entry_debug_record(entry: str, index: int) -> dict[str, Any]:
         "source": source_match.group(1).strip() if source_match else "",
         "published": published_match.group(1).strip() if published_match else "",
         "url": url_match.group(1).strip() if url_match else "",
+        "article_id": article_id_match.group(1).strip() if article_id_match else "",
         "topic": topic_match.group(1).strip() if topic_match else "",
         "story": story_match.group(1).strip() if story_match else "",
         "summary": _report_summary_text(entry),
@@ -6289,10 +4858,15 @@ def _report_entry_debug_record(entry: str, index: int) -> dict[str, Any]:
     }
 
 
-def _persist_article_summaries_debug(final_reports: List[str]) -> str | None:
+def _persist_article_summaries_debug(
+    final_reports: List[str],
+    *,
+    label: str = "article_summaries",
+) -> str | None:
     if not final_reports:
         return None
-    debug_path = os.path.join(RUN_OUTPUT_DIR, f"article_summaries_{timestamp}.json")
+    safe_label = re.sub(r"[^a-zA-Z0-9_]+", "_", label).strip("_") or "article_summaries"
+    debug_path = os.path.join(RUN_OUTPUT_DIR, f"{safe_label}_{timestamp}.json")
     payload = {
         "generated_at": datetime.now().isoformat(timespec="seconds"),
         "count": len(final_reports),
@@ -6786,11 +5360,13 @@ def _new_run_diagnostics(source_count: int) -> RunDiagnostics:
             "run_used_urls_path": RUN_USED_URLS_PATH,
             "run_log_path": RUN_LOG_PATH,
             "recent_window_hours": RECENT_WINDOW_HOURS,
+            "article_download_timeout_seconds": ARTICLE_DOWNLOAD_TIMEOUT_SECONDS,
+            "article_scrape_total_timeout_seconds": ARTICLE_SCRAPE_TOTAL_TIMEOUT_SECONDS,
+            "slow_source_warning_seconds": SLOW_SOURCE_WARNING_SECONDS,
             "max_articles_per_source": MAX_ARTICLES_PER_SOURCE,
             "topic_relevance_min_score": TOPIC_RELEVANCE_MIN_SCORE,
+            "story_topic_fit_min_score": STORY_TOPIC_FIT_MIN_SCORE,
             "per_source_topic_article_cap": PER_SOURCE_TOPIC_ARTICLE_CAP,
-            "dev_source_limit": DEV_SOURCE_LIMIT,
-            "dev_num_topics": DEV_NUM_TOPICS,
             "num_top_topics": NUM_TOP_TOPICS,
             "top_topic_probes": TOP_TOPIC_PROBES,
             "top_of_funnel_per_provider": TOP_OF_FUNNEL_PER_PROVIDER,
@@ -7062,28 +5638,10 @@ def managed_model_server():
 def _run_pipeline() -> None:
     global ACTIVE_RUN_DIAGNOSTICS
     all_sources = list(SOURCE_FEEDS.keys())
-
-    # In dev mode, cap the source list and topic count to the minimum needed to
-    # exercise every code path (multi-source sweep, topic matching, article budget,
-    # synthesis, image, email) without a full production-width run.
-    if DEV:
-        sources = all_sources[:DEV_SOURCE_LIMIT]
-        effective_num_topics = DEV_NUM_TOPICS
-        effective_total_article_summary_cap = (
-            min(TOTAL_ARTICLE_SUMMARY_CAP, effective_num_topics * 2)
-            if TOTAL_ARTICLE_SUMMARY_CAP > 0
-            else effective_num_topics * 2
-        )
-        effective_per_topic_article_summary_cap = (
-            min(PER_TOPIC_ARTICLE_SUMMARY_CAP, 2)
-            if PER_TOPIC_ARTICLE_SUMMARY_CAP > 0
-            else 2
-        )
-    else:
-        sources = all_sources
-        effective_num_topics = NUM_TOP_TOPICS
-        effective_total_article_summary_cap = TOTAL_ARTICLE_SUMMARY_CAP
-        effective_per_topic_article_summary_cap = PER_TOPIC_ARTICLE_SUMMARY_CAP
+    sources = all_sources
+    effective_num_topics = NUM_TOP_TOPICS
+    effective_total_article_summary_cap = TOTAL_ARTICLE_SUMMARY_CAP
+    effective_per_topic_article_summary_cap = PER_TOPIC_ARTICLE_SUMMARY_CAP
 
     diagnostics = _new_run_diagnostics(len(sources))
     ACTIVE_RUN_DIAGNOSTICS = diagnostics
@@ -7100,6 +5658,11 @@ def _run_pipeline() -> None:
         f"{PER_SOURCE_TOPIC_ARTICLE_CAP} per source/story budget cap, "
         f"summary concurrency {ARTICLE_SUMMARY_CONCURRENCY}."
     )
+    progress_tracker.detail(
+        f"Source scrape guardrails: article download timeout {ARTICLE_DOWNLOAD_TIMEOUT_SECONDS}s, "
+        f"article scrape deadline {ARTICLE_SCRAPE_TOTAL_TIMEOUT_SECONDS}s, "
+        f"slow source warning {SLOW_SOURCE_WARNING_SECONDS}s."
+    )
     progress_tracker.detail(f"Run mode: {RUN_MODE}")
     preflight = preflight_model_server()
     diagnostics.event("model_server_preflight", **preflight)
@@ -7115,12 +5678,9 @@ def _run_pipeline() -> None:
         )
     progress_tracker.detail(f"Source pool: {len(sources)} of {len(all_sources)} configured feed(s).")
     if DEV:
-        topic_limit_label = f"first {effective_num_topics} predefined topic(s)"
         progress_tracker.detail(
-            f"DEV mode active. Source pool limited to {DEV_SOURCE_LIMIT} source(s), "
-            f"topics limited to {topic_limit_label} (full pool: {len(all_sources)} sources), "
-            f"article summaries capped at "
-            f"{effective_total_article_summary_cap} total/{effective_per_topic_article_summary_cap} per topic. "
+            f"DEV mode active. Using English dev-tier sources only "
+            f"({len(sources)} source(s)). "
             f"Sending to one recipient only "
             f"(always {BRADLEY_ONLY_RECIPIENT}) without recording URLs into the shared history."
         )
@@ -7131,7 +5691,7 @@ def _run_pipeline() -> None:
             else "isolated URL history"
         )
         progress_tracker.detail(
-            f"LOCAL-PROD mode active. Using the full production source/topic scope "
+            f"LOCAL-PROD mode active. Using English dev/core source tiers "
             f"with {history_label}, but sending only to {BRADLEY_ONLY_RECIPIENT}."
         )
     progress_tracker.detail(f"Run output folder: {RUN_OUTPUT_DIR}")
@@ -7158,61 +5718,223 @@ def _run_pipeline() -> None:
     progress_tracker.reset(total_sources=len(sources))
 
     seen_urls = _load_seen_urls()
-    run_seen_urls: set[tuple[str, str]] = set()
-    article_targets_for_budget: List[dict] = []
+    run_seen_urls: set[str] = set()
+    article_candidates: List[dict] = []
+    candidate_urls: List[str] = []
     final_reports: List[str] = []
     matched_feed_item_count = 0
     fresh_article_count = 0
     source_rejection_counts: Counter[str] = Counter()
 
-    # 3) Iterate union of sources, collect articles per topic.
+    # 3) Iterate union of sources, collect recent articles without topic labels.
     for source_index, source_name in enumerate(sources, start=1):
-        progress_tracker.start_source(source_index)
-        article_targets, new_urls, source_run = gather_article_targets_for_source(
-            source_name, topics, seen_urls, run_seen_urls
+        progress_tracker.start_source(source_index, source_name)
+        source_started_at = datetime.now(timezone.utc)
+        source_started_perf = time.perf_counter()
+        try:
+            article_targets, new_urls, source_run = gather_article_candidates_for_source(
+                source_name,
+                seen_urls,
+                run_seen_urls,
+            )
+        except Exception as error:
+            article_targets = []
+            new_urls = []
+            source_run = {
+                "source": source_name,
+                "status": "source_error",
+                "reason": f"{type(error).__name__}: {error}",
+                "feed_item_count": 0,
+                "recent_item_count": 0,
+                "selected_item_count": 0,
+                "selected_items": [],
+                "selected_by_topic": {},
+                "post_scrape_rejections": [],
+                "feed_rejections": [],
+                "scrape_attempts": [],
+                "scrape_status_counts": {},
+                "fresh_article_count": 0,
+                "fresh_articles": [],
+                "rejected_counts": {},
+            }
+            progress_tracker.warning(f"Source failed: {source_name}: {type(error).__name__}: {error}")
+        source_elapsed_seconds = round(time.perf_counter() - source_started_perf, 3)
+        source_run["source_index"] = source_index
+        source_run["started_at"] = source_started_at.isoformat(timespec="seconds")
+        source_run["completed_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        source_run["elapsed_seconds"] = source_elapsed_seconds
+        scrape_status_counts = source_run.get("scrape_status_counts") or {}
+        timeout_count = sum(
+            int(count or 0)
+            for status, count in scrape_status_counts.items()
+            if "timeout" in str(status)
         )
+        if timeout_count:
+            source_run["timeout_count"] = timeout_count
+            diagnostics.event(
+                "source_scrape_timeout",
+                source=source_name,
+                source_index=source_index,
+                timeout_count=timeout_count,
+                elapsed_seconds=source_elapsed_seconds,
+            )
+            progress_tracker.warning(
+                f"Source had {timeout_count} timed-out scrape(s): {source_name}"
+            )
+        if source_elapsed_seconds >= SLOW_SOURCE_WARNING_SECONDS:
+            source_run["slow_source"] = True
+            diagnostics.event(
+                "slow_source",
+                source=source_name,
+                source_index=source_index,
+                elapsed_seconds=source_elapsed_seconds,
+            )
+            progress_tracker.warning(
+                f"Slow source: {source_name} took {source_elapsed_seconds:.1f}s"
+            )
         diagnostics.record_source_run(source_run)
         matched_feed_item_count += int(source_run.get("selected_item_count") or 0)
         fresh_article_count += int(source_run.get("fresh_article_count") or 0)
         source_rejection_counts.update(source_run.get("rejected_counts") or {})
         progress_tracker.set_source_article_total(0)
         if new_urls:
-            _record_run_urls(new_urls)
+            candidate_urls.extend(new_urls)
         if article_targets:
-            article_targets_for_budget.extend(article_targets)
+            article_candidates.extend(article_targets)
         progress_tracker.source_completed()
 
     if matched_feed_item_count or any(source_rejection_counts.values()):
         progress_tracker.detail(
-            f"Source funnel: {matched_feed_item_count} matched feed item(s), "
+            f"Source funnel: {matched_feed_item_count} recent scraped article candidate(s), "
             f"{fresh_article_count} fresh article target(s) after dedupe/history "
             f"(history={source_rejection_counts.get('seen_in_history', 0)}, "
             f"duplicate_this_run={source_rejection_counts.get('duplicate_this_run', 0)}, "
-            f"missing_url={source_rejection_counts.get('missing_url', 0)})."
+            f"missing_url={source_rejection_counts.get('missing_url', 0)}, "
+            f"wrong_feed_source={source_rejection_counts.get('wrong_feed_source', 0)})."
         )
+    diagnostics.event(
+        "article_collection",
+        candidate_count=len(article_candidates),
+        candidate_url_count=len(candidate_urls),
+        matched_feed_item_count=matched_feed_item_count,
+        fresh_article_count=fresh_article_count,
+        rejected_counts=dict(source_rejection_counts),
+    )
+    candidate_url_artifact = _persist_url_list_debug(candidate_urls, "candidate_urls")
+    if candidate_url_artifact:
+        candidate_url_path, candidate_url_count = candidate_url_artifact
+        diagnostics.record_artifact(
+            "candidate_urls",
+            candidate_url_path,
+            count=candidate_url_count,
+            run_used_urls_path=RUN_USED_URLS_PATH,
+        )
+    _record_run_urls(candidate_urls)
+    if not article_candidates:
+        progress_tracker.step("finalize", "No recent article candidates available; stopping run.")
+        diagnostics.event("aborted", reason="no_article_candidates")
+        _write_run_diagnostics(diagnostics)
+        return
 
     progress_tracker.step("stories", "Organizing article candidates.")
-    article_targets_for_budget, story_cluster_stats = organize_article_targets_into_stories(
-        article_targets_for_budget,
-        topics,
-        min_articles_per_story=MIN_ARTICLES_PER_STORY,
+    clustered_article_targets, story_records, story_cluster_stats = (
+        story_clustering_stage.organize_article_targets_into_global_stories(
+            article_candidates,
+            min_articles_per_story=MIN_ARTICLES_PER_STORY,
+            similarity_threshold=STORY_CLUSTER_SIMILARITY_THRESHOLD,
+        )
     )
     diagnostics.event("story_clustering", **story_cluster_stats)
     progress_tracker.detail(
         f"Story clustering: {story_cluster_stats.get('included_count', 0)} "
         f"article target(s) retained across {story_cluster_stats.get('story_count', 0)} "
         f"story group(s); {story_cluster_stats.get('dropped_count', 0)} dropped below "
-        f"the {MIN_ARTICLES_PER_STORY}-article story floor/caps "
+        f"the {MIN_ARTICLES_PER_STORY}-article story floor "
         f"(TF-IDF threshold {STORY_CLUSTER_SIMILARITY_THRESHOLD:.2f})."
     )
+    diagnostics.record_article_budget(
+        {
+            "enabled": False,
+            "reason": "story-first pipeline summarizes all articles that belong to retained multi-article story clusters",
+            "candidate_count": len(clustered_article_targets),
+            "included_count": len(clustered_article_targets),
+            "dropped_count": 0,
+            "total_cap": effective_total_article_summary_cap,
+            "per_topic_cap": effective_per_topic_article_summary_cap,
+            "per_source_topic_cap": PER_SOURCE_TOPIC_ARTICLE_CAP,
+        }
+    )
+    if not clustered_article_targets:
+        progress_tracker.step("finalize", "No multi-article story clusters available; stopping run.")
+        diagnostics.event("aborted", reason="no_supported_story_clusters")
+        _write_run_diagnostics(diagnostics)
+        return
+
+    progress_tracker.start_article_summary(len(clustered_article_targets))
+    article_summary_reports: List[str] = []
+    article_summary_reports.extend(
+        article_summarization_stage.run_article_summary_pass(
+            clustered_article_targets,
+            topics,
+            _article_summarization_runtime(),
+        )
+    )
+
+    progress_tracker.set_final_step("reports", 1)
+    diagnostics.article_summary_count = len(article_summary_reports)
+    article_summaries_path = _persist_article_summaries_debug(article_summary_reports)
+    if article_summaries_path:
+        diagnostics.record_artifact(
+            "final_article_summaries",
+            article_summaries_path,
+            count=len(article_summary_reports),
+        )
+    record_activity_snapshot("after_article_summaries", diagnostics)
+    progress_tracker.detail(f"Saved {len(article_summary_reports)} article summary record(s).")
+
+    progress_tracker.step("stories", "Drafting clustered stories from article summaries.")
+    story_drafts, story_draft_stats = story_drafting_stage.draft_story_clusters_from_article_summaries(
+        story_records,
+        article_summary_reports,
+        _story_drafting_runtime(),
+    )
+    diagnostics.event("story_drafting", **story_draft_stats)
+    progress_tracker.detail(
+        f"Story drafting: {story_draft_stats.get('story_drafts_generated', 0)} "
+        f"drafted story paragraph(s) from {story_draft_stats.get('story_blocks_requested', 0)} "
+        "eligible cluster(s)."
+    )
+    if not story_drafts:
+        progress_tracker.step("finalize", "No story drafts generated; stopping run.")
+        diagnostics.event("aborted", reason="no_story_drafts")
+        _write_run_diagnostics(diagnostics)
+        return
+
+    selected_story_topic_matches, story_topic_stats = (
+        story_topic_assignment_stage.classify_story_drafts_for_topics(
+            story_drafts,
+            topics,
+            _story_topic_runtime(),
+        )
+    )
+    diagnostics.event("story_topic_classification", **story_topic_stats)
+    selected_by_topic = story_topic_stats.get("selected_by_topic") or {}
+    progress_tracker.detail(
+        "Story-topic fit: "
+        + ", ".join(
+            f"{topic_title}={count}"
+            for topic_title, count in selected_by_topic.items()
+        )
+        + f" (min score {STORY_TOPIC_FIT_MIN_SCORE})."
+    )
     story_coverage_deficits = {
-        topic_title: MAX_STORIES_PER_TOPIC - len(stories)
-        for topic_title, stories in (story_cluster_stats.get("stories_by_topic") or {}).items()
-        if len(stories) < MAX_STORIES_PER_TOPIC
+        topic_title: MAX_STORIES_PER_TOPIC - int(count or 0)
+        for topic_title, count in selected_by_topic.items()
+        if int(count or 0) < MAX_STORIES_PER_TOPIC
     }
     for topic in topics:
         topic_title = str(topic.get("title") or topic.get("key") or "Unknown topic")
-        if topic_title not in (story_cluster_stats.get("stories_by_topic") or {}):
+        if topic_title not in selected_by_topic:
             story_coverage_deficits[topic_title] = MAX_STORIES_PER_TOPIC
     if story_coverage_deficits:
         diagnostics.event("story_coverage_deficit", deficits=story_coverage_deficits)
@@ -7224,105 +5946,119 @@ def _run_pipeline() -> None:
             )
         )
 
-    article_targets, article_budget_stats = budget_article_targets(
-        article_targets_for_budget,
-        topics,
-        total_cap=effective_total_article_summary_cap,
-        per_topic_cap=effective_per_topic_article_summary_cap,
-        per_source_topic_cap=PER_SOURCE_TOPIC_ARTICLE_CAP,
-    )
-    diagnostics.record_article_budget(article_budget_stats)
-    progress_tracker.detail(
-        f"Article budget: {article_budget_stats.get('included_count', 0)} selected, "
-        f"{article_budget_stats.get('dropped_count', 0)} candidate target(s) not summarized "
-        f"(cap {effective_total_article_summary_cap} total/"
-        f"{effective_per_topic_article_summary_cap} per topic/"
-        f"{PER_SOURCE_TOPIC_ARTICLE_CAP} per source-story)."
-    )
-    article_targets, post_budget_story_stats = filter_budgeted_targets_by_story_floor(
-        article_targets,
-        min_articles_per_story=MIN_ARTICLES_PER_STORY,
-    )
-    if post_budget_story_stats.get("dropped_count", 0):
-        diagnostics.event("post_budget_story_floor", **post_budget_story_stats)
-        progress_tracker.detail(
-            f"Story floor after budget: dropped "
-            f"{post_budget_story_stats.get('dropped_count', 0)} target(s) because budget caps "
-            f"left their story below {MIN_ARTICLES_PER_STORY} articles."
+    final_reports, topic_assignment_stats = (
+        story_topic_assignment_stage.build_topic_assigned_article_reports(
+            selected_story_topic_matches,
+            article_summary_reports,
+            clustered_article_targets,
+            topics,
+            _story_topic_runtime(),
         )
-    progress_tracker.start_article_summary(len(article_targets))
-    if article_targets:
-        final_reports.extend(run_article_summary_pass(article_targets, topics))
-
-    progress_tracker.set_final_step("reports", 1)
-    diagnostics.article_summary_count = len(final_reports)
-    article_summaries_path = _persist_article_summaries_debug(final_reports)
-    if article_summaries_path:
+    )
+    diagnostics.event("story_topic_report_assignment", **topic_assignment_stats)
+    selected_article_ids = {
+        story_drafting_stage.report_article_id(entry)
+        for entry in final_reports
+        if story_drafting_stage.report_article_id(entry)
+    }
+    selected_urls = [
+        str(article.get("url") or "").strip()
+        for article in clustered_article_targets
+        if str(article.get("article_id") or "") in selected_article_ids and article.get("url")
+    ]
+    selected_url_artifact = _persist_url_list_debug(selected_urls, "selected_article_urls")
+    if selected_url_artifact:
+        selected_url_path, selected_url_count = selected_url_artifact
         diagnostics.record_artifact(
-            "final_article_summaries",
-            article_summaries_path,
+            "selected_article_urls",
+            selected_url_path,
+            count=selected_url_count,
+        )
+    progress_tracker.detail(
+        f"Topic assignment: {len(final_reports)} topic/story article summary record(s) "
+        f"from {topic_assignment_stats.get('selected_unique_article_count', 0)} unique article(s)."
+    )
+    if not final_reports:
+        progress_tracker.step("finalize", "No stories met topic-fit thresholds; stopping run.")
+        diagnostics.event("aborted", reason="no_story_topic_matches")
+        _write_run_diagnostics(diagnostics)
+        return
+    topic_assigned_summaries_path = _persist_article_summaries_debug(
+        final_reports,
+        label="topic_assigned_article_summaries",
+    )
+    if topic_assigned_summaries_path:
+        diagnostics.record_artifact(
+            "topic_assigned_article_summaries",
+            topic_assigned_summaries_path,
             count=len(final_reports),
         )
-    record_activity_snapshot("after_article_summaries", diagnostics)
-    progress_tracker.detail(f"Saved {len(final_reports)} article summary record(s).")
 
     recipient_config = get_active_recipient_config(load_recipient_config())
-    prompt_groups = build_prompt_groups(recipient_config)
+    recipient_list = list(recipient_config.keys())
+    recipient_names = [
+        recipient_config[email].get("name") or email
+        for email in recipient_list
+    ]
 
-    if not prompt_groups:
+    if not recipient_list:
         progress_tracker.step("finalize", "No recipients configured; stopping after summaries.")
         diagnostics.event("completed_without_recipients")
         _write_run_diagnostics(diagnostics)
         return
 
-    for group_index, group in enumerate(prompt_groups, start=1):
-        recipient_list = group["recipient_emails"]
-        prompt_label = "default prompt" if group["uses_default_prompt"] else "custom prompt"
-        progress_tracker.step(
-            "report",
-            f"Building report {group_index}/{len(prompt_groups)}.",
-            log_detail=f"Building {prompt_label} report for: {', '.join(recipient_list)}",
-        )
+    prompt_label = "default prompt"
+    progress_tracker.step(
+        "report",
+        "Building report.",
+        log_detail=f"Building {prompt_label} report for: {', '.join(recipient_list)}",
+    )
 
-        report_path = build_report_path(group)
-        progress_tracker.set_final_step("synthesis", 2)
-        final_synthesis, token_stats, synthesis_debug = run_final_synthesis_pass(
-            final_reports,
+    report_path = os.path.join(
+        RUN_OUTPUT_DIR,
+        f"news_report_{timestamp}_{MODEL_PROFILE_KEY}_default_prompt.txt",
+    )
+    progress_tracker.set_final_step("synthesis", 2)
+    final_synthesis, token_stats, synthesis_debug = (
+        story_topic_assignment_stage.build_precomputed_story_synthesis(
+            selected_story_topic_matches,
             topics,
-            group["custom_prompt_text"],
+            final_reports,
+            _story_topic_runtime(),
         )
-        synthesis_dataset_artifacts = _persist_grouped_synthesis_dataset_debug(report_path, token_stats)
-        artifact_prefix = _slugify_report_suffix(os.path.splitext(os.path.basename(report_path))[0])
-        for artifact_name, artifact_path in synthesis_dataset_artifacts.items():
-            diagnostics.record_artifact(
-                f"{artifact_prefix}_{artifact_name}",
-                artifact_path,
-                recipients=recipient_list,
-            )
-        synthesis_body = clean_synthesis_for_publication(
-            final_synthesis,
-            relaxed=RELAXED_FINAL_SYNTHESIS_GUARDS,
+    )
+    synthesis_dataset_artifacts = _persist_grouped_synthesis_dataset_debug(report_path, token_stats)
+    artifact_prefix = _slugify_report_suffix(os.path.splitext(os.path.basename(report_path))[0])
+    for artifact_name, artifact_path in synthesis_dataset_artifacts.items():
+        diagnostics.record_artifact(
+            f"{artifact_prefix}_{artifact_name}",
+            artifact_path,
+            recipients=recipient_list,
         )
-        if not synthesis_body:
-            last_attempt = (synthesis_debug.get("attempts") or [{}])[-1]
-            skip_reason = (
-                last_attempt.get("reason")
-                if not final_synthesis
-                else "publication cleaner removed all synthesis sections"
-            )
-            progress_tracker.detail(
-                f"No synthesis generated for {', '.join(recipient_list)} "
-                f"({skip_reason}). Skipping report."
-            )
-            diagnostics.event(
-                "final_synthesis_skipped",
-                recipients=recipient_list,
-                reason=skip_reason,
-                token_stats=token_stats,
-                attempts=synthesis_debug.get("attempts") or [],
-                relaxed_guards=RELAXED_FINAL_SYNTHESIS_GUARDS,
-            )
-            continue
+    synthesis_body = clean_synthesis_for_publication(
+        final_synthesis,
+        relaxed=RELAXED_FINAL_SYNTHESIS_GUARDS,
+    )
+    if not synthesis_body:
+        last_attempt = (synthesis_debug.get("attempts") or [{}])[-1]
+        skip_reason = (
+            last_attempt.get("reason")
+            if not final_synthesis
+            else "publication cleaner removed all synthesis sections"
+        )
+        progress_tracker.detail(
+            f"No synthesis generated for {', '.join(recipient_list)} "
+            f"({skip_reason}). Skipping report."
+        )
+        diagnostics.event(
+            "final_synthesis_skipped",
+            recipients=recipient_list,
+            reason=skip_reason,
+            token_stats=token_stats,
+            attempts=synthesis_debug.get("attempts") or [],
+            relaxed_guards=RELAXED_FINAL_SYNTHESIS_GUARDS,
+        )
+    else:
         if synthesis_debug.get("dev_fallback_used"):
             diagnostics.event(
                 "dev_final_synthesis_fallback_used",
@@ -7371,7 +6107,7 @@ def _run_pipeline() -> None:
             reference_reports,
             topics,
             recipient_list,
-            group["recipient_names"],
+            recipient_names,
             image_art,
         )
 

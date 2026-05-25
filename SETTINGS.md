@@ -7,8 +7,8 @@ inline or export them before running:
 NEWS_MODEL=gemma-26b-moe uv run news prod
 ```
 
-Two YAML files in `config/` handle the things that are too structured for env
-vars: the source list and the recipient list. Everything else is below.
+YAML files in `config/` handle structured settings such as topics, sources, and
+recipients. Everything else is below.
 
 ---
 
@@ -16,7 +16,7 @@ vars: the source list and the recipient list. Everything else is below.
 
 | Variable | Default | Description |
 |---|---|---|
-| `NEWS_RUN_MODE` | _(derived from `NEWS_DEV`)_ | Explicit mode: `dev`, `local-prod`, or `prod`. `dev` uses the narrow test run and relaxed final-output blocking; `local-prod` uses production source/topic/cap scope with isolated URL history and sends only to `NEWS_DEV_RECIPIENT`; `prod` sends to the configured active recipients and updates shared URL history. |
+| `NEWS_RUN_MODE` | _(derived from `NEWS_DEV`)_ | Explicit mode: `dev`, `local-prod`, or `prod`. `dev` uses the 40-source English `dev` tier, relaxed final-output blocking, isolated URL history, and sends only to `NEWS_DEV_RECIPIENT`; `local-prod` uses all runnable English `dev`/`core` sources with isolated URL history and sends only to `NEWS_DEV_RECIPIENT`; `prod` uses the same runnable source set, sends to configured active recipients, and updates shared URL history. |
 | `NEWS_DEV` | `1` | Backward-compatible mode switch when `NEWS_RUN_MODE` is unset. `1` = `dev`; `0` = `prod`. |
 | `NEWS_DEV_RECIPIENT` | `bradley@mankoff.com` | Single recipient used by `dev` and `local-prod` modes. |
 | `NEWS_DEV_RELAXED_FINAL_GUARDS` | `1` | In `dev` mode only, allows short/degraded final synthesis text through so render/image/email paths can be tested even when the narrowed source pool produces sparse coverage. |
@@ -28,8 +28,8 @@ vars: the source list and the recipient list. Everything else is below.
 
 | Variable | Default | Description |
 |---|---|---|
-| `NEWS_MODEL` | _(see below)_ | Friendly alias **or** full HuggingFace repo ID. Takes highest priority. Aliases: `gemma-26b-moe`, `qwen-9b-dense`. |
-| `NEWS_DEFAULT_MODEL` | `gemma-26b-moe` | Fallback alias when `NEWS_MODEL` is unset. Change this to permanently switch the default without setting it every run. |
+| `NEWS_MODEL` | _(see below)_ | Friendly alias **or** full HuggingFace repo ID. Takes highest priority. Aliases: `gemma-e2b-tiny`, `gemma-26b-moe`, `qwen-9b-dense`. |
+| `NEWS_DEFAULT_MODEL` | `gemma-e2b-tiny` in `dev`; `gemma-26b-moe` in `local-prod`/`prod` | Fallback alias when `NEWS_MODEL` is unset. Change this to permanently switch the default without setting it every run. |
 | `NEWS_MODEL_NAME` | _(none)_ | Lower-priority raw repo ID override (legacy; prefer `NEWS_MODEL`). |
 | `NEWS_MODEL_PROFILE` | _(inferred)_ | Force a runtime profile: `big_conservative` or `small_aggressive`. Inferred from the alias when unset. |
 | `NEWS_MODEL_BASE_URL` | `http://127.0.0.1:8080/v1` | OpenAI-compatible endpoint. Change if running the model server on a different port or machine. |
@@ -130,7 +130,7 @@ default group.
 | `NEWS_PER_TOPIC_ARTICLE_SUMMARY_CAP` | profile-dependent | Per-topic ceiling on articles sent to summarization. |
 | `NEWS_MAX_STORIES_PER_TOPIC` | `2` dev, `4` local-prod/prod | Maximum detected story clusters retained for each topic before article summaries. |
 | `NEWS_MAX_ARTICLES_PER_STORY` | `4` big_conservative, `5` small_aggressive | Maximum articles fully summarized from a retained story cluster. |
-| `NEWS_STORY_CLUSTER_SIMILARITY_THRESHOLD` | `0.22` | Full-text TF-IDF cosine threshold for linking articles into a story cluster. |
+| `NEWS_STORY_CLUSTER_SIMILARITY_THRESHOLD` | `0.30` | Full-text TF-IDF cosine threshold for linking articles into a story cluster. |
 | `NEWS_PER_SOURCE_TOPIC_ARTICLE_CAP` | `1` | Maximum articles from a single source for a topic; after story clustering, extra summaries are capped per source/story. |
 | `NEWS_ARTICLE_SUMMARY_CONCURRENCY` | profile-dependent | Number of article summaries run in parallel. Increase carefully; higher values stress the local model server. |
 
@@ -140,32 +140,21 @@ default group.
 
 | Variable | Default | Description |
 |---|---|---|
-| `NEWS_TOPIC_MODE` | `predefined` | `predefined` loads fixed topic vocabulary from YAML. `dynamic` runs the legacy top-of-funnel discovery and LLM clustering path. |
+| `NEWS_TOPIC_MODE` | `predefined` | Only `predefined` is supported; it loads fixed topic vocabulary from YAML. |
 | `NEWS_CLIENT_YAML` | `config/client.yaml` | Client config listing active predefined topic IDs in report order. |
 | `NEWS_TOPICS_YAML` | `config/topics.yaml` | Predefined topic vocabulary and matching thresholds. |
-| `NEWS_NUM_TOP_TOPICS` | `4` | Dynamic mode only: final number of topics selected for the newsletter. |
-| `NEWS_TOP_TOPIC_PROBES` | `4` | Dynamic mode only: approximate number of headlines the LLM inspects per topic cluster during discovery. |
-| `NEWS_TOP_OF_FUNNEL_PER_PROVIDER` | `10` | Dynamic mode only: headlines fetched per top-of-funnel provider during discovery. |
-| `NEWS_DEV_SOURCE_LIMIT` | `3` | In `dev`, only this many article sources are scanned after topic selection. |
-| `NEWS_DEV_NUM_TOPICS` | `2` | In `dev`, cap predefined topics to the first N configured IDs; in dynamic mode, cap selected topics to N. |
+| `NEWS_NUM_TOP_TOPICS` | `4` | Legacy topic-count setting retained for diagnostics and old paths; predefined topic selection comes from `config/client.yaml`. |
+| `NEWS_TOP_TOPIC_PROBES` | `4` | Legacy top-of-funnel setting retained for diagnostics and old paths. |
+| `NEWS_TOP_OF_FUNNEL_PER_PROVIDER` | `10` | Legacy top-of-funnel setting retained for diagnostics and old paths. |
 | `NEWS_SUMMARY_SCOPE` | `today's selected news topics` | Descriptive phrase embedded in synthesis prompts that tells the model what kind of content this is. |
 
 Predefined mode is the default. The local LLM does not choose the topics or
 generate matching terms; it only summarizes and synthesizes articles after the
 configured vocabulary has selected them.
 
-Dynamic mode is preserved as a fork. Topic frame nudging (the soft geographic
-balance between US/western/non-western topics) is hard-coded in `pipeline.py` as
-`TOPIC_FRAME_TARGETS` and `TOPIC_FRAME_NUDGE_STRENGTH`.
-
-In dynamic mode, if the LLM returns no usable topic clusters, fallback topic
-discovery is deterministic: it clusters top-of-funnel headlines by normalized
-keyword overlap, keeps only clusters with support from at least two providers,
-and uses stricter article matching.
-
-In `dev`, article summaries are also narrowed after gathering: the effective
-budget is capped at two articles per selected topic and twice the selected topic
-count.
+Source scope is controlled by `config/sources.yaml` tiers, not by dev-only
+source/topic caps. `dev` uses English `tier: dev` sources; `local-prod` and
+`prod` use English `tier: dev` plus `tier: core` sources.
 
 ---
 
@@ -198,7 +187,7 @@ count.
 
 | Variable | Default | Description |
 |---|---|---|
-| `NEWS_IMAGE_ENABLED` | `1` | `0` skips image generation entirely. |
+| `NEWS_IMAGE_ENABLED` | `0` in `dev`; `1` in `local-prod`/`prod` | `0` skips image generation entirely. |
 | `NEWS_IMAGE_FAIL_ON_ERROR` | `0` | `1` makes image failures abort the run. Default is fail-open (warning logged, run continues). |
 | `NEWS_IMAGE_MODEL_ID` | `Runpod/FLUX.2-klein-4B-mflux-4bit` | mflux model identifier passed to the FLUX.2 generator `--model` option. |
 | `NEWS_IMAGE_BASE_MODEL` | `flux2-klein-4b` | mflux base model family passed to `--base-model`. |
@@ -249,31 +238,29 @@ Predefined topic vocabulary. Each entry is selected by ID from
 
 ### `config/sources.yaml`
 
-Article feeds plus legacy dynamic discovery providers. Changes take effect on
-the next run without touching Python code.
+The single master source list. It contains only currently working RSS/Atom/JSON
+feeds, deduped from the former source pools. Changes take effect on the next run
+without touching Python code.
 
-**`top_funnel_providers`** — used only when `NEWS_TOPIC_MODE=dynamic`. Each entry needs:
+Runs select sources by `language` and `tier`:
 
-| Field | Required | Description |
-|---|---|---|
-| `key` | yes | Stable identifier. |
-| `name` | yes | Human-readable label. |
-| `url` | yes | RSS/Atom/JSON endpoint. |
-| `fetcher` | no | `rss` (default) or `reddit_top_json`. |
-| `region` | no | Geographic label for frame tracking. |
-| `frame` | no | Editorial frame label (falls back to `region`). |
-| `weight` | no | Float multiplier applied to validation scoring (default `1.0`). |
-| `can_seed_topics` | no | `true` → headlines enter the topic candidate pool. |
-| `can_validate_topics` | no | `true` → headlines validate candidates from seeders. |
-| `can_enrich_coverage` | no | Not used for top-funnel providers (always `false` effectively). |
+- `dev`: English `tier: dev` sources only.
+- `local-prod`: English `tier: dev` and `tier: core` sources.
+- `prod`: English `tier: dev` and `tier: core` sources.
+- `tier: peripheral` and non-English sources are retained in the file but are
+  not selected by any run mode.
 
-**`sources`** — the article pool searched after topics are selected. Each entry needs:
+Each `sources` entry supports:
 
 | Field | Required | Description |
 |---|---|---|
 | `key` | yes | Stable identifier. |
 | `name` | yes | Human-readable label shown in the newsletter. |
-| `url` | yes | RSS/Atom feed URL. Google News source-scoped URLs work. |
+| `tier` | yes | `dev`, `core`, or `peripheral`. |
+| `language` | yes | ISO-ish language tag such as `en`, `fr`, or `es`. Runs currently require `en`. |
+| `topics` | no | Topic/category labels from the source-list origin. |
+| `nations` | no | Country labels from the source-list origin. |
+| `url` | yes | RSS/Atom/JSON feed URL. Google News source-scoped URLs work. |
 | `homepage` | no | Outlet homepage linked in the email source listing. |
 | `region` | no | Geographic label. |
 | `frame` | no | Editorial frame label (falls back to `region`). |
@@ -286,7 +273,6 @@ the next run without touching Python code.
 |---|---|
 | `email` | Recipient address. |
 | `name` | Display name used in the greeting. |
-| `personal_prompt` | Optional custom instruction inserted into the final synthesis prompt. Recipients sharing the exact same prompt text are batched into one synthesis pass. `null` uses the default newsletter format. |
 | `pause` | `true` skips delivery without removing the recipient. Also settable via the unsubscribe endpoint. |
 
 ---
@@ -295,9 +281,10 @@ the next run without touching Python code.
 
 | Command | Description |
 |---|---|
-| `uv run news dev` | Narrow dev run. Sends only to `NEWS_DEV_RECIPIENT`. |
-| `uv run news local-prod` | Production-width review run. Sends only to `NEWS_DEV_RECIPIENT` and uses isolated URL history by default. |
-| `uv run news prod` | Production delivery and shared URL history. |
+| `uv run news dev` | English `dev` source tier, tiny Gemma default, image off, Bradley-only delivery, isolated URL history. |
+| `uv run news local-prod` | English `dev`/`core` source tiers, large Gemma default, image on, Bradley-only delivery, isolated URL history. |
+| `uv run news prod` | English `dev`/`core` source tiers, large Gemma default, image on, configured recipients, shared URL history. |
 | `uv run news model-server-command` | Print the resolved MLX server command for the selected model and exit. |
-| `uv run news check-sources` | Check configured source connectivity. Supports `--section`, `--timeout`, `--only-failures`, and `--json`. |
+| `uv run news check-sources` | Check configured source connectivity. Supports `--section`, `--timeout`, `--concurrency`, `--only-failures`, and `--json`. |
+| `uv run news source-languages` | Detect or verify source language tags. Supports `--sources-yaml`, `--write-languages`, and `--json`. |
 | `uv run news serve-unsubscribe` | Start the local HTTP unsubscribe endpoint instead of running the pipeline. |
