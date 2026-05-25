@@ -21,12 +21,9 @@ glob_scan_max_depth = 8
 ".venv-x86_64-backup-2/**" = "none"
 "__pycache__" = "none"
 "__pycache__/**" = "none"
-"**/__pycache__" = "none"
-"**/__pycache__/**" = "none"
-"*.pyc" = "none"
-"**/*.pyc" = "none"
+
 ".DS_Store" = "none"
-"**/.DS_Store" = "none"
+
 ".pytest_cache" = "none"
 ".pytest_cache/**" = "none"
 ".mypy_cache" = "none"

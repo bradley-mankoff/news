@@ -1,110 +1,6186 @@
-# Article source pool used after predefined topic selection.
+# Canonical RSS/Atom source pool for the daily news pipeline.
 #
-# Usage:
-# - Each item needs a stable key, display name, RSS/Atom URL, and optional homepage.
-# - Google News source-scoped RSS URLs are acceptable when an outlet does not expose
-#   a reliable direct feed.
-# - Article sources default to provider_type: article_feed, intended_role: article enrichment,
-#   weight: 1.0, can_seed_topics: false, can_validate_topics: false, can_enrich_coverage: true.
-# - This is deliberately flat: no Iran/US project forks.
+# Source entries are deduped across the former current, larger, and Plenary pools.
+# The pipeline only loads English dev/core sources:
+# - dev runs use tier: dev
+# - local-prod and prod runs use tier: dev plus tier: core
+# - tier: peripheral and non-English sources are retained here but never selected by runs
+#
 sources:
-  - key: Reuters
-    name: Reuters
-    region: global/western
-    url: https://news.google.com/rss/search?q=when:24h+source:Reuters&hl=en-US&gl=US&ceid=US:en
-    homepage: https://www.reuters.com/
-  - key: AP News
-    name: Associated Press
-    region: us/western
-    url: https://news.google.com/rss/search?q=when:24h+source:Associated+Press&hl=en-US&gl=US&ceid=US:en
-    homepage: https://apnews.com/
   - key: AFP
     name: Agence France-Presse
+    tier: dev
+    language: en
+    topics:
+      - News and Current Events
     region: global/western
     url: https://news.google.com/rss/search?q=when:24h+source:AFP&hl=en-US&gl=US&ceid=US:en
     homepage: https://www.afp.com/
-  - key: UPI
-    name: United Press International
+  - key: Al Jazeera
+    name: Al Jazeera
+    tier: dev
+    language: en
+    topics:
+      - News and Current Events
+      - International News Sources
+    region: qatar/global south
+    url: https://www.aljazeera.com/xml/rss/all.xml
+    homepage: https://www.aljazeera.com/
+  - key: AP News
+    name: Associated Press
+    tier: dev
+    language: en
+    topics:
+      - News and Current Events
     region: us/western
-    url: https://rss.upi.com/news/tn_int.rss
-    homepage: https://www.upi.com/
+    url: https://news.google.com/rss/search?q=when:24h+source:Associated+Press&hl=en-US&gl=US&ceid=US:en
+    homepage: https://apnews.com/
+  - key: BBC World
+    name: BBC World News
+    tier: dev
+    language: en
+    topics:
+      - News and Current Events
+      - International News Sources
+      - News
+    nations:
+      - United Kingdom
+    region: uk/western
+    url: https://feeds.bbci.co.uk/news/world/rss.xml
+    homepage: https://www.bbc.com/news/world
+  - key: CNA
+    name: CNA
+    tier: dev
+    language: en
+    topics:
+      - News and Current Events
+    region: singapore/non-western
+    url: https://www.channelnewsasia.com/api/v1/rss-outbound-feed?_format=xml
+    homepage: https://www.channelnewsasia.com/
+  - key: CNBC Business
+    name: CNBC Business
+    tier: dev
+    language: en
+    topics:
+      - Business and Finance
+    region: us/western
+    url: https://www.cnbc.com/id/10001147/device/rss/rss.html
+    homepage: https://www.cnbc.com/business/
+  - key: CNBC Economy
+    name: CNBC Economy
+    tier: dev
+    language: en
+    topics:
+      - Business and Finance
+    region: us/western
+    url: https://www.cnbc.com/id/20910258/device/rss/rss.html
+    homepage: https://www.cnbc.com/economy/
+  - key: CNBC World
+    name: CNBC World
+    tier: dev
+    language: en
+    topics:
+      - Business and Finance
+      - News
+    nations:
+      - United States
+    region: global/western
+    url: https://www.cnbc.com/id/100727362/device/rss/rss.html
+    homepage: https://www.cnbc.com/world/
+  - key: Dawn
+    name: Dawn
+    tier: dev
+    language: en
+    topics:
+      - News and Current Events
+    region: pakistan/non-western
+    url: https://www.dawn.com/feeds/home
+    homepage: https://www.dawn.com/
+  - key: Deutsche Welle
+    name: Deutsche Welle
+    tier: dev
+    language: en
+    topics:
+      - News and Current Events
+      - International News Sources
+    region: germany/western
+    url: https://rss.dw.com/xml/rss-en-top
+    homepage: https://www.dw.com/
+  - key: France 24
+    name: France 24
+    tier: dev
+    language: en
+    topics:
+      - News and Current Events
+      - International News Sources
+    nations:
+      - France
+    region: france/western
+    url: https://www.france24.com/en/rss
+    homepage: https://www.france24.com/en/
+  - key: NDTV
+    name: NDTV
+    tier: dev
+    language: en
+    topics:
+      - News and Current Events
+      - News
+    region: india/non-western
+    url: https://feeds.feedburner.com/ndtvnews-world-news
+    homepage: https://www.ndtv.com/
   - key: NPR
     name: NPR
+    tier: dev
+    language: en
+    topics:
+      - News and Current Events
+      - US National News
     region: us/western
     url: https://feeds.npr.org/1001/rss.xml
     homepage: https://www.npr.org/
+  - key: NPR Business
+    name: NPR Business
+    tier: dev
+    language: en
+    topics:
+      - Business and Finance
+    region: us/western
+    url: https://feeds.npr.org/1006/rss.xml
+    homepage: https://www.npr.org/sections/business/
   - key: NPR Politics
     name: NPR Politics
+    tier: dev
+    language: en
+    topics:
+      - News and Current Events
+      - US National News
     region: us/western
     url: https://feeds.npr.org/1014/rss.xml
     homepage: https://www.npr.org/politics
   - key: Politico
     name: POLITICO
+    tier: dev
+    language: en
+    topics:
+      - News and Current Events
+      - US National News
     region: us/western
     url: https://rss.politico.com/politics-news.xml
     homepage: https://www.politico.com/
-  - key: The Hill
-    name: The Hill
-    region: us/western
-    url: https://thehill.com/feed/
-    homepage: https://thehill.com/
-  - key: BBC World
-    name: BBC World News
-    region: uk/western
-    url: https://feeds.bbci.co.uk/news/world/rss.xml
-    homepage: https://www.bbc.com/news/world
-  - key: France 24
-    name: France 24
-    region: france/western
-    url: https://www.france24.com/en/rss
-    homepage: https://www.france24.com/en/
-  - key: Deutsche Welle
-    name: Deutsche Welle
-    region: germany/western
-    url: https://rss.dw.com/xml/rss-en-top
-    homepage: https://www.dw.com/
-  - key: Al Jazeera
-    name: Al Jazeera
-    region: qatar/global south
-    url: https://www.aljazeera.com/xml/rss/all.xml
-    homepage: https://www.aljazeera.com/
-  - key: Xinhua
-    name: Xinhua News Agency
-    region: china/non-western
-    url: https://news.google.com/rss/search?q=when:24h+source:Xinhua&hl=en-US&gl=US&ceid=US:en
-    homepage: https://english.news.cn/
-  - key: Anadolu Agency
-    name: Anadolu Agency
-    region: turkey/non-western
-    url: https://www.aa.com.tr/en/rss/default?cat=live
-    homepage: https://www.aa.com.tr/en
-  - key: Yonhap
-    name: Yonhap News Agency
-    region: south korea/non-western
-    url: https://en.yna.co.kr/RSS/news.xml
-    homepage: https://en.yna.co.kr/
-  - key: NDTV
-    name: NDTV
-    region: india/non-western
-    url: https://feeds.feedburner.com/ndtvnews-world-news
-    homepage: https://www.ndtv.com/
-  - key: Dawn
-    name: Dawn
-    region: pakistan/non-western
-    url: https://www.dawn.com/feeds/home
-    homepage: https://www.dawn.com/
-  - key: The Hindu
-    name: The Hindu
-    region: india/non-western
-    url: https://www.thehindu.com/feeder/default.rss
-    homepage: https://www.thehindu.com/
+  - key: Reuters
+    name: Reuters
+    tier: dev
+    language: en
+    topics:
+      - News and Current Events
+    region: global/western
+    url: https://news.google.com/rss/search?q=when:24h+source:Reuters&hl=en-US&gl=US&ceid=US:en
+    homepage: https://www.reuters.com/
+    strict_source_match: true
+    source_match_aliases:
+      - Reuters
+      - Reuters.com
   - key: SCMP
     name: South China Morning Post
+    tier: dev
+    language: en
+    topics:
+      - News and Current Events
     region: hong kong/non-western
     url: https://news.google.com/rss/search?q=when:24h+source:South+China+Morning+Post&hl=en-US&gl=US&ceid=US:en
     homepage: https://www.scmp.com/
-  - key: CNA
-    name: CNA
-    region: singapore/non-western
-    url: https://www.channelnewsasia.com/api/v1/rss-outbound-feed?_format=xml
-    homepage: https://www.channelnewsasia.com/
+  - key: The Hill
+    name: The Hill
+    tier: dev
+    language: en
+    topics:
+      - News and Current Events
+      - US National News
+    region: us/western
+    url: https://thehill.com/feed/
+    homepage: https://thehill.com/
+  - key: The Hindu
+    name: The Hindu
+    tier: dev
+    language: en
+    topics:
+      - News and Current Events
+    nations:
+      - India
+    region: india/non-western
+    url: https://www.thehindu.com/feeder/default.rss
+    homepage: https://www.thehindu.com/
+  - key: UPI
+    name: United Press International
+    tier: dev
+    language: en
+    topics:
+      - News and Current Events
+    region: us/western
+    url: https://rss.upi.com/news/tn_int.rss
+    homepage: https://www.upi.com/
+  - key: Yonhap
+    name: Yonhap News Agency
+    tier: dev
+    language: en
+    topics:
+      - News and Current Events
+    region: south korea/non-western
+    url: https://en.yna.co.kr/RSS/news.xml
+    homepage: https://en.yna.co.kr/
+  - key: Axios
+    name: Axios
+    tier: dev
+    language: en
+    topics:
+      - News and Current Events
+      - Alternative and Independent Media
+    nations:
+      - South Africa
+    url: https://api.axios.com/feed
+    homepage: https://api.axios.com/
+  - key: Barron's
+    name: Barron's
+    tier: dev
+    language: en
+    topics:
+      - Business and Finance
+    url: https://feeds.a.dj.com/rss/RSSMarketsMain.xml
+    homepage: https://feeds.a.dj.com/
+  - key: Bloomberg
+    name: Bloomberg
+    tier: dev
+    language: en
+    topics:
+      - Business and Finance
+    url: https://feeds.bloomberg.com/markets/news.rss
+    homepage: https://feeds.bloomberg.com/
+  - key: Democracy Now
+    name: Democracy Now!
+    tier: dev
+    language: en
+    topics:
+      - News and Current Events
+      - Alternative and Independent Media
+    url: https://www.democracynow.org/democracynow.rss
+    homepage: https://www.democracynow.org/
+  - key: Financial Times
+    name: Financial Times
+    tier: dev
+    language: en
+    topics:
+      - Business and Finance
+    url: https://www.ft.com/rss/home
+    homepage: https://www.ft.com/
+  - key: MarketWatch
+    name: MarketWatch
+    tier: dev
+    language: en
+    topics:
+      - Business and Finance
+    url: https://feeds.marketwatch.com/marketwatch/topstories
+    homepage: https://feeds.marketwatch.com/
+  - key: MIT Technology Review
+    name: MIT Technology Review
+    tier: dev
+    language: en
+    topics:
+      - Technology and Science
+      - Science and Research
+    url: https://www.technologyreview.com/feed
+    homepage: https://www.technologyreview.com/
+  - key: Mother Jones
+    name: Mother Jones
+    tier: dev
+    language: en
+    topics:
+      - News and Current Events
+      - Alternative and Independent Media
+    url: https://www.motherjones.com/feed
+    homepage: https://www.motherjones.com/
+  - key: NASA News
+    name: NASA News
+    tier: dev
+    language: en
+    topics:
+      - Technology and Science
+      - Science and Research
+      - Space
+    url: https://www.nasa.gov/rss/dyn/breaking_news.rss
+    homepage: https://www.nasa.gov/
+  - key: New Scientist
+    name: New Scientist
+    tier: dev
+    language: en
+    topics:
+      - Technology and Science
+      - Science and Research
+    url: https://www.newscientist.com/feed/home
+    homepage: https://www.newscientist.com/
+  - key: NHK World Japan
+    name: NHK World Japan
+    tier: dev
+    language: en
+    topics:
+      - News and Current Events
+      - International News Sources
+    url: https://www3.nhk.or.jp/rss/news/cat0.xml
+    homepage: https://www3.nhk.or.jp/
+  - key: ProPublica
+    name: ProPublica
+    tier: dev
+    language: en
+    topics:
+      - News and Current Events
+      - Alternative and Independent Media
+    url: https://feeds.propublica.org/propublica/main
+    homepage: https://feeds.propublica.org/
+  - key: The Guardian
+    name: The Guardian
+    tier: dev
+    language: en
+    topics:
+      - News and Current Events
+      - International News Sources
+    nations:
+      - United Kingdom
+    url: https://www.theguardian.com/world/rss
+    homepage: https://www.theguardian.com/
+  - key: The Intercept
+    name: The Intercept
+    tier: dev
+    language: en
+    topics:
+      - News and Current Events
+      - Alternative and Independent Media
+    url: https://theintercept.com/feed/?lang=en
+    homepage: https://theintercept.com/
+  - key: The New York Times
+    name: The New York Times
+    tier: dev
+    language: en
+    topics:
+      - News and Current Events
+      - US National News
+    nations:
+      - United States
+    url: https://rss.nytimes.com/services/xml/rss/nyt/HomePage.xml
+    homepage: https://rss.nytimes.com/
+  - key: Vox
+    name: Vox
+    tier: dev
+    language: en
+    topics:
+      - News and Current Events
+      - Alternative and Independent Media
+    url: https://www.vox.com/rss/index.xml
+    homepage: https://www.vox.com/
+  - key: Wall Street Journal
+    name: Wall Street Journal
+    tier: dev
+    language: en
+    topics:
+      - News and Current Events
+      - US National News
+    nations:
+      - United States
+    url: https://feeds.a.dj.com/rss/RSSWorldNews.xml
+    homepage: https://feeds.a.dj.com/
+  - key: Plenary The Nation Top Stories
+    name: The Nation - Top Stories
+    tier: dev
+    language: en
+    nations:
+      - Pakistan
+    region: plenary country/Pakistan
+    url: https://nation.com.pk/rss/top-stories
+    homepage: https://nation.com.pk/
+  - key: Anadolu Agency
+    name: Anadolu Agency
+    tier: core
+    language: en
+    topics:
+      - News and Current Events
+    region: turkey/non-western
+    url: https://www.aa.com.tr/en/rss/default?cat=live
+    homepage: https://www.aa.com.tr/en
+  - key: BBC Business
+    name: BBC Business
+    tier: core
+    language: en
+    topics:
+      - Business and Finance
+    region: uk/western
+    url: https://feeds.bbci.co.uk/news/business/rss.xml
+    homepage: https://www.bbc.com/news/business
+  - key: CNBC Asia
+    name: CNBC Asia
+    tier: core
+    language: en
+    topics:
+      - Business and Finance
+    region: asia/non-western
+    url: https://www.cnbc.com/id/19832390/device/rss/rss.html
+    homepage: https://www.cnbc.com/asia/
+  - key: CNBC Europe
+    name: CNBC Europe
+    tier: core
+    language: en
+    topics:
+      - Business and Finance
+    region: europe/western
+    url: https://www.cnbc.com/id/19794221/device/rss/rss.html
+    homepage: https://www.cnbc.com/europe/
+  - key: NPR Economy
+    name: NPR Economy
+    tier: core
+    language: en
+    topics:
+      - Business and Finance
+    region: us/western
+    url: https://feeds.npr.org/1017/rss.xml
+    homepage: https://www.npr.org/sections/economy/
+  - key: Xinhua
+    name: Xinhua News Agency
+    tier: core
+    language: en
+    topics:
+      - News and Current Events
+    region: china/non-western
+    url: https://news.google.com/rss/search?q=when:24h+source:Xinhua&hl=en-US&gl=US&ceid=US:en
+    homepage: https://english.news.cn/
+  - key: Ars Technica
+    name: Ars Technica
+    tier: core
+    language: en
+    topics:
+      - Technology and Science
+      - Tech News and Analysis
+      - Tech
+    url: http://feeds.arstechnica.com/arstechnica/index
+    homepage: http://feeds.arstechnica.com/
+  - key: Benedict Evans
+    name: Benedict Evans
+    tier: core
+    language: en
+    topics:
+      - Business and Finance
+      - Startups and Venture Capital
+    url: https://www.ben-evans.com/benedictevans?format=rss
+    homepage: https://www.ben-evans.com/
+  - key: BuzzFeed News
+    name: BuzzFeed News
+    tier: core
+    language: en
+    topics:
+      - News and Current Events
+      - Alternative and Independent Media
+    url: https://www.buzzfeednews.com/news.xml
+    homepage: https://www.buzzfeednews.com/
+  - key: Common Dreams
+    name: Common Dreams
+    tier: core
+    language: en
+    topics:
+      - News and Current Events
+      - Alternative and Independent Media
+    url: https://www.commondreams.org/feeds/feed.rss
+    homepage: https://www.commondreams.org/
+  - key: Electronic Frontier Foundation
+    name: Electronic Frontier Foundation
+    tier: core
+    language: en
+    topics:
+      - Privacy and Security
+    url: https://www.eff.org/rss/updates.xml
+    homepage: https://www.eff.org/
+  - key: Engadget
+    name: Engadget
+    tier: core
+    language: en
+    topics:
+      - Technology and Science
+      - Tech News and Analysis
+      - Tech
+    url: https://www.engadget.com/rss.xml
+    homepage: https://www.engadget.com/
+  - key: Entrepreneur
+    name: Entrepreneur
+    tier: core
+    language: en
+    topics:
+      - Business and Finance
+      - Startups
+    url: https://www.entrepreneur.com/latest.rss
+    homepage: https://www.entrepreneur.com/
+  - key: Fast Company
+    name: Fast Company
+    tier: core
+    language: en
+    topics:
+      - Business and Finance
+    url: https://www.fastcompany.com/rss
+    homepage: https://www.fastcompany.com/
+  - key: Forbes
+    name: Forbes
+    tier: core
+    language: en
+    topics:
+      - Business and Finance
+    url: https://www.forbes.com/innovation/feed2
+    homepage: https://www.forbes.com/
+  - key: Gizmodo
+    name: Gizmodo
+    tier: core
+    language: en
+    topics:
+      - Technology and Science
+      - Tech News and Analysis
+      - Science
+      - Tech
+    url: https://gizmodo.com/rss
+    homepage: https://gizmodo.com/
+  - key: Hacker News
+    name: Hacker News
+    tier: core
+    language: en
+    topics:
+      - Technology and Science
+      - Specialized Tech
+      - Startups
+      - Tech
+    url: https://hnrss.org/frontpage
+    homepage: https://hnrss.org/
+  - key: Have I Been Pwned
+    name: Have I Been Pwned
+    tier: core
+    language: en
+    topics:
+      - Privacy and Security
+    url: https://feeds.feedburner.com/HaveIBeenPwnedLatestBreaches
+    homepage: https://feeds.feedburner.com/
+  - key: Inc. Magazine
+    name: Inc. Magazine
+    tier: core
+    language: en
+    topics:
+      - Business and Finance
+      - Startups
+    url: https://www.inc.com/rss
+    homepage: https://www.inc.com/
+  - key: Kaspersky Security Blog
+    name: Kaspersky Security Blog
+    tier: core
+    language: en
+    topics:
+      - Privacy and Security
+    url: https://www.kaspersky.com/blog/feed
+    homepage: https://www.kaspersky.com/
+  - key: Krebs on Security
+    name: Krebs on Security
+    tier: core
+    language: en
+    topics:
+      - Privacy and Security
+    url: https://krebsonsecurity.com/feed
+    homepage: https://krebsonsecurity.com/
+  - key: Lifehacker
+    name: Lifehacker
+    tier: core
+    language: en
+    topics:
+      - Health and Lifestyle
+      - Tech
+    url: https://lifehacker.com/rss
+    homepage: https://lifehacker.com/
+  - key: Live Science
+    name: Live Science
+    tier: core
+    language: en
+    topics:
+      - Technology and Science
+      - Science and Research
+    url: https://www.livescience.com/feeds/all
+    homepage: https://www.livescience.com/
+  - key: Malwarebytes Labs
+    name: Malwarebytes Labs
+    tier: core
+    language: en
+    topics:
+      - Privacy and Security
+    url: https://blog.malwarebytes.com/feed
+    homepage: https://blog.malwarebytes.com/
+  - key: Phys.org
+    name: Phys.org
+    tier: core
+    language: en
+    topics:
+      - Technology and Science
+      - Science and Research
+      - Science
+    url: https://phys.org/rss-feed
+    homepage: https://phys.org/
+  - key: Privacy International
+    name: Privacy International
+    tier: core
+    language: en
+    topics:
+      - Privacy and Security
+    url: https://privacyinternational.org/rss.xml
+    homepage: https://privacyinternational.org/
+  - key: Reason Magazine
+    name: Reason Magazine
+    tier: core
+    language: en
+    topics:
+      - News and Current Events
+      - Alternative and Independent Media
+    url: https://reason.com/feed
+    homepage: https://reason.com/
+  - key: Restore Privacy
+    name: Restore Privacy
+    tier: core
+    language: en
+    topics:
+      - Privacy and Security
+    url: https://restoreprivacy.com/feed
+    homepage: https://restoreprivacy.com/
+  - key: Salon
+    name: Salon
+    tier: core
+    language: en
+    topics:
+      - News and Current Events
+      - Alternative and Independent Media
+    url: https://www.salon.com/feed
+    homepage: https://www.salon.com/
+  - key: SANS Internet Storm Center
+    name: SANS Internet Storm Center
+    tier: core
+    language: en
+    topics:
+      - Privacy and Security
+    url: https://isc.sans.edu/rssfeed.xml
+    homepage: https://isc.sans.edu/
+  - key: Schneier on Security
+    name: Schneier on Security
+    tier: core
+    language: en
+    topics:
+      - Privacy and Security
+    url: https://www.schneier.com/feed
+    homepage: https://www.schneier.com/
+  - key: ScienceDaily
+    name: ScienceDaily
+    tier: core
+    language: en
+    topics:
+      - Technology and Science
+      - Science and Research
+      - Science
+    url: https://www.sciencedaily.com/rss/all.xml
+    homepage: https://www.sciencedaily.com/
+  - key: Security Week
+    name: Security Week
+    tier: core
+    language: en
+    topics:
+      - Privacy and Security
+    url: https://www.securityweek.com/feed
+    homepage: https://www.securityweek.com/
+  - key: Seeking Alpha
+    name: Seeking Alpha
+    tier: core
+    language: en
+    topics:
+      - Business and Finance
+    url: https://seekingalpha.com/feed.xml
+    homepage: https://seekingalpha.com/
+  - key: Signal Blog
+    name: Signal Blog
+    tier: core
+    language: en
+    topics:
+      - Privacy and Security
+    url: https://signal.org/blog/rss.xml
+    homepage: https://signal.org/
+  - key: Space.com
+    name: Space.com
+    tier: core
+    language: en
+    topics:
+      - Technology and Science
+      - Science and Research
+      - Space
+    url: https://www.space.com/feeds/all
+    homepage: https://www.space.com/
+  - key: Stratechery
+    name: Stratechery
+    tier: core
+    language: en
+    topics:
+      - Business and Finance
+      - Startups and Venture Capital
+      - Tech
+    url: https://stratechery.com/feed
+    homepage: https://stratechery.com/
+  - key: TechCrunch
+    name: TechCrunch
+    tier: core
+    language: en
+    topics:
+      - Technology and Science
+      - Tech News and Analysis
+      - Tech
+    url: https://techcrunch.com/feed
+    homepage: https://techcrunch.com/
+  - key: TechRadar
+    name: TechRadar
+    tier: peripheral
+    language: en
+    topics:
+      - Technology and Science
+      - Tech News and Analysis
+    url: https://www.techradar.com/rss
+    homepage: https://www.techradar.com/
+  - key: The American Conservative
+    name: The American Conservative
+    tier: core
+    language: en
+    topics:
+      - News and Current Events
+      - Alternative and Independent Media
+    url: https://www.theamericanconservative.com/feed
+    homepage: https://www.theamericanconservative.com/
+  - key: The Hacker News
+    name: The Hacker News
+    tier: core
+    language: en
+    topics:
+      - Privacy and Security
+    url: https://feeds.feedburner.com/TheHackersNews
+    homepage: https://feeds.feedburner.com/
+  - key: The Next Web
+    name: The Next Web
+    tier: core
+    language: en
+    topics:
+      - Technology and Science
+      - Tech News and Analysis
+      - Tech
+    url: https://thenextweb.com/feed
+    homepage: https://thenextweb.com/
+  - key: The Verge
+    name: The Verge
+    tier: core
+    language: en
+    topics:
+      - Technology and Science
+      - Tech News and Analysis
+      - Tech
+    url: https://www.theverge.com/rss/index.xml
+    homepage: https://www.theverge.com/
+  - key: Threatpost
+    name: Threatpost
+    tier: core
+    language: en
+    topics:
+      - Privacy and Security
+    url: https://threatpost.com/feed
+    homepage: https://threatpost.com/
+  - key: Tim Ferriss
+    name: Tim Ferriss
+    tier: core
+    language: en
+    topics:
+      - Health and Lifestyle
+      - Business & Economy
+    url: https://tim.blog/feed
+    homepage: https://tim.blog/
+  - key: Tor Project Blog
+    name: Tor Project Blog
+    tier: core
+    language: en
+    topics:
+      - Privacy and Security
+    url: https://blog.torproject.org/feed
+    homepage: https://blog.torproject.org/
+  - key: Troy Hunt
+    name: Troy Hunt
+    tier: core
+    language: en
+    topics:
+      - Privacy and Security
+    url: https://www.troyhunt.com/rss
+    homepage: https://www.troyhunt.com/
+  - key: Truthout
+    name: Truthout
+    tier: core
+    language: en
+    topics:
+      - News and Current Events
+      - Alternative and Independent Media
+    url: https://truthout.org/feed
+    homepage: https://truthout.org/
+  - key: VentureBeat
+    name: VentureBeat
+    tier: core
+    language: en
+    topics:
+      - Technology and Science
+      - Tech News and Analysis
+      - Startups
+    url: https://venturebeat.com/feed
+    homepage: https://venturebeat.com/
+  - key: Wired
+    name: Wired
+    tier: core
+    language: en
+    topics:
+      - Technology and Science
+      - Tech News and Analysis
+    url: https://www.wired.com/feed/rss
+    homepage: https://www.wired.com/
+  - key: ZDNet
+    name: ZDNet
+    tier: core
+    language: en
+    topics:
+      - Technology and Science
+      - Tech News and Analysis
+    url: https://www.zdnet.com/news/rss.xml
+    homepage: https://www.zdnet.com/
+  - key: Plenary r space news articles and discussion
+    name: '/r/space: news, articles and discussion'
+    tier: core
+    language: en
+    topics:
+      - Space
+    region: plenary recommended/Space
+    url: https://www.reddit.com/r/space/.rss?format=xml
+    homepage: https://www.reddit.com/
+  - key: Plenary 60 Second Science
+    name: 60-Second Science
+    tier: core
+    language: en
+    topics:
+      - Science
+    region: plenary recommended/Science
+    url: http://rss.sciam.com/sciam/60secsciencepodcast
+    homepage: http://rss.sciam.com/
+  - key: Plenary Abante Tonite
+    name: Abante Tonite
+    tier: core
+    language: en
+    nations:
+      - Philippines
+    region: plenary country/Philippines
+    url: https://tonite.abante.com.ph/feed/
+    homepage: https://tonite.abante.com.ph/
+  - key: Plenary ABC News
+    name: ABC News
+    tier: core
+    language: en
+    nations:
+      - Australia
+    region: plenary country/Australia
+    url: https://www.abc.net.au/news/feed/1948/rss.xml
+    homepage: https://www.abc.net.au/
+  - key: Plenary Accidental Tech Podcast
+    name: Accidental Tech Podcast
+    tier: peripheral
+    language: en
+    topics:
+      - Tech
+    region: plenary recommended/Tech
+    url: https://atp.fm/rss
+    homepage: https://atp.fm/
+  - key: Plenary Afford Anything
+    name: Afford Anything
+    tier: core
+    language: en
+    topics:
+      - Personal finance
+    region: plenary recommended/Personal finance
+    url: https://affordanything.com/feed/
+    homepage: https://affordanything.com/
+  - key: Plenary All News
+    name: All News
+    tier: core
+    language: en
+    topics:
+      - Business & Economy
+    region: plenary recommended/Business & Economy
+    url: https://www.investing.com/rss/news.rss
+    homepage: https://www.investing.com/
+  - key: Plenary All BreakingNews ie
+    name: 'All: BreakingNews.ie'
+    tier: core
+    language: en
+    nations:
+      - Ireland
+    region: plenary country/Ireland
+    url: https://feeds.breakingnews.ie/bntopstories
+    homepage: https://feeds.breakingnews.ie/
+  - key: Plenary Analog ue
+    name: Analog(ue)
+    tier: peripheral
+    language: en
+    topics:
+      - Tech
+    region: plenary recommended/Tech
+    url: https://www.relay.fm/analogue/feed
+    homepage: https://www.relay.fm/
+  - key: Plenary AVC
+    name: AVC
+    tier: core
+    language: en
+    topics:
+      - Startups
+    region: plenary recommended/Startups
+    url: https://avc.com/feed/
+    homepage: https://avc.com/
+  - key: Plenary BBC News India
+    name: BBC News - India
+    tier: core
+    language: en
+    nations:
+      - India
+    region: plenary country/India
+    url: http://feeds.bbci.co.uk/news/world/asia/india/rss.xml
+    homepage: http://feeds.bbci.co.uk/
+  - key: Plenary BBC News Science Environment
+    name: BBC News - Science & Environment
+    tier: core
+    language: en
+    topics:
+      - Science
+    region: plenary recommended/Science
+    url: http://feeds.bbci.co.uk/news/science_and_environment/rss.xml
+    homepage: http://feeds.bbci.co.uk/
+  - key: Plenary BD24Live com
+    name: BD24Live.com
+    tier: core
+    language: en
+    nations:
+      - Bangladesh
+    region: plenary country/Bangladesh
+    url: https://www.bd24live.com/feed
+    homepage: https://www.bd24live.com/
+  - key: Plenary blog Feld Thoughts
+    name: blog – Feld Thoughts
+    tier: core
+    language: en
+    topics:
+      - Startups
+    region: plenary recommended/Startups
+    url: https://feld.com/archives/tag/blog/feed
+    homepage: https://feld.com/
+  - key: Plenary Bloomberg Quicktake
+    name: Bloomberg Quicktake
+    tier: peripheral
+    language: en
+    topics:
+      - Business & Economy
+    region: plenary recommended/Business & Economy
+    url: https://www.youtube.com/feeds/videos.xml?user=Bloomberg
+    homepage: https://www.youtube.com/
+  - key: Plenary Brasil Wire
+    name: Brasil Wire
+    tier: core
+    language: en
+    nations:
+      - Brazil
+    region: plenary country/Brazil
+    url: http://www.brasilwire.com/feed/
+    homepage: http://www.brasilwire.com/
+  - key: Plenary Breaking News on Seeking Alpha
+    name: Breaking News on Seeking Alpha
+    tier: core
+    language: en
+    topics:
+      - Business & Economy
+    region: plenary recommended/Business & Economy
+    url: https://seekingalpha.com/market_currents.xml
+    homepage: https://seekingalpha.com/
+  - key: Plenary Brisbane Times Latest News
+    name: Brisbane Times - Latest News
+    tier: core
+    language: en
+    nations:
+      - Australia
+    region: plenary country/Australia
+    url: https://www.brisbanetimes.com.au/rss/feed.xml
+    homepage: https://www.brisbanetimes.com.au/
+  - key: Plenary Budgets Are Sexy
+    name: Budgets Are Sexy
+    tier: core
+    language: en
+    topics:
+      - Personal finance
+    region: plenary recommended/Personal finance
+    url: https://feeds2.feedburner.com/budgetsaresexy
+    homepage: https://feeds2.feedburner.com/
+  - key: Plenary Business Insider
+    name: Business Insider
+    tier: peripheral
+    language: en
+    topics:
+      - Business & Economy
+    region: plenary recommended/Business & Economy
+    url: https://www.youtube.com/feeds/videos.xml?user=businessinsider
+    homepage: https://www.youtube.com/
+  - key: Plenary Business Line Home
+    name: Business Line - Home
+    tier: core
+    language: en
+    nations:
+      - India
+    region: plenary country/India
+    url: https://www.thehindubusinessline.com/feeder/default.rss
+    homepage: https://www.thehindubusinessline.com/
+  - key: Plenary Business News Latest Headlines
+    name: Business News - Latest Headlines
+    tier: core
+    language: en
+    nations:
+      - Australia
+    region: plenary country/Australia
+    url: https://www.businessnews.com.au/rssfeed/latest.rss
+    homepage: https://www.businessnews.com.au/
+  - key: Plenary BusinessWorld
+    name: BusinessWorld
+    tier: core
+    language: en
+    nations:
+      - Philippines
+    region: plenary country/Philippines
+    url: https://www.bworldonline.com/feed/
+    homepage: https://www.bworldonline.com/
+  - key: Plenary CBC Top Stories News
+    name: CBC | Top Stories News
+    tier: core
+    language: en
+    nations:
+      - Canada
+    region: plenary country/Canada
+    url: https://www.cbc.ca/cmlink/rss-topstories
+    homepage: https://www.cbc.ca/
+  - key: Plenary Clockwise
+    name: Clockwise
+    tier: peripheral
+    language: en
+    topics:
+      - Tech
+    region: plenary recommended/Tech
+    url: https://www.relay.fm/clockwise/feed
+    homepage: https://www.relay.fm/
+  - key: Plenary CNET
+    name: CNET
+    tier: peripheral
+    language: en
+    topics:
+      - Tech
+    region: plenary recommended/Tech
+    url: https://www.youtube.com/feeds/videos.xml?user=CNETTV
+    homepage: https://www.youtube.com/
+  - key: Plenary CNET News
+    name: CNET News
+    tier: peripheral
+    language: en
+    topics:
+      - Tech
+    region: plenary recommended/Tech
+    url: https://www.cnet.com/rss/news/
+    homepage: https://www.cnet.com/
+  - key: Plenary CNN com RSS Channel App International Edition
+    name: CNN.com - RSS Channel - App International Edition
+    tier: core
+    language: en
+    nations:
+      - United States
+    region: plenary country/United States
+    url: http://rss.cnn.com/rss/edition.rss
+    homepage: http://rss.cnn.com/
+  - key: Plenary CNN com RSS Channel World
+    name: CNN.com - RSS Channel - World
+    tier: core
+    language: en
+    topics:
+      - News
+    region: plenary recommended/News
+    url: http://rss.cnn.com/rss/edition_world.rss
+    homepage: http://rss.cnn.com/
+  - key: Plenary Crikey
+    name: Crikey
+    tier: core
+    language: en
+    nations:
+      - Australia
+    region: plenary country/Australia
+    url: https://feeds.feedburner.com/com/rCTl
+    homepage: https://feeds.feedburner.com/
+  - key: Plenary Current PH
+    name: Current PH
+    tier: core
+    language: en
+    nations:
+      - Philippines
+    region: plenary country/Philippines
+    url: https://currentph.com/feed/
+    homepage: https://currentph.com/
+  - key: Plenary Daily Express News Feed
+    name: 'Daily Express :: News Feed'
+    tier: core
+    language: en
+    nations:
+      - United Kingdom
+    region: plenary country/United Kingdom
+    url: http://feeds.feedburner.com/daily-express-news-showbiz
+    homepage: http://feeds.feedburner.com/
+  - key: Plenary Daily Maverick
+    name: Daily Maverick
+    tier: core
+    language: en
+    nations:
+      - South Africa
+    region: plenary country/South Africa
+    url: https://www.dailymaverick.co.za/dmrss/
+    homepage: https://www.dailymaverick.co.za/
+  - key: Plenary Daily Post Nigeria
+    name: Daily Post Nigeria
+    tier: core
+    language: en
+    nations:
+      - Nigeria
+    region: plenary country/Nigeria
+    url: https://dailypost.ng/feed
+    homepage: https://dailypost.ng/
+  - key: Plenary Deccan Chronicle Latest India news Breaking news Hyderabad News World ne
+    name: Deccan Chronicle - Latest India news | Breaking news | Hyderabad News | World news | Business news | Politics |
+      Technology news
+    tier: core
+    language: en
+    nations:
+      - India
+    region: plenary country/India
+    url: https://www.deccanchronicle.com/rss_feed/
+    homepage: https://www.deccanchronicle.com/
+  - key: Plenary Discovery
+    name: Discovery
+    tier: core
+    language: en
+    topics:
+      - Science
+    region: plenary recommended/Science
+    url: https://podcasts.files.bbci.co.uk/p002w557.rss
+    homepage: https://podcasts.files.bbci.co.uk/
+  - key: Plenary Duct Tape Marketing
+    name: Duct Tape Marketing
+    tier: core
+    language: en
+    topics:
+      - Business & Economy
+    region: plenary recommended/Business & Economy
+    url: https://ducttape.libsyn.com/rss
+    homepage: https://ducttape.libsyn.com/
+  - key: Plenary Eagle News
+    name: Eagle News
+    tier: core
+    language: en
+    nations:
+      - Philippines
+    region: plenary country/Philippines
+    url: https://www.eaglenews.ph/feed/
+    homepage: https://www.eaglenews.ph/
+  - key: Plenary Economic Times
+    name: Economic Times
+    tier: core
+    language: en
+    nations:
+      - India
+    region: plenary country/India
+    url: https://economictimes.indiatimes.com/rssfeedsdefault.cms
+    homepage: https://economictimes.indiatimes.com/
+  - key: Plenary Euro Weekly News Spain
+    name: Euro Weekly News Spain
+    tier: core
+    language: en
+    nations:
+      - Spain
+    region: plenary country/Spain
+    url: https://www.euroweeklynews.com/feed/
+    homepage: https://www.euroweeklynews.com/
+  - key: Plenary Feld Thoughts
+    name: Feld Thoughts
+    tier: core
+    language: en
+    topics:
+      - Startups
+    region: plenary recommended/Startups
+    url: https://feld.com/feed
+    homepage: https://feld.com/
+  - key: Plenary Financial Post
+    name: Financial Post
+    tier: core
+    language: en
+    nations:
+      - Canada
+    region: plenary country/Canada
+    url: https://business.financialpost.com/feed/
+    homepage: https://business.financialpost.com/
+  - key: Plenary Financial Samurai
+    name: Financial Samurai
+    tier: core
+    language: en
+    topics:
+      - Personal finance
+    region: plenary recommended/Personal finance
+    url: https://www.financialsamurai.com/feed/
+    homepage: https://www.financialsamurai.com/
+  - key: Plenary FlowingData
+    name: FlowingData
+    tier: core
+    language: en
+    topics:
+      - Science
+    region: plenary recommended/Science
+    url: https://flowingdata.com/feed
+    homepage: https://flowingdata.com/
+  - key: Plenary Forbes Business
+    name: Forbes - Business
+    tier: core
+    language: en
+    topics:
+      - Business & Economy
+    region: plenary recommended/Business & Economy
+    url: https://www.forbes.com/business/feed/
+    homepage: https://www.forbes.com/
+  - key: Plenary Fortune
+    name: Fortune
+    tier: core
+    language: en
+    topics:
+      - Business & Economy
+    region: plenary recommended/Business & Economy
+    url: https://fortune.com/feed
+    homepage: https://fortune.com/
+  - key: Plenary FOX News
+    name: FOX News
+    tier: core
+    language: en
+    nations:
+      - United States
+    region: plenary country/United States
+    url: http://feeds.foxnews.com/foxnews/latest
+    homepage: http://feeds.foxnews.com/
+  - key: Plenary Free Press Journal
+    name: Free Press Journal
+    tier: core
+    language: en
+    nations:
+      - India
+    region: plenary country/India
+    url: https://www.freepressjournal.in/stories.rss
+    homepage: https://www.freepressjournal.in/
+  - key: Plenary GaryVee
+    name: GaryVee
+    tier: core
+    language: en
+    topics:
+      - Startups
+    region: plenary recommended/Startups
+    url: https://www.youtube.com/feeds/videos.xml?user=GaryVaynerchuk
+    homepage: https://www.youtube.com/
+  - key: Plenary Get Rich Slowly
+    name: Get Rich Slowly
+    tier: core
+    language: en
+    topics:
+      - Personal finance
+    region: plenary recommended/Personal finance
+    url: https://www.getrichslowly.org/feed/
+    homepage: https://www.getrichslowly.org/
+  - key: Plenary globalnews ca
+    name: globalnews ca
+    tier: core
+    language: en
+    nations:
+      - Canada
+    region: plenary country/Canada
+    url: https://globalnews.ca/feed/
+    homepage: https://globalnews.ca/
+  - key: Plenary GMA News Online News
+    name: GMA News Online / News
+    tier: core
+    language: en
+    nations:
+      - Philippines
+    region: plenary country/Philippines
+    url: https://data.gmanews.tv/gno/rss/news/feed.xml
+    homepage: https://data.gmanews.tv/
+  - key: Plenary HBR IdeaCast
+    name: HBR IdeaCast
+    tier: core
+    language: en
+    topics:
+      - Business & Economy
+    region: plenary recommended/Business & Economy
+    url: http://feeds.harvardbusiness.org/harvardbusiness/ideacast
+    homepage: http://feeds.harvardbusiness.org/
+  - key: Plenary Hidden Brain
+    name: Hidden Brain
+    tier: core
+    language: en
+    topics:
+      - Science
+    region: plenary recommended/Science
+    url: https://feeds.npr.org/510308/podcast.xml
+    homepage: https://feeds.npr.org/
+  - key: Plenary Home Mail Online
+    name: Home | Mail Online
+    tier: core
+    language: en
+    nations:
+      - United Kingdom
+    region: plenary country/United Kingdom
+    url: https://www.dailymail.co.uk/home/index.rss
+    homepage: https://www.dailymail.co.uk/
+  - key: Plenary Hong Kong Free Press HKFP
+    name: Hong Kong Free Press HKFP
+    tier: core
+    language: en
+    nations:
+      - Hong Kong SAR China
+    region: plenary country/Hong Kong SAR China
+    url: https://www.hongkongfp.com/feed/
+    homepage: https://www.hongkongfp.com/
+  - key: Plenary hongkongnews net latest rss headlines
+    name: hongkongnews.net latest rss headlines
+    tier: core
+    language: en
+    nations:
+      - Hong Kong SAR China
+    region: plenary country/Hong Kong SAR China
+    url: http://feeds.hongkongnews.net/rss/b82693edf38ebff8
+    homepage: http://feeds.hongkongnews.net/
+  - key: Plenary How I Built This with Guy Raz
+    name: How I Built This with Guy Raz
+    tier: core
+    language: en
+    topics:
+      - Business & Economy
+    region: plenary recommended/Business & Economy
+    url: https://feeds.npr.org/510313/podcast.xml
+    homepage: https://feeds.npr.org/
+  - key: Plenary I Will Teach You To Be Rich
+    name: I Will Teach You To Be Rich
+    tier: core
+    language: en
+    topics:
+      - Personal finance
+    region: plenary recommended/Personal finance
+    url: https://www.iwillteachyoutoberich.com/feed/
+    homepage: https://www.iwillteachyoutoberich.com/
+  - key: Plenary Independent Australia
+    name: Independent Australia
+    tier: core
+    language: en
+    nations:
+      - Australia
+    region: plenary country/Australia
+    url: http://feeds.feedburner.com/IndependentAustralia
+    homepage: http://feeds.feedburner.com/
+  - key: Plenary India Today Latest Stories
+    name: India Today | Latest Stories
+    tier: core
+    language: en
+    nations:
+      - India
+    region: plenary country/India
+    url: https://www.indiatoday.in/rss/home
+    homepage: https://www.indiatoday.in/
+  - key: Plenary India The Guardian
+    name: India | The Guardian
+    tier: core
+    language: en
+    nations:
+      - India
+    region: plenary country/India
+    url: https://www.theguardian.com/world/india/rss
+    homepage: https://www.theguardian.com/
+  - key: Plenary Information Nigeria
+    name: Information Nigeria
+    tier: core
+    language: en
+    nations:
+      - Nigeria
+    region: plenary country/Nigeria
+    url: https://www.informationng.com/feed
+    homepage: https://www.informationng.com/
+  - key: Plenary INQUIRER net
+    name: INQUIRER.net
+    tier: core
+    language: en
+    nations:
+      - Philippines
+    region: plenary country/Philippines
+    url: https://www.inquirer.net/fullfeed
+    homepage: https://www.inquirer.net/
+  - key: Plenary Inside Intercom
+    name: Inside Intercom
+    tier: core
+    language: en
+    topics:
+      - Startups
+    region: plenary recommended/Startups
+    url: https://www.intercom.com/blog/feed
+    homepage: https://www.intercom.com/
+  - key: Plenary Interaksyon
+    name: Interaksyon
+    tier: core
+    language: en
+    nations:
+      - Philippines
+    region: plenary country/Philippines
+    url: https://www.interaksyon.com/feed/
+    homepage: https://www.interaksyon.com/
+  - key: Plenary Invisibilia
+    name: Invisibilia
+    tier: core
+    language: en
+    topics:
+      - Science
+    region: plenary recommended/Science
+    url: https://feeds.npr.org/510307/podcast.xml
+    homepage: https://feeds.npr.org/
+  - key: Plenary IOL section feed for News
+    name: IOL section feed for News
+    tier: core
+    language: en
+    nations:
+      - South Africa
+    region: plenary country/South Africa
+    url: http://rss.iol.io/iol/news
+    homepage: http://rss.iol.io/
+  - key: Plenary IrishCentral com Top Stories
+    name: IrishCentral.com - Top Stories
+    tier: core
+    language: en
+    nations:
+      - Ireland
+    region: plenary country/Ireland
+    url: https://feeds.feedburner.com/IrishCentral
+    homepage: https://feeds.feedburner.com/
+  - key: Plenary IrishExaminer com
+    name: IrishExaminer.com
+    tier: core
+    language: en
+    nations:
+      - Ireland
+    region: plenary country/Ireland
+    url: https://feeds.feedburner.com/ietopstories
+    homepage: https://feeds.feedburner.com/
+  - key: Plenary Italy The Guardian
+    name: Italy | The Guardian
+    tier: core
+    language: en
+    nations:
+      - Italy
+    region: plenary country/Italy
+    url: https://www.theguardian.com/world/italy/rss
+    homepage: https://www.theguardian.com/
+  - key: Plenary Japan Times latest articles
+    name: Japan Times latest articles
+    tier: core
+    language: en
+    nations:
+      - Japan
+    region: plenary country/Japan
+    url: https://www.japantimes.co.jp/feed/topstories/
+    homepage: https://www.japantimes.co.jp/
+  - key: Plenary Japan Today
+    name: Japan Today
+    tier: core
+    language: en
+    nations:
+      - Japan
+    region: plenary country/Japan
+    url: https://japantoday.com/feed
+    homepage: https://japantoday.com/
+  - key: Plenary Learn To Trade The Market
+    name: Learn To Trade The Market
+    tier: core
+    language: en
+    topics:
+      - Personal finance
+    region: plenary recommended/Personal finance
+    url: https://www.learntotradethemarket.com/feed
+    homepage: https://www.learntotradethemarket.com/
+  - key: Plenary Legit ng
+    name: Legit.ng
+    tier: core
+    language: en
+    nations:
+      - Nigeria
+    region: plenary country/Nigeria
+    url: https://www.legit.ng/rss/all.rss
+    homepage: https://www.legit.ng/
+  - key: Plenary Linus Tech Tips
+    name: Linus Tech Tips
+    tier: peripheral
+    language: en
+    topics:
+      - Tech
+    region: plenary recommended/Tech
+    url: https://www.youtube.com/feeds/videos.xml?user=LinusTechTips
+    homepage: https://www.youtube.com/
+  - key: Plenary Making Sense Of Cents
+    name: Making Sense Of Cents
+    tier: core
+    language: en
+    topics:
+      - Personal finance
+    region: plenary recommended/Personal finance
+    url: https://www.makingsenseofcents.com/feed
+    homepage: https://www.makingsenseofcents.com/
+  - key: Plenary Marie Forleo
+    name: Marie Forleo
+    tier: peripheral
+    language: en
+    topics:
+      - Startups
+    region: plenary recommended/Startups
+    url: https://www.youtube.com/feeds/videos.xml?user=marieforleo
+    homepage: https://www.youtube.com/
+  - key: Plenary Marques Brownlee
+    name: Marques Brownlee
+    tier: peripheral
+    language: en
+    topics:
+      - Tech
+    region: plenary recommended/Tech
+    url: https://www.youtube.com/feeds/videos.xml?user=marquesbrownlee
+    homepage: https://www.youtube.com/
+  - key: Plenary Mashable
+    name: Mashable
+    tier: peripheral
+    language: en
+    topics:
+      - Tech
+    region: plenary recommended/Tech
+    url: http://feeds.mashable.com/Mashable
+    homepage: http://feeds.mashable.com/
+  - key: Plenary Masters of Scale with Reid Hoffman
+    name: Masters of Scale with Reid Hoffman
+    tier: core
+    language: en
+    topics:
+      - Startups
+    region: plenary recommended/Startups
+    url: https://rss.art19.com/masters-of-scale
+    homepage: https://rss.art19.com/
+  - key: Plenary Mexico News Daily
+    name: Mexico News Daily
+    tier: core
+    language: en
+    nations:
+      - Mexico
+    region: plenary country/Mexico
+    url: https://mexiconewsdaily.com/feed/
+    homepage: https://mexiconewsdaily.com/
+  - key: Plenary Mexico The Guardian
+    name: Mexico | The Guardian
+    tier: core
+    language: en
+    nations:
+      - Mexico
+    region: plenary country/Mexico
+    url: https://www.theguardian.com/world/mexico/rss
+    homepage: https://www.theguardian.com/
+  - key: Plenary Michael West
+    name: Michael West
+    tier: core
+    language: en
+    nations:
+      - Australia
+    region: plenary country/Australia
+    url: https://www.michaelwest.com.au/feed/
+    homepage: https://www.michaelwest.com.au/
+  - key: Plenary Millennial Money
+    name: Millennial Money
+    tier: core
+    language: en
+    topics:
+      - Personal finance
+    region: plenary recommended/Personal finance
+    url: https://millennialmoney.com/feed/
+    homepage: https://millennialmoney.com/
+  - key: Plenary Money Saving Mom
+    name: Money Saving Mom®
+    tier: core
+    language: en
+    topics:
+      - Personal finance
+    region: plenary recommended/Personal finance
+    url: https://moneysavingmom.com/feed/
+    homepage: https://moneysavingmom.com/
+  - key: Plenary Money Under 30
+    name: Money Under 30
+    tier: core
+    language: en
+    topics:
+      - Personal finance
+    region: plenary recommended/Personal finance
+    url: https://www.moneyunder30.com/feed
+    homepage: https://www.moneyunder30.com/
+  - key: Plenary MoneyNing
+    name: MoneyNing
+    tier: core
+    language: en
+    topics:
+      - Personal finance
+    region: plenary recommended/Personal finance
+    url: http://feeds.feedburner.com/MoneyNing
+    homepage: http://feeds.feedburner.com/
+  - key: Plenary Moneyweb
+    name: Moneyweb
+    tier: core
+    language: en
+    nations:
+      - South Africa
+    region: plenary country/South Africa
+    url: https://www.moneyweb.co.za/feed/
+    homepage: https://www.moneyweb.co.za/
+  - key: Plenary MyWifeQuitHerJob com
+    name: MyWifeQuitHerJob.com
+    tier: core
+    language: en
+    topics:
+      - Personal finance
+    region: plenary recommended/Personal finance
+    url: https://mywifequitherjob.com/feed/
+    homepage: https://mywifequitherjob.com/
+  - key: Plenary National Post
+    name: National Post
+    tier: core
+    language: en
+    nations:
+      - Canada
+    region: plenary country/Canada
+    url: https://nationalpost.com/feed/
+    homepage: https://nationalpost.com/
+  - key: Plenary NDTV News Topstories
+    name: NDTV News -   Topstories
+    tier: core
+    language: en
+    nations:
+      - India
+    region: plenary country/India
+    url: https://feeds.feedburner.com/ndtvnews-top-stories
+    homepage: https://feeds.feedburner.com/
+  - key: Plenary Nerd s Eye View Kitces com
+    name: Nerd's Eye View | Kitces.com
+    tier: core
+    language: en
+    topics:
+      - Personal finance
+    region: plenary recommended/Personal finance
+    url: http://feeds.feedblitz.com/kitcesnerdseyeview&x=1
+    homepage: http://feeds.feedblitz.com/
+  - key: Plenary NerdWallet
+    name: NerdWallet
+    tier: core
+    language: en
+    topics:
+      - Personal finance
+    region: plenary recommended/Personal finance
+    url: https://www.nerdwallet.com/blog/feed/
+    homepage: https://www.nerdwallet.com/
+  - key: Plenary New Scientist Space
+    name: New Scientist - Space
+    tier: core
+    language: en
+    topics:
+      - Space
+    region: plenary recommended/Space
+    url: https://www.newscientist.com/subject/space/feed/
+    homepage: https://www.newscientist.com/
+  - key: Plenary News Agency UNIAN
+    name: News Agency UNIAN
+    tier: core
+    language: en
+    nations:
+      - Ukraine
+    region: plenary country/Ukraine
+    url: https://rss.unian.net/site/news_eng.rss
+    homepage: https://rss.unian.net/
+  - key: Plenary News Blog
+    name: News Blog
+    tier: core
+    language: en
+    nations:
+      - Pakistan
+    region: plenary country/Pakistan
+    url: https://newsnblogs.com/feed/
+    homepage: https://newsnblogs.com/
+  - key: Plenary News On Japan
+    name: News On Japan
+    tier: core
+    language: en
+    nations:
+      - Japan
+    region: plenary country/Japan
+    url: http://www.newsonjapan.com/rss/top.xml
+    homepage: http://www.newsonjapan.com/
+  - key: Plenary News Latest News Today s News Headlines Breaking News LIVE News Oneindia
+    name: News, Latest News, Today's News Headlines, Breaking News, LIVE News - Oneindia
+    tier: core
+    language: en
+    nations:
+      - India
+    region: plenary country/India
+    url: https://www.oneindia.com/rss/news-fb.xml
+    homepage: https://www.oneindia.com/
+  - key: Plenary News24 Top Stories
+    name: News24 Top Stories
+    tier: core
+    language: en
+    nations:
+      - South Africa
+    region: plenary country/South Africa
+    url: http://feeds.news24.com/articles/news24/TopStories/rss
+    homepage: http://feeds.news24.com/
+  - key: Plenary Nigeria News Links Today s Updates Nigerian Bulletin
+    name: Nigeria News Links | Today's Updates - Nigerian Bulletin
+    tier: core
+    language: en
+    nations:
+      - Nigeria
+    region: plenary country/Nigeria
+    url: https://www.nigerianbulletin.com/forums/-/index.rss
+    homepage: https://www.nigerianbulletin.com/
+  - key: Plenary Nigerian News Latest Nigeria News Your online Nigerian Newspaper
+    name: Nigerian News. Latest Nigeria News. Your online Nigerian Newspaper.
+    tier: core
+    language: en
+    nations:
+      - Nigeria
+    region: plenary country/Nigeria
+    url: http://feeds.feedburner.com/Nigerianeye
+    homepage: http://feeds.feedburner.com/
+  - key: Plenary NYT Japan
+    name: NYT > Japan
+    tier: core
+    language: en
+    nations:
+      - Japan
+    region: plenary country/Japan
+    url: https://www.nytimes.com/svc/collections/v1/publish/http://www.nytimes.com/topic/destination/japan/rss.xml
+    homepage: https://www.nytimes.com/
+  - key: Plenary NYT Science
+    name: NYT > Science
+    tier: core
+    language: en
+    topics:
+      - Science
+    region: plenary recommended/Science
+    url: https://rss.nytimes.com/services/xml/rss/nyt/Science.xml
+    homepage: https://rss.nytimes.com/
+  - key: Plenary NYT World News
+    name: NYT > World News
+    tier: core
+    language: en
+    topics:
+      - News
+    region: plenary recommended/News
+    url: https://rss.nytimes.com/services/xml/rss/nyt/World.xml
+    homepage: https://rss.nytimes.com/
+  - key: Plenary Oblivious Investor
+    name: Oblivious Investor
+    tier: core
+    language: en
+    topics:
+      - Personal finance
+    region: plenary recommended/Personal finance
+    url: https://obliviousinvestor.com/feed/
+    homepage: https://obliviousinvestor.com/
+  - key: Plenary omnycontent com
+    name: omnycontent com
+    tier: core
+    language: en
+    topics:
+      - Science
+    region: plenary recommended/Science
+    url: https://www.omnycontent.com/d/playlist/aaea4e69-af51-495e-afc9-a9760146922b/2a195077-f014-41d2-8313-ab190186b4c2/277bcd5c-0a05-4c14-8ba6-ab190186b4d5/podcast.rss
+    homepage: https://www.omnycontent.com/
+  - key: Plenary OpIndia
+    name: OpIndia
+    tier: core
+    language: en
+    nations:
+      - India
+    region: plenary country/India
+    url: https://feeds.feedburner.com/opindia
+    homepage: https://feeds.feedburner.com/
+  - key: Plenary Ottawa Citizen
+    name: Ottawa Citizen
+    tier: core
+    language: en
+    nations:
+      - Canada
+    region: plenary country/Canada
+    url: https://ottawacitizen.com/feed/
+    homepage: https://ottawacitizen.com/
+  - key: Plenary Paris Star
+    name: Paris Star
+    tier: core
+    language: en
+    nations:
+      - France
+    region: plenary country/France
+    url: https://www.parisstaronline.com/feed
+    homepage: https://www.parisstaronline.com/
+  - key: Plenary Paul Graham Essays
+    name: 'Paul Graham: Essays'
+    tier: core
+    language: en
+    topics:
+      - Startups
+    region: plenary recommended/Startups
+    url: http://www.aaronsw.com/2002/feeds/pgessays.rss
+    homepage: http://www.aaronsw.com/
+  - key: Plenary Personal Finance
+    name: Personal Finance
+    tier: core
+    language: en
+    topics:
+      - Personal finance
+    region: plenary recommended/Personal finance
+    url: https://reddit.com/r/personalfinance/.rss
+    homepage: https://reddit.com/
+  - key: Plenary PerthNow
+    name: PerthNow
+    tier: core
+    language: en
+    nations:
+      - Australia
+    region: plenary country/Australia
+    url: https://www.perthnow.com.au/news/feed
+    homepage: https://www.perthnow.com.au/
+  - key: Plenary PhilNews XYZ
+    name: PhilNews.XYZ
+    tier: core
+    language: en
+    nations:
+      - Philippines
+    region: plenary country/Philippines
+    url: https://www.philnews.xyz/feeds/posts/default?alt=rss
+    homepage: https://www.philnews.xyz/
+  - key: Plenary philstar com RSS Headlines
+    name: philstar.com - RSS Headlines
+    tier: core
+    language: en
+    nations:
+      - Philippines
+    region: plenary country/Philippines
+    url: https://www.philstar.com/rss/headlines
+    homepage: https://www.philstar.com/
+  - key: Plenary Playbook
+    name: Playbook
+    tier: core
+    language: en
+    nations:
+      - United States
+    region: plenary country/United States
+    url: https://rss.politico.com/playbook.xml
+    homepage: https://rss.politico.com/
+  - key: Plenary PravdaReport
+    name: PravdaReport
+    tier: core
+    language: en
+    nations:
+      - Russia
+    region: plenary country/Russia
+    url: https://www.pravdareport.com/export.xml
+    homepage: https://www.pravdareport.com/
+  - key: Plenary Premium Times Nigeria
+    name: Premium Times Nigeria
+    tier: core
+    language: en
+    nations:
+      - Nigeria
+    region: plenary country/Nigeria
+    url: https://www.premiumtimesng.com/feed
+    homepage: https://www.premiumtimesng.com/
+  - key: Plenary Probably Science
+    name: Probably Science
+    tier: core
+    language: en
+    topics:
+      - Science
+    region: plenary recommended/Science
+    url: https://probablyscience.libsyn.com/rss
+    homepage: https://probablyscience.libsyn.com/
+  - key: Plenary Product Hunt The best new products every day
+    name: Product Hunt — The best new products, every day
+    tier: peripheral
+    language: en
+    topics:
+      - Startups
+    region: plenary recommended/Startups
+    url: https://www.producthunt.com/feed
+    homepage: https://www.producthunt.com/
+  - key: Plenary Quick Sprout
+    name: Quick Sprout
+    tier: core
+    language: en
+    topics:
+      - Startups
+    region: plenary recommended/Startups
+    url: https://www.quicksprout.com/rss
+    homepage: https://www.quicksprout.com/
+  - key: Plenary Radiolab
+    name: Radiolab
+    tier: core
+    language: en
+    topics:
+      - Science
+    region: plenary recommended/Science
+    url: http://feeds.wnyc.org/radiolab
+    homepage: http://feeds.wnyc.org/
+  - key: Plenary ReadWrite
+    name: ReadWrite
+    tier: core
+    language: en
+    topics:
+      - Tech
+    region: plenary recommended/Tech
+    url: https://readwrite.com/feed/
+    homepage: https://readwrite.com/
+  - key: Plenary Reddit Science
+    name: Reddit Science
+    tier: core
+    language: en
+    topics:
+      - Science
+    region: plenary recommended/Science
+    url: https://reddit.com/r/science/.rss
+    homepage: https://reddit.com/
+  - key: Plenary Reply All
+    name: Reply All
+    tier: peripheral
+    language: en
+    topics:
+      - Tech
+    region: plenary recommended/Tech
+    url: https://feeds.megaphone.fm/replyall
+    homepage: https://feeds.megaphone.fm/
+  - key: Plenary Rocket
+    name: Rocket
+    tier: peripheral
+    language: en
+    topics:
+      - Tech
+    region: plenary recommended/Tech
+    url: https://www.relay.fm/rocket/feed
+    homepage: https://www.relay.fm/
+  - key: Plenary RT Daily news
+    name: RT - Daily news
+    tier: core
+    language: en
+    nations:
+      - Russia
+    region: plenary country/Russia
+    url: https://www.rt.com/rss/
+    homepage: https://www.rt.com/
+  - key: Plenary Sawbones A Marital Tour of Misguided Medicine
+    name: 'Sawbones: A Marital Tour of Misguided Medicine'
+    tier: core
+    language: en
+    topics:
+      - Science
+    region: plenary recommended/Science
+    url: https://feeds.simplecast.com/y1LF_sn2
+    homepage: https://feeds.simplecast.com/
+  - key: Plenary Science Latest
+    name: Science Latest
+    tier: core
+    language: en
+    topics:
+      - Science
+    region: plenary recommended/Science
+    url: https://www.wired.com/feed/category/science/latest/rss
+    homepage: https://www.wired.com/
+  - key: Plenary Science Based Medicine
+    name: Science-Based Medicine
+    tier: core
+    language: en
+    topics:
+      - Science
+    region: plenary recommended/Science
+    url: https://sciencebasedmedicine.org/feed/
+    homepage: https://sciencebasedmedicine.org/
+  - key: Plenary Scientific American Content Global
+    name: 'Scientific American Content: Global'
+    tier: core
+    language: en
+    topics:
+      - Science
+    region: plenary recommended/Science
+    url: http://rss.sciam.com/ScientificAmerican-Global
+    homepage: http://rss.sciam.com/
+  - key: Plenary Scroll in
+    name: Scroll.in
+    tier: core
+    language: en
+    nations:
+      - India
+    region: plenary country/India
+    url: http://feeds.feedburner.com/ScrollinArticles.rss
+    homepage: http://feeds.feedburner.com/
+  - key: Plenary SEBI RSS Feed
+    name: SEBI RSS Feed
+    tier: core
+    language: en
+    nations:
+      - India
+    region: plenary country/India
+    url: https://www.sebi.gov.in/sebirss.xml
+    homepage: https://www.sebi.gov.in/
+  - key: Plenary shirtloadsofscience libsyn com
+    name: shirtloadsofscience libsyn com
+    tier: core
+    language: en
+    topics:
+      - Science
+    region: plenary recommended/Science
+    url: https://shirtloadsofscience.libsyn.com/rss
+    homepage: https://shirtloadsofscience.libsyn.com/
+  - key: Plenary Side Hustle Nation
+    name: Side Hustle Nation
+    tier: core
+    language: en
+    topics:
+      - Personal finance
+    region: plenary recommended/Personal finance
+    url: https://www.sidehustlenation.com/feed
+    homepage: https://www.sidehustlenation.com/
+  - key: Plenary Sky Telescope
+    name: Sky & Telescope
+    tier: core
+    language: en
+    topics:
+      - Space
+    region: plenary recommended/Space
+    url: https://www.skyandtelescope.com/feed/
+    homepage: https://www.skyandtelescope.com/
+  - key: Plenary Small Business Trends
+    name: Small Business Trends
+    tier: core
+    language: en
+    topics:
+      - Startups
+    region: plenary recommended/Startups
+    url: https://feeds2.feedburner.com/SmallBusinessTrends
+    homepage: https://feeds2.feedburner.com/
+  - key: Plenary Space The Guardian
+    name: Space | The Guardian
+    tier: core
+    language: en
+    topics:
+      - Space
+    region: plenary recommended/Space
+    url: https://www.theguardian.com/science/space/rss
+    homepage: https://www.theguardian.com/
+  - key: Plenary SpaceX
+    name: SpaceX
+    tier: peripheral
+    language: en
+    topics:
+      - Space
+    region: plenary recommended/Space
+    url: https://www.youtube.com/feeds/videos.xml?user=spacexchannel
+    homepage: https://www.youtube.com/
+  - key: Plenary Startup Stories Mixergy
+    name: Startup Stories - Mixergy
+    tier: core
+    language: en
+    topics:
+      - Business & Economy
+    region: plenary recommended/Business & Economy
+    url: https://feeds.feedburner.com/Mixergy-main-podcast
+    homepage: https://feeds.feedburner.com/
+  - key: Plenary Steve Blank
+    name: Steve Blank
+    tier: core
+    language: en
+    topics:
+      - Startups
+    region: plenary recommended/Startups
+    url: https://steveblank.com/feed/
+    homepage: https://steveblank.com/
+  - key: Plenary Swarajya
+    name: Swarajya
+    tier: core
+    language: en
+    nations:
+      - India
+    region: plenary country/India
+    url: https://prod-qt-images.s3.amazonaws.com/production/swarajya/feed.xml
+    homepage: https://prod-qt-images.s3.amazonaws.com/
+  - key: Plenary Sydney Morning Herald Latest News
+    name: Sydney Morning Herald - Latest News
+    tier: core
+    language: en
+    nations:
+      - Australia
+    region: plenary country/Australia
+    url: https://www.smh.com.au/rss/feed.xml
+    homepage: https://www.smh.com.au/
+  - key: Plenary TASS
+    name: TASS
+    tier: core
+    language: en
+    nations:
+      - Russia
+    region: plenary country/Russia
+    url: http://tass.com/rss/v2.xml
+    homepage: http://tass.com/
+  - key: Plenary TechCentral
+    name: TechCentral
+    tier: core
+    language: en
+    nations:
+      - South Africa
+    region: plenary country/South Africa
+    url: https://techcentral.co.za/feed
+    homepage: https://techcentral.co.za/
+  - key: Plenary TechGenyz
+    name: TechGenyz
+    tier: core
+    language: en
+    nations:
+      - India
+    region: plenary country/India
+    url: http://feeds.feedburner.com/techgenyz
+    homepage: http://feeds.feedburner.com/
+  - key: Plenary TechPinas Philippines Technology News Tips and Reviews Blog
+    name: 'TechPinas : Philippines'' Technology News, Tips and Reviews Blog'
+    tier: core
+    language: en
+    nations:
+      - Philippines
+    region: plenary country/Philippines
+    url: http://feeds.feedburner.com/Techpinas
+    homepage: http://feeds.feedburner.com/
+  - key: Plenary TED Talks Daily SD video
+    name: TED Talks Daily (SD video)
+    tier: core
+    language: en
+    topics:
+      - Science
+    region: plenary recommended/Science
+    url: https://pa.tedcdn.com/feeds/talks.rss
+    homepage: https://pa.tedcdn.com/
+  - key: Plenary The Age Latest News
+    name: The Age - Latest News
+    tier: core
+    language: en
+    nations:
+      - Australia
+    region: plenary country/Australia
+    url: https://www.theage.com.au/rss/feed.xml
+    homepage: https://www.theage.com.au/
+  - key: Plenary The Canberra Times Local News
+    name: The Canberra Times - Local News
+    tier: core
+    language: en
+    nations:
+      - Australia
+    region: plenary country/Australia
+    url: https://www.canberratimes.com.au/rss.xml
+    homepage: https://www.canberratimes.com.au/
+  - key: Plenary The Citizen
+    name: The Citizen
+    tier: core
+    language: en
+    nations:
+      - South Africa
+    region: plenary country/South Africa
+    url: https://citizen.co.za/feed/
+    homepage: https://citizen.co.za/
+  - key: Plenary The College Investor
+    name: The College Investor
+    tier: core
+    language: en
+    topics:
+      - Personal finance
+    region: plenary recommended/Personal finance
+    url: https://thecollegeinvestor.com/feed/
+    homepage: https://thecollegeinvestor.com/
+  - key: Plenary The Daily Star
+    name: The Daily Star
+    tier: core
+    language: en
+    nations:
+      - Bangladesh
+    region: plenary country/Bangladesh
+    url: https://www.thedailystar.net/frontpage/rss.xml
+    homepage: https://www.thedailystar.net/
+  - key: Plenary The Express Tribune
+    name: The Express Tribune
+    tier: core
+    language: en
+    nations:
+      - Pakistan
+    region: plenary country/Pakistan
+    url: https://tribune.com.pk/feed/home
+    homepage: https://tribune.com.pk/
+  - key: Plenary The Growth Show
+    name: The Growth Show
+    tier: core
+    language: en
+    topics:
+      - Business & Economy
+    region: plenary recommended/Business & Economy
+    url: http://thegrowthshow.hubspot.libsynpro.com/
+    homepage: http://thegrowthshow.hubspot.libsynpro.com/
+  - key: Plenary The Independent
+    name: The Independent
+    tier: core
+    language: en
+    nations:
+      - United Kingdom
+    region: plenary country/United Kingdom
+    url: http://www.independent.co.uk/news/uk/rss
+    homepage: http://www.independent.co.uk/
+  - key: Plenary The Infinite Monkey Cage
+    name: The Infinite Monkey Cage
+    tier: core
+    language: en
+    topics:
+      - Science
+    region: plenary recommended/Science
+    url: https://podcasts.files.bbci.co.uk/b00snr0w.rss
+    homepage: https://podcasts.files.bbci.co.uk/
+  - key: Plenary The Keyword
+    name: The Keyword
+    tier: peripheral
+    language: en
+    topics:
+      - Tech
+    region: plenary recommended/Tech
+    url: https://www.blog.google/rss/
+    homepage: https://www.blog.google/
+  - key: Plenary The Local
+    name: The Local
+    tier: core
+    language: en
+    nations:
+      - Italy
+      - Spain
+    region: plenary country/Italy
+    url: https://feeds.thelocal.com/rss/it
+    homepage: https://feeds.thelocal.com/
+  - key: Plenary The Moscow Times Independent News From Russia
+    name: The Moscow Times - Independent News From Russia
+    tier: core
+    language: en
+    nations:
+      - Russia
+    region: plenary country/Russia
+    url: https://www.themoscowtimes.com/rss/news
+    homepage: https://www.themoscowtimes.com/
+  - key: Plenary The News International Pakistan
+    name: The News International - Pakistan
+    tier: core
+    language: en
+    nations:
+      - Pakistan
+    region: plenary country/Pakistan
+    url: https://www.thenews.com.pk/rss/1/1
+    homepage: https://www.thenews.com.pk/
+  - key: Plenary The Province
+    name: The Province
+    tier: core
+    language: en
+    nations:
+      - Canada
+    region: plenary country/Canada
+    url: https://theprovince.com/feed/
+    homepage: https://theprovince.com/
+  - key: Plenary The Rio Times
+    name: The Rio Times
+    tier: core
+    language: en
+    nations:
+      - Brazil
+    region: plenary country/Brazil
+    url: https://riotimesonline.com/feed/
+    homepage: https://riotimesonline.com/
+  - key: Plenary The South African
+    name: The South African
+    tier: core
+    language: en
+    nations:
+      - South Africa
+    region: plenary country/South Africa
+    url: https://www.thesouthafrican.com/feed/
+    homepage: https://www.thesouthafrican.com/
+  - key: Plenary The Startup Junkies Podcast
+    name: The Startup Junkies Podcast
+    tier: core
+    language: en
+    topics:
+      - Startups
+    region: plenary recommended/Startups
+    url: https://startupjunkie.libsyn.com/rss
+    homepage: https://startupjunkie.libsyn.com/
+  - key: Plenary The Tim Ferriss Show
+    name: The Tim Ferriss Show
+    tier: core
+    language: en
+    topics:
+      - Startups
+    region: plenary recommended/Startups
+    url: https://rss.art19.com/tim-ferriss-show
+    homepage: https://rss.art19.com/
+  - key: Plenary The Vergecast
+    name: The Vergecast
+    tier: peripheral
+    language: en
+    topics:
+      - Tech
+    region: plenary recommended/Tech
+    url: https://feeds.megaphone.fm/vergecast
+    homepage: https://feeds.megaphone.fm/
+  - key: Plenary The42
+    name: The42
+    tier: core
+    language: en
+    nations:
+      - Ireland
+    region: plenary country/Ireland
+    url: https://www.the42.ie/feed/
+    homepage: https://www.the42.ie/
+  - key: Plenary TheJournal ie
+    name: TheJournal.ie
+    tier: core
+    language: en
+    nations:
+      - Ireland
+    region: plenary country/Ireland
+    url: https://www.thejournal.ie/feed/
+    homepage: https://www.thejournal.ie/
+  - key: Plenary This Week in Science The Kickass Science Podcast
+    name: This Week in Science – The Kickass Science Podcast
+    tier: core
+    language: en
+    topics:
+      - Science
+    region: plenary recommended/Science
+    url: http://www.twis.org/feed/
+    homepage: http://www.twis.org/
+  - key: Plenary This Week in Tech Audio
+    name: This Week in Tech (Audio)
+    tier: peripheral
+    language: en
+    topics:
+      - Tech
+    region: plenary recommended/Tech
+    url: https://feeds.twit.tv/twit.xml
+    homepage: https://feeds.twit.tv/
+  - key: Plenary Times of India
+    name: Times of India
+    tier: core
+    language: en
+    nations:
+      - India
+    region: plenary country/India
+    url: https://timesofindia.indiatimes.com/rssfeedstopstories.cms
+    homepage: https://timesofindia.indiatimes.com/
+  - key: Plenary Top stories Google News
+    name: Top stories - Google News
+    tier: core
+    language: en
+    topics:
+      - News
+    region: plenary recommended/News
+    url: https://news.google.com/rss
+    homepage: https://news.google.com/
+  - key: Plenary Toronto Sun RSS Feed
+    name: Toronto Sun - RSS Feed
+    tier: core
+    language: en
+    nations:
+      - Canada
+    region: plenary country/Canada
+    url: https://torontosun.com/category/news/feed
+    homepage: https://torontosun.com/
+  - key: Plenary UNBOX PH
+    name: UNBOX PH
+    tier: peripheral
+    language: en
+    nations:
+      - Philippines
+    region: plenary country/Philippines
+    url: https://www.unbox.ph/feed/
+    homepage: https://www.unbox.ph/
+  - key: Plenary Unbox Therapy
+    name: Unbox Therapy
+    tier: peripheral
+    language: en
+    topics:
+      - Tech
+    region: plenary recommended/Tech
+    url: https://www.youtube.com/feeds/videos.xml?user=unboxtherapy
+    homepage: https://www.youtube.com/
+  - key: Plenary Well Kept Wallet
+    name: Well Kept Wallet
+    tier: core
+    language: en
+    topics:
+      - Personal finance
+    region: plenary recommended/Personal finance
+    url: https://wellkeptwallet.com/feed/
+    homepage: https://wellkeptwallet.com/
+  - key: Plenary Wise Bread
+    name: Wise Bread
+    tier: core
+    language: en
+    topics:
+      - Personal finance
+    region: plenary recommended/Personal finance
+    url: http://feeds.killeraces.com/wisebread
+    homepage: http://feeds.killeraces.com/
+  - key: Plenary World Nation
+    name: World & Nation
+    tier: core
+    language: en
+    nations:
+      - United States
+    region: plenary country/United States
+    url: https://www.latimes.com/world-nation/rss2.0.xml
+    homepage: https://www.latimes.com/
+  - key: Plenary World News
+    name: World News
+    tier: core
+    language: en
+    topics:
+      - News
+    region: plenary recommended/News
+    url: https://www.reddit.com/r/worldnews/.rss
+    homepage: https://www.reddit.com/
+  - key: Plenary World News Breaking News Top Stories
+    name: World News - Breaking News, Top Stories
+    tier: core
+    language: en
+    nations:
+      - United States
+    region: plenary country/United States
+    url: https://www.huffpost.com/section/world-news/feed
+    homepage: https://www.huffpost.com/
+  - key: Plenary World News Headlines Latest International News World Breaking News Times
+    name: World News Headlines, Latest International News, World Breaking News - Times of India
+    tier: core
+    language: en
+    topics:
+      - News
+    region: plenary recommended/News
+    url: https://timesofindia.indiatimes.com/rssfeeds/296589292.cms
+    homepage: https://timesofindia.indiatimes.com/
+  - key: Plenary Yahoo Finance
+    name: Yahoo Finance
+    tier: core
+    language: en
+    topics:
+      - Business & Economy
+    region: plenary recommended/Business & Economy
+    url: https://finance.yahoo.com/news/rssindex
+    homepage: https://finance.yahoo.com/
+  - key: Plenary Yahoo News Latest News Headlines
+    name: Yahoo News - Latest News & Headlines
+    tier: core
+    language: en
+    nations:
+      - United States
+    region: plenary country/United States
+    url: https://news.yahoo.com/rss/mostviewed
+    homepage: https://news.yahoo.com/
+  - key: Plenary 24 Horas
+    name: 24 Horas
+    tier: core
+    language: es
+    nations:
+      - Mexico
+    region: plenary country/Mexico
+    url: https://www.24-horas.mx/feed/
+    homepage: https://www.24-horas.mx/
+  - key: Plenary 8 Columnas
+    name: 8 Columnas
+    tier: core
+    language: es
+    nations:
+      - Mexico
+    region: plenary country/Mexico
+    url: https://8columnas.com.mx/feed/
+    homepage: https://8columnas.com.mx/
+  - key: Plenary Adnkronos ultimoratop
+    name: Adnkronos - ultimoratop
+    tier: core
+    language: it
+    nations:
+      - Italy
+    region: plenary country/Italy
+    url: http://rss.adnkronos.com/RSS_PrimaPagina.xml
+    homepage: http://rss.adnkronos.com/
+  - key: Plenary Aktuell FAZ NET
+    name: Aktuell - FAZ.NET
+    tier: core
+    language: de
+    nations:
+      - Germany
+    region: plenary country/Germany
+    url: https://www.faz.net/rss/aktuell/
+    homepage: https://www.faz.net/
+  - key: Plenary BRIDGE
+    name: BRIDGE（ブリッジ）テクノロジー＆スタートアップ情報
+    tier: core
+    language: ja
+    nations:
+      - Japan
+    region: plenary country/Japan
+    url: http://feeds.feedburner.com/SdJapan
+    homepage: http://feeds.feedburner.com/
+  - key: Plenary Dziennik pl Dziennik dziennik pl
+    name: Dziennik.pl Dziennik - dziennik.pl
+    tier: core
+    language: pl
+    nations:
+      - Poland
+    region: plenary country/Poland
+    url: http://rss.dziennik.pl/Dziennik-PL/
+    homepage: http://rss.dziennik.pl/
+  - key: Plenary El Financiero
+    name: El Financiero
+    tier: core
+    language: es
+    nations:
+      - Mexico
+    region: plenary country/Mexico
+    url: https://www.elfinanciero.com.mx/arc/outboundfeeds/rss/?outputType=xml
+    homepage: https://www.elfinanciero.com.mx/
+  - key: Plenary El Informador Noticias de Jalisco Mexico Deportes Entretenimiento
+    name: 'El Informador :: Noticias de Jalisco, México, Deportes & Entretenimiento'
+    tier: core
+    language: es
+    nations:
+      - Mexico
+    region: plenary country/Mexico
+    url: https://www.informador.mx/rss/ultimas-noticias.xml
+    homepage: https://www.informador.mx/
+  - key: Plenary EL PAIS el periodico global
+    name: 'EL PAÍS: el periódico global'
+    tier: core
+    language: es
+    nations:
+      - Spain
+    region: plenary country/Spain
+    url: https://feeds.elpais.com/mrss-s/pages/ep/site/elpais.com/portada
+    homepage: https://feeds.elpais.com/
+  - key: Plenary ElDiario es ElDiario es
+    name: ElDiario.es - ElDiario.es
+    tier: core
+    language: es
+    nations:
+      - Spain
+    region: plenary country/Spain
+    url: https://www.eldiario.es/rss/
+    homepage: https://www.eldiario.es/
+  - key: Plenary ElNorte
+    name: ElNorte
+    tier: core
+    language: es
+    nations:
+      - Mexico
+    region: plenary country/Mexico
+    url: https://www.elnorte.com/rss/portada.xml
+    homepage: https://www.elnorte.com/
+  - key: Plenary Espana
+    name: España
+    tier: core
+    language: es
+    nations:
+      - Spain
+    region: plenary country/Spain
+    url: https://rss.elconfidencial.com/espana/
+    homepage: https://rss.elconfidencial.com/
+  - key: Plenary Folha de S Paulo Em cima da hora Principal
+    name: Folha de S.Paulo - Em cima da hora - Principal
+    tier: core
+    language: pt
+    nations:
+      - Brazil
+    region: plenary country/Brazil
+    url: https://feeds.folha.uol.com.br/emcimadahora/rss091.xml
+    homepage: https://feeds.folha.uol.com.br/
+  - key: Plenary Franceinfo Les Titres
+    name: Franceinfo - Les Titres
+    tier: core
+    language: fr
+    nations:
+      - France
+    region: plenary country/France
+    url: https://www.francetvinfo.fr/titres.rss
+    homepage: https://www.francetvinfo.fr/
+  - key: Plenary Gazeta ua
+    name: Gazeta.ua
+    tier: core
+    language: uk
+    nations:
+      - Ukraine
+    region: plenary country/Ukraine
+    url: https://gazeta.ua/rss
+    homepage: https://gazeta.ua/
+  - key: Plenary GazetaPrawna pl biznes podatki prawo finanse wiadomosci praca
+    name: GazetaPrawna.pl - biznes, podatki, prawo, finanse, wiadomości, praca
+    tier: core
+    language: pl
+    nations:
+      - Poland
+    region: plenary country/Poland
+    url: http://rss.gazetaprawna.pl/GazetaPrawna
+    homepage: http://rss.gazetaprawna.pl/
+  - key: Plenary https www rp pl
+    name: https://www.rp.pl
+    tier: core
+    language: pl
+    nations:
+      - Poland
+    region: plenary country/Poland
+    url: https://www.rp.pl/rss/1019
+    homepage: https://www.rp.pl/
+  - key: Plenary huffingtonpost es
+    name: huffingtonpost.es
+    tier: core
+    language: es
+    nations:
+      - Spain
+    region: plenary country/Spain
+    url: https://www.huffingtonpost.es/feeds/index.xml
+    homepage: https://www.huffingtonpost.es/
+  - key: Plenary Il Mattino Web
+    name: Il Mattino Web
+    tier: core
+    language: it
+    nations:
+      - Italy
+    region: plenary country/Italy
+    url: https://www.ilmattino.it/?sez=XML&args&p=search&args[box]=Home&limit=20&layout=rss
+    homepage: https://www.ilmattino.it/
+  - key: Plenary Internazionale
+    name: Internazionale
+    tier: core
+    language: it
+    nations:
+      - Italy
+    region: plenary country/Italy
+    url: https://www.internazionale.it/sitemaps/rss.xml
+    homepage: https://www.internazionale.it/
+  - key: Plenary jagonews24 com rss Feed
+    name: jagonews24.com | rss Feed
+    tier: core
+    language: hi
+    nations:
+      - Bangladesh
+    region: plenary country/Bangladesh
+    url: https://www.jagonews24.com/rss/rss.xml
+    homepage: https://www.jagonews24.com/
+  - key: Plenary L essentiel
+    name: L'essentiel
+    tier: core
+    language: fr
+    nations:
+      - France
+    region: plenary country/France
+    url: https://www.sudouest.fr/essentiel/rss.xml
+    homepage: https://www.sudouest.fr/
+  - key: Plenary L Obs A la une
+    name: L'Obs - A la une
+    tier: core
+    language: fr
+    nations:
+      - France
+    region: plenary country/France
+    url: https://www.nouvelobs.com/a-la-une/rss.xml
+    homepage: https://www.nouvelobs.com/
+  - key: Plenary La Depeche du Midi actualites et info en direct de la region Occitanie e
+    name: 'La Dépêche du Midi : actualités et info en direct de la région Occitanie et des environs - ladepeche.fr'
+    tier: core
+    language: fr
+    nations:
+      - France
+    region: plenary country/France
+    url: https://www.ladepeche.fr/rss.xml
+    homepage: https://www.ladepeche.fr/
+  - key: Plenary LaPresse ca Actualites
+    name: LaPresse.ca - Actualités
+    tier: core
+    language: fr
+    nations:
+      - Canada
+    region: plenary country/Canada
+    url: https://www.lapresse.ca/actualites/rss
+    homepage: https://www.lapresse.ca/
+  - key: Plenary Latest And Breaking Hindi News Headlines News In Hindi Amar Ujala
+    name: Latest And Breaking Hindi News Headlines, News In Hindi | अमर उजाला हिंदी न्यूज़ | - Amar Ujala
+    tier: core
+    language: hi
+    nations:
+      - India
+    region: plenary country/India
+    url: https://www.amarujala.com/rss/breaking-news.xml
+    homepage: https://www.amarujala.com/
+  - key: Plenary Le Huffington Post
+    name: Le Huffington Post
+    tier: core
+    language: fr
+    nations:
+      - France
+    region: plenary country/France
+    url: https://www.huffingtonpost.fr/feeds/index.xml
+    homepage: https://www.huffingtonpost.fr/
+  - key: Plenary Le Monde fr Actualites et Infos en France et dans le monde
+    name: Le Monde.fr - Actualités et Infos en France et dans le monde
+    tier: core
+    language: fr
+    nations:
+      - France
+    region: plenary country/France
+    url: https://www.lemonde.fr/rss/une.xml
+    homepage: https://www.lemonde.fr/
+  - key: Plenary Lenta ru
+    name: 'Lenta.ru : Новости'
+    tier: core
+    language: ru
+    nations:
+      - Russia
+    region: plenary country/Russia
+    url: https://lenta.ru/rss
+    homepage: https://lenta.ru/
+  - key: Plenary Libero Quotidiano
+    name: Libero Quotidiano
+    tier: core
+    language: it
+    nations:
+      - Italy
+    region: plenary country/Italy
+    url: https://www.liberoquotidiano.it/rss.xml
+    homepage: https://www.liberoquotidiano.it/
+  - key: Plenary Lo ultimo en Vanguardia MX
+    name: Lo último en Vanguardia MX
+    tier: core
+    language: es
+    nations:
+      - Mexico
+    region: plenary country/Mexico
+    url: https://vanguardia.com.mx/rss.xml
+    homepage: https://vanguardia.com.mx/
+  - key: Plenary Mediapart
+    name: Mediapart
+    tier: core
+    language: fr
+    nations:
+      - France
+    region: plenary country/France
+    url: https://www.mediapart.fr/articles/feed
+    homepage: https://www.mediapart.fr/
+  - key: Plenary Meduza io
+    name: Meduza.io
+    tier: core
+    language: ru
+    nations:
+      - Russia
+    region: plenary country/Russia
+    url: https://meduza.io/rss/all
+    homepage: https://meduza.io/
+  - key: Plenary Milan News
+    name: Milan News
+    tier: core
+    language: it
+    nations:
+      - Italy
+    region: plenary country/Italy
+    url: https://www.milannews.it/rss/
+    homepage: https://www.milannews.it/
+  - key: Plenary Najnowsze
+    name: Najnowsze
+    tier: core
+    language: pl
+    nations:
+      - Poland
+    region: plenary country/Poland
+    url: http://feeds.feedburner.com/wPolitycepl
+    homepage: http://feeds.feedburner.com/
+  - key: Plenary Newsweek Polska
+    name: Newsweek Polska
+    tier: core
+    language: pl
+    nations:
+      - Poland
+    region: plenary country/Poland
+    url: https://www.newsweek.pl/rss.xml
+    homepage: https://www.newsweek.pl/
+  - key: Plenary Ouest France Actualite
+    name: Ouest-France - Actualité
+    tier: core
+    language: fr
+    nations:
+      - France
+    region: plenary country/France
+    url: https://www.ouest-france.fr/rss-en-continu.xml
+    homepage: https://www.ouest-france.fr/
+  - key: Plenary Panorama
+    name: Panorama
+    tier: core
+    language: it
+    nations:
+      - Italy
+    region: plenary country/Italy
+    url: https://www.panorama.it/feeds/feed.rss
+    homepage: https://www.panorama.it/
+  - key: Plenary Portada expansion
+    name: Portada // expansion
+    tier: core
+    language: es
+    nations:
+      - Spain
+    region: plenary country/Spain
+    url: https://e00-expansion.uecdn.es/rss/portada.xml
+    homepage: https://e00-expansion.uecdn.es/
+  - key: Plenary Portada El Siglo de Torreon
+    name: Portada, El Siglo de Torreón
+    tier: core
+    language: es
+    nations:
+      - Mexico
+    region: plenary country/Mexico
+    url: https://www.elsiglodetorreon.com.mx/index.xml
+    homepage: https://www.elsiglodetorreon.com.mx/
+  - key: Plenary Reforma
+    name: Reforma
+    tier: core
+    language: es
+    nations:
+      - Mexico
+    region: plenary country/Mexico
+    url: https://www.reforma.com/rss/portada.xml
+    homepage: https://www.reforma.com/
+  - key: Plenary Repubblica it Homepage
+    name: Repubblica.it > Homepage
+    tier: core
+    language: it
+    nations:
+      - Italy
+    region: plenary country/Italy
+    url: https://www.repubblica.it/rss/homepage/rss2.0.xml
+    homepage: https://www.repubblica.it/
+  - key: Plenary Republika Online RSS Feed
+    name: Republika Online RSS Feed
+    tier: core
+    language: id
+    nations:
+      - Indonesia
+    region: plenary country/Indonesia
+    url: https://www.republika.co.id/rss/
+    homepage: https://www.republika.co.id/
+  - key: Plenary RMF24 pl
+    name: RMF24.pl
+    tier: core
+    language: pl
+    nations:
+      - Poland
+    region: plenary country/Poland
+    url: https://www.rmf24.pl/feed
+    homepage: https://www.rmf24.pl/
+  - key: Plenary RSS di ANSA it
+    name: RSS di   - ANSA.it
+    tier: core
+    language: it
+    nations:
+      - Italy
+    region: plenary country/Italy
+    url: https://www.ansa.it/sito/ansait_rss.xml
+    homepage: https://www.ansa.it/
+  - key: Plenary RSS DiariodelWeb it
+    name: RSS DiariodelWeb.it
+    tier: core
+    language: it
+    nations:
+      - Italy
+    region: plenary country/Italy
+    url: https://www.diariodelweb.it/rss/home/
+    homepage: https://www.diariodelweb.it/
+  - key: Plenary tagesschau de Die Nachrichten der ARD
+    name: tagesschau.de - Die Nachrichten der ARD
+    tier: core
+    language: de
+    nations:
+      - Germany
+    region: plenary country/Germany
+    url: http://www.tagesschau.de/xml/rss2
+    homepage: http://www.tagesschau.de/
+  - key: Plenary Top Stories News Gujarat Samachar World s Leading Gujarati Newspaper
+    name: 'Top Stories News - Gujarat Samachar : World''s Leading Gujarati Newspaper'
+    tier: core
+    language: hi
+    nations:
+      - India
+    region: plenary country/India
+    url: https://www.gujaratsamachar.com/rss/top-stories
+    homepage: https://www.gujaratsamachar.com/
+  - key: Plenary Tribunnews com
+    name: Tribunnews.com
+    tier: core
+    language: id
+    nations:
+      - Indonesia
+    region: plenary country/Indonesia
+    url: https://www.tribunnews.com/rss
+    homepage: https://www.tribunnews.com/
+  - key: Plenary UOL
+    name: UOL
+    tier: core
+    language: pt
+    nations:
+      - Brazil
+    region: plenary country/Brazil
+    url: http://rss.home.uol.com.br/index.xml
+    homepage: http://rss.home.uol.com.br/
+  - key: Plenary www wirtualnemedia pl
+    name: www.wirtualnemedia.pl
+    tier: core
+    language: pl
+    nations:
+      - Poland
+    region: plenary country/Poland
+    url: https://www.wirtualnemedia.pl/rss/wirtualnemedia_rss.xml
+    homepage: https://www.wirtualnemedia.pl/
+  - key: Plenary ZEIT ONLINE Nachrichten Hintergrunde und Debatten
+    name: ZEIT ONLINE | Nachrichten, Hintergründe und Debatten
+    tier: core
+    language: de
+    nations:
+      - Germany
+    region: plenary country/Germany
+    url: http://newsfeed.zeit.de/index
+    homepage: http://newsfeed.zeit.de/
+  - key: Plenary Ru gazeta ru
+    name: Газета.Ru - Первая полоса
+    tier: core
+    language: ru
+    nations:
+      - Russia
+    region: plenary country/Russia
+    url: https://www.gazeta.ru/export/rss/first.xml
+    homepage: https://www.gazeta.ru/
+  - key: Plenary tsn ua
+    name: Новини на tsn.ua
+    tier: core
+    language: pl
+    nations:
+      - Ukraine
+    region: plenary country/Ukraine
+    url: https://tsn.ua/rss/full.rss
+    homepage: https://tsn.ua/
+  - key: Plenary korrespondent net
+    name: Последние новости на сайте korrespondent.net
+    tier: core
+    language: ru
+    nations:
+      - Ukraine
+    region: plenary country/Ukraine
+    url: http://k.img.com.ua/rss/ru/all_news2.0.xml
+    homepage: http://k.img.com.ua/
+  - key: Plenary censor net ua
+    name: Цензор.НЕТ - Новости
+    tier: core
+    language: ru
+    nations:
+      - Bangladesh
+      - India
+      - Iran
+      - Japan
+      - Pakistan
+      - Russia
+      - Ukraine
+    region: plenary country/Ukraine
+    url: https://censor.net.ua/includes/news_ru.xml
+    homepage: https://censor.net.ua/
+  - key: Plenary TABNAK
+    name: تابناک | TABNAK
+    tier: core
+    language: fa
+    nations:
+      - Iran
+    region: plenary country/Iran
+    url: https://www.tabnak.ir/fa/rss/allnews
+    homepage: https://www.tabnak.ir/
+  - key: Plenary Khabaronline
+    name: خبرگزاری خبرآنلاین - آخرین اخبار ایران و جهان | Khabaronline
+    tier: core
+    language: fa
+    nations:
+      - Iran
+    region: plenary country/Iran
+    url: https://www.khabaronline.ir/rss
+    homepage: https://www.khabaronline.ir/
+  - key: Plenary Mehr News Agency
+    name: خبرگزاری مهر | اخبار ایران و جهان | Mehr News Agency
+    tier: core
+    language: fa
+    nations:
+      - Iran
+    region: plenary country/Iran
+    url: https://www.mehrnews.com/rss
+    homepage: https://www.mehrnews.com/
+  - key: 9to5Mac
+    name: 9to5Mac
+    tier: peripheral
+    language: en
+    topics:
+      - Technology and Science
+      - Specialized Tech
+      - Apple
+    url: https://9to5mac.com/feed
+    homepage: https://9to5mac.com/
+  - key: A List Apart
+    name: A List Apart
+    tier: peripheral
+    language: en
+    topics:
+      - Programming and Development
+      - Web Development
+    url: https://alistapart.com/main/feed
+    homepage: https://alistapart.com/
+  - key: Aeon
+    name: Aeon
+    tier: peripheral
+    language: en
+    topics:
+      - Niche and Specialty
+    url: https://aeon.co/feed.rss
+    homepage: https://aeon.co/
+  - key: Android Central
+    name: Android Central
+    tier: peripheral
+    language: en
+    topics:
+      - Technology and Science
+      - Specialized Tech
+    url: https://www.androidcentral.com/rss.xml
+    homepage: https://www.androidcentral.com/
+  - key: Angular Blog
+    name: Angular Blog
+    tier: peripheral
+    language: en
+    topics:
+      - Programming and Development
+    url: https://blog.angular.io/feed
+    homepage: https://blog.angular.io/
+  - key: Ars Technica OpenSource
+    name: Ars Technica OpenSource
+    tier: peripheral
+    language: en
+    topics:
+      - Technology and Science
+      - Specialized Tech
+    url: https://arstechnica.com/open-source/feed
+    homepage: https://arstechnica.com/
+  - key: Atlas Obscura
+    name: Atlas Obscura
+    tier: peripheral
+    language: en
+    topics:
+      - Entertainment and Culture
+      - Travel
+    url: https://www.atlasobscura.com/feeds/latest
+    homepage: https://www.atlasobscura.com/
+  - key: AWS News
+    name: AWS News
+    tier: peripheral
+    language: en
+    topics:
+      - Programming and Development
+    url: https://aws.amazon.com/blogs/aws/feed
+    homepage: https://aws.amazon.com/
+  - key: Boing Boing
+    name: Boing Boing
+    tier: peripheral
+    language: en
+    topics:
+      - Niche and Specialty
+    url: https://boingboing.net/feed
+    homepage: https://boingboing.net/
+  - key: Brain Pickings
+    name: Brain Pickings
+    tier: peripheral
+    language: en
+    topics:
+      - Entertainment and Culture
+    url: https://www.brainpickings.org/feed
+    homepage: https://www.brainpickings.org/
+  - key: CleanTechnica
+    name: CleanTechnica
+    tier: peripheral
+    language: en
+    topics:
+      - Niche and Specialty
+    url: https://cleantechnica.com/feed
+    homepage: https://cleantechnica.com/
+  - key: Coding Horror
+    name: Coding Horror
+    tier: peripheral
+    language: en
+    topics:
+      - Programming and Development
+      - Programming
+    url: https://blog.codinghorror.com/rss
+    homepage: https://blog.codinghorror.com/
+  - key: Cool Hunting
+    name: Cool Hunting
+    tier: peripheral
+    language: en
+    topics:
+      - Niche and Specialty
+    url: https://coolhunting.com/feed
+    homepage: https://coolhunting.com/
+  - key: CSS-Tricks
+    name: CSS-Tricks
+    tier: peripheral
+    language: en
+    topics:
+      - Programming and Development
+      - Web Development
+    url: https://css-tricks.com/feed
+    homepage: https://css-tricks.com/
+  - key: Dan Abramov
+    name: Dan Abramov
+    tier: peripheral
+    language: en
+    topics:
+      - Programming and Development
+      - Programming
+    url: https://overreacted.io/rss.xml
+    homepage: https://overreacted.io/
+  - key: Dev.to
+    name: Dev.to
+    tier: peripheral
+    language: en
+    topics:
+      - Programming and Development
+    url: https://dev.to/feed
+    homepage: https://dev.to/
+  - key: Docker Blog
+    name: Docker Blog
+    tier: peripheral
+    language: en
+    topics:
+      - Programming and Development
+    url: https://www.docker.com/blog/feed
+    homepage: https://www.docker.com/
+  - key: Edge.org
+    name: Edge.org
+    tier: peripheral
+    language: en
+    topics:
+      - Niche and Specialty
+    url: https://www.edge.org/feed
+    homepage: https://www.edge.org/
+  - key: Eurogamer
+    name: Eurogamer
+    tier: peripheral
+    language: en
+    topics:
+      - Entertainment and Culture
+    url: https://www.eurogamer.net/?format=rss
+    homepage: https://www.eurogamer.net/
+  - key: FreeCodeCamp
+    name: FreeCodeCamp
+    tier: peripheral
+    language: en
+    topics:
+      - Programming and Development
+    url: https://www.freecodecamp.org/news/rss
+    homepage: https://www.freecodecamp.org/
+  - key: GameSpot
+    name: GameSpot
+    tier: peripheral
+    language: en
+    topics:
+      - Entertainment and Culture
+      - Gaming
+    url: https://www.gamespot.com/feeds/mashup
+    homepage: https://www.gamespot.com/
+  - key: GitHub Blog
+    name: GitHub Blog
+    tier: peripheral
+    language: en
+    topics:
+      - Programming and Development
+      - Programming
+    url: https://github.blog/feed
+    homepage: https://github.blog/
+  - key: Go Blog
+    name: Go Blog
+    tier: peripheral
+    language: en
+    topics:
+      - Programming and Development
+    url: https://blog.golang.org/feed.atom
+    homepage: https://blog.golang.org/
+  - key: Google Developers
+    name: Google Developers
+    tier: peripheral
+    language: en
+    topics:
+      - Programming and Development
+    url: https://developers.googleblog.com/feeds/posts/default
+    homepage: https://developers.googleblog.com/
+  - key: High Scalability
+    name: High Scalability
+    tier: peripheral
+    language: en
+    topics:
+      - Programming and Development
+    url: http://feeds.feedburner.com/HighScalability
+    homepage: http://feeds.feedburner.com/
+  - key: IEEE Spectrum
+    name: IEEE Spectrum
+    tier: peripheral
+    language: en
+    topics:
+      - Technology and Science
+      - Specialized Tech
+    url: https://spectrum.ieee.org/rss/fulltext
+    homepage: https://spectrum.ieee.org/
+  - key: IGN
+    name: IGN
+    tier: peripheral
+    language: en
+    topics:
+      - Entertainment and Culture
+      - Gaming
+    url: http://feeds.ign.com/ign/all
+    homepage: http://feeds.ign.com/
+  - key: IndieWire
+    name: IndieWire
+    tier: peripheral
+    language: en
+    topics:
+      - Entertainment and Culture
+      - Movies
+    url: https://www.indiewire.com/feed
+    homepage: https://www.indiewire.com/
+  - key: Inhabitat
+    name: Inhabitat
+    tier: peripheral
+    language: en
+    topics:
+      - Niche and Specialty
+    url: https://inhabitat.com/feed
+    homepage: https://inhabitat.com/
+  - key: Joel on Software
+    name: Joel on Software
+    tier: peripheral
+    language: en
+    topics:
+      - Programming and Development
+      - Programming
+    url: https://www.joelonsoftware.com/rss
+    homepage: https://www.joelonsoftware.com/
+  - key: Kotaku
+    name: Kotaku
+    tier: peripheral
+    language: en
+    topics:
+      - Entertainment and Culture
+      - Gaming
+    url: https://kotaku.com/rss
+    homepage: https://kotaku.com/
+  - key: Kottke.org
+    name: Kottke.org
+    tier: peripheral
+    language: en
+    topics:
+      - Niche and Specialty
+    url: https://feeds.kottke.org/main
+    homepage: https://feeds.kottke.org/
+  - key: Kubernetes Blog
+    name: Kubernetes Blog
+    tier: peripheral
+    language: en
+    topics:
+      - Programming and Development
+    url: https://kubernetes.io/feed.xml
+    homepage: https://kubernetes.io/
+  - key: Kurzweil AI
+    name: Kurzweil AI
+    tier: peripheral
+    language: en
+    topics:
+      - Niche and Specialty
+    url: https://www.kurzweilai.net/rss
+    homepage: https://www.kurzweilai.net/
+  - key: LessWrong
+    name: LessWrong
+    tier: peripheral
+    language: en
+    topics:
+      - Niche and Specialty
+    url: https://www.lesswrong.com/feed.xml
+    homepage: https://www.lesswrong.com/
+  - key: Longform
+    name: Longform
+    tier: peripheral
+    language: en
+    topics:
+      - Niche and Specialty
+    url: https://longform.org/feed
+    homepage: https://longform.org/
+  - key: Marginal Revolution
+    name: Marginal Revolution
+    tier: peripheral
+    language: en
+    topics:
+      - Niche and Specialty
+    url: https://marginalrevolution.com/feed
+    homepage: https://marginalrevolution.com/
+  - key: Martin Fowler
+    name: Martin Fowler
+    tier: peripheral
+    language: en
+    topics:
+      - Programming and Development
+    url: https://martinfowler.com/feed.atom
+    homepage: https://martinfowler.com/
+  - key: Men's Health
+    name: Men's Health
+    tier: peripheral
+    language: en
+    topics:
+      - Health and Lifestyle
+    url: https://www.menshealth.com/rss/all.xml
+    homepage: https://www.menshealth.com/
+  - key: Mental Floss
+    name: Mental Floss
+    tier: peripheral
+    language: en
+    topics:
+      - Entertainment and Culture
+    url: https://mentalfloss.com/feed
+    homepage: https://mentalfloss.com/
+  - key: Microsoft Developer Blog
+    name: Microsoft Developer Blog
+    tier: peripheral
+    language: en
+    topics:
+      - Programming and Development
+    url: https://devblogs.microsoft.com/feed
+    homepage: https://devblogs.microsoft.com/
+  - key: Mindful
+    name: Mindful
+    tier: peripheral
+    language: en
+    topics:
+      - Health and Lifestyle
+    url: https://www.mindful.org/feed
+    homepage: https://www.mindful.org/
+  - key: Mozilla Hacks
+    name: Mozilla Hacks
+    tier: peripheral
+    language: en
+    topics:
+      - Programming and Development
+      - Web Development
+    url: https://hacks.mozilla.org/feed
+    homepage: https://hacks.mozilla.org/
+  - key: Next Big Future
+    name: Next Big Future
+    tier: peripheral
+    language: en
+    topics:
+      - Niche and Specialty
+    url: https://www.nextbigfuture.com/feed
+    homepage: https://www.nextbigfuture.com/
+  - key: Node.js Blog
+    name: Node.js Blog
+    tier: peripheral
+    language: en
+    topics:
+      - Programming and Development
+    url: https://nodejs.org/en/feed/blog.xml
+    homepage: https://nodejs.org/
+  - key: Open Culture
+    name: Open Culture
+    tier: peripheral
+    language: en
+    topics:
+      - Niche and Specialty
+    url: http://www.openculture.com/feed
+    homepage: http://www.openculture.com/
+  - key: Phoronix
+    name: Phoronix
+    tier: peripheral
+    language: en
+    topics:
+      - Technology and Science
+      - Specialized Tech
+    url: https://www.phoronix.com/rss.php
+    homepage: https://www.phoronix.com/
+  - key: Polygon
+    name: Polygon
+    tier: peripheral
+    language: en
+    topics:
+      - Entertainment and Culture
+      - Gaming
+    url: https://www.polygon.com/rss/index.xml
+    homepage: https://www.polygon.com/
+  - key: Python.org
+    name: Python.org
+    tier: peripheral
+    language: en
+    topics:
+      - Programming and Development
+    url: https://www.python.org/jobs/feed/rss
+    homepage: https://www.python.org/
+  - key: React Blog
+    name: React Blog
+    tier: peripheral
+    language: en
+    topics:
+      - Programming and Development
+    url: https://reactjs.org/feed.xml
+    homepage: https://reactjs.org/
+  - key: Rock Paper Shotgun
+    name: Rock Paper Shotgun
+    tier: peripheral
+    language: en
+    topics:
+      - Entertainment and Culture
+      - Gaming
+    url: https://www.rockpapershotgun.com/feed
+    homepage: https://www.rockpapershotgun.com/
+  - key: Rolling Stone
+    name: Rolling Stone
+    tier: peripheral
+    language: en
+    topics:
+      - Entertainment and Culture
+    url: https://www.rollingstone.com/feed
+    homepage: https://www.rollingstone.com/
+  - key: Rust Blog
+    name: Rust Blog
+    tier: peripheral
+    language: en
+    topics:
+      - Programming and Development
+    url: https://blog.rust-lang.org/feed.xml
+    homepage: https://blog.rust-lang.org/
+  - key: Singularity Hub
+    name: Singularity Hub
+    tier: peripheral
+    language: en
+    topics:
+      - Niche and Specialty
+    url: https://singularityhub.com/feed
+    homepage: https://singularityhub.com/
+  - key: Smashing Magazine
+    name: Smashing Magazine
+    tier: peripheral
+    language: en
+    topics:
+      - Programming and Development
+      - UI / UX
+    url: https://www.smashingmagazine.com/feed
+    homepage: https://www.smashingmagazine.com/
+  - key: Stack Overflow Blog
+    name: Stack Overflow Blog
+    tier: peripheral
+    language: en
+    topics:
+      - Programming and Development
+      - Programming
+    url: https://stackoverflow.blog/feed
+    homepage: https://stackoverflow.blog/
+  - key: TED Blog
+    name: TED Blog
+    tier: peripheral
+    language: en
+    topics:
+      - Entertainment and Culture
+    url: https://blog.ted.com/feed
+    homepage: https://blog.ted.com/
+  - key: The Browser
+    name: The Browser
+    tier: peripheral
+    language: en
+    topics:
+      - Niche and Specialty
+    url: https://thebrowser.com/rss
+    homepage: https://thebrowser.com/
+  - key: The Hollywood Reporter
+    name: The Hollywood Reporter
+    tier: peripheral
+    language: en
+    topics:
+      - Entertainment and Culture
+    url: https://www.hollywoodreporter.com/feed
+    homepage: https://www.hollywoodreporter.com/
+  - key: The Minimalists
+    name: The Minimalists
+    tier: peripheral
+    language: en
+    topics:
+      - Health and Lifestyle
+    url: https://www.theminimalists.com/rss
+    homepage: https://www.theminimalists.com/
+  - key: Tom's Hardware
+    name: Tom's Hardware
+    tier: peripheral
+    language: en
+    topics:
+      - Technology and Science
+      - Specialized Tech
+    url: https://www.tomshardware.com/feeds/all
+    homepage: https://www.tomshardware.com/
+  - key: Variety
+    name: Variety
+    tier: peripheral
+    language: en
+    topics:
+      - Entertainment and Culture
+      - Movies
+    url: https://variety.com/feed
+    homepage: https://variety.com/
+  - key: Wait But Why
+    name: Wait But Why
+    tier: peripheral
+    language: en
+    topics:
+      - Niche and Specialty
+    url: https://waitbutwhy.com/feed
+    homepage: https://waitbutwhy.com/
+  - key: Women's Health
+    name: Women's Health
+    tier: peripheral
+    language: en
+    topics:
+      - Health and Lifestyle
+    url: https://www.womenshealthmag.com/rss/all.xml
+    homepage: https://www.womenshealthmag.com/
+  - key: XDA Developers
+    name: XDA Developers
+    tier: peripheral
+    language: en
+    topics:
+      - Technology and Science
+      - Specialized Tech
+    url: https://www.xda-developers.com/feed
+    homepage: https://www.xda-developers.com/
+  - key: Yoga Journal
+    name: Yoga Journal
+    tier: peripheral
+    language: en
+    topics:
+      - Health and Lifestyle
+    url: https://www.yogajournal.com/rss
+    homepage: https://www.yogajournal.com/
+  - key: Plenary Film
+    name: /Film
+    tier: peripheral
+    language: en
+    topics:
+      - Movies
+    region: plenary recommended/Movies
+    url: https://feeds2.feedburner.com/slashfilm
+    homepage: https://feeds2.feedburner.com/
+  - key: Plenary 101 Cookbooks
+    name: 101 Cookbooks
+    tier: peripheral
+    language: en
+    topics:
+      - Food
+    region: plenary recommended/Food
+    url: https://www.101cookbooks.com/feed
+    homepage: https://www.101cookbooks.com/
+  - key: Plenary 30 For 30 Podcasts
+    name: 30 For 30 Podcasts
+    tier: peripheral
+    language: en
+    topics:
+      - History
+    region: plenary recommended/History
+    url: https://feeds.megaphone.fm/ESP5765452710
+    homepage: https://feeds.megaphone.fm/
+  - key: Plenary 500px
+    name: 500px
+    tier: peripheral
+    language: en
+    topics:
+      - Photography
+    region: plenary recommended/Photography
+    url: https://iso.500px.com/feed/
+    homepage: https://iso.500px.com/
+  - key: Plenary A Beautiful Mess
+    name: A Beautiful Mess
+    tier: peripheral
+    language: en
+    topics:
+      - DIY
+    region: plenary recommended/DIY
+    url: https://abeautifulmess.com/feed
+    homepage: https://abeautifulmess.com/
+  - key: Plenary A Daily Dose of Architecture Books
+    name: A Daily Dose of Architecture Books
+    tier: peripheral
+    language: en
+    topics:
+      - Architecture
+    region: plenary recommended/Architecture
+    url: http://feeds.feedburner.com/archidose
+    homepage: http://feeds.feedburner.com/
+  - key: Plenary A year of reading the world
+    name: A year of reading the world
+    tier: peripheral
+    language: en
+    topics:
+      - Books
+    region: plenary recommended/Books
+    url: https://ayearofreadingtheworld.com/feed/
+    homepage: https://ayearofreadingtheworld.com/
+  - key: Plenary Aestas Book Blog
+    name: Aestas Book Blog
+    tier: peripheral
+    language: en
+    topics:
+      - Books
+    region: plenary recommended/Books
+    url: https://aestasbookblog.com/feed/
+    homepage: https://aestasbookblog.com/
+  - key: Plenary Ain t It Cool News Feed
+    name: Ain't It Cool News Feed
+    tier: peripheral
+    language: en
+    topics:
+      - Movies
+    region: plenary recommended/Movies
+    url: https://www.aintitcool.com/node/feed/
+    homepage: https://www.aintitcool.com/
+  - key: Plenary Alberto De Bortoli
+    name: Alberto De Bortoli
+    tier: peripheral
+    language: en
+    topics:
+      - iOS Development
+    region: plenary recommended/iOS Development
+    url: https://albertodebortoli.com/rss/
+    homepage: https://albertodebortoli.com/
+  - key: Plenary All About Android Audio
+    name: All About Android (Audio)
+    tier: peripheral
+    language: en
+    topics:
+      - Android
+    region: plenary recommended/Android
+    url: https://feeds.twit.tv/aaa.xml
+    homepage: https://feeds.twit.tv/
+  - key: Plenary Android reddit com
+    name: Android
+    tier: peripheral
+    language: en
+    topics:
+      - Android
+    region: plenary recommended/Android
+    url: https://www.reddit.com/r/android/.rss
+    homepage: https://www.reddit.com/
+  - key: Plenary Android Authority
+    name: Android Authority
+    tier: peripheral
+    language: en
+    topics:
+      - Android
+    region: plenary recommended/Android
+    url: https://www.androidauthority.com/feed
+    homepage: https://www.androidauthority.com/
+  - key: Plenary Android Central Android Forums News Reviews Help and Android Wallpapers
+    name: Android Central - Android Forums, News, Reviews, Help and Android Wallpapers
+    tier: peripheral
+    language: en
+    topics:
+      - Android
+    region: plenary recommended/Android
+    url: http://feeds.androidcentral.com/androidcentral
+    homepage: http://feeds.androidcentral.com/
+  - key: Plenary Android Central Podcast
+    name: Android Central Podcast
+    tier: peripheral
+    language: en
+    topics:
+      - Android
+    region: plenary recommended/Android
+    url: http://feeds.feedburner.com/AndroidCentralPodcast
+    homepage: http://feeds.feedburner.com/
+  - key: Plenary Android Community
+    name: Android Community
+    tier: peripheral
+    language: en
+    topics:
+      - Android
+    region: plenary recommended/Android
+    url: https://androidcommunity.com/feed/
+    homepage: https://androidcommunity.com/
+  - key: Plenary Android Developers
+    name: Android Developers
+    tier: peripheral
+    language: en
+    topics:
+      - Android Development
+    region: plenary recommended/Android Development
+    url: https://www.youtube.com/feeds/videos.xml?user=androiddevelopers
+    homepage: https://www.youtube.com/
+  - key: Plenary Android Developers Medium
+    name: Android Developers - Medium
+    tier: peripheral
+    language: en
+    topics:
+      - Android Development
+    region: plenary recommended/Android Development
+    url: https://medium.com/feed/androiddevelopers
+    homepage: https://medium.com/
+  - key: Plenary Android Developers Backstage
+    name: Android Developers Backstage
+    tier: peripheral
+    language: en
+    topics:
+      - Android Development
+    region: plenary recommended/Android Development
+    url: http://feeds.feedburner.com/blogspot/androiddevelopersbackstage
+    homepage: http://feeds.feedburner.com/
+  - key: Plenary Android Developers Blog
+    name: Android Developers Blog
+    tier: peripheral
+    language: en
+    topics:
+      - Android Development
+    region: plenary recommended/Android Development
+    url: http://feeds.feedburner.com/blogspot/hsDu
+    homepage: http://feeds.feedburner.com/
+  - key: Plenary Android in MindOrks on Medium
+    name: Android in MindOrks on Medium
+    tier: peripheral
+    language: en
+    topics:
+      - Android Development
+    region: plenary recommended/Android Development
+    url: https://medium.com/feed/mindorks/tagged/android
+    homepage: https://medium.com/
+  - key: Plenary Android in The Airbnb Tech Blog on Medium
+    name: Android in The Airbnb Tech Blog on Medium
+    tier: peripheral
+    language: en
+    topics:
+      - Android Development
+    region: plenary recommended/Android Development
+    url: https://medium.com/feed/airbnb-engineering/tagged/android
+    homepage: https://medium.com/
+  - key: Plenary Android Police Android news reviews apps games phones tablets
+    name: Android Police – Android news, reviews, apps, games, phones, tablets
+    tier: peripheral
+    language: en
+    topics:
+      - Android
+    region: plenary recommended/Android
+    url: http://feeds.feedburner.com/AndroidPolice
+    homepage: http://feeds.feedburner.com/
+  - key: Plenary androidauthority libsyn com
+    name: androidauthority libsyn com
+    tier: peripheral
+    language: en
+    topics:
+      - Android
+    region: plenary recommended/Android
+    url: https://androidauthority.libsyn.com/rss
+    homepage: https://androidauthority.libsyn.com/
+  - key: Plenary Apple
+    name: Apple
+    tier: peripheral
+    language: en
+    topics:
+      - Apple
+    region: plenary recommended/Apple
+    url: https://www.youtube.com/feeds/videos.xml?user=Apple
+    homepage: https://www.youtube.com/
+  - key: Plenary Apple Newsroom
+    name: Apple Newsroom
+    tier: peripheral
+    language: en
+    topics:
+      - Apple
+    region: plenary recommended/Apple
+    url: https://www.apple.com/newsroom/rss-feed.rss
+    homepage: https://www.apple.com/
+  - key: Plenary AppleInsider News
+    name: AppleInsider News
+    tier: peripheral
+    language: en
+    topics:
+      - Apple
+    region: plenary recommended/Apple
+    url: https://appleinsider.com/rss/news/
+    homepage: https://appleinsider.com/
+  - key: Plenary ArchDaily
+    name: ArchDaily
+    tier: peripheral
+    language: en
+    topics:
+      - Architecture
+    region: plenary recommended/Architecture
+    url: http://feeds.feedburner.com/Archdaily
+    homepage: http://feeds.feedburner.com/
+  - key: Plenary Architectural Digest
+    name: Architectural Digest
+    tier: peripheral
+    language: en
+    topics:
+      - Architecture
+    region: plenary recommended/Architecture
+    url: https://www.architecturaldigest.com/feed/rss
+    homepage: https://www.architecturaldigest.com/
+  - key: Plenary Architecture
+    name: Architecture
+    tier: peripheral
+    language: en
+    topics:
+      - Architecture
+    region: plenary recommended/Architecture
+    url: https://www.reddit.com/r/architecture/.rss
+    homepage: https://www.reddit.com/
+  - key: Plenary architecture designboom architecture design magazine
+    name: architecture – designboom | architecture & design magazine
+    tier: peripheral
+    language: en
+    topics:
+      - Architecture
+      - Interior design
+    region: plenary recommended/Architecture
+    url: https://www.designboom.com/architecture/feed/
+    homepage: https://www.designboom.com/
+  - key: Plenary Augmented Code
+    name: Augmented Code
+    tier: peripheral
+    language: en
+    topics:
+      - iOS Development
+    region: plenary recommended/iOS Development
+    url: https://augmentedcode.io/feed/
+    homepage: https://augmentedcode.io/
+  - key: Plenary Autocar India All Bike Reviews
+    name: Autocar India - All Bike Reviews
+    tier: peripheral
+    language: en
+    topics:
+      - Cars
+    region: plenary recommended/Cars
+    url: https://www.autocarindia.com/RSS/rss.ashx?type=all_bikes
+    homepage: https://www.autocarindia.com/
+  - key: Plenary Autocar India All Car Reviews
+    name: Autocar India - All Car Reviews
+    tier: peripheral
+    language: en
+    topics:
+      - Cars
+    region: plenary recommended/Cars
+    url: https://www.autocarindia.com/RSS/rss.ashx?type=all_cars
+    homepage: https://www.autocarindia.com/
+  - key: Plenary Autocar India News
+    name: Autocar India - News
+    tier: peripheral
+    language: en
+    topics:
+      - Cars
+    region: plenary recommended/Cars
+    url: https://www.autocarindia.com/RSS/rss.ashx?type=News
+    homepage: https://www.autocarindia.com/
+  - key: Plenary Autocar RSS Feed
+    name: Autocar RSS Feed
+    tier: peripheral
+    language: en
+    topics:
+      - Cars
+    region: plenary recommended/Cars
+    url: https://www.autocar.co.uk/rss
+    homepage: https://www.autocar.co.uk/
+  - key: Plenary AwkwardFamilyPhotos com
+    name: AwkwardFamilyPhotos.com
+    tier: peripheral
+    language: en
+    topics:
+      - Funny
+    region: plenary recommended/Funny
+    url: https://awkwardfamilyphotos.com/feed/
+    homepage: https://awkwardfamilyphotos.com/
+  - key: Plenary Babish Culinary Universe
+    name: Babish Culinary Universe
+    tier: peripheral
+    language: en
+    topics:
+      - Food
+    region: plenary recommended/Food
+    url: https://www.youtube.com/feeds/videos.xml?user=bgfilms
+    homepage: https://www.youtube.com/
+  - key: Plenary BBC Sport Cricket
+    name: BBC Sport - Cricket
+    tier: peripheral
+    language: en
+    topics:
+      - Cricket
+    region: plenary recommended/Cricket
+    url: http://feeds.bbci.co.uk/sport/cricket/rss.xml
+    homepage: http://feeds.bbci.co.uk/
+  - key: Plenary BBC Sport Sport
+    name: BBC Sport - Sport
+    tier: peripheral
+    language: en
+    topics:
+      - Sports
+    region: plenary recommended/Sports
+    url: http://feeds.bbci.co.uk/sport/rss.xml
+    homepage: http://feeds.bbci.co.uk/
+  - key: Plenary BBC Sport Tennis
+    name: BBC Sport - Tennis
+    tier: peripheral
+    language: en
+    topics:
+      - Tennis
+    region: plenary recommended/Tennis
+    url: http://feeds.bbci.co.uk/sport/tennis/rss.xml
+    homepage: http://feeds.bbci.co.uk/
+  - key: Plenary Beauty ELLE
+    name: Beauty - ELLE
+    tier: peripheral
+    language: en
+    topics:
+      - Beauty
+    region: plenary recommended/Beauty
+    url: https://www.elle.com/rss/beauty.xml/
+    homepage: https://www.elle.com/
+  - key: Plenary Beauty Fashionista
+    name: Beauty - Fashionista
+    tier: peripheral
+    language: en
+    topics:
+      - Beauty
+    region: plenary recommended/Beauty
+    url: https://fashionista.com/.rss/excerpt/beauty
+    homepage: https://fashionista.com/
+  - key: Plenary Benoit Pasquier Swift Data and more
+    name: Benoit Pasquier - Swift, Data and more
+    tier: peripheral
+    language: en
+    topics:
+      - iOS Development
+    region: plenary recommended/iOS Development
+    url: https://benoitpasquier.com/index.xml
+    homepage: https://benoitpasquier.com/
+  - key: Plenary Better Programming Medium
+    name: Better Programming - Medium
+    tier: peripheral
+    language: en
+    topics:
+      - Programming
+    region: plenary recommended/Programming
+    url: https://medium.com/feed/better-programming
+    homepage: https://medium.com/
+  - key: Plenary Big Picture
+    name: Big Picture
+    tier: peripheral
+    language: en
+    topics:
+      - Photography
+    region: plenary recommended/Photography
+    url: https://www.bostonglobe.com/rss/bigpicture
+    homepage: https://www.bostonglobe.com/
+  - key: Plenary Bike EXIF
+    name: Bike EXIF
+    tier: peripheral
+    language: en
+    topics:
+      - Cars
+    region: plenary recommended/Cars
+    url: https://www.bikeexif.com/feed
+    homepage: https://www.bikeexif.com/
+  - key: Plenary Blog decor8
+    name: Blog - decor8
+    tier: peripheral
+    language: en
+    topics:
+      - Interior design
+    region: plenary recommended/Interior design
+    url: https://www.decor8blog.com/blog?format=rss
+    homepage: https://www.decor8blog.com/
+  - key: Plenary Blog Hackaday
+    name: Blog – Hackaday
+    tier: peripheral
+    language: en
+    topics:
+      - DIY
+    region: plenary recommended/DIY
+    url: https://hackaday.com/blog/feed/
+    homepage: https://hackaday.com/
+  - key: Plenary Blog The Beauty Brains
+    name: Blog – The Beauty Brains
+    tier: peripheral
+    language: en
+    topics:
+      - Beauty
+    region: plenary recommended/Beauty
+    url: https://thebeautybrains.com/blog/feed/
+    homepage: https://thebeautybrains.com/
+  - key: Plenary BMW BLOG
+    name: BMW BLOG
+    tier: peripheral
+    language: en
+    topics:
+      - Cars
+    region: plenary recommended/Cars
+    url: https://feeds.feedburner.com/BmwBlog
+    homepage: https://feeds.feedburner.com/
+  - key: Plenary Bon Appetit
+    name: Bon Appétit
+    tier: peripheral
+    language: en
+    topics:
+      - Food
+    region: plenary recommended/Food
+    url: https://www.youtube.com/feeds/videos.xml?user=BonAppetitDotCom
+    homepage: https://www.youtube.com/
+  - key: Plenary BOOK RIOT
+    name: BOOK RIOT
+    tier: peripheral
+    language: en
+    topics:
+      - Books
+    region: plenary recommended/Books
+    url: https://bookriot.com/feed/
+    homepage: https://bookriot.com/
+  - key: Plenary Boxes and Arrows
+    name: Boxes and Arrows
+    tier: peripheral
+    language: en
+    topics:
+      - UI / UX
+    region: plenary recommended/UI - UX
+    url: http://boxesandarrows.com/rss/
+    homepage: http://boxesandarrows.com/
+  - key: Plenary Can t Bowl Can t Throw Cricket Show
+    name: Can't Bowl Can't Throw Cricket Show
+    tier: peripheral
+    language: en
+    topics:
+      - Cricket
+    region: plenary recommended/Cricket
+    url: http://feeds.feedburner.com/cantbowlcantthrow
+    homepage: http://feeds.feedburner.com/
+  - key: Plenary Canon Rumors Your best source for Canon rumors leaks and gossip
+    name: Canon Rumors – Your best source for Canon rumors, leaks and gossip
+    tier: peripheral
+    language: en
+    topics:
+      - Photography
+    region: plenary recommended/Photography
+    url: https://www.canonrumors.com/feed/
+    homepage: https://www.canonrumors.com/
+  - key: Plenary Car Body Design
+    name: Car Body Design
+    tier: peripheral
+    language: en
+    topics:
+      - Cars
+    region: plenary recommended/Cars
+    url: https://www.carbodydesign.com/feed/
+    homepage: https://www.carbodydesign.com/
+  - key: Plenary Carscoops
+    name: Carscoops
+    tier: peripheral
+    language: en
+    topics:
+      - Cars
+    region: plenary recommended/Cars
+    url: https://www.carscoops.com/feed/
+    homepage: https://www.carscoops.com/
+  - key: Plenary Centsational Style
+    name: Centsational Style
+    tier: peripheral
+    language: en
+    topics:
+      - DIY
+    region: plenary recommended/DIY
+    url: https://centsationalstyle.com/feed/
+    homepage: https://centsationalstyle.com/
+  - key: Plenary Chocolate Zucchini
+    name: Chocolate & Zucchini
+    tier: peripheral
+    language: en
+    topics:
+      - Food
+    region: plenary recommended/Food
+    url: https://cnz.to/feed/
+    homepage: https://cnz.to/
+  - key: Plenary chRyNaN Codes
+    name: chRyNaN Codes
+    tier: peripheral
+    language: en
+    topics:
+      - Android Development
+    region: plenary recommended/Android Development
+    url: https://chrynan.codes/rss/
+    homepage: https://chrynan.codes/
+  - key: Plenary Code as Craft
+    name: Code as Craft
+    tier: peripheral
+    language: en
+    topics:
+      - Programming
+    region: plenary recommended/Programming
+    url: https://codeascraft.com/feed/atom/
+    homepage: https://codeascraft.com/
+  - key: Plenary CodeNewbie
+    name: CodeNewbie
+    tier: peripheral
+    language: en
+    topics:
+      - Programming
+    region: plenary recommended/Programming
+    url: http://feeds.codenewbie.org/cnpodcast.xml
+    homepage: http://feeds.codenewbie.org/
+  - key: Plenary ComingSoon net
+    name: ComingSoon.net
+    tier: peripheral
+    language: en
+    topics:
+      - Movies
+    region: plenary recommended/Movies
+    url: https://www.comingsoon.net/feed
+    homepage: https://www.comingsoon.net/
+  - key: Plenary Consequence
+    name: Consequence
+    tier: peripheral
+    language: en
+    topics:
+      - Music
+    region: plenary recommended/Music
+    url: http://consequenceofsound.net/feed
+    homepage: http://consequenceofsound.net/
+  - key: Plenary Core77
+    name: Core77
+    tier: peripheral
+    language: en
+    topics:
+      - Interior design
+    region: plenary recommended/Interior design
+    url: http://feeds.feedburner.com/core77/blog
+    homepage: http://feeds.feedburner.com/
+  - key: Plenary Cracked All Posts
+    name: 'Cracked: All Posts'
+    tier: peripheral
+    language: en
+    topics:
+      - Funny
+    region: plenary recommended/Funny
+    url: http://feeds.feedburner.com/CrackedRSS
+    homepage: http://feeds.feedburner.com/
+  - key: Plenary Cricbuzz
+    name: Cricbuzz
+    tier: peripheral
+    language: en
+    topics:
+      - Cricket
+    region: plenary recommended/Cricket
+    url: https://www.youtube.com/feeds/videos.xml?channel_id=UCSRQXk5yErn4e14vN76upOw
+    homepage: https://www.youtube.com/
+  - key: Plenary Cricket
+    name: Cricket
+    tier: peripheral
+    language: en
+    topics:
+      - Cricket
+    region: plenary recommended/Cricket
+    url: https://www.reddit.com/r/Cricket/.rss
+    homepage: https://www.reddit.com/
+  - key: Plenary Cricket news from ESPN Cricinfo com
+    name: Cricket news from ESPN Cricinfo.com
+    tier: peripheral
+    language: en
+    topics:
+      - Cricket
+    region: plenary recommended/Cricket
+    url: http://www.espncricinfo.com/rss/content/story/feeds/0.xml
+    homepage: http://www.espncricinfo.com/
+  - key: Plenary Cricket The Guardian
+    name: Cricket | The Guardian
+    tier: peripheral
+    language: en
+    topics:
+      - Cricket
+    region: plenary recommended/Cricket
+    url: https://www.theguardian.com/sport/cricket/rss
+    homepage: https://www.theguardian.com/
+  - key: Plenary Cricket The Roar
+    name: Cricket – The Roar
+    tier: peripheral
+    language: en
+    topics:
+      - Cricket
+    region: plenary recommended/Cricket
+    url: https://www.theroar.com.au/cricket/feed/
+    homepage: https://www.theroar.com.au/
+  - key: Plenary cricket com au
+    name: cricket.com.au
+    tier: peripheral
+    language: en
+    topics:
+      - Cricket
+    region: plenary recommended/Cricket
+    url: https://www.youtube.com/feeds/videos.xml?user=cricketaustraliatv
+    homepage: https://www.youtube.com/
+  - key: Plenary Cult of Android
+    name: Cult of Android
+    tier: peripheral
+    language: en
+    topics:
+      - Android
+    region: plenary recommended/Android
+    url: https://www.cultofandroid.com/feed
+    homepage: https://www.cultofandroid.com/
+  - key: Plenary Cult of Mac
+    name: Cult of Mac
+    tier: peripheral
+    language: en
+    topics:
+      - Apple
+    region: plenary recommended/Apple
+    url: https://www.cultofmac.com/feed
+    homepage: https://www.cultofmac.com/
+  - key: Plenary Cyanogen Mods
+    name: Cyanogen Mods
+    tier: peripheral
+    language: en
+    topics:
+      - Android
+    region: plenary recommended/Android
+    url: https://www.cyanogenmods.org/feed
+    homepage: https://www.cyanogenmods.org/
+  - key: Plenary cynicaldeveloper com
+    name: cynicaldeveloper com
+    tier: peripheral
+    language: en
+    topics:
+      - Programming
+    region: plenary recommended/Programming
+    url: https://cynicaldeveloper.com/feed/podcast
+    homepage: https://cynicaldeveloper.com/
+  - key: Plenary Dan Carlin s Hardcore History
+    name: Dan Carlin's Hardcore History
+    tier: peripheral
+    language: en
+    topics:
+      - History
+    region: plenary recommended/History
+    url: https://feeds.feedburner.com/dancarlin/history?format=xml
+    homepage: https://feeds.feedburner.com/
+  - key: Plenary Dan Lew Codes
+    name: Dan Lew Codes
+    tier: peripheral
+    language: en
+    topics:
+      - Android Development
+    region: plenary recommended/Android Development
+    url: https://blog.danlew.net/rss/
+    homepage: https://blog.danlew.net/
+  - key: Plenary Daring Fireball
+    name: Daring Fireball
+    tier: peripheral
+    language: en
+    topics:
+      - Apple
+    region: plenary recommended/Apple
+    url: https://daringfireball.net/feeds/main
+    homepage: https://daringfireball.net/
+  - key: Plenary David Lebovitz
+    name: David Lebovitz
+    tier: peripheral
+    language: en
+    topics:
+      - Food
+    region: plenary recommended/Food
+    url: https://www.davidlebovitz.com/feed/
+    homepage: https://www.davidlebovitz.com/
+  - key: Plenary David Walsh Blog
+    name: David Walsh Blog
+    tier: peripheral
+    language: en
+    topics:
+      - Web Development
+    region: plenary recommended/Web Development
+    url: https://davidwalsh.name/feed
+    homepage: https://davidwalsh.name/
+  - key: Plenary Deadline
+    name: Deadline
+    tier: peripheral
+    language: en
+    topics:
+      - Movies
+    region: plenary recommended/Movies
+    url: https://deadline.com/feed/
+    homepage: https://deadline.com/
+  - key: Plenary decoist
+    name: decoist
+    tier: peripheral
+    language: en
+    topics:
+      - Interior design
+    region: plenary recommended/Interior design
+    url: https://www.decoist.com/feed/
+    homepage: https://www.decoist.com/
+  - key: Plenary Design MilkArchitecture Design Milk
+    name: Design MilkArchitecture – Design Milk
+    tier: peripheral
+    language: en
+    topics:
+      - Architecture
+    region: plenary recommended/Architecture
+    url: https://design-milk.com/category/architecture/feed/
+    homepage: https://design-milk.com/
+  - key: Plenary Design MilkInterior Design Design Milk
+    name: Design MilkInterior Design – Design Milk
+    tier: peripheral
+    language: en
+    topics:
+      - Interior design
+    region: plenary recommended/Interior design
+    url: https://design-milk.com/category/interior-design/feed/
+    homepage: https://design-milk.com/
+  - key: Plenary Developer Tea
+    name: Developer Tea
+    tier: peripheral
+    language: en
+    topics:
+      - Programming
+    region: plenary recommended/Programming
+    url: https://feeds.simplecast.com/dLRotFGk
+    homepage: https://feeds.simplecast.com/
+  - key: Plenary Developing Android Apps
+    name: Developing Android Apps
+    tier: peripheral
+    language: en
+    topics:
+      - Android Development
+    region: plenary recommended/Android Development
+    url: https://reddit.com/r/androiddev.rss
+    homepage: https://reddit.com/
+  - key: Plenary Digital Photography School
+    name: Digital Photography School
+    tier: peripheral
+    language: en
+    topics:
+      - Photography
+    region: plenary recommended/Photography
+    url: https://feeds.feedburner.com/DigitalPhotographySchool
+    homepage: https://feeds.feedburner.com/
+  - key: Plenary Doityourself com
+    name: Doityourself.com
+    tier: peripheral
+    language: en
+    topics:
+      - DIY
+    region: plenary recommended/DIY
+    url: https://www.doityourself.com/feed
+    homepage: https://www.doityourself.com/
+  - key: Plenary Droid Life
+    name: Droid Life
+    tier: peripheral
+    language: en
+    topics:
+      - Android
+    region: plenary recommended/Android
+    url: https://www.droid-life.com/feed
+    homepage: https://www.droid-life.com/
+  - key: Plenary droidcon SF
+    name: droidcon SF
+    tier: peripheral
+    language: en
+    topics:
+      - Android Development
+    region: plenary recommended/Android Development
+    url: https://www.youtube.com/feeds/videos.xml?channel_id=UCKubKoe1CBw_-n_GXetEQbg
+    homepage: https://www.youtube.com/
+  - key: Plenary EDM com The Latest Electronic Dance Music News Reviews Artists
+    name: EDM.com - The Latest Electronic Dance Music News, Reviews & Artists
+    tier: peripheral
+    language: en
+    topics:
+      - Music
+    region: plenary recommended/Music
+    url: https://edm.com/.rss/full/
+    homepage: https://edm.com/
+  - key: Plenary EFL Championship
+    name: EFL Championship
+    tier: peripheral
+    language: en
+    topics:
+      - Football
+    region: plenary recommended/Football
+    url: https://www.reddit.com/r/Championship/.rss?format=xml
+    homepage: https://www.reddit.com/
+  - key: Plenary England Wales Cricket Board
+    name: England & Wales Cricket Board
+    tier: peripheral
+    language: en
+    topics:
+      - Cricket
+    region: plenary recommended/Cricket
+    url: https://www.youtube.com/feeds/videos.xml?user=ecbcricket
+    homepage: https://www.youtube.com/
+  - key: Plenary Escapist Magazine
+    name: Escapist Magazine
+    tier: peripheral
+    language: en
+    topics:
+      - Gaming
+    region: plenary recommended/Gaming
+    url: https://www.escapistmagazine.com/v2/feed/
+    homepage: https://www.escapistmagazine.com/
+  - key: Plenary Essential Tennis Podcast Instruction Lessons Tips
+    name: Essential Tennis Podcast - Instruction, Lessons, Tips
+    tier: peripheral
+    language: en
+    topics:
+      - Tennis
+    region: plenary recommended/Tennis
+    url: https://feed.podbean.com/essentialtennis/feed.xml
+    homepage: https://feed.podbean.com/
+  - key: Plenary Explosm net
+    name: Explosm.net
+    tier: peripheral
+    language: en
+    topics:
+      - Funny
+    region: plenary recommended/Funny
+    url: http://feeds.feedburner.com/Explosm
+    homepage: http://feeds.feedburner.com/
+  - key: Plenary Fabisevi ch
+    name: Fabisevi.ch
+    tier: peripheral
+    language: en
+    topics:
+      - iOS Development
+    region: plenary recommended/iOS Development
+    url: https://www.fabisevi.ch/feed.xml
+    homepage: https://www.fabisevi.ch/
+  - key: Plenary Facebook Engineering
+    name: Facebook Engineering
+    tier: peripheral
+    language: en
+    topics:
+      - Programming
+    region: plenary recommended/Programming
+    url: https://engineering.fb.com/feed/
+    homepage: https://engineering.fb.com/
+  - key: Plenary FAIL Blog
+    name: FAIL Blog
+    tier: peripheral
+    language: en
+    topics:
+      - Funny
+    region: plenary recommended/Funny
+    url: http://feeds.feedburner.com/failblog
+    homepage: http://feeds.feedburner.com/
+  - key: Plenary Fashion ELLE
+    name: Fashion - ELLE
+    tier: peripheral
+    language: en
+    topics:
+      - Fashion
+    region: plenary recommended/Fashion
+    url: https://www.elle.com/rss/fashion.xml/
+    homepage: https://www.elle.com/
+  - key: Plenary Fashion The Guardian
+    name: Fashion | The Guardian
+    tier: peripheral
+    language: en
+    topics:
+      - Fashion
+    region: plenary recommended/Fashion
+    url: https://www.theguardian.com/fashion/rss
+    homepage: https://www.theguardian.com/
+  - key: Plenary FashionBeans Men s Fashion and Style Feed
+    name: FashionBeans Men's Fashion and Style Feed
+    tier: peripheral
+    language: en
+    topics:
+      - Fashion
+    region: plenary recommended/Fashion
+    url: https://www.fashionbeans.com/rss-feed/?category=fashion
+    homepage: https://www.fashionbeans.com/
+  - key: Plenary Fashionista
+    name: Fashionista
+    tier: peripheral
+    language: en
+    topics:
+      - Fashion
+    region: plenary recommended/Fashion
+    url: https://fashionista.com/.rss/excerpt/
+    homepage: https://fashionista.com/
+  - key: Plenary FirstShowing net
+    name: FirstShowing.net
+    tier: peripheral
+    language: en
+    topics:
+      - Movies
+    region: plenary recommended/Movies
+    url: https://www.firstshowing.net/feed/
+    homepage: https://www.firstshowing.net/
+  - key: Plenary FLOSS Weekly Audio
+    name: FLOSS Weekly (Audio)
+    tier: peripheral
+    language: en
+    topics:
+      - Programming
+    region: plenary recommended/Programming
+    url: https://feeds.twit.tv/floss.xml
+    homepage: https://feeds.twit.tv/
+  - key: Plenary Food52
+    name: Food52
+    tier: peripheral
+    language: en
+    topics:
+      - Food
+    region: plenary recommended/Food
+    url: http://feeds.feedburner.com/food52-TheAandMBlog
+    homepage: http://feeds.feedburner.com/
+  - key: Plenary Football The People s Sport
+    name: Football - The People's Sport
+    tier: peripheral
+    language: en
+    topics:
+      - Football
+    region: plenary recommended/Football
+    url: https://www.reddit.com/r/football/.rss?format=xml
+    homepage: https://www.reddit.com/
+  - key: Plenary Formula 1
+    name: Formula 1
+    tier: peripheral
+    language: en
+    topics:
+      - Cars
+    region: plenary recommended/Cars
+    url: https://www.reddit.com/r/formula1/.rss
+    homepage: https://www.reddit.com/
+  - key: Plenary Fragmented The Software Podcast
+    name: Fragmented - The Software Podcast
+    tier: peripheral
+    language: en
+    topics:
+      - Android Development
+    region: plenary recommended/Android Development
+    url: https://feeds.simplecast.com/LpAGSLnY
+    homepage: https://feeds.simplecast.com/
+  - key: Plenary From Head To Toe
+    name: From Head To Toe
+    tier: peripheral
+    language: en
+    topics:
+      - Beauty
+    region: plenary recommended/Beauty
+    url: http://feeds.feedburner.com/frmheadtotoe
+    homepage: http://feeds.feedburner.com/
+  - key: Plenary GitLab
+    name: GitLab
+    tier: peripheral
+    language: en
+    topics:
+      - Programming
+    region: plenary recommended/Programming
+    url: https://about.gitlab.com/atom.xml
+    homepage: https://about.gitlab.com/
+  - key: Plenary Google Developers Blog
+    name: Google Developers Blog
+    tier: peripheral
+    language: en
+    topics:
+      - Programming
+    region: plenary recommended/Programming
+    url: http://feeds.feedburner.com/GDBcode
+    homepage: http://feeds.feedburner.com/
+  - key: Plenary Google TechTalks
+    name: Google TechTalks
+    tier: peripheral
+    language: en
+    topics:
+      - Programming
+    region: plenary recommended/Programming
+    url: https://www.youtube.com/feeds/videos.xml?user=GoogleTechTalks
+    homepage: https://www.youtube.com/
+  - key: Plenary Green Kitchen Stories
+    name: Green Kitchen Stories
+    tier: peripheral
+    language: en
+    topics:
+      - Food
+    region: plenary recommended/Food
+    url: https://greenkitchenstories.com/feed/
+    homepage: https://greenkitchenstories.com/
+  - key: Plenary GSMArena com Latest articles
+    name: GSMArena.com - Latest articles
+    tier: peripheral
+    language: en
+    topics:
+      - Android
+    region: plenary recommended/Android
+    url: https://www.gsmarena.com/rss-news-reviews.php3
+    homepage: https://www.gsmarena.com/
+  - key: Plenary HackerNoon com Medium
+    name: HackerNoon.com - Medium
+    tier: peripheral
+    language: en
+    topics:
+      - Programming
+    region: plenary recommended/Programming
+    url: https://medium.com/feed/hackernoon
+    homepage: https://medium.com/
+  - key: Plenary Handstand Sam
+    name: Handstand Sam
+    tier: peripheral
+    language: en
+    topics:
+      - Android Development
+    region: plenary recommended/Android Development
+    url: https://handstandsam.com/feed/
+    homepage: https://handstandsam.com/
+  - key: Plenary Hanselminutes with Scott Hanselman
+    name: Hanselminutes with Scott Hanselman
+    tier: peripheral
+    language: en
+    topics:
+      - Programming
+    region: plenary recommended/Programming
+    url: https://feeds.simplecast.com/gvtxUiIf
+    homepage: https://feeds.simplecast.com/
+  - key: Plenary History in 28 minutes
+    name: History in 28-minutes
+    tier: peripheral
+    language: en
+    topics:
+      - History
+    region: plenary recommended/History
+    url: https://www.historyisnowmagazine.com/blog?format=RSS
+    homepage: https://www.historyisnowmagazine.com/
+  - key: Plenary HistoryNet
+    name: HistoryNet
+    tier: peripheral
+    language: en
+    topics:
+      - History
+    region: plenary recommended/History
+    url: http://www.historynet.com/feed
+    homepage: http://www.historynet.com/
+  - key: Plenary How Sweet Eats
+    name: How Sweet Eats
+    tier: peripheral
+    language: en
+    topics:
+      - Food
+    region: plenary recommended/Food
+    url: https://www.howsweeteats.com/feed/
+    homepage: https://www.howsweeteats.com/
+  - key: Plenary How To Geek
+    name: How-To Geek
+    tier: peripheral
+    language: en
+    topics:
+      - DIY
+    region: plenary recommended/DIY
+    url: https://www.howtogeek.com/feed/
+    homepage: https://www.howtogeek.com/
+  - key: Plenary I Can Has Cheezburger
+    name: I Can Has Cheezburger?
+    tier: peripheral
+    language: en
+    topics:
+      - Funny
+    region: plenary recommended/Funny
+    url: http://feeds.feedburner.com/icanhascheezburger
+    homepage: http://feeds.feedburner.com/
+  - key: Plenary IKEA Hackers
+    name: IKEA Hackers
+    tier: peripheral
+    language: en
+    topics:
+      - DIY
+    region: plenary recommended/DIY
+    url: https://www.ikeahackers.net/feed
+    homepage: https://www.ikeahackers.net/
+  - key: Plenary iMore The 1 iPhone iPad and iPod touch blog
+    name: 'iMore - The #1 iPhone, iPad, and iPod touch blog'
+    tier: peripheral
+    language: en
+    topics:
+      - Apple
+    region: plenary recommended/Apple
+    url: http://feeds.feedburner.com/TheiPhoneBlog
+    homepage: http://feeds.feedburner.com/
+  - key: Plenary In My Own Style
+    name: In My Own Style
+    tier: peripheral
+    language: en
+    topics:
+      - Interior design
+    region: plenary recommended/Interior design
+    url: https://inmyownstyle.com/feed
+    homepage: https://inmyownstyle.com/
+  - key: Plenary Indie Games Plus
+    name: Indie Games Plus
+    tier: peripheral
+    language: en
+    topics:
+      - Gaming
+    region: plenary recommended/Gaming
+    url: https://indiegamesplus.com/feed
+    homepage: https://indiegamesplus.com/
+  - key: Plenary inessential com
+    name: inessential.com
+    tier: peripheral
+    language: en
+    topics:
+      - iOS Development
+    region: plenary recommended/iOS Development
+    url: https://inessential.com/xml/rss.xml
+    homepage: https://inessential.com/
+  - key: Plenary InfoQ
+    name: InfoQ
+    tier: peripheral
+    language: en
+    topics:
+      - Programming
+    region: plenary recommended/Programming
+    url: https://feed.infoq.com
+    homepage: https://feed.infoq.com/
+  - key: Plenary Inhabitat Green Design Innovation Architecture Green Building
+    name: Inhabitat - Green Design, Innovation, Architecture, Green Building
+    tier: peripheral
+    language: en
+    topics:
+      - Interior design
+    region: plenary recommended/Interior design
+    url: https://inhabitat.com/design/feed/
+    homepage: https://inhabitat.com/
+  - key: Plenary Interior Design Interior Architecture
+    name: Interior Design (Interior Architecture)
+    tier: peripheral
+    language: en
+    topics:
+      - Interior design
+    region: plenary recommended/Interior design
+    url: https://www.reddit.com/r/InteriorDesign/.rss
+    homepage: https://www.reddit.com/
+  - key: Plenary Interior Design Ideas
+    name: Interior Design Ideas
+    tier: peripheral
+    language: en
+    topics:
+      - Interior design
+    region: plenary recommended/Interior design
+    url: http://www.home-designing.com/feed
+    homepage: http://www.home-designing.com/
+  - key: Plenary Into The Gloss Beauty Tips Trends And Product Reviews
+    name: Into The Gloss - Beauty Tips, Trends, And Product Reviews
+    tier: peripheral
+    language: en
+    topics:
+      - Beauty
+    region: plenary recommended/Beauty
+    url: https://feeds.feedburner.com/intothegloss/oqoU
+    homepage: https://feeds.feedburner.com/
+  - key: Plenary Jake Wharton
+    name: Jake Wharton
+    tier: peripheral
+    language: en
+    topics:
+      - Android Development
+    region: plenary recommended/Android Development
+    url: https://jakewharton.com/atom.xml
+    homepage: https://jakewharton.com/
+  - key: Plenary Jalopnik
+    name: Jalopnik
+    tier: peripheral
+    language: en
+    topics:
+      - Cars
+    region: plenary recommended/Cars
+    url: https://jalopnik.com/rss
+    homepage: https://jalopnik.com/
+  - key: Plenary Java SQL and jOOQ
+    name: Java, SQL and jOOQ.
+    tier: peripheral
+    language: en
+    topics:
+      - Programming
+    region: plenary recommended/Programming
+    url: https://blog.jooq.org/feed
+    homepage: https://blog.jooq.org/
+  - key: Plenary JetBrains Blog
+    name: JetBrains Blog
+    tier: peripheral
+    language: en
+    topics:
+      - Android Development
+      - Programming
+    region: plenary recommended/Programming
+    url: https://blog.jetbrains.com/feed
+    homepage: https://blog.jetbrains.com/
+  - key: Plenary Journal
+    name: Journal
+    tier: peripheral
+    language: en
+    topics:
+      - Architecture
+    region: plenary recommended/Architecture
+    url: https://architizer.wpengine.com/feed/
+    homepage: https://architizer.wpengine.com/
+  - key: Plenary Joy the Baker
+    name: Joy the Baker
+    tier: peripheral
+    language: en
+    topics:
+      - Food
+    region: plenary recommended/Food
+    url: http://joythebaker.com/feed/
+    homepage: http://joythebaker.com/
+  - key: Plenary JUSTTM Creative
+    name: JUST™ Creative
+    tier: peripheral
+    language: en
+    topics:
+      - UI / UX
+    region: plenary recommended/UI - UX
+    url: https://feeds.feedburner.com/JustCreativeDesignBlog
+    homepage: https://feeds.feedburner.com/
+  - key: Plenary Kirkus Reviews
+    name: Kirkus Reviews
+    tier: peripheral
+    language: en
+    topics:
+      - Books
+    region: plenary recommended/Books
+    url: https://www.kirkusreviews.com/feeds/rss/
+    homepage: https://www.kirkusreviews.com/
+  - key: Plenary Kitchn Inspiring cooks nourishing homes
+    name: Kitchn | Inspiring cooks, nourishing homes
+    tier: peripheral
+    language: en
+    topics:
+      - Food
+    region: plenary recommended/Food
+    url: https://www.thekitchn.com/main.rss
+    homepage: https://www.thekitchn.com/
+  - key: Plenary Kotlin
+    name: Kotlin
+    tier: peripheral
+    language: en
+    topics:
+      - Android Development
+    region: plenary recommended/Android Development
+    url: https://www.youtube.com/feeds/videos.xml?playlist_id=PLQ176FUIyIUa6SChjajjVc-LMzxWiz6dy
+    homepage: https://www.youtube.com/
+  - key: Plenary Latest Content Car and Driver
+    name: Latest Content - Car and Driver
+    tier: peripheral
+    language: en
+    topics:
+      - Cars
+    region: plenary recommended/Cars
+    url: https://www.caranddriver.com/rss/all.xml/
+    homepage: https://www.caranddriver.com/
+  - key: Plenary Laura in the Kitchen
+    name: Laura in the Kitchen
+    tier: peripheral
+    language: en
+    topics:
+      - Food
+    region: plenary recommended/Food
+    url: https://www.youtube.com/feeds/videos.xml?user=LauraVitalesKitchen
+    homepage: https://www.youtube.com/
+  - key: Plenary Light Stalking
+    name: Light Stalking
+    tier: peripheral
+    language: en
+    topics:
+      - Photography
+    region: plenary recommended/Photography
+    url: https://www.lightstalking.com/feed/
+    homepage: https://www.lightstalking.com/
+  - key: Plenary Lightroom Killer Tips
+    name: Lightroom Killer Tips
+    tier: peripheral
+    language: en
+    topics:
+      - Photography
+    region: plenary recommended/Photography
+    url: https://lightroomkillertips.com/feed/
+    homepage: https://lightroomkillertips.com/
+  - key: Plenary Live Life Travel
+    name: Live Life Travel
+    tier: peripheral
+    language: en
+    topics:
+      - Travel
+    region: plenary recommended/Travel
+    url: https://www.livelifetravel.world/feed/
+    homepage: https://www.livelifetravel.world/
+  - key: Plenary Living Big In A Tiny House
+    name: Living Big In A Tiny House
+    tier: peripheral
+    language: en
+    topics:
+      - Architecture
+    region: plenary recommended/Architecture
+    url: https://www.youtube.com/feeds/videos.xml?user=livingbigtinyhouse
+    homepage: https://www.youtube.com/
+  - key: Plenary Liz Marie Blog
+    name: Liz Marie Blog
+    tier: peripheral
+    language: en
+    topics:
+      - Interior design
+    region: plenary recommended/Interior design
+    url: https://www.lizmarieblog.com/feed/
+    homepage: https://www.lizmarieblog.com/
+  - key: Plenary Love and Olive Oil
+    name: Love and Olive Oil
+    tier: peripheral
+    language: en
+    topics:
+      - Food
+    region: plenary recommended/Food
+    url: https://www.loveandoliveoil.com/feed
+    homepage: https://www.loveandoliveoil.com/
+  - key: Plenary MacRumors
+    name: MacRumors
+    tier: peripheral
+    language: en
+    topics:
+      - Apple
+    region: plenary recommended/Apple
+    url: https://www.youtube.com/feeds/videos.xml?user=macrumors
+    homepage: https://www.youtube.com/
+  - key: Plenary MacRumors Mac News and Rumors Mac Blog
+    name: 'MacRumors: Mac News and Rumors - Mac Blog'
+    tier: peripheral
+    language: en
+    topics:
+      - Apple
+    region: plenary recommended/Apple
+    url: http://feeds.macrumors.com/MacRumors-Mac
+    homepage: http://feeds.macrumors.com/
+  - key: Plenary MacStories
+    name: MacStories
+    tier: peripheral
+    language: en
+    topics:
+      - Apple
+    region: plenary recommended/Apple
+    url: https://www.macstories.net/feed
+    homepage: https://www.macstories.net/
+  - key: Plenary Macworld com
+    name: Macworld.com
+    tier: peripheral
+    language: en
+    topics:
+      - Apple
+    region: plenary recommended/Apple
+    url: https://www.macworld.com/index.rss
+    homepage: https://www.macworld.com/
+  - key: Plenary Makeup and Beauty Blog Makeup Reviews Swatches and How To Makeup
+    name: Makeup and Beauty Blog | Makeup Reviews, Swatches and How-To Makeup
+    tier: peripheral
+    language: en
+    topics:
+      - Gaming
+    region: plenary recommended/Gaming
+    url: https://www.makeupandbeautyblog.com/feed/
+    homepage: https://www.makeupandbeautyblog.com/
+  - key: Plenary Marco org
+    name: Marco.org
+    tier: peripheral
+    language: en
+    topics:
+      - Apple
+    region: plenary recommended/Apple
+    url: https://marco.org/rss
+    homepage: https://marco.org/
+  - key: Plenary Metal Injection
+    name: Metal Injection
+    tier: peripheral
+    language: en
+    topics:
+      - Music
+    region: plenary recommended/Music
+    url: http://feeds.feedburner.com/metalinjection
+    homepage: http://feeds.feedburner.com/
+  - key: Plenary Mobile A11y
+    name: Mobile A11y
+    tier: peripheral
+    language: en
+    topics:
+      - iOS Development
+    region: plenary recommended/iOS Development
+    url: https://mobilea11y.com/index.xml
+    homepage: https://mobilea11y.com/
+  - key: Plenary Movie News and Discussion
+    name: Movie News and Discussion
+    tier: peripheral
+    language: en
+    topics:
+      - Movies
+    region: plenary recommended/Movies
+    url: https://reddit.com/r/movies/.rss
+    homepage: https://reddit.com/
+  - key: Plenary Movies
+    name: Movies
+    tier: peripheral
+    language: en
+    topics:
+      - Movies
+    region: plenary recommended/Movies
+    url: https://www.bleedingcool.com/movies/feed/
+    homepage: https://www.bleedingcool.com/
+  - key: Plenary MUO Feed
+    name: MUO - Feed
+    tier: peripheral
+    language: en
+    topics:
+      - DIY
+    region: plenary recommended/DIY
+    url: https://www.makeuseof.com/feed/
+    homepage: https://www.makeuseof.com/
+  - key: Plenary Music Business Worldwide
+    name: Music Business Worldwide
+    tier: peripheral
+    language: en
+    topics:
+      - Music
+    region: plenary recommended/Music
+    url: https://www.musicbusinessworldwide.com/feed/
+    homepage: https://www.musicbusinessworldwide.com/
+  - key: Plenary NDTV Sports Cricket
+    name: NDTV Sports - Cricket
+    tier: peripheral
+    language: en
+    topics:
+      - Cricket
+    region: plenary recommended/Cricket
+    url: http://feeds.feedburner.com/ndtvsports-cricket
+    homepage: http://feeds.feedburner.com/
+  - key: Plenary News Apple Developer
+    name: News - Apple Developer
+    tier: peripheral
+    language: en
+    topics:
+      - iOS Development
+    region: plenary recommended/iOS Development
+    url: https://developer.apple.com/news/rss/news.rss
+    homepage: https://developer.apple.com/
+  - key: Plenary NN g latest articles and announcements
+    name: NN/g latest articles and announcements
+    tier: peripheral
+    language: en
+    topics:
+      - UI / UX
+    region: plenary recommended/UI - UX
+    url: https://www.nngroup.com/feed/rss/
+    homepage: https://www.nngroup.com/
+  - key: Plenary Nomadic Matt s Travel Site
+    name: Nomadic Matt's Travel Site
+    tier: peripheral
+    language: en
+    topics:
+      - Travel
+    region: plenary recommended/Travel
+    url: https://www.nomadicmatt.com/travel-blog/feed/
+    homepage: https://www.nomadicmatt.com/
+  - key: Plenary NYT Food
+    name: NYT > Food
+    tier: peripheral
+    language: en
+    topics:
+      - Food
+    region: plenary recommended/Food
+    url: https://rss.nytimes.com/services/xml/rss/nyt/DiningandWine.xml
+    homepage: https://rss.nytimes.com/
+  - key: Plenary NYT Style
+    name: NYT > Style
+    tier: peripheral
+    language: en
+    topics:
+      - Fashion
+    region: plenary recommended/Fashion
+    url: https://rss.nytimes.com/services/xml/rss/nyt/FashionandStyle.xml
+    homepage: https://rss.nytimes.com/
+  - key: Plenary NYT Travel
+    name: NYT > Travel
+    tier: peripheral
+    language: en
+    topics:
+      - Travel
+    region: plenary recommended/Travel
+    url: https://rss.nytimes.com/services/xml/rss/nyt/Travel.xml
+    homepage: https://rss.nytimes.com/
+  - key: Plenary Oh Happy Day
+    name: Oh Happy Day!
+    tier: peripheral
+    language: en
+    topics:
+      - DIY
+    region: plenary recommended/DIY
+    url: http://ohhappyday.com/feed/
+    homepage: http://ohhappyday.com/
+  - key: Plenary Oh She Glows
+    name: Oh She Glows
+    tier: peripheral
+    language: en
+    topics:
+      - Food
+    region: plenary recommended/Food
+    url: https://ohsheglows.com/feed/
+    homepage: https://ohsheglows.com/
+  - key: Plenary OkKotlin
+    name: OkKotlin
+    tier: peripheral
+    language: en
+    topics:
+      - Android Development
+    region: plenary recommended/Android Development
+    url: https://okkotlin.com/rss.xml
+    homepage: https://okkotlin.com/
+  - key: Plenary Ole Begemann
+    name: Ole Begemann
+    tier: peripheral
+    language: en
+    topics:
+      - iOS Development
+    region: plenary recommended/iOS Development
+    url: https://oleb.net/blog/atom.xml
+    homepage: https://oleb.net/
+  - key: Plenary One Big Photo
+    name: One Big Photo
+    tier: peripheral
+    language: en
+    topics:
+      - Photography
+    region: plenary recommended/Photography
+    url: http://feeds.feedburner.com/OneBigPhoto
+    homepage: http://feeds.feedburner.com/
+  - key: Plenary OS X Daily
+    name: OS X Daily
+    tier: peripheral
+    language: en
+    topics:
+      - Apple
+    region: plenary recommended/Apple
+    url: http://feeds.feedburner.com/osxdaily
+    homepage: http://feeds.feedburner.com/
+  - key: Plenary Overflow Buffer Resources
+    name: Overflow - Buffer Resources
+    tier: peripheral
+    language: en
+    topics:
+      - Programming
+    region: plenary recommended/Programming
+    url: https://buffer.com/resources/overflow/rss/
+    homepage: https://buffer.com/
+  - key: Plenary Page Array NewInBooks
+    name: Page Array – NewInBooks
+    tier: peripheral
+    language: en
+    topics:
+      - Books
+    region: plenary recommended/Books
+    url: https://www.newinbooks.com/feed/
+    homepage: https://www.newinbooks.com/
+  - key: Plenary Penny Arcade
+    name: Penny Arcade
+    tier: peripheral
+    language: en
+    topics:
+      - Funny
+    region: plenary recommended/Funny
+    url: https://www.penny-arcade.com/feed
+    homepage: https://www.penny-arcade.com/
+  - key: Plenary peRFect Tennis
+    name: peRFect Tennis
+    tier: peripheral
+    language: en
+    topics:
+      - Tennis
+    region: plenary recommended/Tennis
+    url: https://www.perfect-tennis.com/feed/
+    homepage: https://www.perfect-tennis.com/
+  - key: Plenary PetaPixel
+    name: PetaPixel
+    tier: peripheral
+    language: en
+    topics:
+      - Photography
+    region: plenary recommended/Photography
+    url: https://petapixel.com/feed/
+    homepage: https://petapixel.com/
+  - key: Plenary Phandroid
+    name: Phandroid
+    tier: peripheral
+    language: en
+    topics:
+      - Android
+    region: plenary recommended/Android
+    url: http://feeds2.feedburner.com/AndroidPhoneFans
+    homepage: http://feeds2.feedburner.com/
+  - key: Plenary PHD Comics
+    name: PHD Comics
+    tier: peripheral
+    language: en
+    topics:
+      - Funny
+    region: plenary recommended/Funny
+    url: http://phdcomics.com/gradfeed.php
+    homepage: http://phdcomics.com/
+  - key: Plenary PlayStation Blog
+    name: PlayStation.Blog
+    tier: peripheral
+    language: en
+    topics:
+      - Gaming
+    region: plenary recommended/Gaming
+    url: http://feeds.feedburner.com/psblog
+    homepage: http://feeds.feedburner.com/
+  - key: Plenary Podcast Software Engineering Daily
+    name: Podcast – Software Engineering Daily
+    tier: peripheral
+    language: en
+    topics:
+      - Programming
+    region: plenary recommended/Programming
+    url: https://softwareengineeringdaily.com/category/podcast/feed
+    homepage: https://softwareengineeringdaily.com/
+  - key: Plenary POPSUGAR Beauty
+    name: POPSUGAR Beauty
+    tier: peripheral
+    language: en
+    topics:
+      - Beauty
+    region: plenary recommended/Beauty
+    url: https://www.popsugar.com/beauty/feed
+    homepage: https://www.popsugar.com/
+  - key: Plenary POPSUGAR Fashion
+    name: POPSUGAR Fashion
+    tier: peripheral
+    language: en
+    topics:
+      - Fashion
+    region: plenary recommended/Fashion
+    url: https://www.popsugar.com/fashion/feed
+    homepage: https://www.popsugar.com/
+  - key: Plenary PostSecret
+    name: PostSecret
+    tier: peripheral
+    language: en
+    topics:
+      - Funny
+    region: plenary recommended/Funny
+    url: https://postsecret.com/feed/?alt=rss
+    homepage: https://postsecret.com/
+  - key: Plenary ProAndroidDev Medium
+    name: ProAndroidDev - Medium
+    tier: peripheral
+    language: en
+    topics:
+      - Android Development
+    region: plenary recommended/Android Development
+    url: https://proandroiddev.com/feed
+    homepage: https://proandroiddev.com/
+  - key: Plenary programming
+    name: programming
+    tier: peripheral
+    language: en
+    topics:
+      - Programming
+    region: plenary recommended/Programming
+    url: https://www.reddit.com/r/programming/.rss
+    homepage: https://www.reddit.com/
+  - key: Plenary Programming Throwdown
+    name: Programming Throwdown
+    tier: peripheral
+    language: en
+    topics:
+      - Programming
+    region: plenary recommended/Programming
+    url: http://feeds.feedburner.com/ProgrammingThrowdown
+    homepage: http://feeds.feedburner.com/
+  - key: Plenary Programming The Crazy Programmer
+    name: Programming – The Crazy Programmer
+    tier: peripheral
+    language: en
+    topics:
+      - Programming
+    region: plenary recommended/Programming
+    url: https://www.thecrazyprogrammer.com/category/programming/feed
+    homepage: https://www.thecrazyprogrammer.com/
+  - key: Plenary Public Object
+    name: Public Object
+    tier: peripheral
+    language: en
+    topics:
+      - Android Development
+    region: plenary recommended/Android Development
+    url: https://publicobject.com/rss/
+    homepage: https://publicobject.com/
+  - key: Plenary r gaming
+    name: r/gaming
+    tier: peripheral
+    language: en
+    topics:
+      - Gaming
+    region: plenary recommended/Gaming
+    url: https://www.reddit.com/r/gaming.rss
+    homepage: https://www.reddit.com/
+  - key: Plenary r iPhone
+    name: r/iPhone
+    tier: peripheral
+    language: en
+    topics:
+      - Apple
+    region: plenary recommended/Apple
+    url: https://www.reddit.com/r/iphone/.rss
+    homepage: https://www.reddit.com/
+  - key: Plenary Reddit Sports
+    name: Reddit Sports
+    tier: peripheral
+    language: en
+    topics:
+      - Sports
+    region: plenary recommended/Sports
+    url: https://www.reddit.com/r/sports.rss
+    homepage: https://www.reddit.com/
+  - key: Plenary Refinery29 refinery29 com
+    name: Refinery29
+    tier: peripheral
+    language: en
+    topics:
+      - Beauty
+      - Fashion
+    region: plenary recommended/Fashion
+    url: https://www.refinery29.com/fashion/rss.xml
+    homepage: https://www.refinery29.com/
+  - key: Plenary Robert Heaton Blog
+    name: Robert Heaton | Blog
+    tier: peripheral
+    language: en
+    topics:
+      - Programming
+    region: plenary recommended/Programming
+    url: https://robertheaton.com/feed.xml
+    homepage: https://robertheaton.com/
+  - key: Plenary RSS News
+    name: 'RSS: News'
+    tier: peripheral
+    language: en
+    topics:
+      - Music
+    region: plenary recommended/Music
+    url: http://pitchfork.com/rss/news
+    homepage: http://pitchfork.com/
+  - key: Plenary Saket Narayan
+    name: Saket Narayan
+    tier: peripheral
+    language: en
+    topics:
+      - Android Development
+    region: plenary recommended/Android Development
+    url: https://saket.me/feed/
+    homepage: https://saket.me/
+  - key: Plenary Saturday Morning Breakfast Cereal
+    name: Saturday Morning Breakfast Cereal
+    tier: peripheral
+    language: en
+    topics:
+      - Funny
+    region: plenary recommended/Funny
+    url: https://www.smbc-comics.com/comic/rss
+    homepage: https://www.smbc-comics.com/
+  - key: Plenary Scott Hanselman s Blog
+    name: Scott Hanselman's Blog
+    tier: peripheral
+    language: en
+    topics:
+      - Programming
+    region: plenary recommended/Programming
+    url: http://feeds.hanselman.com/ScottHanselman
+    homepage: http://feeds.hanselman.com/
+  - key: Plenary Scripting News
+    name: Scripting News
+    tier: peripheral
+    language: en
+    topics:
+      - Programming
+    region: plenary recommended/Programming
+    url: http://scripting.com/rss.xml
+    homepage: http://scripting.com/
+  - key: Plenary Serious Eats
+    name: Serious Eats
+    tier: peripheral
+    language: en
+    topics:
+      - Food
+    region: plenary recommended/Food
+    url: https://www.youtube.com/feeds/videos.xml?user=SeriousEats
+    homepage: https://www.youtube.com/
+  - key: Plenary Serious Eats Recipes
+    name: 'Serious Eats: Recipes'
+    tier: peripheral
+    language: en
+    topics:
+      - Food
+    region: plenary recommended/Food
+    url: http://feeds.feedburner.com/seriouseats/recipes
+    homepage: http://feeds.feedburner.com/
+  - key: Plenary Shutterbean
+    name: Shutterbean
+    tier: peripheral
+    language: en
+    topics:
+      - Food
+    region: plenary recommended/Food
+    url: http://www.shutterbean.com/feed/
+    homepage: http://www.shutterbean.com/
+  - key: Plenary Sink In Tech and Travel
+    name: Sink In - Tech and Travel
+    tier: peripheral
+    language: en
+    topics:
+      - Web Development
+    region: plenary recommended/Web Development
+    url: https://gosink.in/rss/
+    homepage: https://gosink.in/
+  - key: Plenary Skinnytaste
+    name: Skinnytaste
+    tier: peripheral
+    language: en
+    topics:
+      - Food
+    region: plenary recommended/Food
+    url: https://www.skinnytaste.com/feed/
+    homepage: https://www.skinnytaste.com/
+  - key: Plenary Sky Sports Cricket Podcast
+    name: Sky Sports Cricket Podcast
+    tier: peripheral
+    language: en
+    topics:
+      - Cricket
+    region: plenary recommended/Cricket
+    url: https://www.spreaker.com/show/3387348/episodes/feed
+    homepage: https://www.spreaker.com/
+  - key: Plenary Slack Engineering
+    name: Slack Engineering
+    tier: peripheral
+    language: en
+    topics:
+      - Programming
+    region: plenary recommended/Programming
+    url: https://slack.engineering/feed
+    homepage: https://slack.engineering/
+  - key: Plenary smitten kitchen
+    name: smitten kitchen
+    tier: peripheral
+    language: en
+    topics:
+      - Food
+    region: plenary recommended/Food
+    url: http://feeds.feedburner.com/smittenkitchen
+    homepage: http://feeds.feedburner.com/
+  - key: Plenary So many books so little time
+    name: So many books, so little time
+    tier: peripheral
+    language: en
+    topics:
+      - Books
+    region: plenary recommended/Books
+    url: https://reddit.com/r/books/.rss
+    homepage: https://reddit.com/
+  - key: Plenary Soccer News
+    name: Soccer News
+    tier: peripheral
+    language: en
+    topics:
+      - Football
+    region: plenary recommended/Football
+    url: https://www.soccernews.com/feed
+    homepage: https://www.soccernews.com/
+  - key: Plenary Software Defined Talk
+    name: Software Defined Talk
+    tier: peripheral
+    language: en
+    topics:
+      - Programming
+    region: plenary recommended/Programming
+    url: https://feeds.fireside.fm/sdt/rss
+    homepage: https://feeds.fireside.fm/
+  - key: Plenary Software Engineering Radio The Podcast for Professional Software Develop
+    name: Software Engineering Radio - The Podcast for Professional Software Developers
+    tier: peripheral
+    language: en
+    topics:
+      - Programming
+    region: plenary recommended/Programming
+    url: http://feeds.feedburner.com/se-radio
+    homepage: http://feeds.feedburner.com/
+  - key: Plenary Song Exploder
+    name: Song Exploder
+    tier: peripheral
+    language: en
+    topics:
+      - Music
+    region: plenary recommended/Music
+    url: http://songexploder.net/feed
+    homepage: http://songexploder.net/
+  - key: Plenary SoundCloud Backstage Blog
+    name: SoundCloud Backstage Blog
+    tier: peripheral
+    language: en
+    topics:
+      - Programming
+    region: plenary recommended/Programming
+    url: https://developers.soundcloud.com/blog/blog.rss
+    homepage: https://developers.soundcloud.com/
+  - key: Plenary Speedhunters
+    name: Speedhunters
+    tier: peripheral
+    language: en
+    topics:
+      - Cars
+    region: plenary recommended/Cars
+    url: http://feeds.feedburner.com/speedhunters
+    homepage: http://feeds.feedburner.com/
+  - key: Plenary Sports News Latest Sports and Football News Sky News
+    name: Sports News - Latest Sports and Football News | Sky News
+    tier: peripheral
+    language: en
+    topics:
+      - Sports
+    region: plenary recommended/Sports
+    url: http://feeds.skynews.com/feeds/rss/sports.xml
+    homepage: http://feeds.skynews.com/
+  - key: Plenary Sportskeeda
+    name: Sportskeeda
+    tier: peripheral
+    language: en
+    topics:
+      - Sports
+    region: plenary recommended/Sports
+    url: https://www.sportskeeda.com/feed
+    homepage: https://www.sportskeeda.com/
+  - key: Plenary Spotify Engineering
+    name: Spotify Engineering
+    tier: peripheral
+    language: en
+    topics:
+      - Programming
+    region: plenary recommended/Programming
+    url: https://labs.spotify.com/feed/
+    homepage: https://labs.spotify.com/
+  - key: Plenary Sprouted Kitchen
+    name: Sprouted Kitchen
+    tier: peripheral
+    language: en
+    topics:
+      - Food
+    region: plenary recommended/Food
+    url: https://www.sproutedkitchen.com/home?format=rss
+    homepage: https://www.sproutedkitchen.com/
+  - key: Plenary Sri Lanka Cricket
+    name: Sri Lanka Cricket
+    tier: peripheral
+    language: en
+    topics:
+      - Cricket
+    region: plenary recommended/Cricket
+    url: https://www.youtube.com/feeds/videos.xml?user=TheOfficialSLC
+    homepage: https://www.youtube.com/
+  - key: Plenary Stack Abuse
+    name: Stack Abuse
+    tier: peripheral
+    language: en
+    topics:
+      - Programming
+    region: plenary recommended/Programming
+    url: https://stackabuse.com/rss/
+    homepage: https://stackabuse.com/
+  - key: Plenary Strobist
+    name: Strobist
+    tier: peripheral
+    language: en
+    topics:
+      - Photography
+    region: plenary recommended/Photography
+    url: http://feeds.feedburner.com/blogspot/WOBq
+    homepage: http://feeds.feedburner.com/
+  - key: Plenary Stuck in Customs
+    name: Stuck in Customs
+    tier: peripheral
+    language: en
+    topics:
+      - Photography
+    region: plenary recommended/Photography
+    url: https://stuckincustoms.com/feed/
+    homepage: https://stuckincustoms.com/
+  - key: Plenary Stumped
+    name: Stumped
+    tier: peripheral
+    language: en
+    topics:
+      - Cricket
+    region: plenary recommended/Cricket
+    url: https://podcasts.files.bbci.co.uk/p02gsrmh.rss
+    homepage: https://podcasts.files.bbci.co.uk/
+  - key: Plenary Swift by Sundell swiftbysundell com
+    name: Swift by Sundell
+    tier: peripheral
+    language: en
+    topics:
+      - iOS Development
+    region: plenary recommended/iOS Development
+    url: https://swiftbysundell.com/feed.rss
+    homepage: https://swiftbysundell.com/
+  - key: Plenary SwiftRocks
+    name: SwiftRocks
+    tier: peripheral
+    language: en
+    topics:
+      - iOS Development
+    region: plenary recommended/iOS Development
+    url: https://swiftrocks.com/rss.xml
+    homepage: https://swiftrocks.com/
+  - key: Plenary Switch Hit Podcast
+    name: Switch Hit Podcast
+    tier: peripheral
+    language: en
+    topics:
+      - Cricket
+    region: plenary recommended/Cricket
+    url: https://feeds.megaphone.fm/ESP9247246951
+    homepage: https://feeds.megaphone.fm/
+  - key: Plenary Tailenders
+    name: Tailenders
+    tier: peripheral
+    language: en
+    topics:
+      - Cricket
+    region: plenary recommended/Cricket
+    url: https://podcasts.files.bbci.co.uk/p02pcb4w.rss
+    homepage: https://podcasts.files.bbci.co.uk/
+  - key: Plenary TalkAndroid
+    name: TalkAndroid
+    tier: peripheral
+    language: en
+    topics:
+      - Android
+    region: plenary recommended/Android
+    url: http://feeds.feedburner.com/AndroidNewsGoogleAndroidForums
+    homepage: http://feeds.feedburner.com/
+  - key: Plenary Television News and Discussion
+    name: Television News and Discussion
+    tier: peripheral
+    language: en
+    topics:
+      - Television
+    region: plenary recommended/Television
+    url: https://reddit.com/r/television/.rss
+    homepage: https://reddit.com/
+  - key: Plenary Tennis News Discussion
+    name: Tennis News & Discussion
+    tier: peripheral
+    language: en
+    topics:
+      - Tennis
+    region: plenary recommended/Tennis
+    url: https://www.reddit.com/r/tennis/.rss
+    homepage: https://www.reddit.com/
+  - key: Plenary Test Match Special
+    name: Test Match Special
+    tier: peripheral
+    language: en
+    topics:
+      - Cricket
+    region: plenary recommended/Cricket
+    url: https://podcasts.files.bbci.co.uk/p02nrsl2.rss
+    homepage: https://podcasts.files.bbci.co.uk/
+  - key: Plenary The 6 Figure Developer
+    name: The 6 Figure Developer
+    tier: peripheral
+    language: en
+    topics:
+      - Programming
+    region: plenary recommended/Programming
+    url: http://6figuredev.com/feed/rss/
+    homepage: http://6figuredev.com/
+  - key: Plenary The Airbnb Tech Blog Medium
+    name: The Airbnb Tech Blog - Medium
+    tier: peripheral
+    language: en
+    topics:
+      - Programming
+    region: plenary recommended/Programming
+    url: https://medium.com/feed/airbnb-engineering
+    homepage: https://medium.com/
+  - key: Plenary The Ancient Gaming Noob
+    name: The Ancient Gaming Noob
+    tier: peripheral
+    language: en
+    topics:
+      - Gaming
+    region: plenary recommended/Gaming
+    url: http://feeds.feedburner.com/TheAncientGamingNoob
+    homepage: http://feeds.feedburner.com/
+  - key: Plenary The Android Arsenal
+    name: The Android Arsenal
+    tier: peripheral
+    language: en
+    topics:
+      - Android Development
+    region: plenary recommended/Android Development
+    url: https://feeds.feedburner.com/Android_Arsenal
+    homepage: https://feeds.feedburner.com/
+  - key: Plenary The Architects Newspaper
+    name: The Architect’s Newspaper
+    tier: peripheral
+    language: en
+    topics:
+      - Architecture
+    region: plenary recommended/Architecture
+    url: https://archpaper.com/feed
+    homepage: https://archpaper.com/
+  - key: Plenary The Atomic Birdhouse
+    name: The Atomic Birdhouse
+    tier: peripheral
+    language: en
+    topics:
+      - iOS Development
+    region: plenary recommended/iOS Development
+    url: https://atomicbird.com/index.xml
+    homepage: https://atomicbird.com/
+  - key: Plenary The Beauty Look Book
+    name: The Beauty Look Book
+    tier: peripheral
+    language: en
+    topics:
+      - Beauty
+    region: plenary recommended/Beauty
+    url: https://thebeautylookbook.com/feed
+    homepage: https://thebeautylookbook.com/
+  - key: Plenary The best vintage and classic cars for sale online Bring a Trailer
+    name: The best vintage and classic cars for sale online | Bring a Trailer
+    tier: peripheral
+    language: en
+    topics:
+      - Cars
+    region: plenary recommended/Cars
+    url: https://bringatrailer.com/feed/
+    homepage: https://bringatrailer.com/
+  - key: Plenary The Bloggess
+    name: The Bloggess
+    tier: peripheral
+    language: en
+    topics:
+      - Funny
+    region: plenary recommended/Funny
+    url: https://thebloggess.com/feed/
+    homepage: https://thebloggess.com/
+  - key: Plenary The Daily WTF
+    name: The Daily WTF
+    tier: peripheral
+    language: en
+    topics:
+      - Funny
+    region: plenary recommended/Funny
+    url: http://syndication.thedailywtf.com/TheDailyWtf
+    homepage: http://syndication.thedailywtf.com/
+  - key: Plenary The Design Files Australia s most popular design blog The Design Files A
+    name: The Design Files | Australia's most popular design blog.The Design Files | Australia's most popular design blog.
+    tier: peripheral
+    language: en
+    topics:
+      - Interior design
+    region: plenary recommended/Interior design
+    url: https://thedesignfiles.net/feed/
+    homepage: https://thedesignfiles.net/
+  - key: Plenary The History Reader
+    name: The History Reader
+    tier: peripheral
+    language: en
+    topics:
+      - History
+    region: plenary recommended/History
+    url: https://www.thehistoryreader.com/feed/
+    homepage: https://www.thehistoryreader.com/
+  - key: Plenary The Inspired Room
+    name: The Inspired Room
+    tier: peripheral
+    language: en
+    topics:
+      - Interior design
+    region: plenary recommended/Interior design
+    url: https://theinspiredroom.net/feed/
+    homepage: https://theinspiredroom.net/
+  - key: Plenary The Loop
+    name: The Loop
+    tier: peripheral
+    language: en
+    topics:
+      - Apple
+    region: plenary recommended/Apple
+    url: https://www.loopinsight.com/feed
+    homepage: https://www.loopinsight.com/
+  - key: Plenary the memory palace
+    name: the memory palace
+    tier: peripheral
+    language: en
+    topics:
+      - History
+    region: plenary recommended/History
+    url: http://feeds.thememorypalace.us/thememorypalace
+    homepage: http://feeds.thememorypalace.us/
+  - key: Plenary The Onion
+    name: The Onion
+    tier: peripheral
+    language: en
+    topics:
+      - Funny
+    region: plenary recommended/Funny
+    url: https://www.theonion.com/rss
+    homepage: https://www.theonion.com/
+  - key: Plenary The PIT Show Reflections and Interviews in the Tech World
+    name: 'The PIT Show: Reflections and Interviews in the Tech World'
+    tier: peripheral
+    language: en
+    topics:
+      - Programming
+    region: plenary recommended/Programming
+    url: https://feeds.transistor.fm/productivity-in-tech-podcast
+    homepage: https://feeds.transistor.fm/
+  - key: Plenary The Stack Overflow Podcast
+    name: The Stack Overflow Podcast
+    tier: peripheral
+    language: en
+    topics:
+      - Programming
+    region: plenary recommended/Programming
+    url: https://feeds.simplecast.com/XA_851k3
+    homepage: https://feeds.simplecast.com/
+  - key: Plenary The Truth About Cars
+    name: The Truth About Cars
+    tier: peripheral
+    language: en
+    topics:
+      - Cars
+    region: plenary recommended/Cars
+    url: https://www.thetruthaboutcars.com/feed/
+    homepage: https://www.thetruthaboutcars.com/
+  - key: Plenary the TV addict
+    name: the TV addict
+    tier: peripheral
+    language: en
+    topics:
+      - Television
+    region: plenary recommended/Television
+    url: http://feeds.feedburner.com/thetvaddict/AXob
+    homepage: http://feeds.feedburner.com/
+  - key: Plenary The unofficial Apple community
+    name: The unofficial Apple community
+    tier: peripheral
+    language: en
+    topics:
+      - Apple
+    region: plenary recommended/Apple
+    url: https://www.reddit.com/r/apple/.rss
+    homepage: https://www.reddit.com/
+  - key: Plenary The Women in Tech Show A Technical Podcast
+    name: 'The Women in Tech Show: A Technical Podcast'
+    tier: peripheral
+    language: en
+    topics:
+      - Programming
+    region: plenary recommended/Programming
+    url: https://thewomenintechshow.com/category/podcast/feed/
+    homepage: https://thewomenintechshow.com/
+  - key: Plenary Thrifty Decor Chick
+    name: Thrifty Decor Chick
+    tier: peripheral
+    language: en
+    topics:
+      - Interior design
+    region: plenary recommended/Interior design
+    url: http://feeds.feedburner.com/blogspot/ZBcZ
+    homepage: http://feeds.feedburner.com/
+  - key: Plenary Throughline
+    name: Throughline
+    tier: peripheral
+    language: en
+    topics:
+      - History
+    region: plenary recommended/History
+    url: https://feeds.npr.org/510333/podcast.xml
+    homepage: https://feeds.npr.org/
+  - key: Plenary Top Gear The Philippine authority on cars and the automotive industry
+    name: 'Top Gear: The Philippine authority on cars and the automotive industry'
+    tier: peripheral
+    language: en
+    nations:
+      - Philippines
+    region: plenary country/Philippines
+    url: https://www.topgear.com.ph/feed/rss1
+    homepage: https://www.topgear.com.ph/
+  - key: Plenary TouchArcade iPhone iPad Android Games Forum
+    name: TouchArcade - iPhone, iPad, Android Games Forum
+    tier: peripheral
+    language: en
+    topics:
+      - Gaming
+    region: plenary recommended/Gaming
+    url: https://toucharcade.com/community/forums/-/index.rss
+    homepage: https://toucharcade.com/
+  - key: Plenary Travel The Guardian
+    name: Travel | The Guardian
+    tier: peripheral
+    language: en
+    topics:
+      - Travel
+    region: plenary recommended/Travel
+    url: https://www.theguardian.com/uk/travel/rss
+    homepage: https://www.theguardian.com/
+  - key: Plenary Trendir
+    name: Trendir
+    tier: peripheral
+    language: en
+    topics:
+      - Interior design
+    region: plenary recommended/Interior design
+    url: https://www.trendir.com/feed/
+    homepage: https://www.trendir.com/
+  - key: Plenary TV
+    name: TV
+    tier: peripheral
+    language: en
+    topics:
+      - Television
+    region: plenary recommended/Television
+    url: https://www.bleedingcool.com/tv/feed/
+    homepage: https://www.bleedingcool.com/
+  - key: Plenary TV Fanatic
+    name: TV Fanatic
+    tier: peripheral
+    language: en
+    topics:
+      - Television
+    region: plenary recommended/Television
+    url: https://www.tvfanatic.com/rss.xml
+    homepage: https://www.tvfanatic.com/
+  - key: Plenary TVLine
+    name: TVLine
+    tier: peripheral
+    language: en
+    topics:
+      - Television
+    region: plenary recommended/Television
+    url: https://tvline.com/feed/
+    homepage: https://tvline.com/
+  - key: Plenary Under the Radar
+    name: Under the Radar
+    tier: peripheral
+    language: en
+    topics:
+      - iOS Development
+    region: plenary recommended/iOS Development
+    url: https://www.relay.fm/radar/feed
+    homepage: https://www.relay.fm/
+  - key: Plenary Use Your Loaf iOS Development News Tips
+    name: Use Your Loaf - iOS Development News & Tips
+    tier: peripheral
+    language: en
+    topics:
+      - iOS Development
+    region: plenary recommended/iOS Development
+    url: https://useyourloaf.com/blog/rss.xml
+    homepage: https://useyourloaf.com/
+  - key: Plenary User Experience
+    name: User Experience
+    tier: peripheral
+    language: en
+    topics:
+      - UI / UX
+    region: plenary recommended/UI - UX
+    url: https://www.reddit.com/r/userexperience/.rss
+    homepage: https://www.reddit.com/
+  - key: Plenary UX Collective Medium
+    name: UX Collective - Medium
+    tier: peripheral
+    language: en
+    topics:
+      - UI / UX
+    region: plenary recommended/UI - UX
+    url: https://uxdesign.cc/feed
+    homepage: https://uxdesign.cc/
+  - key: Plenary UX Movement
+    name: UX Movement
+    tier: peripheral
+    language: en
+    topics:
+      - UI / UX
+    region: plenary recommended/UI - UX
+    url: https://uxmovement.com/feed/
+    homepage: https://uxmovement.com/
+  - key: Plenary Who What Wear
+    name: Who What Wear
+    tier: peripheral
+    language: en
+    topics:
+      - Fashion
+    region: plenary recommended/Fashion
+    url: https://www.whowhatwear.com/rss
+    homepage: https://www.whowhatwear.com/
+  - key: Plenary Wokeread
+    name: Wokeread
+    tier: peripheral
+    language: en
+    topics:
+      - Books
+    region: plenary recommended/Books
+    url: https://wokeread.home.blog/feed/
+    homepage: https://wokeread.home.blog/
+  - key: Plenary WonderHowTo
+    name: WonderHowTo
+    tier: peripheral
+    language: en
+    topics:
+      - DIY
+    region: plenary recommended/DIY
+    url: https://www.wonderhowto.com/rss.xml
+    homepage: https://www.wonderhowto.com/
+  - key: Plenary Xbox s Major Nelson
+    name: Xbox's Major Nelson
+    tier: peripheral
+    language: en
+    topics:
+      - Gaming
+    region: plenary recommended/Gaming
+    url: https://majornelson.com/feed/
+    homepage: https://majornelson.com/
+  - key: Plenary xkcd com
+    name: xkcd.com
+    tier: peripheral
+    language: en
+    topics:
+      - Funny
+    region: plenary recommended/Funny
+    url: https://xkcd.com/rss.xml
+    homepage: https://xkcd.com/
+  - key: Plenary Yahoo Sports News Scores Standings Rumors Fantasy Games
+    name: Yahoo! Sports - News, Scores, Standings, Rumors, Fantasy Games
+    tier: peripheral
+    language: en
+    topics:
+      - Sports
+    region: plenary recommended/Sports
+    url: https://sports.yahoo.com/rss/
+    homepage: https://sports.yahoo.com/
+  - key: Plenary Yanko Design
+    name: Yanko Design
+    tier: peripheral
+    language: en
+    topics:
+      - Interior design
+    region: plenary recommended/Interior design
+    url: http://feeds.feedburner.com/yankodesign
+    homepage: http://feeds.feedburner.com/
+  - key: Plenary You Must Remember This
+    name: You Must Remember This
+    tier: peripheral
+    language: en
+    topics:
+      - History
+    region: plenary recommended/History
+    url: https://feeds.megaphone.fm/YMRT7068253588
+    homepage: https://feeds.megaphone.fm/
+  - key: Plenary Young House Love
+    name: Young House Love
+    tier: peripheral
+    language: en
+    topics:
+      - Interior design
+    region: plenary recommended/Interior design
+    url: https://www.younghouselove.com/feed/
+    homepage: https://www.younghouselove.com/
+  - key: Plenary Zac Sweers
+    name: Zac Sweers
+    tier: peripheral
+    language: en
+    topics:
+      - Android Development
+    region: plenary recommended/Android Development
+    url: https://www.zacsweers.dev/rss/
+    homepage: https://www.zacsweers.dev/
+  - key: Plenary Zarah Dominguez
+    name: Zarah Dominguez
+    tier: peripheral
+    language: en
+    topics:
+      - Android Development
+    region: plenary recommended/Android Development
+    url: https://zarah.dev/feed.xml
+    homepage: https://zarah.dev/
+  - key: Plenary zsmb co
+    name: zsmb.co
+    tier: peripheral
+    language: en
+    topics:
+      - Android Development
+    region: plenary recommended/Android Development
+    url: https://zsmb.co/index.xml
+    homepage: https://zsmb.co/
+  - key: Plenary Fubiz Media
+    name: Fubiz Media
+    tier: peripheral
+    language: fr
+    topics:
+      - Interior design
+    region: plenary recommended/Interior design
+    url: http://feeds.feedburner.com/fubiz
+    homepage: http://feeds.feedburner.com/
+  - key: Plenary Pakistan Cricket
+    name: Pakistan Cricket
+    tier: peripheral
+    language: hi
+    topics:
+      - Cricket
+    region: plenary recommended/Cricket
+    url: https://www.youtube.com/feeds/videos.xml?channel_id=UCiWrjBhlICf_L_RK5y6Vrxw
+    homepage: https://www.youtube.com/

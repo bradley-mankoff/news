@@ -28,6 +28,13 @@ Run commands from the repo root:
 - Local production review: `uv run news local-prod`
 - Production: `uv run news prod`
 
+Source selection is now entirely driven by `config/sources.yaml`:
+
+- `dev` uses English `tier: dev` sources only.
+- `local-prod` and `prod` use English `tier: dev` plus `tier: core` sources.
+- `tier: peripheral` and non-English sources stay in the master list for later
+  review but are not selected by any run mode.
+
 Codex model safety:
 
 - Codex must not start the managed model server or run model-calling pipeline

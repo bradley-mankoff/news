@@ -83,6 +83,10 @@ class NewsSource:
     url: str
     homepage: str | None = None
     region: str | None = None
+    language: str | None = None
+    tier: str = "core"
+    topics: tuple[str, ...] = ()
+    nations: tuple[str, ...] = ()
     frame: str | None = None
     provider_type: str | None = None
     intended_role: str | None = None
@@ -90,15 +94,9 @@ class NewsSource:
     can_seed_topics: bool = False
     can_validate_topics: bool = False
     can_enrich_coverage: bool = True
+    strict_source_match: bool = False
+    source_match_aliases: tuple[str, ...] = ()
     notes: str | None = None
-
-
-@dataclass(frozen=True)
-class Recipient:
-    email: str
-    name: str
-    personal_prompt: str | None = None
-    pause: bool = False
 
 
 @dataclass(frozen=True)
@@ -197,8 +195,6 @@ class RuntimeConfig:
     max_stories_per_topic: int
     max_articles_per_story: int
     story_cluster_similarity_threshold: float
-    dev_source_limit: int
-    dev_num_topics: int
 
 
 def _sampling(
@@ -414,7 +410,7 @@ def configured_max_articles_per_story(model_profile_key: str | None = None) -> i
 def configured_story_cluster_similarity_threshold() -> float:
     return min(
         1.0,
-        max(0.0, _float_env("NEWS_STORY_CLUSTER_SIMILARITY_THRESHOLD", 0.22)),
+        max(0.0, _float_env("NEWS_STORY_CLUSTER_SIMILARITY_THRESHOLD", 0.30)),
     )
 
 
@@ -452,12 +448,14 @@ def ensure_codex_safe_model_reference(model_reference: str) -> None:
     )
 
 
-def _configured_model_reference() -> str:
+def _configured_model_reference(run_mode: str | None = None) -> str:
     if _bool_env("NEWS_CODEX_TESTING", False):
         return CODEX_TEST_MODEL_ALIAS
+    mode = run_mode or _configured_run_mode()
     selected_model = _str_env("NEWS_MODEL", "")
     raw_model_name = _str_env("NEWS_MODEL_NAME", "")
-    default_model = _str_env("NEWS_DEFAULT_MODEL", DEFAULT_MODEL_ALIAS) or DEFAULT_MODEL_ALIAS
+    mode_default_model = CODEX_TEST_MODEL_ALIAS if mode == "dev" else DEFAULT_MODEL_ALIAS
+    default_model = _str_env("NEWS_DEFAULT_MODEL", mode_default_model) or mode_default_model
     return selected_model or raw_model_name or default_model
 
 
@@ -834,7 +832,53 @@ def sync_assistant_context_latest_output(config: RuntimeConfig) -> None:
     _sync_cursorignore_latest_output(config.root_dir, config.output_dir, config.run_output_dir)
 
 
-def load_sources(path: Path | None = None) -> dict[str, dict[str, Any]]:
+RUN_MODE_SOURCE_TIERS = {
+    "dev": {"dev"},
+    "local-prod": {"dev", "core"},
+    "prod": {"dev", "core"},
+}
+
+
+def _coerce_source_text_list(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        items = [value]
+    elif isinstance(value, list):
+        items = value
+    else:
+        return []
+
+    clean_items: list[str] = []
+    seen: set[str] = set()
+    for item in items:
+        clean_item = str(item or "").strip()
+        if not clean_item or clean_item in seen:
+            continue
+        seen.add(clean_item)
+        clean_items.append(clean_item)
+    return clean_items
+
+
+def _normalize_source_tier(value: Any) -> str:
+    tier = str(value or "core").strip().lower().replace("_", "-")
+    return tier if tier in {"dev", "core", "peripheral"} else "core"
+
+
+def _source_enabled_for_run(raw_source: dict[str, Any], run_mode: str) -> bool:
+    language = str(raw_source.get("language") or "").strip().lower()
+    if language != "en":
+        return False
+    tier = _normalize_source_tier(raw_source.get("tier"))
+    return tier in RUN_MODE_SOURCE_TIERS.get(run_mode, RUN_MODE_SOURCE_TIERS["prod"])
+
+
+def load_sources(
+    path: Path | None = None,
+    *,
+    run_mode: str | None = None,
+    include_inactive: bool = False,
+) -> dict[str, dict[str, Any]]:
     sources_path = path or CONFIG_DIR / "sources.yaml"
     payload = _load_yaml_mapping(sources_path)
     raw_sources = payload.get("sources", [])
@@ -842,6 +886,7 @@ def load_sources(path: Path | None = None) -> dict[str, dict[str, Any]]:
         raise ValueError(f"{sources_path} must define sources as a list.")
 
     sources: dict[str, dict[str, Any]] = {}
+    selected_run_mode = run_mode or _configured_run_mode()
     for raw_source in raw_sources:
         if not isinstance(raw_source, dict):
             continue
@@ -849,11 +894,23 @@ def load_sources(path: Path | None = None) -> dict[str, dict[str, Any]]:
         url = str(raw_source.get("url") or "").strip()
         if not key or not url:
             continue
+        if not include_inactive and not _source_enabled_for_run(raw_source, selected_run_mode):
+            continue
+        raw_source_match_aliases = raw_source.get("source_match_aliases") or []
+        if isinstance(raw_source_match_aliases, str):
+            raw_source_match_aliases = [raw_source_match_aliases]
+        elif not isinstance(raw_source_match_aliases, list):
+            raw_source_match_aliases = []
+        tier = _normalize_source_tier(raw_source.get("tier"))
         sources[key] = {
             "name": str(raw_source.get("name") or key).strip(),
             "url": url,
             "homepage": str(raw_source.get("homepage") or "").strip() or None,
             "region": str(raw_source.get("region") or "").strip() or None,
+            "language": str(raw_source.get("language") or "").strip() or None,
+            "tier": tier,
+            "topics": _coerce_source_text_list(raw_source.get("topics")),
+            "nations": _coerce_source_text_list(raw_source.get("nations")),
             "frame": str(raw_source.get("frame") or raw_source.get("region") or "").strip() or None,
             "provider_type": str(raw_source.get("provider_type") or "article_feed").strip(),
             "intended_role": str(raw_source.get("intended_role") or "article enrichment").strip(),
@@ -870,6 +927,12 @@ def load_sources(path: Path | None = None) -> dict[str, dict[str, Any]]:
                 raw_source.get("can_enrich_coverage", raw_source.get("enrich_coverage")),
                 True,
             ),
+            "strict_source_match": _coerce_bool_value(raw_source.get("strict_source_match"), False),
+            "source_match_aliases": [
+                str(alias).strip()
+                for alias in raw_source_match_aliases
+                if str(alias).strip()
+            ],
             "notes": str(raw_source.get("notes") or "").strip() or None,
         }
     if not sources:
@@ -1085,7 +1148,6 @@ def load_recipients(path: Path | None = None) -> dict[str, dict[str, Any]]:
             continue
         recipients[email] = {
             "name": str(raw_recipient.get("name") or email).strip(),
-            "personal_prompt": _coerce_prompt_value(raw_recipient.get("personal_prompt")),
             "pause": _coerce_pause_value(raw_recipient.get("pause")),
         }
     return recipients
@@ -1160,7 +1222,7 @@ def load_runtime_config() -> RuntimeConfig:
         if addr.strip()
     ]
 
-    model_reference = _configured_model_reference()
+    model_reference = _configured_model_reference(run_mode)
     model_name = resolve_model_name(model_reference)
     model_profile = configured_model_profile(model_reference)
     model_base_url = _str_env("NEWS_MODEL_BASE_URL", "http://127.0.0.1:8080/v1")
@@ -1221,7 +1283,7 @@ def load_runtime_config() -> RuntimeConfig:
         unsubscribe_port=_int_env("NEWS_UNSUBSCRIBE_PORT", 8765),
         unsubscribe_secret=_str_env("NEWS_UNSUBSCRIBE_SECRET", ""),
         token_encoding_name=_str_env("NEWS_TOKEN_ENCODING", "o200k_base") or "o200k_base",
-        image_generation_enabled=_bool_env("NEWS_IMAGE_ENABLED", True),
+        image_generation_enabled=_bool_env("NEWS_IMAGE_ENABLED", not dev),
         image_generation_fail_on_error=_bool_env("NEWS_IMAGE_FAIL_ON_ERROR", False),
         image_width=_int_env("NEWS_IMAGE_WIDTH", 1024),
         image_height=_int_env("NEWS_IMAGE_HEIGHT", 1024),
@@ -1233,16 +1295,7 @@ def load_runtime_config() -> RuntimeConfig:
         max_stories_per_topic=configured_max_stories_per_topic(run_mode),
         max_articles_per_story=configured_max_articles_per_story(model_profile.key),
         story_cluster_similarity_threshold=configured_story_cluster_similarity_threshold(),
-        dev_source_limit=_int_env("NEWS_DEV_SOURCE_LIMIT", 3),
-        dev_num_topics=_int_env("NEWS_DEV_NUM_TOPICS", 3),
     )
-
-
-def _coerce_prompt_value(value: Any) -> str | None:
-    if value is None:
-        return None
-    prompt_text = str(value).strip()
-    return prompt_text or None
 
 
 def _coerce_pause_value(value: Any) -> bool:

@@ -256,7 +256,7 @@ class ConfigAndTopicSelectionTests(unittest.TestCase):
             {
                 "NEWS_MAX_STORIES_PER_TOPIC": "6",
                 "NEWS_MAX_ARTICLES_PER_STORY": "7",
-                "NEWS_STORY_CLUSTER_SIMILARITY_THRESHOLD": "0.31",
+                "NEWS_STORY_CLUSTER_SIMILARITY_THRESHOLD": "0.30",
             },
             clear=True,
         ):

@@ -22,23 +22,20 @@ The daily commands are intentionally plain:
 ```bash
 uv run news dev
 uv run news local-prod
-
-# how do I run local-prod with gemma-e2b-tiny, for example?
-NEWS_IMAGE_ENABLED=0 NEWS_MODEL=gemma-e2b-tiny uv run news local-prod
-
-
-uv run news
 uv run news prod
 ```
 
-`dev` is narrow, sends only to `NEWS_DEV_RECIPIENT`, and uses relaxed final
-guards so the render/image/email paths can be tested with a small source pool.
+`dev` sends only to `NEWS_DEV_RECIPIENT`, uses the 40-source English `dev`
+source tier, defaults to `gemma-e2b-tiny`, keeps image generation off, and
+records a dev URL log without updating shared production history.
 
-`local-prod` uses production source, topic, and cap scope, but still sends only
-to `NEWS_DEV_RECIPIENT`. It uses isolated URL history by default so a review run
-does not starve a later production run.
+`local-prod` uses the full runnable English source set (`dev` + `core` tiers),
+defaults to the normal large Gemma model with image generation on, but still
+sends only to `NEWS_DEV_RECIPIENT`. It uses isolated URL history by default so a
+review run does not starve a later production run.
 
-`prod` sends to configured active recipients and updates shared URL history.
+`prod` uses the same runnable English source set as `local-prod`, sends to
+configured active recipients, and updates shared URL history.
 
 Compatibility commands still work:
 
@@ -54,26 +51,29 @@ Other useful commands:
 ```bash
 uv run news model-server-command
 uv run news check-sources --only-failures
+uv run news source-languages --sources-yaml config/sources.yaml --json
 uv run news serve-unsubscribe
 ```
-
-Add `--dynamic-topics` to a run command to use the legacy top-of-funnel topic
-discovery path. The default is predefined topics from YAML.
 
 ## Configuration
 
 - `config/client.yaml` selects active predefined topic IDs in report order.
 - `config/topics.yaml` defines topic vocabulary and matching thresholds.
-- `config/sources.yaml` defines article feeds and dynamic-mode seed providers.
-- `config/recipients.yaml` defines recipients, paused recipients, and optional
-  per-recipient prompts.
+- `config/sources.yaml` is the single master source list. It includes working
+  feeds only, tagged by `language`, `tier`, optional `topics`, and optional
+  `nations`. Pipeline runs only select English `dev`/`core` sources;
+  `peripheral` and non-English sources are retained for later review but are not
+  runnable.
+- `config/recipients.yaml` defines recipients and paused recipients.
 
 Most runtime knobs are `NEWS_` environment variables. See `SETTINGS.md` for the
 full reference. Common overrides:
 
 ```bash
-NEWS_MODEL=qwen-9b-dense uv run news dev
+NEWS_MODEL=qwen-9b-dense uv run news local-prod
 NEWS_IMAGE_ENABLED=0 uv run news local-prod
+#local prod but tiny:
+NEWS_MODEL=gemma-e2b-tiny uv run news local-prod
 NEWS_LOCAL_PROD_USE_SHARED_HISTORY=1 uv run news local-prod
 ```
 
@@ -113,7 +113,7 @@ Each run writes to `output/daily_outputs/YYYY-MM-DD/`:
 - `news_report_*_raw.png`: raw text-free generated image.
 - `news_report_*_image_prompt.txt`: generated image prompt.
 - `news_report_*_image_stats.json`: image model, seed, timing, and paths.
-- `topics_*.json`: configured topics or dynamic discovery diagnostics.
+- `topics_*.json`: configured topic diagnostics.
 - `run_details_*.json` and `run_details_*.md`: backend audit trail.
 - `terminal_output_*.log`: captured terminal output.
 - `dev_used_urls.txt`, `local_prod_used_urls.txt`, or `used_urls.txt`: URL log.

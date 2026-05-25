@@ -13,7 +13,8 @@ Usage:
   uv run news dev
   uv run news local-prod
   uv run news prod
-  uv run news check-sources [--only-failures]
+  uv run news check-sources [--sources-yaml PATH] [--only-failures]
+  uv run news source-languages --sources-yaml PATH [--write-languages]
   uv run news model-server-command
   uv run news codex-model-server-command
   uv run news serve-unsubscribe
@@ -53,6 +54,9 @@ ACTION_ALIASES = {
     "check-sources": "check-sources",
     "source-check": "check-sources",
     "sources": "check-sources",
+    "source-languages": "source-languages",
+    "detect-source-languages": "source-languages",
+    "source-language": "source-languages",
 }
 
 
@@ -137,6 +141,10 @@ def main(argv: list[str] | None = None) -> int:
         from .source_checks import main as source_check_main
 
         return source_check_main(args)
+    if action == "source-languages":
+        from .source_checks import main as source_check_main
+
+        return source_check_main(["--detect-languages", *args])
 
     print(f"Unknown command: {command}", file=sys.stderr)
     print(USAGE, file=sys.stderr)

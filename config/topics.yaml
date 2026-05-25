@@ -3,68 +3,112 @@
 # The local LLM does not create these terms; it only summarizes articles selected
 # by this deterministic vocabulary.
 topics:
-  - id: iran_war
-    title: Iran War
-    rationale: Stories about direct US, Israeli, Iranian, or regional proxy conflict involving Iran.
+  - id: international_conflict
+    title: International Conflict
+    rationale: Stories about wars, armed conflicts, military escalation, ceasefires, cross-border attacks, and state or proxy violence involving countries or major armed groups.
+    required_context_terms:
+      - war
+      - conflict
+      - military
+      - troops
+      - armed forces
+      - strike
+      - strikes
+      - missile
+      - missiles
+      - drone
+      - drones
+      - airstrike
+      - bombing
+      - shelling
+      - invasion
+      - ceasefire
+      - peace talks
+      - retaliation
+      - attack
+      - attacks
+      - offensive
+      - defense ministry
+      - security forces
+      - militia
+      - militants
+      - proxy
+      - nuclear threat
+      - territorial dispute
+      - border clash
     keywords:
+      - international conflict
+      - armed conflict
+      - military escalation
+      - cross-border attack
+      - border clashes
+      - airstrikes
+      - missile attack
+      - drone attack
+      - ground offensive
+      - military operation
+      - ceasefire talks
+      - peace negotiations
+      - civilian casualties
+      - defense ministry
+      - security forces
+      - proxy militia
+      - regional escalation
       - iran israel
       - israel iran
       - us iran
-      - iran war
       - iran conflict
       - iranian retaliation
       - iranian missile attack
       - iranian drone attack
-      - iran nuclear
-      - iran sanctions
-      - iran oil
-      - tehran israel
-      - tehran washington
-      - israeli strike iran
-      - israeli airstrike iran
-      - israeli military iran
-      - idf iran
-      - irgc missile
-      - irgc commander
-      - khamenei israel
-      - khamenei trump
-      - netanyahu iran
-      - us military iran
-      - us strikes iran
-      - pentagon iran
-      - iran air defense
-      - iran ballistic missile
       - iran nuclear facility
-      - iran nuclear site
-      - fordow nuclear
-      - natanz nuclear
-      - isfahan nuclear
       - strait of hormuz
-      - persian gulf security
-      - gulf oil flows
-      - hormuz shipping
-      - hezbollah iran
-      - houthi iran
-      - iraq militia
-      - iran regional escalation
-      - iran ceasefire
+      - gaza war
+      - israel hamas
+      - israel gaza
+      - hamas ceasefire
+      - lebanon israel
+      - hezbollah israel
+      - houthi red sea
+      - yemen strikes
+      - russia ukraine
+      - ukraine war
+      - russian missile attack
+      - ukrainian drone strike
+      - nato eastern flank
+      - china taiwan
+      - taiwan strait
+      - south china sea
+      - north korea missile
+      - korean peninsula
+      - india pakistan
+      - kashmir border
+      - myanmar conflict
+      - sudan war
+      - congo fighting
+      - syria airstrike
     boost_phrases:
-      - iran israel war
+      - missile attack
+      - drone attack
+      - air defense
+      - cross-border strikes
+      - military escalation
+      - ceasefire talks
+      - peace negotiations
+      - civilian casualties
+      - regional war
+      - proxy attacks
+      - iran israel conflict
       - israel iran conflict
       - us strikes iran
       - israeli strikes iran
-      - iran missile attack
-      - iran drone attack
-      - iranian retaliation
-      - iran nuclear sites
-      - iranian nuclear facilities
       - strait of hormuz
-      - gulf oil flows
-      - middle east escalation
-      - us enters war
-      - pentagon deploys air defense
-      - irgc launches missiles
-      - proxy attacks on us forces
+      - gaza ceasefire
+      - russia ukraine war
+      - ukraine peace talks
+      - south china sea tensions
+      - taiwan strait tensions
+      - north korea missile launch
     frame_tags:
       - us
       - western
@@ -72,45 +116,52 @@ topics:
 
   - id: us_economy
     title: US Economy
-    rationale: Stories about US macro data, Federal Reserve policy, market moves, housing, consumers, commodities, and major US business conditions.
+    rationale: Stories about how the US economy affects American households, workers, consumers, borrowers, savers, and broad markets.
     required_context_terms:
       - united states economy
       - united states inflation
       - united states jobs
       - united states labor market
-      - united states stock market
-      - united states treasury
+      - united states consumers
+      - united states households
+      - united states workers
       - u.s. economy
       - u.s. inflation
       - u.s. jobs
       - u.s. labor
       - u.s. consumers
-      - u.s. business
-      - u.s. companies
-      - u.s. markets
-      - u.s. stocks
-      - u.s. equities
-      - u.s. bonds
-      - u.s. dollar
-      - u.s. treasury
+      - u.s. households
+      - u.s. workers
+      - u.s. labor market
+      - u.s. housing market
       - us economy
       - us inflation
       - us jobs
       - us labor
       - us consumers
-      - us business
-      - us companies
-      - us markets
-      - us stocks
-      - us equities
-      - us bonds
-      - us dollar
-      - us treasury
+      - us households
+      - us workers
+      - us labor market
+      - us housing market
       - american consumers
       - american households
       - american workers
-      - american businesses
       - american economy
+      - american labor market
+      - american housing market
+      - jobless claims
+      - nonfarm payrolls
+      - payrolls report
+      - labor market
+      - unemployment rate
+      - consumer spending
+      - retail sales
+      - consumer sentiment
+      - consumer confidence
+      - consumer price index
+      - producer price index
+      - personal consumption expenditures
+      - inflation expectations
       - federal reserve
       - fed
       - fomc
@@ -122,31 +173,18 @@ topics:
       - fed chair
       - fed officials
       - powell
-      - wall street
       - dow jones
-      - nasdaq
+      - nasdaq composite
       - s&p 500
       - russell 2000
+      - broad stock market
+      - market indices
+      - retirement savings
+      - 401(k)
       - treasury yield
       - treasury yields
-      - treasury market
-      - treasuries
-      - bond market
-      - bond yields
       - 10-year treasury
       - 30-year treasury
-      - dollar index
-      - jobless claims
-      - nonfarm payrolls
-      - private payrolls
-      - labor market
-      - consumer sentiment
-      - consumer confidence
-      - consumer spending
-      - retail sales
-      - consumer price index
-      - producer price index
-      - personal consumption expenditures
       - gross domestic product
       - gdp
       - ism manufacturing
@@ -156,20 +194,24 @@ topics:
       - mortgage rates
       - housing starts
       - home sales
-      - tariff impact
-      - tariff policy
-      - trade deficit
-      - chapter 11
-      - bankruptcy protection
-      - new york stock exchange
+      - home prices
+      - rent prices
+      - gas prices
+      - gasoline prices
+      - grocery prices
+      - household debt
+      - credit card debt
+      - personal taxes
+      - payroll taxes
+      - tax refunds
     keywords:
       - economic data
       - economic growth
       - growth forecast
-      - business activity
       - manufacturing activity
       - services activity
       - soft landing
+      - recession risk
       - jobs report
       - nonfarm payrolls
       - employment report
@@ -186,6 +228,8 @@ topics:
       - initial jobless claims
       - continuing claims
       - labor force participation
+      - worker pay
+      - household income
       - inflation report
       - cpi inflation
       - core cpi
@@ -194,6 +238,11 @@ topics:
       - consumer price index
       - producer price index
       - wholesale prices
+      - grocery prices
+      - rent prices
+      - gas prices
+      - gasoline prices
+      - energy bills
       - gdp growth
       - gross domestic product
       - durable goods orders
@@ -201,7 +250,6 @@ topics:
       - ism manufacturing
       - ism services
       - purchasing managers index
-      - recession risk
       - retail sales
       - consumer spending
       - consumer confidence
@@ -209,6 +257,12 @@ topics:
       - household spending
       - consumer debt
       - credit card debt
+      - household debt
+      - personal taxes
+      - payroll taxes
+      - tax refunds
+      - student loans
+      - borrowing costs
       - federal reserve
       - fed chair
       - fed minutes
@@ -223,23 +277,18 @@ topics:
       - interest rate
       - rate cut
       - rate hike
-      - borrowing costs
       - mortgage rate
       - mortgage applications
       - treasury yields
-      - treasury market
       - us treasury yields
       - 10-year treasury
       - 30-year treasury
       - yield curve
-      - bond yields
-      - us bond yields
-      - bond market
+      - retirement savings
+      - 401(k)
       - stock futures
-      - stock market
-      - us stocks
-      - us equities
-      - wall street
+      - broad stock market
+      - market indices
       - nasdaq composite
       - dow jones
       - s&p 500
@@ -256,38 +305,16 @@ topics:
       - housing inventory
       - homebuilder confidence
       - housing market
-      - oil prices
-      - gas prices
-      - gasoline prices
-      - crude oil
-      - gold prices
-      - commodity prices
-      - us dollar
-      - dollar index
-      - dollar weakens
-      - dollar strengthens
-      - tariff impact
-      - tariff policy
+      - consumer prices
+      - family budgets
+      - household budgets
+      - tariff costs
+      - tariffs on consumers
       - import prices
-      - export prices
-      - trade deficit
-      - corporate earnings
-      - quarterly results
-      - earnings outlook
-      - revenue forecast
-      - profit warning
       - job cuts
       - mass layoffs
-      - workforce reduction
-      - full-time workforce
-      - bankruptcy filing
-      - chapter 11
-      - merger deal
-      - acquisition deal
-      - m&a
-      - ipo
-      - initial public offering
-      - antitrust approval
+      - layoff plans
+      - unemployment benefits
     boost_phrases:
       - economic data
       - growth forecast
@@ -314,43 +341,247 @@ topics:
       - fed cuts rates
       - fed raises rates
       - us treasury yields
-      - treasury yields rise
-      - treasury yields fall
-      - bond yields rise
-      - bond yields fall
-      - stock market today
-      - us stocks rise
-      - us stocks fall
-      - us stocks end higher
-      - us stocks end lower
+      - broad stock market
+      - market indices
+      - retirement savings
       - stock futures rise
       - stock futures fall
-      - wall street closes higher
-      - wall street closes lower
       - mortgage rates
       - mortgage applications
       - existing home sales
       - new home sales
       - home sales
-      - oil prices
-      - oil prices rise
-      - oil prices fall
-      - oil prices ease
       - gas prices
-      - dollar index
-      - dollar weakens
-      - dollar strengthens
-      - major merger
-      - antitrust approval
-      - bankruptcy protection
-      - wall street closes
+      - gasoline prices
+      - grocery prices
+      - rent prices
+      - household budgets
+      - family budgets
+      - personal taxes
+      - payroll taxes
     frame_tags:
       - us
       - western
 
+  - id: international_business_news
+    title: International Business News
+    rationale: Stories about global company, market, finance, trade, earnings, deal, investment, and investor developments that matter to executives or markets more than household economic conditions.
+    required_context_terms:
+      - company
+      - companies
+      - corporate
+      - business
+      - businesses
+      - industry
+      - shares
+      - share price
+      - stock
+      - stocks
+      - stock market
+      - equities
+      - market
+      - markets
+      - investors
+      - investment
+      - valuation
+      - market value
+      - ipo
+      - initial public offering
+      - public listing
+      - merger
+      - acquisition
+      - m&a
+      - deal
+      - deals
+      - contract
+      - contracts
+      - earnings
+      - revenue
+      - sales
+      - profit
+      - profits
+      - quarterly results
+      - guidance
+      - forecast
+      - finance
+      - financial
+      - bank
+      - banking
+      - bond
+      - bonds
+      - currency
+      - currencies
+      - trade
+      - tariffs
+      - exports
+      - export controls
+      - supply chain
+      - shipping
+      - oil prices
+      - commodity
+      - commodities
+      - semiconductor company
+      - chipmaker
+      - ai investment
+      - ai infrastructure deal
+      - antitrust
+      - regulator
+      - regulatory approval
+      - startup
+      - venture capital
+      - private equity
+      - bankruptcy
+      - restructuring
+      - workforce reduction
+      - kospi
+      - nikkei
+      - ftse
+      - hang seng
+      - seoul shares
+      - european shares
+      - asian markets
+      - wall street
+    keywords:
+      - business news
+      - global business
+      - international business
+      - world business
+      - overseas markets
+      - global markets
+      - asian markets
+      - european shares
+      - emerging markets
+      - china business
+      - india business
+      - japan markets
+      - hong kong stocks
+      - south korea shares
+      - corporate strategy
+      - corporate deal
+      - company valuation
+      - valuation
+      - market value
+      - share price
+      - stock move
+      - stock jumps
+      - shares rise
+      - shares fall
+      - equity market
+      - seoul shares
+      - kospi
+      - nikkei
+      - hang seng
+      - ipo
+      - initial public offering
+      - public listing
+      - m&a
+      - merger deal
+      - acquisition deal
+      - buyout
+      - private equity
+      - venture capital
+      - startup funding
+      - corporate earnings
+      - quarterly results
+      - revenue forecast
+      - profit warning
+      - earnings outlook
+      - guidance
+      - government contract
+      - defense contract
+      - industrial policy
+      - antitrust review
+      - regulatory approval
+      - semiconductor company
+      - chipmaker
+      - ai investment
+      - ai infrastructure deal
+      - cloud computing contract
+      - electric vehicles
+      - battery maker
+      - aerospace business
+      - airline business
+      - defense company
+      - supply chain
+      - export controls
+      - trade dispute
+      - tariff impact
+      - shipping rates
+      - oil prices
+      - currency market
+      - bond market
+      - corporate restructuring
+      - workforce reduction
+      - bankruptcy filing
+      - chapter 11
+    boost_phrases:
+      - initial public offering
+      - public listing
+      - company valuation
+      - market value
+      - merger deal
+      - acquisition deal
+      - quarterly earnings
+      - revenue forecast
+      - profit warning
+      - government contract
+      - antitrust approval
+      - stock jumps
+      - shares fall
+      - seoul shares
+      - kospi closes
+      - venture capital
+      - private equity
+      - ai infrastructure
+      - export controls
+      - tariff impact
+      - oil prices
+    frame_tags:
+      - western
+      - non_western
+
   - id: us_politics
     title: US Politics
     rationale: Stories about US federal political power, elections, courts, Congress, and administration actions.
+    required_context_terms:
+      - united states
+      - u.s. government
+      - u.s. congress
+      - u.s. president
+      - united states congress
+      - white house
+      - washington dc
+      - washington d.c.
+      - trump
+      - biden
+      - u.s. senate
+      - united states senate
+      - congressional hearing
+      - congressional investigation
+      - house committee
+      - house republicans
+      - house democrats
+      - speaker johnson
+      - supreme court
+      - scotus
+      - u.s. supreme court
+      - u.s. federal judge
+      - u.s. federal government
+      - u.s. federal agency
+      - u.s. federal court
+      - justice department
+      - state department
+      - defense department
+      - homeland security
+      - secret service
+      - gop
+      - u.s. democratic party
+      - u.s. republican party
+      - u.s. presidential campaign
+      - u.s. midterm election
+      - u.s. primary election
+      - texas primary
+      - swing state
     keywords:
       - white house
       - trump administration

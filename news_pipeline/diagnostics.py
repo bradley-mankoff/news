@@ -89,6 +89,7 @@ class RunDiagnostics:
                 "rationale": topic.get("rationale"),
                 "topic_source": topic.get("topic_source"),
                 "fallback_provider_support": topic.get("fallback_provider_support", []),
+                "required_context_terms": topic.get("required_context_terms", []),
                 "keywords": topic.get("keywords", []),
                 "boost_phrases": topic.get("boost_phrases", []),
                 "max_articles_per_source": topic.get("max_articles_per_source"),
@@ -164,6 +165,8 @@ class RunDiagnostics:
         selected_item_count = 0
         fresh_article_count = 0
         problem_sources: list[str] = []
+        slow_sources: list[str] = []
+        timeout_sources: list[str] = []
 
         for source in self.source_runs:
             status = str(source.get("status") or "unknown")
@@ -177,10 +180,32 @@ class RunDiagnostics:
                     for reason, count in (source.get("rejected_counts") or {}).items()
                 }
             )
-            if status not in {"ok", "no_relevant_items"}:
+            if status not in {"ok", "no_relevant_items", "no_recent_items"}:
                 problem_sources.append(f"{source.get('source') or 'Unknown source'} ({status})")
+            elapsed_seconds = _safe_float(source.get("elapsed_seconds"))
+            slow_threshold = _safe_float(self.settings.get("slow_source_warning_seconds"))
+            if source.get("slow_source") or (
+                elapsed_seconds
+                and slow_threshold
+                and elapsed_seconds >= slow_threshold
+            ):
+                slow_sources.append(
+                    f"{source.get('source') or 'Unknown source'} ({_seconds_label(elapsed_seconds)})"
+                )
+            timeout_count = _safe_int(source.get("timeout_count"))
+            if not timeout_count:
+                timeout_count = sum(
+                    _safe_int(count)
+                    for status_label, count in (source.get("scrape_status_counts") or {}).items()
+                    if "timeout" in str(status_label)
+                )
+            if timeout_count:
+                timeout_sources.append(
+                    f"{source.get('source') or 'Unknown source'} ({timeout_count} timeout(s))"
+                )
 
         story_clustering = _last_event(self.events, "story_clustering")
+        story_topic_classification = _last_event(self.events, "story_topic_classification")
         coverage_deficit = _last_event(self.events, "story_coverage_deficit")
         coverage_deficits = coverage_deficit.get("deficits") or {}
 
@@ -203,6 +228,8 @@ class RunDiagnostics:
             "topic_count": len(self.topics),
             "source_status_counts": dict(source_status_counts),
             "problem_sources": problem_sources,
+            "slow_sources": slow_sources,
+            "timeout_sources": timeout_sources,
             "feed_item_count": feed_item_count,
             "selected_item_count": selected_item_count,
             "fresh_article_count": fresh_article_count,
@@ -210,6 +237,10 @@ class RunDiagnostics:
             "story_count": _safe_int(story_clustering.get("story_count")),
             "story_included_count": _safe_int(story_clustering.get("included_count")),
             "story_dropped_count": _safe_int(story_clustering.get("dropped_count")),
+            "story_topic_selected_count": _safe_int(
+                story_topic_classification.get("selected_story_topic_count")
+            ),
+            "story_topic_selected_by_topic": story_topic_classification.get("selected_by_topic") or {},
             "coverage_deficit_topic_count": len(coverage_deficits),
             "coverage_deficit_total": sum(_safe_int(value) for value in coverage_deficits.values()),
             "article_budget_candidate_count": _safe_int(self.article_budget.get("candidate_count")),
@@ -253,6 +284,7 @@ class RunDiagnostics:
             f"- Story groups retained: {stats['story_count']}",
             f"- Article targets retained after story grouping: {stats['story_included_count']}",
             f"- Article targets dropped before budget: {stats['story_dropped_count']}",
+            f"- Story-topic matches selected: {stats['story_topic_selected_count']}",
             f"- Article summaries generated: {stats['article_summary_count']}",
             f"- Reports written: {stats['report_count']}",
         ]
@@ -269,6 +301,14 @@ class RunDiagnostics:
             lines.append("- Problem sources: " + ", ".join(stats["problem_sources"]))
         else:
             lines.append("- Problem sources: none")
+        if stats["timeout_sources"]:
+            lines.append("- Sources with scrape timeouts: " + ", ".join(stats["timeout_sources"]))
+        else:
+            lines.append("- Sources with scrape timeouts: none")
+        if stats["slow_sources"]:
+            lines.append("- Slow sources: " + ", ".join(stats["slow_sources"]))
+        else:
+            lines.append("- Slow sources: none")
         if rejection_counts:
             lines.append(
                 "- Rejections: "
@@ -338,6 +378,9 @@ class RunDiagnostics:
             f"- Topic mode: {self.settings.get('topic_mode') or 'predefined'}",
             f"- Top topics requested: {self.settings.get('num_top_topics')}",
             f"- Recent window hours: {self.settings.get('recent_window_hours')}",
+            f"- Article download timeout: {self.settings.get('article_download_timeout_seconds')}s",
+            f"- Article scrape deadline: {self.settings.get('article_scrape_total_timeout_seconds')}s",
+            f"- Slow source warning threshold: {self.settings.get('slow_source_warning_seconds')}s",
             f"- Topic relevance min score: {self.settings.get('topic_relevance_min_score')}",
             f"- Model: {self.settings.get('model')} ({self.settings.get('model_profile')})",
             f"- Model backend: {self.settings.get('model_backend') or 'mlx-lm'}",
@@ -392,6 +435,7 @@ class RunDiagnostics:
                     f"- Seeded by: {', '.join(topic.get('seed_providers') or []) or 'N/A'}",
                     f"- Validated by: {', '.join(topic.get('validation_providers') or []) or 'N/A'}",
                     f"- Frame tags: {', '.join(topic.get('frame_tags') or []) or 'N/A'}",
+                    f"- Required context terms: {', '.join(topic.get('required_context_terms') or [])}",
                     f"- Keywords: {', '.join(topic.get('keywords') or [])}",
                     f"- Boost phrases: {', '.join(topic.get('boost_phrases') or [])}",
                     "",
@@ -403,12 +447,16 @@ class RunDiagnostics:
                 [
                     f"### {source.get('source')}",
                     "",
+                    f"- Source index: {source.get('source_index') or 'N/A'}",
                     f"- Status: {source.get('status')}",
+                    f"- Elapsed: {_seconds_label(source.get('elapsed_seconds'))}",
                     f"- Feed items parsed: {source.get('feed_item_count', 0)}",
                     f"- Candidate items selected: {source.get('selected_item_count', 0)}",
                     f"- Article targets after dedupe/history: {source.get('fresh_article_count', 0)}",
                 ]
             )
+            if source.get("timeout_count"):
+                lines.append(f"- Scrape timeouts: {source.get('timeout_count')}")
             by_topic = source.get("selected_by_topic") or {}
             if by_topic:
                 lines.append("- Selected by topic:")
@@ -425,6 +473,15 @@ class RunDiagnostics:
                 lines.append(
                     f"- Post-scrape relevance rejections: {len(post_scrape_rejections)}"
                 )
+            feed_rejections = source.get("feed_rejections") or []
+            if feed_rejections:
+                lines.append(f"- Source-match rejections: {len(feed_rejections)}")
+                for rejection in feed_rejections[:10]:
+                    labels = ", ".join(rejection.get("observed_source_labels") or []) or "N/A"
+                    lines.append(
+                        f"  - {rejection.get('title') or 'Untitled feed item'} "
+                        f"(observed: {labels})"
+                    )
             scrape_status_counts = source.get("scrape_status_counts") or {}
             if scrape_status_counts:
                 lines.append(
@@ -435,6 +492,105 @@ class RunDiagnostics:
                     )
                 )
             lines.append("")
+        story_clustering = _last_event(self.events, "story_clustering")
+        if story_clustering:
+            lines.extend(["## Story Clustering", ""])
+            lines.extend(
+                [
+                    f"- Method: {story_clustering.get('clustering_method') or 'N/A'}",
+                    f"- Candidate articles: {story_clustering.get('candidate_count', 0)}",
+                    f"- Retained articles: {story_clustering.get('included_count', 0)}",
+                    f"- Dropped articles: {story_clustering.get('dropped_count', 0)}",
+                    f"- Story groups: {story_clustering.get('story_count', 0)}",
+                    f"- Similarity threshold: {story_clustering.get('similarity_threshold')}",
+                    f"- Component overlap suppression threshold: {story_clustering.get('component_overlap_suppress_threshold')}",
+                    "",
+                ]
+            )
+            for story in (story_clustering.get("stories") or [])[:40]:
+                lines.extend(
+                    [
+                        f"### {story.get('story_title') or story.get('title') or story.get('story_key')}",
+                        "",
+                        f"- Story key: {story.get('story_key')}",
+                        f"- Articles: {story.get('article_count')} ({story.get('source_count')} source(s))",
+                        f"- Strength: {story.get('story_strength_score')} | connectedness: {story.get('connectedness_score')} | avg similarity: {story.get('average_similarity')}",
+                        "- Member articles:",
+                    ]
+                )
+                for article in story.get("articles") or []:
+                    lines.append(
+                        f"  - {article.get('source')}: {article.get('title')} [{article.get('article_id')}]"
+                    )
+                lines.append("")
+            pair_debug = story_clustering.get("pair_debug") or []
+            if pair_debug:
+                lines.extend(["### Strongest Article Links", ""])
+                for pair in pair_debug[:25]:
+                    lines.append(
+                        f"- {pair.get('similarity')}: "
+                        f"{pair.get('left_source')} / {pair.get('left_title')} <-> "
+                        f"{pair.get('right_source')} / {pair.get('right_title')}"
+                    )
+                lines.append("")
+            dropped_articles = story_clustering.get("dropped_articles") or []
+            if dropped_articles:
+                lines.extend(["### Dropped Article Candidates", ""])
+                for article in dropped_articles[:40]:
+                    lines.append(
+                        f"- {article.get('source')}: {article.get('title')} "
+                        f"[{article.get('article_id')}] ({article.get('reason')})"
+                    )
+                lines.append("")
+
+        story_topic_classification = _last_event(self.events, "story_topic_classification")
+        if story_topic_classification:
+            lines.extend(["## Story Topic Fit", ""])
+            lines.extend(
+                [
+                    f"- Story drafts scored: {story_topic_classification.get('story_count', 0)}",
+                    f"- Selected story-topic matches: {story_topic_classification.get('selected_story_topic_count', 0)}",
+                    f"- Max stories per topic: {story_topic_classification.get('max_stories_per_topic')}",
+                    f"- Minimum fit score: {story_topic_classification.get('min_score')}",
+                    "",
+                ]
+            )
+            for topic_title, details in (story_topic_classification.get("topics") or {}).items():
+                lines.extend(
+                    [
+                        f"### {topic_title}",
+                        "",
+                        f"- Candidates above threshold: {details.get('candidate_count', 0)}",
+                        f"- Owned candidates: {details.get('owned_candidate_count', 0)}",
+                        f"- Selected: {details.get('selected_count', 0)}",
+                        f"- Diversity min distance: {details.get('diversity_min_distance')}",
+                    ]
+                )
+                selected = details.get("selected") or []
+                if selected:
+                    lines.append("- Selected stories:")
+                    for story in selected:
+                        distance_text = ""
+                        if story.get("min_distance_to_selected") is not None:
+                            distance_text = f", min distance {story.get('min_distance_to_selected')}"
+                        lines.append(
+                            f"  - score {story.get('topic_fit_score')}: "
+                            f"{story.get('story_title')} "
+                            f"({story.get('article_count')} article(s), {story.get('source_count')} source(s)"
+                            f"{distance_text})"
+                        )
+                rejected = details.get("rejected") or []
+                if rejected:
+                    lines.append("- Best rejected stories:")
+                    for story in rejected[:10]:
+                        owner_text = ""
+                        if story.get("owned_topic_title"):
+                            owner_text = f"; owner={story.get('owned_topic_title')}"
+                        lines.append(
+                            f"  - score {story.get('topic_fit_score')}: "
+                            f"{story.get('story_title')} ({story.get('reason')}{owner_text})"
+                        )
+                lines.append("")
         lines.extend(
             [
                 "## Outputs",
@@ -492,6 +648,21 @@ def _safe_int(value: Any) -> int:
         return 0
 
 
+def _safe_float(value: Any) -> float:
+    try:
+        return float(value or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _seconds_label(value: Any) -> str:
+    seconds = _safe_float(value)
+    if seconds >= 60:
+        minutes, remainder = divmod(seconds, 60)
+        return f"{int(minutes)}m {remainder:.1f}s"
+    return f"{seconds:.1f}s"
+
+
 def _last_event(events: list[dict[str, Any]], label: str) -> dict[str, Any]:
     for event in reversed(events):
         if event.get("label") == label:
@@ -505,6 +676,8 @@ def _model_call_bucket(task_name: str) -> str:
         return "final_synthesis"
     if normalized.startswith("analysis for "):
         return "article_summary"
+    if normalized.startswith("story synthesis for "):
+        return "story_synthesis"
     clean = normalized.replace(" ", "_")
     return clean or "unknown"
 
