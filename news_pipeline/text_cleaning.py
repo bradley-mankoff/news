@@ -231,7 +231,7 @@ def _is_yonhap_article(*, source: str | None, url: str | None) -> bool:
         return True
 
     try:
-        hostname = (urlparse(str(url or "")).hostname or "").lower().lstrip("www.")
+        hostname = (urlparse(str(url or "")).hostname or "").lower().removeprefix("www.")
     except Exception:
         hostname = ""
     return hostname == YONHAP_DOMAIN_SUFFIX or hostname.endswith("." + YONHAP_DOMAIN_SUFFIX)
