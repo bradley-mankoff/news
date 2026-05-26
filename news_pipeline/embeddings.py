@@ -139,6 +139,10 @@ def embed_topics(topics: list[dict]) -> dict[str, "np.ndarray"]:  # type: ignore
     if not topics:
         return {}
     topic_keys = [str(t.get("key") or t.get("id") or "") for t in topics]
+    if len(set(topic_keys)) != len(topic_keys):
+        seen = set()
+        dupes = [k for k in topic_keys if k in seen or seen.add(k)]  # type: ignore[func-returns-value]
+        logger.warning("Duplicate topic keys detected, embeddings will be overwritten: %s", dupes)
     topic_texts = [
         str(t.get("description") or t.get("rationale") or t.get("title") or "")
         for t in topics

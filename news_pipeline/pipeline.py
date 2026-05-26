@@ -6591,6 +6591,7 @@ def _run_pipeline() -> None:
             },
         )
     except Exception as _emb_error:
+        logger.exception("Embedding classification failed; falling back to keyword-assigned topic keys.")
         progress_tracker.warning(
             f"Embedding classification failed ({_emb_error}); "
             "falling back to keyword-assigned topic keys."

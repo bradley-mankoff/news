@@ -239,18 +239,20 @@ def validate_cited_story_text(
             continue
         raw_source_ids = _marker_source_ids(segment)
         source_ids: list[str] = []
+        sentence_unknown_ids: list[str] = []
         for source_id in raw_source_ids:
             if source_id in valid_source_ids:
                 if source_id not in source_ids:
                     source_ids.append(source_id)
             else:
+                sentence_unknown_ids.append(source_id)
                 unknown_source_ids.append(source_id)
         cited_sentences.append(
             {
                 "text": sentence_text,
                 "source_ids": source_ids,
                 "raw_source_ids": raw_source_ids,
-                "repaired": bool(unknown_source_ids and not source_ids),
+                "repaired": bool(sentence_unknown_ids and not source_ids),
             }
         )
 
@@ -261,6 +263,7 @@ def validate_cited_story_text(
         "diagnostics": {
             "sentence_count": len(cited_sentences),
             "temporary_marker_count": len(TEMPORARY_CITATION_RE.findall(marked_text or "")),
+            "malformed_marker_count": (marked_text or "").count("[[") - len(TEMPORARY_CITATION_RE.findall(marked_text or "")),
             "unknown_source_ids": sorted(set(unknown_source_ids)),
             "uncited_sentence_count": sum(1 for s in cited_sentences if not s["source_ids"]),
             "source_count": len(citation_sources),
