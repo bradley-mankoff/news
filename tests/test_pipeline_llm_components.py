@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 from tests.pipeline_component_fixtures import (
     ARTICLE_SUMMARIES,
+    ARTICLE_SUMMARIES_CLIMATE_PAIR,
     ARTICLE_TARGETS,
     CHIP_ARTICLE_TEXT,
     NOW_UTC,
@@ -30,8 +31,9 @@ from news_pipeline.pipeline import (
     generate_report_title,
     llm_cluster_top_topics,
     managed_model_server,
+    run_article_summary_pass,
+    run_per_story_synthesis,
 )
-from news_pipeline.article_summarization import run_article_summary_pass
 
 
 def fake_scrape(url: str) -> str:
@@ -104,9 +106,24 @@ class PipelineLLMComponentTests(unittest.TestCase):
         self.assertIn("Climate Resilience", summaries[0])
         self.assertNoModelFallbacks()
 
-    @unittest.skip("run_final_synthesis_pass removed in pipeline disaggregation; per-story synthesis replaces it")
-    def test_final_synthesis_component(self) -> None:
-        pass
+    def test_story_synthesis_component(self) -> None:
+        story_records = [
+            {
+                "topic_title": "Climate Resilience",
+                "story_title": "Cities act on flood defenses and heat preparedness",
+                "cluster_article_ids": [
+                    "Fixture Wire-climate_resilience-1",
+                    "Second Source-climate_resilience-1",
+                ],
+            }
+        ]
+        with redirect_stdout(StringIO()):
+            synthesis = run_per_story_synthesis(ARTICLE_SUMMARIES_CLIMATE_PAIR, story_records, TOPICS[:1])
+
+        self.assertIsInstance(synthesis, str)
+        self.assertGreater(len(synthesis.split()), 20)
+        self.assertIn("climate", synthesis.lower())
+        self.assertNoModelFallbacks()
 
     def test_title_generation_component(self) -> None:
         with redirect_stdout(StringIO()):
@@ -172,7 +189,20 @@ class PipelineLLMComponentTests(unittest.TestCase):
                     with redirect_stdout(StringIO()):
                         summaries = run_article_summary_pass(budgeted, TOPICS)
 
-        synthesis = ""
+        story_records = [
+            {
+                "topic_title": article.get("topic_title") or "News",
+                "story_title": article.get("title") or "News update",
+                "cluster_article_ids": [article.get("article_id")],
+            }
+            for article in budgeted
+        ]
+        with redirect_stdout(StringIO()):
+            synthesis = run_per_story_synthesis(summaries, story_records, TOPICS, min_articles_per_story=1)
+
+        self.assertIsInstance(synthesis, str)
+        self.assertGreater(len(synthesis), 0, "Expected non-empty synthesis from per-story drafting")
+
         report_body = build_report_body("Fixture Daily Brief", synthesis, summaries, TOPICS, None)
 
         self.assertEqual(len(summaries), 2)

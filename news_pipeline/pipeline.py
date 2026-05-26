@@ -997,14 +997,16 @@ def _article_summarization_runtime() -> article_summarization_stage.ArticleSumma
     )
 
 
-def _story_drafting_runtime() -> story_drafting_stage.StoryDraftingRuntime:
+def _story_drafting_runtime(
+    *, min_articles_per_story: int | None = None
+) -> story_drafting_stage.StoryDraftingRuntime:
     return story_drafting_stage.StoryDraftingRuntime(
         article_summary_concurrency=ARTICLE_SUMMARY_CONCURRENCY,
         final_synthesis_max_tokens=FINAL_SYNTHESIS_MAX_TOKENS,
         model_reference=MODEL_REFERENCE,
         model_name=MODEL_NAME,
         model_backend=MODEL_BACKEND,
-        min_articles_per_story=MIN_ARTICLES_PER_STORY,
+        min_articles_per_story=min_articles_per_story if min_articles_per_story is not None else MIN_ARTICLES_PER_STORY,
         build_chat_model=build_chat_model,
         invoke_with_retries=invoke_with_retries,
         estimate_message_token_count=estimate_message_token_count,
@@ -1035,6 +1037,33 @@ def _story_topic_runtime() -> story_topic_assignment_stage.StoryTopicRuntime:
         is_low_confidence_report_entry=is_low_confidence_report_entry,
         report_reference_key=_report_reference_key,
     )
+
+
+def run_article_summary_pass(article_targets: list[dict], topics: list[dict]) -> list[str]:
+    return article_summarization_stage.run_article_summary_pass(
+        article_targets, topics, _article_summarization_runtime()
+    )
+
+
+def run_per_story_synthesis(
+    article_summaries: list[str],
+    story_records: list[dict],
+    topics: list[dict],
+    *,
+    min_articles_per_story: int | None = None,
+) -> str:
+    story_drafts, _ = story_drafting_stage.draft_story_clusters_from_article_summaries(
+        story_records, article_summaries, _story_drafting_runtime(min_articles_per_story=min_articles_per_story)
+    )
+    if not story_drafts:
+        return ""
+    selected_matches, _ = story_topic_assignment_stage.classify_story_drafts_for_topics(
+        story_drafts, topics, _story_topic_runtime()
+    )
+    final_synthesis, _, _ = story_topic_assignment_stage.build_precomputed_story_synthesis(
+        selected_matches, topics, article_summaries, _story_topic_runtime()
+    )
+    return clean_synthesis_for_publication(final_synthesis, relaxed=RELAXED_FINAL_SYNTHESIS_GUARDS)
 
 
 @contextmanager
