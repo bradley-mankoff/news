@@ -2,7 +2,7 @@
 #
 # Topic IDs must exist in config/topics.yaml. The order here is the report order.
 topic_ids:
-  - international_conflict
+  - global_crises_conflict
   - us_economy
-  - international_business_news
+  - global_business_finance
   - us_politics

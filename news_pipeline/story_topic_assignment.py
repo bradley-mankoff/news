@@ -8,6 +8,7 @@ from collections import Counter
 from dataclasses import dataclass
 from typing import Any, Callable
 
+from . import citations as citations_stage
 from .story_clustering import cosine_similarity, story_similarity_terms
 from .story_drafting import article_summary_lookup_by_id, report_summary_text
 from .topic_matching import (
@@ -442,6 +443,8 @@ def build_precomputed_story_synthesis(
     required_topic_titles: list[str] = []
     required_story_blocks_by_topic: dict[str, list[str]] = {}
     attempts: list[dict[str, Any]] = []
+    citation_registry = citations_stage.CitationRegistry()
+    citation_diagnostics: list[dict[str, Any]] = []
     for topic in topics:
         topic_key = str(topic.get("key") or "")
         topic_title = str(topic.get("title") or topic_key or "Unknown topic")
@@ -451,6 +454,23 @@ def build_precomputed_story_synthesis(
             paragraph = str(story.get("paragraph") or story.get("story_text") or "").strip()
             if not paragraph:
                 continue
+            if story.get("cited_sentences") and story.get("citation_sources"):
+                cited_paragraph = citations_stage.render_cited_story_text(
+                    list(story.get("cited_sentences") or []),
+                    list(story.get("citation_sources") or []),
+                    citation_registry,
+                )
+                if cited_paragraph:
+                    paragraph = cited_paragraph
+                citation_diagnostics.append(
+                    {
+                        "topic": topic_title,
+                        "story": story.get("story_title"),
+                        "source_count": len(story.get("citation_sources") or []),
+                        "sentence_count": len(story.get("cited_sentences") or []),
+                        "diagnostics": story.get("citation_diagnostics") or {},
+                    }
+                )
             paragraphs.append(paragraph)
             required_story_blocks_by_topic.setdefault(topic_title, []).append(
                 str(story.get("story_title") or "Story update")
@@ -474,6 +494,7 @@ def build_precomputed_story_synthesis(
             )
 
     final_synthesis = "\n\n".join(sections)
+    citation_sources = citation_registry.sources()
     token_stats = {
         "synthesis_method": "precomputed_story_drafts_post_topic_classification",
         "total_reports": len(reference_reports),
@@ -498,11 +519,14 @@ def build_precomputed_story_synthesis(
         "explicit_story_mode": True,
         "primary_dataset": _story_topic_primary_dataset(selected_story_topic_matches, topics),
         "included_report_keys": [runtime.report_reference_key(entry) for entry in reference_reports],
+        "citation_sources": citation_sources,
+        "citation_source_count": len(citation_sources),
     }
     debug = {
         "attempts": attempts,
         "relaxed_guards": runtime.relaxed_final_synthesis_guards,
         "dev_fallback_used": False,
         "synthesis_method": "precomputed_story_drafts_post_topic_classification",
+        "citation_diagnostics": citation_diagnostics,
     }
     return final_synthesis, token_stats, debug

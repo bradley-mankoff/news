@@ -30,10 +30,15 @@ Run commands from the repo root:
 
 Source selection is now entirely driven by `config/sources.yaml`:
 
-- `dev` uses English `tier: dev` sources only.
-- `local-prod` and `prod` use English `tier: dev` plus `tier: core` sources.
-- `tier: peripheral` and non-English sources stay in the master list for later
-  review but are not selected by any run mode.
+- `dev` uses `tier: dev` sources that are English or explicitly
+  translation-enabled.
+- `local-prod` and `prod` use `tier: dev` plus `tier: core` sources that are
+  English or translation-enabled.
+- Non-English sources are translation-enabled by their `language` field unless
+  `requires_translation: false` is set. Translation runs as a bundled step using
+  `google/translategemma-4b-it` before the main summarization model is loaded.
+- `tier: peripheral` sources stay in the master list for later review but are
+  not selected by any run mode.
 
 Codex model safety:
 

@@ -59,12 +59,16 @@ ASSISTANT_CONTEXT_CORE_PATTERNS = (
     "**/.DS_Store",
 )
 RUN_OUTPUT_TIMESTAMP_RE = re.compile(r"\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}")
+SOURCE_FIELD_RE = re.compile(r"^    ([A-Za-z_][A-Za-z0-9_-]*):")
 DEFAULT_MODEL_ALIAS = "gemma-26b-moe"
 CODEX_TEST_MODEL_ALIAS = "gemma-e2b-tiny"
 CODEX_TEST_MODEL_NAME = "deadbydawn101/gemma-4-E2B-Heretic-Uncensored-mlx-4bit"
+DEFAULT_TRANSLATION_MODEL = "google/translategemma-4b-it"
 MODEL_ALIASES = {
     "qwen-9b-dense": "TheCluster/Qwen3.5-9B-Heretic-MLX-mxfp4",
     "gemma-26b-moe": "mlx-community/gemma-4-26B-A4B-it-heretic-4bit",
+    f"https://huggingface.co/{DEFAULT_TRANSLATION_MODEL}": DEFAULT_TRANSLATION_MODEL,
+    f"https://hf.co/{DEFAULT_TRANSLATION_MODEL}": DEFAULT_TRANSLATION_MODEL,
     CODEX_TEST_MODEL_ALIAS: CODEX_TEST_MODEL_NAME,
     f"https://huggingface.co/{CODEX_TEST_MODEL_NAME}": CODEX_TEST_MODEL_NAME,
     f"https://hf.co/{CODEX_TEST_MODEL_NAME}": CODEX_TEST_MODEL_NAME,
@@ -95,6 +99,9 @@ class NewsSource:
     can_validate_topics: bool = False
     can_enrich_coverage: bool = True
     strict_source_match: bool = False
+    requires_translation: bool = False
+    requires_translation_explicit: bool = False
+    translation_source_language: str | None = None
     source_match_aliases: tuple[str, ...] = ()
     notes: str | None = None
 
@@ -164,6 +171,12 @@ class RuntimeConfig:
     model_base_url: str
     model_backend: str
     model_server_command: str
+    translation_model_reference: str
+    translation_model_name: str
+    translation_model_base_url: str
+    translation_model_backend: str
+    translation_model_server_command: str
+    translation_target_language: str
     recent_window_hours: int
     max_articles_per_source: int
     num_top_topics: int
@@ -192,8 +205,10 @@ class RuntimeConfig:
     image_model_id: str
     image_base_model: str
     per_source_topic_article_cap: int
+    min_articles_per_story: int
     max_stories_per_topic: int
     max_articles_per_story: int
+    topic_embedding_similarity_threshold: float
     story_cluster_similarity_threshold: float
 
 
@@ -396,6 +411,12 @@ def configured_max_stories_per_topic(run_mode: str | None = None) -> int:
     return max(1, _int_env("NEWS_MAX_STORIES_PER_TOPIC", default))
 
 
+def configured_min_articles_per_story(run_mode: str | None = None) -> int:
+    mode = run_mode or _configured_run_mode()
+    default = 2 if mode == "dev" else 4
+    return max(2, _int_env("NEWS_MIN_ARTICLES_PER_STORY", default))
+
+
 def configured_max_articles_per_story(model_profile_key: str | None = None) -> int:
     profile_key = model_profile_key or _configured_model_profile_key(_configured_model_reference())
     if profile_key == "tiny_codex":
@@ -407,10 +428,21 @@ def configured_max_articles_per_story(model_profile_key: str | None = None) -> i
     return max(2, _int_env("NEWS_MAX_ARTICLES_PER_STORY", default))
 
 
-def configured_story_cluster_similarity_threshold() -> float:
+def configured_topic_embedding_similarity_threshold(run_mode: str | None = None) -> float:
+    mode = run_mode or _configured_run_mode()
+    default = 0.18 if mode == "dev" else 0.20
     return min(
         1.0,
-        max(0.0, _float_env("NEWS_STORY_CLUSTER_SIMILARITY_THRESHOLD", 0.30)),
+        max(0.0, _float_env("NEWS_TOPIC_EMBEDDING_THRESHOLD", default)),
+    )
+
+
+def configured_story_cluster_similarity_threshold(run_mode: str | None = None) -> float:
+    mode = run_mode or _configured_run_mode()
+    default = 0.26 if mode == "dev" else 0.30
+    return min(
+        1.0,
+        max(0.0, _float_env("NEWS_STORY_CLUSTER_SIMILARITY_THRESHOLD", default)),
     )
 
 
@@ -476,6 +508,20 @@ def _configured_model_backend(model_reference: str) -> str:
         normalized = explicit_backend.strip().lower().replace("_", "-")
         if normalized not in {"mlx-lm", "mlx-vlm"}:
             raise ValueError("NEWS_MODEL_BACKEND must be one of: mlx-lm, mlx-vlm")
+        return normalized
+    return infer_model_backend(model_reference)
+
+
+def _configured_translation_model_reference() -> str:
+    return _str_env("NEWS_TRANSLATION_MODEL", DEFAULT_TRANSLATION_MODEL) or DEFAULT_TRANSLATION_MODEL
+
+
+def _configured_translation_model_backend(model_reference: str) -> str:
+    explicit_backend = _str_env("NEWS_TRANSLATION_MODEL_BACKEND", "")
+    if explicit_backend:
+        normalized = explicit_backend.strip().lower().replace("_", "-")
+        if normalized not in {"mlx-lm", "mlx-vlm"}:
+            raise ValueError("NEWS_TRANSLATION_MODEL_BACKEND must be one of: mlx-lm, mlx-vlm")
         return normalized
     return infer_model_backend(model_reference)
 
@@ -865,9 +911,17 @@ def _normalize_source_tier(value: Any) -> str:
     return tier if tier in {"dev", "core", "peripheral"} else "core"
 
 
+def _source_requires_translation(raw_source: dict[str, Any]) -> bool:
+    explicit = raw_source.get("requires_translation", raw_source.get("translate"))
+    language = str(raw_source.get("language") or "").strip().lower()
+    if explicit is not None:
+        return _coerce_bool_value(explicit, False)
+    return bool(language and language != "en")
+
+
 def _source_enabled_for_run(raw_source: dict[str, Any], run_mode: str) -> bool:
     language = str(raw_source.get("language") or "").strip().lower()
-    if language != "en":
+    if language != "en" and not _source_requires_translation(raw_source):
         return False
     tier = _normalize_source_tier(raw_source.get("tier"))
     return tier in RUN_MODE_SOURCE_TIERS.get(run_mode, RUN_MODE_SOURCE_TIERS["prod"])
@@ -902,12 +956,20 @@ def load_sources(
         elif not isinstance(raw_source_match_aliases, list):
             raw_source_match_aliases = []
         tier = _normalize_source_tier(raw_source.get("tier"))
+        language = str(raw_source.get("language") or "").strip().lower()
+        requires_translation_explicit = (
+            raw_source.get("requires_translation", raw_source.get("translate")) is not None
+        )
+        requires_translation = _source_requires_translation(raw_source)
+        translation_source_language = str(
+            raw_source.get("translation_source_language") or language
+        ).strip().lower()
         sources[key] = {
             "name": str(raw_source.get("name") or key).strip(),
             "url": url,
             "homepage": str(raw_source.get("homepage") or "").strip() or None,
             "region": str(raw_source.get("region") or "").strip() or None,
-            "language": str(raw_source.get("language") or "").strip() or None,
+            "language": language or None,
             "tier": tier,
             "topics": _coerce_source_text_list(raw_source.get("topics")),
             "nations": _coerce_source_text_list(raw_source.get("nations")),
@@ -928,6 +990,9 @@ def load_sources(
                 True,
             ),
             "strict_source_match": _coerce_bool_value(raw_source.get("strict_source_match"), False),
+            "requires_translation": requires_translation,
+            "requires_translation_explicit": requires_translation_explicit,
+            "translation_source_language": translation_source_language or None,
             "source_match_aliases": [
                 str(alias).strip()
                 for alias in raw_source_match_aliases
@@ -938,6 +1003,113 @@ def load_sources(
     if not sources:
         raise ValueError(f"No valid source entries found in {sources_path}.")
     return sources
+
+
+def _source_block_ranges(lines: list[str]) -> list[tuple[int, int]]:
+    ranges: list[tuple[int, int]] = []
+    in_sources = False
+    start: int | None = None
+    for index, line in enumerate(lines):
+        if not in_sources:
+            if line.startswith("sources:"):
+                in_sources = True
+            continue
+        if line.startswith("  - "):
+            if start is not None:
+                ranges.append((start, index))
+            start = index
+            continue
+        if start is not None and line.strip() and not line.startswith((" ", "#")):
+            ranges.append((start, index))
+            start = None
+            break
+    if start is not None:
+        ranges.append((start, len(lines)))
+    return ranges
+
+
+def _source_block_key(lines: list[str], start: int, end: int) -> str:
+    try:
+        payload = yaml.safe_load("sources:\n" + "".join(lines[start:end])) or {}
+    except yaml.YAMLError:
+        return ""
+    records = payload.get("sources", []) if isinstance(payload, dict) else []
+    if not records or not isinstance(records[0], dict):
+        return ""
+    return str(records[0].get("key") or records[0].get("name") or "").strip()
+
+
+def _direct_source_field_line(lines: list[str], start: int, end: int, field: str) -> int | None:
+    for index in range(start, end):
+        match = SOURCE_FIELD_RE.match(lines[index])
+        if match and match.group(1) == field:
+            return index
+    return None
+
+
+def _preferred_translation_insert_line(lines: list[str], start: int, end: int) -> int:
+    for field in ("language", "url", "region", "name"):
+        field_line = _direct_source_field_line(lines, start, end, field)
+        if field_line is not None:
+            return field_line + 1
+    return start + 1
+
+
+def write_source_translation_flags(
+    path: Path,
+    source_languages: dict[str, str | None],
+) -> int:
+    updates = {
+        str(key).strip(): str(language or "").strip().lower()
+        for key, language in source_languages.items()
+        if str(key).strip()
+    }
+    if not updates:
+        return 0
+
+    lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
+    newline = "\n"
+    for line in lines:
+        if line.endswith("\r\n"):
+            newline = "\r\n"
+            break
+
+    edits: list[tuple[str, int, str]] = []
+    for start, end in _source_block_ranges(lines):
+        key = _source_block_key(lines, start, end)
+        if key not in updates:
+            continue
+        language = updates[key]
+        requires_line = _direct_source_field_line(lines, start, end, "requires_translation")
+        if requires_line is not None:
+            if lines[requires_line].strip().lower() != "requires_translation: true":
+                edits.append(("replace", requires_line, f"    requires_translation: true{newline}"))
+        else:
+            edits.append((
+                "insert",
+                _preferred_translation_insert_line(lines, start, end),
+                f"    requires_translation: true{newline}",
+            ))
+
+        if language:
+            language_line = _direct_source_field_line(lines, start, end, "translation_source_language")
+            if language_line is None:
+                insert_at = requires_line + 1 if requires_line is not None else _preferred_translation_insert_line(lines, start, end)
+                edits.append((
+                    "insert",
+                    insert_at,
+                    f"    translation_source_language: {language}{newline}",
+                ))
+
+    for action, index, line in reversed(edits):
+        if action == "replace":
+            lines[index] = line
+        else:
+            lines.insert(index, line)
+
+    if edits:
+        path.write_text("".join(lines), encoding="utf-8")
+    return len(edits)
 
 
 def load_top_funnel_providers(path: Path | None = None) -> dict[str, dict[str, Any]]:
@@ -1227,6 +1399,11 @@ def load_runtime_config() -> RuntimeConfig:
     model_profile = configured_model_profile(model_reference)
     model_base_url = _str_env("NEWS_MODEL_BASE_URL", "http://127.0.0.1:8080/v1")
     model_backend = _configured_model_backend(model_reference)
+    translation_model_reference = _configured_translation_model_reference()
+    translation_model_name = resolve_model_name(translation_model_reference)
+    translation_model_profile = configured_model_profile(translation_model_reference)
+    translation_model_base_url = _str_env("NEWS_TRANSLATION_MODEL_BASE_URL", model_base_url)
+    translation_model_backend = _configured_translation_model_backend(translation_model_reference)
     return RuntimeConfig(
         root_dir=ROOT_DIR,
         sources_path=ROOT_DIR / _str_env("NEWS_SOURCES_YAML", "config/sources.yaml"),
@@ -1261,6 +1438,16 @@ def load_runtime_config() -> RuntimeConfig:
             model_profile,
             backend=model_backend,
         ),
+        translation_model_reference=translation_model_reference,
+        translation_model_name=translation_model_name,
+        translation_model_base_url=translation_model_base_url,
+        translation_model_backend=translation_model_backend,
+        translation_model_server_command=build_model_server_command(
+            translation_model_name,
+            translation_model_profile,
+            backend=translation_model_backend,
+        ),
+        translation_target_language=_str_env("NEWS_TRANSLATION_TARGET_LANGUAGE", "en") or "en",
         recent_window_hours=_int_env("NEWS_RECENT_WINDOW_HOURS", 24),
         max_articles_per_source=_int_env("NEWS_MAX_ARTICLES_PER_SOURCE", 6),
         num_top_topics=_int_env("NEWS_NUM_TOP_TOPICS", 4),
@@ -1292,9 +1479,11 @@ def load_runtime_config() -> RuntimeConfig:
         image_model_id=_str_env("NEWS_IMAGE_MODEL_ID", "Runpod/FLUX.2-klein-4B-mflux-4bit"),
         image_base_model=_str_env("NEWS_IMAGE_BASE_MODEL", "flux2-klein-4b"),
         per_source_topic_article_cap=_int_env("NEWS_PER_SOURCE_TOPIC_ARTICLE_CAP", 1),
+        min_articles_per_story=configured_min_articles_per_story(run_mode),
         max_stories_per_topic=configured_max_stories_per_topic(run_mode),
         max_articles_per_story=configured_max_articles_per_story(model_profile.key),
-        story_cluster_similarity_threshold=configured_story_cluster_similarity_threshold(),
+        topic_embedding_similarity_threshold=configured_topic_embedding_similarity_threshold(run_mode),
+        story_cluster_similarity_threshold=configured_story_cluster_similarity_threshold(run_mode),
     )
 
 

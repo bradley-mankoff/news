@@ -59,7 +59,9 @@ under ``output/daily_outputs/<date>/``.
 """
 
 import importlib.util
+import gc
 import json
+import logging
 import math
 import re
 import os
@@ -102,9 +104,12 @@ from .config import (
     load_sources,
     sync_assistant_context_latest_output,
     update_recipient_pause_setting,
+    write_source_translation_flags,
 )
 from .diagnostics import RunDiagnostics
 from . import article_summarization as article_summarization_stage
+from . import citations as citations_stage
+from . import embeddings as embeddings_stage
 from . import story_clustering as story_clustering_stage
 from . import story_drafting as story_drafting_stage
 from . import story_topic_assignment as story_topic_assignment_stage
@@ -119,6 +124,9 @@ try:
     import tiktoken
 except ImportError:
     tiktoken = None
+
+
+logger = logging.getLogger(__name__)
 
 
 def _int_env(name: str, default: int) -> int:
@@ -158,6 +166,12 @@ MODEL_PROFILE_KEY = MODEL_PROFILE.key
 MODEL_BASE_URL = CONFIG.model_base_url
 MODEL_BACKEND = CONFIG.model_backend
 MODEL_SERVER_COMMAND = CONFIG.model_server_command
+TRANSLATION_MODEL_REFERENCE = CONFIG.translation_model_reference
+TRANSLATION_MODEL_NAME = CONFIG.translation_model_name
+TRANSLATION_MODEL_BASE_URL = CONFIG.translation_model_base_url
+TRANSLATION_MODEL_BACKEND = CONFIG.translation_model_backend
+TRANSLATION_MODEL_SERVER_COMMAND = CONFIG.translation_model_server_command
+TRANSLATION_TARGET_LANGUAGE = CONFIG.translation_target_language
 BRADLEY_ONLY_RECIPIENT = CONFIG.bradley_only_recipient
 USER_AGENT = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -234,10 +248,7 @@ def _bounded_env_float(name: str, default: float, *, lower: float = 0.0, upper: 
     return min(upper, max(lower, value))
 
 
-try:
-    MIN_ARTICLES_PER_STORY = max(2, int(os.getenv("NEWS_MIN_ARTICLES_PER_STORY", "4")))
-except ValueError:
-    MIN_ARTICLES_PER_STORY = 2
+MIN_ARTICLES_PER_STORY = max(2, CONFIG.min_articles_per_story)
 try:
     TOPIC_RELEVANCE_MIN_SCORE = max(1, int(os.getenv("NEWS_TOPIC_RELEVANCE_MIN_SCORE", "8")))
 except ValueError:
@@ -258,6 +269,14 @@ STORY_CLUSTER_SIMILARITY_THRESHOLD = min(
 TOPIC_STORY_DIVERSITY_MIN_DISTANCE = _bounded_env_float(
     "NEWS_TOPIC_STORY_DIVERSITY_MIN_DISTANCE",
     0.50,
+)
+TOPIC_EMBEDDING_SIMILARITY_THRESHOLD = min(
+    1.0,
+    max(0.0, CONFIG.topic_embedding_similarity_threshold),
+)
+STORY_EMBEDDING_DEDUP_THRESHOLD = _bounded_env_float(
+    "NEWS_STORY_DEDUP_THRESHOLD",
+    0.85,
 )
 IMAGE_GENERATION_ENABLED = CONFIG.image_generation_enabled
 IMAGE_GENERATION_FAIL_ON_ERROR = CONFIG.image_generation_fail_on_error
@@ -280,6 +299,12 @@ MODEL_CALL_STATS: dict[str, Any] = {
 MODEL_CALL_STATS_LOCK = Lock()
 RUN_ACTIVITY_SNAPSHOTS: list[dict[str, Any]] = []
 ACTIVE_RUN_DIAGNOSTICS: RunDiagnostics | None = None
+MANAGED_MODEL_SERVER_ACTIVE = False
+MANAGED_MODEL_SERVER_READY = False
+MANAGED_MODEL_SERVER_EXTERNAL = False
+MANAGED_MODEL_SERVER_PROCESS: subprocess.Popen | None = None
+MANAGED_MODEL_SERVER_LOG_FILE: TextIO | None = None
+TRANSLATION_MODEL_RESOURCES: tuple[Any, Any, Any] | None = None
 
 
 def _read_url_file(path: str) -> set[str]:
@@ -796,6 +821,7 @@ class ProgressTracker:
         "setup",
         "topics",
         "sources",
+        "translation",
         "stories",
         "summaries",
         "report",
@@ -806,6 +832,7 @@ class ProgressTracker:
         "setup": "setup",
         "topics": "topics",
         "sources": "sources",
+        "translation": "translation",
         "stories": "stories",
         "summaries": "summaries",
         "report": "report",
@@ -1215,6 +1242,60 @@ def _google_news_query_target(url: str) -> str:
     return ""
 
 
+def _decode_google_news_article_path(url: str) -> str:
+    """Decode modern Google News RSS article URLs (CBMi... base64 path encoding).
+
+    Two encoding variants are handled:
+    - URL directly encoded in the proto payload (older modern format)
+    - AU_yqL secondary token (current AP/Reuters format) — resolved via Google's
+      batchexecute API using the googlenewsdecoder package.
+
+    HTTP redirects no longer work for these URLs; the path must be decoded.
+    """
+    try:
+        article_id = urlparse(url).path.rstrip("/").split("/")[-1]
+        if not article_id:
+            return ""
+
+        decoded_bytes = base64.urlsafe_b64decode(article_id + "==")
+        decoded_str = decoded_bytes.decode("latin1")
+
+        # Strip known proto header/footer bytes
+        prefix = b"\x08\x13\x22".decode("latin1")
+        if decoded_str.startswith(prefix):
+            decoded_str = decoded_str[len(prefix):]
+        suffix = b"\xd2\x01\x00".decode("latin1")
+        if decoded_str.endswith(suffix):
+            decoded_str = decoded_str[: -len(suffix)]
+
+        # Extract the first length-prefixed string field
+        bytes_array = bytearray(decoded_str, "latin1")
+        if not bytes_array:
+            return ""
+        length = bytes_array[0]
+        candidate = decoded_str[2 : length + 1] if length >= 0x80 else decoded_str[1 : length + 1]
+
+        # Variant 1: URL is directly embedded
+        if candidate.startswith(("http://", "https://")) and not _is_google_news_url(candidate):
+            return candidate
+
+        # Variant 2: AU_yqL secondary token — resolve via batchexecute API
+        if candidate.startswith("AU_yqL"):
+            try:
+                from googlenewsdecoder import gnewsdecoder
+                result = gnewsdecoder(url)
+                if result.get("status"):
+                    resolved = result.get("decoded_url", "")
+                    if resolved and not _is_google_news_url(resolved):
+                        return resolved
+            except Exception:
+                pass
+
+    except Exception:
+        pass
+    return ""
+
+
 def _resolve_google_news_url_details(url: str) -> dict[str, str]:
     """Follow Google News redirect links without treating Google pages as articles."""
     original_url = str(url or "").strip()
@@ -1237,6 +1318,16 @@ def _resolve_google_news_url_details(url: str) -> dict[str, str]:
             "original_url": original_url,
             "resolved_url": query_target,
             "resolution_status": "google_news_resolved_query",
+        }
+
+    # Modern Google News RSS links encode the article URL in the base64 path
+    # rather than using HTTP redirects. Decode it directly.
+    decoded_target = _decode_google_news_article_path(original_url)
+    if decoded_target:
+        return {
+            "original_url": original_url,
+            "resolved_url": decoded_target,
+            "resolution_status": "google_news_resolved_decode",
         }
 
     headers = {
@@ -1421,39 +1512,345 @@ def _resolve_and_scrape_feed_article(
         "scrape_seconds": scrape_seconds,
     }
 
-def _translate_if_needed(text: str, title: str = "") -> str:
-    """Use the local LLM to translate non-English article text."""
+def _text_looks_non_english(text: str, title: str = "") -> bool:
     sample = (title + " " + text)[:300].strip()
     if not sample:
-        return text
+        return False
     ascii_letters = sum(1 for c in sample if c.isascii() and c.isalpha())
     total_letters = sum(1 for c in sample if c.isalpha())
-    if total_letters == 0 or ascii_letters / total_letters > 0.7:
+    return bool(total_letters and ascii_letters / total_letters <= 0.7)
+
+
+def _normalize_translation_language(value: str | None) -> str:
+    return str(value or "").strip().replace("_", "-").lower()
+
+
+def _infer_script_translation_language(text: str, title: str = "") -> str:
+    sample = (title + " " + text)[:1000]
+    if re.search(r"[\u0400-\u04ff]", sample):
+        return "ru"
+    if re.search(r"[\u0600-\u06ff]", sample):
+        return "fa"
+    if re.search(r"[\u0900-\u097f]", sample):
+        return "hi"
+    if re.search(r"[\u3040-\u30ff\u3400-\u9fff]", sample):
+        return "ja"
+    return ""
+
+
+def _article_translation_decision(
+    source_name: str,
+    *,
+    title: str,
+    text: str,
+) -> dict[str, Any]:
+    source_config = SOURCE_FEEDS.get(source_name) or {}
+    source_language = _normalize_translation_language(source_config.get("language"))
+    translation_source_language = _normalize_translation_language(
+        source_config.get("translation_source_language") or source_language
+    )
+    source_requires_translation = bool(source_config.get("requires_translation"))
+
+    if source_requires_translation and translation_source_language and translation_source_language != "en":
+        return {
+            "needed": True,
+            "reason": "source_requires_translation",
+            "source_language": translation_source_language,
+            "retag_source": not bool(source_config.get("requires_translation_explicit")),
+        }
+
+    if _text_looks_non_english(text, title):
+        inferred_language = (
+            translation_source_language
+            if translation_source_language and translation_source_language != "en"
+            else _infer_script_translation_language(text, title)
+        )
+        return {
+            "needed": bool(inferred_language),
+            "reason": "detected_non_english_text",
+            "source_language": inferred_language or None,
+            "retag_source": True,
+        }
+
+    return {
+        "needed": False,
+        "reason": "looks_english",
+        "source_language": translation_source_language or None,
+    }
+
+
+def _with_translation_metadata(
+    record: dict[str, Any],
+    *,
+    source_name: str,
+    title: str,
+    text: str,
+) -> dict[str, Any]:
+    decision = _article_translation_decision(source_name, title=title, text=text)
+    status = "pending" if decision.get("needed") else "not_needed"
+    return {
+        **record,
+        "translation_needed": bool(decision.get("needed")),
+        "translation_status": status,
+        "translation_reason": decision.get("reason"),
+        "translation_source_language": decision.get("source_language"),
+        "translation_target_language": TRANSLATION_TARGET_LANGUAGE,
+        "translation_model": TRANSLATION_MODEL_NAME,
+        "translation_retag_source": bool(decision.get("retag_source")),
+    }
+
+
+def _translation_response_content(payload: dict[str, Any]) -> str:
+    choices = payload.get("choices") if isinstance(payload, dict) else None
+    if not choices:
+        return ""
+    message = choices[0].get("message") if isinstance(choices[0], dict) else None
+    if not isinstance(message, dict):
+        return ""
+    content = message.get("content")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for item in content:
+            if isinstance(item, dict):
+                value = item.get("text") or item.get("content")
+                if value:
+                    parts.append(str(value))
+            elif item:
+                parts.append(str(item))
+        return "\n".join(parts)
+    return str(content or "")
+
+
+def _translation_messages(text: str, source_language: str) -> list[dict[str, Any]]:
+    return [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "source_lang_code": source_language,
+                    "target_lang_code": TRANSLATION_TARGET_LANGUAGE,
+                    "text": text[:5000],
+                }
+            ],
+        }
+    ]
+
+
+def _translation_payload(text: str, source_language: str) -> dict[str, Any]:
+    return {
+        "model": TRANSLATION_MODEL_NAME,
+        "messages": _translation_messages(text, source_language),
+        "max_tokens": TRANSLATION_MAX_TOKENS,
+        "temperature": 0,
+        "stream": False,
+    }
+
+
+def _format_translation_prompt(processor: Any, text: str, source_language: str) -> str:
+    messages = _translation_messages(text, source_language)
+    try:
+        prompt = processor.apply_chat_template(
+            messages,
+            add_generation_prompt=True,
+            tokenize=False,
+        )
+    except TypeError:
+        prompt = processor.apply_chat_template(
+            messages,
+            add_generation_prompt=True,
+        )
+    return str(prompt)
+
+
+def _load_translation_model_resources() -> tuple[Any, Any, Any]:
+    global TRANSLATION_MODEL_RESOURCES
+    ensure_codex_safe_model_reference(TRANSLATION_MODEL_REFERENCE)
+    if TRANSLATION_MODEL_RESOURCES is not None:
+        return TRANSLATION_MODEL_RESOURCES
+    if TRANSLATION_MODEL_BACKEND != "mlx-vlm":
+        raise RuntimeError(
+            "TranslateGemma must use the mlx-vlm backend for direct structured prompting. "
+            f"Configured backend: {TRANSLATION_MODEL_BACKEND}"
+        )
+
+    try:
+        from mlx_vlm import generate as mlx_vlm_generate
+        from mlx_vlm import load as mlx_vlm_load
+    except Exception as error:
+        raise RuntimeError(f"Could not import mlx-vlm for translation: {error}") from error
+
+    progress_tracker.step("translation", "Loading translation model.")
+    progress_tracker.detail(f"Translation model: {TRANSLATION_MODEL_REFERENCE} -> {TRANSLATION_MODEL_NAME}")
+    model, processor = mlx_vlm_load(TRANSLATION_MODEL_NAME)
+    TRANSLATION_MODEL_RESOURCES = (model, processor, mlx_vlm_generate)
+    return TRANSLATION_MODEL_RESOURCES
+
+
+def _unload_translation_model_resources() -> None:
+    global TRANSLATION_MODEL_RESOURCES
+    if TRANSLATION_MODEL_RESOURCES is None:
+        return
+    TRANSLATION_MODEL_RESOURCES = None
+    gc.collect()
+    try:
+        import mlx.core as mx
+
+        mx.clear_cache()
+    except Exception:
+        pass
+
+
+def _generate_translation_text(
+    text: str,
+    source_language: str,
+    *,
+    max_tokens: int | None = None,
+) -> str:
+    model, processor, generate_fn = _load_translation_model_resources()
+    prompt = _format_translation_prompt(processor, text, source_language)
+    result = generate_fn(
+        model,
+        processor,
+        prompt,
+        max_tokens=max_tokens or TRANSLATION_MAX_TOKENS,
+        temperature=0,
+        verbose=False,
+        skip_special_tokens=True,
+    )
+    return strip_model_artifacts(str(getattr(result, "text", result))).strip()
+
+
+def _translate_text_with_translation_model(text: str, source_language: str, title: str) -> str:
+    source_language = _normalize_translation_language(source_language)
+    if not text.strip() or not source_language:
         return text
 
-    progress_tracker.warning(f"Translating {title[:56]}")
+    with MODEL_CALL_STATS_LOCK:
+        calls = MODEL_CALL_STATS.setdefault("calls", {})
+        calls["translation"] = int(calls.get("translation", 0)) + 1
+
+    last_error: Exception | None = None
+    for attempt in range(1, MODEL_RETRY_ATTEMPTS + 1):
+        try:
+            translated = _generate_translation_text(text, source_language)
+            return translated if translated else text
+        except Exception as error:
+            last_error = error
+            if attempt >= MODEL_RETRY_ATTEMPTS:
+                break
+            delay = MODEL_RETRY_BASE_DELAY_SECONDS * attempt
+            progress_tracker.retry(
+                "translation",
+                attempt,
+                MODEL_RETRY_ATTEMPTS,
+                delay,
+                error,
+            )
+            time.sleep(delay)
+
+    with MODEL_CALL_STATS_LOCK:
+        MODEL_CALL_STATS["fallbacks"] = int(MODEL_CALL_STATS.get("fallbacks", 0)) + 1
+        failures = MODEL_CALL_STATS.setdefault("failures", {})
+        failures["translation"] = str(last_error or "unknown translation error")
+    progress_tracker.warning(f"Translation failed; using original text: {title[:56]}")
+    return text
+
+
+def translate_article_candidates(
+    articles: list[dict],
+    diagnostics: RunDiagnostics | None = None,
+) -> list[dict]:
+    translation_targets = [
+        article
+        for article in articles
+        if article.get("translation_needed") and article.get("translation_source_language")
+    ]
+    skipped_unknown_language = [
+        article
+        for article in articles
+        if article.get("translation_needed") and not article.get("translation_source_language")
+    ]
+    if skipped_unknown_language:
+        progress_tracker.warning(
+            f"Skipping {len(skipped_unknown_language)} translation candidate(s) with unknown source language."
+        )
+
+    if not translation_targets:
+        if diagnostics is not None:
+            diagnostics.event(
+                "translation",
+                candidate_count=len(articles),
+                translated_count=0,
+                skipped_unknown_language=len(skipped_unknown_language),
+            )
+        return articles
+
+    progress_tracker.step(
+        "translation",
+        f"Translating {len(translation_targets)} article candidate(s).",
+        log_detail=(
+            f"Translation model: {TRANSLATION_MODEL_REFERENCE} -> {TRANSLATION_MODEL_NAME}; "
+            f"target language: {TRANSLATION_TARGET_LANGUAGE}"
+        ),
+    )
+
+    translated_by_id: dict[int, dict[str, Any]] = {}
+    retag_sources: dict[str, str | None] = {}
     try:
-        llm = build_chat_model(
-            max_tokens=TRANSLATION_MAX_TOKENS,
-            task="translation",
+        for index, article in enumerate(translation_targets, start=1):
+            title = str(article.get("title") or "")
+            source_language = str(article.get("translation_source_language") or "")
+            progress_tracker.detail(
+                f"  [{index}/{len(translation_targets)}] Translating {title[:80] or article.get('url')}"
+            )
+            translated_text = _translate_text_with_translation_model(
+                str(article.get("text") or ""),
+                source_language,
+                title,
+            )
+            translated_article = {
+                **article,
+                "translation_original_text_preview": str(article.get("text") or "")[:300],
+                "text": translated_text,
+                "translation_status": "translated" if translated_text != article.get("text") else "unchanged",
+            }
+            translated_by_id[id(article)] = translated_article
+            if article.get("translation_retag_source"):
+                retag_sources[str(article.get("source") or "")] = source_language
+    finally:
+        _unload_translation_model_resources()
+
+    if retag_sources:
+        try:
+            written = write_source_translation_flags(CONFIG.sources_path, retag_sources)
+            if written:
+                progress_tracker.detail(
+                    f"Retagged {len(retag_sources)} source(s) in {_display_config_path(CONFIG.sources_path)} "
+                    "as requiring translation."
+                )
+        except Exception as error:
+            progress_tracker.warning(f"Could not retag translation sources: {error}")
+
+    translated_articles = [
+        translated_by_id.get(id(article), article)
+        for article in articles
+    ]
+    if diagnostics is not None:
+        diagnostics.event(
+            "translation",
+            candidate_count=len(articles),
+            translated_count=len(translated_by_id),
+            skipped_unknown_language=len(skipped_unknown_language),
+            retagged_sources=sorted(retag_sources),
+            model=TRANSLATION_MODEL_REFERENCE,
+            model_name=TRANSLATION_MODEL_NAME,
+            target_language=TRANSLATION_TARGET_LANGUAGE,
         )
-        response = invoke_with_retries(
-            llm,
-            [
-                SystemMessage(content=(
-                    "Translate the following article text into English. "
-                    "Output ONLY the translated text, nothing else. "
-                    "Preserve paragraph structure."
-                )),
-                HumanMessage(content=text[:5000]),
-            ],
-            task_name="translation",
-            fallback_content=text,
-        )
-        translated = strip_model_artifacts(response.content)
-        return translated if translated else text
-    except Exception:
-        return text
+    return translated_articles
+
 
 def _extract_sentences(text: str, limit: int = 5) -> List[str]:
     clean_text = re.sub(r"\s+", " ", (text or "")).strip()
@@ -2954,12 +3351,16 @@ def get_direct_source_article_context(source_name: str) -> dict:
             scrape_attempts.append(attempt)
             continue
 
+        if attempt["feed_fallback_used"]:
+            logger.debug("No real body scraped for %s (status: %s) — dropping", selected_url, scrape_status)
+            scrape_attempts.append(attempt)
+            continue
+
         article_text = str(scrape_result.get("text") or "").strip()
         if not article_text:
             scrape_attempts.append(attempt)
             continue
 
-        article_text = _translate_if_needed(article_text, item.get("title", ""))
         clean_article_text = _clean_article_text(
             article_text,
             source=source_name,
@@ -2971,22 +3372,27 @@ def get_direct_source_article_context(source_name: str) -> dict:
             continue
 
         summary_text = truncate_text_to_token_limit(clean_article_text, ARTICLE_TEXT_TOKEN_LIMIT)
-        article_record = {
-            **item,
-            "url": selected_url,
-            "original_rss_url": original_rss_url,
-            "resolved_url": selected_url,
-            "resolution_status": scrape_result.get("resolution_status"),
-            "scrape_status": scrape_status,
-            "scrape_seconds": scrape_result.get("scrape_seconds"),
-            "feed_fallback_used": bool(scrape_result.get("feed_fallback_used")),
-            "feed_source": item.get("source", ""),
-            "title_source_suffix": _feed_title_source_suffix(str(item.get("title") or "")),
-            "text": summary_text,
-            "title": item.get("title", ""),
-            "pub_date": item.get("pub_date", ""),
-            "description": item.get("description", ""),
-        }
+        article_record = _with_translation_metadata(
+            {
+                **item,
+                "url": selected_url,
+                "original_rss_url": original_rss_url,
+                "resolved_url": selected_url,
+                "resolution_status": scrape_result.get("resolution_status"),
+                "scrape_status": scrape_status,
+                "scrape_seconds": scrape_result.get("scrape_seconds"),
+                "feed_fallback_used": bool(scrape_result.get("feed_fallback_used")),
+                "feed_source": item.get("source", ""),
+                "title_source_suffix": _feed_title_source_suffix(str(item.get("title") or "")),
+                "text": summary_text,
+                "title": item.get("title", ""),
+                "pub_date": item.get("pub_date", ""),
+                "description": item.get("description", ""),
+            },
+            source_name=source_name,
+            title=str(item.get("title") or ""),
+            text=summary_text,
+        )
         articles.append(article_record)
         selected_items.append(
             {
@@ -3110,6 +3516,13 @@ def gather_article_candidates_for_source(
                 "title_source_suffix": article.get("title_source_suffix", ""),
                 "description": article.get("description", ""),
                 "text": article.get("text", ""),
+                "translation_needed": article.get("translation_needed", False),
+                "translation_status": article.get("translation_status"),
+                "translation_reason": article.get("translation_reason"),
+                "translation_source_language": article.get("translation_source_language"),
+                "translation_target_language": article.get("translation_target_language"),
+                "translation_model": article.get("translation_model"),
+                "translation_retag_source": article.get("translation_retag_source", False),
                 "topic_key": "",
                 "topic_title": "",
                 "relevance_score": 0,
@@ -3128,6 +3541,8 @@ def gather_article_candidates_for_source(
             "feed_source": article.get("feed_source", ""),
             "title_source_suffix": article.get("title_source_suffix", ""),
             "scrape_status": article.get("scrape_status"),
+            "translation_needed": article.get("translation_needed", False),
+            "translation_status": article.get("translation_status"),
         }
         for article in article_targets
     ]
@@ -3221,12 +3636,16 @@ def get_direct_source_context(source_name: str, topics: List[dict]) -> dict | No
             scrape_attempts.append(attempt)
             continue
 
+        if attempt["feed_fallback_used"]:
+            logger.debug("No real body scraped for %s (status: %s) — dropping", selected_url, scrape_status)
+            scrape_attempts.append(attempt)
+            continue
+
         article_text = str(scrape_result.get("text") or "").strip()
         if not article_text:
             scrape_attempts.append(attempt)
             continue
 
-        article_text = _translate_if_needed(article_text, item.get("title", ""))
         clean_article_text = _clean_article_text(
             article_text,
             source=source_name,
@@ -3260,23 +3679,28 @@ def get_direct_source_context(source_name: str, topics: List[dict]) -> dict | No
                 }
             )
             section_candidates[topic_key].append(
-                {
-                    **item,
-                    "url": selected_url,
-                    "original_rss_url": original_rss_url,
-                    "resolved_url": selected_url,
-                    "resolution_status": scrape_result.get("resolution_status"),
-                    "scrape_status": scrape_status,
-                    "scrape_seconds": scrape_result.get("scrape_seconds"),
-                    "feed_fallback_used": bool(scrape_result.get("feed_fallback_used")),
-                    "text": summary_text,
-                    "title": item.get("title", ""),
-                    "pub_date": item.get("pub_date", ""),
-                    "description": item.get("description", ""),
-                    "topic_key": topic_key,
-                    "topic_title": topic.get("title"),
-                    "relevance_score": final_relevance_score,
-                }
+                _with_translation_metadata(
+                    {
+                        **item,
+                        "url": selected_url,
+                        "original_rss_url": original_rss_url,
+                        "resolved_url": selected_url,
+                        "resolution_status": scrape_result.get("resolution_status"),
+                        "scrape_status": scrape_status,
+                        "scrape_seconds": scrape_result.get("scrape_seconds"),
+                        "feed_fallback_used": bool(scrape_result.get("feed_fallback_used")),
+                        "text": summary_text,
+                        "title": item.get("title", ""),
+                        "pub_date": item.get("pub_date", ""),
+                        "description": item.get("description", ""),
+                        "topic_key": topic_key,
+                        "topic_title": topic.get("title"),
+                        "relevance_score": final_relevance_score,
+                    },
+                    source_name=source_name,
+                    title=str(item.get("title") or ""),
+                    text=summary_text,
+                )
             )
         scrape_attempts.append(attempt)
 
@@ -3400,6 +3824,13 @@ def gather_article_targets_for_source(
                 "feed_fallback_used": article.get("feed_fallback_used"),
                 "description": article.get("description", ""),
                 "text": article.get("text", ""),
+                "translation_needed": article.get("translation_needed", False),
+                "translation_status": article.get("translation_status"),
+                "translation_reason": article.get("translation_reason"),
+                "translation_source_language": article.get("translation_source_language"),
+                "translation_target_language": article.get("translation_target_language"),
+                "translation_model": article.get("translation_model"),
+                "translation_retag_source": article.get("translation_retag_source", False),
                 "topic_key": topic_key,
                 "topic_title": article.get("topic_title"),
                 "relevance_score": article.get("relevance_score", 0),
@@ -3416,6 +3847,8 @@ def gather_article_targets_for_source(
                 "topic_title": article.get("topic_title"),
                 "relevance_score": article.get("relevance_score", 0),
                 "scrape_status": article.get("scrape_status"),
+                "translation_needed": article.get("translation_needed", False),
+                "translation_status": article.get("translation_status"),
             }
         for article in article_targets
     ]
@@ -3525,32 +3958,37 @@ def build_top_funnel_article_targets_for_coverage_gaps(
             if not article_text:
                 continue
 
-            article_text = _translate_if_needed(article_text, str(story.get("title") or ""))
             target_index = len(fallback_targets) + 1
+            prepared_text = prepare_article_text_for_summary(
+                article_text,
+                source=story_source,
+                url=selected_url,
+                title=str(story.get("title") or ""),
+            )
             fallback_targets.append(
-                {
-                    "article_id": f"top-funnel-{topic_key}-{target_index}",
-                    "source": story_source,
-                    "title": story.get("title", ""),
-                    "pub_date": _story_pub_date(story),
-                    "url": selected_url,
-                    "original_rss_url": original_rss_url,
-                    "resolved_url": selected_url,
-                    "resolution_status": scrape_result.get("resolution_status"),
-                    "scrape_status": scrape_status,
-                    "feed_fallback_used": bool(scrape_result.get("feed_fallback_used")),
-                    "description": story.get("description", ""),
-                    "text": prepare_article_text_for_summary(
-                        article_text,
-                        source=story_source,
-                        url=selected_url,
-                        title=str(story.get("title") or ""),
-                    ),
-                    "topic_key": topic_key,
-                    "topic_title": topic_title,
-                    "relevance_score": _score_topic_against_story(topic, story),
-                    "coverage_fallback": True,
-                }
+                _with_translation_metadata(
+                    {
+                        "article_id": f"top-funnel-{topic_key}-{target_index}",
+                        "source": story_source,
+                        "title": story.get("title", ""),
+                        "pub_date": _story_pub_date(story),
+                        "url": selected_url,
+                        "original_rss_url": original_rss_url,
+                        "resolved_url": selected_url,
+                        "resolution_status": scrape_result.get("resolution_status"),
+                        "scrape_status": scrape_status,
+                        "feed_fallback_used": bool(scrape_result.get("feed_fallback_used")),
+                        "description": story.get("description", ""),
+                        "text": prepared_text,
+                        "topic_key": topic_key,
+                        "topic_title": topic_title,
+                        "relevance_score": _score_topic_against_story(topic, story),
+                        "coverage_fallback": True,
+                    },
+                    source_name=story_source,
+                    title=str(story.get("title") or ""),
+                    text=prepared_text,
+                )
             )
             new_urls.append(selected_url)
             run_seen_urls.add(run_dedupe_key)
@@ -3660,6 +4098,8 @@ def _model_extra_body(settings: ModelSamplingSettings) -> dict[str, Any]:
 
 def build_chat_model(max_tokens: int, *, task: str = "default") -> ChatOpenAI:
     ensure_codex_safe_model_reference(MODEL_REFERENCE)
+    if MANAGED_MODEL_SERVER_ACTIVE:
+        _ensure_main_model_server_ready()
     sampling = MODEL_TASK_SAMPLING.get(task, MODEL_DEFAULT_SAMPLING)
     return ChatOpenAI(
         base_url=MODEL_BASE_URL,
@@ -3996,6 +4436,7 @@ def maybe_email_report(
     recipients: List[str],
     recipient_names: List[str],
     image_art: dict[str, Any] | None = None,
+    citation_sources: list[dict[str, Any]] | None = None,
 ) -> None:
     missing = []
     if not recipients:
@@ -4049,6 +4490,7 @@ def maybe_email_report(
                 final_reports,
                 topics,
                 html_image_art,
+                citation_sources,
             ),
             subtype="html",
         )
@@ -4589,7 +5031,7 @@ def _build_plain_text_article_listing(final_reports: List[str], topics: List[dic
                 topic_lines.append(f"{display_name}: {homepage_url}" if homepage_url else f"{display_name}:")
                 topic_lines.append("")
                 for headline, link, _, _story_title in source_entries:
-                    headline_label = headline
+                    headline_label = f"[{_story_title}] {headline}" if _story_title else headline
                     topic_lines.append(
                         f"- {headline_label} ({link})" if link else f"- {headline_label}"
                     )
@@ -4601,7 +5043,7 @@ def _build_plain_text_article_listing(final_reports: List[str], topics: List[dic
                 homepage_url = first_entry[2] if first_entry else None
                 lines = [f"{display_name}: {homepage_url}" if homepage_url else f"{display_name}:", ""]
                 for headline, link, _, _story_title in source_entries:
-                    headline_label = headline
+                    headline_label = f"[{_story_title}] {headline}" if _story_title else headline
                     lines.append(f"- {headline_label} ({link})" if link else f"- {headline_label}")
                 grouped_sections.append("\n".join(lines))
     else:
@@ -4610,24 +5052,30 @@ def _build_plain_text_article_listing(final_reports: List[str], topics: List[dic
             homepage_url = first_entry[2] if first_entry else None
             lines = [f"{display_name}: {homepage_url}" if homepage_url else f"{display_name}:", ""]
             for headline, link, _, _story_title in source_entries:
-                headline_label = headline
+                headline_label = f"[{_story_title}] {headline}" if _story_title else headline
                 lines.append(f"- {headline_label} ({link})" if link else f"- {headline_label}")
             grouped_sections.append("\n".join(lines))
 
     return "\n\n".join(grouped_sections) if grouped_sections else "No article headlines available."
 
 
-def _render_html_paragraphs(block_text: str) -> str:
+def _render_html_paragraphs(
+    block_text: str,
+    citation_sources: list[dict[str, Any]] | None = None,
+) -> str:
     paragraphs = [segment.strip() for segment in re.split(r"\n\s*\n", block_text.strip()) if segment.strip()]
     return "".join(
         f"<p class=\"email-paragraph\" style=\"margin:0 0 18px; font-size:16px; line-height:1.7; color:#1f2937;\">"
-        f"{html.escape(paragraph).replace(chr(10), '<br>')}"
+        f"{citations_stage.render_html_text_with_citations(paragraph, citation_sources or [])}"
         f"</p>"
         for paragraph in paragraphs
     )
 
 
-def _build_html_synthesis(synthesis_body: str) -> str:
+def _build_html_synthesis(
+    synthesis_body: str,
+    citation_sources: list[dict[str, Any]] | None = None,
+) -> str:
     cleaned = _strip_inline_markdown(
         _strip_prompt_echo_lines(strip_model_artifacts(synthesis_body))
     ).replace("\r\n", "\n")
@@ -4644,10 +5092,10 @@ def _build_html_synthesis(synthesis_body: str) -> str:
                 f"<h2 style=\"margin:32px 0 12px; font-size:22px; line-height:1.3; "
                 f"font-weight:700; color:#111827; letter-spacing:0.01em; text-transform:uppercase;\">"
                 f"{html.escape(current_heading)}</h2>"
-            )
+        )
         section_text = "\n".join(current_lines).strip()
         if section_text:
-            blocks.append(_render_html_paragraphs(section_text))
+            blocks.append(_render_html_paragraphs(section_text, citation_sources))
         current_heading = None
         current_lines = []
 
@@ -4738,9 +5186,12 @@ def build_report_body(
     final_reports: List[str],
     topics: List[dict],
     image_art: dict[str, Any] | None = None,
+    citation_sources: list[dict[str, Any]] | None = None,
 ) -> str:
     cleaned_synthesis_body = _format_plain_text_synthesis(synthesis_body)
+    clean_citation_sources = citation_sources or []
     article_listing = _build_plain_text_article_listing(final_reports, topics)
+    citation_listing = citations_stage.render_plain_text_sources(clean_citation_sources)
     image_section = ""
     if image_art:
         image_lines = ["IMAGE", "=====", ""]
@@ -4754,14 +5205,18 @@ def build_report_body(
             image_lines.append(f"Image generation warning: {image_art.get('error')}")
         image_section = "\n".join(image_lines).strip() + "\n\n"
 
+    source_heading = "SOURCES" if citation_listing else "ARTICLES BY SOURCE"
+    source_rule = "=" * len(source_heading)
+    source_body = citation_listing or article_listing
+
     return (
         f"{report_title}\n"
         f"{'=' * len(report_title)}\n\n"
         f"{image_section}"
         f"{cleaned_synthesis_body}\n\n"
-        "ARTICLES BY SOURCE\n"
-        "==================\n\n"
-        f"{article_listing}\n"
+        f"{source_heading}\n"
+        f"{source_rule}\n\n"
+        f"{source_body}\n"
     )
 
 
@@ -4773,10 +5228,17 @@ def build_report_html(
     final_reports: List[str],
     topics: List[dict],
     image_art: dict[str, Any] | None = None,
+    citation_sources: list[dict[str, Any]] | None = None,
 ) -> str:
     first_name = _extract_first_name(recipient_name)
-    synthesis_html = _build_html_synthesis(synthesis_body)
+    clean_citation_sources = citation_sources or []
+    synthesis_html = _build_html_synthesis(synthesis_body, clean_citation_sources)
     article_listing_html = _build_html_article_listing(final_reports, topics)
+    source_listing_html = (
+        citations_stage.render_html_sources(clean_citation_sources)
+        if clean_citation_sources
+        else article_listing_html
+    )
     unsubscribe_url = build_unsubscribe_url(recipient_email)
     image_html = ""
     if image_art and image_art.get("content_id"):
@@ -4820,7 +5282,7 @@ def build_report_html(
         f"{synthesis_html}"
         "<hr style=\"border:none; border-top:1px solid #e5e7eb; margin:36px 0 28px;\">"
         "<h2 style=\"margin:0 0 18px; font-size:22px; line-height:1.3; font-weight:800; color:#111827; letter-spacing:0.01em;\">Sources</h2>"
-        f"{article_listing_html}"
+        f"{source_listing_html}"
         "<div style=\"margin:34px 0 0; padding-top:22px; border-top:1px solid #e5e7eb; text-align:center;\">"
         f"<a href=\"{html.escape(unsubscribe_url, quote=True)}\" "
         "style=\"display:inline-block; padding:10px 16px; border-radius:6px; background:#f3f4f6; "
@@ -4856,6 +5318,15 @@ def _report_entry_debug_record(entry: str, index: int) -> dict[str, Any]:
         "summary": _report_summary_text(entry),
         "raw_entry": entry,
     }
+
+
+def _flatten_topic_story_records(story_cluster_stats: dict) -> list[dict]:
+    """Flatten stories_by_topic dict into a flat list, annotating each record with topic_title."""
+    records: list[dict] = []
+    for topic_title, story_list in (story_cluster_stats.get("stories_by_topic") or {}).items():
+        for record in story_list:
+            records.append({**record, "topic_title": str(topic_title)})
+    return records
 
 
 def _persist_article_summaries_debug(
@@ -5379,6 +5850,12 @@ def _new_run_diagnostics(source_count: int) -> RunDiagnostics:
             "model_base_url": MODEL_BASE_URL,
             "model_backend": MODEL_BACKEND,
             "model_server_command": MODEL_SERVER_COMMAND,
+            "translation_model": TRANSLATION_MODEL_REFERENCE,
+            "translation_model_name": TRANSLATION_MODEL_NAME,
+            "translation_model_base_url": TRANSLATION_MODEL_BASE_URL,
+            "translation_model_backend": TRANSLATION_MODEL_BACKEND,
+            "translation_model_server_command": TRANSLATION_MODEL_SERVER_COMMAND,
+            "translation_target_language": TRANSLATION_TARGET_LANGUAGE,
             "model_max_input_tokens": MODEL_MAX_INPUT_TOKENS,
             "model_default_sampling": _sampling_to_dict(MODEL_DEFAULT_SAMPLING),
             "model_reasoning_sampling": _sampling_to_dict(MODEL_REASONING_SAMPLING),
@@ -5420,10 +5897,15 @@ def _write_run_diagnostics(diagnostics: RunDiagnostics) -> None:
     progress_tracker.detail(f"Human-readable run summary saved: {summary_path}")
 
 
-def preflight_model_server() -> dict[str, Any]:
-    models_url = f"{MODEL_BASE_URL.rstrip('/')}/models"
+def _preflight_openai_model_server(
+    *,
+    base_url: str,
+    model_name: str,
+    model_reference: str,
+) -> dict[str, Any]:
+    models_url = f"{base_url.rstrip('/')}/models"
     result: dict[str, Any] = {
-        "base_url": MODEL_BASE_URL,
+        "base_url": base_url,
         "models_url": models_url,
         "ok": False,
         "served_models": [],
@@ -5444,20 +5926,55 @@ def preflight_model_server() -> dict[str, Any]:
         if not served_models:
             result["model_match"] = True
         else:
-            expected = {MODEL_NAME, MODEL_REFERENCE, "default_model"}
+            expected = {model_name, model_reference, "default_model"}
             result["model_match"] = any(model in expected for model in served_models)
     except Exception as error:
         result["error"] = str(error)
     return result
 
 
-def probe_model_generation(timeout_seconds: int = MODEL_LOAD_PROBE_TIMEOUT_SECONDS) -> dict[str, Any]:
-    completions_url = f"{MODEL_BASE_URL.rstrip('/')}/chat/completions"
+def preflight_model_server() -> dict[str, Any]:
+    return _preflight_openai_model_server(
+        base_url=MODEL_BASE_URL,
+        model_name=MODEL_NAME,
+        model_reference=MODEL_REFERENCE,
+    )
+
+
+def preflight_translation_model_server() -> dict[str, Any]:
+    return _preflight_openai_model_server(
+        base_url=TRANSLATION_MODEL_BASE_URL,
+        model_name=TRANSLATION_MODEL_NAME,
+        model_reference=TRANSLATION_MODEL_REFERENCE,
+    )
+
+
+def _probe_chat_completion(
+    *,
+    base_url: str,
+    payload: dict[str, Any],
+    timeout_seconds: int,
+) -> dict[str, Any]:
+    completions_url = f"{base_url.rstrip('/')}/chat/completions"
     result: dict[str, Any] = {
-        "base_url": MODEL_BASE_URL,
+        "base_url": base_url,
         "completions_url": completions_url,
         "ok": False,
     }
+    payload = {**payload, "stream": False}
+    try:
+        response = requests.post(completions_url, json=payload, timeout=timeout_seconds)
+        result["status_code"] = response.status_code
+        response.raise_for_status()
+        response_payload = response.json()
+        result["content_preview"] = _translation_response_content(response_payload)[:80]
+        result["ok"] = True
+    except Exception as error:
+        result["error"] = str(error)
+    return result
+
+
+def probe_model_generation(timeout_seconds: int = MODEL_LOAD_PROBE_TIMEOUT_SECONDS) -> dict[str, Any]:
     payload = {
         "model": MODEL_NAME,
         "messages": [
@@ -5469,24 +5986,31 @@ def probe_model_generation(timeout_seconds: int = MODEL_LOAD_PROBE_TIMEOUT_SECON
         "stream": False,
         "chat_template_kwargs": dict(VISIBLE_CONTENT_CHAT_TEMPLATE_KWARGS),
     }
-    try:
-        response = requests.post(completions_url, json=payload, timeout=timeout_seconds)
-        result["status_code"] = response.status_code
-        response.raise_for_status()
-        payload = response.json()
-        choices = payload.get("choices") if isinstance(payload, dict) else None
-        if choices:
-            message = choices[0].get("message") if isinstance(choices[0], dict) else None
-            content = message.get("content") if isinstance(message, dict) else None
-            result["content_preview"] = str(content or "")[:80]
-        result["ok"] = True
-    except Exception as error:
-        result["error"] = str(error)
-    return result
+    return _probe_chat_completion(
+        base_url=MODEL_BASE_URL,
+        payload=payload,
+        timeout_seconds=timeout_seconds,
+    )
+
+
+def probe_translation_model_generation(
+    timeout_seconds: int = MODEL_LOAD_PROBE_TIMEOUT_SECONDS,
+) -> dict[str, Any]:
+    payload = _translation_payload("Hola.", "es")
+    payload["max_tokens"] = 8
+    return _probe_chat_completion(
+        base_url=TRANSLATION_MODEL_BASE_URL,
+        payload=payload,
+        timeout_seconds=timeout_seconds,
+    )
 
 
 def _managed_model_server_log_path() -> str:
     return os.path.join(RUN_OUTPUT_DIR, "model_server.log")
+
+
+def _managed_translation_model_server_log_path() -> str:
+    return os.path.join(RUN_OUTPUT_DIR, "translation_model_server.log")
 
 
 def _wait_for_managed_model_server(
@@ -5512,6 +6036,32 @@ def _wait_for_managed_model_server(
     raise TimeoutError(
         f"Managed model server did not become ready within {timeout_seconds} seconds "
         f"at {MODEL_BASE_URL}: {detail}. See {_managed_model_server_log_path()}."
+    )
+
+
+def _wait_for_managed_translation_model_server(
+    process: subprocess.Popen,
+    *,
+    timeout_seconds: int = 300,
+) -> dict[str, Any]:
+    deadline = time.monotonic() + timeout_seconds
+    last_preflight: dict[str, Any] = {}
+    while time.monotonic() < deadline:
+        exit_code = process.poll()
+        if exit_code is not None:
+            raise RuntimeError(
+                f"Managed translation model server exited before it was ready "
+                f"(exit code {exit_code}). See {_managed_translation_model_server_log_path()}."
+            )
+        last_preflight = preflight_translation_model_server()
+        if last_preflight.get("ok") and last_preflight.get("model_match"):
+            return last_preflight
+        time.sleep(2)
+
+    detail = last_preflight.get("error") or last_preflight.get("served_models") or "no response"
+    raise TimeoutError(
+        f"Managed translation model server did not become ready within {timeout_seconds} seconds "
+        f"at {TRANSLATION_MODEL_BASE_URL}: {detail}. See {_managed_translation_model_server_log_path()}."
     )
 
 
@@ -5556,10 +6106,54 @@ def run_pipeline() -> None:
 
 @contextmanager
 def managed_model_server():
+    global MANAGED_MODEL_SERVER_ACTIVE
+    global MANAGED_MODEL_SERVER_READY
+    global MANAGED_MODEL_SERVER_EXTERNAL
+    global MANAGED_MODEL_SERVER_PROCESS
+    global MANAGED_MODEL_SERVER_LOG_FILE
+    previous_active = MANAGED_MODEL_SERVER_ACTIVE
+    if previous_active:
+        yield
+        return
+
+    MANAGED_MODEL_SERVER_ACTIVE = True
+    MANAGED_MODEL_SERVER_READY = False
+    MANAGED_MODEL_SERVER_EXTERNAL = False
+    MANAGED_MODEL_SERVER_PROCESS = None
+    MANAGED_MODEL_SERVER_LOG_FILE = None
+    try:
+        yield
+    finally:
+        if MANAGED_MODEL_SERVER_PROCESS is not None:
+            _stop_managed_model_server(MANAGED_MODEL_SERVER_PROCESS)
+            record_activity_snapshot("after_model_server_stop", ACTIVE_RUN_DIAGNOSTICS)
+        elif MANAGED_MODEL_SERVER_EXTERNAL and MANAGED_MODEL_SERVER_READY:
+            record_activity_snapshot("after_existing_model_server_run", ACTIVE_RUN_DIAGNOSTICS)
+        if ACTIVE_RUN_DIAGNOSTICS is not None and MANAGED_MODEL_SERVER_READY:
+            ACTIVE_RUN_DIAGNOSTICS.write(CONFIG.run_output_dir, timestamp)
+        if MANAGED_MODEL_SERVER_LOG_FILE is not None:
+            MANAGED_MODEL_SERVER_LOG_FILE.close()
+        MANAGED_MODEL_SERVER_ACTIVE = False
+        MANAGED_MODEL_SERVER_READY = False
+        MANAGED_MODEL_SERVER_EXTERNAL = False
+        MANAGED_MODEL_SERVER_PROCESS = None
+        MANAGED_MODEL_SERVER_LOG_FILE = None
+
+
+def _ensure_main_model_server_ready() -> None:
+    global MANAGED_MODEL_SERVER_READY
+    global MANAGED_MODEL_SERVER_EXTERNAL
+    global MANAGED_MODEL_SERVER_PROCESS
+    global MANAGED_MODEL_SERVER_LOG_FILE
+    if MANAGED_MODEL_SERVER_READY:
+        return
+
     ensure_codex_safe_model_reference(MODEL_REFERENCE)
     progress_tracker.step("model", "Checking model server.")
     record_activity_snapshot("before_model_server_preflight")
     existing_preflight = preflight_model_server()
+    if ACTIVE_RUN_DIAGNOSTICS is not None:
+        ACTIVE_RUN_DIAGNOSTICS.event("model_server_preflight", **existing_preflight)
     if existing_preflight.get("ok") and existing_preflight.get("model_match"):
         generation_probe = probe_model_generation()
         if not generation_probe.get("ok"):
@@ -5575,12 +6169,8 @@ def managed_model_server():
         )
         progress_tracker.detail("Existing model server passed a tiny generation probe.")
         record_activity_snapshot("existing_model_server_ready", ACTIVE_RUN_DIAGNOSTICS)
-        try:
-            yield
-        finally:
-            record_activity_snapshot("after_existing_model_server_run", ACTIVE_RUN_DIAGNOSTICS)
-            if ACTIVE_RUN_DIAGNOSTICS is not None:
-                ACTIVE_RUN_DIAGNOSTICS.write(CONFIG.run_output_dir, timestamp)
+        MANAGED_MODEL_SERVER_EXTERNAL = True
+        MANAGED_MODEL_SERVER_READY = True
         return
 
     if existing_preflight.get("ok"):
@@ -5597,6 +6187,7 @@ def managed_model_server():
     progress_tracker.detail(f"Managed model server command: {MODEL_SERVER_COMMAND}")
     progress_tracker.detail(f"Managed model server log: {log_path}")
     log_file = open(log_path, "w", encoding="utf-8")
+    MANAGED_MODEL_SERVER_LOG_FILE = log_file
     try:
         process = subprocess.Popen(
             command,
@@ -5608,7 +6199,9 @@ def managed_model_server():
         )
     except Exception:
         log_file.close()
+        MANAGED_MODEL_SERVER_LOG_FILE = None
         raise
+    MANAGED_MODEL_SERVER_PROCESS = process
     try:
         ready_preflight = _wait_for_managed_model_server(process)
         record_activity_snapshot("after_model_server_ready", ACTIVE_RUN_DIAGNOSTICS)
@@ -5626,13 +6219,113 @@ def managed_model_server():
             )
         progress_tracker.step("model", "Model server ready.")
         progress_tracker.detail("Managed model server passed a tiny generation probe.")
+        MANAGED_MODEL_SERVER_READY = True
+    except Exception:
+        _stop_managed_model_server(process)
+        record_activity_snapshot("after_model_server_stop", ACTIVE_RUN_DIAGNOSTICS)
+        log_file.close()
+        MANAGED_MODEL_SERVER_PROCESS = None
+        MANAGED_MODEL_SERVER_LOG_FILE = None
+        raise
+
+
+@contextmanager
+def managed_translation_model_server():
+    ensure_codex_safe_model_reference(TRANSLATION_MODEL_REFERENCE)
+    progress_tracker.step("translation", "Checking translation model server.")
+    record_activity_snapshot("before_translation_model_server_preflight", ACTIVE_RUN_DIAGNOSTICS)
+    existing_preflight = preflight_translation_model_server()
+    if existing_preflight.get("ok") and existing_preflight.get("model_match"):
+        generation_probe = probe_translation_model_generation()
+        if not generation_probe.get("ok"):
+            raise RuntimeError(
+                "Translation model server endpoint answered /models but failed a tiny generation probe. "
+                f"{generation_probe.get('error') or generation_probe}. "
+                f"See {_managed_translation_model_server_log_path()}."
+            )
+        progress_tracker.step("translation", "Translation model server ready.")
+        progress_tracker.detail(
+            "Translation model server already running for the selected translation model; "
+            "using it without managing its lifecycle."
+        )
+        record_activity_snapshot("existing_translation_model_server_ready", ACTIVE_RUN_DIAGNOSTICS)
+        try:
+            yield
+        finally:
+            record_activity_snapshot("after_existing_translation_model_server_run", ACTIVE_RUN_DIAGNOSTICS)
+        return
+
+    if existing_preflight.get("ok"):
+        raise RuntimeError(
+            "Translation model endpoint is already in use, but it did not report the expected model. "
+            f"Expected {TRANSLATION_MODEL_REFERENCE} / {TRANSLATION_MODEL_NAME}; served "
+            f"{existing_preflight.get('served_models')}. Stop that server or change "
+            "NEWS_TRANSLATION_MODEL_BASE_URL."
+        )
+
+    log_path = _managed_translation_model_server_log_path()
+    command = shlex.split(TRANSLATION_MODEL_SERVER_COMMAND)
+    record_activity_snapshot("before_translation_model_server_start", ACTIVE_RUN_DIAGNOSTICS)
+    progress_tracker.step("translation", "Starting translation model server.")
+    progress_tracker.detail(f"Managed translation model server command: {TRANSLATION_MODEL_SERVER_COMMAND}")
+    progress_tracker.detail(f"Managed translation model server log: {log_path}")
+    log_file = open(log_path, "w", encoding="utf-8")
+    try:
+        process = subprocess.Popen(
+            command,
+            cwd=str(CONFIG.root_dir),
+            stdout=log_file,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+            text=True,
+        )
+    except Exception:
+        log_file.close()
+        raise
+    try:
+        ready_preflight = _wait_for_managed_translation_model_server(process)
+        record_activity_snapshot("after_translation_model_server_ready", ACTIVE_RUN_DIAGNOSTICS)
+        progress_tracker.detail(
+            "Managed translation model server answered /models. "
+            f"Served models: {ready_preflight.get('served_models') or ['n/a']}"
+        )
+        progress_tracker.step("translation", "Checking translation model generation.")
+        generation_probe = probe_translation_model_generation()
+        if not generation_probe.get("ok"):
+            raise RuntimeError(
+                "Managed translation model server answered /models but failed a tiny generation probe. "
+                f"{generation_probe.get('error') or generation_probe}. "
+                f"See {_managed_translation_model_server_log_path()}."
+            )
+        progress_tracker.step("translation", "Translation model server ready.")
+        progress_tracker.detail("Managed translation model server passed a tiny generation probe.")
         yield
     finally:
         _stop_managed_model_server(process)
-        record_activity_snapshot("after_model_server_stop", ACTIVE_RUN_DIAGNOSTICS)
-        if ACTIVE_RUN_DIAGNOSTICS is not None:
-            ACTIVE_RUN_DIAGNOSTICS.write(CONFIG.run_output_dir, timestamp)
+        record_activity_snapshot("after_translation_model_server_stop", ACTIVE_RUN_DIAGNOSTICS)
         log_file.close()
+
+
+def run_translation_model_smoke_test() -> int:
+    print("Translation model smoke test")
+    print(f"Reference: {TRANSLATION_MODEL_REFERENCE}")
+    print(f"Resolved model: {TRANSLATION_MODEL_NAME}")
+    print(f"Backend: {TRANSLATION_MODEL_BACKEND}")
+    try:
+        translated = _generate_translation_text("Hola.", "es", max_tokens=16)
+    except Exception as error:
+        print(f"FAILED: {type(error).__name__}: {error}", file=sys.stderr)
+        return 1
+    finally:
+        _unload_translation_model_resources()
+
+    if translated:
+        print("OK: translated a tiny Spanish probe with TranslateGemma.")
+        print(f"Preview: {translated}")
+        return 0
+
+    print("FAILED: translation returned an empty response.", file=sys.stderr)
+    return 1
 
 
 def _run_pipeline() -> None:
@@ -5651,6 +6344,10 @@ def _run_pipeline() -> None:
         f"model: {MODEL_REFERENCE} -> {MODEL_NAME}"
     )
     progress_tracker.detail(
+        f"Translation model: {TRANSLATION_MODEL_REFERENCE} -> {TRANSLATION_MODEL_NAME} "
+        f"({TRANSLATION_MODEL_BACKEND}, target={TRANSLATION_TARGET_LANGUAGE})."
+    )
+    progress_tracker.detail(
         f"Model caps: input {MODEL_MAX_INPUT_TOKENS} tokens, "
         f"article text {ARTICLE_TEXT_TOKEN_LIMIT} tokens, "
         f"summaries {TOTAL_ARTICLE_SUMMARY_CAP} total/{PER_TOPIC_ARTICLE_SUMMARY_CAP} per topic, "
@@ -5664,22 +6361,10 @@ def _run_pipeline() -> None:
         f"slow source warning {SLOW_SOURCE_WARNING_SECONDS}s."
     )
     progress_tracker.detail(f"Run mode: {RUN_MODE}")
-    preflight = preflight_model_server()
-    diagnostics.event("model_server_preflight", **preflight)
-    if not preflight.get("ok"):
-        progress_tracker.warning(
-            f"model server preflight failed at {preflight.get('models_url')}: "
-            f"{preflight.get('error') or 'unknown error'}"
-        )
-    elif not preflight.get("model_match"):
-        progress_tracker.warning(
-            "model server is reachable but did not report the expected model. "
-            f"Served: {preflight.get('served_models')}"
-        )
     progress_tracker.detail(f"Source pool: {len(sources)} of {len(all_sources)} configured feed(s).")
     if DEV:
         progress_tracker.detail(
-            f"DEV mode active. Using English dev-tier sources only "
+            f"DEV mode active. Using dev-tier sources that are English or translation-enabled "
             f"({len(sources)} source(s)). "
             f"Sending to one recipient only "
             f"(always {BRADLEY_ONLY_RECIPIENT}) without recording URLs into the shared history."
@@ -5691,7 +6376,7 @@ def _run_pipeline() -> None:
             else "isolated URL history"
         )
         progress_tracker.detail(
-            f"LOCAL-PROD mode active. Using English dev/core source tiers "
+            f"LOCAL-PROD mode active. Using dev/core source tiers that are English or translation-enabled "
             f"with {history_label}, but sending only to {BRADLEY_ONLY_RECIPIENT}."
         )
     progress_tracker.detail(f"Run output folder: {RUN_OUTPUT_DIR}")
@@ -5836,21 +6521,94 @@ def _run_pipeline() -> None:
         _write_run_diagnostics(diagnostics)
         return
 
-    progress_tracker.step("stories", "Organizing article candidates.")
-    clustered_article_targets, story_records, story_cluster_stats = (
-        story_clustering_stage.organize_article_targets_into_global_stories(
+    article_candidates = translate_article_candidates(article_candidates, diagnostics)
+
+    # Classify all collected articles into topics via embedding cosine similarity.
+    # This replaces the earlier keyword-based topic_key assignment with a semantic one,
+    # then deduplicates articles that converge to the same (url, topic_key) pair.
+    progress_tracker.step("stories", "Classifying articles by topic (semantic embeddings).")
+    topic_titles_map = {
+        str(t.get("key") or ""): str(t.get("title") or "")
+        for t in topics
+    }
+    progress_tracker.detail(
+        f"Embedding model: {embeddings_stage.EMBEDDING_MODEL_NAME} | "
+        f"threshold: {TOPIC_EMBEDDING_SIMILARITY_THRESHOLD:.2f}"
+    )
+    topic_counts_by_key: Counter[str] = Counter()
+    try:
+        topic_classified_candidates = embeddings_stage.classify_articles_by_topic(
             article_candidates,
+            topics,
+            threshold=TOPIC_EMBEDDING_SIMILARITY_THRESHOLD,
+        )
+        topic_counts_by_key = Counter(
+            str(a.get("topic_key") or "unassigned") for a in topic_classified_candidates
+        )
+        for topic in topics:
+            tkey = str(topic.get("key") or "")
+            progress_tracker.detail(
+                f"  Topic '{topic_titles_map.get(tkey, tkey)}': "
+                f"{topic_counts_by_key.get(tkey, 0)} articles after embedding classification."
+            )
+        diagnostics.event(
+            "embedding_topic_classification",
+            threshold=TOPIC_EMBEDDING_SIMILARITY_THRESHOLD,
+            candidate_count=len(article_candidates),
+            classified_count=len(topic_classified_candidates),
+            counts_by_topic={
+                topic_titles_map.get(k, k): v
+                for k, v in topic_counts_by_key.items()
+            },
+        )
+    except Exception as _emb_error:
+        progress_tracker.warning(
+            f"Embedding classification failed ({_emb_error}); "
+            "falling back to keyword-assigned topic keys."
+        )
+        topic_classified_candidates = article_candidates
+        diagnostics.event(
+            "embedding_topic_classification",
+            error=str(_emb_error),
+            fallback="keyword_assigned_topic_keys",
+        )
+
+    # Cluster articles into stories *within* each topic using TF-IDF similarity.
+    # This produces tighter, more on-topic story clusters than the previous global approach.
+    progress_tracker.step("stories", "Clustering stories within topics.")
+    clustered_article_targets, story_cluster_stats = (
+        story_clustering_stage.organize_article_targets_into_stories(
+            topic_classified_candidates,
+            topics,
             min_articles_per_story=MIN_ARTICLES_PER_STORY,
+            max_stories_per_topic=MAX_STORIES_PER_TOPIC,
+            max_articles_per_story=MAX_ARTICLES_PER_STORY,
             similarity_threshold=STORY_CLUSTER_SIMILARITY_THRESHOLD,
         )
     )
-    diagnostics.event("story_clustering", **story_cluster_stats)
+    story_records = _flatten_topic_story_records(story_cluster_stats)
+    diagnostics.event("story_clustering", **{
+        k: v for k, v in story_cluster_stats.items()
+        if k not in ("stories_by_topic", "dropped_articles_by_topic", "pair_debug_by_topic")
+    })
+    stories_by_topic_debug = story_cluster_stats.get("stories_by_topic") or {}
+    for topic in topics:
+        tkey = str(topic.get("key") or "")
+        ttitle = str(topic.get("title") or "")
+        topic_stories = stories_by_topic_debug.get(ttitle, [])
+        dropped_count = (story_cluster_stats.get("dropped_by_topic") or {}).get(ttitle, 0)
+        progress_tracker.detail(
+            f"  {ttitle}: "
+            f"{topic_counts_by_key.get(tkey, 0)} articles "
+            f"→ {len(topic_stories)} story cluster(s) "
+            f"(+{dropped_count} noise dropped)"
+        )
     progress_tracker.detail(
         f"Story clustering: {story_cluster_stats.get('included_count', 0)} "
         f"article target(s) retained across {story_cluster_stats.get('story_count', 0)} "
         f"story group(s); {story_cluster_stats.get('dropped_count', 0)} dropped below "
         f"the {MIN_ARTICLES_PER_STORY}-article story floor "
-        f"(TF-IDF threshold {STORY_CLUSTER_SIMILARITY_THRESHOLD:.2f})."
+        f"(TF-IDF threshold {STORY_CLUSTER_SIMILARITY_THRESHOLD:.2f}, per-topic)."
     )
     diagnostics.record_article_budget(
         {
@@ -5909,6 +6667,40 @@ def _run_pipeline() -> None:
         diagnostics.event("aborted", reason="no_story_drafts")
         _write_run_diagnostics(diagnostics)
         return
+
+    # Dedup near-duplicate story drafts within each topic using embedding cosine similarity.
+    drafts_before_dedup = len(story_drafts)
+    try:
+        drafts_by_topic: dict[str, list[dict]] = {}
+        for draft in story_drafts:
+            tkey = str(draft.get("topic_title") or draft.get("topic_key") or "unassigned")
+            drafts_by_topic.setdefault(tkey, []).append(draft)
+        story_drafts = []
+        for _topic_group, _drafts in drafts_by_topic.items():
+            story_drafts.extend(
+                embeddings_stage.dedup_story_drafts_within_topic(
+                    _drafts,
+                    threshold=STORY_EMBEDDING_DEDUP_THRESHOLD,
+                )
+            )
+        drafts_dropped = drafts_before_dedup - len(story_drafts)
+        if drafts_dropped:
+            progress_tracker.detail(
+                f"Story dedup: removed {drafts_dropped} near-duplicate story draft(s) "
+                f"(cosine threshold {STORY_EMBEDDING_DEDUP_THRESHOLD:.2f})."
+            )
+        diagnostics.event(
+            "story_dedup",
+            before=drafts_before_dedup,
+            after=len(story_drafts),
+            dropped=drafts_dropped,
+            threshold=STORY_EMBEDDING_DEDUP_THRESHOLD,
+        )
+    except Exception as _dedup_error:
+        progress_tracker.warning(
+            f"Story dedup failed ({_dedup_error}); keeping all {drafts_before_dedup} drafts."
+        )
+        diagnostics.event("story_dedup", error=str(_dedup_error), fallback="no_dedup")
 
     selected_story_topic_matches, story_topic_stats = (
         story_topic_assignment_stage.classify_story_drafts_for_topics(
@@ -6039,6 +6831,7 @@ def _run_pipeline() -> None:
         final_synthesis,
         relaxed=RELAXED_FINAL_SYNTHESIS_GUARDS,
     )
+    citation_sources = list((token_stats or {}).get("citation_sources") or [])
     if not synthesis_body:
         last_attempt = (synthesis_debug.get("attempts") or [{}])[-1]
         skip_reason = (
@@ -6066,20 +6859,28 @@ def _run_pipeline() -> None:
                 attempts=synthesis_debug.get("attempts") or [],
             )
 
-        report_title = strip_model_artifacts(generate_report_title(synthesis_body, timestamp))
+        synthesis_body_without_citations = citations_stage.strip_citation_markers(synthesis_body)
+        report_title = strip_model_artifacts(generate_report_title(synthesis_body_without_citations, timestamp))
 
         progress_tracker.set_final_step("art", 3)
         record_activity_snapshot("before_image_generation", diagnostics)
         image_art = generate_report_image_art(
             report_path=report_path,
-            synthesis_body=synthesis_body,
+            synthesis_body=synthesis_body_without_citations,
             report_title=report_title,
         )
         record_activity_snapshot("after_image_generation", diagnostics)
 
         progress_tracker.set_final_step("render", 4)
         reference_reports = filter_reports_for_references(final_reports, token_stats)
-        report_body = build_report_body(report_title, synthesis_body, reference_reports, topics, image_art)
+        report_body = build_report_body(
+            report_title,
+            synthesis_body,
+            reference_reports,
+            topics,
+            image_art,
+            citation_sources,
+        )
         write_report_asset(report_path, report_body)
         image_art_diagnostics = None
         if image_art:
@@ -6095,6 +6896,7 @@ def _run_pipeline() -> None:
             recipients=recipient_list,
             token_stats=token_stats,
             reference_report_count=len(reference_reports),
+            citation_source_count=len(citation_sources),
             synthesis_dataset_artifacts=synthesis_dataset_artifacts,
             image_art=image_art_diagnostics,
         )
@@ -6109,6 +6911,7 @@ def _run_pipeline() -> None:
             recipient_list,
             recipient_names,
             image_art,
+            citation_sources,
         )
 
         if token_stats:

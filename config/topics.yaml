@@ -1,10 +1,24 @@
 # Predefined topic vocabulary for article relevance matching.
 #
-# The local LLM does not create these terms; it only summarizes articles selected
-# by this deterministic vocabulary.
+# Each topic has:
+#   description: Natural-language description used for semantic (embedding) classification.
+#                This is the primary signal for routing articles to topics.
+#   required_context_terms: At least one must appear in article/story text for keyword scoring.
+#                           Acts as a secondary validation gate after embedding classification.
+#   keywords / boost_phrases: Used for keyword-based relevance scoring at story-assignment stage.
+#
 topics:
-  - id: international_conflict
-    title: International Conflict
+  - id: global_crises_conflict
+    title: Global Crises & Conflict
+    description: >
+      Large-scale events with major global security or humanitarian implications: armed conflicts
+      and wars (Ukraine-Russia, Gaza, Iran, Sudan, etc.), military escalations, airstrikes and
+      missile attacks, coup attempts and state collapse, ethnic cleansing and genocide, nuclear
+      threats and arms races, major cross-border terrorist attacks, refugee crises, mass civilian
+      casualties, and any event where state or organized violence shapes international security or
+      threatens populations at scale. Includes peace talks and ceasefire negotiations. Excludes
+      minor local crime; focuses on events affecting multiple countries or with global strategic
+      significance.
     rationale: Stories about wars, armed conflicts, military escalation, ceasefires, cross-border attacks, and state or proxy violence involving countries or major armed groups.
     required_context_terms:
       - war
@@ -116,6 +130,16 @@ topics:
 
   - id: us_economy
     title: US Economy
+    description: >
+      US macroeconomic news directly affecting American households, workers, borrowers, savers,
+      and broad markets: Federal Reserve interest rate decisions and monetary policy, inflation
+      and consumer prices (CPI, PCE, grocery/gas/rent prices), employment and jobs reports
+      (nonfarm payrolls, jobless claims, JOLTS, unemployment rate, wage growth), GDP and economic
+      growth, consumer spending and confidence, housing market (mortgage rates, home sales, starts),
+      stock and bond markets (S&P 500, Dow, Nasdaq, Treasury yields), major US corporate earnings
+      and layoffs affecting workers, tariff effects on household budgets, and any economic data
+      that shapes the financial lives of Americans. Excludes purely international economic
+      developments unless they directly drive US conditions.
     rationale: Stories about how the US economy affects American households, workers, consumers, borrowers, savers, and broad markets.
     required_context_terms:
       - united states economy
@@ -204,6 +228,13 @@ topics:
       - personal taxes
       - payroll taxes
       - tax refunds
+      - job cuts
+      - layoffs
+      - mass layoffs
+      - workforce reduction
+      - workers
+      - wages
+      - hiring
     keywords:
       - economic data
       - economic growth
@@ -363,8 +394,18 @@ topics:
       - us
       - western
 
-  - id: international_business_news
-    title: International Business News
+  - id: global_business_finance
+    title: Global Business & Finance
+    description: >
+      Business and financial news with global significance: major mergers and acquisitions
+      worldwide, corporate bankruptcies and restructurings, large IPOs and significant startup
+      funding rounds (Series C and above), major corporate layoffs of tens of thousands, central
+      bank decisions outside the US, currency and commodity market movements with global impact
+      (oil prices, gold, major currency swings), BRICS financial and banking developments,
+      international trade deals and tariff disputes between major economies, global supply chain
+      disruptions, and major developments at multinational companies that reshape industries.
+      Excludes routine quarterly earnings; includes events that signal major economic shifts,
+      power realignments between companies, or structural changes in global finance.
     rationale: Stories about global company, market, finance, trade, earnings, deal, investment, and investor developments that matter to executives or markets more than household economic conditions.
     required_context_terms:
       - company
@@ -444,7 +485,6 @@ topics:
     keywords:
       - business news
       - global business
-      - international business
       - world business
       - overseas markets
       - global markets
@@ -514,6 +554,12 @@ topics:
       - workforce reduction
       - bankruptcy filing
       - chapter 11
+      - brics
+      - series a
+      - series b
+      - series c
+      - series d
+      - unicorn
     boost_phrases:
       - initial public offering
       - public listing
@@ -536,12 +582,23 @@ topics:
       - export controls
       - tariff impact
       - oil prices
+      - brics currency
+      - central bank decision
     frame_tags:
       - western
       - non_western
 
   - id: us_politics
     title: US Politics
+    description: >
+      US federal political news: White House and executive branch actions (executive orders,
+      presidential decisions, cabinet moves), Congress (House and Senate votes, committee
+      hearings, legislation), Supreme Court and federal judiciary rulings, Trump and Biden
+      administrations, federal agencies (DOJ, DHS, State Department, Defense), presidential
+      and congressional elections and campaigns, campaign fundraising and polling,
+      US immigration and border policy enforcement, government shutdowns and debt ceiling
+      debates, and any significant political power struggle at the US federal level. Excludes
+      state and local politics unless they carry national significance.
     rationale: Stories about US federal political power, elections, courts, Congress, and administration actions.
     required_context_terms:
       - united states

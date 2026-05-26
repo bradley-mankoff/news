@@ -16,16 +16,20 @@ Primary entry points:
 
 Run-mode source and delivery behavior:
 
-- `dev` uses exactly the English `tier: dev` sources from `config/sources.yaml`,
-  sends only to `NEWS_DEV_RECIPIENT`, defaults to `gemma-e2b-tiny`, and keeps
-  image generation off unless overridden.
-- `local-prod` uses English `tier: dev` plus `tier: core` sources, sends only to
-  `NEWS_DEV_RECIPIENT`, defaults to the large Gemma model, keeps image
-  generation on, and uses isolated URL history by default.
-- `prod` uses the same English `dev`/`core` source set as `local-prod`, sends to
+- `dev` uses `tier: dev` sources from `config/sources.yaml` that are English or
+  explicitly translation-enabled, sends only to `NEWS_DEV_RECIPIENT`, defaults
+  to `gemma-e2b-tiny`, and keeps image generation off unless overridden.
+- `local-prod` uses `tier: dev` plus `tier: core` sources that are English or
+  translation-enabled, sends only to `NEWS_DEV_RECIPIENT`, defaults to the large
+  Gemma model, keeps image generation on, and uses isolated URL history by
+  default.
+- `prod` uses the same `dev`/`core` source set as `local-prod`, sends to
   configured active recipients, and updates shared URL history.
-- `tier: peripheral` and non-English sources are retained in the master source
-  file but are not selected by any run mode.
+- Non-English sources are translation-enabled by their `language` field unless
+  `requires_translation: false` is set. Translation runs as a bundled step using
+  `google/translategemma-4b-it` before the main summarization model is loaded.
+- `tier: peripheral` sources are retained in the master source file but are not
+  selected by any run mode.
 
 Codex model safety:
 
