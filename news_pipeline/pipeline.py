@@ -6111,12 +6111,13 @@ def _wait_for_managed_translation_model_server(
     )
 
 
-def _stop_managed_model_server(process: subprocess.Popen) -> None:
+def _stop_managed_server_process(process: subprocess.Popen, *, server_label: str) -> None:
+    """Stop a managed server spawned with ``start_new_session=True``."""
     if process.poll() is not None:
-        progress_tracker.detail(f"Managed model server already exited with code {process.returncode}.")
+        progress_tracker.detail(f"Managed {server_label} already exited with code {process.returncode}.")
         return
 
-    progress_tracker.detail("Stopping managed model server.")
+    progress_tracker.detail(f"Stopping managed {server_label}.")
     try:
         os.killpg(process.pid, signal.SIGTERM)
     except ProcessLookupError:
@@ -6127,7 +6128,7 @@ def _stop_managed_model_server(process: subprocess.Popen) -> None:
     try:
         process.wait(timeout=20)
     except subprocess.TimeoutExpired:
-        progress_tracker.detail("Managed model server did not stop gracefully; killing it.")
+        progress_tracker.detail(f"Managed {server_label} did not stop gracefully; killing it.")
         try:
             os.killpg(process.pid, signal.SIGKILL)
         except ProcessLookupError:
@@ -6171,12 +6172,12 @@ def managed_model_server():
         yield
     finally:
         if MANAGED_MODEL_SERVER_PROCESS is not None:
-            _stop_managed_model_server(MANAGED_MODEL_SERVER_PROCESS)
+            _stop_managed_server_process(MANAGED_MODEL_SERVER_PROCESS, server_label="model server")
             record_activity_snapshot("after_model_server_stop", ACTIVE_RUN_DIAGNOSTICS)
         elif MANAGED_MODEL_SERVER_EXTERNAL and MANAGED_MODEL_SERVER_READY:
             record_activity_snapshot("after_existing_model_server_run", ACTIVE_RUN_DIAGNOSTICS)
         if ACTIVE_RUN_DIAGNOSTICS is not None and MANAGED_MODEL_SERVER_READY:
-            ACTIVE_RUN_DIAGNOSTICS.write(CONFIG.run_output_dir, timestamp)
+            ACTIVE_RUN_DIAGNOSTICS.write(CONFIG.run_output_dir, CONFIG.timestamp)
         if MANAGED_MODEL_SERVER_LOG_FILE is not None:
             MANAGED_MODEL_SERVER_LOG_FILE.close()
         MANAGED_MODEL_SERVER_ACTIVE = False
@@ -6267,7 +6268,7 @@ def _ensure_main_model_server_ready() -> None:
         progress_tracker.detail("Managed model server passed a tiny generation probe.")
         MANAGED_MODEL_SERVER_READY = True
     except Exception:
-        _stop_managed_model_server(process)
+        _stop_managed_server_process(process, server_label="model server")
         record_activity_snapshot("after_model_server_stop", ACTIVE_RUN_DIAGNOSTICS)
         log_file.close()
         MANAGED_MODEL_SERVER_PROCESS = None
@@ -6347,7 +6348,7 @@ def managed_translation_model_server():
         progress_tracker.detail("Managed translation model server passed a tiny generation probe.")
         yield
     finally:
-        _stop_managed_model_server(process)
+        _stop_managed_server_process(process, server_label="translation model server")
         record_activity_snapshot("after_translation_model_server_stop", ACTIVE_RUN_DIAGNOSTICS)
         log_file.close()
 
