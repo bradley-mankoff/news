@@ -26,14 +26,22 @@ Run commands from the repo root:
 
 - Dev: `uv run news dev`
 - Local production review: `uv run news local-prod`
+- Loose local production review: `uv run news loose-local-prod`
 - Production: `uv run news prod`
 
 Source selection is now entirely driven by `config/sources.yaml`:
 
-- `dev` uses English `tier: dev` sources only.
-- `local-prod` and `prod` use English `tier: dev` plus `tier: core` sources.
-- `tier: peripheral` and non-English sources stay in the master list for later
-  review but are not selected by any run mode.
+- `dev` uses English `tier: dev` sources.
+- `local-prod`, `loose-local-prod`, and `prod` use `tier: dev` plus
+  `tier: core` sources that are English.
+- `loose-local-prod` otherwise behaves like `local-prod`, but uses dev-loose
+  topic/story matching thresholds while keeping the 4-article story floor.
+- Translation is currently paused by default (`NEWS_TRANSLATION_ENABLED=0`).
+  Non-English sources remain in the master list for later review but are not
+  selected by normal runs, and the pipeline no longer translates the full
+  scraped candidate funnel before topic classification.
+- `tier: peripheral` sources stay in the master list for later review but are
+  not selected by any run mode.
 
 Codex model safety:
 

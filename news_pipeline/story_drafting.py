@@ -11,6 +11,8 @@ from typing import Any, Callable
 
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 
+from . import citations as citations_stage
+
 
 @dataclass(frozen=True)
 class StoryDraftingRuntime:
@@ -60,25 +62,36 @@ def story_summary_blocks_from_clusters(
     for story_index, story in enumerate(story_records):
         summaries: list[str] = []
         article_ids: list[str] = []
+        citation_sources: list[dict[str, Any]] = []
         for article_id in story.get("cluster_article_ids") or story.get("article_ids") or []:
             clean_article_id = str(article_id or "").strip()
             entry = article_summary_lookup.get(clean_article_id)
             if not entry:
                 continue
-            summary_text = report_summary_text(entry)
+            source_record = citations_stage.parse_article_report_entry(entry)
+            summary_text = str(source_record.get("summary") or report_summary_text(entry)).strip()
             if not summary_text:
                 continue
             summaries.append(summary_text)
             article_ids.append(clean_article_id)
+            citation_sources.append(
+                {
+                    **source_record,
+                    "local_id": f"S{len(citation_sources) + 1}",
+                    "article_id": clean_article_id or source_record.get("article_id", ""),
+                    "summary": summary_text,
+                }
+            )
         if len(summaries) < min_articles_per_story:
             continue
         story_blocks.append(
             {
-                "topic_title": "Unclassified News",
+                "topic_title": story.get("topic_title") or "Unclassified News",
                 "story_title": story.get("story_title") or story.get("title") or "News update",
                 "story_key": story.get("story_key") or f"global-story-{story_index + 1:02d}",
                 "summaries": summaries,
                 "article_ids": article_ids,
+                "citation_sources": citation_sources,
                 "article_count": len(article_ids),
                 "cluster_article_count": story.get("cluster_article_count") or story.get("article_count"),
                 "source_count": story.get("source_count"),
@@ -96,18 +109,39 @@ def build_story_synthesis_prompt_messages(story_block: dict[str, Any], now_label
     topic_title = str(story_block.get("topic_title") or "Unknown topic")
     story_title = str(story_block.get("story_title") or "Story update")
     summaries = [str(summary or "").strip() for summary in story_block.get("summaries", []) if str(summary or "").strip()]
-    source_summary_lines = "\n".join(
-        f"{index}. {summary}"
-        for index, summary in enumerate(summaries, start=1)
-    )
+    citation_sources = [
+        source
+        for source in story_block.get("citation_sources", [])
+        if str(source.get("summary") or "").strip()
+    ]
+    if citation_sources:
+        source_summary_lines = "\n\n".join(
+            textwrap.dedent(f"""
+                {source.get("local_id")}:
+                Title: {source.get("title") or "Untitled article"}
+                Article ID: {source.get("article_id") or "N/A"}
+                Source: {source.get("source") or "Unknown source"}
+                Published: {source.get("published") or "Unknown publish time"}
+                URL: {source.get("url") or "N/A"}
+                Summary: {source.get("summary")}
+            """).strip()
+            for source in citation_sources
+        )
+    else:
+        source_summary_lines = "\n".join(
+            f"S{index}: {summary}"
+            for index, summary in enumerate(summaries, start=1)
+        )
     system_prompt = SystemMessage(content=textwrap.dedent(f"""
         Today: {now_label}.
         You are synthesizing prewritten article summaries into one newsletter story paragraph.
         Use only the supplied source summaries.
         Write exactly one cohesive prose paragraph, roughly 70-130 words.
+        End every factual sentence with one or more source markers using the listed source IDs,
+        like [[S1]] or [[S1,S3]]. Use only listed source IDs and do not invent sources.
         Lead with today's reported development. Include concrete reported claims, named actors,
         places, timing, figures, damage, statements, deadlines, and uncertainty when supported.
-        Do not write a heading, bullets, labels, source-material notes, methodology, or preamble.
+        Do not write a heading, bullets, labels, source-material notes, methodology, bibliography, or preamble.
         Do not merge in background material unless a source summary reports it as part of today's update.
     """).strip())
     user_prompt = HumanMessage(content=textwrap.dedent(f"""
@@ -117,7 +151,7 @@ def build_story_synthesis_prompt_messages(story_block: dict[str, Any], now_label
         Source summaries:
         {source_summary_lines}
 
-        Return only the story paragraph.
+        Return only the story paragraph with sentence-end source markers.
     """).strip())
     return [system_prompt, user_prompt]
 
@@ -129,7 +163,7 @@ def clean_story_synthesis_paragraph(
 ) -> str:
     clean_text = runtime.strip_prompt_echo_lines(runtime.strip_model_artifacts(raw_text or ""))
     clean_text = re.sub(r"(?m)^##+\s+.*$", "", clean_text)
-    clean_text = re.sub(r"(?mi)^(topic|story|source summaries?|paragraph)\s*:\s*.*$", "", clean_text)
+    clean_text = re.sub(r"(?mi)^(topic|story|source summaries?|sources?|references?|paragraph)\s*:\s*.*$", "", clean_text)
     clean_text = re.sub(r"(?m)^\s*[-*]\s+", "", clean_text)
     clean_text = re.sub(r"\s+", " ", clean_text).strip()
     if clean_text and not runtime.is_low_coverage_synthesis_section(clean_text):
@@ -155,11 +189,19 @@ def run_story_synthesis_block(
         task_name=f"story synthesis for {story_block.get('story_title') or 'story'}",
         fallback_content=fallback_paragraph,
     )
-    paragraph = clean_story_synthesis_paragraph(response.content, summaries, runtime)
+    marked_paragraph = clean_story_synthesis_paragraph(response.content, summaries, runtime)
+    citation_result = citations_stage.validate_cited_story_text(
+        marked_paragraph,
+        list(story_block.get("citation_sources") or []),
+    )
+    paragraph = str(citation_result.get("paragraph") or "").strip()
     prompt_tokens = runtime.extract_prompt_tokens_from_response(response)
     return {
         **story_block,
         "paragraph": paragraph,
+        "marked_paragraph": marked_paragraph,
+        "cited_sentences": citation_result.get("cited_sentences", []),
+        "citation_diagnostics": citation_result.get("diagnostics", {}),
         "estimated_input_tokens": estimated_input_tokens,
         "actual_prompt_tokens": prompt_tokens,
         "word_count": runtime.final_synthesis_word_count(paragraph),

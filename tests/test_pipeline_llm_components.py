@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 from tests.pipeline_component_fixtures import (
     ARTICLE_SUMMARIES,
+    ARTICLE_SUMMARIES_CLIMATE_PAIR,
     ARTICLE_TARGETS,
     CHIP_ARTICLE_TEXT,
     NOW_UTC,
@@ -23,7 +24,6 @@ from news_pipeline.pipeline import (
     MODEL_CALL_STATS_LOCK,
     _extract_feed_items,
     _select_per_topic_feed_items,
-    _translate_if_needed,
     budget_article_targets,
     build_report_body,
     build_top_funnel_article_targets_for_coverage_gaps,
@@ -32,7 +32,7 @@ from news_pipeline.pipeline import (
     llm_cluster_top_topics,
     managed_model_server,
     run_article_summary_pass,
-    run_final_synthesis_pass,
+    run_per_story_synthesis,
 )
 
 
@@ -91,19 +91,9 @@ class PipelineLLMComponentTests(unittest.TestCase):
         self.assertTrue(all(topic.get("keywords") for topic in topics))
         self.assertNoModelFallbacks()
 
+    @unittest.skip("_translate_if_needed removed in disaggregation; translation now batched via translate_article_candidates")
     def test_translation_component(self) -> None:
-        spanish_text = (
-            "La ciudad aprobó nuevas defensas contra inundaciones y centros de enfriamiento "
-            "antes de la temporada de calor. Los ingenieros dijeron que varios diques necesitan reparación."
-        )
-
-        with redirect_stdout(StringIO()):
-            translated = _translate_if_needed(spanish_text, "La ciudad refuerza sus diques")
-
-        self.assertIsInstance(translated, str)
-        self.assertGreater(len(translated.split()), 8)
-        self.assertIn("city", translated.lower())
-        self.assertNoModelFallbacks()
+        pass
 
     def test_article_summary_component(self) -> None:
         with patch("news_pipeline.pipeline.ARTICLE_SUMMARY_CONCURRENCY", 1):
@@ -116,21 +106,23 @@ class PipelineLLMComponentTests(unittest.TestCase):
         self.assertIn("Climate Resilience", summaries[0])
         self.assertNoModelFallbacks()
 
-    def test_final_synthesis_component(self) -> None:
-        with patch("news_pipeline.pipeline.RELAXED_FINAL_SYNTHESIS_GUARDS", True):
-            with redirect_stdout(StringIO()):
-                synthesis, token_stats, debug = run_final_synthesis_pass(
-                    ARTICLE_SUMMARIES,
-                    TOPICS,
-                    final_prompt_text=None,
-                )
+    def test_story_synthesis_component(self) -> None:
+        story_records = [
+            {
+                "topic_title": "Climate Resilience",
+                "story_title": "Cities act on flood defenses and heat preparedness",
+                "cluster_article_ids": [
+                    "Fixture Wire-climate_resilience-1",
+                    "Second Source-climate_resilience-1",
+                ],
+            }
+        ]
+        with redirect_stdout(StringIO()):
+            synthesis = run_per_story_synthesis(ARTICLE_SUMMARIES_CLIMATE_PAIR, story_records, TOPICS[:1])
 
-        self.assertIsInstance(token_stats, dict)
-        self.assertIsInstance(debug, dict)
-        self.assertGreater(len(synthesis.split()), 25)
+        self.assertIsInstance(synthesis, str)
+        self.assertGreater(len(synthesis.split()), 20)
         self.assertIn("climate", synthesis.lower())
-        self.assertFalse(debug.get("dev_fallback_used"), debug)
-        self.assertTrue(any(attempt.get("valid") for attempt in debug.get("attempts", [])), debug)
         self.assertNoModelFallbacks()
 
     def test_title_generation_component(self) -> None:
@@ -173,17 +165,13 @@ class PipelineLLMComponentTests(unittest.TestCase):
         }
         with patch("news_pipeline.pipeline._resolve_google_news_url", side_effect=lambda url: url):
             with patch("news_pipeline.pipeline.web_scrape", side_effect=fake_scrape):
-                with patch(
-                    "news_pipeline.pipeline._translate_if_needed",
-                    side_effect=lambda text, title="": text,
-                ):
-                    fallback_targets, _, fallback_stats = build_top_funnel_article_targets_for_coverage_gaps(
-                        TOPICS,
-                        TOP_FUNNEL_STORIES,
-                        [article_target],
-                        seen_urls=set(),
-                        run_seen_urls=set(),
-                    )
+                fallback_targets, _, fallback_stats = build_top_funnel_article_targets_for_coverage_gaps(
+                    TOPICS,
+                    TOP_FUNNEL_STORIES,
+                    [article_target],
+                    seen_urls=set(),
+                    run_seen_urls=set(),
+                )
         self.assertGreaterEqual(fallback_stats["added_count"], 1)
 
         budgeted, budget_stats = budget_article_targets(
@@ -196,16 +184,24 @@ class PipelineLLMComponentTests(unittest.TestCase):
         self.assertEqual(budget_stats["included_count"], 2)
 
         with patch("news_pipeline.pipeline.ARTICLE_SUMMARY_CONCURRENCY", 1):
-            with patch("news_pipeline.pipeline.RELAXED_FINAL_SYNTHESIS_GUARDS", True):
-                with patch("news_pipeline.pipeline._resolve_google_news_url", side_effect=lambda url: url):
-                    with patch("news_pipeline.pipeline.web_scrape", side_effect=fake_scrape):
-                        with patch(
-                            "news_pipeline.pipeline._translate_if_needed",
-                            side_effect=lambda text, title="": text,
-                        ):
-                            with redirect_stdout(StringIO()):
-                                summaries = run_article_summary_pass(budgeted, TOPICS)
-                                synthesis, _, _ = run_final_synthesis_pass(summaries, TOPICS, None)
+            with patch("news_pipeline.pipeline._resolve_google_news_url", side_effect=lambda url: url):
+                with patch("news_pipeline.pipeline.web_scrape", side_effect=fake_scrape):
+                    with redirect_stdout(StringIO()):
+                        summaries = run_article_summary_pass(budgeted, TOPICS)
+
+        story_records = [
+            {
+                "topic_title": article.get("topic_title") or "News",
+                "story_title": article.get("title") or "News update",
+                "cluster_article_ids": [article.get("article_id")],
+            }
+            for article in budgeted
+        ]
+        with redirect_stdout(StringIO()):
+            synthesis = run_per_story_synthesis(summaries, story_records, TOPICS, min_articles_per_story=1)
+
+        self.assertIsInstance(synthesis, str)
+        self.assertGreater(len(synthesis), 0, "Expected non-empty synthesis from per-story drafting")
 
         report_body = build_report_body("Fixture Daily Brief", synthesis, summaries, TOPICS, None)
 

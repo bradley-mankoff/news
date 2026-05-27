@@ -196,6 +196,7 @@ ARTICLE_SUMMARIES = [
         "- Source: Fixture Wire\n"
         "- Published: Sat, 16 May 2026 15:30:00 GMT\n"
         "- URL: https://example.com/climate-levee\n"
+        "- Article ID: Fixture Wire-climate_resilience-1\n"
         "- Topic: Climate Resilience\n\n"
         "Summary:\n"
         "City officials approved a climate resilience package focused on river levee repairs, "
@@ -209,6 +210,7 @@ ARTICLE_SUMMARIES = [
         "- Source: Fixture Wire\n"
         "- Published: Sat, 16 May 2026 16:45:00 GMT\n"
         "- URL: https://example.com/chip-controls\n"
+        "- Article ID: Fixture Wire-chip_exports-1\n"
         "- Topic: Chip Export Controls\n\n"
         "Summary:\n"
         "Officials announced tighter chip export controls for advanced AI accelerators and "
@@ -216,6 +218,24 @@ ARTICLE_SUMMARIES = [
         "and the government said the move is intended to limit military use while preserving "
         "some commercial trade."
     ),
+    (
+        "### Cooling centers added to climate resilience plan\n"
+        "Metadata:\n"
+        "- Source: Second Source\n"
+        "- Published: Sat, 16 May 2026 12:00:00 GMT\n"
+        "- URL: https://example.com/cooling-centers\n"
+        "- Article ID: Second Source-climate_resilience-1\n"
+        "- Topic: Climate Resilience\n\n"
+        "Summary:\n"
+        "The city will open additional cooling centers and inspect flood pumps as part of its "
+        "climate resilience plan. Officials said the centers would be staffed during extreme "
+        "heat days and that pump inspections would continue through the summer."
+    ),
+]
+
+ARTICLE_SUMMARIES_CLIMATE_PAIR = [
+    ARTICLE_SUMMARIES[0],
+    ARTICLE_SUMMARIES[2],
 ]
 
 

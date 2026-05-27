@@ -27,25 +27,21 @@ __pycache__/
 .DS_Store
 **/.DS_Store
 
-# Keep generated output context narrowed to run 2026-05-25_14-46-36.
+# Keep generated output context narrowed to run 2026-05-26_22-01-48.
 !output/
 !output/daily_outputs/
 output/daily_outputs/*
-!output/daily_outputs/2026-05-25/
-!output/daily_outputs/2026-05-25/article_summaries_2026-05-25_14-46-36.json
-!output/daily_outputs/2026-05-25/candidate_urls_2026-05-25_14-46-36.txt
-!output/daily_outputs/2026-05-25/news_report_2026-05-25_14-46-36_tiny_codex_default_prompt.txt
-!output/daily_outputs/2026-05-25/news_report_2026-05-25_14-46-36_tiny_codex_default_prompt_image.png
-!output/daily_outputs/2026-05-25/news_report_2026-05-25_14-46-36_tiny_codex_default_prompt_image_prompt.txt
-!output/daily_outputs/2026-05-25/news_report_2026-05-25_14-46-36_tiny_codex_default_prompt_image_stats.json
-!output/daily_outputs/2026-05-25/news_report_2026-05-25_14-46-36_tiny_codex_default_prompt_primary_dataset.json
-!output/daily_outputs/2026-05-25/news_report_2026-05-25_14-46-36_tiny_codex_default_prompt_primary_dataset.txt
-!output/daily_outputs/2026-05-25/news_report_2026-05-25_14-46-36_tiny_codex_default_prompt_raw.png
-!output/daily_outputs/2026-05-25/run_details_2026-05-25_14-46-36.json
-!output/daily_outputs/2026-05-25/run_details_2026-05-25_14-46-36.md
-!output/daily_outputs/2026-05-25/run_log_2026-05-25_14-46-36.log
-!output/daily_outputs/2026-05-25/run_summary_2026-05-25_14-46-36.md
-!output/daily_outputs/2026-05-25/selected_article_urls_2026-05-25_14-46-36.txt
-!output/daily_outputs/2026-05-25/topic_assigned_article_summaries_2026-05-25_14-46-36.json
-!output/daily_outputs/2026-05-25/topics_2026-05-25_14-46-36.json
+!output/daily_outputs/2026-05-26/
+!output/daily_outputs/2026-05-26/article_summaries_2026-05-26_22-01-48.json
+!output/daily_outputs/2026-05-26/candidate_urls_2026-05-26_22-01-48.txt
+!output/daily_outputs/2026-05-26/news_report_2026-05-26_22-01-48_tiny_codex_default_prompt.txt
+!output/daily_outputs/2026-05-26/news_report_2026-05-26_22-01-48_tiny_codex_default_prompt_primary_dataset.json
+!output/daily_outputs/2026-05-26/news_report_2026-05-26_22-01-48_tiny_codex_default_prompt_primary_dataset.txt
+!output/daily_outputs/2026-05-26/run_details_2026-05-26_22-01-48.json
+!output/daily_outputs/2026-05-26/run_details_2026-05-26_22-01-48.md
+!output/daily_outputs/2026-05-26/run_log_2026-05-26_22-01-48.log
+!output/daily_outputs/2026-05-26/run_summary_2026-05-26_22-01-48.md
+!output/daily_outputs/2026-05-26/selected_article_urls_2026-05-26_22-01-48.txt
+!output/daily_outputs/2026-05-26/topic_assigned_article_summaries_2026-05-26_22-01-48.json
+!output/daily_outputs/2026-05-26/topics_2026-05-26_22-01-48.json
 # <<< news-pipeline core context <<<

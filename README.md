@@ -73,7 +73,7 @@ full reference. Common overrides:
 NEWS_MODEL=qwen-9b-dense uv run news local-prod
 NEWS_IMAGE_ENABLED=0 uv run news local-prod
 #local prod but tiny:
-NEWS_MODEL=gemma-e2b-tiny uv run news local-prod
+NEWS_MODEL=gemma-e2b-tiny NEWS_IMAGE_ENABLED=0 uv run news local-prod
 NEWS_LOCAL_PROD_USE_SHARED_HISTORY=1 uv run news local-prod
 ```
 

@@ -38,7 +38,11 @@ from news_pipeline.pipeline import (
 
 
 def fake_scrape(url: str) -> str:
-    return CHIP_ARTICLE_TEXT if "chip" in url else SCRAPED_ARTICLE_TEXT
+    if "chip" in url:
+        return CHIP_ARTICLE_TEXT
+    if "sports" in url:
+        return ""
+    return SCRAPED_ARTICLE_TEXT
 
 
 class FakeRSSResponse:
@@ -95,7 +99,7 @@ class PipelineComponentTests(unittest.TestCase):
             [item["title"] for item in selected],
             [
                 "City expands flood defenses after river levee warnings",
-                "New chip export controls target advanced AI accelerators",
+                "New chip export controls advanced AI accelerators",
             ],
         )
         self.assertGreaterEqual(selected[0]["relevance_score"], TOPICS[0]["min_score"])
@@ -111,21 +115,20 @@ class PipelineComponentTests(unittest.TestCase):
         with patch("news_pipeline.pipeline.SOURCE_FEEDS", source_feeds):
             with patch("news_pipeline.pipeline.requests.get", return_value=FakeRSSResponse()):
                 with patch("news_pipeline.pipeline._resolve_google_news_url", side_effect=lambda url: url):
-                    with patch("news_pipeline.pipeline.web_scrape", side_effect=fake_scrape):
+                    with patch(
+                        "news_pipeline.pipeline.scrape_article_text",
+                        side_effect=lambda url, **kwargs: (fake_scrape(url), "scraped"),
+                    ):
                         with patch(
-                            "news_pipeline.pipeline._translate_if_needed",
-                            side_effect=lambda text, title="": text,
+                            "news_pipeline.pipeline._is_within_recent_window",
+                            return_value=True,
                         ):
-                            with patch(
-                                "news_pipeline.pipeline._is_within_recent_window",
-                                return_value=True,
-                            ):
-                                targets, new_urls, source_run = gather_article_targets_for_source(
-                                    "Fixture Wire",
-                                    TOPICS,
-                                    seen_urls=set(),
-                                    run_seen_urls=set(),
-                                )
+                            targets, new_urls, source_run = gather_article_targets_for_source(
+                                "Fixture Wire",
+                                TOPICS,
+                                seen_urls=set(),
+                                run_seen_urls=set(),
+                            )
 
         self.assertEqual(source_run["status"], "ok")
         self.assertEqual(source_run["feed_item_count"], 3)
@@ -250,18 +253,17 @@ class PipelineComponentTests(unittest.TestCase):
         existing_targets = [ARTICLE_TARGETS[1]]
         with patch("news_pipeline.pipeline.DEV", False):
             with patch("news_pipeline.pipeline._resolve_google_news_url", side_effect=lambda url: url):
-                with patch("news_pipeline.pipeline.web_scrape", side_effect=fake_scrape):
-                    with patch(
-                        "news_pipeline.pipeline._translate_if_needed",
-                        side_effect=lambda text, title="": text,
-                    ):
-                        targets, new_urls, stats = build_top_funnel_article_targets_for_coverage_gaps(
-                            TOPICS,
-                            TOP_FUNNEL_STORIES,
-                            existing_targets,
-                            seen_urls=set(),
-                            run_seen_urls=set(),
-                        )
+                with patch(
+                    "news_pipeline.pipeline.scrape_article_text",
+                    side_effect=lambda url, **kwargs: (fake_scrape(url), "scraped"),
+                ):
+                    targets, new_urls, stats = build_top_funnel_article_targets_for_coverage_gaps(
+                        TOPICS,
+                        TOP_FUNNEL_STORIES,
+                        existing_targets,
+                        seen_urls=set(),
+                        run_seen_urls=set(),
+                    )
 
         self.assertEqual(stats["added_count"], 1)
         self.assertEqual(stats["filled_topics"], {"Climate Resilience": 1})

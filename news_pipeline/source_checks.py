@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import argparse
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timedelta, timezone
+from email.utils import parsedate_to_datetime
 import gzip
 import html
 import json
@@ -12,6 +14,7 @@ import re
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 import zlib
 from pathlib import Path
@@ -26,9 +29,33 @@ from .config import ROOT_DIR
 LANGUAGE_DETECTION_MODEL = "papluca/xlm-roberta-base-language-detection"
 LANGUAGE_MIN_CONFIDENCE = 0.35
 LANGUAGE_SAMPLE_LIMIT = 12
+RECENT_SOURCE_WINDOW_DAYS = 7
+ARTICLE_PROBE_SAMPLE_SIZE = 5
 TEXT_TAG_RE = re.compile(r"<[^>]+>")
 WHITESPACE_RE = re.compile(r"\s+")
 SOURCE_FIELD_RE = re.compile(r"^    ([A-Za-z_][A-Za-z0-9_-]*):")
+PORTUGUESE_DATE_TOKEN_MAP = {
+    "Dom": "Sun",
+    "Seg": "Mon",
+    "Ter": "Tue",
+    "Qua": "Wed",
+    "Qui": "Thu",
+    "Sex": "Fri",
+    "Sab": "Sat",
+    "Sáb": "Sat",
+    "Jan": "Jan",
+    "Fev": "Feb",
+    "Mar": "Mar",
+    "Abr": "Apr",
+    "Mai": "May",
+    "Jun": "Jun",
+    "Jul": "Jul",
+    "Ago": "Aug",
+    "Set": "Sep",
+    "Out": "Oct",
+    "Nov": "Nov",
+    "Dez": "Dec",
+}
 
 HEADERS = {
     "User-Agent": (
@@ -111,48 +138,275 @@ def _fetch_url(url: str, timeout: int, *, retries: int = 1) -> tuple[bytes, int]
     raise RuntimeError(str(last_error or "fetch failed"))
 
 
-def _count_items(content: bytes, fetcher: str) -> tuple[int, str]:
+def _recent_probe_url(url: str, recent_days: int) -> str:
+    parts = urllib.parse.urlsplit(url)
+    if parts.netloc.lower() != "news.google.com" or not parts.path.startswith("/rss/search"):
+        return url
+
+    query_items = urllib.parse.parse_qsl(parts.query, keep_blank_values=True)
+    updated_items: list[tuple[str, str]] = []
+    changed = False
+    for key, value in query_items:
+        if key != "q":
+            updated_items.append((key, value))
+            continue
+        updated_value = re.sub(
+            r"\bwhen:\S+",
+            f"when:{recent_days}d",
+            value,
+            count=1,
+            flags=re.IGNORECASE,
+        )
+        if updated_value == value:
+            updated_value = f"when:{recent_days}d {value}".strip()
+        updated_items.append((key, updated_value))
+        changed = True
+
+    if not changed:
+        updated_items.append(("q", f"when:{recent_days}d"))
+
+    return urllib.parse.urlunsplit(
+        parts._replace(query=urllib.parse.urlencode(updated_items))
+    )
+
+
+def _utc_datetime(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
+def _normalize_feed_date_text(value: str) -> str:
+    normalized = value
+    for source_token, target_token in PORTUGUESE_DATE_TOKEN_MAP.items():
+        normalized = re.sub(
+            rf"(?<![A-Za-zÀ-ÿ]){re.escape(source_token)}(?![A-Za-zÀ-ÿ])",
+            target_token,
+            normalized,
+            flags=re.IGNORECASE,
+        )
+    return normalized
+
+
+def _parse_feed_datetime(raw_value: Any) -> datetime | None:
+    value = str(raw_value or "").strip()
+    if not value:
+        return None
+
+    for candidate in (value, _normalize_feed_date_text(value)):
+        try:
+            return _utc_datetime(parsedate_to_datetime(candidate))
+        except Exception:
+            pass
+
+    iso_value = value.replace("Z", "+00:00")
+    try:
+        return _utc_datetime(datetime.fromisoformat(iso_value))
+    except Exception:
+        return None
+
+
+def _parse_unix_datetime(raw_value: Any) -> datetime | None:
+    if raw_value is None or isinstance(raw_value, bool):
+        return None
+    try:
+        timestamp = float(str(raw_value).strip())
+    except (TypeError, ValueError):
+        return None
+    if timestamp <= 0:
+        return None
+    if timestamp > 1_000_000_000_000:
+        timestamp /= 1000
+    try:
+        return datetime.fromtimestamp(timestamp, timezone.utc)
+    except (OverflowError, OSError, ValueError):
+        return None
+
+
+def _format_feed_datetime(value: datetime | None) -> str | None:
+    if value is None:
+        return None
+    return _utc_datetime(value).isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
+def _json_record_datetime(record: dict[str, Any]) -> datetime | None:
+    timestamp_fields = ("created_utc", "created", "created_at_utc")
+    date_fields = (
+        "date_published",
+        "date_modified",
+        "published",
+        "published_at",
+        "updated",
+        "updated_at",
+        "pubDate",
+        "pub_date",
+    )
+    for field in timestamp_fields:
+        parsed = _parse_unix_datetime(record.get(field))
+        if parsed is not None:
+            return parsed
+    for field in date_fields:
+        parsed = _parse_feed_datetime(record.get(field))
+        if parsed is not None:
+            return parsed
+    return None
+
+
+def _json_item_datetimes(content: bytes) -> list[datetime | None]:
+    data = json.loads(content)
+    dates: list[datetime | None] = []
+
+    def add_records(records: Any) -> None:
+        if not isinstance(records, list):
+            return
+        for item in records:
+            if not isinstance(item, dict):
+                continue
+            record = item.get("data") if isinstance(item.get("data"), dict) else item
+            dates.append(_json_record_datetime(record))
+
+    if isinstance(data, dict):
+        nested_data = data.get("data")
+        reddit_children = nested_data.get("children", []) if isinstance(nested_data, dict) else []
+        add_records(reddit_children)
+        add_records(data.get("items", []))
+        if not dates:
+            for field in ("entries", "articles", "results"):
+                add_records(data.get(field, []))
+        if not dates and isinstance(nested_data, list):
+            add_records(nested_data)
+    elif isinstance(data, list):
+        add_records(data)
+
+    return dates
+
+
+def _xml_feed_format(root: ElementTree.Element) -> str:
+    root_tag = _local_xml_name(root.tag)
+    if "rss" in root_tag or root_tag == "rss":
+        return "rss"
+    if "feed" in root_tag or "atom" in root_tag:
+        return "atom"
+    return "xml"
+
+
+def _xml_item_datetime(node: ElementTree.Element) -> datetime | None:
+    date_fields = ("pubdate", "published", "updated", "date", "created", "modified", "issued")
+    values_by_field: dict[str, str] = {}
+    for child in list(node):
+        field = _local_xml_name(child.tag)
+        if field in date_fields:
+            values_by_field.setdefault(field, " ".join(child.itertext()).strip())
+    for field in date_fields:
+        parsed = _parse_feed_datetime(values_by_field.get(field))
+        if parsed is not None:
+            return parsed
+    return None
+
+
+def _xml_item_datetimes(content: bytes) -> tuple[list[datetime | None], str]:
+    root = _xml_root_from_content(content)
+    dates = [
+        _xml_item_datetime(node)
+        for node in root.iter()
+        if _local_xml_name(node.tag) in {"item", "entry"}
+    ]
+    return dates, _xml_feed_format(root)
+
+
+def _item_datetimes(content: bytes, fetcher: str) -> tuple[list[datetime | None], str]:
     if fetcher in {"reddit", "reddit_top", "reddit_top_json"}:
-        data = json.loads(content)
-        return len(data.get("data", {}).get("children", [])), "json"
+        return _json_item_datetimes(content), "json"
 
     try:
-        root = ElementTree.fromstring(content)
+        return _xml_item_datetimes(content)
     except ElementTree.ParseError:
-        data = json.loads(content)
-        return len(data.get("data", {}).get("children", [])), "json"
-
-    root_tag = root.tag.lower()
-    if "rss" in root_tag or root.tag == "rss":
-        return len(root.findall(".//item")), "rss"
-    if "feed" in root_tag or "atom" in root_tag:
-        return len(root.findall(".//{http://www.w3.org/2005/Atom}entry")), "atom"
-    return len(root.findall(".//item") + root.findall(".//entry")), "xml"
+        return _json_item_datetimes(content), "json"
 
 
-def probe_source(source: dict[str, Any], timeout: int) -> dict[str, Any]:
+def _count_items(content: bytes, fetcher: str) -> tuple[int, str]:
+    item_datetimes, feed_format = _item_datetimes(content, fetcher)
+    return len(item_datetimes), feed_format
+
+
+def _summarize_items(
+    content: bytes,
+    fetcher: str,
+    *,
+    recent_days: int,
+    now_utc: datetime | None = None,
+) -> dict[str, Any]:
+    item_datetimes, feed_format = _item_datetimes(content, fetcher)
+    dated_items = [value for value in item_datetimes if value is not None]
+    cutoff = (now_utc or datetime.now(timezone.utc)) - timedelta(days=recent_days)
+    recent_items = [value for value in dated_items if value >= cutoff]
+    newest_item = max(dated_items) if dated_items else None
+    return {
+        "format": feed_format,
+        "item_count": len(item_datetimes),
+        "recent_item_count": len(recent_items),
+        "undated_item_count": len(item_datetimes) - len(dated_items),
+        "newest_item_at": _format_feed_datetime(newest_item),
+    }
+
+
+def probe_source(
+    source: dict[str, Any],
+    timeout: int,
+    *,
+    recent_days: int = RECENT_SOURCE_WINDOW_DAYS,
+    probe_articles: int = 0,
+) -> dict[str, Any]:
     started_at = time.monotonic()
     result: dict[str, Any] = {
         "key": source["key"],
         "name": source["name"],
         "section": source["section"],
         "url": source["url"],
+        "probe_url": None,
         "ok": False,
         "http_status": None,
         "latency_ms": None,
         "format": None,
         "item_count": None,
+        "recent_item_count": None,
+        "undated_item_count": None,
+        "newest_item_at": None,
+        "recent_days": recent_days,
+        "stale": False,
         "error": None,
+        "article_probe_count": None,
+        "article_probe_successes": None,
     }
 
+    content: bytes | None = None
     try:
-        content, status = _fetch_url(source["url"], timeout)
+        probe_url = _recent_probe_url(source["url"], recent_days)
+        if probe_url != source["url"]:
+            result["probe_url"] = probe_url
+        content, status = _fetch_url(probe_url, timeout)
         result["http_status"] = status
         result["latency_ms"] = int((time.monotonic() - started_at) * 1000)
-        item_count, feed_format = _count_items(content, source["fetcher"])
-        result.update(format=feed_format, item_count=item_count)
+        item_summary = _summarize_items(content, source["fetcher"], recent_days=recent_days)
+        result.update(item_summary)
+        item_count = int(item_summary["item_count"])
+        recent_item_count = int(item_summary["recent_item_count"])
         if item_count <= 0:
+            result["stale"] = True
             result["error"] = "Feed parsed but returned 0 items."
+        elif recent_item_count <= 0:
+            result["stale"] = True
+            newest_item_at = item_summary.get("newest_item_at")
+            undated_item_count = int(item_summary.get("undated_item_count") or 0)
+            if newest_item_at:
+                result["error"] = (
+                    f"No feed items dated within last {recent_days} day(s); "
+                    f"newest is {newest_item_at}."
+                )
+            elif undated_item_count:
+                result["error"] = "Feed items had no parseable publish/update dates."
+            else:
+                result["error"] = f"No feed items dated within last {recent_days} day(s)."
         else:
             result["ok"] = True
     except urllib.error.HTTPError as error:
@@ -168,6 +422,16 @@ def probe_source(source: dict[str, Any], timeout: int) -> dict[str, Any]:
         if result["latency_ms"] is None:
             result["latency_ms"] = int((time.monotonic() - started_at) * 1000)
 
+    if probe_articles > 0 and content is not None and not result.get("stale"):
+        urls = _extract_feed_article_urls(content, source["fetcher"], probe_articles)
+        successes = 0
+        for url in urls:
+            has_body, _status = _probe_article_body(url, timeout)
+            if has_body:
+                successes += 1
+        result["article_probe_count"] = len(urls)
+        result["article_probe_successes"] = successes
+
     return result
 
 
@@ -178,6 +442,18 @@ def _clean_sample_text(value: str) -> str:
 
 def _local_xml_name(tag: str) -> str:
     return str(tag).rsplit("}", 1)[-1].lower()
+
+
+def _xml_root_from_content(content: bytes) -> ElementTree.Element:
+    try:
+        return ElementTree.fromstring(content)
+    except ElementTree.ParseError as first_error:
+        for encoding in ("utf-8-sig", "iso-8859-1", "windows-1252"):
+            try:
+                return ElementTree.fromstring(content.decode(encoding))
+            except (ElementTree.ParseError, UnicodeDecodeError):
+                continue
+        raise first_error
 
 
 def _direct_child_text(node: ElementTree.Element, field_names: set[str]) -> str:
@@ -230,7 +506,7 @@ def _json_language_samples(content: bytes, max_items: int) -> list[str]:
 
 
 def _xml_language_samples(content: bytes, max_items: int) -> list[str]:
-    root = ElementTree.fromstring(content)
+    root = _xml_root_from_content(content)
     samples: list[str] = []
     text_fields = {"title", "description", "summary", "content", "encoded"}
 
@@ -380,6 +656,85 @@ def detect_source_language(
     return result
 
 
+def _xml_feed_article_urls(content: bytes, max_urls: int) -> list[str]:
+    root = _xml_root_from_content(content)
+    urls: list[str] = []
+    for node in root.iter():
+        if _local_xml_name(node.tag) not in {"item", "entry"}:
+            continue
+        url = ""
+        for child in list(node):
+            name = _local_xml_name(child.tag)
+            if name == "link":
+                href = child.get("href", "").strip()
+                url = href or (child.text or "").strip()
+                if url:
+                    break
+        if not url:
+            for child in list(node):
+                if _local_xml_name(child.tag) == "guid":
+                    candidate = (child.text or "").strip()
+                    if candidate.startswith("http"):
+                        url = candidate
+                    break
+        if url:
+            urls.append(url)
+        if len(urls) >= max_urls:
+            break
+    return urls
+
+
+def _json_feed_article_urls(content: bytes, max_urls: int) -> list[str]:
+    data = json.loads(content)
+    urls: list[str] = []
+    children = []
+    if isinstance(data, dict):
+        children = data.get("data", {}).get("children", [])
+        if not isinstance(children, list):
+            children = []
+    for child in children:
+        record = child.get("data") if isinstance(child, dict) else None
+        if not isinstance(record, dict):
+            continue
+        url = str(record.get("url") or "").strip()
+        if url and url.startswith("http"):
+            urls.append(url)
+        if len(urls) >= max_urls:
+            break
+    return urls
+
+
+def _extract_feed_article_urls(content: bytes, fetcher: str, max_urls: int) -> list[str]:
+    if fetcher in {"reddit", "reddit_top", "reddit_top_json"}:
+        return _json_feed_article_urls(content, max_urls)
+    try:
+        return _xml_feed_article_urls(content, max_urls)
+    except Exception:
+        return _json_feed_article_urls(content, max_urls)
+
+
+def _probe_article_body(url: str, timeout: int) -> tuple[bool, str]:
+    """Returns (has_real_body, status_label)."""
+    try:
+        content, _status = _fetch_url(url, timeout)
+        try:
+            import trafilatura  # type: ignore
+            text = trafilatura.extract(content.decode("utf-8", errors="replace"))
+        except ImportError:
+            return False, "trafilatura_not_installed"
+        except Exception:
+            return False, "trafilatura_error"
+        return bool(text and text.strip()), "scraped" if (text and text.strip()) else "no_text"
+    except urllib.error.HTTPError as exc:
+        return False, f"http_{exc.code}"
+    except urllib.error.URLError as exc:
+        return False, f"url_error: {exc.reason}"
+    except TimeoutError:
+        return False, f"timeout_{timeout}s"
+    except Exception as exc:
+        return False, f"error: {exc!s}"
+
+
 def _source_block_ranges(lines: list[str]) -> list[tuple[int, int]]:
     ranges: list[tuple[int, int]] = []
     in_sources = False
@@ -472,7 +827,28 @@ def write_source_languages(path: Path, results: list[dict[str, Any]], *, overwri
     return len(edits)
 
 
+def remove_source_blocks(path: Path, keys: set[str]) -> int:
+    if not keys:
+        return 0
+
+    lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
+    ranges_to_remove: list[tuple[int, int]] = []
+    for start, end in _source_block_ranges(lines):
+        key = _source_block_key(lines, start, end)
+        if key in keys:
+            ranges_to_remove.append((start, end))
+
+    for start, end in reversed(ranges_to_remove):
+        del lines[start:end]
+
+    if ranges_to_remove:
+        path.write_text("".join(lines), encoding="utf-8")
+    return len(ranges_to_remove)
+
+
 def _status(result: dict[str, Any]) -> str:
+    if result.get("stale"):
+        return "STALE"
     if result["ok"]:
         return "OK"
     if result["http_status"]:
@@ -483,26 +859,37 @@ def _status(result: dict[str, Any]) -> str:
 def print_table(results: list[dict[str, Any]]) -> None:
     if not results:
         return
+    show_scrape = any(row.get("article_probe_count") is not None for row in results)
     widths = {
         "section": 10,
         "key": min(max(len(row["key"]) for row in results), 28),
         "name": min(max(len(row["name"]) for row in results), 30),
     }
+    scrape_header = f"  {'SCRAPE':>6}" if show_scrape else ""
     print()
     print(
         f"  {'STATUS':<8}  {'SECTION':<10}  {'KEY':<{widths['key']}}  "
-        f"{'NAME':<{widths['name']}}  {'LATENCY':>8}  {'ITEMS':>5}  FORMAT  ERROR"
+        f"{'NAME':<{widths['name']}}  {'LATENCY':>8}  {'ITEMS':>5}  "
+        f"{'RECENT':>6}  {'NEWEST':<20}  FORMAT{scrape_header}  ERROR"
     )
-    print("  " + "-" * 108)
+    print("  " + "-" * (136 + (9 if show_scrape else 0)))
     for row in results:
         latency = f"{row['latency_ms']}ms" if row["latency_ms"] is not None else "-"
         items = str(row["item_count"]) if row["item_count"] is not None else "-"
+        recent = str(row.get("recent_item_count")) if row.get("recent_item_count") is not None else "-"
+        newest = str(row.get("newest_item_at") or "-")[:20]
         name = row["name"][: widths["name"]]
         key = row["key"][: widths["key"]]
+        scrape_col = ""
+        if show_scrape:
+            probe_count = row.get("article_probe_count")
+            probe_ok = row.get("article_probe_successes")
+            scrape_col = f"  {f'{probe_ok}/{probe_count}' if probe_count is not None else '-':>6}"
         print(
             f"  {_status(row):<8}  {row['section']:<10}  {key:<{widths['key']}}  "
             f"{name:<{widths['name']}}  {latency:>8}  {items:>5}  "
-            f"{row['format'] or '-':<6}  {row['error'] or ''}"
+            f"{recent:>6}  {newest:<20}  "
+            f"{row['format'] or '-':<6}{scrape_col}  {row['error'] or ''}"
         )
 
 
@@ -549,6 +936,41 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=12,
         help="Maximum concurrent source probes for connectivity checks.",
+    )
+    parser.add_argument(
+        "--recent-days",
+        type=int,
+        default=RECENT_SOURCE_WINDOW_DAYS,
+        help=(
+            "Require at least one feed item dated within this many days. "
+            f"Defaults to {RECENT_SOURCE_WINDOW_DAYS}."
+        ),
+    )
+    parser.add_argument(
+        "--prune-inactive",
+        "--prune-stale",
+        action="store_true",
+        help=(
+            "Remove source entries from the YAML when the feed parses but has "
+            "0 articles in the recent-days window."
+        ),
+    )
+    parser.add_argument(
+        "--probe-articles",
+        action="store_true",
+        help=(
+            f"For each active source, fetch up to {ARTICLE_PROBE_SAMPLE_SIZE} article URLs from "
+            "the feed and verify that trafilatura can extract real body text. "
+            "Adds a SCRAPE column to the output table."
+        ),
+    )
+    parser.add_argument(
+        "--prune-unscrapable",
+        action="store_true",
+        help=(
+            "Remove source entries from the YAML when ALL probed article bodies were empty "
+            "(requires --probe-articles). Use this for monthly source hygiene."
+        ),
     )
     parser.add_argument("--only-failures", action="store_true", help="Print only failed sources.")
     parser.add_argument("--no-color", action="store_true", help=argparse.SUPPRESS)
@@ -682,13 +1104,23 @@ def _probe_sources(
     *,
     timeout: int,
     concurrency: int,
+    recent_days: int,
+    probe_articles: int = 0,
 ) -> list[dict[str, Any]]:
     worker_count = max(1, min(max(1, concurrency), len(sources)))
     if worker_count == 1:
-        return [probe_source(source, timeout) for source in sources]
+        return [
+            probe_source(source, timeout, recent_days=recent_days, probe_articles=probe_articles)
+            for source in sources
+        ]
 
     with ThreadPoolExecutor(max_workers=worker_count) as executor:
-        futures = [executor.submit(probe_source, source, timeout) for source in sources]
+        futures = [
+            executor.submit(
+                probe_source, source, timeout, recent_days=recent_days, probe_articles=probe_articles
+            )
+            for source in sources
+        ]
         return [future.result() for future in futures]
 
 
@@ -698,6 +1130,12 @@ def main(argv: list[str] | None = None) -> int:
 
     if not args.sources_yaml.exists():
         print(f"ERROR: {args.sources_yaml} not found.", file=sys.stderr)
+        return 2
+    if args.recent_days < 1:
+        print("ERROR: --recent-days must be at least 1.", file=sys.stderr)
+        return 2
+    if args.detect_languages and args.prune_inactive:
+        print("ERROR: --prune-inactive cannot be combined with --detect-languages.", file=sys.stderr)
         return 2
 
     sources = _source_rows(args.sources_yaml)
@@ -717,15 +1155,50 @@ def main(argv: list[str] | None = None) -> int:
             print("No sources to check.", file=sys.stderr)
             return 2
 
+    probe_articles_count = ARTICLE_PROBE_SAMPLE_SIZE if args.probe_articles else 0
+
+    if args.prune_unscrapable and not args.probe_articles:
+        print("ERROR: --prune-unscrapable requires --probe-articles.", file=sys.stderr)
+        return 2
+
     if not args.json_output:
+        probe_note = f", probe-articles={probe_articles_count}" if probe_articles_count else ""
         print(
             f"Checking {len(sources)} source(s) from {args.sources_yaml} "
-            f"(timeout={args.timeout}s, concurrency={args.concurrency})..."
+            f"(timeout={args.timeout}s, concurrency={args.concurrency}, "
+            f"recent_days={args.recent_days}{probe_note})..."
         )
-    results = _probe_sources(sources, timeout=args.timeout, concurrency=args.concurrency)
+    results = _probe_sources(
+        sources,
+        timeout=args.timeout,
+        concurrency=args.concurrency,
+        recent_days=args.recent_days,
+        probe_articles=probe_articles_count,
+    )
+
+    stale_keys = {str(result["key"]) for result in results if result.get("stale")}
+    unscrapable_keys = {
+        str(result["key"])
+        for result in results
+        if result.get("article_probe_count") and result.get("article_probe_successes") == 0
+    }
+
+    pruned = 0
+    pruned_unscrapable = 0
+    if args.prune_inactive:
+        pruned = remove_source_blocks(args.sources_yaml, stale_keys)
+    if args.prune_unscrapable:
+        pruned_unscrapable = remove_source_blocks(args.sources_yaml, unscrapable_keys)
 
     if args.json_output:
-        print(json.dumps(results, indent=2))
+        payload: dict[str, Any] = {"results": results}
+        if args.prune_inactive:
+            payload["pruned_inactive"] = pruned
+            payload["pruned_inactive_keys"] = sorted(stale_keys)
+        if args.prune_unscrapable:
+            payload["pruned_unscrapable"] = pruned_unscrapable
+            payload["pruned_unscrapable_keys"] = sorted(unscrapable_keys)
+        print(json.dumps(payload, indent=2))
     else:
         display = [result for result in results if not args.only_failures or not result["ok"]]
         if display:
@@ -733,12 +1206,24 @@ def main(argv: list[str] | None = None) -> int:
         else:
             print()
             print("  All sources passed.")
-        passed = sum(1 for result in results if result["ok"])
-        zero_items = sum(1 for result in results if result["ok"] and (result["item_count"] or 0) == 0)
-        summary = f"  {passed}/{len(results)} sources OK"
-        if zero_items:
-            summary += f", {zero_items} returned 0 items"
+        active = sum(1 for result in results if result["ok"])
+        stale = sum(1 for result in results if result.get("stale"))
+        failed = sum(1 for result in results if not result["ok"] and not result.get("stale"))
+        summary = f"  {active}/{len(results)} sources active"
+        if stale:
+            summary += f", {stale} inactive (0 articles in last {args.recent_days} days)"
+        if failed:
+            summary += f", {failed} failed"
+        if probe_articles_count:
+            unscrapable_count = len(unscrapable_keys)
+            summary += f", {unscrapable_count} unscrapable (0/{probe_articles_count} bodies)"
+        if args.prune_inactive:
+            summary += f", {pruned} pruned (inactive)"
+        if args.prune_unscrapable:
+            summary += f", {pruned_unscrapable} pruned (unscrapable)"
         print()
         print(summary)
 
+    if args.prune_inactive:
+        return 1 if any(not result["ok"] and not result.get("stale") for result in results) else 0
     return 1 if any(not result["ok"] for result in results) else 0
