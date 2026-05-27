@@ -92,6 +92,14 @@ def _open_cache() -> sqlite3.Connection:
         "CREATE TABLE IF NOT EXISTS embeddings "
         "(hash TEXT PRIMARY KEY, vector BLOB NOT NULL)"
     )
+    # Fresh caches use SQLite's implicit primary-key index; this covers older
+    # cache files that may have been created before hash was the primary key.
+    table_columns = conn.execute("PRAGMA table_info(embeddings)").fetchall()
+    hash_is_primary_key = any(row[1] == "hash" and row[5] for row in table_columns)
+    if not hash_is_primary_key:
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_embeddings_hash ON embeddings(hash)"
+        )
     conn.commit()
     return conn
 
@@ -141,7 +149,12 @@ def embed_topics(topics: list[dict]) -> dict[str, "np.ndarray"]:  # type: ignore
     topic_keys = [str(t.get("key") or t.get("id") or "") for t in topics]
     if len(set(topic_keys)) != len(topic_keys):
         seen = set()
-        dupes = [k for k in topic_keys if k in seen or seen.add(k)]  # type: ignore[func-returns-value]
+        dupes = []
+        for key in topic_keys:
+            if key in seen:
+                dupes.append(key)
+            else:
+                seen.add(key)
         logger.warning("Duplicate topic keys detected, embeddings will be overwritten: %s", dupes)
     topic_texts = [
         str(t.get("description") or t.get("rationale") or t.get("title") or "")
