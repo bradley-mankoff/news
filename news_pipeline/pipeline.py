@@ -3,6 +3,7 @@
 Common usage:
     uv run news dev
     uv run news local-prod
+    uv run news loose-local-prod
     uv run news prod
 
 Development vs. real sends:
@@ -14,6 +15,10 @@ Development vs. real sends:
     uv run news local-prod
         English core source run with isolated URL history, but delivery is
         limited to NEWS_DEV_RECIPIENT for review and manual forwarding.
+
+    uv run news loose-local-prod
+        Local production review with dev-loose topic/story matching thresholds
+        and the regular local-prod four-article story floor.
 
     uv run news prod
         Production run. Uses the configured recipient list, writes used_urls.txt,
@@ -172,6 +177,7 @@ TRANSLATION_MODEL_BASE_URL = CONFIG.translation_model_base_url
 TRANSLATION_MODEL_BACKEND = CONFIG.translation_model_backend
 TRANSLATION_MODEL_SERVER_COMMAND = CONFIG.translation_model_server_command
 TRANSLATION_TARGET_LANGUAGE = CONFIG.translation_target_language
+TRANSLATION_ENABLED = CONFIG.translation_enabled
 BRADLEY_ONLY_RECIPIENT = CONFIG.bradley_only_recipient
 USER_AGENT = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -209,6 +215,7 @@ LEGACY_SEEN_URLS_PATH = str(CONFIG.legacy_seen_urls_path)
 RUN_MODE = CONFIG.run_mode
 DEV = CONFIG.dev
 LOCAL_PROD = CONFIG.local_prod
+LOOSE_LOCAL_PROD = CONFIG.loose_local_prod
 BRADLEY_ONLY_DELIVERY = CONFIG.bradley_only_delivery
 SHARED_URL_HISTORY_ENABLED = CONFIG.shared_url_history_enabled
 RELAXED_FINAL_SYNTHESIS_GUARDS = CONFIG.relaxed_final_synthesis_guards
@@ -249,17 +256,8 @@ def _bounded_env_float(name: str, default: float, *, lower: float = 0.0, upper: 
 
 
 MIN_ARTICLES_PER_STORY = max(2, CONFIG.min_articles_per_story)
-try:
-    TOPIC_RELEVANCE_MIN_SCORE = max(1, int(os.getenv("NEWS_TOPIC_RELEVANCE_MIN_SCORE", "8")))
-except ValueError:
-    TOPIC_RELEVANCE_MIN_SCORE = 6
-try:
-    STORY_TOPIC_FIT_MIN_SCORE = max(
-        1,
-        int(os.getenv("NEWS_STORY_TOPIC_FIT_MIN_SCORE", str(TOPIC_RELEVANCE_MIN_SCORE))),
-    )
-except ValueError:
-    STORY_TOPIC_FIT_MIN_SCORE = TOPIC_RELEVANCE_MIN_SCORE
+TOPIC_RELEVANCE_MIN_SCORE = max(1, CONFIG.topic_relevance_min_score)
+STORY_TOPIC_FIT_MIN_SCORE = max(1, CONFIG.story_topic_fit_min_score)
 MAX_STORIES_PER_TOPIC = max(1, CONFIG.max_stories_per_topic)
 MAX_ARTICLES_PER_STORY = max(MIN_ARTICLES_PER_STORY, CONFIG.max_articles_per_story)
 STORY_CLUSTER_SIMILARITY_THRESHOLD = min(
@@ -1573,6 +1571,13 @@ def _article_translation_decision(
     title: str,
     text: str,
 ) -> dict[str, Any]:
+    if not TRANSLATION_ENABLED:
+        return {
+            "needed": False,
+            "reason": "translation_disabled",
+            "source_language": None,
+        }
+
     source_config = SOURCE_FEEDS.get(source_name) or {}
     source_language = _normalize_translation_language(source_config.get("language"))
     translation_source_language = _normalize_translation_language(
@@ -1792,6 +1797,17 @@ def translate_article_candidates(
     articles: list[dict],
     diagnostics: RunDiagnostics | None = None,
 ) -> list[dict]:
+    if not TRANSLATION_ENABLED:
+        if diagnostics is not None:
+            diagnostics.event(
+                "translation",
+                candidate_count=len(articles),
+                translated_count=0,
+                skipped=True,
+                reason="translation_disabled",
+            )
+        return articles
+
     translation_targets = [
         article
         for article in articles
@@ -5845,6 +5861,7 @@ def _new_run_diagnostics(source_count: int) -> RunDiagnostics:
             "run_mode": RUN_MODE,
             "dev": DEV,
             "local_prod": LOCAL_PROD,
+            "loose_local_prod": LOOSE_LOCAL_PROD,
             "bradley_only_delivery": BRADLEY_ONLY_DELIVERY,
             "shared_url_history_enabled": SHARED_URL_HISTORY_ENABLED,
             "relaxed_final_synthesis_guards": RELAXED_FINAL_SYNTHESIS_GUARDS,
@@ -6373,8 +6390,12 @@ def _run_pipeline() -> None:
         f"model: {MODEL_REFERENCE} -> {MODEL_NAME}"
     )
     progress_tracker.detail(
-        f"Translation model: {TRANSLATION_MODEL_REFERENCE} -> {TRANSLATION_MODEL_NAME} "
-        f"({TRANSLATION_MODEL_BACKEND}, target={TRANSLATION_TARGET_LANGUAGE})."
+        (
+            f"Translation model: {TRANSLATION_MODEL_REFERENCE} -> {TRANSLATION_MODEL_NAME} "
+            f"({TRANSLATION_MODEL_BACKEND}, target={TRANSLATION_TARGET_LANGUAGE})."
+            if TRANSLATION_ENABLED
+            else "Translation disabled; source selection is English-only."
+        )
     )
     progress_tracker.detail(
         f"Model caps: input {MODEL_MAX_INPUT_TOKENS} tokens, "
@@ -6393,21 +6414,27 @@ def _run_pipeline() -> None:
     progress_tracker.detail(f"Source pool: {len(sources)} of {len(all_sources)} configured feed(s).")
     if DEV:
         progress_tracker.detail(
-            f"DEV mode active. Using dev-tier sources that are English or translation-enabled "
+            f"DEV mode active. Using English dev-tier sources "
             f"({len(sources)} source(s)). "
             f"Sending to one recipient only "
             f"(always {BRADLEY_ONLY_RECIPIENT}) without recording URLs into the shared history."
         )
     elif LOCAL_PROD:
+        mode_label = "LOOSE-LOCAL-PROD" if LOOSE_LOCAL_PROD else "LOCAL-PROD"
         history_label = (
             "shared production URL history"
             if SHARED_URL_HISTORY_ENABLED
             else "isolated URL history"
         )
         progress_tracker.detail(
-            f"LOCAL-PROD mode active. Using dev/core source tiers that are English or translation-enabled "
+            f"{mode_label} mode active. Using English dev/core source tiers "
             f"with {history_label}, but sending only to {BRADLEY_ONLY_RECIPIENT}."
         )
+        if LOOSE_LOCAL_PROD:
+            progress_tracker.detail(
+                "Loose local-prod matching active: dev topic/story thresholds "
+                f"with a {MIN_ARTICLES_PER_STORY}-article story floor."
+            )
     progress_tracker.detail(f"Run output folder: {RUN_OUTPUT_DIR}")
     progress_tracker.detail(f"Run used URL log: {RUN_USED_URLS_PATH}")
     progress_tracker.detail(f"Run log: {RUN_LOG_PATH}")
@@ -6550,7 +6577,18 @@ def _run_pipeline() -> None:
         _write_run_diagnostics(diagnostics)
         return
 
-    article_candidates = translate_article_candidates(article_candidates, diagnostics)
+    diagnostics.event(
+        "translation",
+        candidate_count=len(article_candidates),
+        translated_count=0,
+        skipped=True,
+        reason=(
+            "translation_disabled"
+            if not TRANSLATION_ENABLED
+            else "pre_classification_translation_pass_disabled"
+        ),
+    )
+    progress_tracker.detail("Translation pass skipped before topic classification.")
 
     # Classify all collected articles into topics via embedding cosine similarity.
     # This replaces the earlier keyword-based topic_key assignment with a semantic one,

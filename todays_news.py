@@ -3,6 +3,7 @@
 Preferred usage:
     uv run news dev
     uv run news local-prod
+    uv run news loose-local-prod
     uv run news prod
 """
 

@@ -12,6 +12,7 @@ USAGE = """\
 Usage:
   uv run news dev
   uv run news local-prod
+  uv run news loose-local-prod
   uv run news prod
   uv run news check-sources [--sources-yaml PATH] [--only-failures]
   uv run news prune-sources [--sources-yaml PATH] [--recent-days 7]
@@ -22,12 +23,13 @@ Usage:
   uv run news serve-unsubscribe
 
 Compatibility:
-  uv run todays_news.py [dev|local-prod|prod]
-  uv run todays_news.py --dev|--local-prod|--prod
+  uv run todays_news.py [dev|local-prod|loose-local-prod|prod]
+  uv run todays_news.py --dev|--local-prod|--loose-local-prod|--prod
   uv run todays_news.py --model-server-command
   uv run todays_news.py --test-translation-model
   uv run todays_news.py --serve-unsubscribe
   NEWS_RUN_MODE=local-prod uv run todays_news.py
+  NEWS_RUN_MODE=loose-local-prod uv run todays_news.py
   NEWS_DEV=0 uv run todays_news.py
 
 """
@@ -37,12 +39,18 @@ RUN_MODE_COMMANDS = {
     "local-prod": "local-prod",
     "local_prod": "local-prod",
     "localprod": "local-prod",
+    "loose-local-prod": "loose-local-prod",
+    "loose_local_prod": "loose-local-prod",
+    "loose-localprod": "loose-local-prod",
+    "looselocal-prod": "loose-local-prod",
+    "looselocalprod": "loose-local-prod",
     "prod": "prod",
     "production": "prod",
 }
 MODE_FLAGS = {
     "--dev": "dev",
     "--local-prod": "local-prod",
+    "--loose-local-prod": "loose-local-prod",
     "--prod": "prod",
 }
 ACTION_ALIASES = {

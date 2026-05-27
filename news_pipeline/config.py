@@ -64,6 +64,13 @@ DEFAULT_MODEL_ALIAS = "gemma-26b-moe"
 CODEX_TEST_MODEL_ALIAS = "gemma-e2b-tiny"
 CODEX_TEST_MODEL_NAME = "deadbydawn101/gemma-4-E2B-Heretic-Uncensored-mlx-4bit"
 DEFAULT_TRANSLATION_MODEL = "google/translategemma-4b-it"
+DEV_RUN_MODE = "dev"
+LOCAL_PROD_RUN_MODE = "local-prod"
+LOOSE_LOCAL_PROD_RUN_MODE = "loose-local-prod"
+PROD_RUN_MODE = "prod"
+RUN_MODES = (DEV_RUN_MODE, LOCAL_PROD_RUN_MODE, LOOSE_LOCAL_PROD_RUN_MODE, PROD_RUN_MODE)
+LOCAL_PROD_REVIEW_RUN_MODES = {LOCAL_PROD_RUN_MODE, LOOSE_LOCAL_PROD_RUN_MODE}
+DEV_MATCHING_DEFAULT_RUN_MODES = {DEV_RUN_MODE, LOOSE_LOCAL_PROD_RUN_MODE}
 MODEL_ALIASES = {
     "qwen-9b-dense": "TheCluster/Qwen3.5-9B-Heretic-MLX-mxfp4",
     "gemma-26b-moe": "mlx-community/gemma-4-26B-A4B-it-heretic-4bit",
@@ -161,6 +168,7 @@ class RuntimeConfig:
     run_mode: str
     dev: bool
     local_prod: bool
+    loose_local_prod: bool
     bradley_only_delivery: bool
     shared_url_history_enabled: bool
     relaxed_final_synthesis_guards: bool
@@ -177,6 +185,7 @@ class RuntimeConfig:
     translation_model_backend: str
     translation_model_server_command: str
     translation_target_language: str
+    translation_enabled: bool
     recent_window_hours: int
     max_articles_per_source: int
     num_top_topics: int
@@ -205,6 +214,8 @@ class RuntimeConfig:
     image_model_id: str
     image_base_model: str
     per_source_topic_article_cap: int
+    topic_relevance_min_score: int
+    story_topic_fit_min_score: int
     min_articles_per_story: int
     max_stories_per_topic: int
     max_articles_per_story: int
@@ -382,14 +393,25 @@ def _configured_run_mode() -> str:
         "true-prod": "prod",
         "true-production": "prod",
         "localprod": "local-prod",
+        "loose-localprod": "loose-local-prod",
+        "loose-local-production": "loose-local-prod",
+        "looselocal-prod": "loose-local-prod",
+        "looselocalprod": "loose-local-prod",
     }
     if explicit_mode:
         mode = aliases.get(explicit_mode, explicit_mode)
-        if mode not in {"dev", "local-prod", "prod"}:
-            raise ValueError("NEWS_RUN_MODE must be one of: dev, local-prod, prod")
+        if mode not in RUN_MODES:
+            raise ValueError(
+                "NEWS_RUN_MODE must be one of: "
+                + ", ".join(RUN_MODES)
+            )
         return mode
 
-    return "dev" if _bool_env("NEWS_DEV", True) else "prod"
+    return DEV_RUN_MODE if _bool_env("NEWS_DEV", True) else PROD_RUN_MODE
+
+
+def _uses_dev_matching_defaults(run_mode: str) -> bool:
+    return run_mode in DEV_MATCHING_DEFAULT_RUN_MODES
 
 
 def configured_topic_mode() -> str:
@@ -430,7 +452,7 @@ def configured_max_articles_per_story(model_profile_key: str | None = None) -> i
 
 def configured_topic_embedding_similarity_threshold(run_mode: str | None = None) -> float:
     mode = run_mode or _configured_run_mode()
-    default = 0.18 if mode == "dev" else 0.20
+    default = 0.18 if _uses_dev_matching_defaults(mode) else 0.20
     return min(
         1.0,
         max(0.0, _float_env("NEWS_TOPIC_EMBEDDING_THRESHOLD", default)),
@@ -439,11 +461,28 @@ def configured_topic_embedding_similarity_threshold(run_mode: str | None = None)
 
 def configured_story_cluster_similarity_threshold(run_mode: str | None = None) -> float:
     mode = run_mode or _configured_run_mode()
-    default = 0.26 if mode == "dev" else 0.30
+    default = 0.26 if _uses_dev_matching_defaults(mode) else 0.30
     return min(
         1.0,
         max(0.0, _float_env("NEWS_STORY_CLUSTER_SIMILARITY_THRESHOLD", default)),
     )
+
+
+def configured_topic_relevance_min_score(run_mode: str | None = None) -> int:
+    mode = run_mode or _configured_run_mode()
+    default = 6 if _uses_dev_matching_defaults(mode) else 8
+    try:
+        return max(1, _int_env("NEWS_TOPIC_RELEVANCE_MIN_SCORE", default))
+    except ValueError:
+        return default
+
+
+def configured_story_topic_fit_min_score(run_mode: str | None = None) -> int:
+    topic_default = configured_topic_relevance_min_score(run_mode)
+    try:
+        return max(1, _int_env("NEWS_STORY_TOPIC_FIT_MIN_SCORE", topic_default))
+    except ValueError:
+        return topic_default
 
 
 def resolve_model_name(model_reference: str) -> str:
@@ -881,6 +920,7 @@ def sync_assistant_context_latest_output(config: RuntimeConfig) -> None:
 RUN_MODE_SOURCE_TIERS = {
     "dev": {"dev"},
     "local-prod": {"dev", "core"},
+    "loose-local-prod": {"dev", "core"},
     "prod": {"dev", "core"},
 }
 
@@ -913,15 +953,14 @@ def _normalize_source_tier(value: Any) -> str:
 
 def _source_requires_translation(raw_source: dict[str, Any]) -> bool:
     explicit = raw_source.get("requires_translation", raw_source.get("translate"))
-    language = str(raw_source.get("language") or "").strip().lower()
     if explicit is not None:
         return _coerce_bool_value(explicit, False)
-    return bool(language and language != "en")
+    return False
 
 
 def _source_enabled_for_run(raw_source: dict[str, Any], run_mode: str) -> bool:
     language = str(raw_source.get("language") or "").strip().lower()
-    if language != "en" and not _source_requires_translation(raw_source):
+    if language != "en" or _source_requires_translation(raw_source):
         return False
     tier = _normalize_source_tier(raw_source.get("tier"))
     return tier in RUN_MODE_SOURCE_TIERS.get(run_mode, RUN_MODE_SOURCE_TIERS["prod"])
@@ -1365,8 +1404,9 @@ def load_runtime_config() -> RuntimeConfig:
 
     bradley_only_recipient = _str_env("NEWS_DEV_RECIPIENT", "bradley@mankoff.com")
     run_mode = _configured_run_mode()
-    dev = run_mode == "dev"
-    local_prod = run_mode == "local-prod"
+    dev = run_mode == DEV_RUN_MODE
+    loose_local_prod = run_mode == LOOSE_LOCAL_PROD_RUN_MODE
+    local_prod = run_mode in LOCAL_PROD_REVIEW_RUN_MODES
     bradley_only_delivery = dev or local_prod
     local_prod_use_shared_history = _bool_env("NEWS_LOCAL_PROD_USE_SHARED_HISTORY", False)
     shared_url_history_enabled = (not dev and not local_prod) or (
@@ -1424,6 +1464,7 @@ def load_runtime_config() -> RuntimeConfig:
         run_mode=run_mode,
         dev=dev,
         local_prod=local_prod,
+        loose_local_prod=loose_local_prod,
         bradley_only_delivery=bradley_only_delivery,
         shared_url_history_enabled=shared_url_history_enabled,
         relaxed_final_synthesis_guards=relaxed_final_synthesis_guards,
@@ -1448,6 +1489,7 @@ def load_runtime_config() -> RuntimeConfig:
             backend=translation_model_backend,
         ),
         translation_target_language=_str_env("NEWS_TRANSLATION_TARGET_LANGUAGE", "en") or "en",
+        translation_enabled=_bool_env("NEWS_TRANSLATION_ENABLED", False),
         recent_window_hours=_int_env("NEWS_RECENT_WINDOW_HOURS", 24),
         max_articles_per_source=_int_env("NEWS_MAX_ARTICLES_PER_SOURCE", 6),
         num_top_topics=_int_env("NEWS_NUM_TOP_TOPICS", 4),
@@ -1479,6 +1521,8 @@ def load_runtime_config() -> RuntimeConfig:
         image_model_id=_str_env("NEWS_IMAGE_MODEL_ID", "Runpod/FLUX.2-klein-4B-mflux-4bit"),
         image_base_model=_str_env("NEWS_IMAGE_BASE_MODEL", "flux2-klein-4b"),
         per_source_topic_article_cap=_int_env("NEWS_PER_SOURCE_TOPIC_ARTICLE_CAP", 1),
+        topic_relevance_min_score=configured_topic_relevance_min_score(run_mode),
+        story_topic_fit_min_score=configured_story_topic_fit_min_score(run_mode),
         min_articles_per_story=configured_min_articles_per_story(run_mode),
         max_stories_per_topic=configured_max_stories_per_topic(run_mode),
         max_articles_per_story=configured_max_articles_per_story(model_profile.key),

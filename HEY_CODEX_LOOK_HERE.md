@@ -11,23 +11,27 @@ Primary entry points:
 
 - Dev run: `uv run news dev`
 - Local production review: `uv run news local-prod`
+- Loose local production review: `uv run news loose-local-prod`
 - Production run: `uv run news prod`
 - Installed CLI: `news` and `todays-news` map to `news_pipeline.cli:main`
 
 Run-mode source and delivery behavior:
 
-- `dev` uses `tier: dev` sources from `config/sources.yaml` that are English or
-  explicitly translation-enabled, sends only to `NEWS_DEV_RECIPIENT`, defaults
-  to `gemma-e2b-tiny`, and keeps image generation off unless overridden.
-- `local-prod` uses `tier: dev` plus `tier: core` sources that are English or
-  translation-enabled, sends only to `NEWS_DEV_RECIPIENT`, defaults to the large
-  Gemma model, keeps image generation on, and uses isolated URL history by
-  default.
-- `prod` uses the same `dev`/`core` source set as `local-prod`, sends to
-  configured active recipients, and updates shared URL history.
-- Non-English sources are translation-enabled by their `language` field unless
-  `requires_translation: false` is set. Translation runs as a bundled step using
-  `google/translategemma-4b-it` before the main summarization model is loaded.
+- `dev` uses English `tier: dev` sources from `config/sources.yaml`, sends only
+  to `NEWS_DEV_RECIPIENT`, defaults to `gemma-e2b-tiny`, and keeps image
+  generation off unless overridden.
+- `local-prod` uses English `tier: dev` plus `tier: core` sources, sends only to
+  `NEWS_DEV_RECIPIENT`, defaults to the large Gemma model, keeps image
+  generation on, and uses isolated URL history by default.
+- `loose-local-prod` behaves like `local-prod` for source selection, delivery,
+  model defaults, image generation, and URL history, but uses dev-loose
+  topic/story matching thresholds while retaining the 4-article story floor.
+- `prod` uses the same `dev`/`core` source set as local production review runs,
+  sends to configured active recipients, and updates shared URL history.
+- Translation is currently paused by default (`NEWS_TRANSLATION_ENABLED=0`).
+  Non-English sources remain in `config/sources.yaml` for later review but are
+  not selected by normal runs, and the pipeline no longer translates the full
+  scraped candidate funnel before topic classification.
 - `tier: peripheral` sources are retained in the master source file but are not
   selected by any run mode.
 

@@ -1,11 +1,11 @@
 # Canonical RSS/Atom source pool for the daily news pipeline.
 #
 # Source entries are deduped across the former current, larger, and Plenary pools.
-# The pipeline loads English sources plus sources marked or inferred as needing translation:
+# The pipeline currently loads English sources only:
 # - dev runs use tier: dev
-# - local-prod and prod runs use tier: dev plus tier: core
-# - non-English sources are translation-enabled by their language field unless
-#   requires_translation: false is set
+# - local-prod, loose-local-prod, and prod runs use tier: dev plus tier: core
+# - non-English sources remain in the master list for later review but are not
+#   selected by runs while translation is paused
 # - tier: peripheral sources stay in the master list but are not selected by runs
 #
 sources:
