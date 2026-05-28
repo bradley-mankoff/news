@@ -1,6 +1,8 @@
 # Active topics for the default predefined-topic news run.
 #
 # Topic IDs must exist in config/topics.yaml. The order here is the report order.
+# Runtime commands can override this list with --topics, for example:
+# uv run news dev --topics sports,entertainment,science_space_tech
 topic_ids:
   - global_crises_conflict
   - us_economy

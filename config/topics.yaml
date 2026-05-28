@@ -126,20 +126,273 @@ topics:
     frame_tags:
       - us
       - western
+
+  - id: sports
+    title: Sports
+    description: >
+      Major sports news and competition coverage across professional, college, and international
+      sports: scores and results, championships and playoffs, league standings, player injuries,
+      trades and signings, coaching changes, team ownership, labor disputes, doping or integrity
+      investigations, and major stories involving athletes, clubs, leagues, tournaments, and
+      governing bodies. Includes soccer, football, basketball, baseball, hockey, tennis, golf,
+      cricket, motorsport, combat sports, Olympics, and women's sports. Excludes general politics
+      or business stories unless sports organizations or athletes are central.
+    rationale: Stories where athletes, teams, leagues, tournaments, championships, or sports institutions are the main subject.
+    required_context_terms:
+      - sport
+      - sports
+      - game
+      - match
+      - tournament
+      - championship
+      - playoffs
+      - finals
+      - league
+      - team
+      - coach
+      - player
+      - athlete
+      - season
+      - score
+      - standings
+      - soccer
+      - football
+      - nfl
+      - nba
+      - mlb
+      - nhl
+      - wnba
+      - ncaa
+      - tennis
+      - golf
+      - cricket
+      - olympics
+      - world cup
+    keywords:
+      - sports news
+      - game result
+      - match result
+      - championship game
+      - playoff race
+      - league standings
+      - player injury
+      - trade deadline
+      - free agency
+      - coaching change
+      - team signs
+      - athlete suspended
+      - doping investigation
+      - world cup
+      - super bowl
+      - nba finals
+      - world series
+      - stanley cup
+      - grand slam tennis
+      - champions league
+      - premier league
+      - college football
+      - college basketball
+      - formula one
+      - cricket world cup
+    boost_phrases:
+      - wins championship
+      - advances to final
+      - playoff berth
+      - injury report
+      - trade talks
+      - signs contract
+      - coaching change
+      - league investigation
+      - record-breaking performance
+      - title race
+    frame_tags:
+      - us
+      - western
+
+  - id: entertainment
+    title: Entertainment & Culture
+    description: >
+      Entertainment, celebrity, music, film, television, streaming, Hollywood, awards, and popular
+      culture news: major releases and premieres, box office and ratings, album and tour news,
+      celebrity profiles or controversies, industry deals, strikes and labor issues, lawsuits,
+      festival news, awards campaigns and results, show renewals or cancellations, and major
+      creator or performer milestones. Excludes hard-news politics, markets, or technology unless
+      entertainment companies, artists, or cultural institutions are central to the story.
+    rationale: Stories centered on celebrities, musicians, actors, studios, streaming platforms, Hollywood, film, television, awards, tours, and popular culture.
+    required_context_terms:
+      - entertainment
+      - celebrity
+      - celebrities
+      - hollywood
+      - actor
+      - actress
+      - musician
+      - singer
+      - artist
+      - band
+      - album
+      - song
+      - tour
+      - concert
+      - movie
+      - film
+      - box office
+      - television
+      - tv
+      - streaming
+      - netflix
+      - disney
+      - warner bros
+      - studio
+      - awards
+      - oscars
+      - grammys
+      - emmys
+      - festival
+    keywords:
+      - entertainment news
+      - celebrity news
+      - hollywood news
+      - music news
+      - movie premiere
+      - film release
+      - box office
+      - television series
+      - streaming series
+      - album release
+      - concert tour
+      - music festival
+      - awards season
+      - oscar nomination
+      - grammy nomination
+      - emmy nomination
+      - celebrity lawsuit
+      - studio deal
+      - showrunner
+      - cast announcement
+      - renewed for season
+      - canceled series
+      - entertainment industry strike
+    boost_phrases:
+      - box office debut
+      - album release
+      - announces tour
+      - wins oscar
+      - wins grammy
+      - hollywood studio
+      - streaming deal
+      - celebrity lawsuit
+      - film festival premiere
+      - series finale
+      - cast joins
+    frame_tags:
+      - us
+      - western
+
+  - id: science_space_tech
+    title: Science, Space & Technology
+    description: >
+      Science, space, and technology news with broad public interest: astronomy and spaceflight,
+      NASA and commercial space missions, climate and earth science, medical and biological
+      research, physics, AI and computing, cybersecurity, consumer technology, chips and hardware,
+      startups and platform shifts, major product launches, research breakthroughs, regulatory
+      decisions affecting technology, and technology-driven changes to work, culture, security, or
+      daily life. Excludes routine corporate earnings unless the technology, scientific, or research
+      impact is the central story.
+    rationale: Stories about scientific discoveries, space missions, major technology developments, AI, cybersecurity, computing, hardware, and research with public impact.
+    required_context_terms:
+      - science
+      - research
+      - study
+      - researchers
+      - scientists
+      - discovery
+      - experiment
+      - space
+      - nasa
+      - spacex
+      - rocket
+      - satellite
+      - moon
+      - mars
+      - planet
+      - telescope
+      - technology
+      - tech
+      - artificial intelligence
+      - ai
+      - software
+      - hardware
+      - chip
+      - semiconductor
+      - cybersecurity
+      - data breach
+      - climate science
+      - vaccine
+      - medical research
+    keywords:
+      - science news
+      - research breakthrough
+      - peer-reviewed study
+      - scientific discovery
+      - space mission
+      - rocket launch
+      - nasa mission
+      - commercial spaceflight
+      - satellite launch
+      - mars mission
+      - moon landing
+      - telescope observation
+      - artificial intelligence
+      - ai model
+      - machine learning
+      - cybersecurity breach
+      - software vulnerability
+      - chip manufacturing
+      - semiconductor supply
+      - quantum computing
+      - climate research
+      - medical research
+      - biotech breakthrough
+      - consumer technology
+      - product launch
+      - platform policy
+    boost_phrases:
+      - scientists discover
+      - study finds
+      - research breakthrough
+      - nasa launches
+      - space mission
+      - rocket launch
+      - artificial intelligence model
+      - cybersecurity breach
+      - chip maker
+      - quantum computing
+      - climate science
+      - medical breakthrough
+      - product launch
+    frame_tags:
+      - us
+      - western
+      - non_western
       - non_western
 
   - id: us_economy
     title: US Economy
     description: >
-      US macroeconomic news directly affecting American households, workers, borrowers, savers,
-      and broad markets: Federal Reserve interest rate decisions and monetary policy, inflation
-      and consumer prices (CPI, PCE, grocery/gas/rent prices), employment and jobs reports
-      (nonfarm payrolls, jobless claims, JOLTS, unemployment rate, wage growth), GDP and economic
-      growth, consumer spending and confidence, housing market (mortgage rates, home sales, starts),
-      stock and bond markets (S&P 500, Dow, Nasdaq, Treasury yields), major US corporate earnings
-      and layoffs affecting workers, tariff effects on household budgets, and any economic data
-      that shapes the financial lives of Americans. Excludes purely international economic
-      developments unless they directly drive US conditions.
+      US-centered macroeconomic news where the United States is the main economy affected and
+      the article frames consequences for American households, workers, borrowers, savers,
+      consumers, businesses, investors, or broad US markets. Includes Federal Reserve interest
+      rate decisions and monetary policy, US inflation and consumer prices (CPI, PCE,
+      grocery/gas/rent prices), US employment and jobs reports (nonfarm payrolls, jobless claims,
+      JOLTS, unemployment rate, wage growth), US GDP and economic growth, American consumer
+      spending and confidence, US housing market conditions (mortgage rates, home sales, starts),
+      US stock and bond markets (S&P 500, Dow, Nasdaq, Treasury yields), major US corporate
+      earnings and layoffs affecting workers, tariff effects on American household budgets, and
+      economic data that shapes the financial lives of people in the United States. International
+      economic developments belong here only when the story explicitly centers their direct effect
+      on US inflation, jobs, consumers, financial markets, trade policy, Federal Reserve policy, or
+      household costs.
     rationale: Stories about how the US economy affects American households, workers, consumers, borrowers, savers, and broad markets.
     required_context_terms:
       - united states economy
@@ -591,14 +844,19 @@ topics:
   - id: us_politics
     title: US Politics
     description: >
-      US federal political news: White House and executive branch actions (executive orders,
-      presidential decisions, cabinet moves), Congress (House and Senate votes, committee
-      hearings, legislation), Supreme Court and federal judiciary rulings, Trump and Biden
-      administrations, federal agencies (DOJ, DHS, State Department, Defense), presidential
-      and congressional elections and campaigns, campaign fundraising and polling,
-      US immigration and border policy enforcement, government shutdowns and debt ceiling
-      debates, and any significant political power struggle at the US federal level. Excludes
-      state and local politics unless they carry national significance.
+      US-centered federal political news where the United States government, national political
+      institutions, federal officials, federal courts, national elections, or nationwide policy are
+      the central actors or direct targets. Includes White House and executive branch actions
+      (executive orders, presidential decisions, cabinet moves), Congress (House and Senate votes,
+      committee hearings, legislation), Supreme Court and federal judiciary rulings, Trump and Biden
+      administrations, federal agencies (DOJ, DHS, State Department, Defense), presidential and
+      congressional elections and campaigns, campaign fundraising and polling, US immigration and
+      border policy enforcement, government shutdowns and debt ceiling debates, and significant
+      political power struggles at the US federal level. Foreign political developments belong here
+      only when the article explicitly centers a US government response, US law or policy, American
+      elections, Congress, the White House, federal courts, or direct consequences for US national
+      politics. State and local politics belong here only when they carry clear national or federal
+      significance.
     rationale: Stories about US federal political power, elections, courts, Congress, and administration actions.
     required_context_terms:
       - united states

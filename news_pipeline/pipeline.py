@@ -9,12 +9,12 @@ Common usage:
 Development vs. real sends:
     uv run news dev
         Default. Sends only to NEWS_DEV_RECIPIENT, writes dev_used_urls.txt,
-        uses the English dev source tier, and does not add URLs to the
-        long-lived seen_urls.txt history.
+        uses core English sources allowed for the active topic IDs, and does not
+        add URLs to the long-lived seen_urls.txt history.
 
     uv run news local-prod
-        English core source run with isolated URL history, but delivery is
-        limited to NEWS_DEV_RECIPIENT for review and manual forwarding.
+        Core plus peripheral English source run with isolated URL history, but
+        delivery is limited to NEWS_DEV_RECIPIENT for review and manual forwarding.
 
     uv run news loose-local-prod
         Local production review with dev-loose topic/story matching thresholds
@@ -51,6 +51,10 @@ Local model server:
         Points the pipeline at a different OpenAI-compatible local endpoint.
 
 Other useful switches:
+    uv run news dev --topics sports,science_space_tech
+        Overrides config/client.yaml for one run with a comma-separated list of
+        configured topic IDs.
+
     NEWS_IMAGE_ENABLED=0 uv run news dev
         Skips report image generation.
 
@@ -220,6 +224,7 @@ BRADLEY_ONLY_DELIVERY = CONFIG.bradley_only_delivery
 SHARED_URL_HISTORY_ENABLED = CONFIG.shared_url_history_enabled
 RELAXED_FINAL_SYNTHESIS_GUARDS = CONFIG.relaxed_final_synthesis_guards
 TOPIC_MODE = CONFIG.topic_mode
+ACTIVE_TOPIC_IDS = CONFIG.topic_ids
 RUN_USED_URLS_PATH = str(CONFIG.run_used_urls_path)
 RUN_LOG_PATH = os.path.join(RUN_OUTPUT_DIR, f"run_log_{timestamp}.log")
 EMAIL_RECIPIENTS_FALLBACK = CONFIG.email_recipients_fallback
@@ -565,8 +570,50 @@ def _feed_item_matches_configured_source(
         "observed_source_labels": labels,
     }
 
-SOURCE_FEEDS = load_sources(CONFIG.sources_path, run_mode=CONFIG.run_mode)
+SOURCE_FEEDS = load_sources(
+    CONFIG.sources_path,
+    run_mode=CONFIG.run_mode,
+    active_topic_ids=CONFIG.topic_ids,
+)
 TOP_FUNNEL_PROVIDERS: dict[str, dict[str, Any]] = {}
+
+
+def _source_allowed_topic_ids(source_name: str) -> set[str]:
+    source_config = SOURCE_FEEDS.get(source_name) or {}
+    return {
+        str(topic_id or "").strip()
+        for topic_id in source_config.get("allowed_topic_ids", [])
+        if str(topic_id or "").strip()
+    }
+
+
+def _filter_articles_by_source_topic_scope(
+    articles: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    retained: list[dict[str, Any]] = []
+    dropped: list[dict[str, Any]] = []
+    for article in articles:
+        source_name = str(article.get("source") or "").strip()
+        allowed_topic_ids = _source_allowed_topic_ids(source_name)
+        if not allowed_topic_ids:
+            retained.append(article)
+            continue
+        topic_key = str(article.get("topic_key") or "").strip()
+        if topic_key in allowed_topic_ids:
+            retained.append(article)
+            continue
+        dropped.append(
+            {
+                "article_id": article.get("article_id"),
+                "source": source_name,
+                "title": article.get("title"),
+                "url": article.get("url") or article.get("resolved_url"),
+                "topic_key": topic_key,
+                "topic_title": article.get("topic_title"),
+                "allowed_topic_ids": sorted(allowed_topic_ids),
+            }
+        )
+    return retained, dropped
 
 LOW_CONFIDENCE_SUMMARY_PATTERNS = [
     "insufficient to create a substantive summary",
@@ -3149,6 +3196,7 @@ def load_predefined_topics_for_run(topic_limit: int | None = None) -> list[dict]
         client_path=CONFIG.client_path,
         topics_path=CONFIG.topics_path,
         default_max_articles_per_source=MAX_ARTICLES_PER_SOURCE,
+        topic_ids=CONFIG.topic_ids,
     )
     if topic_limit is not None and topic_limit > 0:
         configured_topics = configured_topics[:topic_limit]
@@ -4333,7 +4381,7 @@ def clean_synthesis_for_publication(text: str, *, relaxed: bool = False) -> str:
     if not clean_text:
         return ""
 
-    section_pattern = re.compile(r"(?m)^##+\s+(.+?)\s*$")
+    section_pattern = re.compile(r"(?m)^##\s+(.+?)\s*$")
     matches = list(section_pattern.finditer(clean_text))
     if not matches:
         return clean_text.strip() if relaxed else (
@@ -4618,12 +4666,12 @@ def build_dev_final_synthesis_preview(final_reports: List[str], topics: List[dic
         if not story_map:
             continue
         paragraphs: list[str] = []
-        for summaries in story_map.values():
+        for story_label, summaries in story_map.items():
             if explicit_story_mode and len(summaries) < MIN_ARTICLES_PER_STORY:
                 continue
             paragraph = _dev_synthesis_paragraph_from_summaries(summaries)
             if paragraph:
-                paragraphs.append(paragraph)
+                paragraphs.append(f"### {story_label}\n\n{paragraph}")
         if paragraphs:
             section_body = "\n\n".join(paragraphs)
             sections.append(
@@ -4994,13 +5042,14 @@ def _format_plain_text_synthesis(synthesis_body: str) -> str:
             if formatted_lines and formatted_lines[-1] != "":
                 formatted_lines.append("")
             continue
-        heading_match = re.match(r"^##+\s+(.+)$", stripped)
+        heading_match = re.match(r"^(#{2,6})\s+(.+)$", stripped)
         if heading_match:
-            heading = heading_match.group(1).strip()
+            heading_level = len(heading_match.group(1))
+            heading = heading_match.group(2).strip()
             if formatted_lines and formatted_lines[-1] != "":
                 formatted_lines.append("")
             formatted_lines.append(heading)
-            formatted_lines.append("-" * len(heading))
+            formatted_lines.append(("-" if heading_level == 2 else "~") * len(heading))
             formatted_lines.append("")
             continue
         formatted_lines.append(stripped)
@@ -5126,30 +5175,44 @@ def _build_html_synthesis(
     ).replace("\r\n", "\n")
     blocks: list[str] = []
     current_heading: str | None = None
+    current_heading_level: int | None = None
     current_lines: list[str] = []
 
     def flush_section() -> None:
-        nonlocal current_heading, current_lines
+        nonlocal current_heading, current_heading_level, current_lines
         if current_heading is None and not current_lines:
             return
         if current_heading is not None:
-            blocks.append(
-                f"<h2 style=\"margin:32px 0 12px; font-size:22px; line-height:1.3; "
-                f"font-weight:700; color:#111827; letter-spacing:0.01em; text-transform:uppercase;\">"
-                f"{html.escape(current_heading)}</h2>"
-        )
+            current_heading_html = citations_stage.render_html_text_with_citations(
+                current_heading,
+                citation_sources or [],
+            )
+            if current_heading_level == 2:
+                blocks.append(
+                    f"<h2 style=\"margin:32px 0 12px; font-size:22px; line-height:1.3; "
+                    f"font-weight:700; color:#111827; letter-spacing:0.01em; text-transform:uppercase;\">"
+                    f"{current_heading_html}</h2>"
+                )
+            else:
+                blocks.append(
+                    f"<h3 style=\"margin:22px 0 10px; font-size:18px; line-height:1.35; "
+                    f"font-weight:800; color:#111827;\">"
+                    f"{current_heading_html}</h3>"
+                )
         section_text = "\n".join(current_lines).strip()
         if section_text:
             blocks.append(_render_html_paragraphs(section_text, citation_sources))
         current_heading = None
+        current_heading_level = None
         current_lines = []
 
     for raw_line in cleaned.splitlines():
         stripped = raw_line.strip()
-        heading_match = re.match(r"^##+\s+(.+)$", stripped)
+        heading_match = re.match(r"^(#{2,6})\s+(.+)$", stripped)
         if heading_match:
             flush_section()
-            current_heading = heading_match.group(1).strip()
+            current_heading_level = len(heading_match.group(1))
+            current_heading = heading_match.group(2).strip()
             continue
         if not stripped:
             current_lines.append("")
@@ -5255,8 +5318,6 @@ def build_report_body(
     source_body = citation_listing or article_listing
 
     return (
-        f"{report_title}\n"
-        f"{'=' * len(report_title)}\n\n"
         f"{image_section}"
         f"{cleaned_synthesis_body}\n\n"
         f"{source_heading}\n"
@@ -5287,7 +5348,7 @@ def build_report_html(
     unsubscribe_url = build_unsubscribe_url(recipient_email)
     image_html = ""
     if image_art and image_art.get("content_id"):
-        image_alt = image_art.get("overlay_headline") or report_title
+        image_alt = image_art.get("overlay_headline") or report_title or "Daily News Summary"
         image_html = (
             "<img "
             f"alt=\"{html.escape(str(image_alt), quote=True)}\" "
@@ -5295,7 +5356,7 @@ def build_report_html(
             "style=\"display:block; width:100%; height:auto; margin:0 0 30px; border-radius:6px;\">"
         )
     elif image_art and image_art.get("data_uri"):
-        image_alt = image_art.get("overlay_headline") or report_title
+        image_alt = image_art.get("overlay_headline") or report_title or "Daily News Summary"
         image_html = (
             "<img "
             f"alt=\"{html.escape(str(image_alt), quote=True)}\" "
@@ -5312,7 +5373,6 @@ def build_report_html(
         ".email-shell{padding:12px 0 !important;}"
         ".email-card{width:100% !important; max-width:none !important; border-radius:0 !important;}"
         ".email-content{padding:30px 18px 22px !important;}"
-        ".email-title{font-size:28px !important; line-height:1.18 !important;}"
         ".email-paragraph{font-size:16px !important; line-height:1.65 !important;}"
         "}"
         "</style>"
@@ -5322,7 +5382,6 @@ def build_report_html(
         "<div class=\"email-content\" style=\"padding:36px 32px 24px; box-sizing:border-box;\">"
         f"<p style=\"margin:0 0 24px; font-size:18px; line-height:1.6; color:#111827;\">{html.escape(first_name)},</p>"
         "<p style=\"margin:0 0 28px; font-size:17px; line-height:1.7; color:#374151;\">Here is your daily news summary.</p>"
-        f"<h1 class=\"email-title\" style=\"margin:0 0 28px; font-size:32px; line-height:1.2; font-weight:800; color:#111827;\">{html.escape(report_title)}</h1>"
         f"{image_html}"
         f"{synthesis_html}"
         "<hr style=\"border:none; border-top:1px solid #e5e7eb; margin:36px 0 28px;\">"
@@ -5870,7 +5929,7 @@ def _new_run_diagnostics(source_count: int) -> RunDiagnostics:
             "topic_mode": TOPIC_MODE,
             "client_path": str(CONFIG.client_path),
             "topics_path": str(CONFIG.topics_path),
-            "active_topic_ids": [],
+            "active_topic_ids": list(ACTIVE_TOPIC_IDS),
             "top_funnel_provider_count": len(TOP_FUNNEL_PROVIDERS),
             "recipients_path": str(CONFIG.recipients_path),
             "output_dir": RUN_OUTPUT_DIR,
@@ -6412,10 +6471,29 @@ def _run_pipeline() -> None:
         f"slow source warning {SLOW_SOURCE_WARNING_SECONDS}s."
     )
     progress_tracker.detail(f"Run mode: {RUN_MODE}")
-    progress_tracker.detail(f"Source pool: {len(sources)} of {len(all_sources)} configured feed(s).")
+    progress_tracker.detail(
+        f"Source pool: {len(sources)} active feed(s) after tier/topic filters."
+    )
+    active_source_tiers = Counter(
+        str(source.get("tier") or "unknown") for source in SOURCE_FEEDS.values()
+    )
+    if active_source_tiers:
+        tier_summary = ", ".join(
+            f"{tier}: {count}" for tier, count in sorted(active_source_tiers.items())
+        )
+        progress_tracker.detail(f"Active source tiers: {tier_summary}.")
+    progress_tracker.detail(f"Active topic IDs: {', '.join(ACTIVE_TOPIC_IDS)}")
+    topic_scoped_source_count = sum(
+        1 for source in SOURCE_FEEDS.values() if source.get("allowed_topic_ids")
+    )
+    if topic_scoped_source_count:
+        progress_tracker.detail(
+            f"Topic-scoped sources active: {topic_scoped_source_count} "
+            "source(s) with allowed_topic_ids."
+        )
     if DEV:
         progress_tracker.detail(
-            f"DEV mode active. Using English dev-tier sources "
+            f"DEV mode active. Using core English sources allowed for active topics "
             f"({len(sources)} source(s)). "
             f"Sending to one recipient only "
             f"(always {BRADLEY_ONLY_RECIPIENT}) without recording URLs into the shared history."
@@ -6428,8 +6506,9 @@ def _run_pipeline() -> None:
             else "isolated URL history"
         )
         progress_tracker.detail(
-            f"{mode_label} mode active. Using English dev/core source tiers "
-            f"with {history_label}, but sending only to {BRADLEY_ONLY_RECIPIENT}."
+            f"{mode_label} mode active. Using core and peripheral English sources "
+            f"allowed for active topics with {history_label}, but sending only to "
+            f"{BRADLEY_ONLY_RECIPIENT}."
         )
         if LOOSE_LOCAL_PROD:
             progress_tracker.detail(
@@ -6604,30 +6683,12 @@ def _run_pipeline() -> None:
         f"threshold: {TOPIC_EMBEDDING_SIMILARITY_THRESHOLD:.2f}"
     )
     topic_counts_by_key: Counter[str] = Counter()
+    embedding_classification_error = ""
     try:
         topic_classified_candidates = embeddings_stage.classify_articles_by_topic(
             article_candidates,
             topics,
             threshold=TOPIC_EMBEDDING_SIMILARITY_THRESHOLD,
-        )
-        topic_counts_by_key = Counter(
-            str(a.get("topic_key") or "unassigned") for a in topic_classified_candidates
-        )
-        for topic in topics:
-            tkey = str(topic.get("key") or "")
-            progress_tracker.detail(
-                f"  Topic '{topic_titles_map.get(tkey, tkey)}': "
-                f"{topic_counts_by_key.get(tkey, 0)} articles after embedding classification."
-            )
-        diagnostics.event(
-            "embedding_topic_classification",
-            threshold=TOPIC_EMBEDDING_SIMILARITY_THRESHOLD,
-            candidate_count=len(article_candidates),
-            classified_count=len(topic_classified_candidates),
-            counts_by_topic={
-                topic_titles_map.get(k, k): v
-                for k, v in topic_counts_by_key.items()
-            },
         )
     except Exception as _emb_error:
         logger.exception("Embedding classification failed; falling back to keyword-assigned topic keys.")
@@ -6635,12 +6696,46 @@ def _run_pipeline() -> None:
             f"Embedding classification failed ({_emb_error}); "
             "falling back to keyword-assigned topic keys."
         )
+        embedding_classification_error = str(_emb_error)
         topic_classified_candidates = article_candidates
-        diagnostics.event(
-            "embedding_topic_classification",
-            error=str(_emb_error),
-            fallback="keyword_assigned_topic_keys",
+
+    topic_classified_candidates, source_topic_scope_drops = _filter_articles_by_source_topic_scope(
+        topic_classified_candidates
+    )
+    topic_counts_by_key = Counter(
+        str(a.get("topic_key") or "unassigned") for a in topic_classified_candidates
+    )
+    for topic in topics:
+        tkey = str(topic.get("key") or "")
+        progress_tracker.detail(
+            f"  Topic '{topic_titles_map.get(tkey, tkey)}': "
+            f"{topic_counts_by_key.get(tkey, 0)} articles after embedding classification."
         )
+    if source_topic_scope_drops:
+        progress_tracker.detail(
+            "Topic-scoped source filter: dropped "
+            f"{len(source_topic_scope_drops)} article-topic match(es) outside allowed_topic_ids."
+        )
+    embedding_event = {
+        "threshold": TOPIC_EMBEDDING_SIMILARITY_THRESHOLD,
+        "candidate_count": len(article_candidates),
+        "classified_count": len(topic_classified_candidates),
+        "counts_by_topic": {
+            topic_titles_map.get(k, k): v
+            for k, v in topic_counts_by_key.items()
+        },
+        "source_topic_scope_dropped_count": len(source_topic_scope_drops),
+        "source_topic_scope_dropped_by_source": dict(
+            Counter(str(item.get("source") or "") for item in source_topic_scope_drops)
+        ),
+        "source_topic_scope_dropped_by_topic": dict(
+            Counter(str(item.get("topic_key") or "unassigned") for item in source_topic_scope_drops)
+        ),
+    }
+    if embedding_classification_error:
+        embedding_event["error"] = embedding_classification_error
+        embedding_event["fallback"] = "keyword_assigned_topic_keys"
+    diagnostics.event("embedding_topic_classification", **embedding_event)
 
     # Cluster articles into stories *within* each topic using TF-IDF similarity.
     # This produces tighter, more on-topic story clusters than the previous global approach.
@@ -6929,7 +7024,7 @@ def _run_pipeline() -> None:
             )
 
         synthesis_body_without_citations = citations_stage.strip_citation_markers(synthesis_body)
-        report_title = strip_model_artifacts(generate_report_title(synthesis_body_without_citations, timestamp))
+        report_title = "Daily News Summary"
 
         progress_tracker.set_final_step("art", 3)
         record_activity_snapshot("before_image_generation", diagnostics)

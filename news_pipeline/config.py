@@ -2,7 +2,8 @@
 
 The pipeline is intentionally driven by small YAML files in ``config/``:
 
-- ``sources.yaml`` defines article feeds searched after topic selection.
+- ``sources.yaml`` defines article feeds searched after source-tier and topic
+  selection.
 - ``client.yaml`` selects active predefined topics.
 - ``topics.yaml`` defines predefined topic relevance vocabulary.
 - ``recipients.yaml`` defines email recipients and optional personal prompts.
@@ -71,6 +72,14 @@ PROD_RUN_MODE = "prod"
 RUN_MODES = (DEV_RUN_MODE, LOCAL_PROD_RUN_MODE, LOOSE_LOCAL_PROD_RUN_MODE, PROD_RUN_MODE)
 LOCAL_PROD_REVIEW_RUN_MODES = {LOCAL_PROD_RUN_MODE, LOOSE_LOCAL_PROD_RUN_MODE}
 DEV_MATCHING_DEFAULT_RUN_MODES = {DEV_RUN_MODE, LOOSE_LOCAL_PROD_RUN_MODE}
+CORE_SOURCE_TIER = "core"
+PERIPHERAL_SOURCE_TIER = "peripheral"
+RUN_MODE_SOURCE_TIERS = {
+    DEV_RUN_MODE: {CORE_SOURCE_TIER},
+    LOCAL_PROD_RUN_MODE: {CORE_SOURCE_TIER, PERIPHERAL_SOURCE_TIER},
+    LOOSE_LOCAL_PROD_RUN_MODE: {CORE_SOURCE_TIER, PERIPHERAL_SOURCE_TIER},
+    PROD_RUN_MODE: {CORE_SOURCE_TIER, PERIPHERAL_SOURCE_TIER},
+}
 MODEL_ALIASES = {
     "qwen-9b-dense": "TheCluster/Qwen3.5-9B-Heretic-MLX-mxfp4",
     "gemma-26b-moe": "mlx-community/gemma-4-26B-A4B-it-heretic-4bit",
@@ -95,8 +104,8 @@ class NewsSource:
     homepage: str | None = None
     region: str | None = None
     language: str | None = None
-    tier: str = "core"
-    topics: tuple[str, ...] = ()
+    tier: str = PERIPHERAL_SOURCE_TIER
+    allowed_topic_ids: tuple[str, ...] = ()
     nations: tuple[str, ...] = ()
     frame: str | None = None
     provider_type: str | None = None
@@ -173,6 +182,7 @@ class RuntimeConfig:
     shared_url_history_enabled: bool
     relaxed_final_synthesis_guards: bool
     topic_mode: str
+    topic_ids: tuple[str, ...]
     model_reference: str
     model_name: str
     model_profile: ModelRuntimeProfile
@@ -917,14 +927,6 @@ def sync_assistant_context_latest_output(config: RuntimeConfig) -> None:
     _sync_cursorignore_latest_output(config.root_dir, config.output_dir, config.run_output_dir)
 
 
-RUN_MODE_SOURCE_TIERS = {
-    "dev": {"dev"},
-    "local-prod": {"dev", "core"},
-    "loose-local-prod": {"dev", "core"},
-    "prod": {"dev", "core"},
-}
-
-
 def _coerce_source_text_list(value: Any) -> list[str]:
     if value is None:
         return []
@@ -946,9 +948,45 @@ def _coerce_source_text_list(value: Any) -> list[str]:
     return clean_items
 
 
-def _normalize_source_tier(value: Any) -> str:
-    tier = str(value or "core").strip().lower().replace("_", "-")
-    return tier if tier in {"dev", "core", "peripheral"} else "core"
+def normalize_topic_id(value: Any) -> str:
+    raw_value = str(value or "").strip().lower()
+    if not raw_value:
+        return ""
+    return re.sub(r"[^a-z0-9_]+", "_", raw_value).strip("_")
+
+
+def coerce_topic_id_list(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        items = value.split(",")
+    elif isinstance(value, (list, tuple, set)):
+        items = value
+    else:
+        return []
+
+    topic_ids: list[str] = []
+    seen: set[str] = set()
+    for item in items:
+        topic_id = normalize_topic_id(item)
+        if not topic_id or topic_id in seen:
+            continue
+        seen.add(topic_id)
+        topic_ids.append(topic_id)
+    return topic_ids
+
+
+def parse_topic_id_csv(value: str) -> list[str]:
+    return coerce_topic_id_list(value)
+
+
+def _source_allowed_topic_ids(raw_source: dict[str, Any]) -> list[str]:
+    return coerce_topic_id_list(
+        raw_source.get(
+            "allowed_topic_ids",
+            raw_source.get("only_topic_ids", raw_source.get("source_topic_ids")),
+        )
+    )
 
 
 def _source_requires_translation(raw_source: dict[str, Any]) -> bool:
@@ -958,18 +996,45 @@ def _source_requires_translation(raw_source: dict[str, Any]) -> bool:
     return False
 
 
-def _source_enabled_for_run(raw_source: dict[str, Any], run_mode: str) -> bool:
+def _normalize_source_tier(value: Any, *, source_key: str | None = None) -> str:
+    tier = str(value or "").strip().lower()
+    if not tier:
+        return PERIPHERAL_SOURCE_TIER
+    if tier == DEV_RUN_MODE:
+        return CORE_SOURCE_TIER
+    if tier in {CORE_SOURCE_TIER, PERIPHERAL_SOURCE_TIER}:
+        return tier
+    source_label = f" for source {source_key!r}" if source_key else ""
+    raise ValueError(
+        f"Unsupported source tier {value!r}{source_label}; "
+        f"expected {CORE_SOURCE_TIER!r} or {PERIPHERAL_SOURCE_TIER!r}."
+    )
+
+
+def _source_enabled_for_run(
+    raw_source: dict[str, Any],
+    run_mode: str,
+    *,
+    source_key: str | None = None,
+) -> bool:
     language = str(raw_source.get("language") or "").strip().lower()
     if language != "en" or _source_requires_translation(raw_source):
         return False
-    tier = _normalize_source_tier(raw_source.get("tier"))
-    return tier in RUN_MODE_SOURCE_TIERS.get(run_mode, RUN_MODE_SOURCE_TIERS["prod"])
+    selected_tiers = RUN_MODE_SOURCE_TIERS.get(
+        run_mode,
+        RUN_MODE_SOURCE_TIERS[DEV_RUN_MODE],
+    )
+    return (
+        _normalize_source_tier(raw_source.get("tier"), source_key=source_key)
+        in selected_tiers
+    )
 
 
 def load_sources(
     path: Path | None = None,
     *,
     run_mode: str | None = None,
+    active_topic_ids: list[str] | tuple[str, ...] | None = None,
     include_inactive: bool = False,
 ) -> dict[str, dict[str, Any]]:
     sources_path = path or CONFIG_DIR / "sources.yaml"
@@ -979,7 +1044,13 @@ def load_sources(
         raise ValueError(f"{sources_path} must define sources as a list.")
 
     sources: dict[str, dict[str, Any]] = {}
+    selected_topic_ids = (
+        coerce_topic_id_list(active_topic_ids)
+        if active_topic_ids is not None
+        else list(_configured_topic_ids())
+    )
     selected_run_mode = run_mode or _configured_run_mode()
+    active_topic_id_set = set(selected_topic_ids)
     for raw_source in raw_sources:
         if not isinstance(raw_source, dict):
             continue
@@ -987,14 +1058,26 @@ def load_sources(
         url = str(raw_source.get("url") or "").strip()
         if not key or not url:
             continue
-        if not include_inactive and not _source_enabled_for_run(raw_source, selected_run_mode):
+        if not include_inactive and not _source_enabled_for_run(
+            raw_source,
+            selected_run_mode,
+            source_key=key,
+        ):
+            continue
+        allowed_topic_ids = _source_allowed_topic_ids(raw_source)
+        if (
+            not include_inactive
+            and (
+                not allowed_topic_ids
+                or not active_topic_id_set.intersection(allowed_topic_ids)
+            )
+        ):
             continue
         raw_source_match_aliases = raw_source.get("source_match_aliases") or []
         if isinstance(raw_source_match_aliases, str):
             raw_source_match_aliases = [raw_source_match_aliases]
         elif not isinstance(raw_source_match_aliases, list):
             raw_source_match_aliases = []
-        tier = _normalize_source_tier(raw_source.get("tier"))
         language = str(raw_source.get("language") or "").strip().lower()
         requires_translation_explicit = (
             raw_source.get("requires_translation", raw_source.get("translate")) is not None
@@ -1003,6 +1086,7 @@ def load_sources(
         translation_source_language = str(
             raw_source.get("translation_source_language") or language
         ).strip().lower()
+        tier = _normalize_source_tier(raw_source.get("tier"), source_key=key)
         sources[key] = {
             "name": str(raw_source.get("name") or key).strip(),
             "url": url,
@@ -1010,7 +1094,7 @@ def load_sources(
             "region": str(raw_source.get("region") or "").strip() or None,
             "language": language or None,
             "tier": tier,
-            "topics": _coerce_source_text_list(raw_source.get("topics")),
+            "allowed_topic_ids": allowed_topic_ids,
             "nations": _coerce_source_text_list(raw_source.get("nations")),
             "frame": str(raw_source.get("frame") or raw_source.get("region") or "").strip() or None,
             "provider_type": str(raw_source.get("provider_type") or "article_feed").strip(),
@@ -1241,6 +1325,16 @@ def load_client_config(path: Path | None = None) -> dict[str, Any]:
     return {"topic_ids": topic_ids}
 
 
+def _configured_topic_ids(client_path: Path | None = None) -> tuple[str, ...]:
+    runtime_topic_ids = os.getenv("NEWS_TOPIC_IDS", "").strip()
+    if runtime_topic_ids:
+        topic_ids = coerce_topic_id_list(runtime_topic_ids)
+        if not topic_ids:
+            raise ValueError("NEWS_TOPIC_IDS must contain at least one topic id.")
+        return tuple(topic_ids)
+    return tuple(load_client_config(client_path)["topic_ids"])
+
+
 def load_topic_definitions(path: Path | None = None) -> dict[str, dict[str, Any]]:
     topics_path = path or CONFIG_DIR / "topics.yaml"
     payload = _load_yaml_mapping(topics_path)
@@ -1284,6 +1378,7 @@ def load_topic_definitions(path: Path | None = None) -> dict[str, dict[str, Any]
         topics[topic_id] = {
             "id": topic_id,
             "title": title,
+            "description": str(raw_topic.get("description") or "").strip(),
             "rationale": str(raw_topic.get("rationale") or "").strip(),
             "keywords": keywords,
             "boost_phrases": boost_phrases,
@@ -1319,17 +1414,29 @@ def load_predefined_topics(
     client_path: Path | None = None,
     topics_path: Path | None = None,
     default_max_articles_per_source: int = 6,
+    topic_ids: list[str] | tuple[str, ...] | None = None,
 ) -> list[dict[str, Any]]:
     resolved_client_path = client_path or CONFIG_DIR / "client.yaml"
     resolved_topics_path = topics_path or CONFIG_DIR / "topics.yaml"
-    client_config = load_client_config(resolved_client_path)
+    selected_topic_ids = (
+        coerce_topic_id_list(topic_ids)
+        if topic_ids is not None
+        else load_client_config(resolved_client_path)["topic_ids"]
+    )
+    if not selected_topic_ids:
+        raise ValueError("Runtime topic selection must include at least one topic_id.")
     topic_definitions = load_topic_definitions(resolved_topics_path)
 
     selected_topics: list[dict[str, Any]] = []
-    for topic_id in client_config["topic_ids"]:
+    for topic_id in selected_topic_ids:
         if topic_id not in topic_definitions:
+            topic_source = (
+                "runtime topic selection"
+                if topic_ids is not None
+                else str(resolved_client_path)
+            )
             raise ValueError(
-                f"{resolved_client_path} references unknown topic_id {topic_id!r} "
+                f"{topic_source} references unknown topic_id {topic_id!r} "
                 f"not found in {resolved_topics_path}."
             )
         topic = dict(topic_definitions[topic_id])
@@ -1396,6 +1503,12 @@ def load_runtime_config() -> RuntimeConfig:
     run_date = run_started_at.strftime("%Y-%m-%d")
     timestamp = run_started_at.strftime("%Y-%m-%d_%H-%M-%S")
 
+    sources_path = ROOT_DIR / _str_env("NEWS_SOURCES_YAML", "config/sources.yaml")
+    client_path = ROOT_DIR / _str_env("NEWS_CLIENT_YAML", "config/client.yaml")
+    topics_path = ROOT_DIR / _str_env("NEWS_TOPICS_YAML", "config/topics.yaml")
+    recipients_path = ROOT_DIR / _str_env("NEWS_RECIPIENTS_YAML", "config/recipients.yaml")
+    topic_ids = _configured_topic_ids(client_path)
+
     output_dir = ROOT_DIR / _str_env("NEWS_OUTPUT_DIR", "output/daily_outputs")
     run_output_dir = output_dir / run_date
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -1446,10 +1559,10 @@ def load_runtime_config() -> RuntimeConfig:
     translation_model_backend = _configured_translation_model_backend(translation_model_reference)
     return RuntimeConfig(
         root_dir=ROOT_DIR,
-        sources_path=ROOT_DIR / _str_env("NEWS_SOURCES_YAML", "config/sources.yaml"),
-        client_path=ROOT_DIR / _str_env("NEWS_CLIENT_YAML", "config/client.yaml"),
-        topics_path=ROOT_DIR / _str_env("NEWS_TOPICS_YAML", "config/topics.yaml"),
-        recipients_path=ROOT_DIR / _str_env("NEWS_RECIPIENTS_YAML", "config/recipients.yaml"),
+        sources_path=sources_path,
+        client_path=client_path,
+        topics_path=topics_path,
+        recipients_path=recipients_path,
         env_json_path=env_json_path,
         run_started_at=run_started_at,
         run_date=run_date,
@@ -1469,6 +1582,7 @@ def load_runtime_config() -> RuntimeConfig:
         shared_url_history_enabled=shared_url_history_enabled,
         relaxed_final_synthesis_guards=relaxed_final_synthesis_guards,
         topic_mode=configured_topic_mode(),
+        topic_ids=topic_ids,
         model_reference=model_reference,
         model_name=model_name,
         model_profile=model_profile,

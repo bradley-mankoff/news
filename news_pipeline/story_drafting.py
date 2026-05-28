@@ -134,14 +134,15 @@ def build_story_synthesis_prompt_messages(story_block: dict[str, Any], now_label
         )
     system_prompt = SystemMessage(content=textwrap.dedent(f"""
         Today: {now_label}.
-        You are synthesizing prewritten article summaries into one newsletter story paragraph.
+        You are synthesizing prewritten article summaries into one newsletter story.
         Use only the supplied source summaries.
-        Write exactly one cohesive prose paragraph, roughly 70-130 words.
+        Write one custom story headline, then exactly one cohesive prose paragraph, roughly 70-130 words.
+        The headline should be factual, specific, 4-10 words, and not copied wholesale from a source headline.
         End every factual sentence with one or more source markers using the listed source IDs,
         like [[S1]] or [[S1,S3]]. Use only listed source IDs and do not invent sources.
         Lead with today's reported development. Include concrete reported claims, named actors,
         places, timing, figures, damage, statements, deadlines, and uncertainty when supported.
-        Do not write a heading, bullets, labels, source-material notes, methodology, bibliography, or preamble.
+        Do not write bullets, source-material notes, methodology, bibliography, or preamble.
         Do not merge in background material unless a source summary reports it as part of today's update.
     """).strip())
     user_prompt = HumanMessage(content=textwrap.dedent(f"""
@@ -151,9 +152,32 @@ def build_story_synthesis_prompt_messages(story_block: dict[str, Any], now_label
         Source summaries:
         {source_summary_lines}
 
-        Return only the story paragraph with sentence-end source markers.
+        Return exactly this format:
+        Headline: <custom story headline>
+        Paragraph: <story paragraph with sentence-end source markers>
     """).strip())
     return [system_prompt, user_prompt]
+
+
+def clean_story_synthesis_headline(
+    raw_text: str,
+    fallback: str,
+    runtime: StoryDraftingRuntime,
+) -> str:
+    clean_text = runtime.strip_prompt_echo_lines(runtime.strip_model_artifacts(raw_text or ""))
+    clean_text = re.sub(r"(?m)^##+\s*", "", clean_text)
+    clean_text = re.sub(r"(?mi)^\s*(?:story\s+headline|headline)\s*:\s*", "", clean_text)
+    clean_text = re.sub(r"\[\[[^\]]+\]\]", "", clean_text)
+    clean_text = re.sub(r"\[[0-9,\s]+\]", "", clean_text)
+    clean_text = re.sub(r"[\r\n]+", " ", clean_text)
+    clean_text = re.sub(r"\s+", " ", clean_text).strip(" \"'")
+    clean_text = re.sub(r"\.+$", "", clean_text).strip()
+    if not clean_text:
+        clean_text = str(fallback or "Story update").strip()
+    words = clean_text.split()
+    if len(words) > 12:
+        clean_text = " ".join(words[:12])
+    return clean_text[:110].strip() or "Story update"
 
 
 def clean_story_synthesis_paragraph(
@@ -163,12 +187,42 @@ def clean_story_synthesis_paragraph(
 ) -> str:
     clean_text = runtime.strip_prompt_echo_lines(runtime.strip_model_artifacts(raw_text or ""))
     clean_text = re.sub(r"(?m)^##+\s+.*$", "", clean_text)
-    clean_text = re.sub(r"(?mi)^(topic|story|source summaries?|sources?|references?|paragraph)\s*:\s*.*$", "", clean_text)
+    clean_text = re.sub(r"(?mi)^\s*(?:story\s+headline|headline)\s*:\s*.*$", "", clean_text)
+    clean_text = re.sub(r"(?mi)^\s*paragraph\s*:\s*", "", clean_text)
+    clean_text = re.sub(r"(?mi)^(topic|story|source summaries?|sources?|references?)\s*:\s*.*$", "", clean_text)
     clean_text = re.sub(r"(?m)^\s*[-*]\s+", "", clean_text)
     clean_text = re.sub(r"\s+", " ", clean_text).strip()
     if clean_text and not runtime.is_low_coverage_synthesis_section(clean_text):
         return clean_text
     return runtime.dev_synthesis_paragraph_from_summaries(summaries)
+
+
+def parse_story_synthesis_output(
+    raw_text: str,
+    summaries: list[str],
+    fallback_headline: str,
+    runtime: StoryDraftingRuntime,
+) -> tuple[str, str]:
+    clean_text = runtime.strip_prompt_echo_lines(runtime.strip_model_artifacts(raw_text or ""))
+    headline_match = re.search(
+        r"(?mi)^\s*(?:story\s+headline|headline)\s*:\s*(.+)$",
+        clean_text,
+    )
+    markdown_heading_match = re.search(r"(?m)^##+\s+(.+)$", clean_text)
+    headline = (
+        headline_match.group(1).strip()
+        if headline_match
+        else markdown_heading_match.group(1).strip()
+        if markdown_heading_match
+        else ""
+    )
+
+    paragraph_match = re.search(r"(?mis)^\s*paragraph\s*:\s*(.+)$", clean_text)
+    paragraph_source = paragraph_match.group(1).strip() if paragraph_match else clean_text
+    return (
+        clean_story_synthesis_headline(headline, fallback_headline, runtime),
+        clean_story_synthesis_paragraph(paragraph_source, summaries, runtime),
+    )
 
 
 def run_story_synthesis_block(
@@ -177,6 +231,11 @@ def run_story_synthesis_block(
     runtime: StoryDraftingRuntime,
 ) -> dict[str, Any]:
     summaries = [str(summary or "").strip() for summary in story_block.get("summaries", []) if str(summary or "").strip()]
+    fallback_headline = clean_story_synthesis_headline(
+        str(story_block.get("story_title") or ""),
+        "Story update",
+        runtime,
+    )
     fallback_paragraph = runtime.dev_synthesis_paragraph_from_summaries(summaries)
     prompt_messages = build_story_synthesis_prompt_messages(story_block, now_label)
     estimated_input_tokens = sum(runtime.estimate_message_token_count(message) for message in prompt_messages)
@@ -187,9 +246,14 @@ def run_story_synthesis_block(
         ),
         prompt_messages,
         task_name=f"story synthesis for {story_block.get('story_title') or 'story'}",
-        fallback_content=fallback_paragraph,
+        fallback_content=f"Headline: {fallback_headline}\nParagraph: {fallback_paragraph}",
     )
-    marked_paragraph = clean_story_synthesis_paragraph(response.content, summaries, runtime)
+    story_headline, marked_paragraph = parse_story_synthesis_output(
+        response.content,
+        summaries,
+        fallback_headline,
+        runtime,
+    )
     citation_result = citations_stage.validate_cited_story_text(
         marked_paragraph,
         list(story_block.get("citation_sources") or []),
@@ -198,6 +262,7 @@ def run_story_synthesis_block(
     prompt_tokens = runtime.extract_prompt_tokens_from_response(response)
     return {
         **story_block,
+        "story_headline": story_headline,
         "paragraph": paragraph,
         "marked_paragraph": marked_paragraph,
         "cited_sentences": citation_result.get("cited_sentences", []),
