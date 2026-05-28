@@ -22,20 +22,62 @@ The daily commands are intentionally plain:
 ```bash
 uv run news dev
 uv run news local-prod
+uv run news loose-local-prod
 uv run news prod
 ```
 
-`dev` sends only to `NEWS_DEV_RECIPIENT`, uses the 40-source English `dev`
-source tier, defaults to `gemma-e2b-tiny`, keeps image generation off, and
-records a dev URL log without updating shared production history.
+`dev` sends only to `NEWS_DEV_RECIPIENT`, uses `tier: core` English sources
+allowed for the active topic IDs, defaults to `gemma-e2b-tiny`, keeps image
+generation off, and records a dev URL log without updating shared production
+history.
 
-`local-prod` uses the full runnable English source set (`dev` + `core` tiers),
-defaults to the normal large Gemma model with image generation on, but still
-sends only to `NEWS_DEV_RECIPIENT`. It uses isolated URL history by default so a
-review run does not starve a later production run.
+`local-prod` uses `tier: core` plus `tier: peripheral` English sources allowed
+for the active topic IDs, defaults to the normal large Gemma model with image
+generation on, but still sends only to `NEWS_DEV_RECIPIENT`. It uses isolated
+URL history by default so a review run does not starve a later production run.
 
-`prod` uses the same runnable English source set as `local-prod`, sends to
-configured active recipients, and updates shared URL history.
+`loose-local-prod` uses the same source pool as `local-prod`, but applies the
+dev-loose topic/story matching thresholds while keeping the production story
+floor.
+
+`prod` uses `tier: core` plus `tier: peripheral` English sources allowed for the
+active topic IDs, sends to configured active recipients, and updates shared URL
+history.
+
+### Runtime Topic Selection
+
+By default, all run modes use the ordered `topic_ids` in `config/client.yaml`,
+which are the original four report topics: `global_crises_conflict`,
+`us_economy`, `global_business_finance`, and `us_politics`. You can override
+that list for a single run with `--topics` and a comma-separated list of topic
+IDs:
+
+```bash
+uv run news dev --topics sports,science_space_tech
+uv run news local-prod --topics global_crises_conflict,us_politics,sports
+uv run news loose-local-prod entertainment,science_space_tech
+uv run news prod --topics global_crises_conflict,us_economy,global_business_finance,us_politics
+```
+
+The positional form after a run mode is equivalent to `--topics`. The CLI also
+honors `NEWS_TOPIC_IDS` for compatibility scripts:
+
+```bash
+NEWS_TOPIC_IDS=sports,entertainment uv run todays_news.py local-prod
+```
+
+Topic IDs are defined in `config/topics.yaml`. The current IDs are:
+
+- `global_crises_conflict`
+- `us_economy`
+- `global_business_finance`
+- `us_politics`
+- `sports`
+- `entertainment`
+- `science_space_tech`
+
+Runtime topic selection fully replaces the default `config/client.yaml` list for
+that run; it does not append to it.
 
 Compatibility commands still work:
 
@@ -58,13 +100,53 @@ uv run news serve-unsubscribe
 ## Configuration
 
 - `config/client.yaml` selects active predefined topic IDs in report order.
-- `config/topics.yaml` defines topic vocabulary and matching thresholds.
+- `config/topics.yaml` defines topic vocabulary and matching thresholds. It now
+  includes optional run topics for sports, entertainment/celebrity/music/
+  Hollywood coverage, and science/space/technology coverage.
 - `config/sources.yaml` is the single master source list. It includes working
-  feeds only, tagged by `language`, `tier`, optional `topics`, and optional
-  `nations`. Pipeline runs only select English `dev`/`core` sources;
-  `peripheral` and non-English sources are retained for later review but are not
-  runnable.
+  feeds tagged by `language`, `tier`, optional `nations`, and
+  `allowed_topic_ids`. Pipeline runs select English sources whose `tier` is
+  enabled for the run mode and whose `allowed_topic_ids` intersect the active
+  runtime topics. Sources without `allowed_topic_ids` remain in the master list
+  but are not selected by normal runs.
 - `config/recipients.yaml` defines recipients and paused recipients.
+
+### Source Pools and Topic-Scoped Sources
+
+Sources are controlled by two independent YAML attributes:
+
+- `tier` controls source pool size. Use `core` for quick/dev runs. Use
+  `peripheral` for additional sources that should appear only in
+  `local-prod`, `loose-local-prod`, and `prod`.
+- `allowed_topic_ids` controls topical scope. It is the only source-level topic
+  selection field.
+
+```yaml
+sources:
+  - key: Example Sports Feed
+    name: Example Sports Feed
+    language: en
+    tier: core
+    allowed_topic_ids:
+      - sports
+    url: https://example.com/sports/rss
+```
+
+The old source-level `topics` metadata has been removed. A source is loaded only
+when both source-selection gates pass:
+
+- Its `tier` is enabled for the run mode: `dev` uses `core`; `local-prod`,
+  `loose-local-prod`, and `prod` use `core` plus `peripheral`.
+- At least one of its `allowed_topic_ids` is active for the run.
+- After semantic topic classification, article-topic matches from that source
+  are kept only for the listed topic IDs.
+
+The previous general-purpose runnable source pool is now represented by the four
+default IDs on each source: `global_crises_conflict`, `us_economy`,
+`global_business_finance`, and `us_politics`. Sports-only sources are tagged
+only with `sports`, entertainment-only sources only with `entertainment`, and so
+on, so they are not scraped during the default four-topic run and cannot leak
+into unrelated topics.
 
 Most runtime knobs are `NEWS_` environment variables. See `SETTINGS.md` for the
 full reference. Common overrides:

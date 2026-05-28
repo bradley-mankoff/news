@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
@@ -66,6 +67,12 @@ HEADERS = {
     "Accept": "application/rss+xml, application/atom+xml, application/xml, text/xml, application/json, */*",
     "Accept-Encoding": "gzip, deflate",
 }
+ARTICLE_HEADERS = {
+    "User-Agent": HEADERS["User-Agent"],
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Encoding": "gzip, deflate",
+    "Accept-Language": "en-US,en;q=0.9",
+}
 
 
 def _default_sources_yaml() -> Path:
@@ -116,19 +123,30 @@ def _decompress_response_body(content: bytes, content_encoding: str) -> bytes:
     return content
 
 
-def _fetch_url_once(url: str, timeout: int) -> tuple[bytes, int]:
-    request = urllib.request.Request(url, headers=HEADERS)
+def _fetch_url_once(
+    url: str,
+    timeout: int,
+    *,
+    headers: dict[str, str] | None = None,
+) -> tuple[bytes, int]:
+    request = urllib.request.Request(url, headers=headers or HEADERS)
     with urllib.request.urlopen(request, timeout=timeout) as response:
         content = response.read()
         content_encoding = response.headers.get("Content-Encoding", "")
         return _decompress_response_body(content, content_encoding), int(response.status)
 
 
-def _fetch_url(url: str, timeout: int, *, retries: int = 1) -> tuple[bytes, int]:
+def _fetch_url(
+    url: str,
+    timeout: int,
+    *,
+    retries: int = 1,
+    headers: dict[str, str] | None = None,
+) -> tuple[bytes, int]:
     last_error: Exception | None = None
     for attempt in range(max(0, retries) + 1):
         try:
-            return _fetch_url_once(url, timeout)
+            return _fetch_url_once(url, timeout, headers=headers)
         except Exception as error:
             last_error = error
             if attempt < retries:
@@ -167,6 +185,84 @@ def _recent_probe_url(url: str, recent_days: int) -> str:
 
     return urllib.parse.urlunsplit(
         parts._replace(query=urllib.parse.urlencode(updated_items))
+    )
+
+
+def _is_google_news_url(url: str | None) -> bool:
+    raw_url = str(url or "").strip()
+    if not raw_url:
+        return False
+    try:
+        parsed = urllib.parse.urlparse(raw_url)
+    except Exception:
+        return False
+    hostname = (parsed.hostname or "").lower()
+    return hostname == "news.google.com" or hostname.endswith(".news.google.com")
+
+
+def _google_news_query_target(url: str) -> str:
+    try:
+        parsed = urllib.parse.urlparse(url)
+        query = urllib.parse.parse_qs(parsed.query)
+    except Exception:
+        return ""
+    for key in ("url", "u"):
+        for value in query.get(key, []):
+            candidate = urllib.parse.unquote(str(value or "").strip())
+            if candidate.startswith(("http://", "https://")) and not _is_google_news_url(candidate):
+                return candidate
+    return ""
+
+
+def _decode_google_news_article_path(url: str) -> str:
+    try:
+        article_id = urllib.parse.urlparse(url).path.rstrip("/").split("/")[-1]
+        if not article_id:
+            return ""
+
+        decoded_bytes = base64.urlsafe_b64decode(article_id + "==")
+        decoded_str = decoded_bytes.decode("latin1")
+
+        prefix = b"\x08\x13\x22".decode("latin1")
+        if decoded_str.startswith(prefix):
+            decoded_str = decoded_str[len(prefix):]
+        suffix = b"\xd2\x01\x00".decode("latin1")
+        if decoded_str.endswith(suffix):
+            decoded_str = decoded_str[: -len(suffix)]
+
+        bytes_array = bytearray(decoded_str, "latin1")
+        if not bytes_array:
+            return ""
+        length = bytes_array[0]
+        candidate = decoded_str[2 : length + 1] if length >= 0x80 else decoded_str[1 : length + 1]
+
+        if candidate.startswith(("http://", "https://")) and not _is_google_news_url(candidate):
+            return candidate
+
+        if candidate.startswith("AU_yqL"):
+            try:
+                from googlenewsdecoder import gnewsdecoder
+
+                result = gnewsdecoder(url)
+                if result.get("status"):
+                    resolved = result.get("decoded_url", "")
+                    if resolved and not _is_google_news_url(resolved):
+                        return resolved
+            except Exception:
+                pass
+    except Exception:
+        pass
+    return ""
+
+
+def _resolve_google_news_url(url: str) -> str:
+    original_url = str(url or "").strip()
+    if not _is_google_news_url(original_url):
+        return original_url
+    return (
+        _google_news_query_target(original_url)
+        or _decode_google_news_article_path(original_url)
+        or original_url
     )
 
 
@@ -716,10 +812,14 @@ def _extract_feed_article_urls(content: bytes, fetcher: str, max_urls: int) -> l
 def _probe_article_body(url: str, timeout: int) -> tuple[bool, str]:
     """Returns (has_real_body, status_label)."""
     try:
-        content, _status = _fetch_url(url, timeout)
+        article_url = _resolve_google_news_url(url)
+        content, _status = _fetch_url(article_url, timeout, headers=ARTICLE_HEADERS)
         try:
             import trafilatura  # type: ignore
-            text = trafilatura.extract(content.decode("utf-8", errors="replace"))
+            text = trafilatura.extract(
+                content.decode("utf-8", errors="replace"),
+                url=article_url,
+            )
         except ImportError:
             return False, "trafilatura_not_installed"
         except Exception:

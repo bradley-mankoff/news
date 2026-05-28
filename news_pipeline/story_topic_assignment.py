@@ -408,6 +408,7 @@ def _story_topic_primary_dataset(
             lines = [
                 f"Topic: {topic_title}",
                 f"Story: {story.get('story_title')}",
+                f"Story headline: {_story_section_headline(story)}",
                 f"Topic fit score: {story.get('topic_fit_score')}",
                 f"Article IDs: {', '.join(str(article_id) for article_id in story.get('article_ids', []))}",
                 "Story draft:",
@@ -421,12 +422,37 @@ def _story_topic_primary_dataset(
             lines = [
                 f"Topic: {story.get('topic_title') or topic_key}",
                 f"Story: {story.get('story_title')}",
+                f"Story headline: {_story_section_headline(story)}",
                 f"Topic fit score: {story.get('topic_fit_score')}",
                 "Story draft:",
                 str(story.get("paragraph") or story.get("story_text") or "").strip(),
             ]
             sections.append("\n".join(lines))
     return "\n\n---\n\n".join(sections)
+
+
+def _story_section_headline(story: dict[str, Any]) -> str:
+    raw_headline = (
+        story.get("story_headline")
+        or story.get("display_story_headline")
+        or story.get("story_title")
+        or "Story update"
+    )
+    clean_headline = re.sub(r"(?m)^##+\s*", "", str(raw_headline or ""))
+    clean_headline = re.sub(
+        r"(?mi)^\s*(?:story\s+headline|headline)\s*:\s*",
+        "",
+        clean_headline,
+    )
+    clean_headline = re.sub(r"\[[0-9,\s]+\]", "", clean_headline)
+    clean_headline = re.sub(r"\[\[[^\]]+\]\]", "", clean_headline)
+    clean_headline = re.sub(r"[\r\n]+", " ", clean_headline)
+    clean_headline = re.sub(r"\s+", " ", clean_headline).strip(" \"'")
+    clean_headline = re.sub(r"\.+$", "", clean_headline).strip()
+    words = clean_headline.split()
+    if len(words) > 12:
+        clean_headline = " ".join(words[:12])
+    return clean_headline[:110].strip() or "Story update"
 
 
 def build_precomputed_story_synthesis(
@@ -449,36 +475,54 @@ def build_precomputed_story_synthesis(
         topic_key = str(topic.get("key") or "")
         topic_title = str(topic.get("title") or topic_key or "Unknown topic")
         story_matches = matches_by_topic.get(topic_key) or []
-        paragraphs: list[str] = []
+        story_blocks: list[str] = []
         for story in story_matches:
             paragraph = str(story.get("paragraph") or story.get("story_text") or "").strip()
             if not paragraph:
                 continue
+            story_headline = _story_section_headline(story)
+            display_story_headline = story_headline
+            story_level_citation_numbers: list[int] = []
             if story.get("cited_sentences") and story.get("citation_sources"):
-                cited_paragraph = citations_stage.render_cited_story_text(
+                rendered_story = citations_stage.render_cited_story(
                     list(story.get("cited_sentences") or []),
                     list(story.get("citation_sources") or []),
                     citation_registry,
                 )
+                cited_paragraph = str(rendered_story.get("paragraph") or "").strip()
                 if cited_paragraph:
                     paragraph = cited_paragraph
+                headline_citation_text = str(rendered_story.get("headline_citation_text") or "").strip()
+                if headline_citation_text:
+                    display_story_headline = f"{story_headline} {headline_citation_text}"
+                story_level_citation_numbers = [
+                    int(number)
+                    for number in rendered_story.get("story_level_source_numbers") or []
+                    if isinstance(number, int)
+                ]
                 citation_diagnostics.append(
                     {
                         "topic": topic_title,
                         "story": story.get("story_title"),
                         "source_count": len(story.get("citation_sources") or []),
                         "sentence_count": len(story.get("cited_sentences") or []),
+                        "story_level_citation_numbers": story_level_citation_numbers,
+                        "story_level_source_sentence_counts": rendered_story.get(
+                            "story_level_source_sentence_counts"
+                        )
+                        or {},
                         "diagnostics": story.get("citation_diagnostics") or {},
                     }
                 )
-            paragraphs.append(paragraph)
-            required_story_blocks_by_topic.setdefault(topic_title, []).append(
-                str(story.get("story_title") or "Story update")
-            )
+            story_blocks.append(f"### {display_story_headline}\n\n{paragraph}")
+            required_story_blocks_by_topic.setdefault(topic_title, []).append(display_story_headline)
             attempts.append(
                 {
                     "topic": topic_title,
                     "story": story.get("story_title"),
+                    "story_headline": story_headline,
+                    "display_story_headline": display_story_headline,
+                    "story_level_citation_numbers": story_level_citation_numbers,
                     "valid": True,
                     "reason": "precomputed_story_draft",
                     "word_count": runtime.final_synthesis_word_count(paragraph),
@@ -486,11 +530,11 @@ def build_precomputed_story_synthesis(
                     "preview": paragraph[:500],
                 }
             )
-        if paragraphs:
+        if story_blocks:
             required_topic_titles.append(topic_title)
             sections.append(
                 f"## {runtime.format_topic_section_header(topic_title)}\n"
-                + "\n\n".join(paragraphs)
+                + "\n\n".join(story_blocks)
             )
 
     final_synthesis = "\n\n".join(sections)

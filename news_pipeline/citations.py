@@ -14,6 +14,7 @@ from zoneinfo import ZoneInfo
 
 TEMPORARY_CITATION_RE = re.compile(r"\[\[([A-Za-z0-9_,;\s-]+)\]\]")
 DISPLAY_CITATION_RE = re.compile(r"\[(\d+(?:\s*,\s*\d+)*)\]")
+DEFAULT_STORY_LEVEL_CITATION_SENTENCE_THRESHOLD = 2
 
 _COMMON_ABBREVIATION_RE = re.compile(
     r"\b(?:U\.S|U\.K|E\.U|U\.N|Mr|Mrs|Ms|Dr|Prof|Sen|Rep|Gov|St|No|Inc|Ltd|Co|Corp|vs)\.$",
@@ -362,17 +363,74 @@ def render_cited_story_text(
     citation_sources: list[dict[str, Any]],
     registry: CitationRegistry,
 ) -> str:
+    return str(
+        render_cited_story(
+            cited_sentences,
+            citation_sources,
+            registry,
+            story_level_citation_sentence_threshold=None,
+        ).get("paragraph")
+        or ""
+    )
+
+
+def _normalized_sentence_source_ids(sentence: dict[str, Any]) -> list[str]:
+    source_ids: list[str] = []
+    for source_id in sentence.get("source_ids") or []:
+        normalized_source_id = _normalize_source_id(str(source_id))
+        if normalized_source_id and normalized_source_id not in source_ids:
+            source_ids.append(normalized_source_id)
+    return source_ids
+
+
+def render_cited_story(
+    cited_sentences: list[dict[str, Any]],
+    citation_sources: list[dict[str, Any]],
+    registry: CitationRegistry,
+    *,
+    story_level_citation_sentence_threshold: int | None = DEFAULT_STORY_LEVEL_CITATION_SENTENCE_THRESHOLD,
+) -> dict[str, Any]:
     source_by_local_id = {
         _normalize_source_id(str(source.get("local_id") or "")): source
         for source in citation_sources
         if source.get("local_id")
     }
+    source_sentence_counts: dict[str, int] = {}
+    source_first_seen_order: list[str] = []
+    for sentence in cited_sentences:
+        for source_id in _normalized_sentence_source_ids(sentence):
+            if source_id not in source_by_local_id:
+                continue
+            source_sentence_counts[source_id] = source_sentence_counts.get(source_id, 0) + 1
+            if source_id not in source_first_seen_order:
+                source_first_seen_order.append(source_id)
+
+    if story_level_citation_sentence_threshold is None:
+        story_level_source_ids = []
+    else:
+        story_level_source_ids = [
+            source_id
+            for source_id in source_first_seen_order
+            if source_sentence_counts.get(source_id, 0) > story_level_citation_sentence_threshold
+        ]
+    story_level_source_id_set = set(story_level_source_ids)
+    story_level_numbers: list[int] = []
+    for source_id in story_level_source_ids:
+        source = source_by_local_id.get(source_id)
+        if not source:
+            continue
+        number = registry.register(source)
+        if number not in story_level_numbers:
+            story_level_numbers.append(number)
+
     rendered_sentences: list[str] = []
     for sentence in cited_sentences:
         sentence_text = strip_citation_markers(str(sentence.get("text") or ""))
         numbers: list[int] = []
-        for source_id in sentence.get("source_ids") or []:
-            source = source_by_local_id.get(_normalize_source_id(str(source_id)))
+        for source_id in _normalized_sentence_source_ids(sentence):
+            if source_id in story_level_source_id_set:
+                continue
+            source = source_by_local_id.get(source_id)
             if not source:
                 continue
             number = registry.register(source)
@@ -382,7 +440,17 @@ def render_cited_story_text(
             sentence_text = f"{sentence_text}{''.join(f'[{number}]' for number in numbers)}"
         if sentence_text:
             rendered_sentences.append(sentence_text)
-    return " ".join(rendered_sentences).strip()
+    return {
+        "paragraph": " ".join(rendered_sentences).strip(),
+        "headline_citation_text": "".join(f"[{number}]" for number in story_level_numbers),
+        "story_level_source_numbers": story_level_numbers,
+        "story_level_source_ids": story_level_source_ids,
+        "story_level_source_sentence_counts": {
+            source_id: source_sentence_counts[source_id]
+            for source_id in story_level_source_ids
+            if source_id in source_sentence_counts
+        },
+    }
 
 
 def render_plain_text_sources(citation_sources: list[dict[str, Any]]) -> str:

@@ -2,6 +2,7 @@
 
 Preferred usage:
     uv run news dev
+    uv run news dev --topics sports,science_space_tech
     uv run news local-prod
     uv run news loose-local-prod
     uv run news prod
