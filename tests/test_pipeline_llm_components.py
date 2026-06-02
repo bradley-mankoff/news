@@ -24,6 +24,7 @@ from news_pipeline.pipeline import (
     MODEL_CALL_STATS_LOCK,
     _extract_feed_items,
     _select_per_topic_feed_items,
+    _story_topic_runtime,
     budget_article_targets,
     build_report_body,
     build_top_funnel_article_targets_for_coverage_gaps,
@@ -34,6 +35,8 @@ from news_pipeline.pipeline import (
     run_article_summary_pass,
     run_per_story_synthesis,
 )
+from news_pipeline.config import load_predefined_topics
+from news_pipeline.story_topic_assignment import classify_story_drafts_for_topics
 
 
 def fake_scrape(url: str) -> str:
@@ -123,6 +126,82 @@ class PipelineLLMComponentTests(unittest.TestCase):
         self.assertIsInstance(synthesis, str)
         self.assertGreater(len(synthesis.split()), 20)
         self.assertIn("climate", synthesis.lower())
+        self.assertNoModelFallbacks()
+
+    def test_story_topic_validation_rejects_plain_south_korea_for_us_economy(self) -> None:
+        topics = load_predefined_topics(topic_ids=["us_economy"])
+        topic_title = topics[0]["title"]
+        story_drafts = [
+            {
+                "story_key": "powell-fed-independence",
+                "topic_key": "us_economy",
+                "topic_title": topic_title,
+                "story_title": "Powell uses JFK award speech to defend Fed from political pressure",
+                "paragraph": (
+                    "Federal Reserve Chair Jerome Powell used a public award speech to defend the Fed's "
+                    "independence from White House pressure, warning that politicized interest-rate "
+                    "decisions would damage public trust in the central bank. The story centers on Fed "
+                    "policy, US interest rates, and broad implications for American households, borrowers, "
+                    "businesses, investors, and US financial markets."
+                ),
+                "summaries": [
+                    "Powell defended Federal Reserve independence from White House pressure and linked "
+                    "politicized rate decisions to risks for US households, businesses, and markets."
+                ],
+                "article_ids": ["fed-1", "fed-2", "fed-3", "fed-4"],
+                "cluster_article_ids": ["fed-1", "fed-2", "fed-3", "fed-4"],
+                "article_count": 4,
+                "source_count": 4,
+                "story_strength_score": 2.0,
+                "average_similarity": 0.8,
+            },
+            {
+                "story_key": "seoul-shares-ai-optimism",
+                "topic_key": "us_economy",
+                "topic_title": topic_title,
+                "story_title": "South Korean Stocks Rally on AI Tech Optimism",
+                "paragraph": (
+                    "South Korean stocks reached a new high as investor interest in technology and "
+                    "artificial intelligence drove market gains. The Korea Composite Stock Price Index "
+                    "(KOSPI) climbed after optimism that the AI-driven semiconductor boom would persist. "
+                    "South Korean exports rose 53 percent from the prior year to a monthly high of "
+                    "US$87.8 billion, supported by the semiconductor supercycle. Robot and AI-related "
+                    "stocks also gained before Nvidia CEO Jensen Huang's visit to South Korea."
+                ),
+                "summaries": [
+                    "Seoul shares and the KOSPI rallied on AI and semiconductor optimism, while South "
+                    "Korean exports reached US$87.8 billion and Nvidia CEO Jensen Huang prepared to "
+                    "visit local executives."
+                ],
+                "article_ids": ["seoul-1", "seoul-2", "seoul-3", "seoul-4"],
+                "cluster_article_ids": ["seoul-1", "seoul-2", "seoul-3", "seoul-4"],
+                "article_count": 4,
+                "source_count": 4,
+                "story_strength_score": 3.0,
+                "average_similarity": 0.9,
+            },
+        ]
+
+        with redirect_stdout(StringIO()):
+            selected, stats = classify_story_drafts_for_topics(
+                story_drafts,
+                topics,
+                _story_topic_runtime(),
+            )
+
+        selected_keys = {story["story_key"] for story in selected}
+        self.assertIn("powell-fed-independence", selected_keys, stats)
+        self.assertNotIn("seoul-shares-ai-optimism", selected_keys, stats)
+        rejected = stats["topics"][topic_title]["rejected"]
+        korea_rejection = next(
+            record for record in rejected if record["story_key"] == "seoul-shares-ai-optimism"
+        )
+        self.assertEqual(
+            korea_rejection["topic_screening_topicality"],
+            "obviously_not_topical",
+            stats,
+        )
+        self.assertEqual(korea_rejection["reason"], "screened_out_by_story_topic_screening")
         self.assertNoModelFallbacks()
 
     def test_title_generation_component(self) -> None:

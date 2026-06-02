@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+from collections import Counter
 from contextlib import redirect_stdout
 from datetime import datetime, timezone
 from io import StringIO
@@ -17,9 +18,9 @@ from news_pipeline.config import (
     _configured_model_reference,
     _sync_cursorignore_latest_output,
     build_model_server_command,
-    configured_max_articles_per_story,
     configured_max_stories_per_topic,
     configured_story_cluster_similarity_threshold,
+    configured_story_topic_fit_min_score,
     configured_topic_mode,
     configured_model_profile,
     infer_model_profile_key,
@@ -37,6 +38,8 @@ from news_pipeline.pipeline import (
     _enforce_text_free_image_prompt,
     _generate_translation_text,
     _sanitize_overlay_headline,
+    _run_story_reserve_backfill,
+    _select_reserve_story_batch,
     _select_per_topic_feed_items,
     _report_reference_key,
     _score_topic_against_story,
@@ -59,7 +62,10 @@ from news_pipeline.pipeline import (
     truncate_text_to_token_limit,
 )
 from news_pipeline.article_summarization import ArticleSummarizationRuntime, build_article_summary_prompt_messages
-from news_pipeline.story_clustering import organize_article_targets_into_stories
+from news_pipeline.story_clustering import (
+    _prune_story_component_by_member_cohesion,
+    organize_article_targets_into_stories,
+)
 
 
 class ConfigAndTopicSelectionTests(unittest.TestCase):
@@ -276,21 +282,21 @@ class ConfigAndTopicSelectionTests(unittest.TestCase):
             self.assertEqual(configured_max_stories_per_topic("dev"), 2)
             self.assertEqual(configured_max_stories_per_topic("local-prod"), 4)
             self.assertEqual(configured_max_stories_per_topic("prod"), 4)
-            self.assertEqual(configured_max_articles_per_story("big_conservative"), 4)
-            self.assertEqual(configured_max_articles_per_story("small_aggressive"), 5)
+            self.assertEqual(configured_story_topic_fit_min_score("dev"), 4)
+            self.assertEqual(configured_story_topic_fit_min_score("local-prod"), 6)
             self.assertEqual(configured_story_cluster_similarity_threshold(), 0.26)
 
         with patch.dict(
             "os.environ",
             {
                 "NEWS_MAX_STORIES_PER_TOPIC": "6",
-                "NEWS_MAX_ARTICLES_PER_STORY": "7",
+                "NEWS_STORY_TOPIC_FIT_MIN_SCORE": "5",
                 "NEWS_STORY_CLUSTER_SIMILARITY_THRESHOLD": "0.30",
             },
             clear=True,
         ):
             self.assertEqual(configured_max_stories_per_topic("dev"), 6)
-            self.assertEqual(configured_max_articles_per_story("big_conservative"), 7)
+            self.assertEqual(configured_story_topic_fit_min_score("dev"), 5)
             self.assertEqual(configured_story_cluster_similarity_threshold(), 0.30)
 
     @unittest.skip("configured_topic_mode raises for dynamic mode; dynamic topic discovery retired in pipeline disaggregation")
@@ -599,6 +605,58 @@ class ConfigAndTopicSelectionTests(unittest.TestCase):
         self.assertNotIn("EMPTY TOPIC", cleaned)
         self.assertNotIn("No high-confidence", cleaned)
 
+    def test_publication_cleaner_preserves_valid_story_subsections(self) -> None:
+        cleaned = clean_synthesis_for_publication(
+            "## CLIMATE RESILIENCE\n"
+            "### Levee repairs advance\n\n"
+            "Officials approved levee repairs after spring flooding.\n\n"
+            "#### Cooling centers open\n\n"
+            "The city opened cooling centers ahead of the heat wave."
+        )
+
+        self.assertIn("## CLIMATE RESILIENCE", cleaned)
+        self.assertIn("### Levee repairs advance", cleaned)
+        self.assertIn("#### Cooling centers open", cleaned)
+        self.assertIn("Officials approved levee repairs", cleaned)
+
+    def test_publication_cleaner_drops_low_coverage_story_subsections_only(self) -> None:
+        cleaned = clean_synthesis_for_publication(
+            "## CLIMATE RESILIENCE\n"
+            "### Empty dataset\n\n"
+            "No high-confidence updates in supplied coverage.\n\n"
+            "The primary dataset is literally empty for this story.\n\n"
+            "### Levee repairs advance\n\n"
+            "Officials approved levee repairs after spring flooding."
+        )
+
+        self.assertIn("## CLIMATE RESILIENCE", cleaned)
+        self.assertNotIn("### Empty dataset", cleaned)
+        self.assertNotIn("No high-confidence", cleaned)
+        self.assertIn("### Levee repairs advance", cleaned)
+        self.assertIn("Officials approved levee repairs", cleaned)
+
+    def test_publication_cleaner_drops_topic_with_only_low_coverage_stories(self) -> None:
+        cleaned = clean_synthesis_for_publication(
+            "## CLIMATE RESILIENCE\n"
+            "### Empty dataset\n\n"
+            "No high-confidence updates in supplied coverage.\n\n"
+            "The primary dataset is literally empty for this story."
+        )
+
+        self.assertEqual(cleaned, "")
+
+    def test_publication_cleaner_preserves_h2_only_supported_sections(self) -> None:
+        cleaned = clean_synthesis_for_publication(
+            "## CLIMATE RESILIENCE\n"
+            "Officials approved levee repairs after spring flooding."
+        )
+
+        self.assertEqual(
+            cleaned,
+            "## CLIMATE RESILIENCE\n"
+            "Officials approved levee repairs after spring flooding.",
+        )
+
     def test_relaxed_publication_cleaner_keeps_dev_low_coverage_sections(self) -> None:
         cleaned = clean_synthesis_for_publication(
             "## EMPTY TOPIC\nNo high-confidence updates in supplied coverage.",
@@ -683,6 +741,7 @@ class ConfigAndTopicSelectionTests(unittest.TestCase):
                         "region": "global",
                         "language": "en",
                         "tier": "dev",
+                        "allowed_topic_ids": ["global_crises_conflict"],
                     }
                 ],
             }
@@ -693,6 +752,79 @@ class ConfigAndTopicSelectionTests(unittest.TestCase):
         self.assertFalse(sources["Example"]["can_validate_topics"])
         self.assertTrue(sources["Example"]["can_enrich_coverage"])
         self.assertEqual(sources["Example"]["provider_type"], "article_feed")
+
+    def test_article_sources_default_to_feed_label_source_matching(self) -> None:
+        path = self._write_config(
+            {
+                "sources": [
+                    {
+                        "key": "Example",
+                        "name": "Example Feed",
+                        "url": "https://example.com/feed.xml",
+                        "language": "en",
+                        "tier": "core",
+                        "allowed_topic_ids": ["global_crises_conflict"],
+                    },
+                    {
+                        "key": "AP News",
+                        "name": "Associated Press",
+                        "url": "https://example.com/ap.xml",
+                        "language": "en",
+                        "tier": "core",
+                        "allowed_topic_ids": ["global_crises_conflict"],
+                        "source_match_mode": "wire_attribution",
+                    },
+                ]
+            }
+        )
+
+        sources = load_sources(path)
+        self.assertEqual(sources["Example"]["source_match_mode"], "feed_label")
+        self.assertEqual(sources["AP News"]["source_match_mode"], "wire_attribution")
+
+    def test_configured_sources_all_declare_topic_scope(self) -> None:
+        sources_payload = yaml.safe_load(Path("config/sources.yaml").read_text(encoding="utf-8"))
+        topics_payload = yaml.safe_load(Path("config/topics.yaml").read_text(encoding="utf-8"))
+        sources_by_key = {
+            str(source.get("key") or ""): source
+            for source in sources_payload["sources"]
+            if isinstance(source, dict)
+        }
+        valid_topic_ids = {topic["id"] for topic in topics_payload["topics"]}
+        original_topic_ids = {
+            "global_crises_conflict",
+            "us_economy",
+            "global_business_finance",
+            "us_politics",
+        }
+        for key in ("AFP", "AP News", "Reuters"):
+            self.assertEqual(sources_by_key[key].get("source_match_mode"), "wire_attribution")
+        source_topic_counts: Counter[str] = Counter()
+        missing_scope: list[str] = []
+        unknown_scope: dict[str, list[str]] = {}
+        core_missing_original: list[str] = []
+
+        for source in sources_payload["sources"]:
+            source_key = str(source.get("key") or "")
+            allowed_topic_ids = list(source.get("allowed_topic_ids") or [])
+            if not allowed_topic_ids:
+                missing_scope.append(source_key)
+                continue
+            unknown_ids = [topic_id for topic_id in allowed_topic_ids if topic_id not in valid_topic_ids]
+            if unknown_ids:
+                unknown_scope[source_key] = unknown_ids
+            source_topic_counts.update(allowed_topic_ids)
+            if str(source.get("tier") or "").lower() in {"core", "dev"} and not original_topic_ids.issubset(
+                set(allowed_topic_ids)
+            ):
+                core_missing_original.append(source_key)
+
+        self.assertEqual(missing_scope, [])
+        self.assertEqual(unknown_scope, {})
+        self.assertEqual(core_missing_original, [])
+        self.assertGreaterEqual(source_topic_counts["sports"], 10)
+        self.assertGreaterEqual(source_topic_counts["entertainment"], 25)
+        self.assertGreaterEqual(source_topic_counts["science_space_tech"], 50)
 
     def test_annotation_records_seed_validation_and_frame_metadata(self) -> None:
         topics = [
@@ -1437,7 +1569,6 @@ class ConfigAndTopicSelectionTests(unittest.TestCase):
             topics,
             min_articles_per_story=2,
             max_stories_per_topic=4,
-            max_articles_per_story=5,
             similarity_threshold=0.18,
         )
 
@@ -1496,7 +1627,6 @@ class ConfigAndTopicSelectionTests(unittest.TestCase):
             topics,
             min_articles_per_story=2,
             max_stories_per_topic=4,
-            max_articles_per_story=5,
             similarity_threshold=0.20,
         )
 
@@ -1550,7 +1680,6 @@ class ConfigAndTopicSelectionTests(unittest.TestCase):
             topics,
             min_articles_per_story=2,
             max_stories_per_topic=4,
-            max_articles_per_story=4,
             similarity_threshold=0.10,
         )
 
@@ -1629,7 +1758,6 @@ class ConfigAndTopicSelectionTests(unittest.TestCase):
             topics,
             min_articles_per_story=2,
             max_stories_per_topic=4,
-            max_articles_per_story=4,
             similarity_threshold=0.18,
         )
 
@@ -1640,7 +1768,7 @@ class ConfigAndTopicSelectionTests(unittest.TestCase):
         self.assertEqual(stats["story_count"], 1)
         self.assertEqual(stats["dropped_by_topic"], {"Iran War": 2})
 
-    def test_story_clustering_caps_summaries_without_shrinking_detected_cluster(self) -> None:
+    def test_story_clustering_retains_full_detected_cluster(self) -> None:
         topics = [{"key": "topic_a", "title": "Topic A", "keywords": [], "boost_phrases": []}]
         articles = [
             {
@@ -1664,15 +1792,431 @@ class ConfigAndTopicSelectionTests(unittest.TestCase):
             topics,
             min_articles_per_story=2,
             max_stories_per_topic=4,
-            max_articles_per_story=3,
             similarity_threshold=0.18,
         )
 
-        self.assertEqual(len(selected), 3)
+        self.assertEqual(len(selected), 5)
         story = stats["stories_by_topic"]["Topic A"][0]
         self.assertEqual(story["cluster_article_count"], 5)
-        self.assertEqual(story["selected_article_count"], 3)
-        self.assertEqual(stats["dropped_count"], 2)
+        self.assertEqual(story["selected_article_count"], 5)
+        self.assertEqual(stats["dropped_count"], 0)
+
+    def test_story_clustering_keeps_ranked_reserve_story_clusters(self) -> None:
+        topics = [{"key": "topic_a", "title": "Topic A", "keywords": [], "boost_phrases": []}]
+        story_terms = [
+            "harbor refinery blaze",
+            "rail tunnel flooding",
+            "battery factory leak",
+            "airport runway outage",
+            "hospital power failure",
+            "river bridge closure",
+        ]
+        articles = []
+        for story_index, story_term in enumerate(story_terms, start=1):
+            for article_index in range(1, 3):
+                articles.append(
+                    {
+                        "article_id": f"s{story_index}a{article_index}",
+                        "source": f"Wire {article_index}",
+                        "topic_key": "topic_a",
+                        "topic_title": "Topic A",
+                        "title": f"{story_term} update {article_index}",
+                        "description": f"{story_term} reported by officials.",
+                        "text": (
+                            f"{story_term} {story_term} officials reported new details and "
+                            "response crews worked at the scene."
+                        ),
+                        "relevance_score": 20 - story_index,
+                    }
+                )
+
+        selected, stats = organize_article_targets_into_stories(
+            articles,
+            topics,
+            min_articles_per_story=2,
+            max_stories_per_topic=4,
+            similarity_threshold=0.18,
+        )
+
+        self.assertEqual(len(selected), 8)
+        self.assertEqual(stats["story_count"], 4)
+        self.assertEqual(stats["reserve_story_count"], 2)
+        self.assertEqual(stats["dropped_count"], 0)
+        self.assertEqual(
+            [story["story_rank"] for story in stats["stories_by_topic"]["Topic A"]],
+            [1, 2, 3, 4],
+        )
+        self.assertEqual(
+            [story["story_rank"] for story in stats["reserve_stories_by_topic"]["Topic A"]],
+            [5, 6],
+        )
+
+    def test_reserve_story_batch_uses_deficit_multiplier_and_skips_attempted(self) -> None:
+        topics = [
+            {"key": "topic_a", "title": "Topic A"},
+            {"key": "topic_b", "title": "Topic B"},
+        ]
+        reserves = {
+            "Topic A": [
+                {"story_key": "a1"},
+                {"story_key": "a2"},
+                {"story_key": "a3"},
+            ],
+            "Topic B": [
+                {"story_key": "b1"},
+                {"story_key": "b2"},
+            ],
+        }
+
+        batch = _select_reserve_story_batch(
+            reserves,
+            {"Topic A": 1, "Topic B": 2},
+            topics,
+            {"a1"},
+            batch_multiplier=2,
+        )
+
+        self.assertEqual([story["story_key"] for story in batch], ["a2", "a3", "b1", "b2"])
+        self.assertEqual(
+            _select_reserve_story_batch(
+                reserves,
+                {"Topic A": 1},
+                topics,
+                {"a1", "a2", "a3"},
+                batch_multiplier=2,
+            ),
+            [],
+        )
+
+    def test_story_reserve_backfill_attempts_only_deficient_topics(self) -> None:
+        topics = [
+            {"key": "topic_a", "title": "Topic A"},
+            {"key": "topic_b", "title": "Topic B"},
+        ]
+        reserve_stories = {
+            "Topic A": [
+                {
+                    "story_key": "topic-a-story-05-reserve",
+                    "topic_key": "topic_a",
+                    "topic_title": "Topic A",
+                    "story_title": "Reserve harbor update",
+                    "story_rank": 5,
+                    "article_ids": ["r1", "r2"],
+                    "cluster_article_ids": ["r1", "r2"],
+                    "article_count": 2,
+                    "source_count": 2,
+                }
+            ],
+            "Topic B": [
+                {
+                    "story_key": "topic-b-story-05-should-not-run",
+                    "topic_key": "topic_b",
+                    "topic_title": "Topic B",
+                    "story_title": "Full topic reserve",
+                    "story_rank": 5,
+                    "article_ids": ["b1", "b2"],
+                    "cluster_article_ids": ["b1", "b2"],
+                    "article_count": 2,
+                    "source_count": 2,
+                }
+            ],
+        }
+        article_lookup = {
+            article_id: {
+                "article_id": article_id,
+                "source": f"Wire {article_id}",
+                "topic_key": "topic_a" if article_id.startswith("r") else "topic_b",
+                "topic_title": "Topic A" if article_id.startswith("r") else "Topic B",
+                "title": f"Article {article_id}",
+                "url": f"https://example.com/{article_id}",
+                "pub_date": "Sat, 30 May 2026 12:00:00 GMT",
+                "text": "Officials reported a supported reserve story update.",
+            }
+            for article_id in ("r1", "r2", "b1", "b2")
+        }
+        initial_drafts = [
+            {"story_key": f"topic-a-story-0{index}", "topic_key": "topic_a", "topic_title": "Topic A"}
+            for index in range(1, 4)
+        ] + [
+            {"story_key": f"topic-b-story-0{index}", "topic_key": "topic_b", "topic_title": "Topic B"}
+            for index in range(1, 5)
+        ]
+        summarized_article_ids: list[str] = []
+        drafted_story_keys: list[str] = []
+
+        def summarize(article_targets: list[dict]) -> list[str]:
+            summarized_article_ids.extend(str(article["article_id"]) for article in article_targets)
+            return [
+                (
+                    f"### {article['title']}\n"
+                    "Metadata:\n"
+                    f"- Source: {article['source']}\n"
+                    f"- URL: {article['url']}\n"
+                    f"- Article ID: {article['article_id']}\n\n"
+                    "Summary:\n"
+                    "Officials reported a supported reserve story update."
+                )
+                for article in article_targets
+            ]
+
+        def draft(records: list[dict], _summaries: list[str], _article_targets: list[dict]):
+            drafted_story_keys.extend(str(record["story_key"]) for record in records)
+            return [
+                {
+                    **record,
+                    "paragraph": "Topic A officials reported the reserve harbor update with support.",
+                    "story_text": "Topic A officials reported the reserve harbor update with support.",
+                    "valid": True,
+                }
+                for record in records
+            ], {"story_drafts_generated": len(records)}
+
+        def classify(drafts: list[dict]):
+            selected_by_topic = {
+                "Topic A": 4 if any(draft.get("story_key") == "topic-a-story-05-reserve" for draft in drafts) else 3,
+                "Topic B": 4,
+            }
+            return list(drafts), {"selected_by_topic": selected_by_topic}
+
+        result = _run_story_reserve_backfill(
+            topics=topics,
+            reserve_stories_by_topic=reserve_stories,
+            article_lookup=article_lookup,
+            article_summary_reports=[],
+            clustered_article_targets=[],
+            story_drafts=initial_drafts,
+            selected_story_topic_matches=list(initial_drafts),
+            story_topic_stats={"selected_by_topic": {"Topic A": 3, "Topic B": 4}},
+            summarize_article_targets=summarize,
+            draft_story_records=draft,
+            classify_story_drafts=classify,
+            dedupe_story_drafts=lambda drafts: (drafts, {"dropped": 0}),
+            max_stories_per_topic=4,
+            batch_multiplier=2,
+        )
+
+        stats = result["stats"]
+        self.assertEqual(stats["iterations"], 1)
+        self.assertEqual(stats["attempted_story_count_by_topic"], {"Topic A": 1})
+        self.assertEqual(stats["attempted_article_count"], 2)
+        self.assertEqual(stats["final_selected_by_topic"], {"Topic A": 4, "Topic B": 4})
+        self.assertEqual(stats["deficits_after"], {})
+        self.assertEqual(summarized_article_ids, ["r1", "r2"])
+        self.assertEqual(drafted_story_keys, ["topic-a-story-05-reserve"])
+
+    def test_story_clustering_rejects_three_plus_one_mixed_component_at_four_article_floor(self) -> None:
+        topics = [{"key": "topic_a", "title": "Topic A", "keywords": [], "boost_phrases": []}]
+        articles = [
+            {
+                "article_id": f"coherent-{index}",
+                "source": f"Wire {index}",
+                "topic_key": "topic_a",
+                "topic_title": "Topic A",
+                "title": f"Harbor refinery drone strike update {index}",
+                "description": "Harbor refinery drone strike damages storage tanks.",
+                "text": (
+                    "Harbor refinery drone strike damaged storage tanks and ignited a fuel fire. "
+                    "Emergency crews contained the refinery blaze after inspecting pipeline valves."
+                ),
+            }
+            for index in range(1, 4)
+        ] + [
+            {
+                "article_id": "outlier",
+                "source": "Wire 4",
+                "topic_key": "topic_a",
+                "topic_title": "Topic A",
+                "title": "Harbor refinery court hearing scheduled",
+                "description": "A harbor refinery phrase appears in a separate legal calendar item.",
+                "text": (
+                    "Judges scheduled a procedural hearing in a contract dispute. "
+                    "The calendar item mentioned harbor refinery filings but focused on legal deadlines."
+                ),
+            }
+        ]
+
+        selected, stats = organize_article_targets_into_stories(
+            articles,
+            topics,
+            min_articles_per_story=4,
+            max_stories_per_topic=4,
+            similarity_threshold=0.18,
+        )
+
+        self.assertEqual(selected, [])
+        self.assertEqual(stats["story_count"], 0)
+
+    def test_story_clustering_prunes_multiple_islands_in_one_retained_story(self) -> None:
+        similarities = {
+            (left, right): 0.40
+            for left in range(4)
+            for right in range(left + 1, 4)
+        }
+
+        component, pruned, reason = _prune_story_component_by_member_cohesion(
+            [0, 1, 2, 3, 4, 5],
+            ["s1", "s2", "s3", "s4", "s5", "s6"],
+            similarities,
+            0.30,
+            min_articles_per_story=4,
+        )
+
+        self.assertEqual(component, [0, 1, 2, 3])
+        self.assertEqual(pruned, [4, 5])
+        self.assertEqual(reason, "removed_islands")
+
+    def test_story_clustering_prunes_weak_outlier_to_four_article_story(self) -> None:
+        topics = [{"key": "topic_a", "title": "Topic A", "keywords": [], "boost_phrases": []}]
+        articles = [
+            {
+                "article_id": f"coherent-{index}",
+                "source": f"Wire {index}",
+                "topic_key": "topic_a",
+                "topic_title": "Topic A",
+                "title": f"Battery factory evacuation update {index}",
+                "description": "Battery factory evacuation follows chemical leak.",
+                "text": (
+                    "Battery factory evacuation orders followed a chemical leak near the assembly line. "
+                    "Fire crews sealed the battery plant ventilation system and treated exposed workers."
+                ),
+            }
+            for index in range(1, 5)
+        ] + [
+            {
+                "article_id": "weak-outlier",
+                "source": "Wire 5",
+                "topic_key": "topic_a",
+                "topic_title": "Topic A",
+                "title": "Battery factory museum receives grant",
+                "description": "Battery factory words appear in a cultural funding story.",
+                "text": (
+                    "A museum received a cultural grant for an exhibit about industrial design. "
+                    "Battery factory evacuation words appeared in archive notes, not a chemical leak report."
+                ),
+            }
+        ]
+
+        selected, stats = organize_article_targets_into_stories(
+            articles,
+            topics,
+            min_articles_per_story=4,
+            max_stories_per_topic=4,
+            similarity_threshold=0.12,
+        )
+
+        self.assertEqual(
+            {article["article_id"] for article in selected},
+            {"coherent-1", "coherent-2", "coherent-3", "coherent-4"},
+        )
+        story = stats["stories_by_topic"]["Topic A"][0]
+        self.assertEqual(story["pruned_article_ids"], ["weak-outlier"])
+        self.assertIn("removed_", story["prune_reason"])
+
+    def test_story_clustering_allows_coherent_four_article_story_with_one_neighbor_each(self) -> None:
+        topics = [{"key": "topic_a", "title": "Topic A", "keywords": [], "boost_phrases": []}]
+        articles = [
+            {
+                "article_id": "a1",
+                "source": "Wire 1",
+                "topic_key": "topic_a",
+                "topic_title": "Topic A",
+                "title": "Rail tunnel flooding disrupts metro service",
+                "description": "Rail tunnel flooding forced closures.",
+                "text": "Rail tunnel flooding disrupted metro service after pumps failed during heavy rain.",
+            },
+            {
+                "article_id": "a2",
+                "source": "Wire 2",
+                "topic_key": "topic_a",
+                "topic_title": "Topic A",
+                "title": "Metro service halted by rail tunnel flooding",
+                "description": "Rail tunnel flooding stopped trains.",
+                "text": "Metro service halted because rail tunnel flooding overwhelmed pumps during heavy rain.",
+            },
+            {
+                "article_id": "a3",
+                "source": "Wire 3",
+                "topic_key": "topic_a",
+                "topic_title": "Topic A",
+                "title": "Transit agency repairs flooded rail tunnel",
+                "description": "Agency crews repaired pumps in the flooded tunnel.",
+                "text": "Transit agency crews repaired pumps after rail tunnel flooding shut metro trains.",
+            },
+            {
+                "article_id": "a4",
+                "source": "Wire 4",
+                "topic_key": "topic_a",
+                "topic_title": "Topic A",
+                "title": "Commuters face delays after tunnel flood",
+                "description": "Commuters faced delays from metro tunnel flooding.",
+                "text": "Commuters faced delays after metro tunnel flooding forced rail service changes.",
+            },
+        ]
+
+        selected, stats = organize_article_targets_into_stories(
+            articles,
+            topics,
+            min_articles_per_story=4,
+            max_stories_per_topic=4,
+            similarity_threshold=0.18,
+        )
+
+        self.assertEqual({article["article_id"] for article in selected}, {"a1", "a2", "a3", "a4"})
+        story = stats["stories_by_topic"]["Topic A"][0]
+        self.assertGreaterEqual(story["min_member_edge_degree"], 1)
+        self.assertGreaterEqual(story["min_member_average_similarity"], story["member_cohesion_floor"])
+
+    def test_story_clustering_rejects_loose_chain_below_member_average_floor(self) -> None:
+        topics = [{"key": "topic_a", "title": "Topic A", "keywords": [], "boost_phrases": []}]
+        articles = [
+            {
+                "article_id": "a1",
+                "source": "Wire 1",
+                "topic_key": "topic_a",
+                "topic_title": "Topic A",
+                "title": "alpha bravo",
+                "description": "alpha bravo",
+                "text": "alpha alpha alpha bravo bravo",
+            },
+            {
+                "article_id": "a2",
+                "source": "Wire 2",
+                "topic_key": "topic_a",
+                "topic_title": "Topic A",
+                "title": "bravo charlie",
+                "description": "bravo charlie",
+                "text": "bravo bravo charlie charlie",
+            },
+            {
+                "article_id": "a3",
+                "source": "Wire 3",
+                "topic_key": "topic_a",
+                "topic_title": "Topic A",
+                "title": "charlie delta",
+                "description": "charlie delta",
+                "text": "charlie charlie delta delta",
+            },
+            {
+                "article_id": "a4",
+                "source": "Wire 4",
+                "topic_key": "topic_a",
+                "topic_title": "Topic A",
+                "title": "delta echo",
+                "description": "delta echo",
+                "text": "delta delta echo echo",
+            },
+        ]
+
+        selected, stats = organize_article_targets_into_stories(
+            articles,
+            topics,
+            min_articles_per_story=4,
+            max_stories_per_topic=4,
+            similarity_threshold=0.18,
+        )
+
+        self.assertEqual(selected, [])
+        self.assertEqual(stats["story_count"], 0)
 
     @unittest.skip("build_final_synthesis_payload removed in pipeline disaggregation; per-story synthesis replaces it")
     def test_explicit_story_payload_drops_story_blocks_below_floor(self) -> None:

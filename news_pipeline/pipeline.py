@@ -91,7 +91,7 @@ import trafilatura
 from collections import Counter
 from contextlib import contextmanager
 from threading import Lock, current_thread, main_thread
-from typing import Any, TextIO, List
+from typing import Any, Callable, TextIO, List
 import requests
 from bs4 import BeautifulSoup
 from langchain_openai import ChatOpenAI
@@ -199,6 +199,46 @@ TOPIC_FRAME_TARGETS = {"western": 0.75, "us": 0.50, "non_western": 0.25}
 TOPIC_FRAME_NUDGE_STRENGTH = 0.75
 EXCLUDED_NEWS_SOURCE_LABELS = {"abcnews", "abcnewsgo"}
 EXCLUDED_NEWS_SOURCE_DOMAINS = {"abcnews.go.com", "abcnews.com"}
+EXCLUDED_FEED_ITEM_PATTERNS = (
+    (
+        "daily_puzzle_answer",
+        re.compile(
+            r"\b(?:today(?:'|’)?s|daily)\b.{0,80}\b"
+            r"(?:nyt\s+)?(?:connections|strands|wordle|mini\s+crossword|crossword)\b"
+            r".{0,80}\b(?:hint|hints|answer|answers|clue|clues|help)\b",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "daily_puzzle_answer",
+        re.compile(
+            r"\b(?:nyt\s+)?(?:connections|strands|wordle|mini\s+crossword|crossword)\b"
+            r".{0,80}\b(?:hint|hints|answer|answers|clue|clues|help)\b",
+            re.IGNORECASE,
+        ),
+    ),
+)
+SOURCE_MATCH_MODE_FEED_LABEL = "feed_label"
+SOURCE_MATCH_MODE_WIRE_ATTRIBUTION = "wire_attribution"
+WIRE_ATTRIBUTION_EVIDENCE_CHARS = 2500
+WIRE_ATTRIBUTION_BEFORE_ALIAS = (
+    "by",
+    "credited to",
+    "distributed by",
+    "from",
+    "provided by",
+    "reporting by",
+    "via",
+    "written by",
+)
+WIRE_ATTRIBUTION_AFTER_ALIAS = (
+    "contributed",
+    "contributed to this report",
+    "distributed",
+    "provided",
+    "reported",
+    "wrote",
+)
 
 RECENT_WINDOW_HOURS = CONFIG.recent_window_hours
 MAX_ARTICLES_PER_SOURCE = CONFIG.max_articles_per_source
@@ -263,8 +303,8 @@ def _bounded_env_float(name: str, default: float, *, lower: float = 0.0, upper: 
 MIN_ARTICLES_PER_STORY = max(2, CONFIG.min_articles_per_story)
 TOPIC_RELEVANCE_MIN_SCORE = max(1, CONFIG.topic_relevance_min_score)
 STORY_TOPIC_FIT_MIN_SCORE = max(1, CONFIG.story_topic_fit_min_score)
+STORY_TOPIC_VALIDATION_ENABLED = CONFIG.story_topic_validation_enabled
 MAX_STORIES_PER_TOPIC = max(1, CONFIG.max_stories_per_topic)
-MAX_ARTICLES_PER_STORY = max(MIN_ARTICLES_PER_STORY, CONFIG.max_articles_per_story)
 STORY_CLUSTER_SIMILARITY_THRESHOLD = min(
     1.0,
     max(0.0, CONFIG.story_cluster_similarity_threshold),
@@ -281,6 +321,10 @@ STORY_EMBEDDING_DEDUP_THRESHOLD = _bounded_env_float(
     "NEWS_STORY_DEDUP_THRESHOLD",
     0.85,
 )
+STORY_BACKFILL_BATCH_MULTIPLIER = max(
+    1,
+    _int_env("NEWS_STORY_BACKFILL_BATCH_MULTIPLIER", 2),
+)
 IMAGE_GENERATION_ENABLED = CONFIG.image_generation_enabled
 IMAGE_GENERATION_FAIL_ON_ERROR = CONFIG.image_generation_fail_on_error
 IMAGE_WIDTH = max(256, CONFIG.image_width)
@@ -295,6 +339,7 @@ MODEL_REASONING_SAMPLING = MODEL_PROFILE.reasoning_sampling
 MODEL_TASK_SAMPLING = MODEL_PROFILE.task_sampling
 MODEL_CALL_STATS: dict[str, Any] = {
     "calls": {},
+    "token_usage": {},
     "retries": 0,
     "fallbacks": 0,
     "failures": {},
@@ -532,6 +577,18 @@ def _source_match_aliases(source_name: str, source_config: dict[str, Any]) -> se
     return {_normalize_source_label(alias) for alias in aliases if _normalize_source_label(alias)}
 
 
+def _source_match_mode(source_config: dict[str, Any]) -> str:
+    mode = str(source_config.get("source_match_mode") or SOURCE_MATCH_MODE_FEED_LABEL)
+    mode = mode.strip().lower().replace("-", "_")
+    if mode == SOURCE_MATCH_MODE_WIRE_ATTRIBUTION:
+        return SOURCE_MATCH_MODE_WIRE_ATTRIBUTION
+    return SOURCE_MATCH_MODE_FEED_LABEL
+
+
+def _configured_source_display_name(source_name: str, source_config: dict[str, Any]) -> str:
+    return str(source_config.get("name") or source_name or "Unknown source").strip()
+
+
 def _feed_item_source_labels(item: dict[str, Any]) -> list[str]:
     labels: list[str] = []
     feed_source = str(item.get("source") or "").strip()
@@ -543,13 +600,67 @@ def _feed_item_source_labels(item: dict[str, Any]) -> list[str]:
     return labels
 
 
-def _feed_item_matches_configured_source(
+def _publisher_source_label(item: dict[str, Any], source_display_name: str) -> str:
+    labels = _feed_item_source_labels(item)
+    return labels[0] if labels else source_display_name
+
+
+def _source_display_name_for_match(
+    *,
+    source_display_name: str,
+    publisher_source: str,
+    wire_source: str,
+    source_match_status: str,
+) -> str:
+    if (
+        source_match_status == "wire_attribution_confirmed"
+        and publisher_source
+        and wire_source
+        and _normalize_source_label(publisher_source) != _normalize_source_label(wire_source)
+    ):
+        return f"{wire_source} via {publisher_source}"
+    return source_display_name
+
+
+def _source_match_public_metadata(match_result: dict[str, Any]) -> dict[str, str]:
+    return {
+        "source_match_status": str(match_result.get("source_match_status") or ""),
+        "publisher_source": str(match_result.get("publisher_source") or ""),
+        "wire_source": str(match_result.get("wire_source") or ""),
+        "source_display_name": str(match_result.get("source_display_name") or ""),
+    }
+
+
+def _source_match_result_for_feed_item(
     source_name: str,
     source_config: dict[str, Any],
     item: dict[str, Any],
-) -> tuple[bool, dict[str, Any] | None]:
+) -> dict[str, Any]:
+    source_display_name = _configured_source_display_name(source_name, source_config)
+    publisher_source = _publisher_source_label(item, source_display_name)
+    mode = _source_match_mode(source_config)
+
+    base_result: dict[str, Any] = {
+        "accepted": False,
+        "pending_wire_attribution": False,
+        "source": source_name,
+        "title": item.get("title", ""),
+        "link": item.get("link", ""),
+        "feed_source": item.get("source", ""),
+        "title_source_suffix": _feed_title_source_suffix(str(item.get("title") or "")),
+        "publisher_source": publisher_source,
+        "wire_source": source_display_name if mode == SOURCE_MATCH_MODE_WIRE_ATTRIBUTION else "",
+        "source_display_name": source_display_name,
+        "source_match_mode": mode,
+    }
     if not bool(source_config.get("strict_source_match")):
-        return True, None
+        return {
+            **base_result,
+            "accepted": True,
+            "source_match_status": "not_required",
+            "publisher_source": source_display_name,
+            "wire_source": "",
+        }
 
     aliases = _source_match_aliases(source_name, source_config)
     labels = _feed_item_source_labels(item)
@@ -557,18 +668,196 @@ def _feed_item_matches_configured_source(
     observed_labels = [label for label in normalized_labels if label]
     matched = bool(observed_labels) and all(label in aliases for label in observed_labels)
     if matched:
-        return True, None
+        return {
+            **base_result,
+            "accepted": True,
+            "source_match_status": "feed_label_confirmed",
+            "accepted_aliases": sorted(aliases),
+            "observed_source_labels": labels,
+            "source_display_name": source_display_name,
+        }
 
-    return False, {
+    if mode == SOURCE_MATCH_MODE_WIRE_ATTRIBUTION:
+        return {
+            **base_result,
+            "reason": "pending_wire_attribution",
+            "pending_wire_attribution": True,
+            "source_match_status": "wire_attribution_pending",
+            "accepted_aliases": sorted(aliases),
+            "observed_source_labels": labels,
+        }
+
+    return {
+        **base_result,
         "reason": "wrong_feed_source",
-        "source": source_name,
-        "title": item.get("title", ""),
-        "link": item.get("link", ""),
-        "feed_source": item.get("source", ""),
-        "title_source_suffix": _feed_title_source_suffix(str(item.get("title") or "")),
+        "source_match_status": "wrong_feed_source",
         "accepted_aliases": sorted(aliases),
         "observed_source_labels": labels,
     }
+
+
+def _feed_item_matches_configured_source(
+    source_name: str,
+    source_config: dict[str, Any],
+    item: dict[str, Any],
+) -> tuple[bool, dict[str, Any] | None]:
+    match_result = _source_match_result_for_feed_item(source_name, source_config, item)
+    if match_result.get("accepted"):
+        return True, None
+    return False, match_result
+
+
+def _wire_attribution_aliases(source_name: str, source_config: dict[str, Any]) -> list[str]:
+    raw_aliases = [
+        source_name,
+        str(source_config.get("name") or ""),
+        *(str(alias or "") for alias in source_config.get("source_match_aliases") or []),
+    ]
+    aliases: list[str] = []
+    seen: set[str] = set()
+    for alias in raw_aliases:
+        clean_alias = re.sub(r"\s+", " ", str(alias or "")).strip()
+        if not clean_alias:
+            continue
+        variants = [clean_alias]
+        if clean_alias.lower().startswith("the "):
+            variants.append(clean_alias[4:].strip())
+        for variant in variants:
+            normalized = _normalize_source_label(variant)
+            if normalized and normalized not in seen:
+                aliases.append(variant)
+                seen.add(normalized)
+    return aliases
+
+
+def _wire_attribution_phrase_pattern(phrase: str) -> str:
+    words = re.findall(r"[A-Za-z0-9]+", phrase)
+    return r"\s+".join(re.escape(word) for word in words)
+
+
+def _wire_attribution_alias_pattern(alias: str) -> str:
+    clean_alias = re.sub(r"(?i)^the\s+", "", str(alias or "").strip())
+    words = re.findall(r"[A-Za-z0-9]+", clean_alias)
+    return r"[\s.\-]+".join(re.escape(word) for word in words)
+
+
+def _article_confirms_wire_attribution(
+    source_name: str,
+    source_config: dict[str, Any],
+    item: dict[str, Any],
+    article_text: str,
+) -> tuple[bool, str]:
+    evidence_text = "\n".join(
+        part
+        for part in (
+            str(item.get("author") or ""),
+            str(item.get("creator") or ""),
+            str(item.get("description") or ""),
+            str(article_text or "")[:WIRE_ATTRIBUTION_EVIDENCE_CHARS],
+        )
+        if part
+    )
+    if not evidence_text.strip():
+        return False, ""
+
+    before_pattern = "|".join(
+        _wire_attribution_phrase_pattern(phrase)
+        for phrase in WIRE_ATTRIBUTION_BEFORE_ALIAS
+    )
+    after_pattern = "|".join(
+        _wire_attribution_phrase_pattern(phrase)
+        for phrase in WIRE_ATTRIBUTION_AFTER_ALIAS
+    )
+    for alias in _wire_attribution_aliases(source_name, source_config):
+        alias_pattern = _wire_attribution_alias_pattern(alias)
+        if not alias_pattern:
+            continue
+        alias_expr = rf"(?:the\s+)?{alias_pattern}"
+        if re.search(
+            rf"(?im)(?:^|[\n\r.;:|•-])\s*(?:{before_pattern})\s+{alias_expr}\b",
+            evidence_text,
+        ):
+            return True, alias
+        if re.search(
+            rf"(?im)(?:^|[\n\r.;:|•-])\s*{alias_expr}\s+(?:{after_pattern})\b",
+            evidence_text,
+        ):
+            return True, alias
+        if re.search(
+            rf"(?im)\bcopyright\s+(?:\d{{4}}\s+)?{alias_expr}\b",
+            evidence_text,
+        ):
+            return True, alias
+        if len(_normalize_source_label(alias)) > 3 and re.search(
+            rf"(?im)^\s*{alias_expr}\s*$",
+            evidence_text,
+        ):
+            return True, alias
+    return False, ""
+
+
+def _confirm_wire_source_match(
+    match_result: dict[str, Any],
+    *,
+    attribution_alias: str,
+) -> dict[str, Any]:
+    wire_source = str(match_result.get("wire_source") or match_result.get("source_display_name") or "")
+    publisher_source = str(match_result.get("publisher_source") or "")
+    source_display_name = _source_display_name_for_match(
+        source_display_name=str(match_result.get("source_display_name") or wire_source),
+        publisher_source=publisher_source,
+        wire_source=wire_source,
+        source_match_status="wire_attribution_confirmed",
+    )
+    return {
+        **match_result,
+        "accepted": True,
+        "pending_wire_attribution": False,
+        "reason": "",
+        "source_match_status": "wire_attribution_confirmed",
+        "wire_attribution_alias": attribution_alias,
+        "source_display_name": source_display_name,
+    }
+
+
+def _wire_source_unattributed_rejection(
+    match_result: dict[str, Any],
+    *,
+    resolved_url: str = "",
+    scrape_status: str = "",
+) -> dict[str, Any]:
+    return {
+        **match_result,
+        "accepted": False,
+        "pending_wire_attribution": False,
+        "reason": "wrong_feed_source_unattributed",
+        "source_match_status": "wrong_feed_source_unattributed",
+        "resolved_url": resolved_url,
+        "scrape_status": scrape_status,
+    }
+
+
+def _record_feed_source_rejection(
+    rejected_counts: Counter[str],
+    rejections: list[dict[str, Any]],
+    rejection: dict[str, Any],
+) -> None:
+    reason = str(rejection.get("reason") or "wrong_feed_source")
+    rejected_counts[reason] += 1
+    if len(rejections) < 50:
+        rejections.append(rejection)
+
+
+def _excluded_feed_item_reason(item: dict[str, Any]) -> str:
+    text = " ".join(
+        str(item.get(field) or "")
+        for field in ("title", "description", "summary", "link")
+    )
+    for reason, pattern in EXCLUDED_FEED_ITEM_PATTERNS:
+        if pattern.search(text):
+            return reason
+    return ""
+
 
 SOURCE_FEEDS = load_sources(
     CONFIG.sources_path,
@@ -862,13 +1151,13 @@ def _write_run_log(message: str) -> None:
 
 class ProgressTracker:
     STEP_ORDER = [
-        "model",
         "setup",
         "topics",
         "sources",
         "translation",
         "stories",
         "summaries",
+        "model",
         "report",
         "finalize",
     ]
@@ -1075,6 +1364,9 @@ def _story_topic_runtime() -> story_topic_assignment_stage.StoryTopicRuntime:
         model_name=MODEL_NAME,
         model_backend=MODEL_BACKEND,
         relaxed_final_synthesis_guards=RELAXED_FINAL_SYNTHESIS_GUARDS,
+        story_topic_validation_enabled=STORY_TOPIC_VALIDATION_ENABLED,
+        build_chat_model=build_chat_model,
+        invoke_with_retries=invoke_with_retries,
         build_article_heading=_build_article_heading,
         format_article_metadata=_format_article_metadata,
         format_topic_section_header=_format_topic_section_header,
@@ -3402,16 +3694,34 @@ def get_direct_source_article_context(source_name: str) -> dict:
             continue
         recent_item_count += 1
 
-        source_matches, source_rejection = _feed_item_matches_configured_source(
+        excluded_reason = _excluded_feed_item_reason(item)
+        if excluded_reason:
+            _record_feed_source_rejection(
+                feed_rejected_counts,
+                feed_rejections,
+                {
+                    "reason": excluded_reason,
+                    "source": source_name,
+                    "title": item.get("title", ""),
+                    "link": item.get("link", ""),
+                },
+            )
+            continue
+
+        source_match_result = _source_match_result_for_feed_item(
             source_name,
             source_config,
             item,
         )
-        if not source_matches:
-            reason = str((source_rejection or {}).get("reason") or "wrong_feed_source")
-            feed_rejected_counts[reason] += 1
-            if len(feed_rejections) < 50 and source_rejection:
-                feed_rejections.append(source_rejection)
+        if (
+            not source_match_result.get("accepted")
+            and not source_match_result.get("pending_wire_attribution")
+        ):
+            _record_feed_source_rejection(
+                feed_rejected_counts,
+                feed_rejections,
+                source_match_result,
+            )
             continue
 
         if original_rss_url in scrape_cache:
@@ -3439,18 +3749,43 @@ def get_direct_source_article_context(source_name: str) -> dict:
             "scrape_status": scrape_status,
             "scrape_seconds": scrape_result.get("scrape_seconds"),
             "feed_fallback_used": bool(scrape_result.get("feed_fallback_used")),
+            **_source_match_public_metadata(source_match_result),
         }
         if not selected_url:
+            if source_match_result.get("pending_wire_attribution"):
+                rejection = _wire_source_unattributed_rejection(
+                    source_match_result,
+                    resolved_url=selected_url,
+                    scrape_status=scrape_status,
+                )
+                _record_feed_source_rejection(feed_rejected_counts, feed_rejections, rejection)
+                attempt.update(_source_match_public_metadata(rejection))
             scrape_attempts.append(attempt)
             continue
 
         if attempt["feed_fallback_used"]:
             logger.debug("No real body scraped for %s (status: %s) — dropping", selected_url, scrape_status)
+            if source_match_result.get("pending_wire_attribution"):
+                rejection = _wire_source_unattributed_rejection(
+                    source_match_result,
+                    resolved_url=selected_url,
+                    scrape_status=scrape_status,
+                )
+                _record_feed_source_rejection(feed_rejected_counts, feed_rejections, rejection)
+                attempt.update(_source_match_public_metadata(rejection))
             scrape_attempts.append(attempt)
             continue
 
         article_text = str(scrape_result.get("text") or "").strip()
         if not article_text:
+            if source_match_result.get("pending_wire_attribution"):
+                rejection = _wire_source_unattributed_rejection(
+                    source_match_result,
+                    resolved_url=selected_url,
+                    scrape_status=scrape_status,
+                )
+                _record_feed_source_rejection(feed_rejected_counts, feed_rejections, rejection)
+                attempt.update(_source_match_public_metadata(rejection))
             scrape_attempts.append(attempt)
             continue
 
@@ -3461,8 +3796,39 @@ def get_direct_source_article_context(source_name: str) -> dict:
             title=item.get("title", ""),
         )
         if not clean_article_text:
+            if source_match_result.get("pending_wire_attribution"):
+                rejection = _wire_source_unattributed_rejection(
+                    source_match_result,
+                    resolved_url=selected_url,
+                    scrape_status=scrape_status,
+                )
+                _record_feed_source_rejection(feed_rejected_counts, feed_rejections, rejection)
+                attempt.update(_source_match_public_metadata(rejection))
             scrape_attempts.append(attempt)
             continue
+
+        if source_match_result.get("pending_wire_attribution"):
+            attribution_confirmed, attribution_alias = _article_confirms_wire_attribution(
+                source_name,
+                source_config,
+                item,
+                article_text,
+            )
+            if not attribution_confirmed:
+                rejection = _wire_source_unattributed_rejection(
+                    source_match_result,
+                    resolved_url=selected_url,
+                    scrape_status=scrape_status,
+                )
+                _record_feed_source_rejection(feed_rejected_counts, feed_rejections, rejection)
+                attempt.update(_source_match_public_metadata(rejection))
+                scrape_attempts.append(attempt)
+                continue
+            source_match_result = _confirm_wire_source_match(
+                source_match_result,
+                attribution_alias=attribution_alias,
+            )
+            attempt.update(_source_match_public_metadata(source_match_result))
 
         summary_text = truncate_text_to_token_limit(clean_article_text, ARTICLE_TEXT_TOKEN_LIMIT)
         article_record = _with_translation_metadata(
@@ -3477,6 +3843,7 @@ def get_direct_source_article_context(source_name: str) -> dict:
                 "feed_fallback_used": bool(scrape_result.get("feed_fallback_used")),
                 "feed_source": item.get("source", ""),
                 "title_source_suffix": _feed_title_source_suffix(str(item.get("title") or "")),
+                **_source_match_public_metadata(source_match_result),
                 "text": summary_text,
                 "title": item.get("title", ""),
                 "pub_date": item.get("pub_date", ""),
@@ -3496,6 +3863,10 @@ def get_direct_source_article_context(source_name: str) -> dict:
                 "pub_date": article_record.get("pub_date", ""),
                 "feed_source": article_record.get("feed_source", ""),
                 "title_source_suffix": article_record.get("title_source_suffix", ""),
+                "source_match_status": article_record.get("source_match_status", ""),
+                "publisher_source": article_record.get("publisher_source", ""),
+                "wire_source": article_record.get("wire_source", ""),
+                "source_display_name": article_record.get("source_display_name", ""),
                 "scrape_status": article_record.get("scrape_status"),
                 "scrape_seconds": article_record.get("scrape_seconds"),
             }
@@ -3607,6 +3978,10 @@ def gather_article_candidates_for_source(
                 "feed_fallback_used": article.get("feed_fallback_used"),
                 "feed_source": article.get("feed_source", ""),
                 "title_source_suffix": article.get("title_source_suffix", ""),
+                "source_match_status": article.get("source_match_status", ""),
+                "publisher_source": article.get("publisher_source", ""),
+                "wire_source": article.get("wire_source", ""),
+                "source_display_name": article.get("source_display_name", ""),
                 "description": article.get("description", ""),
                 "text": article.get("text", ""),
                 "translation_needed": article.get("translation_needed", False),
@@ -3633,6 +4008,10 @@ def gather_article_candidates_for_source(
             "relevance_score": 0,
             "feed_source": article.get("feed_source", ""),
             "title_source_suffix": article.get("title_source_suffix", ""),
+            "source_match_status": article.get("source_match_status", ""),
+            "publisher_source": article.get("publisher_source", ""),
+            "wire_source": article.get("wire_source", ""),
+            "source_display_name": article.get("source_display_name", ""),
             "scrape_status": article.get("scrape_status"),
             "translation_needed": article.get("translation_needed", False),
             "translation_status": article.get("translation_status"),
@@ -3687,6 +4066,7 @@ def get_direct_source_context(source_name: str, topics: List[dict]) -> dict | No
 
     items = _extract_feed_items(response.text)
     now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
+    selected_feed_items = _select_per_topic_feed_items(items, topics, now_utc=now_utc)
     section_candidates: dict[str, list[dict]] = {topic["key"]: [] for topic in topics}
     post_scrape_rejections: list[dict[str, Any]] = []
     scrape_attempts: list[dict[str, Any]] = []
@@ -3694,11 +4074,9 @@ def get_direct_source_context(source_name: str, topics: List[dict]) -> dict | No
     scrape_cache: dict[str, dict[str, Any]] = {}
     scraped_text_count = 0
 
-    for item in items:
+    for item in selected_feed_items:
         original_rss_url = str(item.get("link") or "").strip()
         if not original_rss_url:
-            continue
-        if not _is_within_recent_window(item.get("published_at"), now_utc):
             continue
 
         if original_rss_url in scrape_cache:
@@ -3723,7 +4101,13 @@ def get_direct_source_context(source_name: str, topics: List[dict]) -> dict | No
             "scrape_status": scrape_status,
             "scrape_seconds": scrape_result.get("scrape_seconds"),
             "feed_fallback_used": bool(scrape_result.get("feed_fallback_used")),
-            "matched_topics": [],
+            "matched_topics": [
+                {
+                    "topic_title": item.get("topic_title"),
+                    "topic_key": item.get("topic_key"),
+                    "relevance_score": item.get("relevance_score", 0),
+                }
+            ],
         }
         if not selected_url:
             scrape_attempts.append(attempt)
@@ -3750,27 +4134,9 @@ def get_direct_source_context(source_name: str, topics: List[dict]) -> dict | No
             continue
 
         scraped_text_count += 1
-        full_relevance_text = " ".join(
-            [
-                str(item.get("title") or ""),
-                str(item.get("description") or ""),
-                clean_article_text,
-            ]
-        )
         summary_text = truncate_text_to_token_limit(clean_article_text, ARTICLE_TEXT_TOKEN_LIMIT)
-
-        for topic in topics:
-            topic_key = str(topic.get("key") or "")
-            final_relevance_score = _score_topic_text_relevance(full_relevance_text, topic)
-            if final_relevance_score <= 0:
-                continue
-            attempt["matched_topics"].append(
-                {
-                    "topic_title": topic.get("title"),
-                    "topic_key": topic_key,
-                    "relevance_score": final_relevance_score,
-                }
-            )
+        topic_key = str(item.get("topic_key") or "")
+        if topic_key:
             section_candidates[topic_key].append(
                 _with_translation_metadata(
                     {
@@ -3787,8 +4153,8 @@ def get_direct_source_context(source_name: str, topics: List[dict]) -> dict | No
                         "pub_date": item.get("pub_date", ""),
                         "description": item.get("description", ""),
                         "topic_key": topic_key,
-                        "topic_title": topic.get("title"),
-                        "relevance_score": final_relevance_score,
+                        "topic_title": item.get("topic_title"),
+                        "relevance_score": item.get("relevance_score", 0),
                     },
                     source_name=source_name,
                     title=str(item.get("title") or ""),
@@ -3915,6 +4281,12 @@ def gather_article_targets_for_source(
                 "resolution_status": article.get("resolution_status"),
                 "scrape_status": article.get("scrape_status"),
                 "feed_fallback_used": article.get("feed_fallback_used"),
+                "feed_source": article.get("feed_source", ""),
+                "title_source_suffix": article.get("title_source_suffix", ""),
+                "source_match_status": article.get("source_match_status", ""),
+                "publisher_source": article.get("publisher_source", ""),
+                "wire_source": article.get("wire_source", ""),
+                "source_display_name": article.get("source_display_name", ""),
                 "description": article.get("description", ""),
                 "text": article.get("text", ""),
                 "translation_needed": article.get("translation_needed", False),
@@ -3936,13 +4308,19 @@ def gather_article_targets_for_source(
             "title": article.get("title"),
             "url": article.get("url"),
             "original_rss_url": article.get("original_rss_url"),
-                "resolved_url": article.get("resolved_url"),
-                "topic_title": article.get("topic_title"),
-                "relevance_score": article.get("relevance_score", 0),
-                "scrape_status": article.get("scrape_status"),
-                "translation_needed": article.get("translation_needed", False),
-                "translation_status": article.get("translation_status"),
-            }
+            "resolved_url": article.get("resolved_url"),
+            "topic_title": article.get("topic_title"),
+            "relevance_score": article.get("relevance_score", 0),
+            "feed_source": article.get("feed_source", ""),
+            "title_source_suffix": article.get("title_source_suffix", ""),
+            "source_match_status": article.get("source_match_status", ""),
+            "publisher_source": article.get("publisher_source", ""),
+            "wire_source": article.get("wire_source", ""),
+            "source_display_name": article.get("source_display_name", ""),
+            "scrape_status": article.get("scrape_status"),
+            "translation_needed": article.get("translation_needed", False),
+            "translation_status": article.get("translation_status"),
+        }
         for article in article_targets
     ]
     return article_targets, new_urls, source_run
@@ -4221,6 +4599,145 @@ def _is_transient_model_error(error: Exception) -> bool:
     )
 
 
+def _coerce_int(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _model_call_bucket(task_name: str) -> str:
+    if task_name.startswith("analysis for "):
+        return "article_summary"
+    if task_name.startswith("story synthesis for "):
+        return "story_synthesis"
+    return task_name
+
+
+def _model_token_usage_entry_locked(task_name: str) -> dict[str, Any]:
+    bucket = _model_call_bucket(task_name)
+    token_usage = MODEL_CALL_STATS.setdefault("token_usage", {})
+    entry = token_usage.setdefault(
+        bucket,
+        {
+            "calls": 0,
+            "estimated_input_tokens": 0,
+            "estimated_output_tokens": 0,
+            "max_output_tokens_requested": 0,
+            "actual_input_tokens": 0,
+            "actual_output_tokens": 0,
+            "actual_total_tokens": 0,
+            "actual_usage_calls": 0,
+            "fallback_calls": 0,
+            "max_estimated_input_tokens": 0,
+            "max_estimated_output_tokens": 0,
+            "max_actual_input_tokens": 0,
+            "max_actual_output_tokens": 0,
+        },
+    )
+    return entry
+
+
+def _record_model_token_usage_locked(
+    task_name: str,
+    *,
+    estimated_input_tokens: int,
+    max_output_tokens: int | None,
+) -> None:
+    entry = _model_token_usage_entry_locked(task_name)
+    entry["calls"] = int(entry.get("calls", 0)) + 1
+    entry["estimated_input_tokens"] = int(entry.get("estimated_input_tokens", 0)) + estimated_input_tokens
+    entry["max_estimated_input_tokens"] = max(
+        int(entry.get("max_estimated_input_tokens", 0)),
+        estimated_input_tokens,
+    )
+    if max_output_tokens is not None:
+        entry["max_output_tokens_requested"] = (
+            int(entry.get("max_output_tokens_requested", 0)) + max_output_tokens
+        )
+
+
+def _extract_token_usage_from_response(message: AIMessage) -> dict[str, int]:
+    usage: dict[str, int] = {}
+    candidates = [
+        getattr(message, "usage_metadata", None),
+        getattr(message, "response_metadata", None),
+    ]
+    response_metadata = getattr(message, "response_metadata", None)
+    if isinstance(response_metadata, dict):
+        candidates.extend(
+            [
+                response_metadata.get("token_usage"),
+                response_metadata.get("usage"),
+            ]
+        )
+
+    for candidate in candidates:
+        if not isinstance(candidate, dict):
+            continue
+        nested = candidate.get("token_usage")
+        if isinstance(nested, dict):
+            candidates.append(nested)
+        input_tokens = _coerce_int(candidate.get("input_tokens") or candidate.get("prompt_tokens"))
+        output_tokens = _coerce_int(
+            candidate.get("output_tokens")
+            or candidate.get("completion_tokens")
+            or candidate.get("completion")
+        )
+        total_tokens = _coerce_int(candidate.get("total_tokens"))
+        if input_tokens is not None:
+            usage["input_tokens"] = input_tokens
+        if output_tokens is not None:
+            usage["output_tokens"] = output_tokens
+        if total_tokens is not None:
+            usage["total_tokens"] = total_tokens
+        if usage:
+            return usage
+    return usage
+
+
+def _record_response_token_usage(task_name: str, response: AIMessage) -> None:
+    usage = _extract_token_usage_from_response(response)
+    estimated_output_tokens = estimate_token_count(
+        response.content if isinstance(response.content, str) else str(response.content or "")
+    )
+    with MODEL_CALL_STATS_LOCK:
+        entry = _model_token_usage_entry_locked(task_name)
+        entry["estimated_output_tokens"] = (
+            int(entry.get("estimated_output_tokens", 0)) + estimated_output_tokens
+        )
+        entry["max_estimated_output_tokens"] = max(
+            int(entry.get("max_estimated_output_tokens", 0)),
+            estimated_output_tokens,
+        )
+        if not usage:
+            return
+        input_tokens = usage.get("input_tokens")
+        output_tokens = usage.get("output_tokens")
+        total_tokens = usage.get("total_tokens")
+        if input_tokens is not None:
+            entry["actual_input_tokens"] = int(entry.get("actual_input_tokens", 0)) + input_tokens
+            entry["max_actual_input_tokens"] = max(
+                int(entry.get("max_actual_input_tokens", 0)),
+                input_tokens,
+            )
+        if output_tokens is not None:
+            entry["actual_output_tokens"] = int(entry.get("actual_output_tokens", 0)) + output_tokens
+            entry["max_actual_output_tokens"] = max(
+                int(entry.get("max_actual_output_tokens", 0)),
+                output_tokens,
+            )
+        if total_tokens is None and (input_tokens is not None or output_tokens is not None):
+            total_tokens = int(input_tokens or 0) + int(output_tokens or 0)
+        if total_tokens is not None:
+            entry["actual_total_tokens"] = int(entry.get("actual_total_tokens", 0)) + total_tokens
+        entry["actual_usage_calls"] = int(entry.get("actual_usage_calls", 0)) + 1
+
+
 def invoke_with_retries(
     llm,
     messages,
@@ -4230,15 +4747,25 @@ def invoke_with_retries(
     attempts: int = MODEL_RETRY_ATTEMPTS,
 ) -> AIMessage:
     last_error = None
+    estimated_input_tokens = sum(estimate_message_token_count(message) for message in messages)
+    max_output_tokens = _coerce_int(getattr(llm, "max_tokens", None))
     with MODEL_CALL_STATS_LOCK:
         calls = MODEL_CALL_STATS.setdefault("calls", {})
         calls[task_name] = int(calls.get(task_name, 0)) + 1
+        _record_model_token_usage_locked(
+            task_name,
+            estimated_input_tokens=estimated_input_tokens,
+            max_output_tokens=max_output_tokens,
+        )
     for attempt in range(1, attempts + 1):
         try:
             response = llm.invoke(messages)
             if isinstance(response, AIMessage):
+                _record_response_token_usage(task_name, response)
                 return response
-            return AIMessage(content=str(getattr(response, "content", response)))
+            response_message = AIMessage(content=str(getattr(response, "content", response)))
+            _record_response_token_usage(task_name, response_message)
+            return response_message
         except Exception as error:
             last_error = error
             if not _is_transient_model_error(error) or attempt == attempts:
@@ -4254,6 +4781,8 @@ def invoke_with_retries(
         MODEL_CALL_STATS["fallbacks"] = int(MODEL_CALL_STATS.get("fallbacks", 0)) + 1
         failures = MODEL_CALL_STATS.setdefault("failures", {})
         failures[task_name] = str(last_error) if last_error else "unknown error"
+        usage = _model_token_usage_entry_locked(task_name)
+        usage["fallback_calls"] = int(usage.get("fallback_calls", 0)) + 1
     return AIMessage(content=fallback_content)
 
 
@@ -4390,13 +4919,43 @@ def clean_synthesis_for_publication(text: str, *, relaxed: bool = False) -> str:
 
     prefix = clean_text[: matches[0].start()].strip()
     kept_sections: list[str] = [prefix] if prefix else []
+    story_pattern = re.compile(r"(?m)^#{3,4}\s+(.+?)\s*$")
     for index, match in enumerate(matches):
         end = matches[index + 1].start() if index + 1 < len(matches) else len(clean_text)
-        section = clean_text[match.start():end].strip()
+        section_header = clean_text[match.start():match.end()].strip()
         section_body = clean_text[match.end():end].strip()
-        if not relaxed and _is_low_coverage_synthesis_section(section_body):
+        if relaxed:
+            kept_sections.append(clean_text[match.start():end].strip())
             continue
-        kept_sections.append(section)
+
+        story_matches = list(story_pattern.finditer(section_body))
+        if not story_matches:
+            if _is_low_coverage_synthesis_section(section_body):
+                continue
+            kept_sections.append(clean_text[match.start():end].strip())
+            continue
+
+        section_prefix = section_body[: story_matches[0].start()].strip()
+        kept_story_parts: list[str] = []
+        for story_index, story_match in enumerate(story_matches):
+            story_end = (
+                story_matches[story_index + 1].start()
+                if story_index + 1 < len(story_matches)
+                else len(section_body)
+            )
+            story = section_body[story_match.start():story_end].strip()
+            story_body = section_body[story_match.end():story_end].strip()
+            if _is_low_coverage_synthesis_section(story_body):
+                continue
+            kept_story_parts.append(story)
+        if not kept_story_parts:
+            continue
+
+        section_parts = [section_header]
+        if section_prefix:
+            section_parts.append(section_prefix)
+        section_parts.extend(kept_story_parts)
+        kept_sections.append("\n\n".join(section_parts))
 
     return "\n\n".join(part for part in kept_sections if part.strip()).strip()
 
@@ -5313,11 +5872,17 @@ def build_report_body(
             image_lines.append(f"Image generation warning: {image_art.get('error')}")
         image_section = "\n".join(image_lines).strip() + "\n\n"
 
+    title_text = re.sub(r"\s+", " ", str(report_title or "")).strip()
+    title_section = ""
+    if title_text:
+        title_section = f"{title_text}\n{'=' * len(title_text)}\n\n"
+
     source_heading = "SOURCES" if citation_listing else "ARTICLES BY SOURCE"
     source_rule = "=" * len(source_heading)
     source_body = citation_listing or article_listing
 
     return (
+        f"{title_section}"
         f"{image_section}"
         f"{cleaned_synthesis_body}\n\n"
         f"{source_heading}\n"
@@ -5346,6 +5911,14 @@ def build_report_html(
         else article_listing_html
     )
     unsubscribe_url = build_unsubscribe_url(recipient_email)
+    title_text = re.sub(r"\s+", " ", str(report_title or "")).strip()
+    title_html = (
+        "<h1 style=\"margin:0 0 24px; font-size:30px; line-height:1.2; "
+        "font-weight:800; color:#111827; letter-spacing:0;\">"
+        f"{html.escape(title_text)}</h1>"
+        if title_text
+        else ""
+    )
     image_html = ""
     if image_art and image_art.get("content_id"):
         image_alt = image_art.get("overlay_headline") or report_title or "Daily News Summary"
@@ -5382,6 +5955,7 @@ def build_report_html(
         "<div class=\"email-content\" style=\"padding:36px 32px 24px; box-sizing:border-box;\">"
         f"<p style=\"margin:0 0 24px; font-size:18px; line-height:1.6; color:#111827;\">{html.escape(first_name)},</p>"
         "<p style=\"margin:0 0 28px; font-size:17px; line-height:1.7; color:#374151;\">Here is your daily news summary.</p>"
+        f"{title_html}"
         f"{image_html}"
         f"{synthesis_html}"
         "<hr style=\"border:none; border-top:1px solid #e5e7eb; margin:36px 0 28px;\">"
@@ -5424,13 +5998,300 @@ def _report_entry_debug_record(entry: str, index: int) -> dict[str, Any]:
     }
 
 
-def _flatten_topic_story_records(story_cluster_stats: dict) -> list[dict]:
-    """Flatten stories_by_topic dict into a flat list, annotating each record with topic_title."""
+def _topic_display_title(topic: dict) -> str:
+    return str(topic.get("title") or topic.get("key") or "Unknown topic")
+
+
+def _flatten_topic_story_records(
+    story_cluster_stats: dict,
+    *,
+    pool_key: str = "stories_by_topic",
+) -> list[dict]:
+    """Flatten a story pool dict into a list, preserving topic_title."""
     records: list[dict] = []
-    for topic_title, story_list in (story_cluster_stats.get("stories_by_topic") or {}).items():
+    for topic_title, story_list in (story_cluster_stats.get(pool_key) or {}).items():
         for record in story_list:
             records.append({**record, "topic_title": str(topic_title)})
     return records
+
+
+def _story_coverage_deficits(
+    selected_by_topic: dict,
+    topics: list[dict],
+    *,
+    max_stories_per_topic: int = MAX_STORIES_PER_TOPIC,
+) -> dict[str, int]:
+    deficits: dict[str, int] = {}
+    for topic in topics:
+        topic_title = _topic_display_title(topic)
+        selected_count = int((selected_by_topic or {}).get(topic_title) or 0)
+        deficit = max_stories_per_topic - selected_count
+        if deficit > 0:
+            deficits[topic_title] = deficit
+    return deficits
+
+
+def _select_reserve_story_batch(
+    reserve_stories_by_topic: dict[str, list[dict]],
+    deficits_by_topic: dict[str, int],
+    topics: list[dict],
+    attempted_story_keys: set[str],
+    *,
+    batch_multiplier: int = STORY_BACKFILL_BATCH_MULTIPLIER,
+) -> list[dict]:
+    batch: list[dict] = []
+    topic_order = [_topic_display_title(topic) for topic in topics]
+    extra_topic_titles = sorted(
+        topic_title
+        for topic_title in reserve_stories_by_topic
+        if topic_title not in set(topic_order)
+    )
+    for topic_title in topic_order + extra_topic_titles:
+        deficit = int(deficits_by_topic.get(topic_title) or 0)
+        if deficit <= 0:
+            continue
+        limit = max(1, deficit * max(1, batch_multiplier))
+        selected_for_topic = 0
+        for story in reserve_stories_by_topic.get(topic_title) or []:
+            story_key = str(story.get("story_key") or "").strip()
+            if not story_key or story_key in attempted_story_keys:
+                continue
+            batch.append({**story, "topic_title": topic_title})
+            selected_for_topic += 1
+            if selected_for_topic >= limit:
+                break
+    return batch
+
+
+def _article_targets_for_story_records(
+    story_records: list[dict],
+    article_lookup: dict[str, dict],
+    *,
+    existing_article_ids: set[str] | None = None,
+) -> list[dict]:
+    seen_article_ids: set[str] = set(existing_article_ids or set())
+    article_targets: list[dict] = []
+    for story in story_records:
+        article_ids = story.get("cluster_article_ids") or story.get("article_ids") or []
+        for article_id in article_ids:
+            clean_article_id = str(article_id or "").strip()
+            if not clean_article_id or clean_article_id in seen_article_ids:
+                continue
+            article = article_lookup.get(clean_article_id)
+            if not article:
+                continue
+            seen_article_ids.add(clean_article_id)
+            article_targets.append(
+                {
+                    **article,
+                    "topic_key": story.get("topic_key") or article.get("topic_key"),
+                    "topic_title": story.get("topic_title") or article.get("topic_title"),
+                    "story_key": story.get("story_key"),
+                    "story_title": story.get("story_title"),
+                    "story_rank": story.get("story_rank"),
+                    "story_article_count": story.get("cluster_article_count") or story.get("article_count"),
+                    "story_selected_article_count": story.get("selected_article_count") or story.get("article_count"),
+                    "story_average_similarity": story.get("average_similarity"),
+                    "story_connectedness_score": story.get("connectedness_score"),
+                    "story_strength_score": story.get("story_strength_score"),
+                    "story_edge_density": story.get("edge_density"),
+                    "story_min_member_average_similarity": story.get("min_member_average_similarity"),
+                    "story_min_member_edge_degree": story.get("min_member_edge_degree"),
+                    "story_member_cohesion_floor": story.get("member_cohesion_floor"),
+                    "story_member_edge_degree_floor": story.get("member_edge_degree_floor"),
+                    "story_pruned_article_ids": story.get("pruned_article_ids") or [],
+                    "story_prune_reason": story.get("prune_reason") or "",
+                    "story_source_count": story.get("source_count"),
+                }
+            )
+    return article_targets
+
+
+def _dedupe_story_drafts_for_topic_selection(
+    story_drafts: list[dict],
+) -> tuple[list[dict], dict[str, Any]]:
+    drafts_before = len(story_drafts)
+    try:
+        drafts_by_topic: dict[str, list[dict]] = {}
+        for draft in story_drafts:
+            topic_key = str(draft.get("topic_title") or draft.get("topic_key") or "unassigned")
+            drafts_by_topic.setdefault(topic_key, []).append(draft)
+        deduped_story_drafts: list[dict] = []
+        for _topic_group, drafts in drafts_by_topic.items():
+            deduped_story_drafts.extend(
+                embeddings_stage.dedup_story_drafts_within_topic(
+                    drafts,
+                    threshold=STORY_EMBEDDING_DEDUP_THRESHOLD,
+                )
+            )
+        drafts_dropped = drafts_before - len(deduped_story_drafts)
+        return deduped_story_drafts, {
+            "before": drafts_before,
+            "after": len(deduped_story_drafts),
+            "dropped": drafts_dropped,
+            "threshold": STORY_EMBEDDING_DEDUP_THRESHOLD,
+        }
+    except Exception as error:
+        return story_drafts, {
+            "before": drafts_before,
+            "after": drafts_before,
+            "dropped": 0,
+            "threshold": STORY_EMBEDDING_DEDUP_THRESHOLD,
+            "error": str(error),
+            "fallback": "no_dedup",
+        }
+
+
+def _run_story_reserve_backfill(
+    *,
+    topics: list[dict],
+    reserve_stories_by_topic: dict[str, list[dict]],
+    article_lookup: dict[str, dict],
+    article_summary_reports: list[str],
+    clustered_article_targets: list[dict],
+    story_drafts: list[dict],
+    selected_story_topic_matches: list[dict],
+    story_topic_stats: dict[str, Any],
+    summarize_article_targets: Callable[[list[dict]], list[str]],
+    draft_story_records: Callable[[list[dict], list[str], list[dict]], tuple[list[dict], dict[str, Any]]],
+    classify_story_drafts: Callable[[list[dict]], tuple[list[dict], dict[str, Any]]],
+    dedupe_story_drafts: Callable[[list[dict]], tuple[list[dict], dict[str, Any]]],
+    max_stories_per_topic: int = MAX_STORIES_PER_TOPIC,
+    batch_multiplier: int = STORY_BACKFILL_BATCH_MULTIPLIER,
+) -> dict[str, Any]:
+    article_summary_reports = list(article_summary_reports)
+    clustered_article_targets = list(clustered_article_targets)
+    story_drafts = list(story_drafts)
+    selected_story_topic_matches = list(selected_story_topic_matches)
+    story_topic_stats = dict(story_topic_stats or {})
+
+    initial_selected_by_topic = dict(story_topic_stats.get("selected_by_topic") or {})
+    deficits = _story_coverage_deficits(
+        initial_selected_by_topic,
+        topics,
+        max_stories_per_topic=max_stories_per_topic,
+    )
+    deficits_before = dict(deficits)
+    reserve_story_total = sum(len(stories) for stories in (reserve_stories_by_topic or {}).values())
+    attempted_story_keys = {
+        str(story.get("story_key") or "").strip()
+        for story in story_drafts
+        if str(story.get("story_key") or "").strip()
+    }
+    summarized_article_ids = set(story_drafting_stage.article_summary_lookup_by_id(article_summary_reports))
+    clustered_article_ids = {
+        str(article.get("article_id") or "").strip()
+        for article in clustered_article_targets
+        if str(article.get("article_id") or "").strip()
+    }
+    attempted_story_count_by_topic: Counter[str] = Counter()
+    attempted_article_ids: set[str] = set()
+    new_article_summary_count = 0
+    new_story_draft_count = 0
+    iterations = 0
+
+    if deficits and reserve_story_total:
+        while deficits:
+            batch = _select_reserve_story_batch(
+                reserve_stories_by_topic,
+                deficits,
+                topics,
+                attempted_story_keys,
+                batch_multiplier=batch_multiplier,
+            )
+            if not batch:
+                break
+
+            iterations += 1
+            for story in batch:
+                story_key = str(story.get("story_key") or "").strip()
+                if story_key:
+                    attempted_story_keys.add(story_key)
+                attempted_story_count_by_topic[str(story.get("topic_title") or "Unknown topic")] += 1
+                for article_id in story.get("cluster_article_ids") or story.get("article_ids") or []:
+                    clean_article_id = str(article_id or "").strip()
+                    if clean_article_id:
+                        attempted_article_ids.add(clean_article_id)
+
+            batch_article_targets = _article_targets_for_story_records(
+                batch,
+                article_lookup,
+                existing_article_ids=clustered_article_ids,
+            )
+            for article in batch_article_targets:
+                article_id = str(article.get("article_id") or "").strip()
+                if article_id:
+                    clustered_article_ids.add(article_id)
+            clustered_article_targets.extend(batch_article_targets)
+
+            new_article_targets = [
+                article
+                for article in batch_article_targets
+                if str(article.get("article_id") or "").strip() not in summarized_article_ids
+            ]
+            if new_article_targets:
+                new_reports = summarize_article_targets(new_article_targets)
+                article_summary_reports.extend(new_reports)
+                summarized_article_ids.update(
+                    story_drafting_stage.article_summary_lookup_by_id(new_reports)
+                )
+                new_article_summary_count += len(new_reports)
+
+            new_story_drafts, _draft_stats = draft_story_records(
+                batch,
+                article_summary_reports,
+                clustered_article_targets,
+            )
+            if new_story_drafts:
+                new_story_draft_count += len(new_story_drafts)
+                story_drafts.extend(new_story_drafts)
+                story_drafts, _dedup_stats = dedupe_story_drafts(story_drafts)
+                selected_story_topic_matches, story_topic_stats = classify_story_drafts(story_drafts)
+
+            deficits = _story_coverage_deficits(
+                story_topic_stats.get("selected_by_topic") or {},
+                topics,
+                max_stories_per_topic=max_stories_per_topic,
+            )
+
+    final_selected_by_topic = dict(story_topic_stats.get("selected_by_topic") or {})
+    deficits_after = _story_coverage_deficits(
+        final_selected_by_topic,
+        topics,
+        max_stories_per_topic=max_stories_per_topic,
+    )
+    exhausted_topics: list[str] = []
+    for topic_title in deficits_after:
+        has_unattempted_reserve = any(
+            str(story.get("story_key") or "").strip()
+            and str(story.get("story_key") or "").strip() not in attempted_story_keys
+            for story in (reserve_stories_by_topic or {}).get(topic_title) or []
+        )
+        if not has_unattempted_reserve:
+            exhausted_topics.append(topic_title)
+
+    return {
+        "article_summary_reports": article_summary_reports,
+        "clustered_article_targets": clustered_article_targets,
+        "story_drafts": story_drafts,
+        "selected_story_topic_matches": selected_story_topic_matches,
+        "story_topic_stats": story_topic_stats,
+        "stats": {
+            "enabled": bool(deficits_before and reserve_story_total),
+            "iterations": iterations,
+            "initial_selected_by_topic": initial_selected_by_topic,
+            "final_selected_by_topic": final_selected_by_topic,
+            "deficits_before": deficits_before,
+            "deficits_after": deficits_after,
+            "attempted_story_count_by_topic": dict(attempted_story_count_by_topic),
+            "attempted_article_count": len(attempted_article_ids),
+            "new_article_summary_count": new_article_summary_count,
+            "new_story_draft_count": new_story_draft_count,
+            "exhausted_topics": sorted(exhausted_topics),
+            "reserve_story_count": reserve_story_total,
+            "batch_multiplier": max(1, batch_multiplier),
+        },
+    }
 
 
 def _persist_article_summaries_debug(
@@ -5942,6 +6803,7 @@ def _new_run_diagnostics(source_count: int) -> RunDiagnostics:
             "max_articles_per_source": MAX_ARTICLES_PER_SOURCE,
             "topic_relevance_min_score": TOPIC_RELEVANCE_MIN_SCORE,
             "story_topic_fit_min_score": STORY_TOPIC_FIT_MIN_SCORE,
+            "story_topic_validation_enabled": STORY_TOPIC_VALIDATION_ENABLED,
             "per_source_topic_article_cap": PER_SOURCE_TOPIC_ARTICLE_CAP,
             "num_top_topics": NUM_TOP_TOPICS,
             "top_topic_probes": TOP_TOPIC_PROBES,
@@ -5971,7 +6833,7 @@ def _new_run_diagnostics(source_count: int) -> RunDiagnostics:
             "per_topic_article_summary_cap": PER_TOPIC_ARTICLE_SUMMARY_CAP,
             "min_articles_per_story": MIN_ARTICLES_PER_STORY,
             "max_stories_per_topic": MAX_STORIES_PER_TOPIC,
-            "max_articles_per_story": MAX_ARTICLES_PER_STORY,
+            "story_backfill_batch_multiplier": STORY_BACKFILL_BATCH_MULTIPLIER,
             "story_cluster_similarity_threshold": STORY_CLUSTER_SIMILARITY_THRESHOLD,
             "topic_clustering_max_tokens": TOPIC_CLUSTERING_MAX_TOKENS,
             "translation_max_tokens": TRANSLATION_MAX_TOKENS,
@@ -6461,7 +7323,7 @@ def _run_pipeline() -> None:
         f"Model caps: input {MODEL_MAX_INPUT_TOKENS} tokens, "
         f"article text {ARTICLE_TEXT_TOKEN_LIMIT} tokens, "
         f"summaries {TOTAL_ARTICLE_SUMMARY_CAP} total/{PER_TOPIC_ARTICLE_SUMMARY_CAP} per topic, "
-        f"{MAX_STORIES_PER_TOPIC} stories/topic, {MAX_ARTICLES_PER_STORY} articles/story, "
+        f"{MAX_STORIES_PER_TOPIC} stories/topic, "
         f"{PER_SOURCE_TOPIC_ARTICLE_CAP} per source/story budget cap, "
         f"summary concurrency {ARTICLE_SUMMARY_CONCURRENCY}."
     )
@@ -6631,7 +7493,9 @@ def _run_pipeline() -> None:
             f"(history={source_rejection_counts.get('seen_in_history', 0)}, "
             f"duplicate_this_run={source_rejection_counts.get('duplicate_this_run', 0)}, "
             f"missing_url={source_rejection_counts.get('missing_url', 0)}, "
-            f"wrong_feed_source={source_rejection_counts.get('wrong_feed_source', 0)})."
+            f"wrong_feed_source={source_rejection_counts.get('wrong_feed_source', 0)}, "
+            "wrong_feed_source_unattributed="
+            f"{source_rejection_counts.get('wrong_feed_source_unattributed', 0)})."
         )
     diagnostics.event(
         "article_collection",
@@ -6746,14 +7610,18 @@ def _run_pipeline() -> None:
             topics,
             min_articles_per_story=MIN_ARTICLES_PER_STORY,
             max_stories_per_topic=MAX_STORIES_PER_TOPIC,
-            max_articles_per_story=MAX_ARTICLES_PER_STORY,
             similarity_threshold=STORY_CLUSTER_SIMILARITY_THRESHOLD,
         )
     )
     story_records = _flatten_topic_story_records(story_cluster_stats)
     diagnostics.event("story_clustering", **{
         k: v for k, v in story_cluster_stats.items()
-        if k not in ("stories_by_topic", "dropped_articles_by_topic", "pair_debug_by_topic")
+        if k not in (
+            "stories_by_topic",
+            "reserve_stories_by_topic",
+            "dropped_articles_by_topic",
+            "pair_debug_by_topic",
+        )
     })
     stories_by_topic_debug = story_cluster_stats.get("stories_by_topic") or {}
     for topic in topics:
@@ -6764,20 +7632,20 @@ def _run_pipeline() -> None:
         progress_tracker.detail(
             f"  {ttitle}: "
             f"{topic_counts_by_key.get(tkey, 0)} articles "
-            f"→ {len(topic_stories)} story cluster(s) "
-            f"(+{dropped_count} noise dropped)"
+            f"→ {len(topic_stories)} viable story cluster(s) "
+            f"(+{dropped_count} true noise/below-floor dropped)"
         )
     progress_tracker.detail(
         f"Story clustering: {story_cluster_stats.get('included_count', 0)} "
-        f"article target(s) retained across {story_cluster_stats.get('story_count', 0)} "
-        f"story group(s); {story_cluster_stats.get('dropped_count', 0)} dropped below "
+        f"article target(s) retained across {story_cluster_stats.get('viable_story_count', 0)} "
+        f"viable story group(s); {story_cluster_stats.get('dropped_count', 0)} dropped below "
         f"the {MIN_ARTICLES_PER_STORY}-article story floor "
         f"(TF-IDF threshold {STORY_CLUSTER_SIMILARITY_THRESHOLD:.2f}, per-topic)."
     )
     diagnostics.record_article_budget(
         {
             "enabled": False,
-            "reason": "story-first pipeline summarizes all articles that belong to retained multi-article story clusters",
+            "reason": "story-first pipeline summarizes every viable story cluster before final topic selection",
             "candidate_count": len(clustered_article_targets),
             "included_count": len(clustered_article_targets),
             "dropped_count": 0,
@@ -6819,6 +7687,7 @@ def _run_pipeline() -> None:
         story_records,
         article_summary_reports,
         _story_drafting_runtime(),
+        article_targets=clustered_article_targets,
     )
     diagnostics.event("story_drafting", **story_draft_stats)
     progress_tracker.detail(
@@ -6826,63 +7695,133 @@ def _run_pipeline() -> None:
         f"drafted story paragraph(s) from {story_draft_stats.get('story_blocks_requested', 0)} "
         "eligible cluster(s)."
     )
-    if not story_drafts:
-        progress_tracker.step("finalize", "No story drafts generated; stopping run.")
-        diagnostics.event("aborted", reason="no_story_drafts")
-        _write_run_diagnostics(diagnostics)
-        return
 
     # Dedup near-duplicate story drafts within each topic using embedding cosine similarity.
-    drafts_before_dedup = len(story_drafts)
-    try:
-        drafts_by_topic: dict[str, list[dict]] = {}
-        for draft in story_drafts:
-            tkey = str(draft.get("topic_title") or draft.get("topic_key") or "unassigned")
-            drafts_by_topic.setdefault(tkey, []).append(draft)
-        story_drafts = []
-        for _topic_group, _drafts in drafts_by_topic.items():
-            story_drafts.extend(
-                embeddings_stage.dedup_story_drafts_within_topic(
-                    _drafts,
-                    threshold=STORY_EMBEDDING_DEDUP_THRESHOLD,
-                )
-            )
-        drafts_dropped = drafts_before_dedup - len(story_drafts)
-        if drafts_dropped:
+    if story_drafts:
+        story_drafts, story_dedup_stats = _dedupe_story_drafts_for_topic_selection(story_drafts)
+        if story_dedup_stats.get("dropped"):
             progress_tracker.detail(
-                f"Story dedup: removed {drafts_dropped} near-duplicate story draft(s) "
+                f"Story dedup: removed {story_dedup_stats.get('dropped')} near-duplicate story draft(s) "
                 f"(cosine threshold {STORY_EMBEDDING_DEDUP_THRESHOLD:.2f})."
             )
-        diagnostics.event(
-            "story_dedup",
-            before=drafts_before_dedup,
-            after=len(story_drafts),
-            dropped=drafts_dropped,
-            threshold=STORY_EMBEDDING_DEDUP_THRESHOLD,
-        )
-    except Exception as _dedup_error:
-        progress_tracker.warning(
-            f"Story dedup failed ({_dedup_error}); keeping all {drafts_before_dedup} drafts."
-        )
-        diagnostics.event("story_dedup", error=str(_dedup_error), fallback="no_dedup")
+        diagnostics.event("story_dedup", **story_dedup_stats)
+        if story_dedup_stats.get("error"):
+            progress_tracker.warning(
+                f"Story dedup failed ({story_dedup_stats.get('error')}); "
+                f"keeping all {story_dedup_stats.get('before', len(story_drafts))} drafts."
+            )
 
-    selected_story_topic_matches, story_topic_stats = (
-        story_topic_assignment_stage.classify_story_drafts_for_topics(
-            story_drafts,
-            topics,
-            _story_topic_runtime(),
+        selected_story_topic_matches, story_topic_stats = (
+            story_topic_assignment_stage.classify_story_drafts_for_topics(
+                story_drafts,
+                topics,
+                _story_topic_runtime(),
+            )
         )
-    )
-    diagnostics.event("story_topic_classification", **story_topic_stats)
+        diagnostics.event("story_topic_classification", **story_topic_stats)
+    else:
+        story_dedup_stats = {
+            "before": 0,
+            "after": 0,
+            "dropped": 0,
+            "threshold": STORY_EMBEDDING_DEDUP_THRESHOLD,
+            "skipped": True,
+            "reason": "no_initial_story_drafts",
+        }
+        diagnostics.event("story_dedup", **story_dedup_stats)
+        selected_story_topic_matches = []
+        story_topic_stats = {
+            "enabled": True,
+            "story_count": 0,
+            "selected_story_topic_count": 0,
+            "max_stories_per_topic": MAX_STORIES_PER_TOPIC,
+            "min_score": None,
+            "keyword_fit_gate_enabled": False,
+            "topic_story_diversity_min_distance": TOPIC_STORY_DIVERSITY_MIN_DISTANCE,
+            "selected_by_topic": {},
+            "story_topic_screening": {
+                "enabled": bool(STORY_TOPIC_VALIDATION_ENABLED),
+                "us_focus_topic_ids": ["us_economy", "us_politics"],
+                "topic_ids": ["us_economy", "us_politics"],
+                "candidate_count": 0,
+                "judged_count": 0,
+                "preferred_count": 0,
+                "obvious_exclusion_count": 0,
+                "fallback_kept_count": 0,
+                "parse_failed_count": 0,
+                "topicality_counts": {},
+                "scale_counts": {},
+                "topics": {},
+            },
+            "story_topic_validation": {
+                "enabled": bool(STORY_TOPIC_VALIDATION_ENABLED),
+                "us_focus_topic_ids": ["us_economy", "us_politics"],
+                "topic_ids": ["us_economy", "us_politics"],
+                "candidate_count": 0,
+                "judged_count": 0,
+                "kept_count": 0,
+                "dropped_count": 0,
+                "fallback_kept_count": 0,
+                "parse_failed_count": 0,
+                "verdict_counts": {},
+                "topics": {},
+            },
+            "article_overlap_dedup": {
+                "enabled": True,
+                "threshold": story_topic_assignment_stage.STORY_TOPIC_OVERLAP_SUPPRESS_THRESHOLD,
+                "conflicts_resolved": 0,
+                "banned_story_count": 0,
+                "events": [],
+            },
+            "topics": {},
+        }
+        diagnostics.event("story_topic_classification", **story_topic_stats)
+        progress_tracker.detail(
+            "No story drafts generated from viable clusters."
+        )
     selected_by_topic = story_topic_stats.get("selected_by_topic") or {}
     progress_tracker.detail(
-        "Story-topic fit: "
+        "Story-topic assignment: "
         + ", ".join(
             f"{topic_title}={count}"
             for topic_title, count in selected_by_topic.items()
         )
-        + f" (min score {STORY_TOPIC_FIT_MIN_SCORE})."
+        + " (LLM screening + article-overlap ownership)."
     )
+    topic_screening_stats = story_topic_stats.get("story_topic_screening") or {}
+    if topic_screening_stats.get("enabled") and topic_screening_stats.get("candidate_count"):
+        progress_tracker.detail(
+            "Story-topic screening: "
+            f"judged {topic_screening_stats.get('judged_count', 0)} story candidate(s), "
+            f"{topic_screening_stats.get('preferred_count', 0)} not obviously bad, "
+            f"{topic_screening_stats.get('obvious_exclusion_count', 0)} obvious topicality/scale exclusion(s)."
+        )
+    overlap_stats = story_topic_stats.get("article_overlap_dedup") or {}
+    if overlap_stats.get("conflicts_resolved"):
+        progress_tracker.detail(
+            "Story overlap ownership: "
+            f"resolved {overlap_stats.get('conflicts_resolved')} >=50% article-overlap conflict(s)."
+        )
+
+    story_backfill_stats = {
+        "enabled": False,
+        "reason": "all_viable_story_clusters_drafted_up_front",
+        "iterations": 0,
+        "initial_selected_by_topic": selected_by_topic,
+        "final_selected_by_topic": selected_by_topic,
+        "deficits_before": {},
+        "deficits_after": {},
+        "attempted_story_count_by_topic": {},
+        "attempted_article_count": 0,
+        "new_article_summary_count": 0,
+        "new_story_draft_count": 0,
+        "exhausted_topics": [],
+        "reserve_story_count": 0,
+        "batch_multiplier": max(1, STORY_BACKFILL_BATCH_MULTIPLIER),
+    }
+    diagnostics.event("story_backfill", **story_backfill_stats)
+    diagnostics.article_summary_count = len(article_summary_reports)
+
     story_coverage_deficits = {
         topic_title: MAX_STORIES_PER_TOPIC - int(count or 0)
         for topic_title, count in selected_by_topic.items()

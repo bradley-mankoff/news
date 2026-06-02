@@ -13,8 +13,60 @@ from zoneinfo import ZoneInfo
 
 
 TEMPORARY_CITATION_RE = re.compile(r"\[\[([A-Za-z0-9_,;\s-]+)\]\]")
+BRACKETED_TEMPORARY_CITATION_LIST_RE = re.compile(
+    r"\[(\s*\[[A-Za-z][A-Za-z0-9_-]*\](?:\s*[,;]\s*\[[A-Za-z][A-Za-z0-9_-]*\])+\s*)\]"
+)
 DISPLAY_CITATION_RE = re.compile(r"\[(\d+(?:\s*,\s*\d+)*)\]")
 DEFAULT_STORY_LEVEL_CITATION_SENTENCE_THRESHOLD = 2
+PRIMARY_CITATION_RANK = 0
+NEUTRAL_CITATION_RANK = 1
+DERIVATIVE_CITATION_RANK = 2
+CITATION_PRECEDENCE_PRIMARY_OVERLAP_MIN_TOKENS = 2
+CITATION_PRECEDENCE_PRIMARY_OVERLAP_MIN_SCORE = 0.08
+
+_ORG_ALIAS_TO_CANONICAL = {
+    "afp": "afp",
+    "agence france presse": "afp",
+    "ap": "associated press",
+    "ap news": "associated press",
+    "associated press": "associated press",
+    "the associated press": "associated press",
+    "reuters": "reuters",
+    "reuters com": "reuters",
+}
+_PRIMARY_WIRE_ORGS = {"afp", "associated press", "reuters"}
+_WIRE_ORG_ALIASES = {
+    "afp": ("afp", "agence france presse"),
+    "associated press": ("ap", "ap news", "associated press", "the associated press"),
+    "reuters": ("reuters", "reuters com"),
+}
+_ATTRIBUTION_BEFORE_ORG = (
+    "according to",
+    "based on",
+    "citing",
+    "credited to",
+    "distributed by",
+    "from",
+    "published by",
+    "reported by",
+    "via",
+)
+_ATTRIBUTION_AFTER_ORG = (
+    "confirmed",
+    "contributed",
+    "distributed",
+    "provided",
+    "reported",
+    "said",
+    "says",
+    "wrote",
+)
+_SAME_ORG_REFERENCE_RE = re.compile(
+    r"\b(?:previously|earlier)\s+reported\b|\breported\s+(?:previously|earlier)\b"
+    r"|\bas\s+(?:we|the\s+outlet|[a-z0-9 ]{2,48})\s+reported\s+(?:previously|earlier)\b"
+    r"|\b(?:previous|earlier)\s+(?:story|report|article|coverage)\b",
+    flags=re.IGNORECASE,
+)
 
 _COMMON_ABBREVIATION_RE = re.compile(
     r"\b(?:U\.S|U\.K|E\.U|U\.N|Mr|Mrs|Ms|Dr|Prof|Sen|Rep|Gov|St|No|Inc|Ltd|Co|Corp|vs)\.$",
@@ -60,6 +112,262 @@ _TOKEN_STOPWORDS = {
 EASTERN_TIME = ZoneInfo("America/New_York")
 
 
+def _fold_label(value: Any) -> str:
+    clean_value = str(value or "").lower().replace("&", " and ")
+    clean_value = re.sub(r"[^a-z0-9]+", " ", clean_value)
+    clean_value = re.sub(r"\s+", " ", clean_value).strip()
+    if clean_value.startswith("plenary "):
+        clean_value = clean_value.removeprefix("plenary ").strip()
+    return clean_value
+
+
+def _normalize_org_label(value: Any) -> str:
+    folded = _fold_label(value)
+    if not folded:
+        return ""
+    if folded in _ORG_ALIAS_TO_CANONICAL:
+        return _ORG_ALIAS_TO_CANONICAL[folded]
+    for alias, canonical in _ORG_ALIAS_TO_CANONICAL.items():
+        if len(alias) > 3 and folded.startswith(alias + " "):
+            return canonical
+    if folded.startswith("yahoo news "):
+        return "yahoo news"
+    if folded.startswith("yahoo finance "):
+        return "yahoo finance"
+    return folded
+
+
+def _source_org(source: dict[str, Any]) -> str:
+    return _normalize_org_label(source.get("source"))
+
+
+def _source_text_for_precedence(source: dict[str, Any]) -> str:
+    return " ".join(
+        str(source.get(key) or "")
+        for key in ("title", "source", "summary", "body_evidence")
+    )
+
+
+def _fold_source_text(source: dict[str, Any]) -> str:
+    return _fold_label(_source_text_for_precedence(source))
+
+
+def _contains_attribution_to_org(folded_text: str, canonical_org: str) -> bool:
+    aliases = _WIRE_ORG_ALIASES.get(canonical_org, (canonical_org,))
+    for alias in aliases:
+        folded_alias = _fold_label(alias)
+        if not folded_alias:
+            continue
+        for phrase in _ATTRIBUTION_BEFORE_ORG:
+            folded_phrase = _fold_label(phrase)
+            if re.search(
+                rf"\b{re.escape(folded_phrase)}\s+(?:the\s+)?{re.escape(folded_alias)}\b",
+                folded_text,
+            ):
+                return True
+        for phrase in _ATTRIBUTION_AFTER_ORG:
+            folded_phrase = _fold_label(phrase)
+            if re.search(
+                rf"\b(?:the\s+)?{re.escape(folded_alias)}\s+{re.escape(folded_phrase)}\b",
+                folded_text,
+            ):
+                return True
+        if re.search(rf"\bby\s+(?:the\s+)?{re.escape(folded_alias)}\b", folded_text):
+            return True
+    return False
+
+
+def _attributed_wire_orgs(source: dict[str, Any]) -> list[str]:
+    folded_text = _fold_source_text(source)
+    orgs = [
+        org
+        for org in sorted(_PRIMARY_WIRE_ORGS)
+        if _contains_attribution_to_org(folded_text, org)
+    ]
+    return orgs
+
+
+def _has_same_org_reference(source: dict[str, Any]) -> bool:
+    return bool(_SAME_ORG_REFERENCE_RE.search(_source_text_for_precedence(source)))
+
+
+def _source_match_score(left_text: str, right_text: str) -> float:
+    left_tokens = _tokenize_for_matching(left_text)
+    right_tokens = _tokenize_for_matching(right_text)
+    if not left_tokens or not right_tokens:
+        return 0.0
+    return len(left_tokens & right_tokens) / math.sqrt(len(left_tokens) * len(right_tokens))
+
+
+def _source_local_id(source: dict[str, Any]) -> str:
+    return _normalize_source_id(str(source.get("local_id") or ""))
+
+
+def _source_order(source: dict[str, Any], fallback: int = 0) -> int:
+    try:
+        return int(source.get("citation_precedence_order"))
+    except (TypeError, ValueError):
+        return fallback
+
+
+def _source_rank(source: dict[str, Any]) -> int:
+    try:
+        return int(source.get("citation_precedence_rank"))
+    except (TypeError, ValueError):
+        return NEUTRAL_CITATION_RANK
+
+
+def _same_org_primary_id(
+    derivative: dict[str, Any],
+    candidates: list[dict[str, Any]],
+) -> str:
+    derivative_text = _source_text_for_precedence(derivative)
+    derivative_published = _parse_published_datetime(derivative.get("published"))
+    ranked: list[tuple[float, int, int, int, str]] = []
+    for index, candidate in enumerate(candidates):
+        candidate_id = _source_local_id(candidate)
+        if not candidate_id or candidate_id == _source_local_id(derivative):
+            continue
+        candidate_published = _parse_published_datetime(candidate.get("published"))
+        older_or_equal = (
+            derivative_published is not None
+            and candidate_published is not None
+            and candidate_published <= derivative_published
+        )
+        score = _source_match_score(derivative_text, _source_text_for_precedence(candidate))
+        ranked.append(
+            (
+                score,
+                1 if not candidate.get("citation_precedence_same_org_reference") else 0,
+                1 if older_or_equal else 0,
+                -_source_order(candidate, index),
+                candidate_id,
+            )
+        )
+    if not ranked:
+        return ""
+    ranked.sort(reverse=True)
+    return ranked[0][4]
+
+
+def annotate_citation_precedence(citation_sources: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Annotate story-local citation sources with primary/derivative relationships."""
+
+    annotated: list[dict[str, Any]] = []
+    for index, source in enumerate(citation_sources):
+        local_id = _source_local_id(source)
+        source_org = _source_org(source)
+        attributed_wire_orgs = _attributed_wire_orgs(source)
+        annotated.append(
+            {
+                **source,
+                "local_id": str(source.get("local_id") or local_id),
+                "citation_precedence_order": index,
+                "citation_precedence_org": source_org,
+                "citation_precedence_attributed_orgs": attributed_wire_orgs,
+                "citation_precedence_same_org_reference": _has_same_org_reference(source),
+                "citation_precedence_derives_from": [],
+                "citation_precedence_rank": NEUTRAL_CITATION_RANK,
+                "citation_precedence_role": "neutral",
+                "citation_precedence_reason": "",
+                "citation_precedence_guidance": "",
+            }
+        )
+
+    sources_by_org: dict[str, list[dict[str, Any]]] = {}
+    source_by_local_id: dict[str, dict[str, Any]] = {}
+    for source in annotated:
+        local_id = _source_local_id(source)
+        if local_id:
+            source_by_local_id[local_id] = source
+        org = str(source.get("citation_precedence_org") or "")
+        if org:
+            sources_by_org.setdefault(org, []).append(source)
+
+    primary_source_ids: set[str] = set()
+    for source in annotated:
+        local_id = _source_local_id(source)
+        if not local_id:
+            continue
+        derives_from: list[str] = []
+        reasons: list[str] = []
+        own_org = str(source.get("citation_precedence_org") or "")
+        for attributed_org in source.get("citation_precedence_attributed_orgs") or []:
+            if attributed_org == own_org:
+                continue
+            for candidate in sources_by_org.get(str(attributed_org), []):
+                candidate_id = _source_local_id(candidate)
+                if candidate_id and candidate_id != local_id and candidate_id not in derives_from:
+                    derives_from.append(candidate_id)
+                    reasons.append(f"wire_attribution:{attributed_org}")
+
+        if source.get("citation_precedence_same_org_reference") and own_org:
+            same_org_candidates = [
+                candidate
+                for candidate in sources_by_org.get(own_org, [])
+                if _source_local_id(candidate) != local_id
+            ]
+            primary_id = _same_org_primary_id(source, same_org_candidates)
+            if primary_id and primary_id not in derives_from:
+                derives_from.append(primary_id)
+                reasons.append("same_org_previous_report")
+
+        if derives_from:
+            source["citation_precedence_derives_from"] = derives_from
+            source["citation_precedence_rank"] = DERIVATIVE_CITATION_RANK
+            source["citation_precedence_role"] = "derivative"
+            source["citation_precedence_reason"] = ",".join(reasons)
+            primary_source_ids.update(derives_from)
+
+    for source in annotated:
+        local_id = _source_local_id(source)
+        derives_from = list(source.get("citation_precedence_derives_from") or [])
+        if local_id in primary_source_ids and not derives_from:
+            source["citation_precedence_rank"] = PRIMARY_CITATION_RANK
+            source["citation_precedence_role"] = "primary"
+            source["citation_precedence_reason"] = "cited_by_derivative"
+        if derives_from:
+            source["citation_precedence_guidance"] = (
+                f"{local_id} appears to cite {', '.join(derives_from)}; "
+                f"for shared facts prefer {', '.join(derives_from)} and cite {local_id} only for unique reporting."
+            )
+        elif source.get("citation_precedence_role") == "primary":
+            source["citation_precedence_guidance"] = (
+                f"{local_id} is the preferred citation for facts also repeated by derivative sources."
+            )
+
+    return annotated
+
+
+def _citation_precedence_dependency_records_from_annotated(
+    citation_sources: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    for source in citation_sources:
+        local_id = _source_local_id(source)
+        derives_from = [
+            _normalize_source_id(str(source_id))
+            for source_id in source.get("citation_precedence_derives_from") or []
+            if _normalize_source_id(str(source_id))
+        ]
+        if not local_id or not derives_from:
+            continue
+        records.append(
+            {
+                "source_id": local_id,
+                "derives_from": derives_from,
+                "reason": source.get("citation_precedence_reason") or "",
+            }
+        )
+    return records
+
+
+def citation_precedence_dependency_records(citation_sources: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return _citation_precedence_dependency_records_from_annotated(
+        annotate_citation_precedence(citation_sources)
+    )
+
+
 def parse_article_report_entry(entry: str) -> dict[str, Any]:
     """Extract stable citation metadata from a normalized article summary."""
 
@@ -95,7 +403,8 @@ def parse_article_report_entry(entry: str) -> dict[str, Any]:
 def strip_citation_markers(text: str) -> str:
     """Remove temporary and final numeric citation markers while preserving prose."""
 
-    clean_text = TEMPORARY_CITATION_RE.sub("", str(text or ""))
+    clean_text = normalize_temporary_citation_markers(str(text or ""))
+    clean_text = TEMPORARY_CITATION_RE.sub("", clean_text)
     clean_text = DISPLAY_CITATION_RE.sub("", clean_text)
     clean_text = re.sub(r"[ \t]+([,.;:!?])", r"\1", clean_text)
     clean_text = re.sub(r"[ \t]{2,}", " ", clean_text)
@@ -104,12 +413,32 @@ def strip_citation_markers(text: str) -> str:
 
 
 def _normalize_source_id(value: str) -> str:
-    return re.sub(r"\s+", "", str(value or "")).upper()
+    return re.sub(r"[\s\[\]]+", "", str(value or "")).upper()
+
+
+def normalize_temporary_citation_markers(text: str) -> str:
+    """Canonicalize common model variants like [[S1], [S2]] into [[S1,S2]]."""
+
+    def replace_bracketed_list(match: re.Match[str]) -> str:
+        source_ids = [
+            _normalize_source_id(source_id)
+            for source_id in re.findall(r"\[([A-Za-z][A-Za-z0-9_-]*)\]", match.group(1))
+        ]
+        source_ids = [source_id for source_id in source_ids if source_id]
+        if not source_ids:
+            return match.group(0)
+        return "[[" + ",".join(source_ids) + "]]"
+
+    return BRACKETED_TEMPORARY_CITATION_LIST_RE.sub(
+        replace_bracketed_list,
+        str(text or ""),
+    )
 
 
 def _marker_source_ids(text: str) -> list[str]:
     source_ids: list[str] = []
-    for marker_text in TEMPORARY_CITATION_RE.findall(text or ""):
+    clean_text = normalize_temporary_citation_markers(str(text or ""))
+    for marker_text in TEMPORARY_CITATION_RE.findall(clean_text):
         for raw_id in re.split(r"[,;\s]+", marker_text):
             source_id = _normalize_source_id(raw_id)
             if source_id and source_id not in source_ids:
@@ -118,7 +447,8 @@ def _marker_source_ids(text: str) -> list[str]:
 
 
 def _remove_temporary_markers(text: str) -> str:
-    clean_text = TEMPORARY_CITATION_RE.sub("", str(text or ""))
+    clean_text = normalize_temporary_citation_markers(str(text or ""))
+    clean_text = TEMPORARY_CITATION_RE.sub("", clean_text)
     clean_text = re.sub(r"[ \t]+([,.;:!?])", r"\1", clean_text)
     clean_text = re.sub(r"\s+", " ", clean_text)
     return clean_text.strip()
@@ -144,7 +474,8 @@ def _consume_temporary_markers_after(text: str, index: int) -> int:
 def split_cited_sentences(text: str) -> list[str]:
     """Split prose into sentence-sized chunks while keeping trailing [[S1]] markers."""
 
-    clean_text = re.sub(r"\s+", " ", str(text or "")).strip()
+    clean_text = normalize_temporary_citation_markers(str(text or ""))
+    clean_text = re.sub(r"\s+", " ", clean_text).strip()
     if not clean_text:
         return []
 
@@ -219,12 +550,205 @@ def _fallback_source_ids(sentence: str, citation_sources: list[dict[str, Any]]) 
     return [ranked[0][2]]
 
 
+def _citation_dependency_map(citation_sources: list[dict[str, Any]]) -> dict[str, list[str]]:
+    dependency_map: dict[str, list[str]] = {}
+    valid_source_ids = {
+        _source_local_id(source)
+        for source in citation_sources
+        if _source_local_id(source)
+    }
+    for source in citation_sources:
+        local_id = _source_local_id(source)
+        if not local_id:
+            continue
+        derives_from: list[str] = []
+        for raw_source_id in source.get("citation_precedence_derives_from") or []:
+            source_id = _normalize_source_id(str(raw_source_id))
+            if (
+                source_id
+                and source_id in valid_source_ids
+                and source_id != local_id
+                and source_id not in derives_from
+            ):
+                derives_from.append(source_id)
+        if derives_from:
+            dependency_map[local_id] = derives_from
+    return dependency_map
+
+
+def _sentence_overlaps_source(sentence_text: str, source: dict[str, Any]) -> bool:
+    sentence_tokens = _tokenize_for_matching(sentence_text)
+    source_tokens = _tokenize_for_matching(_source_text_for_precedence(source))
+    if not sentence_tokens or not source_tokens:
+        return False
+    overlap = len(sentence_tokens & source_tokens)
+    if overlap >= CITATION_PRECEDENCE_PRIMARY_OVERLAP_MIN_TOKENS:
+        return True
+    score = overlap / math.sqrt(len(sentence_tokens) * len(source_tokens))
+    return score >= CITATION_PRECEDENCE_PRIMARY_OVERLAP_MIN_SCORE
+
+
+def _should_replace_derivative_citation(
+    sentence_text: str,
+    primary_ids: list[str],
+    source_by_local_id: dict[str, dict[str, Any]],
+) -> bool:
+    return any(
+        _sentence_overlaps_source(sentence_text, source_by_local_id[source_id])
+        for source_id in primary_ids
+        if source_id in source_by_local_id
+    )
+
+
+def _has_unique_derivative_support(
+    sentence_text: str,
+    derivative_source: dict[str, Any],
+    primary_ids: list[str],
+    source_by_local_id: dict[str, dict[str, Any]],
+) -> bool:
+    sentence_tokens = _tokenize_for_matching(sentence_text)
+    derivative_tokens = _tokenize_for_matching(_source_text_for_precedence(derivative_source))
+    primary_tokens: set[str] = set()
+    for primary_id in primary_ids:
+        primary_source = source_by_local_id.get(primary_id)
+        if primary_source:
+            primary_tokens.update(_tokenize_for_matching(_source_text_for_precedence(primary_source)))
+    unique_tokens = (sentence_tokens & derivative_tokens) - primary_tokens
+    return len(unique_tokens) >= CITATION_PRECEDENCE_PRIMARY_OVERLAP_MIN_TOKENS
+
+
+def apply_citation_precedence(
+    cited_sentences: list[dict[str, Any]],
+    citation_sources: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Prefer primary story-local sources over derivative citations where possible."""
+
+    annotated_sources = annotate_citation_precedence(citation_sources)
+    source_by_local_id = {
+        _source_local_id(source): source
+        for source in annotated_sources
+        if _source_local_id(source)
+    }
+    dependency_map = _citation_dependency_map(annotated_sources)
+    dependency_records = _citation_precedence_dependency_records_from_annotated(annotated_sources)
+    adjusted_sentences: list[dict[str, Any]] = []
+    replacements: list[dict[str, Any]] = []
+    suppressions: list[dict[str, Any]] = []
+    retained_derivatives: list[dict[str, Any]] = []
+
+    for sentence_index, sentence in enumerate(cited_sentences):
+        original_source_ids = _normalized_sentence_source_ids(sentence)
+        original_source_id_set = set(original_source_ids)
+        adjusted_source_ids: list[str] = []
+        sentence_text = str(sentence.get("text") or "")
+        for source_id in original_source_ids:
+            primary_ids = dependency_map.get(source_id) or []
+            if not primary_ids:
+                if source_id not in adjusted_source_ids:
+                    adjusted_source_ids.append(source_id)
+                continue
+
+            primary_ids_in_story = [
+                primary_id
+                for primary_id in primary_ids
+                if primary_id in source_by_local_id
+            ]
+            if not primary_ids_in_story:
+                if source_id not in adjusted_source_ids:
+                    adjusted_source_ids.append(source_id)
+                continue
+
+            primary_already_cited = any(
+                primary_id in original_source_id_set
+                for primary_id in primary_ids_in_story
+            )
+            should_replace = primary_already_cited or _should_replace_derivative_citation(
+                sentence_text,
+                primary_ids_in_story,
+                source_by_local_id,
+            )
+            if should_replace:
+                has_unique_derivative_support = _has_unique_derivative_support(
+                    sentence_text,
+                    source_by_local_id.get(source_id) or {},
+                    primary_ids_in_story,
+                    source_by_local_id,
+                )
+                for primary_id in primary_ids_in_story:
+                    if primary_id not in adjusted_source_ids:
+                        adjusted_source_ids.append(primary_id)
+                if has_unique_derivative_support:
+                    if source_id not in adjusted_source_ids:
+                        adjusted_source_ids.append(source_id)
+                    retained_derivatives.append(
+                        {
+                            "sentence_index": sentence_index,
+                            "source_id": source_id,
+                            "preferred_source_ids": primary_ids_in_story,
+                            "reason": "unique_derivative_support",
+                            "text": sentence_text[:220],
+                        }
+                    )
+                    continue
+                event = {
+                    "sentence_index": sentence_index,
+                    "source_id": source_id,
+                    "preferred_source_ids": primary_ids_in_story,
+                    "text": sentence_text[:220],
+                }
+                if primary_already_cited:
+                    suppressions.append(event)
+                else:
+                    replacements.append(event)
+                continue
+
+            if source_id not in adjusted_source_ids:
+                adjusted_source_ids.append(source_id)
+            retained_derivatives.append(
+                {
+                    "sentence_index": sentence_index,
+                    "source_id": source_id,
+                    "preferred_source_ids": primary_ids_in_story,
+                    "text": sentence_text[:220],
+                }
+            )
+
+        adjusted_sentences.append(
+            {
+                **sentence,
+                "source_ids": adjusted_source_ids,
+                "citation_precedence_original_source_ids": original_source_ids,
+            }
+        )
+
+    return {
+        "cited_sentences": adjusted_sentences,
+        "citation_sources": annotated_sources,
+        "diagnostics": {
+            "citation_precedence_dependencies": dependency_records,
+            "citation_precedence_replacements": replacements,
+            "citation_precedence_suppressions": suppressions,
+            "citation_precedence_retained_derivatives": retained_derivatives,
+            "citation_precedence_replacement_count": len(replacements),
+            "citation_precedence_suppression_count": len(suppressions),
+            "citation_precedence_retained_derivative_count": len(retained_derivatives),
+        },
+    }
+
+
 def validate_cited_story_text(
     marked_text: str,
     citation_sources: list[dict[str, Any]],
+    *,
+    apply_precedence: bool = True,
 ) -> dict[str, Any]:
     """Return clean story text plus validated sentence-to-source metadata."""
 
+    original_marked_text = str(marked_text or "")
+    repaired_marker_variant_count = len(
+        BRACKETED_TEMPORARY_CITATION_LIST_RE.findall(original_marked_text)
+    )
+    marked_text = normalize_temporary_citation_markers(original_marked_text)
     valid_source_ids = {
         _normalize_source_id(str(source.get("local_id") or ""))
         for source in citation_sources
@@ -257,6 +781,12 @@ def validate_cited_story_text(
             }
         )
 
+    precedence_diagnostics: dict[str, Any] = {}
+    if apply_precedence:
+        precedence_result = apply_citation_precedence(cited_sentences, citation_sources)
+        cited_sentences = list(precedence_result.get("cited_sentences") or cited_sentences)
+        precedence_diagnostics = dict(precedence_result.get("diagnostics") or {})
+
     clean_paragraph = " ".join(sentence["text"] for sentence in cited_sentences).strip()
     return {
         "paragraph": clean_paragraph,
@@ -264,10 +794,13 @@ def validate_cited_story_text(
         "diagnostics": {
             "sentence_count": len(cited_sentences),
             "temporary_marker_count": len(TEMPORARY_CITATION_RE.findall(marked_text or "")),
-            "malformed_marker_count": (marked_text or "").count("[[") - len(TEMPORARY_CITATION_RE.findall(marked_text or "")),
+            "repaired_marker_variant_count": repaired_marker_variant_count,
+            "malformed_marker_count": (marked_text or "").count("[[")
+            - len(TEMPORARY_CITATION_RE.findall(marked_text or "")),
             "unknown_source_ids": sorted(set(unknown_source_ids)),
             "uncited_sentence_count": sum(1 for s in cited_sentences if not s["source_ids"]),
             "source_count": len(citation_sources),
+            **precedence_diagnostics,
         },
     }
 
@@ -383,13 +916,47 @@ def _normalized_sentence_source_ids(sentence: dict[str, Any]) -> list[str]:
     return source_ids
 
 
+def _precedence_ordered_source_ids(
+    source_ids: list[str],
+    source_by_local_id: dict[str, dict[str, Any]],
+    *,
+    first_seen_order: list[str] | None = None,
+) -> list[str]:
+    first_seen_index = {
+        source_id: index
+        for index, source_id in enumerate(first_seen_order or [])
+    }
+
+    def rank(source_id: str) -> tuple[int, int, int, str]:
+        source = source_by_local_id.get(source_id) or {}
+        return (
+            _source_rank(source),
+            first_seen_index.get(source_id, len(first_seen_index) + _source_order(source)),
+            _source_order(source),
+            source_id,
+        )
+
+    ordered: list[str] = []
+    for source_id in sorted(source_ids, key=rank):
+        if source_id in source_by_local_id and source_id not in ordered:
+            ordered.append(source_id)
+    return ordered
+
+
 def render_cited_story(
     cited_sentences: list[dict[str, Any]],
     citation_sources: list[dict[str, Any]],
     registry: CitationRegistry,
     *,
     story_level_citation_sentence_threshold: int | None = DEFAULT_STORY_LEVEL_CITATION_SENTENCE_THRESHOLD,
+    apply_precedence: bool = True,
 ) -> dict[str, Any]:
+    precedence_diagnostics: dict[str, Any] = {}
+    if apply_precedence:
+        precedence_result = apply_citation_precedence(cited_sentences, citation_sources)
+        cited_sentences = list(precedence_result.get("cited_sentences") or cited_sentences)
+        citation_sources = list(precedence_result.get("citation_sources") or citation_sources)
+        precedence_diagnostics = dict(precedence_result.get("diagnostics") or {})
     source_by_local_id = {
         _normalize_source_id(str(source.get("local_id") or "")): source
         for source in citation_sources
@@ -413,7 +980,28 @@ def render_cited_story(
             for source_id in source_first_seen_order
             if source_sentence_counts.get(source_id, 0) > story_level_citation_sentence_threshold
         ]
+        story_level_source_ids = _precedence_ordered_source_ids(
+            story_level_source_ids,
+            source_by_local_id,
+            first_seen_order=source_first_seen_order,
+        )
     story_level_source_id_set = set(story_level_source_ids)
+
+    rendered_source_ids: list[str] = []
+    for source_id in story_level_source_ids:
+        if source_id not in rendered_source_ids:
+            rendered_source_ids.append(source_id)
+    for sentence in cited_sentences:
+        for source_id in _normalized_sentence_source_ids(sentence):
+            if source_id in source_by_local_id and source_id not in rendered_source_ids:
+                rendered_source_ids.append(source_id)
+    for source_id in _precedence_ordered_source_ids(
+        rendered_source_ids,
+        source_by_local_id,
+        first_seen_order=source_first_seen_order,
+    ):
+        registry.register(source_by_local_id[source_id])
+
     story_level_numbers: list[int] = []
     for source_id in story_level_source_ids:
         source = source_by_local_id.get(source_id)
@@ -427,7 +1015,12 @@ def render_cited_story(
     for sentence in cited_sentences:
         sentence_text = strip_citation_markers(str(sentence.get("text") or ""))
         numbers: list[int] = []
-        for source_id in _normalized_sentence_source_ids(sentence):
+        sentence_source_ids = _precedence_ordered_source_ids(
+            _normalized_sentence_source_ids(sentence),
+            source_by_local_id,
+            first_seen_order=source_first_seen_order,
+        )
+        for source_id in sentence_source_ids:
             if source_id in story_level_source_id_set:
                 continue
             source = source_by_local_id.get(source_id)
@@ -450,6 +1043,7 @@ def render_cited_story(
             for source_id in story_level_source_ids
             if source_id in source_sentence_counts
         },
+        "citation_precedence_diagnostics": precedence_diagnostics,
     }
 
 

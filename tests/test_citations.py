@@ -67,6 +67,211 @@ class CitationHelperTests(unittest.TestCase):
         self.assertEqual(result["diagnostics"]["uncited_sentence_count"], 2)
         self.assertNotIn("[[", result["paragraph"])
 
+    def test_derivative_wire_citation_uses_primary_for_overlapping_fact(self) -> None:
+        sources = [
+            _source(
+                "S1",
+                title="Levee repairs approved",
+                source="Associated Press",
+                summary="Officials approved levee repairs and backup pumps.",
+            ),
+            _source(
+                "S2",
+                title="Yahoo republishes levee plan",
+                source="Yahoo News",
+                summary=(
+                    "The Associated Press reported officials approved levee repairs "
+                    "and backup pumps."
+                ),
+                body_evidence=(
+                    "The Associated Press reported that officials approved levee "
+                    "repairs and backup pumps."
+                ),
+            ),
+        ]
+
+        result = citations_stage.validate_cited_story_text(
+            "Officials approved levee repairs and backup pumps[[S2]].",
+            sources,
+        )
+
+        self.assertEqual(result["cited_sentences"][0]["source_ids"], ["S1"])
+        self.assertEqual(
+            result["diagnostics"]["citation_precedence_dependencies"],
+            [
+                {
+                    "source_id": "S2",
+                    "derives_from": ["S1"],
+                    "reason": "wire_attribution:associated press",
+                }
+            ],
+        )
+        self.assertEqual(result["diagnostics"]["citation_precedence_replacement_count"], 1)
+
+    def test_derivative_citation_is_suppressed_when_primary_already_cited(self) -> None:
+        sources = [
+            _source(
+                "S1",
+                source="Associated Press",
+                summary="Officials approved levee repairs and backup pumps.",
+            ),
+            _source(
+                "S2",
+                source="Yahoo News",
+                summary="According to AP, officials approved levee repairs and backup pumps.",
+                body_evidence="According to AP, officials approved levee repairs and backup pumps.",
+            ),
+        ]
+
+        result = citations_stage.validate_cited_story_text(
+            "Officials approved levee repairs and backup pumps[[S2,S1]].",
+            sources,
+        )
+
+        self.assertEqual(result["cited_sentences"][0]["source_ids"], ["S1"])
+        self.assertEqual(result["diagnostics"]["citation_precedence_suppression_count"], 1)
+
+    def test_derivative_unique_claim_remains_cited(self) -> None:
+        sources = [
+            _source(
+                "S1",
+                source="Associated Press",
+                summary="Officials approved levee repairs and backup pumps.",
+            ),
+            _source(
+                "S2",
+                source="Yahoo Finance",
+                summary=(
+                    "Reuters reported officials approved levee repairs. Yahoo Finance "
+                    "said analysts expected a small share-price move."
+                ),
+                body_evidence=(
+                    "Reuters reported the levee decision. Analysts told Yahoo Finance "
+                    "they expected a small share-price move."
+                ),
+            ),
+            _source(
+                "S3",
+                source="Reuters",
+                summary="Officials approved levee repairs and backup pumps.",
+            ),
+        ]
+
+        result = citations_stage.validate_cited_story_text(
+            (
+                "Officials approved levee repairs, and analysts expected "
+                "a small share-price move[[S2]]."
+            ),
+            sources,
+        )
+
+        self.assertEqual(result["cited_sentences"][0]["source_ids"], ["S3", "S2"])
+        self.assertEqual(result["diagnostics"]["citation_precedence_retained_derivative_count"], 1)
+
+    def test_derivative_source_remains_when_primary_is_absent(self) -> None:
+        sources = [
+            _source(
+                "S1",
+                source="Yahoo News",
+                summary="The Associated Press reported officials approved levee repairs.",
+                body_evidence="The Associated Press reported officials approved levee repairs.",
+            )
+        ]
+
+        result = citations_stage.validate_cited_story_text(
+            "Officials approved levee repairs[[S1]].",
+            sources,
+        )
+
+        self.assertEqual(result["cited_sentences"][0]["source_ids"], ["S1"])
+        self.assertEqual(result["diagnostics"]["citation_precedence_dependencies"], [])
+
+    def test_wire_self_attribution_is_not_marked_derivative(self) -> None:
+        sources = [
+            _source(
+                "S1",
+                source="Associated Press",
+                summary="The Associated Press reported officials approved levee repairs.",
+                body_evidence="By The Associated Press. Officials approved levee repairs.",
+            )
+        ]
+
+        annotated = citations_stage.annotate_citation_precedence(sources)
+
+        self.assertEqual(annotated[0]["citation_precedence_derives_from"], [])
+        self.assertEqual(annotated[0]["citation_precedence_role"], "neutral")
+
+    def test_same_source_previous_report_uses_earlier_source(self) -> None:
+        sources = [
+            _source(
+                "S1",
+                source="Fixture Wire",
+                published="Sat, 16 May 2026 14:30:00 GMT",
+                summary="Officials approved levee repairs and backup pumps.",
+            ),
+            _source(
+                "S2",
+                source="Fixture Wire",
+                published="Sat, 16 May 2026 15:30:00 GMT",
+                summary=(
+                    "As Fixture Wire previously reported, officials approved levee "
+                    "repairs and backup pumps."
+                ),
+                body_evidence=(
+                    "As Fixture Wire previously reported, officials approved levee "
+                    "repairs and backup pumps."
+                ),
+            ),
+        ]
+
+        result = citations_stage.validate_cited_story_text(
+            "Officials approved levee repairs and backup pumps[[S2]].",
+            sources,
+        )
+
+        self.assertEqual(result["cited_sentences"][0]["source_ids"], ["S1"])
+        self.assertEqual(
+            result["diagnostics"]["citation_precedence_dependencies"][0]["reason"],
+            "same_org_previous_report",
+        )
+
+    def test_render_cited_story_numbers_primary_before_derivative(self) -> None:
+        registry = citations_stage.CitationRegistry()
+        sources = [
+            _source(
+                "S1",
+                title="AP levee plan",
+                source="Associated Press",
+                summary="Officials approved levee repairs and backup pumps.",
+            ),
+            _source(
+                "S2",
+                title="Yahoo market reaction",
+                source="Yahoo Finance",
+                summary=(
+                    "According to AP, officials approved levee repairs. Yahoo Finance "
+                    "said analysts expected a small share-price move."
+                ),
+                body_evidence=(
+                    "According to AP, officials approved levee repairs. Analysts expected "
+                    "a small share-price move."
+                ),
+            ),
+        ]
+        cited_sentences = [
+            {"text": "Analysts expected a small share-price move.", "source_ids": ["S2"]},
+            {"text": "Officials approved levee repairs and backup pumps.", "source_ids": ["S1"]},
+        ]
+
+        rendered = citations_stage.render_cited_story_text(cited_sentences, sources, registry)
+
+        self.assertIn("Analysts expected a small share-price move.[2]", rendered)
+        self.assertIn("Officials approved levee repairs and backup pumps.[1]", rendered)
+        self.assertEqual(
+            [source["title"] for source in registry.sources()],
+            ["AP levee plan", "Yahoo market reaction"],
+        )
+
     def test_render_cited_story_reuses_duplicate_url_numbers(self) -> None:
         registry = citations_stage.CitationRegistry()
         sources = [
@@ -157,6 +362,9 @@ class CitationIntegrationTests(unittest.TestCase):
             model_name="test",
             model_backend="test",
             relaxed_final_synthesis_guards=True,
+            us_topic_country_gate_enabled=False,
+            build_chat_model=lambda **_kwargs: object(),
+            invoke_with_retries=lambda *_args, **_kwargs: object(),
             build_article_heading=lambda article: str(article.get("title") or ""),
             format_article_metadata=lambda article: "",
             format_topic_section_header=lambda title: title.upper(),

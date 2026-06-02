@@ -27,21 +27,21 @@ __pycache__/
 .DS_Store
 **/.DS_Store
 
-# Keep generated output context narrowed to run 2026-05-27_20-17-08.
+# Keep generated output context narrowed to run 2026-06-01_18-46-40.
 !output/
 !output/daily_outputs/
 output/daily_outputs/*
-!output/daily_outputs/2026-05-27/
-!output/daily_outputs/2026-05-27/article_summaries_2026-05-27_20-17-08.json
-!output/daily_outputs/2026-05-27/candidate_urls_2026-05-27_20-17-08.txt
-!output/daily_outputs/2026-05-27/news_report_2026-05-27_20-17-08_tiny_codex_default_prompt.txt
-!output/daily_outputs/2026-05-27/news_report_2026-05-27_20-17-08_tiny_codex_default_prompt_primary_dataset.json
-!output/daily_outputs/2026-05-27/news_report_2026-05-27_20-17-08_tiny_codex_default_prompt_primary_dataset.txt
-!output/daily_outputs/2026-05-27/run_details_2026-05-27_20-17-08.json
-!output/daily_outputs/2026-05-27/run_details_2026-05-27_20-17-08.md
-!output/daily_outputs/2026-05-27/run_log_2026-05-27_20-17-08.log
-!output/daily_outputs/2026-05-27/run_summary_2026-05-27_20-17-08.md
-!output/daily_outputs/2026-05-27/selected_article_urls_2026-05-27_20-17-08.txt
-!output/daily_outputs/2026-05-27/topic_assigned_article_summaries_2026-05-27_20-17-08.json
-!output/daily_outputs/2026-05-27/topics_2026-05-27_20-17-08.json
+!output/daily_outputs/2026-06-01/
+!output/daily_outputs/2026-06-01/article_summaries_2026-06-01_18-46-40.json
+!output/daily_outputs/2026-06-01/candidate_urls_2026-06-01_18-46-40.txt
+!output/daily_outputs/2026-06-01/news_report_2026-06-01_18-46-40_tiny_codex_default_prompt.txt
+!output/daily_outputs/2026-06-01/news_report_2026-06-01_18-46-40_tiny_codex_default_prompt_primary_dataset.json
+!output/daily_outputs/2026-06-01/news_report_2026-06-01_18-46-40_tiny_codex_default_prompt_primary_dataset.txt
+!output/daily_outputs/2026-06-01/run_details_2026-06-01_18-46-40.json
+!output/daily_outputs/2026-06-01/run_details_2026-06-01_18-46-40.md
+!output/daily_outputs/2026-06-01/run_log_2026-06-01_18-46-40.log
+!output/daily_outputs/2026-06-01/run_summary_2026-06-01_18-46-40.md
+!output/daily_outputs/2026-06-01/selected_article_urls_2026-06-01_18-46-40.txt
+!output/daily_outputs/2026-06-01/topic_assigned_article_summaries_2026-06-01_18-46-40.json
+!output/daily_outputs/2026-06-01/topics_2026-06-01_18-46-40.json
 # <<< news-pipeline core context <<<

@@ -3,9 +3,8 @@
 # Each topic has:
 #   description: Natural-language description used for semantic (embedding) classification.
 #                This is the primary signal for routing articles to topics.
-#   required_context_terms: At least one must appear in article/story text for keyword scoring.
-#                           Acts as a secondary validation gate after embedding classification.
-#   keywords / boost_phrases: Used for keyword-based relevance scoring at story-assignment stage.
+#   required_context_terms: Terms used only by keyword-based article-from-source filtering.
+#   keywords / boost_phrases: Used only by keyword-based article-from-source filtering.
 #
 topics:
   - id: global_crises_conflict
@@ -650,17 +649,56 @@ topics:
   - id: global_business_finance
     title: Global Business & Finance
     description: >
-      Business and financial news with global significance: major mergers and acquisitions
-      worldwide, corporate bankruptcies and restructurings, large IPOs and significant startup
-      funding rounds (Series C and above), major corporate layoffs of tens of thousands, central
-      bank decisions outside the US, currency and commodity market movements with global impact
-      (oil prices, gold, major currency swings), BRICS financial and banking developments,
-      international trade deals and tariff disputes between major economies, global supply chain
-      disruptions, and major developments at multinational companies that reshape industries.
-      Excludes routine quarterly earnings; includes events that signal major economic shifts,
-      power realignments between companies, or structural changes in global finance.
-    rationale: Stories about global company, market, finance, trade, earnings, deal, investment, and investor developments that matter to executives or markets more than household economic conditions.
+      Business and financial news with global significance. Diplomacy-only or conflict-only
+      geopolitical stories, including Iran, are off-topic here. Use this topic only when the
+      supplied story centers a direct economic or market transmission channel: oil or gas prices
+      and supply, shipping lanes, tankers, ports, freight or insurance costs, sanctions with
+      company, banking, or trade effects, currency, commodity, stock, bond, or investor risk
+      repricing. Military threats, nuclear talks, ceasefires, sanctions announcements, or regional
+      politics are off-topic unless those market, trade, shipping, energy, finance, or corporate
+      consequences are explicit and central.
+      Includes major mergers and acquisitions worldwide, corporate bankruptcies and restructurings,
+      large IPOs and significant startup funding rounds (Series C and above), major corporate
+      layoffs of tens of thousands, central bank decisions outside the US, BRICS financial and
+      banking developments, tariff disputes between major economies, global supply chain
+      disruptions, and multinational company developments that reshape industries. Excludes routine
+      quarterly earnings; includes events that signal major economic shifts, power realignments
+      between companies, or structural changes in global finance.
+    rationale: >
+      Stories about global company, market, finance, trade, deal, investment, and investor
+      developments; geopolitical stories belong only when oil, shipping, market, trade, finance,
+      or corporate effects are central, not when diplomacy or conflict is the center.
     required_context_terms:
+      - oil prices
+      - oil supply
+      - energy prices
+      - gas prices
+      - commodity
+      - commodities
+      - shipping
+      - shipping lanes
+      - tanker
+      - tankers
+      - port
+      - ports
+      - freight
+      - insurance costs
+      - market risk
+      - investor risk
+      - sanctions impact
+      - trade
+      - tariffs
+      - exports
+      - export controls
+      - supply chain
+      - currency
+      - currencies
+      - bond
+      - bonds
+      - stock market
+      - equities
+      - investors
+      - investment
       - company
       - companies
       - corporate
@@ -671,12 +709,8 @@ topics:
       - share price
       - stock
       - stocks
-      - stock market
-      - equities
       - market
       - markets
-      - investors
-      - investment
       - valuation
       - market value
       - ipo
@@ -701,19 +735,6 @@ topics:
       - financial
       - bank
       - banking
-      - bond
-      - bonds
-      - currency
-      - currencies
-      - trade
-      - tariffs
-      - exports
-      - export controls
-      - supply chain
-      - shipping
-      - oil prices
-      - commodity
-      - commodities
       - semiconductor company
       - chipmaker
       - ai investment
@@ -800,7 +821,14 @@ topics:
       - trade dispute
       - tariff impact
       - shipping rates
+      - shipping lane disruption
+      - tanker insurance
+      - freight rates
       - oil prices
+      - oil supply disruption
+      - oil market risk
+      - gas prices
+      - energy market risk
       - currency market
       - bond market
       - corporate restructuring
@@ -818,6 +846,13 @@ topics:
       - public listing
       - company valuation
       - market value
+      - oil market risk
+      - oil supply disruption
+      - shipping lane disruption
+      - tanker insurance costs
+      - freight rate spike
+      - sanctions impact
+      - commodity market move
       - merger deal
       - acquisition deal
       - quarterly earnings

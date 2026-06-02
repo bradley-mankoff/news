@@ -13,6 +13,8 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, Remove
 from langgraph.graph import END, StateGraph
 from langgraph.graph.message import add_messages
 
+from .topic_context import build_topic_context, topic_records_by_key
+
 
 @dataclass(frozen=True)
 class ArticleSummarizationRuntime:
@@ -37,6 +39,23 @@ class ArticleSummaryState(TypedDict):
     empty_response_count: int
 
 
+def _attach_topic_context_to_articles(article_targets: list[dict], topics: list[dict]) -> list[dict]:
+    topics_by_key = topic_records_by_key(topics)
+    for article in article_targets:
+        topic_key = str(article.get("topic_key") or "").strip()
+        topic = topics_by_key.get(topic_key)
+        fallback_title = str(
+            article.get("topic_title") or "unassigned at article-summary stage"
+        )
+        if not topic and str(article.get("topic_context") or "").strip():
+            continue
+        article["topic_context"] = build_topic_context(
+            topic,
+            fallback_title=fallback_title,
+        )
+    return article_targets
+
+
 def build_article_summary_prompt_messages(
     current_article: dict,
     now_label: str,
@@ -49,9 +68,16 @@ def build_article_summary_prompt_messages(
         if isinstance(source_config, dict)
         else source_name
     )
+    display_name = str(current_article.get("source_display_name") or display_name)
     topic_title = current_article.get("topic_title")
     target = runtime.build_article_heading(current_article)
     topic_format_line = f"\n- Topic: {topic_title}" if topic_title else ""
+    topic_context = str(current_article.get("topic_context") or "").strip()
+    if not topic_context:
+        topic_context = build_topic_context(
+            None,
+            fallback_title=str(topic_title or "unassigned at article-summary stage"),
+        )
     system_prompt = SystemMessage(content=textwrap.dedent(f"""
         Today: {now_label}.
         Current Task: Summarize one preselected article from the last {runtime.recent_window_hours} hours
@@ -63,8 +89,10 @@ def build_article_summary_prompt_messages(
         5. If the article text is thin, summarize only what is actually supported by the provided text and metadata.
         6. Do not recap the general history of a longstanding topic or conflict; include background only
            when the article reports a new fact about it or one short clause is needed for orientation.
-        7. Start your response with 'DATABASE_ENTRY:' and then exactly the requested Markdown block.
-        8. Do not include any text before 'DATABASE_ENTRY:' or after the summary.
+        7. Use the provided Topic context to prioritize facts relevant to this topic, but include
+           major concrete developments even if they complicate the topic framing; do not invent topic relevance.
+        8. Start your response with 'DATABASE_ENTRY:' and then exactly the requested Markdown block.
+        9. Do not include any text before 'DATABASE_ENTRY:' or after the summary.
     """).strip())
     story_line = f"Story: {current_article.get('story_title')}\n" if current_article.get("story_title") else ""
     article_payload = (
@@ -74,6 +102,7 @@ def build_article_summary_prompt_messages(
         f"Published: {current_article.get('pub_date') or 'Unknown publish time'}\n"
         f"URL: {current_article.get('url') or 'N/A'}\n"
         f"Topic: {topic_title or 'unassigned at article-summary stage'}\n"
+        f"Topic context:\n{topic_context}\n"
         f"{story_line}"
         f"Description: {current_article.get('description') or 'N/A'}\n"
         f"Article text:\n{current_article.get('text') or 'N/A'}\n\n"
@@ -196,6 +225,8 @@ def run_article_summary_pass(
 ) -> list[str]:
     if not article_targets:
         return []
+
+    article_targets = _attach_topic_context_to_articles(article_targets, topics)
 
     if runtime.article_summary_concurrency > 1 and len(article_targets) > 1:
         ordered_results: list[tuple[int, list[str]]] = []

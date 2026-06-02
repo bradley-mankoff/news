@@ -26,12 +26,14 @@ from tests.pipeline_component_fixtures import (
 from news_pipeline.pipeline import (
     _extract_feed_items,
     _select_per_topic_feed_items,
+    _source_match_result_for_feed_item,
     budget_article_targets,
     build_email_subject,
     build_report_body,
     build_report_html,
     build_top_funnel_article_targets_for_coverage_gaps,
     generate_image_with_mflux,
+    gather_article_candidates_for_source,
     gather_article_targets_for_source,
     maybe_email_report,
 )
@@ -48,6 +50,16 @@ def fake_scrape(url: str) -> str:
 class FakeRSSResponse:
     headers = {"Content-Type": "application/rss+xml; charset=utf-8"}
     text = RSS_FEED
+
+    def raise_for_status(self) -> None:
+        return None
+
+
+class RSSResponse:
+    headers = {"Content-Type": "application/rss+xml; charset=utf-8"}
+
+    def __init__(self, text: str) -> None:
+        self.text = text
 
     def raise_for_status(self) -> None:
         return None
@@ -143,6 +155,174 @@ class PipelineComponentTests(unittest.TestCase):
             ["https://example.com/climate-levee", "https://example.com/chip-controls"],
         )
         self.assertIn("levee", targets[0]["text"].lower())
+
+    def test_exact_wire_feed_label_is_accepted_without_body_attribution(self) -> None:
+        result = _source_match_result_for_feed_item(
+            "AP News",
+            {
+                "name": "Associated Press",
+                "strict_source_match": True,
+                "source_match_mode": "wire_attribution",
+                "source_match_aliases": ["AP", "AP News", "Associated Press"],
+            },
+            {
+                "title": "Magic finalize coach deal, AP source says - AP News",
+                "source": "AP News",
+                "link": "https://news.google.com/rss/articles/example",
+            },
+        )
+
+        self.assertTrue(result["accepted"])
+        self.assertFalse(result["pending_wire_attribution"])
+        self.assertEqual(result["source_match_status"], "feed_label_confirmed")
+
+    def test_non_wire_strict_source_rejects_mismatched_feed_label_pre_scrape(self) -> None:
+        result = _source_match_result_for_feed_item(
+            "SCMP",
+            {
+                "name": "South China Morning Post",
+                "strict_source_match": True,
+                "source_match_aliases": ["SCMP", "South China Morning Post"],
+            },
+            {
+                "title": "Regional tensions rise - Affiliate News",
+                "source": "Affiliate News",
+                "link": "https://news.google.com/rss/articles/example",
+            },
+        )
+
+        self.assertFalse(result["accepted"])
+        self.assertFalse(result["pending_wire_attribution"])
+        self.assertEqual(result["reason"], "wrong_feed_source")
+
+    def test_wire_attributed_affiliate_item_is_accepted_after_scrape(self) -> None:
+        feed_xml = """
+        <rss><channel>
+          <item>
+            <title>US disables ship heading to Iran - KING5.com</title>
+            <link>https://example.com/ap-affiliate</link>
+            <source>KING5.com</source>
+            <pubDate>Sat, 30 May 2026 18:00:00 GMT</pubDate>
+            <description>US officials reported the ship was disabled.</description>
+          </item>
+        </channel></rss>
+        """
+        source_feeds = {
+            "AP News": {
+                "name": "Associated Press",
+                "url": "https://example.com/ap.xml",
+                "strict_source_match": True,
+                "source_match_mode": "wire_attribution",
+                "source_match_aliases": ["AP", "AP News", "Associated Press"],
+            }
+        }
+
+        with patch("news_pipeline.pipeline.SOURCE_FEEDS", source_feeds):
+            with patch("news_pipeline.pipeline.requests.get", return_value=RSSResponse(feed_xml)):
+                with patch(
+                    "news_pipeline.pipeline.scrape_article_text",
+                    return_value=(
+                        "By The Associated Press\n"
+                        "The United States disabled a commercial ship in the Gulf of Oman.",
+                        "scraped",
+                    ),
+                ):
+                    with patch("news_pipeline.pipeline._is_within_recent_window", return_value=True):
+                        targets, new_urls, source_run = gather_article_candidates_for_source(
+                            "AP News",
+                            seen_urls=set(),
+                            run_seen_urls=set(),
+                        )
+
+        self.assertEqual(new_urls, ["https://example.com/ap-affiliate"])
+        self.assertEqual(len(targets), 1)
+        self.assertEqual(targets[0]["source"], "AP News")
+        self.assertEqual(targets[0]["source_match_status"], "wire_attribution_confirmed")
+        self.assertEqual(targets[0]["publisher_source"], "KING5.com")
+        self.assertEqual(targets[0]["wire_source"], "Associated Press")
+        self.assertEqual(targets[0]["source_display_name"], "Associated Press via KING5.com")
+        self.assertEqual(source_run["selected_items"][0]["source_match_status"], "wire_attribution_confirmed")
+
+    def test_wire_title_only_ap_source_phrase_is_not_attribution(self) -> None:
+        feed_xml = """
+        <rss><channel>
+          <item>
+            <title>Magic finalizing coach deal, AP source says - KING5.com</title>
+            <link>https://example.com/ap-source-says</link>
+            <source>KING5.com</source>
+            <pubDate>Sat, 30 May 2026 18:00:00 GMT</pubDate>
+            <description>The team is finalizing a deal.</description>
+          </item>
+        </channel></rss>
+        """
+        source_feeds = {
+            "AP News": {
+                "name": "Associated Press",
+                "url": "https://example.com/ap.xml",
+                "strict_source_match": True,
+                "source_match_mode": "wire_attribution",
+                "source_match_aliases": ["AP", "AP News", "Associated Press"],
+            }
+        }
+
+        with patch("news_pipeline.pipeline.SOURCE_FEEDS", source_feeds):
+            with patch("news_pipeline.pipeline.requests.get", return_value=RSSResponse(feed_xml)):
+                with patch(
+                    "news_pipeline.pipeline.scrape_article_text",
+                    return_value=(
+                        "The team is finalizing a deal after an AP source says talks advanced.",
+                        "scraped",
+                    ),
+                ):
+                    with patch("news_pipeline.pipeline._is_within_recent_window", return_value=True):
+                        targets, _new_urls, source_run = gather_article_candidates_for_source(
+                            "AP News",
+                            seen_urls=set(),
+                            run_seen_urls=set(),
+                        )
+
+        self.assertEqual(targets, [])
+        self.assertEqual(source_run["rejected_counts"]["wrong_feed_source_unattributed"], 1)
+        self.assertEqual(source_run["scrape_attempts"][0]["source_match_status"], "wrong_feed_source_unattributed")
+
+    def test_pending_wire_attribution_rejects_feed_fallback_without_body(self) -> None:
+        feed_xml = """
+        <rss><channel>
+          <item>
+            <title>US disables ship heading to Iran - KING5.com</title>
+            <link>https://example.com/ap-access-denied</link>
+            <source>KING5.com</source>
+            <pubDate>Sat, 30 May 2026 18:00:00 GMT</pubDate>
+            <description>By The Associated Press. US officials reported the ship was disabled.</description>
+          </item>
+        </channel></rss>
+        """
+        source_feeds = {
+            "AP News": {
+                "name": "Associated Press",
+                "url": "https://example.com/ap.xml",
+                "strict_source_match": True,
+                "source_match_mode": "wire_attribution",
+                "source_match_aliases": ["AP", "AP News", "Associated Press"],
+            }
+        }
+
+        with patch("news_pipeline.pipeline.SOURCE_FEEDS", source_feeds):
+            with patch("news_pipeline.pipeline.requests.get", return_value=RSSResponse(feed_xml)):
+                with patch(
+                    "news_pipeline.pipeline.scrape_article_text",
+                    return_value=("Access Denied.", "access_denied"),
+                ):
+                    with patch("news_pipeline.pipeline._is_within_recent_window", return_value=True):
+                        targets, _new_urls, source_run = gather_article_candidates_for_source(
+                            "AP News",
+                            seen_urls=set(),
+                            run_seen_urls=set(),
+                        )
+
+        self.assertEqual(targets, [])
+        self.assertEqual(source_run["rejected_counts"]["wrong_feed_source_unattributed"], 1)
+        self.assertEqual(source_run["scrape_attempts"][0]["scrape_status"], "access_denied_feed_fallback")
 
     def test_duplicate_and_history_filtering_component(self) -> None:
         direct_context = {

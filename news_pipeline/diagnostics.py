@@ -89,9 +89,6 @@ class RunDiagnostics:
                 "rationale": topic.get("rationale"),
                 "topic_source": topic.get("topic_source"),
                 "fallback_provider_support": topic.get("fallback_provider_support", []),
-                "required_context_terms": topic.get("required_context_terms", []),
-                "keywords": topic.get("keywords", []),
-                "boost_phrases": topic.get("boost_phrases", []),
                 "max_articles_per_source": topic.get("max_articles_per_source"),
                 "configured_rank": topic.get("configured_rank"),
                 "candidate_rank": topic.get("candidate_rank"),
@@ -205,13 +202,17 @@ class RunDiagnostics:
                 )
 
         story_clustering = _last_event(self.events, "story_clustering")
+        story_drafting = _last_event(self.events, "story_drafting")
         story_topic_classification = _last_event(self.events, "story_topic_classification")
         coverage_deficit = _last_event(self.events, "story_coverage_deficit")
         coverage_deficits = coverage_deficit.get("deficits") or {}
+        contradiction_analytics = story_drafting.get("contradiction_analytics") or {}
 
         model_calls: Counter[str] = Counter()
         for task_name, count in (self.model_call_stats.get("calls") or {}).items():
             model_calls[_model_call_bucket(str(task_name))] += _safe_int(count)
+        token_usage = self.model_call_stats.get("token_usage") or {}
+        model_token_totals = _model_token_totals(token_usage)
         reports_with_images = 0
         image_warnings = 0
         recipient_count = 0
@@ -241,6 +242,23 @@ class RunDiagnostics:
                 story_topic_classification.get("selected_story_topic_count")
             ),
             "story_topic_selected_by_topic": story_topic_classification.get("selected_by_topic") or {},
+            "contradiction_stories_checked": _safe_int(
+                contradiction_analytics.get("stories_checked")
+            ),
+            "raw_contradiction_count": _safe_int(
+                contradiction_analytics.get("raw_contradiction_count")
+            ),
+            "validated_contradiction_count": _safe_int(
+                contradiction_analytics.get("validated_contradiction_count")
+            ),
+            "render_eligible_contradiction_count": _safe_int(
+                contradiction_analytics.get("render_eligible_contradiction_count")
+            ),
+            "raw_contradictions_rejected_by_citation_validation": _safe_int(
+                contradiction_analytics.get(
+                    "raw_contradictions_rejected_by_citation_validation"
+                )
+            ),
             "coverage_deficit_topic_count": len(coverage_deficits),
             "coverage_deficit_total": sum(_safe_int(value) for value in coverage_deficits.values()),
             "article_budget_candidate_count": _safe_int(self.article_budget.get("candidate_count")),
@@ -249,6 +267,8 @@ class RunDiagnostics:
             "article_summary_count": self.article_summary_count,
             "model_call_count": sum(_safe_int(value) for value in model_calls.values()),
             "model_calls": dict(model_calls),
+            "model_token_usage": token_usage,
+            "model_token_totals": model_token_totals,
             "model_retries": _safe_int(self.model_call_stats.get("retries")),
             "model_fallbacks": _safe_int(self.model_call_stats.get("fallbacks")),
             "report_count": len(self.reports),
@@ -286,6 +306,9 @@ class RunDiagnostics:
             f"- Article targets dropped before budget: {stats['story_dropped_count']}",
             f"- Story-topic matches selected: {stats['story_topic_selected_count']}",
             f"- Article summaries generated: {stats['article_summary_count']}",
+            f"- Contradictions: {stats['validated_contradiction_count']} validated "
+            f"from {stats['contradiction_stories_checked']} story draft(s) checked "
+            f"({stats['raw_contradiction_count']} raw)",
             f"- Reports written: {stats['report_count']}",
         ]
 
@@ -340,8 +363,28 @@ class RunDiagnostics:
         lines.extend(
             [
                 f"- Total model calls: {stats['model_call_count']}",
+                f"- Estimated input tokens: {stats['model_token_totals']['estimated_input_tokens']}",
+                f"- Estimated output tokens: {stats['model_token_totals']['estimated_output_tokens']}",
+                f"- Max output tokens requested: {stats['model_token_totals']['max_output_tokens_requested']}",
+                f"- Actual input tokens: {stats['model_token_totals']['actual_input_tokens'] or 'N/A'}",
+                f"- Actual output tokens: {stats['model_token_totals']['actual_output_tokens'] or 'N/A'}",
+                f"- Actual total tokens: {stats['model_token_totals']['actual_total_tokens'] or 'N/A'}",
+                f"- Calls with provider usage: {stats['model_token_totals']['actual_usage_calls']}",
                 f"- Retries: {stats['model_retries']}",
                 f"- Fallbacks: {stats['model_fallbacks']}",
+            ]
+        )
+
+        lines.extend(
+            [
+                "",
+                "## Contradiction Checks",
+                "",
+                f"- Story drafts checked: {stats['contradiction_stories_checked']}",
+                f"- Raw contradiction outputs: {stats['raw_contradiction_count']}",
+                f"- Validated contradictions: {stats['validated_contradiction_count']}",
+                f"- Render-eligible contradictions: {stats['render_eligible_contradiction_count']}",
+                f"- Raw contradictions rejected by citation validation: {stats['raw_contradictions_rejected_by_citation_validation']}",
             ]
         )
 
@@ -435,9 +478,6 @@ class RunDiagnostics:
                     f"- Seeded by: {', '.join(topic.get('seed_providers') or []) or 'N/A'}",
                     f"- Validated by: {', '.join(topic.get('validation_providers') or []) or 'N/A'}",
                     f"- Frame tags: {', '.join(topic.get('frame_tags') or []) or 'N/A'}",
-                    f"- Required context terms: {', '.join(topic.get('required_context_terms') or [])}",
-                    f"- Keywords: {', '.join(topic.get('keywords') or [])}",
-                    f"- Boost phrases: {', '.join(topic.get('boost_phrases') or [])}",
                     "",
                 ]
             )
@@ -500,8 +540,8 @@ class RunDiagnostics:
                     f"- Method: {story_clustering.get('clustering_method') or 'N/A'}",
                     f"- Candidate articles: {story_clustering.get('candidate_count', 0)}",
                     f"- Retained articles: {story_clustering.get('included_count', 0)}",
-                    f"- Dropped articles: {story_clustering.get('dropped_count', 0)}",
-                    f"- Story groups: {story_clustering.get('story_count', 0)}",
+                    f"- True dropped articles: {story_clustering.get('dropped_count', 0)}",
+                    f"- Viable story groups: {story_clustering.get('viable_story_count', story_clustering.get('story_count', 0))}",
                     f"- Similarity threshold: {story_clustering.get('similarity_threshold')}",
                     f"- Component overlap suppression threshold: {story_clustering.get('component_overlap_suppress_threshold')}",
                     "",
@@ -515,6 +555,10 @@ class RunDiagnostics:
                         f"- Story key: {story.get('story_key')}",
                         f"- Articles: {story.get('article_count')} ({story.get('source_count')} source(s))",
                         f"- Strength: {story.get('story_strength_score')} | connectedness: {story.get('connectedness_score')} | avg similarity: {story.get('average_similarity')}",
+                        f"- Member cohesion: min avg {story.get('min_member_average_similarity')} "
+                        f"(floor {story.get('member_cohesion_floor')}) | "
+                        f"min edge degree {story.get('min_member_edge_degree')} "
+                        f"(floor {story.get('member_edge_degree_floor')})",
                         "- Member articles:",
                     ]
                 )
@@ -522,6 +566,13 @@ class RunDiagnostics:
                     lines.append(
                         f"  - {article.get('source')}: {article.get('title')} [{article.get('article_id')}]"
                     )
+                pruned_article_ids = story.get("pruned_article_ids") or []
+                if pruned_article_ids:
+                    lines.append(
+                        "- Pruned article IDs: "
+                        + ", ".join(str(article_id) for article_id in pruned_article_ids)
+                    )
+                    lines.append(f"- Prune reason: {story.get('prune_reason') or 'N/A'}")
                 lines.append("")
             pair_debug = story_clustering.get("pair_debug") or []
             if pair_debug:
@@ -543,25 +594,97 @@ class RunDiagnostics:
                     )
                 lines.append("")
 
-        story_topic_classification = _last_event(self.events, "story_topic_classification")
-        if story_topic_classification:
-            lines.extend(["## Story Topic Fit", ""])
+        story_backfill = _last_event(self.events, "story_backfill")
+        if story_backfill:
+            lines.extend(["## Story Backfill", ""])
             lines.extend(
                 [
-                    f"- Story drafts scored: {story_topic_classification.get('story_count', 0)}",
-                    f"- Selected story-topic matches: {story_topic_classification.get('selected_story_topic_count', 0)}",
-                    f"- Max stories per topic: {story_topic_classification.get('max_stories_per_topic')}",
-                    f"- Minimum fit score: {story_topic_classification.get('min_score')}",
+                    f"- Enabled: {story_backfill.get('enabled')}",
+                    f"- Iterations: {story_backfill.get('iterations', 0)}",
+                    f"- Deficits before: {story_backfill.get('deficits_before') or {}}",
+                    f"- Deficits after: {story_backfill.get('deficits_after') or {}}",
+                    f"- Attempted stories by topic: {story_backfill.get('attempted_story_count_by_topic') or {}}",
+                    f"- Attempted reserve articles: {story_backfill.get('attempted_article_count', 0)}",
+                    f"- New article summaries: {story_backfill.get('new_article_summary_count', 0)}",
+                    f"- New story drafts: {story_backfill.get('new_story_draft_count', 0)}",
+                    f"- Exhausted topics: {story_backfill.get('exhausted_topics') or []}",
                     "",
                 ]
             )
+
+        story_drafting = _last_event(self.events, "story_drafting")
+        if story_drafting:
+            contradiction_analytics = story_drafting.get("contradiction_analytics") or {}
+            lines.extend(["## Story Drafting", ""])
+            lines.extend(
+                [
+                    f"- Story blocks requested: {story_drafting.get('story_blocks_requested', 0)}",
+                    f"- Story drafts generated: {story_drafting.get('story_drafts_generated', 0)}",
+                    f"- Story drafts rejected: {story_drafting.get('story_drafts_rejected', 0)}",
+                    f"- Contradiction checks: {contradiction_analytics.get('stories_checked', 0)} story draft(s)",
+                    f"- Raw contradiction outputs: {contradiction_analytics.get('raw_contradiction_count', 0)}",
+                    f"- Validated contradictions: {contradiction_analytics.get('validated_contradiction_count', 0)}",
+                    f"- Render-eligible contradictions: {contradiction_analytics.get('render_eligible_contradiction_count', 0)}",
+                    f"- Raw contradictions rejected by citation validation: {contradiction_analytics.get('raw_contradictions_rejected_by_citation_validation', 0)}",
+                    "",
+                ]
+            )
+            examples = contradiction_analytics.get("raw_contradiction_examples") or []
+            if examples:
+                lines.extend(["### Raw Contradiction Examples", ""])
+                for example in examples[:10]:
+                    lines.append(
+                        f"- {example.get('story_title') or example.get('story_key')}: "
+                        f"{example.get('raw_preview') or 'N/A'}"
+                    )
+                lines.append("")
+
+        story_topic_classification = _last_event(self.events, "story_topic_classification")
+        if story_topic_classification:
+            keyword_fit_gate_enabled = bool(
+                story_topic_classification.get("keyword_fit_gate_enabled", True)
+            )
+            screening = story_topic_classification.get("story_topic_screening") or {}
+            overlap_dedup = story_topic_classification.get("article_overlap_dedup") or {}
+            lines.extend(["## Story Topic Assignment", ""])
+            lines.extend(
+                [
+                    f"- Story drafts evaluated: {story_topic_classification.get('story_count', 0)}",
+                    f"- Selected story-topic matches: {story_topic_classification.get('selected_story_topic_count', 0)}",
+                    f"- Max stories per topic: {story_topic_classification.get('max_stories_per_topic')}",
+                    f"- Keyword fit gate: {'enabled' if keyword_fit_gate_enabled else 'disabled'}",
+                    "",
+                ]
+            )
+            if screening:
+                lines.extend(
+                    [
+                        f"- Story-topic screening: {'enabled' if screening.get('enabled') else 'disabled'}",
+                        f"- Screening judged: {screening.get('judged_count', 0)}",
+                        f"- Screening preferred: {screening.get('preferred_count', 0)}",
+                        f"- Obvious topicality/scale exclusions: {screening.get('obvious_exclusion_count', 0)}",
+                        f"- Topicality counts: {screening.get('topicality_counts') or {}}",
+                        f"- Scale counts: {screening.get('scale_counts') or {}}",
+                        "",
+                    ]
+                )
+            if overlap_dedup:
+                lines.extend(
+                    [
+                        f"- Article-overlap dedup: {'enabled' if overlap_dedup.get('enabled') else 'disabled'}",
+                        f"- Overlap threshold: {overlap_dedup.get('threshold')}",
+                        f"- Overlap conflicts resolved: {overlap_dedup.get('conflicts_resolved', 0)}",
+                        "",
+                    ]
+                )
             for topic_title, details in (story_topic_classification.get("topics") or {}).items():
                 lines.extend(
                     [
                         f"### {topic_title}",
                         "",
-                        f"- Candidates above threshold: {details.get('candidate_count', 0)}",
+                        f"- Home-topic candidates: {details.get('candidate_count', 0)}",
                         f"- Owned candidates: {details.get('owned_candidate_count', 0)}",
+                        f"- Screening preferred candidates: {details.get('screening_preferred_candidate_count', 0)}",
                         f"- Selected: {details.get('selected_count', 0)}",
                         f"- Diversity min distance: {details.get('diversity_min_distance')}",
                     ]
@@ -574,10 +697,10 @@ class RunDiagnostics:
                         if story.get("min_distance_to_selected") is not None:
                             distance_text = f", min distance {story.get('min_distance_to_selected')}"
                         lines.append(
-                            f"  - score {story.get('topic_fit_score')}: "
-                            f"{story.get('story_title')} "
+                            f"  - {story.get('story_title')} "
                             f"({story.get('article_count')} article(s), {story.get('source_count')} source(s)"
-                            f"{distance_text})"
+                            f"{distance_text}; topicality={story.get('topic_screening_topicality')}; "
+                            f"scale={story.get('topic_screening_scale')})"
                         )
                 rejected = details.get("rejected") or []
                 if rejected:
@@ -587,8 +710,7 @@ class RunDiagnostics:
                         if story.get("owned_topic_title"):
                             owner_text = f"; owner={story.get('owned_topic_title')}"
                         lines.append(
-                            f"  - score {story.get('topic_fit_score')}: "
-                            f"{story.get('story_title')} ({story.get('reason')}{owner_text})"
+                            f"  - {story.get('story_title')} ({story.get('reason')}{owner_text})"
                         )
                 lines.append("")
         lines.extend(
@@ -653,6 +775,56 @@ def _safe_float(value: Any) -> float:
         return float(value or 0.0)
     except (TypeError, ValueError):
         return 0.0
+
+
+def _model_token_totals(token_usage: dict[str, Any]) -> dict[str, int]:
+    totals = {
+        "calls": 0,
+        "estimated_input_tokens": 0,
+        "estimated_output_tokens": 0,
+        "max_output_tokens_requested": 0,
+        "actual_input_tokens": 0,
+        "actual_output_tokens": 0,
+        "actual_total_tokens": 0,
+        "actual_usage_calls": 0,
+        "fallback_calls": 0,
+        "max_estimated_input_tokens": 0,
+        "max_estimated_output_tokens": 0,
+        "max_actual_input_tokens": 0,
+        "max_actual_output_tokens": 0,
+    }
+    for details in token_usage.values():
+        if not isinstance(details, dict):
+            continue
+        for key in (
+            "calls",
+            "estimated_input_tokens",
+            "estimated_output_tokens",
+            "max_output_tokens_requested",
+            "actual_input_tokens",
+            "actual_output_tokens",
+            "actual_total_tokens",
+            "actual_usage_calls",
+            "fallback_calls",
+        ):
+            totals[key] += _safe_int(details.get(key))
+        totals["max_estimated_input_tokens"] = max(
+            totals["max_estimated_input_tokens"],
+            _safe_int(details.get("max_estimated_input_tokens")),
+        )
+        totals["max_estimated_output_tokens"] = max(
+            totals["max_estimated_output_tokens"],
+            _safe_int(details.get("max_estimated_output_tokens")),
+        )
+        totals["max_actual_input_tokens"] = max(
+            totals["max_actual_input_tokens"],
+            _safe_int(details.get("max_actual_input_tokens")),
+        )
+        totals["max_actual_output_tokens"] = max(
+            totals["max_actual_output_tokens"],
+            _safe_int(details.get("max_actual_output_tokens")),
+        )
+    return totals
 
 
 def _seconds_label(value: Any) -> str:

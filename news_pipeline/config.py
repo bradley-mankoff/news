@@ -80,6 +80,12 @@ RUN_MODE_SOURCE_TIERS = {
     LOOSE_LOCAL_PROD_RUN_MODE: {CORE_SOURCE_TIER, PERIPHERAL_SOURCE_TIER},
     PROD_RUN_MODE: {CORE_SOURCE_TIER, PERIPHERAL_SOURCE_TIER},
 }
+SOURCE_MATCH_MODE_FEED_LABEL = "feed_label"
+SOURCE_MATCH_MODE_WIRE_ATTRIBUTION = "wire_attribution"
+VALID_SOURCE_MATCH_MODES = {
+    SOURCE_MATCH_MODE_FEED_LABEL,
+    SOURCE_MATCH_MODE_WIRE_ATTRIBUTION,
+}
 MODEL_ALIASES = {
     "qwen-9b-dense": "TheCluster/Qwen3.5-9B-Heretic-MLX-mxfp4",
     "gemma-26b-moe": "mlx-community/gemma-4-26B-A4B-it-heretic-4bit",
@@ -115,6 +121,7 @@ class NewsSource:
     can_validate_topics: bool = False
     can_enrich_coverage: bool = True
     strict_source_match: bool = False
+    source_match_mode: str = "feed_label"
     requires_translation: bool = False
     requires_translation_explicit: bool = False
     translation_source_language: str | None = None
@@ -226,9 +233,9 @@ class RuntimeConfig:
     per_source_topic_article_cap: int
     topic_relevance_min_score: int
     story_topic_fit_min_score: int
+    story_topic_validation_enabled: bool
     min_articles_per_story: int
     max_stories_per_topic: int
-    max_articles_per_story: int
     topic_embedding_similarity_threshold: float
     story_cluster_similarity_threshold: float
 
@@ -257,6 +264,8 @@ def _task_sampling(
     reasoning: ModelSamplingSettings,
     translation: ModelSamplingSettings | None = None,
     topic_clustering: ModelSamplingSettings | None = None,
+    topic_country_gate: ModelSamplingSettings | None = None,
+    story_topic_validation: ModelSamplingSettings | None = None,
     article_summary: ModelSamplingSettings | None = None,
     final_synthesis: ModelSamplingSettings | None = None,
     title_generation: ModelSamplingSettings | None = None,
@@ -265,6 +274,11 @@ def _task_sampling(
         "default": default,
         "translation": translation or default,
         "topic_clustering": topic_clustering or reasoning,
+        "topic_country_gate": topic_country_gate
+        or _sampling(0.0, 0.9, 20, 0.0, 0.0, 1.05),
+        "story_topic_validation": story_topic_validation
+        or topic_country_gate
+        or _sampling(0.0, 0.9, 20, 0.0, 0.0, 1.05),
         "article_summary": article_summary or default,
         "final_synthesis": final_synthesis or reasoning,
         "title_generation": title_generation or default,
@@ -449,17 +463,6 @@ def configured_min_articles_per_story(run_mode: str | None = None) -> int:
     return max(2, _int_env("NEWS_MIN_ARTICLES_PER_STORY", default))
 
 
-def configured_max_articles_per_story(model_profile_key: str | None = None) -> int:
-    profile_key = model_profile_key or _configured_model_profile_key(_configured_model_reference())
-    if profile_key == "tiny_codex":
-        default = 3
-    elif profile_key == "small_aggressive":
-        default = 5
-    else:
-        default = 4
-    return max(2, _int_env("NEWS_MAX_ARTICLES_PER_STORY", default))
-
-
 def configured_topic_embedding_similarity_threshold(run_mode: str | None = None) -> float:
     mode = run_mode or _configured_run_mode()
     default = 0.18 if _uses_dev_matching_defaults(mode) else 0.20
@@ -471,7 +474,7 @@ def configured_topic_embedding_similarity_threshold(run_mode: str | None = None)
 
 def configured_story_cluster_similarity_threshold(run_mode: str | None = None) -> float:
     mode = run_mode or _configured_run_mode()
-    default = 0.26 if _uses_dev_matching_defaults(mode) else 0.30
+    default = 0.27
     return min(
         1.0,
         max(0.0, _float_env("NEWS_STORY_CLUSTER_SIMILARITY_THRESHOLD", default)),
@@ -488,11 +491,13 @@ def configured_topic_relevance_min_score(run_mode: str | None = None) -> int:
 
 
 def configured_story_topic_fit_min_score(run_mode: str | None = None) -> int:
-    topic_default = configured_topic_relevance_min_score(run_mode)
+    mode = run_mode or _configured_run_mode()
+    topic_default = configured_topic_relevance_min_score(mode)
+    default = 4 if mode in {DEV_RUN_MODE, LOOSE_LOCAL_PROD_RUN_MODE} else 6
     try:
-        return max(1, _int_env("NEWS_STORY_TOPIC_FIT_MIN_SCORE", topic_default))
+        return max(1, _int_env("NEWS_STORY_TOPIC_FIT_MIN_SCORE", default))
     except ValueError:
-        return topic_default
+        return default
 
 
 def resolve_model_name(model_reference: str) -> str:
@@ -610,6 +615,8 @@ MODEL_TASK_SAMPLING_ENV_PREFIXES = {
     "default": "NEWS_MODEL",
     "translation": "NEWS_MODEL_TRANSLATION",
     "topic_clustering": "NEWS_MODEL_TOPIC_CLUSTERING",
+    "topic_country_gate": "NEWS_MODEL_TOPIC_COUNTRY_GATE",
+    "story_topic_validation": "NEWS_MODEL_STORY_TOPIC_VALIDATION",
     "article_summary": "NEWS_MODEL_ARTICLE_SUMMARY",
     "final_synthesis": "NEWS_MODEL_FINAL_SYNTHESIS",
     "title_generation": "NEWS_MODEL_TITLE_GENERATION",
@@ -1030,6 +1037,16 @@ def _source_enabled_for_run(
     )
 
 
+def _normalize_source_match_mode(value: Any, *, source_key: str) -> str:
+    mode = str(value or SOURCE_MATCH_MODE_FEED_LABEL).strip().lower().replace("-", "_")
+    if mode not in VALID_SOURCE_MATCH_MODES:
+        valid = ", ".join(sorted(VALID_SOURCE_MATCH_MODES))
+        raise ValueError(
+            f"config/sources.yaml source {source_key!r} source_match_mode must be one of: {valid}."
+        )
+    return mode
+
+
 def load_sources(
     path: Path | None = None,
     *,
@@ -1113,6 +1130,10 @@ def load_sources(
                 True,
             ),
             "strict_source_match": _coerce_bool_value(raw_source.get("strict_source_match"), False),
+            "source_match_mode": _normalize_source_match_mode(
+                raw_source.get("source_match_mode"),
+                source_key=key,
+            ),
             "requires_translation": requires_translation,
             "requires_translation_explicit": requires_translation_explicit,
             "translation_source_language": translation_source_language or None,
@@ -1637,9 +1658,12 @@ def load_runtime_config() -> RuntimeConfig:
         per_source_topic_article_cap=_int_env("NEWS_PER_SOURCE_TOPIC_ARTICLE_CAP", 1),
         topic_relevance_min_score=configured_topic_relevance_min_score(run_mode),
         story_topic_fit_min_score=configured_story_topic_fit_min_score(run_mode),
+        story_topic_validation_enabled=_bool_env(
+            "NEWS_STORY_TOPIC_VALIDATION_ENABLED",
+            _bool_env("NEWS_US_TOPIC_COUNTRY_GATE_ENABLED", True),
+        ),
         min_articles_per_story=configured_min_articles_per_story(run_mode),
         max_stories_per_topic=configured_max_stories_per_topic(run_mode),
-        max_articles_per_story=configured_max_articles_per_story(model_profile.key),
         topic_embedding_similarity_threshold=configured_topic_embedding_similarity_threshold(run_mode),
         story_cluster_similarity_threshold=configured_story_cluster_similarity_threshold(run_mode),
     )

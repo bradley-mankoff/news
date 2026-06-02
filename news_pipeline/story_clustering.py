@@ -44,14 +44,6 @@ try:
     MIN_ARTICLES_PER_STORY = max(2, int(os.getenv("NEWS_MIN_ARTICLES_PER_STORY", "4")))
 except ValueError:
     MIN_ARTICLES_PER_STORY = 2
-try:
-    MAX_ARTICLES_PER_STORY = max(
-        MIN_ARTICLES_PER_STORY,
-        int(os.getenv("NEWS_MAX_ARTICLES_PER_STORY", "4")),
-    )
-except ValueError:
-    MAX_ARTICLES_PER_STORY = MIN_ARTICLES_PER_STORY
-
 STORY_CLUSTER_SIMILARITY_THRESHOLD = _bounded_env_float(
     "NEWS_STORY_CLUSTER_SIMILARITY_THRESHOLD",
     0.30,
@@ -65,6 +57,7 @@ STORY_SIMILARITY_DESCRIPTION_WEIGHT = 1
 STORY_SIMILARITY_TEXT_WEIGHT = 4
 STORY_MIN_SOURCE_COUNT = 2
 STORY_PAIR_DEBUG_LIMIT = 250
+STORY_MEMBER_EDGE_DEGREE_FLOOR = 1
 
 
 def strip_model_artifacts(text: str) -> str:
@@ -320,6 +313,67 @@ def _story_component_best_similarities(
     return best_scores
 
 
+def _story_member_average_similarity(
+    index: int,
+    component: list[int],
+    similarities: dict[tuple[int, int], float],
+) -> float:
+    other_indexes = [other_index for other_index in component if other_index != index]
+    if not other_indexes:
+        return 0.0
+    return sum(
+        _story_pair_similarity(similarities, index, other_index)
+        for other_index in other_indexes
+    ) / len(other_indexes)
+
+
+def _story_member_edge_degree(
+    index: int,
+    component: list[int],
+    similarities: dict[tuple[int, int], float],
+    similarity_threshold: float,
+) -> int:
+    return sum(
+        1
+        for other_index in component
+        if other_index != index
+        and _story_pair_similarity(similarities, index, other_index) >= similarity_threshold
+    )
+
+
+def _story_member_cohesion_floor(similarity_threshold: float) -> float:
+    return max(0.20, similarity_threshold * 0.75)
+
+
+def _story_component_member_cohesion_metrics(
+    component: list[int],
+    similarities: dict[tuple[int, int], float],
+    similarity_threshold: float,
+) -> dict[str, Any]:
+    member_average_similarities = {
+        index: _story_member_average_similarity(index, component, similarities)
+        for index in component
+    }
+    member_edge_degrees = {
+        index: _story_member_edge_degree(
+            index,
+            component,
+            similarities,
+            similarity_threshold,
+        )
+        for index in component
+    }
+    cohesion_floor = _story_member_cohesion_floor(similarity_threshold)
+    return {
+        "member_average_similarities": member_average_similarities,
+        "member_edge_degrees": member_edge_degrees,
+        "min_member_average_similarity": min(member_average_similarities.values(), default=0.0),
+        "min_member_edge_degree": min(member_edge_degrees.values(), default=0),
+        "member_cohesion_floor": cohesion_floor,
+        "member_edge_degree_floor": STORY_MEMBER_EDGE_DEGREE_FLOOR,
+    }
+
+
 def _minimum_story_edge_density(component_size: int) -> float:
     if component_size <= 2:
         return 1.0
@@ -363,6 +417,27 @@ def _story_component_connectedness_metrics(
         "min_best_similarity": min_best_similarity,
         "connectedness_score": connectedness_score,
         "story_strength_score": story_strength_score,
+    }
+
+
+def _story_component_diagnostics(
+    component: list[int],
+    similarities: dict[tuple[int, int], float],
+    similarity_threshold: float,
+) -> dict[str, Any]:
+    member_metrics = _story_component_member_cohesion_metrics(
+        component,
+        similarities,
+        similarity_threshold,
+    )
+    return {
+        "min_member_average_similarity": round(
+            float(member_metrics["min_member_average_similarity"]),
+            4,
+        ),
+        "min_member_edge_degree": int(member_metrics["min_member_edge_degree"]),
+        "member_cohesion_floor": round(float(member_metrics["member_cohesion_floor"]), 4),
+        "member_edge_degree_floor": int(member_metrics["member_edge_degree_floor"]),
     }
 
 
@@ -435,7 +510,118 @@ def _story_component_meets_connectedness_floor(
     )
     if float(metrics["min_best_similarity"]) < similarity_threshold:
         return False
-    return float(metrics["edge_density"]) >= _minimum_story_edge_density(len(component))
+    if float(metrics["edge_density"]) < _minimum_story_edge_density(len(component)):
+        return False
+    member_metrics = _story_component_member_cohesion_metrics(
+        component,
+        similarities,
+        similarity_threshold,
+    )
+    if int(member_metrics["min_member_edge_degree"]) < STORY_MEMBER_EDGE_DEGREE_FLOOR:
+        return False
+    return float(member_metrics["min_member_average_similarity"]) >= float(
+        member_metrics["member_cohesion_floor"]
+    )
+
+
+def _story_component_prune_rank(
+    index: int,
+    component: list[int],
+    similarities: dict[tuple[int, int], float],
+    similarity_threshold: float,
+) -> tuple[float, float, float, int]:
+    best_similarity = max(
+        (
+            _story_pair_similarity(similarities, index, other_index)
+            for other_index in component
+            if other_index != index
+        ),
+        default=0.0,
+    )
+    return (
+        float(
+            _story_member_edge_degree(
+                index,
+                component,
+                similarities,
+                similarity_threshold,
+            )
+        ),
+        _story_member_average_similarity(index, component, similarities),
+        best_similarity,
+        -index,
+    )
+
+
+def _prune_story_component_by_member_cohesion(
+    component: list[int],
+    source_identities: list[str],
+    similarities: dict[tuple[int, int], float],
+    similarity_threshold: float,
+    *,
+    min_articles_per_story: int,
+) -> tuple[list[int], list[int], str]:
+    current = sorted(set(component))
+    pruned: list[int] = []
+    prune_reasons: list[str] = []
+
+    while len(current) >= min_articles_per_story:
+        if _story_component_meets_connectedness_floor(
+            current,
+            source_identities,
+            similarities,
+            similarity_threshold,
+            min_articles_per_story=min_articles_per_story,
+        ):
+            return current, pruned, "+".join(prune_reasons) if prune_reasons else ""
+
+        member_metrics = _story_component_member_cohesion_metrics(
+            current,
+            similarities,
+            similarity_threshold,
+        )
+        member_edge_degrees: dict[int, int] = member_metrics["member_edge_degrees"]
+        member_average_similarities: dict[int, float] = member_metrics[
+            "member_average_similarities"
+        ]
+        cohesion_floor = float(member_metrics["member_cohesion_floor"])
+
+        islands = [
+            index for index in current
+            if int(member_edge_degrees.get(index, 0)) == 0
+        ]
+        if islands:
+            pruned.extend(islands)
+            current = [index for index in current if index not in set(islands)]
+            prune_reasons.append("removed_islands")
+            continue
+
+        weak_members = [
+            index
+            for index in current
+            if int(member_edge_degrees.get(index, 0)) < STORY_MEMBER_EDGE_DEGREE_FLOOR
+            or float(member_average_similarities.get(index, 0.0)) < cohesion_floor
+        ]
+        if weak_members and len(current) - len(weak_members) >= min_articles_per_story:
+            pruned.extend(weak_members)
+            current = [index for index in current if index not in set(weak_members)]
+            prune_reasons.append("removed_weak_members")
+            continue
+
+        weakest = sorted(
+            current,
+            key=lambda index: _story_component_prune_rank(
+                index,
+                current,
+                similarities,
+                similarity_threshold,
+            ),
+        )[0]
+        pruned.append(weakest)
+        current = [index for index in current if index != weakest]
+        prune_reasons.append("removed_weakest_member")
+
+    return [], pruned, "+".join(prune_reasons) if prune_reasons else "below_story_floor"
 
 
 def _split_story_component_by_weak_bridges(
@@ -445,9 +631,20 @@ def _split_story_component_by_weak_bridges(
     similarity_threshold: float,
     *,
     min_articles_per_story: int,
-) -> list[list[int]]:
+) -> list[dict[str, Any]]:
     if len(component) < min_articles_per_story:
         return []
+    pruned_component, pruned_indexes, prune_reason = _prune_story_component_by_member_cohesion(
+        component,
+        source_identities,
+        similarities,
+        similarity_threshold,
+        min_articles_per_story=min_articles_per_story,
+    )
+    if not pruned_component:
+        return []
+    component = pruned_component
+    pruned_indexes = sorted(set(pruned_indexes))
     edges = _story_similarity_edges(
         component,
         similarities,
@@ -497,18 +694,33 @@ def _split_story_component_by_weak_bridges(
         )
         if split_strength <= base_strength * 1.05:
             continue
-        split_components: list[list[int]] = []
+        split_records: list[dict[str, Any]] = []
         for subcomponent in retained:
-            split_components.extend(
-                _split_story_component_by_weak_bridges(
-                    subcomponent,
-                    source_identities,
-                    similarities,
-                    similarity_threshold,
-                    min_articles_per_story=min_articles_per_story,
+            for split_record in _split_story_component_by_weak_bridges(
+                subcomponent,
+                source_identities,
+                similarities,
+                similarity_threshold,
+                min_articles_per_story=min_articles_per_story,
+            ):
+                split_records.append(
+                    {
+                        **split_record,
+                        "pruned_indexes": sorted(
+                            set(pruned_indexes)
+                            | set(split_record.get("pruned_indexes") or [])
+                        ),
+                        "prune_reason": "+".join(
+                            reason
+                            for reason in (
+                                prune_reason,
+                                str(split_record.get("prune_reason") or ""),
+                            )
+                            if reason
+                        ),
+                    }
                 )
-            )
-        return split_components
+        return split_records
 
     if _story_component_meets_connectedness_floor(
         component,
@@ -517,7 +729,13 @@ def _split_story_component_by_weak_bridges(
         similarity_threshold,
         min_articles_per_story=min_articles_per_story,
     ):
-        return [component]
+        return [
+            {
+                "component": component,
+                "pruned_indexes": pruned_indexes,
+                "prune_reason": prune_reason,
+            }
+        ]
     return []
 
 
@@ -526,13 +744,7 @@ def _story_index_average_similarity(
     component: list[int],
     similarities: dict[tuple[int, int], float],
 ) -> float:
-    other_indexes = [other_index for other_index in component if other_index != index]
-    if not other_indexes:
-        return 0.0
-    return sum(
-        _story_pair_similarity(similarities, index, other_index)
-        for other_index in other_indexes
-    ) / len(other_indexes)
+    return _story_member_average_similarity(index, component, similarities)
 
 
 def _story_component_medoid_index(
@@ -581,11 +793,7 @@ def _select_story_article_indexes(
     medoid_index: int,
     articles: list[dict],
     similarities: dict[tuple[int, int], float],
-    *,
-    max_articles_per_story: int,
 ) -> list[int]:
-    limit = max(1, max_articles_per_story)
-
     def article_rank(index: int) -> tuple:
         article = articles[index]
         return (
@@ -603,8 +811,6 @@ def _select_story_article_indexes(
     selected_sources: set[str] = set()
 
     for index in ranked_indexes:
-        if len(selected) >= limit:
-            break
         source = _article_source_identity(articles[index])
         if source in selected_sources and len(selected_sources) < source_count:
             continue
@@ -612,8 +818,6 @@ def _select_story_article_indexes(
         selected_sources.add(source)
 
     for index in ranked_indexes:
-        if len(selected) >= limit:
-            break
         if index not in selected:
             selected.append(index)
 
@@ -625,7 +829,6 @@ def cluster_topic_stories_by_similarity(
     articles: list[dict],
     *,
     min_articles_per_story: int = MIN_ARTICLES_PER_STORY,
-    max_articles_per_story: int = MAX_ARTICLES_PER_STORY,
     similarity_threshold: float = STORY_CLUSTER_SIMILARITY_THRESHOLD,
 ) -> list[dict]:
     if len(articles) < min_articles_per_story:
@@ -666,7 +869,7 @@ def cluster_topic_stories_by_similarity(
                     }
                 )
 
-    components: list[list[int]] = []
+    component_records: list[dict[str, Any]] = []
     visited: set[int] = set()
     eligible_indexes = {
         index
@@ -688,7 +891,7 @@ def cluster_topic_stories_by_similarity(
                 visited.add(neighbor)
                 stack.append(neighbor)
         if len(component) >= min_articles_per_story:
-            components.extend(
+            component_records.extend(
                 _split_story_component_by_weak_bridges(
                     sorted(component),
                     source_identities,
@@ -703,7 +906,8 @@ def cluster_topic_stories_by_similarity(
         for index, article in enumerate(articles)
     }
     story_groups: list[dict] = []
-    for component in components:
+    for component_record in component_records:
+        component = list(component_record.get("component") or [])
         if not _story_component_meets_connectedness_floor(
             component,
             source_identities,
@@ -717,6 +921,11 @@ def cluster_topic_stories_by_similarity(
             similarities,
             similarity_threshold,
         )
+        diagnostics = _story_component_diagnostics(
+            component,
+            similarities,
+            similarity_threshold,
+        )
         source_count = _story_component_source_count(component, source_identities)
         medoid_index = _story_component_medoid_index(component, articles, similarities)
         selected_indexes = _select_story_article_indexes(
@@ -724,7 +933,6 @@ def cluster_topic_stories_by_similarity(
             medoid_index,
             articles,
             similarities,
-            max_articles_per_story=max(max_articles_per_story, min_articles_per_story),
         )
         if len(selected_indexes) < min_articles_per_story:
             continue
@@ -754,6 +962,13 @@ def cluster_topic_stories_by_similarity(
                 "edge_count": int(metrics["edge_count"]),
                 "mean_best_similarity": round(float(metrics["mean_best_similarity"]), 4),
                 "min_best_similarity": round(float(metrics["min_best_similarity"]), 4),
+                **diagnostics,
+                "pruned_article_ids": [
+                    article_id_by_index[index]
+                    for index in component_record.get("pruned_indexes") or []
+                    if article_id_by_index.get(index)
+                ],
+                "prune_reason": component_record.get("prune_reason") or "",
                 "source_count": source_count,
                 "relevance_score": _story_cluster_relevance_score(component, articles),
                 "latest_rank": _story_cluster_recency_rank(component, articles),
@@ -878,10 +1093,10 @@ def cluster_global_stories_by_similarity(
                     }
                 )
 
-    candidate_components: dict[tuple[int, ...], list[int]] = {}
+    candidate_components: dict[tuple[int, ...], dict[str, Any]] = {}
 
-    def add_candidate(component: list[int]) -> None:
-        clean_component = sorted(set(component))
+    def add_candidate(component_record: dict[str, Any]) -> None:
+        clean_component = sorted(set(component_record.get("component") or []))
         if len(clean_component) < min_articles_per_story:
             return
         if not _story_component_meets_connectedness_floor(
@@ -893,7 +1108,14 @@ def cluster_global_stories_by_similarity(
         ):
             return
         signature = tuple(clean_component)
-        candidate_components.setdefault(signature, clean_component)
+        candidate_components.setdefault(
+            signature,
+            {
+                **component_record,
+                "component": clean_component,
+                "pruned_indexes": sorted(set(component_record.get("pruned_indexes") or [])),
+            },
+        )
 
     eligible_indexes = {
         index
@@ -916,14 +1138,14 @@ def cluster_global_stories_by_similarity(
                     continue
                 visited.add(neighbor)
                 stack.append(neighbor)
-        for split_component in _split_story_component_by_weak_bridges(
+        for split_record in _split_story_component_by_weak_bridges(
             sorted(component),
             source_identities,
             similarities,
             similarity_threshold,
             min_articles_per_story=min_articles_per_story,
         ):
-            add_candidate(split_component)
+            add_candidate(split_record)
 
     for seed_index in sorted(eligible_indexes):
         ego_component = sorted({seed_index, *adjacency.get(seed_index, set())})
@@ -936,14 +1158,14 @@ def cluster_global_stories_by_similarity(
             similarity_threshold,
             min_articles_per_story=min_articles_per_story,
         )
-        for split_component in split_components:
-            if seed_index in split_component:
-                add_candidate(split_component)
+        for split_record in split_components:
+            if seed_index in set(split_record.get("component") or []):
+                add_candidate(split_record)
 
     ranked_components = sorted(
         candidate_components.values(),
-        key=lambda component: _story_component_rank_tuple(
-            component,
+        key=lambda component_record: _story_component_rank_tuple(
+            list(component_record.get("component") or []),
             articles,
             source_identities,
             similarities,
@@ -951,9 +1173,10 @@ def cluster_global_stories_by_similarity(
         ),
     )
 
-    retained_components: list[list[int]] = []
+    retained_components: list[dict[str, Any]] = []
     retained_sets: list[set[int]] = []
-    for component in ranked_components:
+    for component_record in ranked_components:
+        component = list(component_record.get("component") or [])
         component_set = set(component)
         if any(
             _story_component_overlap_ratio(component_set, existing)
@@ -961,7 +1184,7 @@ def cluster_global_stories_by_similarity(
             for existing in retained_sets
         ):
             continue
-        retained_components.append(component)
+        retained_components.append(component_record)
         retained_sets.append(component_set)
 
     article_id_by_index = {
@@ -979,8 +1202,14 @@ def cluster_global_stories_by_similarity(
     )
 
     story_groups: list[dict] = []
-    for component in retained_components:
+    for component_record in retained_components:
+        component = list(component_record.get("component") or [])
         metrics = _story_component_connectedness_metrics(
+            component,
+            similarities,
+            similarity_threshold,
+        )
+        diagnostics = _story_component_diagnostics(
             component,
             similarities,
             similarity_threshold,
@@ -1025,6 +1254,13 @@ def cluster_global_stories_by_similarity(
                 "edge_count": int(metrics["edge_count"]),
                 "mean_best_similarity": round(float(metrics["mean_best_similarity"]), 4),
                 "min_best_similarity": round(float(metrics["min_best_similarity"]), 4),
+                **diagnostics,
+                "pruned_article_ids": [
+                    article_id_by_index[index]
+                    for index in component_record.get("pruned_indexes") or []
+                    if article_id_by_index.get(index)
+                ],
+                "prune_reason": component_record.get("prune_reason") or "",
                 "source_count": source_count,
                 "relevance_score": _story_cluster_relevance_score(component, articles),
                 "latest_rank": _story_cluster_recency_rank(component, articles),
@@ -1123,6 +1359,12 @@ def organize_article_targets_into_global_stories(
             "edge_density": story.get("edge_density"),
             "mean_best_similarity": story.get("mean_best_similarity"),
             "min_best_similarity": story.get("min_best_similarity"),
+            "min_member_average_similarity": story.get("min_member_average_similarity"),
+            "min_member_edge_degree": story.get("min_member_edge_degree"),
+            "member_cohesion_floor": story.get("member_cohesion_floor"),
+            "member_edge_degree_floor": story.get("member_edge_degree_floor"),
+            "pruned_article_ids": story.get("pruned_article_ids") or [],
+            "prune_reason": story.get("prune_reason") or "",
             "source_count": story.get("source_count"),
         }
         story_records.append(story_record)
@@ -1205,7 +1447,6 @@ def organize_article_targets_into_stories(
     *,
     min_articles_per_story: int = MIN_ARTICLES_PER_STORY,
     max_stories_per_topic: int = 4,
-    max_articles_per_story: int = MAX_ARTICLES_PER_STORY,
     similarity_threshold: float = STORY_CLUSTER_SIMILARITY_THRESHOLD,
 ) -> tuple[list[dict], dict[str, Any]]:
     if min_articles_per_story <= 1:
@@ -1216,7 +1457,6 @@ def organize_article_targets_into_stories(
             "dropped_count": 0,
             "min_articles_per_story": min_articles_per_story,
             "max_stories_per_topic": max_stories_per_topic,
-            "max_articles_per_story": max_articles_per_story,
             "similarity_threshold": similarity_threshold,
         }
 
@@ -1229,9 +1469,12 @@ def organize_article_targets_into_stories(
 
     annotated_by_original_id: dict[int, dict] = {}
     stories_by_topic: dict[str, list[dict]] = {}
+    reserve_stories_by_topic: dict[str, list[dict]] = {}
+    articles_by_topic_title: dict[str, list[dict]] = {}
     pair_debug_by_topic: dict[str, list[dict[str, Any]]] = {}
     dropped_articles_by_topic: dict[str, list[dict[str, Any]]] = {}
     dropped_by_topic: Counter[str] = Counter()
+    reserve_article_ids_by_topic: dict[str, set[str]] = {}
 
     for topic_key in topic_order + sorted(key for key in articles_by_topic if key not in topic_order):
         articles = articles_by_topic.get(topic_key) or []
@@ -1247,19 +1490,18 @@ def organize_article_targets_into_stories(
             },
         )
         topic_title = str(topic.get("title") or topic_key or "Unknown topic")
+        articles_by_topic_title[topic_title] = articles
         all_story_groups = cluster_topic_stories_by_similarity(
             topic,
             articles,
             min_articles_per_story=min_articles_per_story,
-            max_articles_per_story=max_articles_per_story,
             similarity_threshold=similarity_threshold,
         )
-        story_groups = all_story_groups[:max_stories_per_topic]
         if all_story_groups:
             pair_debug_by_topic[topic_title] = (
                 all_story_groups[0].get("_pair_debug", [])[:STORY_PAIR_DEBUG_LIMIT]
             )
-        if not story_groups:
+        if not all_story_groups:
             dropped_by_topic[topic_title] += len(articles)
             dropped_articles_by_topic[topic_title] = [
                 {
@@ -1274,8 +1516,8 @@ def organize_article_targets_into_stories(
             continue
 
         article_lookup = {str(article.get("article_id") or ""): article for article in articles}
-        topic_story_records: list[dict] = []
-        for story_index, story in enumerate(story_groups, start=1):
+        all_topic_story_records: list[dict] = []
+        for story_rank, story in enumerate(all_story_groups, start=1):
             story_title = _clean_story_title(str(story.get("title") or ""), topic, articles)
             article_ids = [
                 str(article_id)
@@ -1286,12 +1528,15 @@ def organize_article_targets_into_stories(
                 continue
             story_key = (
                 f"{_story_slug(topic_key or topic_title, 'topic')}"
-                f"-story-{story_index:02d}-{_story_slug(story_title)}"
+                f"-story-{story_rank:02d}-{_story_slug(story_title)}"
             )
-            topic_story_records.append(
+            all_topic_story_records.append(
                 {
                     "story_key": story_key,
+                    "topic_key": topic_key,
+                    "topic_title": topic_title,
                     "story_title": story_title,
+                    "story_rank": story_rank,
                     "article_count": len(article_ids),
                     "cluster_article_count": int(story.get("article_count") or len(article_ids)),
                     "selected_article_count": len(article_ids),
@@ -1303,22 +1548,49 @@ def organize_article_targets_into_stories(
                     "edge_density": story.get("edge_density"),
                     "mean_best_similarity": story.get("mean_best_similarity"),
                     "min_best_similarity": story.get("min_best_similarity"),
+                    "min_member_average_similarity": story.get("min_member_average_similarity"),
+                    "min_member_edge_degree": story.get("min_member_edge_degree"),
+                    "member_cohesion_floor": story.get("member_cohesion_floor"),
+                    "member_edge_degree_floor": story.get("member_edge_degree_floor"),
+                    "pruned_article_ids": story.get("pruned_article_ids") or [],
+                    "prune_reason": story.get("prune_reason") or "",
                     "source_count": story.get("source_count"),
                 }
             )
+
+        # Keep every viable story cluster in the main candidate pool. The story-topic
+        # assignment stage is responsible for choosing the final per-topic set.
+        topic_story_records = all_topic_story_records
+
+        for record in topic_story_records:
+            story_key = str(record.get("story_key") or "")
+            story_title = str(record.get("story_title") or "")
+            story_rank = int(record.get("story_rank") or 0)
+            article_ids = [
+                str(article_id)
+                for article_id in record.get("article_ids", [])
+                if str(article_id) in article_lookup
+            ]
             for article_id in article_ids:
                 original_article = article_lookup[article_id]
                 annotated_by_original_id[id(original_article)] = {
                     **original_article,
                     "story_key": story_key,
                     "story_title": story_title,
-                    "story_article_count": int(story.get("article_count") or len(article_ids)),
+                    "story_rank": story_rank,
+                    "story_article_count": int(record.get("cluster_article_count") or len(article_ids)),
                     "story_selected_article_count": len(article_ids),
-                    "story_average_similarity": story.get("average_similarity"),
-                    "story_connectedness_score": story.get("connectedness_score"),
-                    "story_strength_score": story.get("story_strength_score"),
-                    "story_edge_density": story.get("edge_density"),
-                    "story_source_count": story.get("source_count"),
+                    "story_average_similarity": record.get("average_similarity"),
+                    "story_connectedness_score": record.get("connectedness_score"),
+                    "story_strength_score": record.get("story_strength_score"),
+                    "story_edge_density": record.get("edge_density"),
+                    "story_min_member_average_similarity": record.get("min_member_average_similarity"),
+                    "story_min_member_edge_degree": record.get("min_member_edge_degree"),
+                    "story_member_cohesion_floor": record.get("member_cohesion_floor"),
+                    "story_member_edge_degree_floor": record.get("member_edge_degree_floor"),
+                    "story_pruned_article_ids": record.get("pruned_article_ids") or [],
+                    "story_prune_reason": record.get("prune_reason") or "",
+                    "story_source_count": record.get("source_count"),
                 }
         included_ids = {
             id(article_lookup[article_id])
@@ -1326,8 +1598,14 @@ def organize_article_targets_into_stories(
             for article_id in record["article_ids"]
             if article_id in article_lookup
         }
-        dropped_by_topic[topic_title] += len([article for article in articles if id(article) not in included_ids])
-        dropped_articles = [article for article in articles if id(article) not in included_ids]
+        reserve_article_ids = reserve_article_ids_by_topic.get(topic_title, set())
+        dropped_articles = [
+            article
+            for article in articles
+            if id(article) not in included_ids
+            and str(article.get("article_id") or "") not in reserve_article_ids
+        ]
+        dropped_by_topic[topic_title] += len(dropped_articles)
         if dropped_articles:
             dropped_articles_by_topic[topic_title] = [
                 {
@@ -1335,7 +1613,7 @@ def organize_article_targets_into_stories(
                     "source": article.get("source"),
                     "title": article.get("title"),
                     "relevance_score": article.get("relevance_score"),
-                    "reason": "outside_retained_story_or_article_cap",
+                    "reason": "no_retained_or_reserve_story_cluster",
                 }
                 for article in dropped_articles
             ]
@@ -1347,20 +1625,80 @@ def organize_article_targets_into_stories(
         for article in article_targets
         if id(article) in annotated_by_original_id
     ]
+    story_debug_records: list[dict[str, Any]] = []
+    reserve_story_debug_records: list[dict[str, Any]] = []
+
+    def story_debug_records_for_topic(topic_title: str, story_list: list[dict]) -> list[dict[str, Any]]:
+        topic_articles = {
+            str(article.get("article_id") or ""): article
+            for article in articles_by_topic_title.get(topic_title, [])
+        }
+        debug_records: list[dict[str, Any]] = []
+        for story in story_list:
+            article_details = []
+            for article_id in story.get("cluster_article_ids", []):
+                article = topic_articles.get(str(article_id))
+                if not article:
+                    continue
+                article_details.append(
+                    {
+                        "article_id": article_id,
+                        "source": article.get("source"),
+                        "title": article.get("title"),
+                        "url": article.get("url"),
+                        "pub_date": article.get("pub_date"),
+                    }
+                )
+            debug_records.append(
+                {**story, "topic_title": topic_title, "articles": article_details}
+            )
+        return debug_records
+
+    for topic_title, story_list in stories_by_topic.items():
+        story_debug_records.extend(story_debug_records_for_topic(topic_title, story_list))
+    for topic_title, story_list in reserve_stories_by_topic.items():
+        reserve_story_debug_records.extend(story_debug_records_for_topic(topic_title, story_list))
+    pair_debug = [
+        pair
+        for pairs in pair_debug_by_topic.values()
+        for pair in pairs[:STORY_PAIR_DEBUG_LIMIT]
+    ][:STORY_PAIR_DEBUG_LIMIT]
+    dropped_articles = [
+        article
+        for articles in dropped_articles_by_topic.values()
+        for article in articles
+    ]
     stats = {
         "enabled": True,
         "candidate_count": len(article_targets),
         "included_count": len(selected_targets),
-        "dropped_count": len(article_targets) - len(selected_targets),
+        "reserve_included_count": sum(
+            len(article_ids) for article_ids in reserve_article_ids_by_topic.values()
+        ),
+        "dropped_count": len(dropped_articles),
         "min_articles_per_story": min_articles_per_story,
         "max_stories_per_topic": max_stories_per_topic,
-        "max_articles_per_story": max_articles_per_story,
         "similarity_threshold": similarity_threshold,
         "clustering_method": "cleaned_body_weighted_tfidf_similarity_graph",
         "story_count": sum(len(stories) for stories in stories_by_topic.values()),
+        "initial_story_count": sum(len(stories) for stories in stories_by_topic.values()),
+        "reserve_story_count": sum(len(stories) for stories in reserve_stories_by_topic.values()),
+        "viable_story_count": (
+            sum(len(stories) for stories in stories_by_topic.values())
+            + sum(len(stories) for stories in reserve_stories_by_topic.values())
+        ),
+        "stories": story_debug_records,
+        "reserve_stories": reserve_story_debug_records,
         "stories_by_topic": stories_by_topic,
+        "reserve_stories_by_topic": reserve_stories_by_topic,
+        "reserve_article_count_by_topic": {
+            topic_title: len(article_ids)
+            for topic_title, article_ids in reserve_article_ids_by_topic.items()
+        },
         "dropped_by_topic": dict(dropped_by_topic),
+        "dropped_articles": dropped_articles,
         "dropped_articles_by_topic": dropped_articles_by_topic,
+        "pair_debug": pair_debug,
         "pair_debug_by_topic": pair_debug_by_topic,
     }
     return selected_targets, stats

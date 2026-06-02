@@ -200,6 +200,11 @@ Each run writes to `output/daily_outputs/YYYY-MM-DD/`:
 - `terminal_output_*.log`: captured terminal output.
 - `dev_used_urls.txt`, `local_prod_used_urls.txt`, or `used_urls.txt`: URL log.
 
+Use the report and image files to review what would be delivered, use the
+`topics_*`, `run_details_*`, and `terminal_output_*` files to debug or audit how
+the run behaved, and treat the URL logs as run-history state that prevents
+repeat stories in later runs.
+
 ## Project Map
 
 - `news_pipeline/cli.py`: run modes and utility commands.
