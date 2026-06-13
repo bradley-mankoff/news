@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Iterable, Protocol
 
 from . import history_store
 from .diagnostics import RunDiagnostics
@@ -22,12 +22,21 @@ class RunFinalizerConfig:
     history_export_csv: bool = True
 
 
+class CleanupVisibleOutputs(Protocol):
+    def __call__(
+        self,
+        output_dir: Path,
+        *,
+        keep_paths: Iterable[Path] | None = None,
+    ) -> tuple[int, int]: ...
+
+
 @dataclass(frozen=True)
 class RunFinalizerAdapters:
     attach_pending_activity_snapshots: Callable[[RunDiagnostics], None] = lambda diagnostics: None
     model_call_stats_snapshot: Callable[[], dict[str, Any]] = dict
     write_run_history: Callable[..., None] = history_store.write_run_history
-    cleanup_visible_outputs: Callable[..., tuple[int, int]] = history_store.cleanup_visible_outputs
+    cleanup_visible_outputs: CleanupVisibleOutputs = history_store.cleanup_visible_outputs
     progress: Any | None = None
 
 
