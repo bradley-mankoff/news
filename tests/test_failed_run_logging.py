@@ -24,6 +24,7 @@ class FailedRunLoggingTests(unittest.TestCase):
         pipeline.RUN_LOG_FILES = []
         pipeline.RUN_LOG_FILE = None
         pipeline.ACTIVE_RUN_DIAGNOSTICS = None
+        pipeline.ACTIVE_RUN_FINALIZER = None
         pipeline.MANAGED_MODEL_SERVER_ACTIVE = False
         pipeline.MANAGED_MODEL_SERVER_READY = False
         pipeline.MANAGED_MODEL_SERVER_EXTERNAL = False
@@ -90,9 +91,10 @@ class FailedRunLoggingTests(unittest.TestCase):
                 pipeline.progress_tracker.detail("synthetic detail before failure")
                 raise RuntimeError("synthetic failure")
 
-            with redirect_stdout(StringIO()):
-                with self.assertRaisesRegex(RuntimeError, "synthetic failure"):
-                    pipeline.RunSession(test_config).run(fail_after_diagnostics)
+            with patch.object(pipeline, "timestamp", "wrong-module-timestamp"):
+                with redirect_stdout(StringIO()):
+                    with self.assertRaisesRegex(RuntimeError, "synthetic failure"):
+                        pipeline.RunSession(test_config).run(fail_after_diagnostics)
 
             self.assertTrue(latest_markdown.exists())
             self.assertTrue(latest_log.exists())
@@ -107,10 +109,9 @@ class FailedRunLoggingTests(unittest.TestCase):
             self.assertIn("synthetic failure", details["events"][-1]["traceback"])
 
             with connect(history_db_path) as con:
-                self.assertEqual(
-                    con.execute("SELECT status FROM runs").fetchone()[0],
-                    "failed",
-                )
+                run_id, status = con.execute("SELECT run_id, status FROM runs").fetchone()
+                self.assertEqual(run_id, timestamp)
+                self.assertEqual(status, "failed")
 
     def test_run_pipeline_delegates_to_run_session(self) -> None:
         with patch.object(pipeline.RunSession, "run") as run:

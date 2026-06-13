@@ -1250,7 +1250,7 @@ class RunSession:
                     progress_tracker.step("finalize", "Daily news run failed. See the run log for details.")
                     progress_tracker.detail(f"Run failed: {type(error).__name__}: {error}")
                     _write_run_log(traceback_text)
-                    _finalize_failed_run(error, traceback_text)
+                    _finalize_failed_run(error, traceback_text, self.config)
                     raise
                 else:
                     progress_tracker.finish("done")
@@ -4935,18 +4935,18 @@ def _model_call_stats_snapshot() -> dict[str, Any]:
         return json.loads(json.dumps(MODEL_CALL_STATS))
 
 
-def _new_run_finalizer(diagnostics: RunDiagnostics) -> RunFinalizer:
+def _new_run_finalizer(diagnostics: RunDiagnostics, config: RuntimeConfig) -> RunFinalizer:
     return RunFinalizer(
         diagnostics=diagnostics,
         config=RunFinalizerConfig(
-            run_id=timestamp,
-            latest_run_details_path=CONFIG.latest_run_details_path,
-            latest_run_markdown_path=CONFIG.latest_run_markdown_path,
-            latest_run_log_path=CONFIG.latest_run_log_path,
-            history_db_path=CONFIG.history_db_path,
-            output_dir=CONFIG.output_dir,
-            run_log_path=RUN_LOG_PATH,
-            history_export_csv=HISTORY_EXPORT_CSV,
+            run_id=config.timestamp,
+            latest_run_details_path=config.latest_run_details_path,
+            latest_run_markdown_path=config.latest_run_markdown_path,
+            latest_run_log_path=config.latest_run_log_path,
+            history_db_path=config.history_db_path,
+            output_dir=config.output_dir,
+            run_log_path=os.path.join(str(config.run_output_dir), f"run_log_{config.timestamp}.log"),
+            history_export_csv=config.history_export_csv,
         ),
         adapters=RunFinalizerAdapters(
             attach_pending_activity_snapshots=_attach_pending_activity_snapshots,
@@ -4956,41 +4956,15 @@ def _new_run_finalizer(diagnostics: RunDiagnostics) -> RunFinalizer:
     )
 
 
-def _active_run_finalizer(diagnostics: RunDiagnostics) -> RunFinalizer:
+def _active_run_finalizer(diagnostics: RunDiagnostics, config: RuntimeConfig) -> RunFinalizer:
     global ACTIVE_RUN_FINALIZER
     if ACTIVE_RUN_FINALIZER is None or ACTIVE_RUN_FINALIZER.diagnostics is not diagnostics:
-        ACTIVE_RUN_FINALIZER = _new_run_finalizer(diagnostics)
+        ACTIVE_RUN_FINALIZER = _new_run_finalizer(diagnostics, config)
     return ACTIVE_RUN_FINALIZER
 
 
-def _finish_run_diagnostics(diagnostics: RunDiagnostics) -> None:
-    _active_run_finalizer(diagnostics).finish()
-
-
-def _write_run_diagnostics(
-    diagnostics: RunDiagnostics,
-    *,
-    report_body: str = "",
-    candidate_articles: list[dict] | None = None,
-    summarized_articles: list[dict] | None = None,
-    selected_articles: list[dict] | None = None,
-    article_summary_records: list[dict[str, Any]] | None = None,
-    story_summary_records: list[dict[str, Any]] | None = None,
-) -> None:
-    finalizer = _active_run_finalizer(diagnostics)
-    if report_body:
-        finalizer.record_report_body(report_body)
-    if candidate_articles is not None:
-        finalizer.record_candidate_articles(candidate_articles)
-    if summarized_articles is not None:
-        finalizer.record_summarized_articles(summarized_articles)
-    if selected_articles is not None:
-        finalizer.record_selected_articles(selected_articles)
-    if article_summary_records is not None:
-        finalizer.record_article_summary_records(article_summary_records)
-    if story_summary_records is not None:
-        finalizer.record_story_summary_records(story_summary_records)
-    finalizer.finish()
+def _finish_run_diagnostics(diagnostics: RunDiagnostics, config: RuntimeConfig) -> None:
+    _active_run_finalizer(diagnostics, config).finish()
 
 
 def _preflight_openai_model_server(
@@ -5188,14 +5162,14 @@ def _stop_managed_server_process(process: subprocess.Popen, *, server_label: str
         process.wait(timeout=10)
 
 
-def _finalize_failed_run(error: Exception, traceback_text: str) -> None:
+def _finalize_failed_run(error: Exception, traceback_text: str, config: RuntimeConfig) -> None:
     global ACTIVE_RUN_DIAGNOSTICS
     diagnostics = ACTIVE_RUN_DIAGNOSTICS
     if diagnostics is None:
         diagnostics = _new_run_diagnostics(len(SOURCE_FEEDS))
         ACTIVE_RUN_DIAGNOSTICS = diagnostics
     try:
-        _active_run_finalizer(diagnostics).finish_failed(error, traceback_text)
+        _active_run_finalizer(diagnostics, config).finish_failed(error, traceback_text)
     except Exception as finalizer_error:
         progress_tracker.warning(f"Failed-run diagnostics finalization failed: {finalizer_error}")
 
@@ -5427,7 +5401,7 @@ def _run_pipeline() -> None:
 
     diagnostics = _new_run_diagnostics(len(sources))
     ACTIVE_RUN_DIAGNOSTICS = diagnostics
-    ACTIVE_RUN_FINALIZER = _new_run_finalizer(diagnostics)
+    ACTIVE_RUN_FINALIZER = _new_run_finalizer(diagnostics, CONFIG)
     image_status = "image on" if IMAGE_GENERATION_ENABLED else "image off"
     send_target = "Bradley only" if RECIPIENT_SCOPE == "bradley" else "active recipients"
     preset_label = PRESET_ID or "custom"
@@ -5600,12 +5574,12 @@ def _run_pipeline() -> None:
             count=candidate_url_count,
             run_used_urls_path=RUN_USED_URLS_PATH,
         )
-    _active_run_finalizer(diagnostics).record_candidate_articles(article_candidates)
+    _active_run_finalizer(diagnostics, CONFIG).record_candidate_articles(article_candidates)
     _record_run_urls(candidate_urls, article_candidates)
     if not article_candidates:
         progress_tracker.step("finalize", "No recent article candidates available; stopping run.")
         diagnostics.event("aborted", reason="no_article_candidates")
-        _finish_run_diagnostics(diagnostics)
+        _finish_run_diagnostics(diagnostics, CONFIG)
         return
 
     diagnostics.event(
@@ -5680,7 +5654,7 @@ def _run_pipeline() -> None:
     if not clustered_article_targets:
         progress_tracker.step("finalize", "No multi-article story clusters available; stopping run.")
         diagnostics.event("aborted", reason="no_supported_story_clusters")
-        _finish_run_diagnostics(diagnostics)
+        _finish_run_diagnostics(diagnostics, CONFIG)
         return
 
     if MANAGED_MODEL_SERVER_ACTIVE and not MANAGED_MODEL_SERVER_READY:
@@ -5698,8 +5672,8 @@ def _run_pipeline() -> None:
     progress_tracker.finish_meter(detail=f"{len(article_summary_reports)} article summaries")
     diagnostics.article_summary_count = len(article_summary_reports)
     article_summary_records = _report_entry_debug_records(article_summary_reports)
-    _active_run_finalizer(diagnostics).record_summarized_articles(clustered_article_targets)
-    _active_run_finalizer(diagnostics).record_article_summary_records(article_summary_records)
+    _active_run_finalizer(diagnostics, CONFIG).record_summarized_articles(clustered_article_targets)
+    _active_run_finalizer(diagnostics, CONFIG).record_article_summary_records(article_summary_records)
     article_summaries_path = _persist_article_summaries_debug(article_summary_reports)
     if article_summaries_path:
         diagnostics.record_artifact(
@@ -5893,11 +5867,11 @@ def _run_pipeline() -> None:
     if not final_reports:
         progress_tracker.step("finalize", "No global stories selected; stopping run.")
         diagnostics.event("aborted", reason="no_global_story_matches")
-        _finish_run_diagnostics(diagnostics)
+        _finish_run_diagnostics(diagnostics, CONFIG)
         return
     story_summary_records = _report_entry_debug_records(final_reports)
-    _active_run_finalizer(diagnostics).record_selected_articles(selected_articles)
-    _active_run_finalizer(diagnostics).record_story_summary_records(story_summary_records)
+    _active_run_finalizer(diagnostics, CONFIG).record_selected_articles(selected_articles)
+    _active_run_finalizer(diagnostics, CONFIG).record_story_summary_records(story_summary_records)
     story_assigned_summaries_path = _persist_article_summaries_debug(
         final_reports,
         label="story_assigned_article_summaries",
@@ -5919,7 +5893,7 @@ def _run_pipeline() -> None:
     if not recipient_list:
         progress_tracker.step("finalize", "No recipients configured; stopping after summaries.")
         diagnostics.event("completed_without_recipients")
-        _finish_run_diagnostics(diagnostics)
+        _finish_run_diagnostics(diagnostics, CONFIG)
         return
 
     prompt_label = "default prompt"
@@ -6047,6 +6021,6 @@ def _run_pipeline() -> None:
         progress_tracker.detail("Finished report. Final prose will be embedded in latest_run.md.")
 
     diagnostics.event("completed")
-    _active_run_finalizer(diagnostics).record_report_body(report_body)
-    _finish_run_diagnostics(diagnostics)
+    _active_run_finalizer(diagnostics, CONFIG).record_report_body(report_body)
+    _finish_run_diagnostics(diagnostics, CONFIG)
     sync_assistant_context_latest_output(CONFIG)
