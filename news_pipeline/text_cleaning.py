@@ -9,6 +9,11 @@ from urllib.parse import urlparse
 from bs4 import BeautifulSoup
 
 
+XML_DOCUMENT_RE = re.compile(
+    r"^[\s\ufeff]*(?:<\?xml\b|<rss\b|<feed\b|<rdf(?::RDF)?\b|<channel\b|<item\b|<entry\b)",
+    flags=re.IGNORECASE,
+)
+
 YONHAP_SOURCE_PREFIXES = ("yonhap",)
 YONHAP_DOMAIN_SUFFIX = "yna.co.kr"
 
@@ -82,6 +87,10 @@ def clean_feed_url(text: str | None) -> str:
     return clean_url
 
 
+def _markup_parser_for_text(text: str) -> str:
+    return "xml" if XML_DOCUMENT_RE.search(text) else "html.parser"
+
+
 def _strip_markup_and_web_noise(text: str | None, *, html_separator: str) -> str:
     clean_text = html.unescape(str(text or ""))
     if not clean_text:
@@ -94,7 +103,8 @@ def _strip_markup_and_web_noise(text: str | None, *, html_separator: str) -> str
     )
     if "<" in clean_text and ">" in clean_text:
         try:
-            clean_text = BeautifulSoup(clean_text, "html.parser").get_text(
+            soup = BeautifulSoup(clean_text, _markup_parser_for_text(clean_text))
+            clean_text = soup.get_text(
                 html_separator,
                 strip=True,
             )

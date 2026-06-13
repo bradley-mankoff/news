@@ -12,16 +12,16 @@ import re
 from collections import Counter
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import urlparse
 
 from .text_cleaning import clean_article_text, clean_content_text
-from .topic_matching import (
+from .text_matching import (
     BOILERPLATE_CONTENT_STOPWORDS,
-    TOPIC_MATCH_STOPWORDS,
-    WEAK_TOPIC_MATCH_TERMS,
-    clean_topic_source_title,
-    ordered_topic_match_terms,
+    TEXT_MATCH_STOPWORDS,
+    WEAK_MATCH_TERMS,
+    clean_source_title,
+    ordered_match_terms,
 )
 
 
@@ -58,6 +58,7 @@ STORY_SIMILARITY_TEXT_WEIGHT = 4
 STORY_MIN_SOURCE_COUNT = 2
 STORY_PAIR_DEBUG_LIMIT = 250
 STORY_MEMBER_EDGE_DEGREE_FLOOR = 1
+ProgressCallback = Callable[[str, dict[str, Any]], None]
 
 
 def strip_model_artifacts(text: str) -> str:
@@ -66,8 +67,6 @@ def strip_model_artifacts(text: str) -> str:
     text = re.sub(r"<\|im_(?:start|end)\|>", "", text)
     text = re.sub(r"&lt;/?(?:analysis|content)&gt;", "", text, flags=re.IGNORECASE)
     text = re.sub(r"</?(?:analysis|content)>", "", text, flags=re.IGNORECASE)
-    text = re.sub(r"&lt;/?topic&gt;", "", text, flags=re.IGNORECASE)
-    text = re.sub(r"</?topic>", "", text, flags=re.IGNORECASE)
     text = text.replace("\r\n", "\n")
     text = re.sub(r"\n{3,}", "\n\n", text)
     return text.strip()
@@ -115,25 +114,25 @@ def _story_slug(value: str, fallback: str = "story") -> str:
     return slug or fallback
 
 
-def _clean_story_title(value: str, topic: dict, articles: list[dict]) -> str:
+def _clean_story_title(value: str, scope: dict, articles: list[dict]) -> str:
     clean_value = strip_inline_markdown(strip_model_artifacts(value or ""))
     clean_value = re.sub(r"[\r\n]+", " ", clean_value)
     clean_value = re.sub(r"\s+", " ", clean_value).strip(" \"'")
-    topic_title = str(topic.get("title") or "").strip()
-    if not clean_value or clean_value.lower() == topic_title.lower():
+    scope_title = str(scope.get("title") or "").strip()
+    if not clean_value or clean_value.lower() == scope_title.lower():
         first_title = str((articles[0] if articles else {}).get("title") or "").strip()
-        clean_value = clean_topic_source_title(first_title) or topic_title or "News update"
+        clean_value = clean_source_title(first_title) or scope_title or "News update"
     words = clean_value.split()
     if len(words) > 14:
         clean_value = " ".join(words[:14])
     return clean_value[:120].strip() or "News update"
 
 
-def _story_similarity_stopwords(topic: dict) -> set[str]:
-    broad_topic_terms = set(
-        ordered_topic_match_terms(topic.get("key"), topic.get("title"), topic.get("rationale"))
+def _story_similarity_stopwords(scope: dict) -> set[str]:
+    broad_scope_terms = set(
+        ordered_match_terms(scope.get("key"), scope.get("title"), scope.get("rationale"))
     )
-    generic_terms = TOPIC_MATCH_STOPWORDS | {
+    generic_terms = TEXT_MATCH_STOPWORDS | {
         "article",
         "briefing",
         "coverage",
@@ -153,7 +152,7 @@ def _story_similarity_stopwords(topic: dict) -> set[str]:
         "update",
         "updates",
     }
-    return broad_topic_terms | generic_terms | WEAK_TOPIC_MATCH_TERMS | BOILERPLATE_CONTENT_STOPWORDS
+    return broad_scope_terms | generic_terms | WEAK_MATCH_TERMS | BOILERPLATE_CONTENT_STOPWORDS
 
 
 def _normalize_story_similarity_token(token: str) -> str:
@@ -188,8 +187,8 @@ def story_similarity_terms(text: str, stopwords: set[str]) -> list[str]:
     return terms
 
 
-def _story_weighted_term_counts(article: dict, topic: dict) -> Counter[str]:
-    stopwords = _story_similarity_stopwords(topic)
+def _story_weighted_term_counts(article: dict, scope: dict) -> Counter[str]:
+    stopwords = _story_similarity_stopwords(scope)
     article_body_text = clean_article_text(
         str(article.get("text") or ""),
         source=str(article.get("source") or ""),
@@ -198,7 +197,7 @@ def _story_weighted_term_counts(article: dict, topic: dict) -> Counter[str]:
     )
     weighted_parts = [
         (
-            clean_content_text(clean_topic_source_title(str(article.get("title") or ""))),
+            clean_content_text(clean_source_title(str(article.get("title") or ""))),
             STORY_SIMILARITY_TITLE_WEIGHT,
         ),
         (clean_content_text(str(article.get("description") or "")), STORY_SIMILARITY_DESCRIPTION_WEIGHT),
@@ -212,10 +211,22 @@ def _story_weighted_term_counts(article: dict, topic: dict) -> Counter[str]:
 
 
 def _build_story_tfidf_vectors(
-    topic: dict,
+    scope: dict,
     articles: list[dict],
+    progress_callback: ProgressCallback | None = None,
 ) -> tuple[list[dict[str, float]], list[float]]:
-    document_counts = [_story_weighted_term_counts(article, topic) for article in articles]
+    document_counts: list[Counter[str]] = []
+    for index, article in enumerate(articles, start=1):
+        document_counts.append(_story_weighted_term_counts(article, scope))
+        if progress_callback:
+            progress_callback(
+                "vectorized_article",
+                {
+                    "phase": "vectorizing article text",
+                    "done": index,
+                    "total": len(articles),
+                },
+            )
     document_frequency: Counter[str] = Counter()
     for counts in document_counts:
         document_frequency.update(counts.keys())
@@ -824,187 +835,6 @@ def _select_story_article_indexes(
     return selected
 
 
-def cluster_topic_stories_by_similarity(
-    topic: dict,
-    articles: list[dict],
-    *,
-    min_articles_per_story: int = MIN_ARTICLES_PER_STORY,
-    similarity_threshold: float = STORY_CLUSTER_SIMILARITY_THRESHOLD,
-) -> list[dict]:
-    if len(articles) < min_articles_per_story:
-        return []
-
-    vectors, norms = _build_story_tfidf_vectors(topic, articles)
-    source_identities = [_article_source_identity(article) for article in articles]
-    similarities: dict[tuple[int, int], float] = {}
-    adjacency: dict[int, set[int]] = {index: set() for index in range(len(articles))}
-    max_similarity_by_index: dict[int, float] = {index: 0.0 for index in range(len(articles))}
-    pair_debug: list[dict[str, Any]] = []
-    for left_index in range(len(articles)):
-        for right_index in range(left_index + 1, len(articles)):
-            score = cosine_similarity(
-                vectors[left_index],
-                norms[left_index],
-                vectors[right_index],
-                norms[right_index],
-            )
-            if score > 0.0:
-                similarities[(left_index, right_index)] = score
-            max_similarity_by_index[left_index] = max(max_similarity_by_index[left_index], score)
-            max_similarity_by_index[right_index] = max(max_similarity_by_index[right_index], score)
-            distinct_source_pair = source_identities[left_index] != source_identities[right_index]
-            linked = score >= similarity_threshold
-            if linked:
-                adjacency[left_index].add(right_index)
-                adjacency[right_index].add(left_index)
-            if score > 0.0 or linked:
-                pair_debug.append(
-                    {
-                        "left_article_id": articles[left_index].get("article_id"),
-                        "right_article_id": articles[right_index].get("article_id"),
-                        "similarity": round(score, 4),
-                        "similarity_threshold": round(similarity_threshold, 4),
-                        "linked": linked,
-                        "distinct_source_pair": distinct_source_pair,
-                    }
-                )
-
-    component_records: list[dict[str, Any]] = []
-    visited: set[int] = set()
-    eligible_indexes = {
-        index
-        for index, max_similarity in max_similarity_by_index.items()
-        if max_similarity >= similarity_threshold
-    }
-    for start_index in range(len(articles)):
-        if start_index not in eligible_indexes or start_index in visited:
-            continue
-        stack = [start_index]
-        component: list[int] = []
-        visited.add(start_index)
-        while stack:
-            index = stack.pop()
-            component.append(index)
-            for neighbor in adjacency[index]:
-                if neighbor in visited:
-                    continue
-                visited.add(neighbor)
-                stack.append(neighbor)
-        if len(component) >= min_articles_per_story:
-            component_records.extend(
-                _split_story_component_by_weak_bridges(
-                    sorted(component),
-                    source_identities,
-                    similarities,
-                    similarity_threshold,
-                    min_articles_per_story=min_articles_per_story,
-                )
-            )
-
-    article_id_by_index = {
-        index: str(article.get("article_id") or "")
-        for index, article in enumerate(articles)
-    }
-    story_groups: list[dict] = []
-    for component_record in component_records:
-        component = list(component_record.get("component") or [])
-        if not _story_component_meets_connectedness_floor(
-            component,
-            source_identities,
-            similarities,
-            similarity_threshold,
-            min_articles_per_story=min_articles_per_story,
-        ):
-            continue
-        metrics = _story_component_connectedness_metrics(
-            component,
-            similarities,
-            similarity_threshold,
-        )
-        diagnostics = _story_component_diagnostics(
-            component,
-            similarities,
-            similarity_threshold,
-        )
-        source_count = _story_component_source_count(component, source_identities)
-        medoid_index = _story_component_medoid_index(component, articles, similarities)
-        selected_indexes = _select_story_article_indexes(
-            component,
-            medoid_index,
-            articles,
-            similarities,
-        )
-        if len(selected_indexes) < min_articles_per_story:
-            continue
-        story_groups.append(
-            {
-                "title": _clean_story_title(
-                    clean_topic_source_title(str(articles[medoid_index].get("title") or "")),
-                    topic,
-                    [articles[medoid_index]],
-                ),
-                "article_ids": [
-                    article_id_by_index[index]
-                    for index in selected_indexes
-                    if article_id_by_index[index]
-                ],
-                "cluster_article_ids": [
-                    article_id_by_index[index]
-                    for index in component
-                    if article_id_by_index[index]
-                ],
-                "article_count": len(component),
-                "selected_article_count": len(selected_indexes),
-                "average_similarity": round(float(metrics["average_similarity"]), 4),
-                "connectedness_score": round(float(metrics["connectedness_score"]), 4),
-                "story_strength_score": round(float(metrics["story_strength_score"]), 4),
-                "edge_density": round(float(metrics["edge_density"]), 4),
-                "edge_count": int(metrics["edge_count"]),
-                "mean_best_similarity": round(float(metrics["mean_best_similarity"]), 4),
-                "min_best_similarity": round(float(metrics["min_best_similarity"]), 4),
-                **diagnostics,
-                "pruned_article_ids": [
-                    article_id_by_index[index]
-                    for index in component_record.get("pruned_indexes") or []
-                    if article_id_by_index.get(index)
-                ],
-                "prune_reason": component_record.get("prune_reason") or "",
-                "source_count": source_count,
-                "relevance_score": _story_cluster_relevance_score(component, articles),
-                "latest_rank": _story_cluster_recency_rank(component, articles),
-                "_medoid_index": medoid_index,
-            }
-        )
-
-    def story_rank(story: dict) -> tuple:
-        return (
-            -float(story.get("story_strength_score") or 0.0),
-            -float(story.get("connectedness_score") or 0.0),
-            -int(story.get("article_count") or 0),
-            -int(story.get("source_count") or 0),
-            -float(story.get("relevance_score") or 0.0),
-            tuple(-value for value in story.get("latest_rank", (0, 0, 0))),
-            int(story.get("_medoid_index") or 0),
-        )
-
-    ranked_groups = sorted(story_groups, key=story_rank)
-    for story in ranked_groups:
-        story.pop("_medoid_index", None)
-        story.pop("latest_rank", None)
-    ranked_groups_debug = sorted(
-        pair_debug,
-        key=lambda entry: (
-            not entry.get("linked"),
-            -float(entry.get("similarity") or 0.0),
-            str(entry.get("left_article_id") or ""),
-            str(entry.get("right_article_id") or ""),
-        ),
-    )
-    for story in ranked_groups:
-        story["_pair_debug"] = ranked_groups_debug[:STORY_PAIR_DEBUG_LIMIT]
-    return ranked_groups
-
-
 def _story_component_overlap_ratio(left: set[int], right: set[int]) -> float:
     if not left or not right:
         return 0.0
@@ -1043,26 +873,48 @@ def cluster_global_stories_by_similarity(
     *,
     min_articles_per_story: int = MIN_ARTICLES_PER_STORY,
     similarity_threshold: float = STORY_CLUSTER_SIMILARITY_THRESHOLD,
+    progress_callback: ProgressCallback | None = None,
 ) -> list[dict]:
     if len(articles) < min_articles_per_story:
         return []
 
-    neutral_topic = {
+    total_pairs = (len(articles) * (len(articles) - 1)) // 2
+    total_work = max(1, len(articles) + total_pairs + len(articles))
+
+    def report_progress(event: str, payload: dict[str, Any]) -> None:
+        if progress_callback:
+            progress_callback(event, payload)
+
+    def vector_progress(event: str, payload: dict[str, Any]) -> None:
+        report_progress(
+            event,
+            {
+                **payload,
+                "done": int(payload.get("done") or 0),
+                "total": total_work,
+            },
+        )
+
+    global_scope = {
         "key": "global_story_pool",
         "title": "Global story pool",
         "rationale": "",
         "keywords": [],
         "boost_phrases": [],
     }
-    vectors, norms = _build_story_tfidf_vectors(neutral_topic, articles)
+    vectors, norms = _build_story_tfidf_vectors(global_scope, articles, vector_progress)
     source_identities = [_article_source_identity(article) for article in articles]
     similarities: dict[tuple[int, int], float] = {}
     adjacency: dict[int, set[int]] = {index: set() for index in range(len(articles))}
     max_similarity_by_index: dict[int, float] = {index: 0.0 for index in range(len(articles))}
     pair_debug: list[dict[str, Any]] = []
+    pair_progress_stride = max(1, total_pairs // 200) if total_pairs else 1
+    pairs_done = 0
+    linked_pair_count = 0
 
     for left_index in range(len(articles)):
         for right_index in range(left_index + 1, len(articles)):
+            pairs_done += 1
             score = cosine_similarity(
                 vectors[left_index],
                 norms[left_index],
@@ -1075,6 +927,7 @@ def cluster_global_stories_by_similarity(
             max_similarity_by_index[right_index] = max(max_similarity_by_index[right_index], score)
             linked = score >= similarity_threshold
             if linked:
+                linked_pair_count += 1
                 adjacency[left_index].add(right_index)
                 adjacency[right_index].add(left_index)
             if score > 0.0 or linked:
@@ -1091,6 +944,18 @@ def cluster_global_stories_by_similarity(
                         "linked": linked,
                         "distinct_source_pair": source_identities[left_index] != source_identities[right_index],
                     }
+                )
+            if progress_callback and (
+                pairs_done == total_pairs or pairs_done % pair_progress_stride == 0
+            ):
+                report_progress(
+                    "similarity_pair",
+                    {
+                        "phase": "comparing article pairs",
+                        "done": len(articles) + pairs_done,
+                        "total": total_work,
+                        "linked_pairs": linked_pair_count,
+                    },
                 )
 
     candidate_components: dict[tuple[int, ...], dict[str, Any]] = {}
@@ -1187,6 +1052,16 @@ def cluster_global_stories_by_similarity(
         retained_components.append(component_record)
         retained_sets.append(component_set)
 
+    report_progress(
+        "components_ranked",
+        {
+            "phase": "ranking story components",
+            "done": total_work,
+            "total": total_work,
+            "candidate_components": len(candidate_components),
+        },
+    )
+
     article_id_by_index = {
         index: str(article.get("article_id") or "")
         for index, article in enumerate(articles)
@@ -1231,8 +1106,8 @@ def cluster_global_stories_by_similarity(
         story_groups.append(
             {
                 "title": _clean_story_title(
-                    clean_topic_source_title(str(articles[medoid_index].get("title") or "")),
-                    neutral_topic,
+                    clean_source_title(str(articles[medoid_index].get("title") or "")),
+                    global_scope,
                     [articles[medoid_index]],
                 ),
                 "article_ids": [
@@ -1290,8 +1165,18 @@ def organize_article_targets_into_global_stories(
     *,
     min_articles_per_story: int = MIN_ARTICLES_PER_STORY,
     similarity_threshold: float = STORY_CLUSTER_SIMILARITY_THRESHOLD,
+    progress_callback: ProgressCallback | None = None,
 ) -> tuple[list[dict], list[dict], dict[str, Any]]:
     if min_articles_per_story <= 1:
+        if progress_callback:
+            progress_callback(
+                "singletons",
+                {
+                    "phase": "single-article story mode",
+                    "done": len(article_targets),
+                    "total": len(article_targets),
+                },
+            )
         story_records = [
             {
                 "story_key": f"global-story-{index:02d}",
@@ -1313,13 +1198,14 @@ def organize_article_targets_into_global_stories(
             "min_articles_per_story": min_articles_per_story,
             "similarity_threshold": similarity_threshold,
             "component_overlap_suppress_threshold": STORY_COMPONENT_OVERLAP_SUPPRESS_THRESHOLD,
-            "clustering_method": "topicless_singletons",
+            "clustering_method": "global_singletons",
         }
 
     story_groups = cluster_global_stories_by_similarity(
         article_targets,
         min_articles_per_story=min_articles_per_story,
         similarity_threshold=similarity_threshold,
+        progress_callback=progress_callback,
     )
     article_lookup = {
         str(article.get("article_id") or ""): article
@@ -1428,7 +1314,7 @@ def organize_article_targets_into_global_stories(
         "min_articles_per_story": min_articles_per_story,
         "similarity_threshold": similarity_threshold,
         "component_overlap_suppress_threshold": STORY_COMPONENT_OVERLAP_SUPPRESS_THRESHOLD,
-        "clustering_method": "topicless_overlapping_cleaned_body_weighted_tfidf_similarity_graph",
+        "clustering_method": "global_overlapping_cleaned_body_weighted_tfidf_similarity_graph",
         "story_count": len(story_records),
         "stories": story_debug_records,
         "article_story_memberships": {
@@ -1439,269 +1325,6 @@ def organize_article_targets_into_global_stories(
         "pair_debug": pair_debug,
     }
     return selected_targets, story_records, stats
-
-
-def organize_article_targets_into_stories(
-    article_targets: list[dict],
-    topics: list[dict],
-    *,
-    min_articles_per_story: int = MIN_ARTICLES_PER_STORY,
-    max_stories_per_topic: int = 4,
-    similarity_threshold: float = STORY_CLUSTER_SIMILARITY_THRESHOLD,
-) -> tuple[list[dict], dict[str, Any]]:
-    if min_articles_per_story <= 1:
-        return article_targets, {
-            "enabled": False,
-            "candidate_count": len(article_targets),
-            "included_count": len(article_targets),
-            "dropped_count": 0,
-            "min_articles_per_story": min_articles_per_story,
-            "max_stories_per_topic": max_stories_per_topic,
-            "similarity_threshold": similarity_threshold,
-        }
-
-    topic_by_key = {str(topic.get("key") or ""): topic for topic in topics}
-    topic_order = [str(topic.get("key") or "") for topic in topics]
-    articles_by_topic: dict[str, list[dict]] = {key: [] for key in topic_order}
-    for article in article_targets:
-        topic_key = str(article.get("topic_key") or "")
-        articles_by_topic.setdefault(topic_key, []).append(article)
-
-    annotated_by_original_id: dict[int, dict] = {}
-    stories_by_topic: dict[str, list[dict]] = {}
-    reserve_stories_by_topic: dict[str, list[dict]] = {}
-    articles_by_topic_title: dict[str, list[dict]] = {}
-    pair_debug_by_topic: dict[str, list[dict[str, Any]]] = {}
-    dropped_articles_by_topic: dict[str, list[dict[str, Any]]] = {}
-    dropped_by_topic: Counter[str] = Counter()
-    reserve_article_ids_by_topic: dict[str, set[str]] = {}
-
-    for topic_key in topic_order + sorted(key for key in articles_by_topic if key not in topic_order):
-        articles = articles_by_topic.get(topic_key) or []
-        if not articles:
-            continue
-        topic = topic_by_key.get(
-            topic_key,
-            {
-                "key": topic_key,
-                "title": articles[0].get("topic_title") or topic_key or "Unknown topic",
-                "keywords": [],
-                "boost_phrases": [],
-            },
-        )
-        topic_title = str(topic.get("title") or topic_key or "Unknown topic")
-        articles_by_topic_title[topic_title] = articles
-        all_story_groups = cluster_topic_stories_by_similarity(
-            topic,
-            articles,
-            min_articles_per_story=min_articles_per_story,
-            similarity_threshold=similarity_threshold,
-        )
-        if all_story_groups:
-            pair_debug_by_topic[topic_title] = (
-                all_story_groups[0].get("_pair_debug", [])[:STORY_PAIR_DEBUG_LIMIT]
-            )
-        if not all_story_groups:
-            dropped_by_topic[topic_title] += len(articles)
-            dropped_articles_by_topic[topic_title] = [
-                {
-                    "article_id": article.get("article_id"),
-                    "source": article.get("source"),
-                    "title": article.get("title"),
-                    "relevance_score": article.get("relevance_score"),
-                    "reason": "no_supported_story_cluster",
-                }
-                for article in articles
-            ]
-            continue
-
-        article_lookup = {str(article.get("article_id") or ""): article for article in articles}
-        all_topic_story_records: list[dict] = []
-        for story_rank, story in enumerate(all_story_groups, start=1):
-            story_title = _clean_story_title(str(story.get("title") or ""), topic, articles)
-            article_ids = [
-                str(article_id)
-                for article_id in story.get("article_ids", [])
-                if str(article_id) in article_lookup
-            ]
-            if len(article_ids) < min_articles_per_story:
-                continue
-            story_key = (
-                f"{_story_slug(topic_key or topic_title, 'topic')}"
-                f"-story-{story_rank:02d}-{_story_slug(story_title)}"
-            )
-            all_topic_story_records.append(
-                {
-                    "story_key": story_key,
-                    "topic_key": topic_key,
-                    "topic_title": topic_title,
-                    "story_title": story_title,
-                    "story_rank": story_rank,
-                    "article_count": len(article_ids),
-                    "cluster_article_count": int(story.get("article_count") or len(article_ids)),
-                    "selected_article_count": len(article_ids),
-                    "article_ids": article_ids,
-                    "cluster_article_ids": story.get("cluster_article_ids", article_ids),
-                    "average_similarity": story.get("average_similarity"),
-                    "connectedness_score": story.get("connectedness_score"),
-                    "story_strength_score": story.get("story_strength_score"),
-                    "edge_density": story.get("edge_density"),
-                    "mean_best_similarity": story.get("mean_best_similarity"),
-                    "min_best_similarity": story.get("min_best_similarity"),
-                    "min_member_average_similarity": story.get("min_member_average_similarity"),
-                    "min_member_edge_degree": story.get("min_member_edge_degree"),
-                    "member_cohesion_floor": story.get("member_cohesion_floor"),
-                    "member_edge_degree_floor": story.get("member_edge_degree_floor"),
-                    "pruned_article_ids": story.get("pruned_article_ids") or [],
-                    "prune_reason": story.get("prune_reason") or "",
-                    "source_count": story.get("source_count"),
-                }
-            )
-
-        # Keep every viable story cluster in the main candidate pool. The story-topic
-        # assignment stage is responsible for choosing the final per-topic set.
-        topic_story_records = all_topic_story_records
-
-        for record in topic_story_records:
-            story_key = str(record.get("story_key") or "")
-            story_title = str(record.get("story_title") or "")
-            story_rank = int(record.get("story_rank") or 0)
-            article_ids = [
-                str(article_id)
-                for article_id in record.get("article_ids", [])
-                if str(article_id) in article_lookup
-            ]
-            for article_id in article_ids:
-                original_article = article_lookup[article_id]
-                annotated_by_original_id[id(original_article)] = {
-                    **original_article,
-                    "story_key": story_key,
-                    "story_title": story_title,
-                    "story_rank": story_rank,
-                    "story_article_count": int(record.get("cluster_article_count") or len(article_ids)),
-                    "story_selected_article_count": len(article_ids),
-                    "story_average_similarity": record.get("average_similarity"),
-                    "story_connectedness_score": record.get("connectedness_score"),
-                    "story_strength_score": record.get("story_strength_score"),
-                    "story_edge_density": record.get("edge_density"),
-                    "story_min_member_average_similarity": record.get("min_member_average_similarity"),
-                    "story_min_member_edge_degree": record.get("min_member_edge_degree"),
-                    "story_member_cohesion_floor": record.get("member_cohesion_floor"),
-                    "story_member_edge_degree_floor": record.get("member_edge_degree_floor"),
-                    "story_pruned_article_ids": record.get("pruned_article_ids") or [],
-                    "story_prune_reason": record.get("prune_reason") or "",
-                    "story_source_count": record.get("source_count"),
-                }
-        included_ids = {
-            id(article_lookup[article_id])
-            for record in topic_story_records
-            for article_id in record["article_ids"]
-            if article_id in article_lookup
-        }
-        reserve_article_ids = reserve_article_ids_by_topic.get(topic_title, set())
-        dropped_articles = [
-            article
-            for article in articles
-            if id(article) not in included_ids
-            and str(article.get("article_id") or "") not in reserve_article_ids
-        ]
-        dropped_by_topic[topic_title] += len(dropped_articles)
-        if dropped_articles:
-            dropped_articles_by_topic[topic_title] = [
-                {
-                    "article_id": article.get("article_id"),
-                    "source": article.get("source"),
-                    "title": article.get("title"),
-                    "relevance_score": article.get("relevance_score"),
-                    "reason": "no_retained_or_reserve_story_cluster",
-                }
-                for article in dropped_articles
-            ]
-        if topic_story_records:
-            stories_by_topic[topic_title] = topic_story_records
-
-    selected_targets = [
-        annotated_by_original_id[id(article)]
-        for article in article_targets
-        if id(article) in annotated_by_original_id
-    ]
-    story_debug_records: list[dict[str, Any]] = []
-    reserve_story_debug_records: list[dict[str, Any]] = []
-
-    def story_debug_records_for_topic(topic_title: str, story_list: list[dict]) -> list[dict[str, Any]]:
-        topic_articles = {
-            str(article.get("article_id") or ""): article
-            for article in articles_by_topic_title.get(topic_title, [])
-        }
-        debug_records: list[dict[str, Any]] = []
-        for story in story_list:
-            article_details = []
-            for article_id in story.get("cluster_article_ids", []):
-                article = topic_articles.get(str(article_id))
-                if not article:
-                    continue
-                article_details.append(
-                    {
-                        "article_id": article_id,
-                        "source": article.get("source"),
-                        "title": article.get("title"),
-                        "url": article.get("url"),
-                        "pub_date": article.get("pub_date"),
-                    }
-                )
-            debug_records.append(
-                {**story, "topic_title": topic_title, "articles": article_details}
-            )
-        return debug_records
-
-    for topic_title, story_list in stories_by_topic.items():
-        story_debug_records.extend(story_debug_records_for_topic(topic_title, story_list))
-    for topic_title, story_list in reserve_stories_by_topic.items():
-        reserve_story_debug_records.extend(story_debug_records_for_topic(topic_title, story_list))
-    pair_debug = [
-        pair
-        for pairs in pair_debug_by_topic.values()
-        for pair in pairs[:STORY_PAIR_DEBUG_LIMIT]
-    ][:STORY_PAIR_DEBUG_LIMIT]
-    dropped_articles = [
-        article
-        for articles in dropped_articles_by_topic.values()
-        for article in articles
-    ]
-    stats = {
-        "enabled": True,
-        "candidate_count": len(article_targets),
-        "included_count": len(selected_targets),
-        "reserve_included_count": sum(
-            len(article_ids) for article_ids in reserve_article_ids_by_topic.values()
-        ),
-        "dropped_count": len(dropped_articles),
-        "min_articles_per_story": min_articles_per_story,
-        "max_stories_per_topic": max_stories_per_topic,
-        "similarity_threshold": similarity_threshold,
-        "clustering_method": "cleaned_body_weighted_tfidf_similarity_graph",
-        "story_count": sum(len(stories) for stories in stories_by_topic.values()),
-        "initial_story_count": sum(len(stories) for stories in stories_by_topic.values()),
-        "reserve_story_count": sum(len(stories) for stories in reserve_stories_by_topic.values()),
-        "viable_story_count": (
-            sum(len(stories) for stories in stories_by_topic.values())
-            + sum(len(stories) for stories in reserve_stories_by_topic.values())
-        ),
-        "stories": story_debug_records,
-        "reserve_stories": reserve_story_debug_records,
-        "stories_by_topic": stories_by_topic,
-        "reserve_stories_by_topic": reserve_stories_by_topic,
-        "reserve_article_count_by_topic": {
-            topic_title: len(article_ids)
-            for topic_title, article_ids in reserve_article_ids_by_topic.items()
-        },
-        "dropped_by_topic": dict(dropped_by_topic),
-        "dropped_articles": dropped_articles,
-        "dropped_articles_by_topic": dropped_articles_by_topic,
-        "pair_debug": pair_debug,
-        "pair_debug_by_topic": pair_debug_by_topic,
-    }
-    return selected_targets, stats
 
 
 def filter_budgeted_targets_by_story_floor(

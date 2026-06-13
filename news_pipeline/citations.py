@@ -393,7 +393,6 @@ def parse_article_report_entry(entry: str) -> dict[str, Any]:
         "published": metadata.get("published", ""),
         "url": url,
         "article_id": metadata.get("article id", ""),
-        "topic": metadata.get("topic", ""),
         "story": metadata.get("story", ""),
         "summary": summary,
         "raw_entry": clean_entry,
@@ -986,6 +985,11 @@ def render_cited_story(
             first_seen_order=source_first_seen_order,
         )
     story_level_source_id_set = set(story_level_source_ids)
+    story_citation_numbers: list[int] = []
+
+    def add_story_citation_number(number: int) -> None:
+        if number > 0 and number not in story_citation_numbers:
+            story_citation_numbers.append(number)
 
     rendered_source_ids: list[str] = []
     for source_id in story_level_source_ids:
@@ -1010,6 +1014,7 @@ def render_cited_story(
         number = registry.register(source)
         if number not in story_level_numbers:
             story_level_numbers.append(number)
+        add_story_citation_number(number)
 
     rendered_sentences: list[str] = []
     for sentence in cited_sentences:
@@ -1029,6 +1034,7 @@ def render_cited_story(
             number = registry.register(source)
             if number not in numbers:
                 numbers.append(number)
+                add_story_citation_number(number)
         if numbers:
             sentence_text = f"{sentence_text}{''.join(f'[{number}]' for number in numbers)}"
         if sentence_text:
@@ -1036,6 +1042,7 @@ def render_cited_story(
     return {
         "paragraph": " ".join(rendered_sentences).strip(),
         "headline_citation_text": "".join(f"[{number}]" for number in story_level_numbers),
+        "story_citation_numbers": story_citation_numbers,
         "story_level_source_numbers": story_level_numbers,
         "story_level_source_ids": story_level_source_ids,
         "story_level_source_sentence_counts": {
@@ -1047,25 +1054,143 @@ def render_cited_story(
     }
 
 
-def render_plain_text_sources(citation_sources: list[dict[str, Any]]) -> str:
+def _citation_source_number(source: dict[str, Any]) -> int:
+    try:
+        number = int(source.get("number") or 0)
+    except (TypeError, ValueError):
+        return 0
+    return number if number > 0 else 0
+
+
+def _source_by_citation_number(citation_sources: list[dict[str, Any]]) -> dict[int, dict[str, Any]]:
+    sources_by_number: dict[int, dict[str, Any]] = {}
+    for source in citation_sources:
+        number = _citation_source_number(source)
+        if number > 0:
+            sources_by_number[number] = source
+    return sources_by_number
+
+
+def _citation_group_title(group: dict[str, Any], index: int) -> str:
+    for key in ("story_headline", "story", "title", "label"):
+        title = strip_citation_markers(str(group.get(key) or ""))
+        title = re.sub(r"\s+", " ", title).strip()
+        if title:
+            return title
+    return f"Story {index + 1}"
+
+
+def _citation_group_numbers(group: dict[str, Any]) -> list[int]:
+    raw_numbers = (
+        group.get("citation_numbers")
+        or group.get("source_numbers")
+        or group.get("numbers")
+        or group.get("sources")
+        or []
+    )
+    numbers: list[int] = []
+    for raw_number in raw_numbers:
+        if isinstance(raw_number, dict):
+            raw_number = raw_number.get("number") or raw_number.get("citation_number")
+        try:
+            number = int(raw_number)
+        except (TypeError, ValueError):
+            continue
+        if number > 0 and number not in numbers:
+            numbers.append(number)
+    return numbers
+
+
+def _render_plain_text_source(source: dict[str, Any]) -> str:
+    number = _citation_source_number(source)
+    if number <= 0:
+        return ""
+    title = str(source.get("title") or "Untitled article").strip()
+    details = [
+        str(source.get("source") or "").strip(),
+        format_source_published_timestamp(source.get("published")),
+    ]
+    detail_text = ", ".join(detail for detail in details if detail)
+    line = f"[{number}] {title}"
+    if detail_text:
+        line = f"{line} - {detail_text}"
+    url = str(source.get("url") or "").strip()
+    if url:
+        line = f"{line}\n    {url}"
+    return line
+
+
+def _render_plain_text_source_section(title: str, sources: list[dict[str, Any]]) -> str:
+    source_lines = [
+        rendered
+        for rendered in (_render_plain_text_source(source) for source in sources)
+        if rendered
+    ]
+    if not source_lines:
+        return ""
+    clean_title = title.strip() or "Sources"
+    return f"{clean_title}\n{'-' * len(clean_title)}\n\n" + "\n\n".join(source_lines)
+
+
+def _grouped_citation_sources(
+    citation_sources: list[dict[str, Any]],
+    citation_groups: list[dict[str, Any]] | None,
+) -> tuple[list[tuple[str, list[dict[str, Any]]]], list[dict[str, Any]]]:
+    if not citation_groups:
+        return [], []
+    sources_by_number = _source_by_citation_number(citation_sources)
+    sections: list[tuple[str, list[dict[str, Any]]]] = []
+    captured_numbers: set[int] = set()
+    for index, group in enumerate(citation_groups):
+        group_sources: list[dict[str, Any]] = []
+        for number in _citation_group_numbers(group):
+            source = sources_by_number.get(number)
+            if not source:
+                continue
+            if number not in captured_numbers:
+                captured_numbers.add(number)
+            group_sources.append(source)
+        if group_sources:
+            sections.append((_citation_group_title(group, index), group_sources))
+    additional_sources = [
+        source
+        for source in citation_sources
+        if _citation_source_number(source) not in captured_numbers
+    ]
+    return sections, additional_sources
+
+
+def render_plain_text_sources(
+    citation_sources: list[dict[str, Any]],
+    citation_groups: list[dict[str, Any]] | None = None,
+) -> str:
+    grouped_sections, additional_sources = _grouped_citation_sources(
+        citation_sources,
+        citation_groups,
+    )
+    if grouped_sections:
+        sections = [
+            section
+            for section in (
+                _render_plain_text_source_section(title, sources)
+                for title, sources in grouped_sections
+            )
+            if section
+        ]
+        additional_section = _render_plain_text_source_section(
+            "Additional Sources",
+            additional_sources,
+        )
+        if additional_section:
+            sections.append(additional_section)
+        if sections:
+            return "\n\n".join(sections)
+
     lines: list[str] = []
     for source in citation_sources:
-        number = int(source.get("number") or 0)
-        if number <= 0:
-            continue
-        title = str(source.get("title") or "Untitled article").strip()
-        details = [
-            str(source.get("source") or "").strip(),
-            format_source_published_timestamp(source.get("published")),
-        ]
-        detail_text = ", ".join(detail for detail in details if detail)
-        line = f"[{number}] {title}"
-        if detail_text:
-            line = f"{line} - {detail_text}"
-        url = str(source.get("url") or "").strip()
-        if url:
-            line = f"{line}\n    {url}"
-        lines.append(line)
+        rendered_source = _render_plain_text_source(source)
+        if rendered_source:
+            lines.append(rendered_source)
     return "\n\n".join(lines)
 
 
@@ -1128,35 +1253,106 @@ def render_html_text_with_citations(text: str, citation_sources: list[dict[str, 
     return "".join(rendered_parts).replace("\n", "<br>")
 
 
-def render_html_sources(citation_sources: list[dict[str, Any]]) -> str:
+def _render_html_source_item(
+    source: dict[str, Any],
+    *,
+    include_id: bool = True,
+    show_number: bool = False,
+) -> str:
+    number = _citation_source_number(source)
+    if number <= 0:
+        return ""
+    title = html.escape(str(source.get("title") or "Untitled article").strip())
+    url = str(source.get("url") or "").strip()
+    if url:
+        title_html = (
+            f"<a href=\"{html.escape(url, quote=True)}\" "
+            f"style=\"color:#2563eb; text-decoration:none;\">{title}</a>"
+        )
+    else:
+        title_html = title
+    details = [
+        str(source.get("source") or "").strip(),
+        format_source_published_timestamp(source.get("published")),
+    ]
+    detail_text = html.escape(", ".join(detail for detail in details if detail))
+    detail_html = (
+        f"<div style=\"margin:1px 0 0; font-size:12px; line-height:1.3; color:#6b7280;\">{detail_text}</div>"
+        if detail_text
+        else ""
+    )
+    id_html = f" id=\"source-{number}\"" if include_id else ""
+    number_html = (
+        f"<span style=\"font-weight:700; color:#111827;\">[{number}]</span> "
+        if show_number
+        else ""
+    )
+    return (
+        f"<li{id_html} style=\"margin:0 0 6px; padding-left:2px; font-size:13px; line-height:1.35; color:#374151;\">"
+        f"{number_html}{title_html}{detail_html}</li>"
+    )
+
+
+def _render_html_source_section(
+    title: str,
+    sources: list[dict[str, Any]],
+    anchored_numbers: set[int],
+) -> str:
+    items: list[str] = []
+    for source in sources:
+        number = _citation_source_number(source)
+        include_id = number not in anchored_numbers
+        rendered_item = _render_html_source_item(source, include_id=include_id, show_number=True)
+        if rendered_item:
+            items.append(rendered_item)
+            if include_id:
+                anchored_numbers.add(number)
+    if not items:
+        return ""
+    clean_title = html.escape(title.strip() or "Sources")
+    return (
+        "<div style=\"margin:0 0 18px;\">"
+        f"<h3 style=\"margin:0 0 8px; font-size:15px; line-height:1.35; font-weight:700; color:#111827;\">{clean_title}</h3>"
+        "<ul style=\"margin:0; padding-left:0; list-style:none;\">"
+        f"{''.join(items)}"
+        "</ul>"
+        "</div>"
+    )
+
+
+def render_html_sources(
+    citation_sources: list[dict[str, Any]],
+    citation_groups: list[dict[str, Any]] | None = None,
+) -> str:
+    grouped_sections, additional_sources = _grouped_citation_sources(
+        citation_sources,
+        citation_groups,
+    )
+    if grouped_sections:
+        anchored_numbers: set[int] = set()
+        sections = [
+            section
+            for section in (
+                _render_html_source_section(title, sources, anchored_numbers)
+                for title, sources in grouped_sections
+            )
+            if section
+        ]
+        additional_section = _render_html_source_section(
+            "Additional Sources",
+            additional_sources,
+            anchored_numbers,
+        )
+        if additional_section:
+            sections.append(additional_section)
+        if sections:
+            return "".join(sections)
+
     items: list[str] = []
     for source in citation_sources:
-        number = int(source.get("number") or 0)
-        if number <= 0:
-            continue
-        title = html.escape(str(source.get("title") or "Untitled article").strip())
-        url = str(source.get("url") or "").strip()
-        if url:
-            title_html = (
-                f"<a href=\"{html.escape(url, quote=True)}\" "
-                f"style=\"color:#2563eb; text-decoration:none;\">{title}</a>"
-            )
-        else:
-            title_html = title
-        details = [
-            str(source.get("source") or "").strip(),
-            format_source_published_timestamp(source.get("published")),
-        ]
-        detail_text = html.escape(", ".join(detail for detail in details if detail))
-        detail_html = (
-            f"<div style=\"margin:1px 0 0; font-size:12px; line-height:1.3; color:#6b7280;\">{detail_text}</div>"
-            if detail_text
-            else ""
-        )
-        items.append(
-            f"<li id=\"source-{number}\" style=\"margin:0 0 6px; padding-left:2px; font-size:13px; line-height:1.35; color:#374151;\">"
-            f"{title_html}{detail_html}</li>"
-        )
+        rendered_item = _render_html_source_item(source)
+        if rendered_item:
+            items.append(rendered_item)
     if not items:
         return "<p style=\"margin:0; font-size:13px; line-height:1.3; color:#6b7280;\">No citation sources available.</p>"
     return "<ol style=\"margin:0; padding-left:20px;\">" + "".join(items) + "</ol>"

@@ -13,7 +13,6 @@ from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 
 from . import citations as citations_stage
 from .text_cleaning import clean_article_text
-from .topic_context import build_topic_context
 
 
 ARTICLE_BODY_EVIDENCE_MAX_CHARS = 2000
@@ -22,7 +21,7 @@ MIN_STORY_DRAFT_WORD_COUNT = 50
 
 @dataclass(frozen=True)
 class StoryDraftingRuntime:
-    article_summary_concurrency: int
+    story_synthesis_concurrency: int
     final_synthesis_max_tokens: int
     model_reference: str
     model_name: str
@@ -35,8 +34,9 @@ class StoryDraftingRuntime:
     strip_prompt_echo_lines: Callable[[str], str]
     strip_model_artifacts: Callable[[str], str]
     is_low_coverage_synthesis_section: Callable[[str], bool]
-    dev_synthesis_paragraph_from_summaries: Callable[[list[str]], str]
+    fallback_synthesis_paragraph_from_summaries: Callable[[list[str]], str]
     final_synthesis_word_count: Callable[[str], int]
+    progress_callback: Callable[[str, dict[str, Any]], None] | None = None
 
 
 def report_summary_text(entry: str) -> str:
@@ -84,16 +84,6 @@ def _annotated_citation_sources(citation_sources: list[dict[str, Any]]) -> list[
     return citations_stage.annotate_citation_precedence(list(citation_sources or []))
 
 
-def _story_topic_context(story: dict, fallback_title: str) -> str:
-    topic_context = str(story.get("topic_context") or "").strip()
-    if topic_context:
-        return topic_context
-    topic_definition = story.get("topic_definition")
-    if isinstance(topic_definition, dict):
-        return build_topic_context(topic_definition, fallback_title=fallback_title)
-    return build_topic_context(None, fallback_title=fallback_title)
-
-
 def story_summary_blocks_from_clusters(
     story_records: list[dict],
     article_summary_lookup: dict[str, str],
@@ -106,9 +96,6 @@ def story_summary_blocks_from_clusters(
         summaries: list[str] = []
         article_ids: list[str] = []
         citation_sources: list[dict[str, Any]] = []
-        topic_title = str(story.get("topic_title") or "Unclassified News")
-        fallback_topic_context = build_topic_context(None, fallback_title=topic_title)
-        topic_context = _story_topic_context(story, topic_title)
         for article_id in story.get("cluster_article_ids") or story.get("article_ids") or []:
             clean_article_id = str(article_id or "").strip()
             entry = article_summary_lookup.get(clean_article_id)
@@ -119,9 +106,6 @@ def story_summary_blocks_from_clusters(
             if not summary_text:
                 continue
             source_article = (article_lookup or {}).get(clean_article_id)
-            source_topic_context = str((source_article or {}).get("topic_context") or "").strip()
-            if source_topic_context and topic_context == fallback_topic_context:
-                topic_context = source_topic_context
             summaries.append(summary_text)
             article_ids.append(clean_article_id)
             citation_sources.append(
@@ -140,9 +124,6 @@ def story_summary_blocks_from_clusters(
         citation_sources = _annotated_citation_sources(citation_sources)
         story_blocks.append(
             {
-                "topic_key": story.get("topic_key") or "",
-                "topic_title": topic_title,
-                "topic_context": topic_context,
                 "story_title": story.get("story_title") or story.get("title") or "News update",
                 "story_key": story.get("story_key") or f"global-story-{story_index + 1:02d}",
                 "summaries": summaries,
@@ -162,10 +143,6 @@ def story_summary_blocks_from_clusters(
 
 
 def build_story_synthesis_prompt_messages(story_block: dict[str, Any], now_label: str) -> list[BaseMessage]:
-    topic_title = str(story_block.get("topic_title") or "Unknown topic")
-    topic_context = str(story_block.get("topic_context") or "").strip()
-    if not topic_context:
-        topic_context = build_topic_context(None, fallback_title=topic_title)
     story_title = str(story_block.get("story_title") or "Story update")
     summaries = [str(summary or "").strip() for summary in story_block.get("summaries", []) if str(summary or "").strip()]
     citation_sources = [
@@ -193,6 +170,10 @@ def build_story_synthesis_prompt_messages(story_block: dict[str, Any], now_label
             f"S{index}: {summary}"
             for index, summary in enumerate(summaries, start=1)
         )
+    story_guidance = (
+        "Prioritize the headline, lede, and details around the central event supported "
+        "by the supplied source summaries and evidence."
+    )
     system_prompt = SystemMessage(content=textwrap.dedent(f"""
         Today: {now_label}.
         You are synthesizing prewritten article summaries and cleaned article evidence into one newsletter story.
@@ -209,9 +190,7 @@ def build_story_synthesis_prompt_messages(story_block: dict[str, Any], now_label
         paraphrased evidence detail.
         If a source says it appears to cite another listed source, prefer the listed primary source
         for shared facts and cite the derivative source only for unique reporting or analysis.
-        Use the provided Topic context to prioritize the headline, lede, and details most relevant
-        to this topic, but include major concrete developments even if they complicate the topic
-        framing; do not invent topic relevance.
+        {story_guidance}
         Lead with today's reported development. Include concrete reported claims, named actors,
         places, timing, figures, damage, statements, deadlines, and uncertainty when supported.
         Then assess whether the sources directly or materially contradict each other.
@@ -219,7 +198,7 @@ def build_story_synthesis_prompt_messages(story_block: dict[str, Any], now_label
         timeline, attribution, status, quote, or outcome where the cited accounts cannot
         both be true in the same context. Do not require identical wording.
         Omission, different focus, routine updates over time, or one source addressing a
-        topic another source does not address is not a contradiction.
+        subject another source does not address is not a contradiction.
         If there is no direct or material factual contradiction, write exactly 'NONE' for Contradictions.
         If there is a contradiction, write 1-3 concise prose sentences under Contradictions.
         Each contradiction sentence must cite the disagreeing sources and must use the cleaned article evidence,
@@ -228,10 +207,6 @@ def build_story_synthesis_prompt_messages(story_block: dict[str, Any], now_label
         Do not merge in background material unless a source summary reports it as part of today's update.
     """).strip())
     user_prompt = HumanMessage(content=textwrap.dedent(f"""
-        Topic: {topic_title}
-        Topic context:
-        {topic_context}
-
         Story: {story_title}
 
         Source summaries and cleaned article evidence to paraphrase, not quote:
@@ -280,12 +255,12 @@ def clean_story_synthesis_paragraph(
     clean_text = re.sub(r"(?m)^##+\s+.*$", "", clean_text)
     clean_text = re.sub(r"(?mi)^\s*(?:story\s+headline|headline)\s*:\s*.*$", "", clean_text)
     clean_text = re.sub(r"(?mi)^\s*paragraph\s*:\s*", "", clean_text)
-    clean_text = re.sub(r"(?mi)^(topic|story|source summaries?|sources?|references?)\s*:\s*.*$", "", clean_text)
+    clean_text = re.sub(r"(?mi)^(story|source summaries?|sources?|references?)\s*:\s*.*$", "", clean_text)
     clean_text = re.sub(r"(?m)^\s*[-*]\s+", "", clean_text)
     clean_text = re.sub(r"\s+", " ", clean_text).strip()
     if clean_text and not runtime.is_low_coverage_synthesis_section(clean_text):
         return clean_text
-    return runtime.dev_synthesis_paragraph_from_summaries(summaries)
+    return runtime.fallback_synthesis_paragraph_from_summaries(summaries)
 
 
 def clean_story_synthesis_contradictions(
@@ -295,7 +270,7 @@ def clean_story_synthesis_contradictions(
     clean_text = runtime.strip_prompt_echo_lines(runtime.strip_model_artifacts(raw_text or ""))
     clean_text = re.sub(r"(?m)^##+\s+.*$", "", clean_text)
     clean_text = re.sub(r"(?mi)^\s*contradictions?\s*:\s*", "", clean_text)
-    clean_text = re.sub(r"(?mi)^(topic|story|source summaries?|sources?|references?)\s*:\s*.*$", "", clean_text)
+    clean_text = re.sub(r"(?mi)^(story|source summaries?|sources?|references?)\s*:\s*.*$", "", clean_text)
     clean_text = re.sub(r"(?m)^\s*[-*]\s+", "", clean_text)
     clean_text = re.sub(r"\s+", " ", clean_text).strip()
     normalized = re.sub(r"[^a-z]+", " ", clean_text.lower()).strip()
@@ -386,8 +361,6 @@ def contradiction_presence_diagnostics(draft: dict[str, Any]) -> dict[str, Any]:
     return {
         "story_key": draft.get("story_key"),
         "story_title": draft.get("story_title"),
-        "topic_key": draft.get("topic_key"),
-        "topic_title": draft.get("topic_title"),
         "article_count": draft.get("article_count"),
         "source_count": draft.get("source_count"),
         "raw_contradiction_detected": bool(marked_contradictions),
@@ -453,7 +426,7 @@ def run_story_synthesis_block(
         "Story update",
         runtime,
     )
-    fallback_paragraph = runtime.dev_synthesis_paragraph_from_summaries(summaries)
+    fallback_paragraph = runtime.fallback_synthesis_paragraph_from_summaries(summaries)
     prompt_messages = build_story_synthesis_prompt_messages(story_block, now_label)
     estimated_input_tokens = sum(runtime.estimate_message_token_count(message) for message in prompt_messages)
     response = runtime.invoke_with_retries(
@@ -533,20 +506,40 @@ def run_story_synthesis_blocks(
     now_label: str,
     runtime: StoryDraftingRuntime,
 ) -> list[dict[str, Any]]:
-    if runtime.article_summary_concurrency > 1 and len(story_blocks) > 1:
+    if runtime.progress_callback:
+        runtime.progress_callback(
+            "story_drafting_started",
+            {"total": len(story_blocks)},
+        )
+    if runtime.story_synthesis_concurrency > 1 and len(story_blocks) > 1:
         ordered_results: list[tuple[int, dict[str, Any]]] = []
-        with ThreadPoolExecutor(max_workers=runtime.article_summary_concurrency) as executor:
+        with ThreadPoolExecutor(max_workers=runtime.story_synthesis_concurrency) as executor:
             future_map = {
                 executor.submit(run_story_synthesis_block, story_block, now_label, runtime): index
                 for index, story_block in enumerate(story_blocks)
             }
             for future in as_completed(future_map):
-                ordered_results.append((future_map[future], future.result()))
+                result = future.result()
+                ordered_results.append((future_map[future], result))
+                if runtime.progress_callback:
+                    runtime.progress_callback(
+                        "story_draft_completed",
+                        {"story": result},
+                    )
         return [
             result
             for _, result in sorted(ordered_results, key=lambda item: item[0])
         ]
-    return [run_story_synthesis_block(story_block, now_label, runtime) for story_block in story_blocks]
+    results: list[dict[str, Any]] = []
+    for story_block in story_blocks:
+        result = run_story_synthesis_block(story_block, now_label, runtime)
+        results.append(result)
+        if runtime.progress_callback:
+            runtime.progress_callback(
+                "story_draft_completed",
+                {"story": result},
+            )
+    return results
 
 
 def draft_story_clusters_from_article_summaries(
@@ -580,8 +573,6 @@ def draft_story_clusters_from_article_summaries(
         {
             "story_key": draft.get("story_key"),
             "story_title": draft.get("story_title"),
-            "topic_key": draft.get("topic_key"),
-            "topic_title": draft.get("topic_title"),
             "article_count": draft.get("article_count"),
             "word_count": draft.get("word_count"),
             "min_word_count": draft.get("min_word_count"),
@@ -602,7 +593,7 @@ def draft_story_clusters_from_article_summaries(
         "story_draft_rejection_counts": rejection_counts,
         "story_draft_rejections": rejection_details,
         "contradiction_analytics": summarize_contradiction_analytics(all_story_drafts),
-        "story_synthesis_concurrency": runtime.article_summary_concurrency,
+        "story_synthesis_concurrency": runtime.story_synthesis_concurrency,
         "model": runtime.model_reference,
         "model_name": runtime.model_name,
         "model_backend": runtime.model_backend,

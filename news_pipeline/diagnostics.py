@@ -1,10 +1,4 @@
-"""Run diagnostics for the daily news funnel.
-
-This module records the run in two formats:
-
-- JSON for inspection or later automation.
-- Markdown for a quick human-readable backend audit trail.
-"""
+"""Run diagnostics for the global story-first news funnel."""
 
 from __future__ import annotations
 
@@ -22,7 +16,6 @@ class RunDiagnostics:
     settings: dict[str, Any]
     events: list[dict[str, Any]] = field(default_factory=list)
     top_funnel: dict[str, Any] = field(default_factory=dict)
-    topics: list[dict[str, Any]] = field(default_factory=list)
     source_runs: list[dict[str, Any]] = field(default_factory=list)
     article_budget: dict[str, Any] = field(default_factory=dict)
     model_call_stats: dict[str, Any] = field(default_factory=dict)
@@ -81,35 +74,6 @@ class RunDiagnostics:
             ),
         }
 
-    def record_topics(self, topics: list[dict[str, Any]]) -> None:
-        self.topics = [
-            {
-                "key": topic.get("key"),
-                "title": topic.get("title"),
-                "rationale": topic.get("rationale"),
-                "topic_source": topic.get("topic_source"),
-                "fallback_provider_support": topic.get("fallback_provider_support", []),
-                "max_articles_per_source": topic.get("max_articles_per_source"),
-                "configured_rank": topic.get("configured_rank"),
-                "candidate_rank": topic.get("candidate_rank"),
-                "selection_rank": topic.get("selection_rank"),
-                "selection_reason": topic.get("selection_reason"),
-                "seed_providers": topic.get("seed_providers", []),
-                "validation_providers": topic.get("validation_providers", []),
-                "frame_counts": topic.get("frame_counts", {}),
-                "frame_tags": topic.get("frame_tags", []),
-                "seed_matches": [
-                    _story_digest(match, rank=index)
-                    for index, match in enumerate(topic.get("seed_matches", []), start=1)
-                ],
-                "validation_matches": [
-                    _story_digest(match, rank=index)
-                    for index, match in enumerate(topic.get("validation_matches", []), start=1)
-                ],
-            }
-            for topic in topics
-        ]
-
     def record_source_run(self, source_run: dict[str, Any]) -> None:
         self.source_runs.append(source_run)
 
@@ -133,7 +97,6 @@ class RunDiagnostics:
             "run_started_at": self.run_started_at,
             "settings": self.settings,
             "top_funnel": self.top_funnel,
-            "topics": self.topics,
             "source_runs": self.source_runs,
             "article_budget": self.article_budget,
             "model_call_stats": self.model_call_stats,
@@ -145,6 +108,7 @@ class RunDiagnostics:
         }
 
     def write(self, output_dir: Path, timestamp: str) -> tuple[Path, Path, Path]:
+        output_dir.mkdir(parents=True, exist_ok=True)
         json_path = output_dir / f"run_details_{timestamp}.json"
         markdown_path = output_dir / f"run_details_{timestamp}.md"
         summary_path = output_dir / f"run_summary_{timestamp}.md"
@@ -154,6 +118,30 @@ class RunDiagnostics:
         markdown_path.write_text(self.to_markdown(), encoding="utf-8")
         summary_path.write_text(self.to_summary_markdown(), encoding="utf-8")
         return json_path, markdown_path, summary_path
+
+    def write_details_json(self, output_path: Path) -> Path:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        temp_path = output_path.with_name(f"{output_path.name}.tmp")
+        with temp_path.open("w", encoding="utf-8") as handle:
+            json.dump(self.to_dict(), handle, indent=2)
+            handle.write("\n")
+        temp_path.replace(output_path)
+        return output_path
+
+    def write_run_review_markdown(
+        self,
+        output_path: Path,
+        *,
+        report_body: str = "",
+    ) -> Path:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        temp_path = output_path.with_name(f"{output_path.name}.tmp")
+        temp_path.write_text(
+            self.to_run_review_markdown(report_body=report_body),
+            encoding="utf-8",
+        )
+        temp_path.replace(output_path)
+        return output_path
 
     def summary_stats(self) -> dict[str, Any]:
         source_status_counts: Counter[str] = Counter()
@@ -177,7 +165,7 @@ class RunDiagnostics:
                     for reason, count in (source.get("rejected_counts") or {}).items()
                 }
             )
-            if status not in {"ok", "no_relevant_items", "no_recent_items"}:
+            if status not in {"ok", "no_recent_items", "no_scraped_recent_items"}:
                 problem_sources.append(f"{source.get('source') or 'Unknown source'} ({status})")
             elapsed_seconds = _safe_float(source.get("elapsed_seconds"))
             slow_threshold = _safe_float(self.settings.get("slow_source_warning_seconds"))
@@ -203,9 +191,9 @@ class RunDiagnostics:
 
         story_clustering = _last_event(self.events, "story_clustering")
         story_drafting = _last_event(self.events, "story_drafting")
-        story_topic_classification = _last_event(self.events, "story_topic_classification")
+        story_selection = _last_event(self.events, "global_story_selection")
+        scale_screening = _last_event(self.events, "global_story_scale_screening")
         coverage_deficit = _last_event(self.events, "story_coverage_deficit")
-        coverage_deficits = coverage_deficit.get("deficits") or {}
         contradiction_analytics = story_drafting.get("contradiction_analytics") or {}
 
         model_calls: Counter[str] = Counter()
@@ -213,6 +201,7 @@ class RunDiagnostics:
             model_calls[_model_call_bucket(str(task_name))] += _safe_int(count)
         token_usage = self.model_call_stats.get("token_usage") or {}
         model_token_totals = _model_token_totals(token_usage)
+
         reports_with_images = 0
         image_warnings = 0
         recipient_count = 0
@@ -226,7 +215,6 @@ class RunDiagnostics:
 
         return {
             "duration": _duration_label(self.run_started_at, self.events),
-            "topic_count": len(self.topics),
             "source_status_counts": dict(source_status_counts),
             "problem_sources": problem_sources,
             "slow_sources": slow_sources,
@@ -238,10 +226,12 @@ class RunDiagnostics:
             "story_count": _safe_int(story_clustering.get("story_count")),
             "story_included_count": _safe_int(story_clustering.get("included_count")),
             "story_dropped_count": _safe_int(story_clustering.get("dropped_count")),
-            "story_topic_selected_count": _safe_int(
-                story_topic_classification.get("selected_story_topic_count")
-            ),
-            "story_topic_selected_by_topic": story_topic_classification.get("selected_by_topic") or {},
+            "story_draft_count": _safe_int(story_drafting.get("story_drafts_generated")),
+            "story_scale_kept_count": _safe_int(scale_screening.get("kept_count")),
+            "story_scale_dropped_count": _safe_int(scale_screening.get("dropped_count")),
+            "selected_story_count": _safe_int(story_selection.get("selected_story_count")),
+            "story_selection_candidate_count": _safe_int(story_selection.get("story_count")),
+            "story_coverage_deficit": _safe_int(coverage_deficit.get("deficit")),
             "contradiction_stories_checked": _safe_int(
                 contradiction_analytics.get("stories_checked")
             ),
@@ -259,8 +249,6 @@ class RunDiagnostics:
                     "raw_contradictions_rejected_by_citation_validation"
                 )
             ),
-            "coverage_deficit_topic_count": len(coverage_deficits),
-            "coverage_deficit_total": sum(_safe_int(value) for value in coverage_deficits.values()),
             "article_budget_candidate_count": _safe_int(self.article_budget.get("candidate_count")),
             "article_budget_included_count": _safe_int(self.article_budget.get("included_count")),
             "article_budget_dropped_count": _safe_int(self.article_budget.get("dropped_count")),
@@ -290,21 +278,27 @@ class RunDiagnostics:
             "",
             f"- Started: {self.run_started_at}",
             f"- Duration: {stats['duration']}",
-            f"- Run mode: {self.settings.get('run_mode') or ('dev' if self.settings.get('dev') else 'prod')}",
+            f"- Preset: {self.settings.get('preset_id') or 'custom'}",
+            f"- Source scope: {self.settings.get('source_scope') or 'unknown'}",
+            f"- Recipient scope: {self.settings.get('recipient_scope') or 'unknown'}",
+            f"- URL reuse blocking: {self.settings.get('url_reuse_blocking_enabled')}",
             f"- Output folder: {output_dir}",
             f"- Run log: {run_log_path}",
             "",
             "## At a Glance",
             "",
-            f"- Topics selected: {stats['topic_count']}",
             f"- Sources checked: {self.settings.get('source_count')}",
             f"- Feed items parsed: {stats['feed_item_count']}",
             f"- Candidate feed items selected: {stats['selected_item_count']}",
             f"- Fresh article targets after history/dedupe: {stats['fresh_article_count']}",
             f"- Story groups retained: {stats['story_count']}",
             f"- Article targets retained after story grouping: {stats['story_included_count']}",
-            f"- Article targets dropped before budget: {stats['story_dropped_count']}",
-            f"- Story-topic matches selected: {stats['story_topic_selected_count']}",
+            f"- Article targets dropped before summary: {stats['story_dropped_count']}",
+            f"- Story drafts generated: {stats['story_draft_count']}",
+            "- Story scale screening eligible/ineligible: "
+            f"{stats['story_scale_kept_count']}/{stats['story_scale_dropped_count']}",
+            f"- Global stories selected: {stats['selected_story_count']} of {self.settings.get('max_stories')}",
+            f"- Story coverage deficit: {stats['story_coverage_deficit']}",
             f"- Article summaries generated: {stats['article_summary_count']}",
             f"- Contradictions: {stats['validated_contradiction_count']} validated "
             f"from {stats['contradiction_stories_checked']} story draft(s) checked "
@@ -320,18 +314,16 @@ class RunDiagnostics:
             )
         else:
             lines.append("- Status counts: N/A")
-        if stats["problem_sources"]:
-            lines.append("- Problem sources: " + ", ".join(stats["problem_sources"]))
-        else:
-            lines.append("- Problem sources: none")
-        if stats["timeout_sources"]:
-            lines.append("- Sources with scrape timeouts: " + ", ".join(stats["timeout_sources"]))
-        else:
-            lines.append("- Sources with scrape timeouts: none")
-        if stats["slow_sources"]:
-            lines.append("- Slow sources: " + ", ".join(stats["slow_sources"]))
-        else:
-            lines.append("- Slow sources: none")
+        lines.append(
+            "- Problem sources: " + (", ".join(stats["problem_sources"]) if stats["problem_sources"] else "none")
+        )
+        lines.append(
+            "- Sources with scrape timeouts: "
+            + (", ".join(stats["timeout_sources"]) if stats["timeout_sources"] else "none")
+        )
+        lines.append(
+            "- Slow sources: " + (", ".join(stats["slow_sources"]) if stats["slow_sources"] else "none")
+        )
         if rejection_counts:
             lines.append(
                 "- Rejections: "
@@ -343,12 +335,12 @@ class RunDiagnostics:
         lines.extend(
             [
                 "",
-                "## Budget And Coverage",
+                "## Story Coverage",
                 "",
-                f"- Budget candidates: {stats['article_budget_candidate_count']}",
-                f"- Budget included: {stats['article_budget_included_count']}",
-                f"- Budget dropped: {stats['article_budget_dropped_count']}",
-                f"- Coverage deficits: {stats['coverage_deficit_topic_count']} topic(s), total shortfall {stats['coverage_deficit_total']}",
+                f"- Global story candidates: {stats['story_selection_candidate_count']}",
+                f"- Global stories selected: {stats['selected_story_count']}",
+                f"- Target global stories: {self.settings.get('max_stories')}",
+                f"- Coverage deficit: {stats['story_coverage_deficit']}",
             ]
         )
 
@@ -378,19 +370,6 @@ class RunDiagnostics:
         lines.extend(
             [
                 "",
-                "## Contradiction Checks",
-                "",
-                f"- Story drafts checked: {stats['contradiction_stories_checked']}",
-                f"- Raw contradiction outputs: {stats['raw_contradiction_count']}",
-                f"- Validated contradictions: {stats['validated_contradiction_count']}",
-                f"- Render-eligible contradictions: {stats['render_eligible_contradiction_count']}",
-                f"- Raw contradictions rejected by citation validation: {stats['raw_contradictions_rejected_by_citation_validation']}",
-            ]
-        )
-
-        lines.extend(
-            [
-                "",
                 "## Outputs",
                 "",
                 f"- Reports: {stats['report_count']}",
@@ -408,23 +387,153 @@ class RunDiagnostics:
         lines.append("")
         return "\n".join(lines)
 
+    def to_run_review_markdown(self, *, report_body: str = "") -> str:
+        stats = self.summary_stats()
+        settings = self.settings or {}
+        preset_id = settings.get("preset_id") or "custom"
+        source_status = stats["source_status_counts"]
+        rejection_counts = stats["rejection_counts"]
+        model_calls = stats["model_calls"]
+        token_totals = stats["model_token_totals"]
+        aborted_event = _last_event(self.events, "aborted")
+        failed_event = _last_event(self.events, "failed")
+        status = run_status_from_events(self.events)
+        history_path = settings.get("history_db_path") or "N/A"
+        output_path = settings.get("latest_run_markdown_path") or "N/A"
+        staging_dir = settings.get("run_staging_dir") or settings.get("output_dir") or "N/A"
+        selected_story_label = f"{stats['selected_story_count']} of {settings.get('max_stories')}"
+
+        lines = [
+            "# Latest News Run Review",
+            "",
+            "| Run | Value |",
+            "| --- | --- |",
+            f"| Status | {_table_value(status)} |",
+            f"| Started | {_table_value(self.run_started_at)} |",
+            f"| Duration | {_table_value(stats['duration'])} |",
+            f"| Preset | {_table_value(preset_id)} |",
+            f"| Output review | {_table_value(output_path)} |",
+            f"| History store | {_table_value(history_path)} |",
+            f"| Staging directory | {_table_value(staging_dir)} |",
+            "",
+            "## Run Settings",
+            "",
+            "| Setting | Value |",
+            "| --- | --- |",
+            f"| Model | {_table_value(settings.get('model'))} |",
+            f"| Model profile | {_table_value(settings.get('model_profile'))} |",
+            f"| Model backend | {_table_value(settings.get('model_backend') or 'mlx-lm')} |",
+            f"| Model input cap | {_table_value(settings.get('model_max_input_tokens'))} |",
+            f"| Sources configured | {_table_value(settings.get('source_count'))} |",
+            f"| Recent window | {_table_value(_hours_label(settings.get('recent_window_hours')))} |",
+            f"| Max global stories | {_table_value(settings.get('max_stories'))} |",
+            f"| Min articles per story | {_table_value(settings.get('min_articles_per_story'))} |",
+            f"| Story similarity threshold | {_table_value(settings.get('story_cluster_similarity_threshold'))} |",
+            f"| Story overlap threshold | {_table_value(settings.get('story_selection_overlap_threshold'))} |",
+            f"| Source scope | {_table_value(settings.get('source_scope'))} |",
+            f"| Recipient scope | {_table_value(settings.get('recipient_scope'))} |",
+            f"| URL reuse blocking | {_table_value(settings.get('url_reuse_blocking_enabled'))} |",
+            f"| Image generation | {_table_value(settings.get('image_generation_enabled'))} |",
+            "",
+            "## Top-Level KPIs",
+            "",
+            "| KPI | Value |",
+            "| --- | --- |",
+            f"| Sources checked | {_table_value(settings.get('source_count'))} |",
+            f"| Feed items parsed | {_table_value(stats['feed_item_count'])} |",
+            f"| Candidate feed items selected | {_table_value(stats['selected_item_count'])} |",
+            f"| Fresh article targets | {_table_value(stats['fresh_article_count'])} |",
+            f"| Story groups retained | {_table_value(stats['story_count'])} |",
+            f"| Story drafts generated | {_table_value(stats['story_draft_count'])} |",
+            f"| Global stories selected | {_table_value(selected_story_label)} |",
+            f"| Story coverage deficit | {_table_value(stats['story_coverage_deficit'])} |",
+            f"| Article summaries generated | {_table_value(stats['article_summary_count'])} |",
+            f"| Reports prepared | {_table_value(stats['report_count'])} |",
+            f"| Recipients covered | {_table_value(stats['recipient_count'])} |",
+            "",
+            "## Funnel Stats",
+            "",
+            "| Stage | Count |",
+            "| --- | ---: |",
+            f"| Feed items parsed | {_table_value(stats['feed_item_count'])} |",
+            f"| Candidate items selected | {_table_value(stats['selected_item_count'])} |",
+            f"| Fresh after history/dedupe | {_table_value(stats['fresh_article_count'])} |",
+            f"| Article targets retained after story grouping | {_table_value(stats['story_included_count'])} |",
+            f"| Article targets dropped before summary | {_table_value(stats['story_dropped_count'])} |",
+            f"| Story drafts generated | {_table_value(stats['story_draft_count'])} |",
+            f"| Story scale screening eligible | {_table_value(stats['story_scale_kept_count'])} |",
+            "| Story scale screening ineligible | "
+            f"{_table_value(stats['story_scale_dropped_count'])} |",
+            f"| Global story candidates | {_table_value(stats['story_selection_candidate_count'])} |",
+            f"| Global stories selected | {_table_value(stats['selected_story_count'])} |",
+            "",
+            "## Source Health",
+            "",
+            "| Signal | Value |",
+            "| --- | --- |",
+            f"| Status counts | {_table_value(_format_count_map(source_status))} |",
+            f"| Rejections | {_table_value(_format_count_map(rejection_counts) or 'none recorded')} |",
+            f"| Problem sources | {_table_value(_join_or_none(stats['problem_sources']))} |",
+            f"| Sources with scrape timeouts | {_table_value(_join_or_none(stats['timeout_sources']))} |",
+            f"| Slow sources | {_table_value(_join_or_none(stats['slow_sources']))} |",
+            "",
+            "## Model Activity",
+            "",
+            "| Signal | Value |",
+            "| --- | ---: |",
+            f"| Calls by task | {_table_value(_format_count_map(model_calls) or 'none recorded')} |",
+            f"| Total model calls | {_table_value(stats['model_call_count'])} |",
+            f"| Estimated input tokens | {_table_value(token_totals['estimated_input_tokens'])} |",
+            f"| Estimated output tokens | {_table_value(token_totals['estimated_output_tokens'])} |",
+            f"| Max output tokens requested | {_table_value(token_totals['max_output_tokens_requested'])} |",
+            f"| Actual input tokens | {_table_value(token_totals['actual_input_tokens'] or 'N/A')} |",
+            f"| Actual output tokens | {_table_value(token_totals['actual_output_tokens'] or 'N/A')} |",
+            f"| Actual total tokens | {_table_value(token_totals['actual_total_tokens'] or 'N/A')} |",
+            f"| Calls with provider usage | {_table_value(token_totals['actual_usage_calls'])} |",
+            f"| Retries | {_table_value(stats['model_retries'])} |",
+            f"| Fallbacks | {_table_value(stats['model_fallbacks'])} |",
+            "",
+            "## Final Output Stats",
+            "",
+            "| Signal | Value |",
+            "| --- | --- |",
+            f"| Reports prepared | {_table_value(stats['report_count'])} |",
+            f"| Recipients covered | {_table_value(stats['recipient_count'])} |",
+            f"| Reports with generated images | {_table_value(stats['reports_with_images'])} |",
+            f"| Image warnings | {_table_value(stats['image_warnings'])} |",
+            f"| Run log imported into history | {_table_value(_run_log_path(settings))} |",
+        ]
+
+        warnings = _run_warning_lines(stats, aborted_event, failed_event)
+        if warnings:
+            lines.extend(["", "## Warnings", ""])
+            lines.extend(f"- {warning}" for warning in warnings)
+
+        clean_report_body = str(report_body or "").strip()
+        lines.extend(["", "## Final Report Preview", ""])
+        if clean_report_body:
+            lines.append(clean_report_body)
+        else:
+            lines.append("_No final prose report was rendered for this run._")
+        lines.append("")
+        return "\n".join(lines)
+
     def to_markdown(self) -> str:
         lines = [
             "# Daily News Run Details",
             "",
             f"- Started: {self.run_started_at}",
-            f"- Run mode: {self.settings.get('run_mode') or ('dev' if self.settings.get('dev') else 'prod')}",
-            f"- DEV mode: {self.settings.get('dev')}",
-            f"- Bradley-only delivery: {self.settings.get('bradley_only_delivery', self.settings.get('dev'))}",
-            f"- Shared URL history: {self.settings.get('shared_url_history_enabled')}",
+            f"- Preset: {self.settings.get('preset_id') or 'custom'}",
+            f"- Source scope: {self.settings.get('source_scope')}",
+            f"- Recipient scope: {self.settings.get('recipient_scope')}",
+            f"- URL reuse blocking: {self.settings.get('url_reuse_blocking_enabled')}",
             f"- Source feeds: {self.settings.get('source_count')}",
-            f"- Topic mode: {self.settings.get('topic_mode') or 'predefined'}",
-            f"- Top topics requested: {self.settings.get('num_top_topics')}",
             f"- Recent window hours: {self.settings.get('recent_window_hours')}",
             f"- Article download timeout: {self.settings.get('article_download_timeout_seconds')}s",
             f"- Article scrape deadline: {self.settings.get('article_scrape_total_timeout_seconds')}s",
             f"- Slow source warning threshold: {self.settings.get('slow_source_warning_seconds')}s",
-            f"- Topic relevance min score: {self.settings.get('topic_relevance_min_score')}",
+            f"- Max global stories: {self.settings.get('max_stories')}",
+            f"- Story scale screening enabled: {self.settings.get('story_scale_screening_enabled')}",
             f"- Model: {self.settings.get('model')} ({self.settings.get('model_profile')})",
             f"- Model backend: {self.settings.get('model_backend') or 'mlx-lm'}",
             f"- Model input cap: {self.settings.get('model_max_input_tokens')}",
@@ -435,53 +544,8 @@ class RunDiagnostics:
             f"- Run URL log: {self.settings.get('run_used_urls_path')}",
             f"- Activity snapshots: {len(self.activity_snapshots)}",
         ]
-        if self.settings.get("topic_mode") == "predefined":
-            active_topic_ids = ", ".join(self.settings.get("active_topic_ids") or []) or "N/A"
-            lines.extend(
-                [
-                    "",
-                    "## Predefined Topics",
-                    "",
-                    f"- Client config: {self.settings.get('client_path')}",
-                    f"- Topic definitions: {self.settings.get('topics_path')}",
-                    f"- Active topic IDs: {active_topic_ids}",
-                    "",
-                    "## Topics and Search Vocabulary",
-                    "",
-                ]
-            )
-        else:
-            lines.extend(["", "## Top-of-Funnel Discovery", ""])
-            provider_counts = self.top_funnel.get("provider_counts", {})
-            if provider_counts:
-                for provider, count in provider_counts.items():
-                    lines.append(f"- {provider}: {count} headline(s)")
-            lines.extend(
-                [
-                    f"- Unique merged headlines: {self.top_funnel.get('merged_count', 0)}",
-                    f"- Seed-capable merged headlines: {self.top_funnel.get('seed_merged_count', 0)}",
-                    f"- Validation-capable merged headlines: {self.top_funnel.get('validation_merged_count', 0)}",
-                    f"- Exact URL/title duplicates across providers: {self.top_funnel.get('multi_provider_count', 0)}",
-                    "",
-                    "## Topics and Search Vocabulary",
-                    "",
-                ]
-            )
-        for topic in self.topics:
-            lines.extend(
-                [
-                    f"### {topic.get('title')}",
-                    "",
-                    f"- Rationale: {topic.get('rationale') or 'N/A'}",
-                    f"- Topic source: {topic.get('topic_source') or 'N/A'}",
-                    f"- Selection: {topic.get('selection_reason') or 'N/A'}",
-                    f"- Seeded by: {', '.join(topic.get('seed_providers') or []) or 'N/A'}",
-                    f"- Validated by: {', '.join(topic.get('validation_providers') or []) or 'N/A'}",
-                    f"- Frame tags: {', '.join(topic.get('frame_tags') or []) or 'N/A'}",
-                    "",
-                ]
-            )
-        lines.extend(["## Source Funnel", ""])
+
+        lines.extend(["", "## Source Funnel", ""])
         for source in self.source_runs:
             lines.extend(
                 [
@@ -497,21 +561,11 @@ class RunDiagnostics:
             )
             if source.get("timeout_count"):
                 lines.append(f"- Scrape timeouts: {source.get('timeout_count')}")
-            by_topic = source.get("selected_by_topic") or {}
-            if by_topic:
-                lines.append("- Selected by topic:")
-                for topic_title, count in by_topic.items():
-                    lines.append(f"  - {topic_title}: {count}")
             rejected = source.get("rejected_counts") or {}
             if rejected:
                 lines.append(
                     "- Rejections: "
                     + ", ".join(f"{reason}={count}" for reason, count in rejected.items())
-                )
-            post_scrape_rejections = source.get("post_scrape_rejections") or []
-            if post_scrape_rejections:
-                lines.append(
-                    f"- Post-scrape relevance rejections: {len(post_scrape_rejections)}"
                 )
             feed_rejections = source.get("feed_rejections") or []
             if feed_rejections:
@@ -532,6 +586,7 @@ class RunDiagnostics:
                     )
                 )
             lines.append("")
+
         story_clustering = _last_event(self.events, "story_clustering")
         if story_clustering:
             lines.extend(["## Story Clustering", ""])
@@ -540,7 +595,7 @@ class RunDiagnostics:
                     f"- Method: {story_clustering.get('clustering_method') or 'N/A'}",
                     f"- Candidate articles: {story_clustering.get('candidate_count', 0)}",
                     f"- Retained articles: {story_clustering.get('included_count', 0)}",
-                    f"- True dropped articles: {story_clustering.get('dropped_count', 0)}",
+                    f"- Dropped articles: {story_clustering.get('dropped_count', 0)}",
                     f"- Viable story groups: {story_clustering.get('viable_story_count', story_clustering.get('story_count', 0))}",
                     f"- Similarity threshold: {story_clustering.get('similarity_threshold')}",
                     f"- Component overlap suppression threshold: {story_clustering.get('component_overlap_suppress_threshold')}",
@@ -555,10 +610,6 @@ class RunDiagnostics:
                         f"- Story key: {story.get('story_key')}",
                         f"- Articles: {story.get('article_count')} ({story.get('source_count')} source(s))",
                         f"- Strength: {story.get('story_strength_score')} | connectedness: {story.get('connectedness_score')} | avg similarity: {story.get('average_similarity')}",
-                        f"- Member cohesion: min avg {story.get('min_member_average_similarity')} "
-                        f"(floor {story.get('member_cohesion_floor')}) | "
-                        f"min edge degree {story.get('min_member_edge_degree')} "
-                        f"(floor {story.get('member_edge_degree_floor')})",
                         "- Member articles:",
                     ]
                 )
@@ -566,51 +617,7 @@ class RunDiagnostics:
                     lines.append(
                         f"  - {article.get('source')}: {article.get('title')} [{article.get('article_id')}]"
                     )
-                pruned_article_ids = story.get("pruned_article_ids") or []
-                if pruned_article_ids:
-                    lines.append(
-                        "- Pruned article IDs: "
-                        + ", ".join(str(article_id) for article_id in pruned_article_ids)
-                    )
-                    lines.append(f"- Prune reason: {story.get('prune_reason') or 'N/A'}")
                 lines.append("")
-            pair_debug = story_clustering.get("pair_debug") or []
-            if pair_debug:
-                lines.extend(["### Strongest Article Links", ""])
-                for pair in pair_debug[:25]:
-                    lines.append(
-                        f"- {pair.get('similarity')}: "
-                        f"{pair.get('left_source')} / {pair.get('left_title')} <-> "
-                        f"{pair.get('right_source')} / {pair.get('right_title')}"
-                    )
-                lines.append("")
-            dropped_articles = story_clustering.get("dropped_articles") or []
-            if dropped_articles:
-                lines.extend(["### Dropped Article Candidates", ""])
-                for article in dropped_articles[:40]:
-                    lines.append(
-                        f"- {article.get('source')}: {article.get('title')} "
-                        f"[{article.get('article_id')}] ({article.get('reason')})"
-                    )
-                lines.append("")
-
-        story_backfill = _last_event(self.events, "story_backfill")
-        if story_backfill:
-            lines.extend(["## Story Backfill", ""])
-            lines.extend(
-                [
-                    f"- Enabled: {story_backfill.get('enabled')}",
-                    f"- Iterations: {story_backfill.get('iterations', 0)}",
-                    f"- Deficits before: {story_backfill.get('deficits_before') or {}}",
-                    f"- Deficits after: {story_backfill.get('deficits_after') or {}}",
-                    f"- Attempted stories by topic: {story_backfill.get('attempted_story_count_by_topic') or {}}",
-                    f"- Attempted reserve articles: {story_backfill.get('attempted_article_count', 0)}",
-                    f"- New article summaries: {story_backfill.get('new_article_summary_count', 0)}",
-                    f"- New story drafts: {story_backfill.get('new_story_draft_count', 0)}",
-                    f"- Exhausted topics: {story_backfill.get('exhausted_topics') or []}",
-                    "",
-                ]
-            )
 
         story_drafting = _last_event(self.events, "story_drafting")
         if story_drafting:
@@ -629,90 +636,89 @@ class RunDiagnostics:
                     "",
                 ]
             )
-            examples = contradiction_analytics.get("raw_contradiction_examples") or []
-            if examples:
-                lines.extend(["### Raw Contradiction Examples", ""])
-                for example in examples[:10]:
-                    lines.append(
-                        f"- {example.get('story_title') or example.get('story_key')}: "
-                        f"{example.get('raw_preview') or 'N/A'}"
-                    )
-                lines.append("")
 
-        story_topic_classification = _last_event(self.events, "story_topic_classification")
-        if story_topic_classification:
-            keyword_fit_gate_enabled = bool(
-                story_topic_classification.get("keyword_fit_gate_enabled", True)
-            )
-            screening = story_topic_classification.get("story_topic_screening") or {}
-            overlap_dedup = story_topic_classification.get("article_overlap_dedup") or {}
-            lines.extend(["## Story Topic Assignment", ""])
+        scale_screening = _last_event(self.events, "global_story_scale_screening")
+        if scale_screening:
+            lines.extend(["## Global Story Scale Screening", ""])
             lines.extend(
                 [
-                    f"- Story drafts evaluated: {story_topic_classification.get('story_count', 0)}",
-                    f"- Selected story-topic matches: {story_topic_classification.get('selected_story_topic_count', 0)}",
-                    f"- Max stories per topic: {story_topic_classification.get('max_stories_per_topic')}",
-                    f"- Keyword fit gate: {'enabled' if keyword_fit_gate_enabled else 'disabled'}",
+                    f"- Enabled: {scale_screening.get('enabled')}",
+                    "- Required final-output scale: "
+                    f"{scale_screening.get('required_scale') or 'N/A'}",
+                    f"- Story drafts evaluated: {scale_screening.get('candidate_count', 0)}",
+                    f"- Screening judged: {scale_screening.get('judged_count', 0)}",
+                    f"- Eligible for final output: {scale_screening.get('kept_count', 0)}",
+                    "- Ineligible because not obviously large-scale: "
+                    f"{scale_screening.get('dropped_count', 0)}",
+                    f"- Scale counts: {scale_screening.get('scale_counts') or {}}",
                     "",
                 ]
             )
-            if screening:
-                lines.extend(
-                    [
-                        f"- Story-topic screening: {'enabled' if screening.get('enabled') else 'disabled'}",
-                        f"- Screening judged: {screening.get('judged_count', 0)}",
-                        f"- Screening preferred: {screening.get('preferred_count', 0)}",
-                        f"- Obvious topicality/scale exclusions: {screening.get('obvious_exclusion_count', 0)}",
-                        f"- Topicality counts: {screening.get('topicality_counts') or {}}",
-                        f"- Scale counts: {screening.get('scale_counts') or {}}",
-                        "",
-                    ]
-                )
-            if overlap_dedup:
-                lines.extend(
-                    [
-                        f"- Article-overlap dedup: {'enabled' if overlap_dedup.get('enabled') else 'disabled'}",
-                        f"- Overlap threshold: {overlap_dedup.get('threshold')}",
-                        f"- Overlap conflicts resolved: {overlap_dedup.get('conflicts_resolved', 0)}",
-                        "",
-                    ]
-                )
-            for topic_title, details in (story_topic_classification.get("topics") or {}).items():
-                lines.extend(
-                    [
-                        f"### {topic_title}",
-                        "",
-                        f"- Home-topic candidates: {details.get('candidate_count', 0)}",
-                        f"- Owned candidates: {details.get('owned_candidate_count', 0)}",
-                        f"- Screening preferred candidates: {details.get('screening_preferred_candidate_count', 0)}",
-                        f"- Selected: {details.get('selected_count', 0)}",
-                        f"- Diversity min distance: {details.get('diversity_min_distance')}",
-                    ]
-                )
-                selected = details.get("selected") or []
-                if selected:
-                    lines.append("- Selected stories:")
-                    for story in selected:
-                        distance_text = ""
-                        if story.get("min_distance_to_selected") is not None:
-                            distance_text = f", min distance {story.get('min_distance_to_selected')}"
-                        lines.append(
-                            f"  - {story.get('story_title')} "
-                            f"({story.get('article_count')} article(s), {story.get('source_count')} source(s)"
-                            f"{distance_text}; topicality={story.get('topic_screening_topicality')}; "
-                            f"scale={story.get('topic_screening_scale')})"
-                        )
-                rejected = details.get("rejected") or []
-                if rejected:
-                    lines.append("- Best rejected stories:")
-                    for story in rejected[:10]:
-                        owner_text = ""
-                        if story.get("owned_topic_title"):
-                            owner_text = f"; owner={story.get('owned_topic_title')}"
-                        lines.append(
-                            f"  - {story.get('story_title')} ({story.get('reason')}{owner_text})"
-                        )
+            dropped = scale_screening.get("dropped") or []
+            if dropped:
+                lines.append("- Ineligible stories:")
+                for story in dropped[:10]:
+                    reason = story.get("scale_screening_reason") or "N/A"
+                    lines.append(
+                        f"  - {story.get('story_title')} "
+                        f"({story.get('article_count')} article(s), "
+                        f"{story.get('source_count')} source(s); {reason})"
+                    )
+                if len(dropped) > 10:
+                    lines.append(
+                        f"  - ... {len(dropped) - 10} more in raw diagnostics"
+                    )
                 lines.append("")
+
+        story_selection = _last_event(self.events, "global_story_selection")
+        if story_selection:
+            lines.extend(["## Global Story Selection", ""])
+            lines.extend(
+                [
+                    f"- Drafted story candidates: {story_selection.get('story_count', 0)}",
+                    f"- Selected global stories: {story_selection.get('selected_story_count', 0)}",
+                    f"- Max global stories: {story_selection.get('max_stories')}",
+                    f"- Overlap threshold: {story_selection.get('overlap_threshold')}",
+                    "",
+                ]
+            )
+            selected = story_selection.get("selected") or []
+            if selected:
+                lines.append("- Selected stories:")
+                for story in selected:
+                    lines.append(
+                        f"  - {story.get('global_selection_rank')}. {story.get('story_title')} "
+                        f"({story.get('article_count')} article(s), {story.get('source_count')} source(s))"
+                    )
+                lines.append("")
+
+        coverage_deficit = _last_event(self.events, "story_coverage_deficit")
+        if coverage_deficit:
+            lines.extend(["## Story Coverage Deficit", ""])
+            lines.extend(
+                [
+                    f"- Selected global stories: {coverage_deficit.get('selected_story_count')}",
+                    f"- Target global stories: {coverage_deficit.get('target_story_count')}",
+                    f"- Deficit: {coverage_deficit.get('deficit')}",
+                    "",
+                ]
+            )
+
+        story_backfill = _last_event(self.events, "story_backfill")
+        if story_backfill:
+            lines.extend(["## Story Backfill", ""])
+            lines.extend(
+                [
+                    f"- Enabled: {story_backfill.get('enabled')}",
+                    f"- Reason: {story_backfill.get('reason') or 'N/A'}",
+                    f"- Iterations: {story_backfill.get('iterations', 0)}",
+                    f"- Attempted reserve articles: {story_backfill.get('attempted_article_count', 0)}",
+                    f"- New article summaries: {story_backfill.get('new_article_summary_count', 0)}",
+                    f"- New story drafts: {story_backfill.get('new_story_draft_count', 0)}",
+                    "",
+                ]
+            )
+
         lines.extend(
             [
                 "## Outputs",
@@ -775,6 +781,59 @@ def _safe_float(value: Any) -> float:
         return float(value or 0.0)
     except (TypeError, ValueError):
         return 0.0
+
+
+def _table_value(value: Any) -> str:
+    text = str(value if value is not None else "N/A")
+    text = text.replace("\n", "<br>")
+    text = text.replace("|", "\\|")
+    return text or "N/A"
+
+
+def _format_count_map(values: dict[str, Any]) -> str:
+    if not values:
+        return ""
+    return ", ".join(
+        f"{key}={_safe_int(count)}"
+        for key, count in sorted(values.items())
+    )
+
+
+def _join_or_none(values: list[str]) -> str:
+    return ", ".join(values) if values else "none"
+
+
+def _hours_label(value: Any) -> str:
+    if value is None:
+        return "N/A"
+    return f"{value}h"
+
+
+def _run_warning_lines(
+    stats: dict[str, Any],
+    aborted_event: dict[str, Any],
+    failed_event: dict[str, Any],
+) -> list[str]:
+    warnings: list[str] = []
+    if failed_event:
+        error_type = failed_event.get("error_type") or "unknown error"
+        error_message = failed_event.get("error_message") or failed_event.get("reason") or ""
+        warnings.append(f"Run failed: {error_type}: {error_message}".rstrip(": "))
+    if aborted_event:
+        warnings.append(f"Run aborted: {aborted_event.get('reason') or 'unknown reason'}")
+    if stats.get("problem_sources"):
+        warnings.append("Problem sources: " + _join_or_none(stats["problem_sources"]))
+    if stats.get("timeout_sources"):
+        warnings.append("Scrape timeouts: " + _join_or_none(stats["timeout_sources"]))
+    if stats.get("slow_sources"):
+        warnings.append("Slow sources: " + _join_or_none(stats["slow_sources"]))
+    if _safe_int(stats.get("image_warnings")):
+        warnings.append(f"Image warnings: {stats.get('image_warnings')}")
+    if _safe_int(stats.get("model_retries")):
+        warnings.append(f"Model retries: {stats.get('model_retries')}")
+    if _safe_int(stats.get("model_fallbacks")):
+        warnings.append(f"Model fallbacks: {stats.get('model_fallbacks')}")
+    return warnings
 
 
 def _model_token_totals(token_usage: dict[str, Any]) -> dict[str, int]:
@@ -840,6 +899,16 @@ def _last_event(events: list[dict[str, Any]], label: str) -> dict[str, Any]:
         if event.get("label") == label:
             return event
     return {}
+
+
+def run_status_from_events(events: list[dict[str, Any]]) -> str:
+    if _last_event(events, "failed"):
+        return "failed"
+    if _last_event(events, "aborted"):
+        return "aborted"
+    if _last_event(events, "completed"):
+        return "completed"
+    return "unknown"
 
 
 def _model_call_bucket(task_name: str) -> str:

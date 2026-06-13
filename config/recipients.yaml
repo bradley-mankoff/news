@@ -2,10 +2,18 @@
 #
 # Usage:
 # - pause: true keeps the recipient configured but skips delivery.
-# - NEWS_RUN_MODE=dev, NEWS_RUN_MODE=local-prod, and
-#   NEWS_RUN_MODE=loose-local-prod always send only to NEWS_DEV_RECIPIENT,
+# - NEWS_RECIPIENT_SCOPE=bradley sends only to bradley@mankoff.com,
 #   regardless of this file.
 recipients:
   - email: bradley@mankoff.com
     name: Bradley Mankoff
+    pause: false
+  - email: aidancoon97@gmail.com
+    name: Aidan Coon
+    pause: false
+  - email: calzacortaandres@gmail.com
+    name: Andrés Calzacorta
+    pause: false
+  - email: isaacmessenger@yahoo.com
+    name: Isaac Bodemann
     pause: false

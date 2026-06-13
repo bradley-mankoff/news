@@ -5,16 +5,17 @@ from __future__ import annotations
 import os
 import sys
 
-from .config import ensure_codex_safe_model_reference, load_runtime_config, parse_topic_id_csv
+from .config import (
+    apply_run_preset_to_environment,
+    ensure_codex_safe_model_reference,
+    load_runtime_config,
+    reject_removed_topic_env_vars,
+)
 
 
 USAGE = """\
 Usage:
-  uv run news dev
-  uv run news dev --topics sports,science_space_tech
-  uv run news local-prod [--topics TOPIC_ID,TOPIC_ID]
-  uv run news loose-local-prod [--topics TOPIC_ID,TOPIC_ID]
-  uv run news prod [--topics TOPIC_ID,TOPIC_ID]
+  uv run news run [--preset NAME]
   uv run news check-sources [--sources-yaml PATH] [--only-failures]
   uv run news prune-sources [--sources-yaml PATH] [--recent-days 7]
   uv run news source-languages --sources-yaml PATH [--write-languages]
@@ -22,39 +23,18 @@ Usage:
   uv run news codex-model-server-command
   uv run news test-translation-model
   uv run news serve-unsubscribe
+  uv run news ui [--host 127.0.0.1] [--port 8766] [--open]
+  uv run news history backfill [--dry-run|--apply]
+  uv run news history cleanup [--dry-run|--apply]
+  uv run news history export
 
-Compatibility:
-  uv run todays_news.py [dev|local-prod|loose-local-prod|prod]
-  uv run todays_news.py --dev|--local-prod|--loose-local-prod|--prod
+Wrapper compatibility:
   uv run todays_news.py --model-server-command
   uv run todays_news.py --test-translation-model
   uv run todays_news.py --serve-unsubscribe
-  NEWS_RUN_MODE=local-prod uv run todays_news.py
-  NEWS_RUN_MODE=loose-local-prod uv run todays_news.py
-  NEWS_TOPIC_IDS=sports,entertainment uv run todays_news.py
-  NEWS_DEV=0 uv run todays_news.py
 
 """
 
-RUN_MODE_COMMANDS = {
-    "dev": "dev",
-    "local-prod": "local-prod",
-    "local_prod": "local-prod",
-    "localprod": "local-prod",
-    "loose-local-prod": "loose-local-prod",
-    "loose_local_prod": "loose-local-prod",
-    "loose-localprod": "loose-local-prod",
-    "looselocal-prod": "loose-local-prod",
-    "looselocalprod": "loose-local-prod",
-    "prod": "prod",
-    "production": "prod",
-}
-MODE_FLAGS = {
-    "--dev": "dev",
-    "--local-prod": "local-prod",
-    "--loose-local-prod": "loose-local-prod",
-    "--prod": "prod",
-}
 ACTION_ALIASES = {
     "model-server-command": "model-server-command",
     "server-command": "model-server-command",
@@ -76,75 +56,42 @@ ACTION_ALIASES = {
     "source-languages": "source-languages",
     "detect-source-languages": "source-languages",
     "source-language": "source-languages",
+    "history": "history",
+    "ui": "ui",
+    "local-ui": "ui",
+    "control-panel": "ui",
 }
-TOPIC_OPTION_FLAGS = {"--topics", "--topic", "--topic-ids"}
 
-
-def _apply_legacy_flags(args: list[str]) -> list[str]:
-    remaining = list(args)
-    for flag, mode in MODE_FLAGS.items():
-        if flag in remaining:
-            os.environ["NEWS_RUN_MODE"] = mode
-            remaining.remove(flag)
-    return remaining
-
-
-def _set_runtime_topic_selection(topic_specs: list[str]) -> None:
-    if not topic_specs:
-        return
-    topic_ids: list[str] = []
-    seen: set[str] = set()
-    for topic_spec in topic_specs:
-        for topic_id in parse_topic_id_csv(topic_spec):
-            if topic_id in seen:
-                continue
-            seen.add(topic_id)
-            topic_ids.append(topic_id)
-    if not topic_ids:
-        raise ValueError("--topics must contain at least one topic id.")
-    os.environ["NEWS_TOPIC_IDS"] = ",".join(topic_ids)
-
-
-def _consume_runtime_topic_args(
-    args: list[str],
-    *,
-    allow_positional: bool,
-) -> list[str]:
+def _consume_preset_arg(args: list[str]) -> tuple[str | None, list[str]]:
     remaining: list[str] = []
-    topic_specs: list[str] = []
+    preset: str | None = None
     index = 0
     while index < len(args):
         arg = args[index]
-        if arg in TOPIC_OPTION_FLAGS:
+        if arg == "--preset":
             if index + 1 >= len(args):
-                raise ValueError(f"{arg} requires a comma-separated topic list.")
-            topic_specs.append(args[index + 1])
+                raise ValueError("--preset requires a preset name.")
+            preset = args[index + 1]
             index += 2
             continue
-
-        matched_flag = next(
-            (
-                flag
-                for flag in TOPIC_OPTION_FLAGS
-                if arg.startswith(f"{flag}=")
-            ),
-            None,
-        )
-        if matched_flag:
-            topic_specs.append(arg.split("=", 1)[1])
+        if arg.startswith("--preset="):
+            preset = arg.split("=", 1)[1]
             index += 1
             continue
-
-        if allow_positional and not arg.startswith("-"):
-            topic_specs.append(arg)
-            index += 1
-            continue
-
         remaining.append(arg)
         index += 1
+    return preset, remaining
 
-    _set_runtime_topic_selection(topic_specs)
-    return remaining
+
+def _apply_cli_preset(preset: str | None) -> bool:
+    if not preset:
+        return True
+    try:
+        apply_run_preset_to_environment(preset)
+    except ValueError as error:
+        print(str(error), file=sys.stderr)
+        return False
+    return True
 
 
 def _run_pipeline_command() -> int:
@@ -173,26 +120,54 @@ def _serve_unsubscribe() -> int:
     return 0
 
 
-def main(argv: list[str] | None = None) -> int:
-    args = _apply_legacy_flags(sys.argv[1:] if argv is None else argv)
+def _run_ui(args: list[str]) -> int:
+    from .ui import main as ui_main
+
+    return ui_main(args)
+
+
+def _run_history(args: list[str]) -> int:
+    from .history_store import parse_history_args
+
+    config = load_runtime_config(materialize_outputs=False)
     try:
-        args = _consume_runtime_topic_args(args, allow_positional=False)
+        result = parse_history_args(
+            args,
+            output_dir=config.output_dir,
+            db_path=config.history_db_path,
+            export_csv=config.history_export_csv,
+        )
     except ValueError as error:
-        print(f"ERROR: {error}", file=sys.stderr)
-        print(USAGE, file=sys.stderr)
+        print(str(error), file=sys.stderr)
         return 2
+    print(result.format())
+    return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = list(sys.argv[1:] if argv is None else argv)
 
     if args and args[0] in {"-h", "--help", "help"}:
         print(USAGE)
         return 0
 
     command = args.pop(0) if args else "run"
+    action = ACTION_ALIASES.get(command)
+    if action == "ui":
+        return _run_ui(args)
+    if action == "history":
+        return _run_history(args)
+
+    reject_removed_topic_env_vars()
+
     if command == "run":
         try:
-            args = _consume_runtime_topic_args(args, allow_positional=True)
+            preset, args = _consume_preset_arg(args)
         except ValueError as error:
-            print(f"ERROR: {error}", file=sys.stderr)
+            print(str(error), file=sys.stderr)
             print(USAGE, file=sys.stderr)
+            return 2
+        if not _apply_cli_preset(preset):
             return 2
         if args:
             print(f"Unexpected arguments for run: {' '.join(args)}", file=sys.stderr)
@@ -200,21 +175,6 @@ def main(argv: list[str] | None = None) -> int:
             return 2
         return _run_pipeline_command()
 
-    if command in RUN_MODE_COMMANDS:
-        os.environ["NEWS_RUN_MODE"] = RUN_MODE_COMMANDS[command]
-        try:
-            args = _consume_runtime_topic_args(args, allow_positional=True)
-        except ValueError as error:
-            print(f"ERROR: {error}", file=sys.stderr)
-            print(USAGE, file=sys.stderr)
-            return 2
-        if args:
-            print(f"Unexpected arguments for {command}: {' '.join(args)}", file=sys.stderr)
-            print(USAGE, file=sys.stderr)
-            return 2
-        return _run_pipeline_command()
-
-    action = ACTION_ALIASES.get(command)
     if action == "model-server-command":
         if args:
             print(f"Unexpected arguments for {command}: {' '.join(args)}", file=sys.stderr)
