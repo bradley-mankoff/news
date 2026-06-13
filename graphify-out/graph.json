@@ -4,36 +4,6 @@
   "graph": {},
   "nodes": [
     {
-      "label": "settings.local.json",
-      "file_type": "code",
-      "source_file": ".claude/settings.local.json",
-      "source_location": "L1",
-      "_origin": "ast",
-      "id": "claude_settings_local",
-      "community": 37,
-      "norm_label": "settings.local.json"
-    },
-    {
-      "label": "permissions",
-      "file_type": "code",
-      "source_file": ".claude/settings.local.json",
-      "source_location": "L2",
-      "_origin": "ast",
-      "id": "claude_settings_local_permissions",
-      "community": 37,
-      "norm_label": "permissions"
-    },
-    {
-      "label": "allow",
-      "file_type": "code",
-      "source_file": ".claude/settings.local.json",
-      "source_location": "L3",
-      "_origin": "ast",
-      "id": "claude_settings_local_permissions_allow",
-      "community": 37,
-      "norm_label": "allow"
-    },
-    {
       "label": "__init__.py",
       "file_type": "code",
       "source_file": "news_pipeline/__init__.py",
@@ -1140,7 +1110,7 @@
       "source_location": "L1",
       "_origin": "ast",
       "id": "news_pipeline_cli",
-      "community": 25,
+      "community": 30,
       "norm_label": "cli.py"
     },
     {
@@ -1150,7 +1120,7 @@
       "source_location": "L65",
       "_origin": "ast",
       "id": "news_pipeline_cli_consume_preset_arg",
-      "community": 25,
+      "community": 30,
       "norm_label": "_consume_preset_arg()"
     },
     {
@@ -1160,7 +1130,7 @@
       "source_location": "L86",
       "_origin": "ast",
       "id": "news_pipeline_cli_apply_cli_preset",
-      "community": 25,
+      "community": 30,
       "norm_label": "_apply_cli_preset()"
     },
     {
@@ -1170,7 +1140,7 @@
       "source_location": "L97",
       "_origin": "ast",
       "id": "news_pipeline_cli_run_pipeline_command",
-      "community": 25,
+      "community": 30,
       "norm_label": "_run_pipeline_command()"
     },
     {
@@ -1180,7 +1150,7 @@
       "source_location": "L104",
       "_origin": "ast",
       "id": "news_pipeline_cli_print_model_server_command",
-      "community": 25,
+      "community": 30,
       "norm_label": "_print_model_server_command()"
     },
     {
@@ -1190,7 +1160,7 @@
       "source_location": "L111",
       "_origin": "ast",
       "id": "news_pipeline_cli_print_codex_model_server_command",
-      "community": 25,
+      "community": 30,
       "norm_label": "_print_codex_model_server_command()"
     },
     {
@@ -1200,7 +1170,7 @@
       "source_location": "L116",
       "_origin": "ast",
       "id": "news_pipeline_cli_serve_unsubscribe",
-      "community": 25,
+      "community": 30,
       "norm_label": "_serve_unsubscribe()"
     },
     {
@@ -1210,7 +1180,7 @@
       "source_location": "L123",
       "_origin": "ast",
       "id": "news_pipeline_cli_run_ui",
-      "community": 25,
+      "community": 30,
       "norm_label": "_run_ui()"
     },
     {
@@ -1220,7 +1190,7 @@
       "source_location": "L129",
       "_origin": "ast",
       "id": "news_pipeline_cli_run_history",
-      "community": 25,
+      "community": 30,
       "norm_label": "_run_history()"
     },
     {
@@ -1230,7 +1200,7 @@
       "source_location": "L147",
       "_origin": "ast",
       "id": "news_pipeline_cli_main",
-      "community": 25,
+      "community": 30,
       "norm_label": "main()"
     },
     {
@@ -1240,7 +1210,7 @@
       "source_location": "L1",
       "_origin": "ast",
       "id": "news_pipeline_cli_rationale_1",
-      "community": 25,
+      "community": 30,
       "norm_label": "command-line entry point for the daily news pipeline."
     },
     {
@@ -1280,7 +1250,7 @@
       "source_location": "L164",
       "_origin": "ast",
       "id": "news_pipeline_config_modelruntimeprofile",
-      "community": 32,
+      "community": 37,
       "norm_label": "modelruntimeprofile"
     },
     {
@@ -1320,7 +1290,7 @@
       "source_location": "L381",
       "_origin": "ast",
       "id": "news_pipeline_config_bool_env",
-      "community": 10,
+      "community": 43,
       "norm_label": "_bool_env()"
     },
     {
@@ -1330,7 +1300,7 @@
       "source_location": "L388",
       "_origin": "ast",
       "id": "news_pipeline_config_int_env",
-      "community": 32,
+      "community": 37,
       "norm_label": "_int_env()"
     },
     {
@@ -1340,7 +1310,7 @@
       "source_location": "L395",
       "_origin": "ast",
       "id": "news_pipeline_config_float_env",
-      "community": 32,
+      "community": 37,
       "norm_label": "_float_env()"
     },
     {
@@ -1370,7 +1340,7 @@
       "source_location": "L411",
       "_origin": "ast",
       "id": "news_pipeline_config_load_run_presets",
-      "community": 20,
+      "community": 2,
       "norm_label": "load_run_presets()"
     },
     {
@@ -1380,7 +1350,7 @@
       "source_location": "L411",
       "_origin": "ast",
       "id": "news_pipeline_config_py_path",
-      "community": 20,
+      "community": 23,
       "norm_label": "path"
     },
     {
@@ -1390,7 +1360,7 @@
       "source_location": "L411",
       "_origin": "ast",
       "id": "news_pipeline_config_py_any",
-      "community": 20,
+      "community": 23,
       "norm_label": "any"
     },
     {
@@ -1400,7 +1370,7 @@
       "source_location": "L440",
       "_origin": "ast",
       "id": "news_pipeline_config_run_preset_env",
-      "community": 20,
+      "community": 2,
       "norm_label": "run_preset_env()"
     },
     {
@@ -1420,7 +1390,7 @@
       "source_location": "L453",
       "_origin": "ast",
       "id": "news_pipeline_config_apply_run_preset_to_environment",
-      "community": 25,
+      "community": 30,
       "norm_label": "apply_run_preset_to_environment()"
     },
     {
@@ -1430,7 +1400,7 @@
       "source_location": "L482",
       "_origin": "ast",
       "id": "news_pipeline_config_configured_min_articles_per_story",
-      "community": 32,
+      "community": 37,
       "norm_label": "configured_min_articles_per_story()"
     },
     {
@@ -1440,7 +1410,7 @@
       "source_location": "L486",
       "_origin": "ast",
       "id": "news_pipeline_config_configured_story_cluster_similarity_threshold",
-      "community": 32,
+      "community": 37,
       "norm_label": "configured_story_cluster_similarity_threshold()"
     },
     {
@@ -1450,7 +1420,7 @@
       "source_location": "L493",
       "_origin": "ast",
       "id": "news_pipeline_config_resolve_model_name",
-      "community": 10,
+      "community": 43,
       "norm_label": "resolve_model_name()"
     },
     {
@@ -1460,7 +1430,7 @@
       "source_location": "L503",
       "_origin": "ast",
       "id": "news_pipeline_config_is_codex_test_model_reference",
-      "community": 10,
+      "community": 43,
       "norm_label": "is_codex_test_model_reference()"
     },
     {
@@ -1470,7 +1440,7 @@
       "source_location": "L511",
       "_origin": "ast",
       "id": "news_pipeline_config_is_gemma_4_model_reference",
-      "community": 30,
+      "community": 35,
       "norm_label": "is_gemma_4_model_reference()"
     },
     {
@@ -1500,7 +1470,7 @@
       "source_location": "L536",
       "_origin": "ast",
       "id": "news_pipeline_config_configured_model_reference",
-      "community": 10,
+      "community": 43,
       "norm_label": "_configured_model_reference()"
     },
     {
@@ -1510,7 +1480,7 @@
       "source_location": "L543",
       "_origin": "ast",
       "id": "news_pipeline_config_configured_model_name",
-      "community": 10,
+      "community": 43,
       "norm_label": "_configured_model_name()"
     },
     {
@@ -1540,7 +1510,7 @@
       "source_location": "L558",
       "_origin": "ast",
       "id": "news_pipeline_config_default_total_article_summary_cap",
-      "community": 32,
+      "community": 37,
       "norm_label": "_default_total_article_summary_cap()"
     },
     {
@@ -1550,7 +1520,7 @@
       "source_location": "L568",
       "_origin": "ast",
       "id": "news_pipeline_config_default_article_summary_concurrency",
-      "community": 10,
+      "community": 43,
       "norm_label": "_default_article_summary_concurrency()"
     },
     {
@@ -1560,7 +1530,7 @@
       "source_location": "L574",
       "_origin": "ast",
       "id": "news_pipeline_config_default_story_synthesis_concurrency",
-      "community": 10,
+      "community": 43,
       "norm_label": "_default_story_synthesis_concurrency()"
     },
     {
@@ -1590,7 +1560,7 @@
       "source_location": "L590",
       "_origin": "ast",
       "id": "news_pipeline_config_infer_model_profile_key",
-      "community": 10,
+      "community": 43,
       "norm_label": "infer_model_profile_key()"
     },
     {
@@ -1600,7 +1570,7 @@
       "source_location": "L609",
       "_origin": "ast",
       "id": "news_pipeline_config_configured_model_profile_key",
-      "community": 10,
+      "community": 43,
       "norm_label": "_configured_model_profile_key()"
     },
     {
@@ -1610,7 +1580,7 @@
       "source_location": "L626",
       "_origin": "ast",
       "id": "news_pipeline_config_override_sampling_from_env",
-      "community": 32,
+      "community": 37,
       "norm_label": "_override_sampling_from_env()"
     },
     {
@@ -1620,7 +1590,7 @@
       "source_location": "L647",
       "_origin": "ast",
       "id": "news_pipeline_config_profile_sampling_with_base_overrides",
-      "community": 32,
+      "community": 37,
       "norm_label": "_profile_sampling_with_base_overrides()"
     },
     {
@@ -1630,7 +1600,7 @@
       "source_location": "L665",
       "_origin": "ast",
       "id": "news_pipeline_config_override_profile_from_env",
-      "community": 32,
+      "community": 37,
       "norm_label": "_override_profile_from_env()"
     },
     {
@@ -1640,7 +1610,7 @@
       "source_location": "L722",
       "_origin": "ast",
       "id": "news_pipeline_config_configured_model_profile",
-      "community": 32,
+      "community": 37,
       "norm_label": "configured_model_profile()"
     },
     {
@@ -1650,7 +1620,7 @@
       "source_location": "L731",
       "_origin": "ast",
       "id": "news_pipeline_config_build_model_server_command",
-      "community": 32,
+      "community": 37,
       "norm_label": "build_model_server_command()"
     },
     {
@@ -1660,7 +1630,7 @@
       "source_location": "L762",
       "_origin": "ast",
       "id": "news_pipeline_config_coerce_bool_value",
-      "community": 20,
+      "community": 23,
       "norm_label": "_coerce_bool_value()"
     },
     {
@@ -1670,7 +1640,7 @@
       "source_location": "L772",
       "_origin": "ast",
       "id": "news_pipeline_config_coerce_float_value",
-      "community": 20,
+      "community": 23,
       "norm_label": "_coerce_float_value()"
     },
     {
@@ -1680,7 +1650,7 @@
       "source_location": "L779",
       "_origin": "ast",
       "id": "news_pipeline_config_coerce_int_value",
-      "community": 20,
+      "community": 10,
       "norm_label": "_coerce_int_value()"
     },
     {
@@ -1690,7 +1660,7 @@
       "source_location": "L786",
       "_origin": "ast",
       "id": "news_pipeline_config_load_yaml_mapping",
-      "community": 20,
+      "community": 23,
       "norm_label": "_load_yaml_mapping()"
     },
     {
@@ -1700,7 +1670,7 @@
       "source_location": "L796",
       "_origin": "ast",
       "id": "news_pipeline_config_load_password_from_env_json",
-      "community": 20,
+      "community": 35,
       "norm_label": "_load_password_from_env_json()"
     },
     {
@@ -1750,7 +1720,7 @@
       "source_location": "L898",
       "_origin": "ast",
       "id": "news_pipeline_config_coerce_source_text_list",
-      "community": 20,
+      "community": 23,
       "norm_label": "_coerce_source_text_list()"
     },
     {
@@ -1760,7 +1730,7 @@
       "source_location": "L919",
       "_origin": "ast",
       "id": "news_pipeline_config_source_requires_translation",
-      "community": 20,
+      "community": 23,
       "norm_label": "_source_requires_translation()"
     },
     {
@@ -1780,7 +1750,7 @@
       "source_location": "L939",
       "_origin": "ast",
       "id": "news_pipeline_config_normalize_source_scope",
-      "community": 20,
+      "community": 23,
       "norm_label": "_normalize_source_scope()"
     },
     {
@@ -1790,7 +1760,7 @@
       "source_location": "L951",
       "_origin": "ast",
       "id": "news_pipeline_config_configured_source_scope",
-      "community": 20,
+      "community": 23,
       "norm_label": "_configured_source_scope()"
     },
     {
@@ -1820,7 +1790,7 @@
       "source_location": "L972",
       "_origin": "ast",
       "id": "news_pipeline_config_source_enabled_for_scope",
-      "community": 20,
+      "community": 23,
       "norm_label": "_source_enabled_for_scope()"
     },
     {
@@ -1830,7 +1800,7 @@
       "source_location": "L988",
       "_origin": "ast",
       "id": "news_pipeline_config_normalize_source_match_mode",
-      "community": 20,
+      "community": 23,
       "norm_label": "_normalize_source_match_mode()"
     },
     {
@@ -1840,7 +1810,7 @@
       "source_location": "L998",
       "_origin": "ast",
       "id": "news_pipeline_config_reject_removed_source_topic_fields",
-      "community": 20,
+      "community": 23,
       "norm_label": "_reject_removed_source_topic_fields()"
     },
     {
@@ -1850,7 +1820,7 @@
       "source_location": "L1008",
       "_origin": "ast",
       "id": "news_pipeline_config_load_sources",
-      "community": 20,
+      "community": 23,
       "norm_label": "load_sources()"
     },
     {
@@ -1910,7 +1880,7 @@
       "source_location": "L1197",
       "_origin": "ast",
       "id": "news_pipeline_config_load_top_funnel_providers",
-      "community": 20,
+      "community": 23,
       "norm_label": "load_top_funnel_providers()"
     },
     {
@@ -1920,7 +1890,7 @@
       "source_location": "L1235",
       "_origin": "ast",
       "id": "news_pipeline_config_load_recipients",
-      "community": 20,
+      "community": 23,
       "norm_label": "load_recipients()"
     },
     {
@@ -1930,7 +1900,7 @@
       "source_location": "L1258",
       "_origin": "ast",
       "id": "news_pipeline_config_update_recipient_pause_setting",
-      "community": 20,
+      "community": 23,
       "norm_label": "update_recipient_pause_setting()"
     },
     {
@@ -1950,7 +1920,7 @@
       "source_location": "L1292",
       "_origin": "ast",
       "id": "news_pipeline_config_reject_removed_topic_env_vars",
-      "community": 25,
+      "community": 30,
       "norm_label": "reject_removed_topic_env_vars()"
     },
     {
@@ -1960,7 +1930,7 @@
       "source_location": "L1302",
       "_origin": "ast",
       "id": "news_pipeline_config_load_runtime_config",
-      "community": 30,
+      "community": 35,
       "norm_label": "load_runtime_config()"
     },
     {
@@ -1970,7 +1940,7 @@
       "source_location": "L1449",
       "_origin": "ast",
       "id": "news_pipeline_config_coerce_pause_value",
-      "community": 20,
+      "community": 23,
       "norm_label": "_coerce_pause_value()"
     },
     {
@@ -1990,7 +1960,7 @@
       "source_location": "L494",
       "_origin": "ast",
       "id": "news_pipeline_config_rationale_494",
-      "community": 10,
+      "community": 43,
       "norm_label": "resolve a friendly model alias to the hugging face repo loaded by mlx."
     },
     {
@@ -2010,7 +1980,7 @@
       "source_location": "L1",
       "_origin": "ast",
       "id": "news_pipeline_diagnostics",
-      "community": 18,
+      "community": 20,
       "norm_label": "diagnostics.py"
     },
     {
@@ -2030,7 +2000,7 @@
       "source_location": "L27",
       "_origin": "ast",
       "id": "news_pipeline_diagnostics_rundiagnostics_event",
-      "community": 18,
+      "community": 20,
       "norm_label": ".event()"
     },
     {
@@ -2040,7 +2010,7 @@
       "source_location": "L27",
       "_origin": "ast",
       "id": "news_pipeline_diagnostics_py_any",
-      "community": 18,
+      "community": 20,
       "norm_label": "any"
     },
     {
@@ -2050,7 +2020,7 @@
       "source_location": "L36",
       "_origin": "ast",
       "id": "news_pipeline_diagnostics_rundiagnostics_record_top_funnel",
-      "community": 18,
+      "community": 20,
       "norm_label": ".record_top_funnel()"
     },
     {
@@ -2060,7 +2030,7 @@
       "source_location": "L77",
       "_origin": "ast",
       "id": "news_pipeline_diagnostics_rundiagnostics_record_source_run",
-      "community": 18,
+      "community": 20,
       "norm_label": ".record_source_run()"
     },
     {
@@ -2070,7 +2040,7 @@
       "source_location": "L80",
       "_origin": "ast",
       "id": "news_pipeline_diagnostics_rundiagnostics_record_article_budget",
-      "community": 18,
+      "community": 20,
       "norm_label": ".record_article_budget()"
     },
     {
@@ -2080,7 +2050,7 @@
       "source_location": "L83",
       "_origin": "ast",
       "id": "news_pipeline_diagnostics_rundiagnostics_record_model_call_stats",
-      "community": 18,
+      "community": 20,
       "norm_label": ".record_model_call_stats()"
     },
     {
@@ -2090,7 +2060,7 @@
       "source_location": "L86",
       "_origin": "ast",
       "id": "news_pipeline_diagnostics_rundiagnostics_record_activity_snapshot",
-      "community": 18,
+      "community": 20,
       "norm_label": ".record_activity_snapshot()"
     },
     {
@@ -2100,7 +2070,7 @@
       "source_location": "L89",
       "_origin": "ast",
       "id": "news_pipeline_diagnostics_rundiagnostics_record_report",
-      "community": 18,
+      "community": 20,
       "norm_label": ".record_report()"
     },
     {
@@ -2110,7 +2080,7 @@
       "source_location": "L92",
       "_origin": "ast",
       "id": "news_pipeline_diagnostics_rundiagnostics_record_artifact",
-      "community": 18,
+      "community": 20,
       "norm_label": ".record_artifact()"
     },
     {
@@ -2120,7 +2090,7 @@
       "source_location": "L95",
       "_origin": "ast",
       "id": "news_pipeline_diagnostics_rundiagnostics_to_dict",
-      "community": 18,
+      "community": 20,
       "norm_label": ".to_dict()"
     },
     {
@@ -2130,7 +2100,7 @@
       "source_location": "L110",
       "_origin": "ast",
       "id": "news_pipeline_diagnostics_rundiagnostics_write",
-      "community": 18,
+      "community": 20,
       "norm_label": ".write()"
     },
     {
@@ -2140,7 +2110,7 @@
       "source_location": "L110",
       "_origin": "ast",
       "id": "news_pipeline_diagnostics_py_path",
-      "community": 18,
+      "community": 20,
       "norm_label": "path"
     },
     {
@@ -2150,7 +2120,7 @@
       "source_location": "L122",
       "_origin": "ast",
       "id": "news_pipeline_diagnostics_rundiagnostics_write_details_json",
-      "community": 18,
+      "community": 20,
       "norm_label": ".write_details_json()"
     },
     {
@@ -2160,7 +2130,7 @@
       "source_location": "L131",
       "_origin": "ast",
       "id": "news_pipeline_diagnostics_rundiagnostics_write_run_review_markdown",
-      "community": 18,
+      "community": 20,
       "norm_label": ".write_run_review_markdown()"
     },
     {
@@ -2170,7 +2140,7 @@
       "source_location": "L146",
       "_origin": "ast",
       "id": "news_pipeline_diagnostics_rundiagnostics_summary_stats",
-      "community": 18,
+      "community": 20,
       "norm_label": ".summary_stats()"
     },
     {
@@ -2180,7 +2150,7 @@
       "source_location": "L268",
       "_origin": "ast",
       "id": "news_pipeline_diagnostics_rundiagnostics_to_summary_markdown",
-      "community": 18,
+      "community": 20,
       "norm_label": ".to_summary_markdown()"
     },
     {
@@ -2190,7 +2160,7 @@
       "source_location": "L390",
       "_origin": "ast",
       "id": "news_pipeline_diagnostics_rundiagnostics_to_run_review_markdown",
-      "community": 18,
+      "community": 20,
       "norm_label": ".to_run_review_markdown()"
     },
     {
@@ -2200,7 +2170,7 @@
       "source_location": "L521",
       "_origin": "ast",
       "id": "news_pipeline_diagnostics_rundiagnostics_to_markdown",
-      "community": 18,
+      "community": 20,
       "norm_label": ".to_markdown()"
     },
     {
@@ -2210,7 +2180,7 @@
       "source_location": "L757",
       "_origin": "ast",
       "id": "news_pipeline_diagnostics_story_digest",
-      "community": 18,
+      "community": 20,
       "norm_label": "_story_digest()"
     },
     {
@@ -2220,7 +2190,7 @@
       "source_location": "L772",
       "_origin": "ast",
       "id": "news_pipeline_diagnostics_safe_int",
-      "community": 18,
+      "community": 20,
       "norm_label": "_safe_int()"
     },
     {
@@ -2230,7 +2200,7 @@
       "source_location": "L779",
       "_origin": "ast",
       "id": "news_pipeline_diagnostics_safe_float",
-      "community": 18,
+      "community": 20,
       "norm_label": "_safe_float()"
     },
     {
@@ -2240,7 +2210,7 @@
       "source_location": "L786",
       "_origin": "ast",
       "id": "news_pipeline_diagnostics_table_value",
-      "community": 18,
+      "community": 20,
       "norm_label": "_table_value()"
     },
     {
@@ -2250,7 +2220,7 @@
       "source_location": "L793",
       "_origin": "ast",
       "id": "news_pipeline_diagnostics_format_count_map",
-      "community": 18,
+      "community": 20,
       "norm_label": "_format_count_map()"
     },
     {
@@ -2260,7 +2230,7 @@
       "source_location": "L802",
       "_origin": "ast",
       "id": "news_pipeline_diagnostics_join_or_none",
-      "community": 18,
+      "community": 20,
       "norm_label": "_join_or_none()"
     },
     {
@@ -2270,7 +2240,7 @@
       "source_location": "L806",
       "_origin": "ast",
       "id": "news_pipeline_diagnostics_hours_label",
-      "community": 18,
+      "community": 20,
       "norm_label": "_hours_label()"
     },
     {
@@ -2280,7 +2250,7 @@
       "source_location": "L812",
       "_origin": "ast",
       "id": "news_pipeline_diagnostics_run_warning_lines",
-      "community": 18,
+      "community": 20,
       "norm_label": "_run_warning_lines()"
     },
     {
@@ -2290,7 +2260,7 @@
       "source_location": "L839",
       "_origin": "ast",
       "id": "news_pipeline_diagnostics_model_token_totals",
-      "community": 18,
+      "community": 20,
       "norm_label": "_model_token_totals()"
     },
     {
@@ -2300,7 +2270,7 @@
       "source_location": "L889",
       "_origin": "ast",
       "id": "news_pipeline_diagnostics_seconds_label",
-      "community": 18,
+      "community": 20,
       "norm_label": "_seconds_label()"
     },
     {
@@ -2310,7 +2280,7 @@
       "source_location": "L897",
       "_origin": "ast",
       "id": "news_pipeline_diagnostics_last_event",
-      "community": 18,
+      "community": 20,
       "norm_label": "_last_event()"
     },
     {
@@ -2320,7 +2290,7 @@
       "source_location": "L904",
       "_origin": "ast",
       "id": "news_pipeline_diagnostics_run_status_from_events",
-      "community": 18,
+      "community": 20,
       "norm_label": "run_status_from_events()"
     },
     {
@@ -2330,7 +2300,7 @@
       "source_location": "L914",
       "_origin": "ast",
       "id": "news_pipeline_diagnostics_model_call_bucket",
-      "community": 18,
+      "community": 20,
       "norm_label": "_model_call_bucket()"
     },
     {
@@ -2340,7 +2310,7 @@
       "source_location": "L926",
       "_origin": "ast",
       "id": "news_pipeline_diagnostics_duration_label",
-      "community": 18,
+      "community": 20,
       "norm_label": "_duration_label()"
     },
     {
@@ -2350,7 +2320,7 @@
       "source_location": "L953",
       "_origin": "ast",
       "id": "news_pipeline_diagnostics_run_log_path",
-      "community": 18,
+      "community": 20,
       "norm_label": "_run_log_path()"
     },
     {
@@ -2360,7 +2330,7 @@
       "source_location": "L1",
       "_origin": "ast",
       "id": "news_pipeline_diagnostics_rationale_1",
-      "community": 18,
+      "community": 20,
       "norm_label": "run diagnostics for the global story-first news funnel."
     },
     {
@@ -4120,7 +4090,7 @@
       "source_location": "L1833",
       "_origin": "ast",
       "id": "news_pipeline_pipeline_base64url_encode",
-      "community": 8,
+      "community": 32,
       "norm_label": "_base64url_encode()"
     },
     {
@@ -4130,7 +4100,7 @@
       "source_location": "L1837",
       "_origin": "ast",
       "id": "news_pipeline_pipeline_base64url_decode",
-      "community": 8,
+      "community": 32,
       "norm_label": "_base64url_decode()"
     },
     {
@@ -4140,7 +4110,7 @@
       "source_location": "L1842",
       "_origin": "ast",
       "id": "news_pipeline_pipeline_unsubscribe_signing_secret",
-      "community": 8,
+      "community": 32,
       "norm_label": "_unsubscribe_signing_secret()"
     },
     {
@@ -4150,7 +4120,7 @@
       "source_location": "L1847",
       "_origin": "ast",
       "id": "news_pipeline_pipeline_build_unsubscribe_token",
-      "community": 8,
+      "community": 32,
       "norm_label": "build_unsubscribe_token()"
     },
     {
@@ -4160,7 +4130,7 @@
       "source_location": "L1862",
       "_origin": "ast",
       "id": "news_pipeline_pipeline_parse_unsubscribe_token",
-      "community": 8,
+      "community": 32,
       "norm_label": "parse_unsubscribe_token()"
     },
     {
@@ -4170,7 +4140,7 @@
       "source_location": "L1884",
       "_origin": "ast",
       "id": "news_pipeline_pipeline_build_unsubscribe_url",
-      "community": 8,
+      "community": 32,
       "norm_label": "build_unsubscribe_url()"
     },
     {
@@ -4180,7 +4150,7 @@
       "source_location": "L1890",
       "_origin": "ast",
       "id": "news_pipeline_pipeline_update_client_pause_setting",
-      "community": 20,
+      "community": 23,
       "norm_label": "update_client_pause_setting()"
     },
     {
@@ -4190,7 +4160,7 @@
       "source_location": "L1898",
       "_origin": "ast",
       "id": "news_pipeline_pipeline_serve_unsubscribe_endpoint",
-      "community": 25,
+      "community": 30,
       "norm_label": "serve_unsubscribe_endpoint()"
     },
     {
@@ -4200,7 +4170,7 @@
       "source_location": "L1953",
       "_origin": "ast",
       "id": "news_pipeline_pipeline_get_active_recipient_config",
-      "community": 0,
+      "community": 8,
       "norm_label": "get_active_recipient_config()"
     },
     {
@@ -4210,7 +4180,7 @@
       "source_location": "L1978",
       "_origin": "ast",
       "id": "news_pipeline_pipeline_slugify_report_suffix",
-      "community": 0,
+      "community": 8,
       "norm_label": "_slugify_report_suffix()"
     },
     {
@@ -4290,7 +4260,7 @@
       "source_location": "L2145",
       "_origin": "ast",
       "id": "news_pipeline_pipeline_article_scrape_deadline",
-      "community": 8,
+      "community": 22,
       "norm_label": "_article_scrape_deadline()"
     },
     {
@@ -4300,7 +4270,7 @@
       "source_location": "L2167",
       "_origin": "ast",
       "id": "news_pipeline_pipeline_download_article_html",
-      "community": 8,
+      "community": 22,
       "norm_label": "_download_article_html()"
     },
     {
@@ -4310,7 +4280,7 @@
       "source_location": "L2177",
       "_origin": "ast",
       "id": "news_pipeline_pipeline_scrape_article_text",
-      "community": 8,
+      "community": 22,
       "norm_label": "scrape_article_text()"
     },
     {
@@ -4430,7 +4400,7 @@
       "source_location": "L2439",
       "_origin": "ast",
       "id": "news_pipeline_pipeline_load_translation_model_resources",
-      "community": 11,
+      "community": 0,
       "norm_label": "_load_translation_model_resources()"
     },
     {
@@ -4440,7 +4410,7 @@
       "source_location": "L2471",
       "_origin": "ast",
       "id": "news_pipeline_pipeline_unload_translation_model_resources",
-      "community": 25,
+      "community": 30,
       "norm_label": "_unload_translation_model_resources()"
     },
     {
@@ -4450,7 +4420,7 @@
       "source_location": "L2485",
       "_origin": "ast",
       "id": "news_pipeline_pipeline_generate_translation_text",
-      "community": 12,
+      "community": 0,
       "norm_label": "_generate_translation_text()"
     },
     {
@@ -4600,7 +4570,7 @@
       "source_location": "L3128",
       "_origin": "ast",
       "id": "news_pipeline_pipeline_sampling_to_extra_body",
-      "community": 9,
+      "community": 8,
       "norm_label": "_sampling_to_extra_body()"
     },
     {
@@ -4620,7 +4590,7 @@
       "source_location": "L3138",
       "_origin": "ast",
       "id": "news_pipeline_pipeline_sampling_to_dict",
-      "community": 9,
+      "community": 8,
       "norm_label": "_sampling_to_dict()"
     },
     {
@@ -4630,7 +4600,7 @@
       "source_location": "L3145",
       "_origin": "ast",
       "id": "news_pipeline_pipeline_task_sampling_to_dict",
-      "community": 9,
+      "community": 8,
       "norm_label": "_task_sampling_to_dict()"
     },
     {
@@ -4640,7 +4610,7 @@
       "source_location": "L3152",
       "_origin": "ast",
       "id": "news_pipeline_pipeline_model_extra_body",
-      "community": 9,
+      "community": 8,
       "norm_label": "_model_extra_body()"
     },
     {
@@ -4670,7 +4640,7 @@
       "source_location": "L3178",
       "_origin": "ast",
       "id": "news_pipeline_pipeline_is_transient_model_error",
-      "community": 8,
+      "community": 18,
       "norm_label": "_is_transient_model_error()"
     },
     {
@@ -4680,7 +4650,7 @@
       "source_location": "L3193",
       "_origin": "ast",
       "id": "news_pipeline_pipeline_coerce_int",
-      "community": 8,
+      "community": 18,
       "norm_label": "_coerce_int()"
     },
     {
@@ -4690,7 +4660,7 @@
       "source_location": "L3204",
       "_origin": "ast",
       "id": "news_pipeline_pipeline_model_call_bucket",
-      "community": 8,
+      "community": 18,
       "norm_label": "_model_call_bucket()"
     },
     {
@@ -4700,7 +4670,7 @@
       "source_location": "L3212",
       "_origin": "ast",
       "id": "news_pipeline_pipeline_model_token_usage_entry_locked",
-      "community": 8,
+      "community": 18,
       "norm_label": "_model_token_usage_entry_locked()"
     },
     {
@@ -4710,7 +4680,7 @@
       "source_location": "L3236",
       "_origin": "ast",
       "id": "news_pipeline_pipeline_record_model_token_usage_locked",
-      "community": 8,
+      "community": 18,
       "norm_label": "_record_model_token_usage_locked()"
     },
     {
@@ -4720,7 +4690,7 @@
       "source_location": "L3255",
       "_origin": "ast",
       "id": "news_pipeline_pipeline_extract_token_usage_from_response",
-      "community": 8,
+      "community": 18,
       "norm_label": "_extract_token_usage_from_response()"
     },
     {
@@ -4740,7 +4710,7 @@
       "source_location": "L3294",
       "_origin": "ast",
       "id": "news_pipeline_pipeline_record_response_token_usage",
-      "community": 8,
+      "community": 18,
       "norm_label": "_record_response_token_usage()"
     },
     {
@@ -4750,7 +4720,7 @@
       "source_location": "L3332",
       "_origin": "ast",
       "id": "news_pipeline_pipeline_invoke_with_retries",
-      "community": 8,
+      "community": 18,
       "norm_label": "invoke_with_retries()"
     },
     {
@@ -4760,7 +4730,7 @@
       "source_location": "L3384",
       "_origin": "ast",
       "id": "news_pipeline_pipeline_get_token_encoder",
-      "community": 8,
+      "community": 18,
       "norm_label": "_get_token_encoder()"
     },
     {
@@ -4770,7 +4740,7 @@
       "source_location": "L3396",
       "_origin": "ast",
       "id": "news_pipeline_pipeline_estimate_token_count",
-      "community": 8,
+      "community": 18,
       "norm_label": "estimate_token_count()"
     },
     {
@@ -4780,7 +4750,7 @@
       "source_location": "L3407",
       "_origin": "ast",
       "id": "news_pipeline_pipeline_estimate_message_token_count",
-      "community": 8,
+      "community": 18,
       "norm_label": "estimate_message_token_count()"
     },
     {
@@ -4800,7 +4770,7 @@
       "source_location": "L3412",
       "_origin": "ast",
       "id": "news_pipeline_pipeline_truncate_text_to_token_limit",
-      "community": 8,
+      "community": 18,
       "norm_label": "truncate_text_to_token_limit()"
     },
     {
@@ -4810,7 +4780,7 @@
       "source_location": "L3431",
       "_origin": "ast",
       "id": "news_pipeline_pipeline_prepare_article_text_for_summary",
-      "community": 8,
+      "community": 18,
       "norm_label": "prepare_article_text_for_summary()"
     },
     {
@@ -4910,7 +4880,7 @@
       "source_location": "L3621",
       "_origin": "ast",
       "id": "news_pipeline_pipeline_report_story_label",
-      "community": 8,
+      "community": 25,
       "norm_label": "_report_story_label()"
     },
     {
@@ -4920,7 +4890,7 @@
       "source_location": "L3626",
       "_origin": "ast",
       "id": "news_pipeline_pipeline_report_summary_text",
-      "community": 8,
+      "community": 25,
       "norm_label": "_report_summary_text()"
     },
     {
@@ -4980,7 +4950,7 @@
       "source_location": "L3760",
       "_origin": "ast",
       "id": "news_pipeline_pipeline_first_sentences",
-      "community": 8,
+      "community": 25,
       "norm_label": "_first_sentences()"
     },
     {
@@ -4990,7 +4960,7 @@
       "source_location": "L3773",
       "_origin": "ast",
       "id": "news_pipeline_pipeline_fallback_synthesis_paragraph_from_summaries",
-      "community": 8,
+      "community": 25,
       "norm_label": "_fallback_synthesis_paragraph_from_summaries()"
     },
     {
@@ -5000,7 +4970,7 @@
       "source_location": "L3783",
       "_origin": "ast",
       "id": "news_pipeline_pipeline_build_fallback_final_synthesis_preview",
-      "community": 8,
+      "community": 25,
       "norm_label": "build_fallback_final_synthesis_preview()"
     },
     {
@@ -5060,7 +5030,7 @@
       "source_location": "L3924",
       "_origin": "ast",
       "id": "news_pipeline_pipeline_load_overlay_font",
-      "community": 8,
+      "community": 17,
       "norm_label": "_load_overlay_font()"
     },
     {
@@ -5070,7 +5040,7 @@
       "source_location": "L3938",
       "_origin": "ast",
       "id": "news_pipeline_pipeline_wrap_text_to_width",
-      "community": 8,
+      "community": 17,
       "norm_label": "_wrap_text_to_width()"
     },
     {
@@ -5080,7 +5050,7 @@
       "source_location": "L3956",
       "_origin": "ast",
       "id": "news_pipeline_pipeline_add_headline_overlay",
-      "community": 8,
+      "community": 17,
       "norm_label": "add_headline_overlay()"
     },
     {
@@ -5090,7 +5060,7 @@
       "source_location": "L3993",
       "_origin": "ast",
       "id": "news_pipeline_pipeline_generate_image_with_mflux",
-      "community": 0,
+      "community": 17,
       "norm_label": "generate_image_with_mflux()"
     },
     {
@@ -5100,7 +5070,7 @@
       "source_location": "L4045",
       "_origin": "ast",
       "id": "news_pipeline_pipeline_generate_report_image_art",
-      "community": 0,
+      "community": 17,
       "norm_label": "generate_report_image_art()"
     },
     {
@@ -5130,7 +5100,7 @@
       "source_location": "L4183",
       "_origin": "ast",
       "id": "news_pipeline_pipeline_collect_grouped_headlines",
-      "community": 6,
+      "community": 8,
       "norm_label": "_collect_grouped_headlines()"
     },
     {
@@ -5140,7 +5110,7 @@
       "source_location": "L4221",
       "_origin": "ast",
       "id": "news_pipeline_pipeline_build_plain_text_article_listing",
-      "community": 6,
+      "community": 8,
       "norm_label": "_build_plain_text_article_listing()"
     },
     {
@@ -5170,7 +5140,7 @@
       "source_location": "L4307",
       "_origin": "ast",
       "id": "news_pipeline_pipeline_build_html_article_listing",
-      "community": 6,
+      "community": 8,
       "norm_label": "_build_html_article_listing()"
     },
     {
@@ -5200,7 +5170,7 @@
       "source_location": "L4485",
       "_origin": "ast",
       "id": "news_pipeline_pipeline_report_entry_debug_record",
-      "community": 8,
+      "community": 25,
       "norm_label": "_report_entry_debug_record()"
     },
     {
@@ -5210,7 +5180,7 @@
       "source_location": "L4505",
       "_origin": "ast",
       "id": "news_pipeline_pipeline_report_entry_debug_records",
-      "community": 8,
+      "community": 25,
       "norm_label": "_report_entry_debug_records()"
     },
     {
@@ -5220,7 +5190,7 @@
       "source_location": "L4512",
       "_origin": "ast",
       "id": "news_pipeline_pipeline_dedupe_story_drafts_for_global_selection",
-      "community": 0,
+      "community": 12,
       "norm_label": "_dedupe_story_drafts_for_global_selection()"
     },
     {
@@ -5230,7 +5200,7 @@
       "source_location": "L4539",
       "_origin": "ast",
       "id": "news_pipeline_pipeline_persist_article_summaries_debug",
-      "community": 8,
+      "community": 25,
       "norm_label": "_persist_article_summaries_debug()"
     },
     {
@@ -5480,7 +5450,7 @@
       "source_location": "L5126",
       "_origin": "ast",
       "id": "news_pipeline_pipeline_run_translation_model_smoke_test",
-      "community": 25,
+      "community": 30,
       "norm_label": "run_translation_model_smoke_test()"
     },
     {
@@ -5590,7 +5560,7 @@
       "source_location": "L3784",
       "_origin": "ast",
       "id": "news_pipeline_pipeline_rationale_3784",
-      "community": 8,
+      "community": 25,
       "norm_label": "create grouped prose when final synthesis repeatedly returns empty."
     },
     {
@@ -8530,7 +8500,7 @@
       "source_location": "L1696",
       "_origin": "ast",
       "id": "news_pipeline_ui_main",
-      "community": 25,
+      "community": 30,
       "norm_label": "main()"
     },
     {
@@ -8990,7 +8960,7 @@
       "source_location": "L17",
       "_origin": "ast",
       "id": "tests_test_failed_run_logging_failedrunloggingtests",
-      "community": 7,
+      "community": 3,
       "norm_label": "failedrunloggingtests"
     },
     {
@@ -9000,7 +8970,7 @@
       "source_location": "L18",
       "_origin": "ast",
       "id": "tests_test_failed_run_logging_failedrunloggingtests_teardown",
-      "community": 7,
+      "community": 3,
       "norm_label": ".teardown()"
     },
     {
@@ -9010,7 +8980,7 @@
       "source_location": "L34",
       "_origin": "ast",
       "id": "tests_test_failed_run_logging_failedrunloggingtests_test_run_logging_creates_missing_parents_and_tees_progress",
-      "community": 7,
+      "community": 3,
       "norm_label": ".test_run_logging_creates_missing_parents_and_tees_progress()"
     },
     {
@@ -9020,7 +8990,7 @@
       "source_location": "L60",
       "_origin": "ast",
       "id": "tests_test_failed_run_logging_failedrunloggingtests_test_failed_run_writes_rolling_artifacts_and_history_status",
-      "community": 7,
+      "community": 3,
       "norm_label": ".test_failed_run_writes_rolling_artifacts_and_history_status()"
     },
     {
@@ -9030,7 +9000,7 @@
       "source_location": "L116",
       "_origin": "ast",
       "id": "tests_test_failed_run_logging_failedrunloggingtests_test_run_pipeline_delegates_to_run_session",
-      "community": 7,
+      "community": 3,
       "norm_label": ".test_run_pipeline_delegates_to_run_session()"
     },
     {
@@ -9040,7 +9010,7 @@
       "source_location": "L1",
       "_origin": "ast",
       "id": "tests_test_gemma4_article_budget",
-      "community": 30,
+      "community": 35,
       "norm_label": "test_gemma4_article_budget.py"
     },
     {
@@ -9050,7 +9020,7 @@
       "source_location": "L19",
       "_origin": "ast",
       "id": "tests_test_gemma4_article_budget_article",
-      "community": 30,
+      "community": 35,
       "norm_label": "_article()"
     },
     {
@@ -9060,7 +9030,7 @@
       "source_location": "L28",
       "_origin": "ast",
       "id": "tests_test_gemma4_article_budget_story",
-      "community": 30,
+      "community": 35,
       "norm_label": "_story()"
     },
     {
@@ -9070,7 +9040,7 @@
       "source_location": "L40",
       "_origin": "ast",
       "id": "tests_test_gemma4_article_budget_article_ids",
-      "community": 30,
+      "community": 35,
       "norm_label": "_article_ids()"
     },
     {
@@ -9080,7 +9050,7 @@
       "source_location": "L44",
       "_origin": "ast",
       "id": "tests_test_gemma4_article_budget_gemma4articlebudgettests",
-      "community": 30,
+      "community": 35,
       "norm_label": "gemma4articlebudgettests"
     },
     {
@@ -9090,7 +9060,7 @@
       "source_location": "L45",
       "_origin": "ast",
       "id": "tests_test_gemma4_article_budget_gemma4articlebudgettests_test_gemma_4_detection_uses_alias_and_resolved_name",
-      "community": 30,
+      "community": 35,
       "norm_label": ".test_gemma_4_detection_uses_alias_and_resolved_name()"
     },
     {
@@ -9100,7 +9070,7 @@
       "source_location": "L56",
       "_origin": "ast",
       "id": "tests_test_gemma4_article_budget_gemma4articlebudgettests_test_gemma_4_cap_is_40_by_default",
-      "community": 30,
+      "community": 35,
       "norm_label": ".test_gemma_4_cap_is_40_by_default()"
     },
     {
@@ -9110,7 +9080,7 @@
       "source_location": "L66",
       "_origin": "ast",
       "id": "tests_test_gemma4_article_budget_gemma4articlebudgettests_test_large_gemma_4_uses_article_parallelism_only",
-      "community": 30,
+      "community": 35,
       "norm_label": ".test_large_gemma_4_uses_article_parallelism_only()"
     },
     {
@@ -9120,7 +9090,7 @@
       "source_location": "L80",
       "_origin": "ast",
       "id": "tests_test_gemma4_article_budget_gemma4articlebudgettests_test_tiny_gemma_uses_higher_article_parallelism_and_story_synthesis_two",
-      "community": 30,
+      "community": 35,
       "norm_label": ".test_tiny_gemma_uses_higher_article_parallelism_and_story_synthesis_two()"
     },
     {
@@ -9130,7 +9100,7 @@
       "source_location": "L94",
       "_origin": "ast",
       "id": "tests_test_gemma4_article_budget_gemma4articlebudgettests_test_non_gemma_preserves_four_by_four_stage_concurrency",
-      "community": 30,
+      "community": 35,
       "norm_label": ".test_non_gemma_preserves_four_by_four_stage_concurrency()"
     },
     {
@@ -9140,7 +9110,7 @@
       "source_location": "L108",
       "_origin": "ast",
       "id": "tests_test_gemma4_article_budget_gemma4articlebudgettests_test_stage_concurrency_env_vars_do_not_override_model_profile",
-      "community": 30,
+      "community": 35,
       "norm_label": ".test_stage_concurrency_env_vars_do_not_override_model_profile()"
     },
     {
@@ -9150,7 +9120,7 @@
       "source_location": "L124",
       "_origin": "ast",
       "id": "tests_test_gemma4_article_budget_gemma4articlebudgettests_test_non_gemma_keeps_profile_cap_and_explicit_override_wins",
-      "community": 32,
+      "community": 37,
       "norm_label": ".test_non_gemma_keeps_profile_cap_and_explicit_override_wins()"
     },
     {
@@ -9160,7 +9130,7 @@
       "source_location": "L133",
       "_origin": "ast",
       "id": "tests_test_gemma4_article_budget_gemma4articlebudgettests_test_budget_keeps_all_articles_below_cap",
-      "community": 30,
+      "community": 35,
       "norm_label": ".test_budget_keeps_all_articles_below_cap()"
     },
     {
@@ -9170,7 +9140,7 @@
       "source_location": "L151",
       "_origin": "ast",
       "id": "tests_test_gemma4_article_budget_gemma4articlebudgettests_test_budget_keeps_whole_ranked_stories_when_possible",
-      "community": 30,
+      "community": 35,
       "norm_label": ".test_budget_keeps_whole_ranked_stories_when_possible()"
     },
     {
@@ -9180,7 +9150,7 @@
       "source_location": "L179",
       "_origin": "ast",
       "id": "tests_test_gemma4_article_budget_gemma4articlebudgettests_test_budget_truncates_single_story_larger_than_cap",
-      "community": 30,
+      "community": 35,
       "norm_label": ".test_budget_truncates_single_story_larger_than_cap()"
     },
     {
@@ -9730,7 +9700,7 @@
       "source_location": "L12",
       "_origin": "ast",
       "id": "tests_test_terminal_progress_faketty",
-      "community": 7,
+      "community": 0,
       "norm_label": "faketty"
     },
     {
@@ -9740,7 +9710,7 @@
       "source_location": "",
       "_origin": "ast",
       "id": "stringio",
-      "community": 7,
+      "community": 3,
       "norm_label": "stringio"
     },
     {
@@ -9750,7 +9720,7 @@
       "source_location": "L13",
       "_origin": "ast",
       "id": "tests_test_terminal_progress_faketty_isatty",
-      "community": 7,
+      "community": 0,
       "norm_label": ".isatty()"
     },
     {
@@ -9760,7 +9730,7 @@
       "source_location": "L17",
       "_origin": "ast",
       "id": "tests_test_terminal_progress_fakepipe",
-      "community": 7,
+      "community": 0,
       "norm_label": "fakepipe"
     },
     {
@@ -9770,7 +9740,7 @@
       "source_location": "L18",
       "_origin": "ast",
       "id": "tests_test_terminal_progress_fakepipe_isatty",
-      "community": 7,
+      "community": 0,
       "norm_label": ".isatty()"
     },
     {
@@ -9800,7 +9770,7 @@
       "source_location": "L43",
       "_origin": "ast",
       "id": "tests_test_terminal_progress_terminalprogresstests",
-      "community": 7,
+      "community": 0,
       "norm_label": "terminalprogresstests"
     },
     {
@@ -9810,7 +9780,7 @@
       "source_location": "L44",
       "_origin": "ast",
       "id": "tests_test_terminal_progress_terminalprogresstests_test_compact_tty_source_progress_suppresses_intermediate_items",
-      "community": 7,
+      "community": 0,
       "norm_label": ".test_compact_tty_source_progress_suppresses_intermediate_items()"
     },
     {
@@ -9820,7 +9790,7 @@
       "source_location": "L61",
       "_origin": "ast",
       "id": "tests_test_terminal_progress_terminalprogresstests_test_live_tty_source_progress_uses_one_mutable_line",
-      "community": 7,
+      "community": 0,
       "norm_label": ".test_live_tty_source_progress_uses_one_mutable_line()"
     },
     {
@@ -9830,7 +9800,7 @@
       "source_location": "L78",
       "_origin": "ast",
       "id": "tests_test_terminal_progress_terminalprogresstests_test_non_tty_source_progress_suppresses_intermediate_items",
-      "community": 7,
+      "community": 0,
       "norm_label": ".test_non_tty_source_progress_suppresses_intermediate_items()"
     },
     {
@@ -9840,7 +9810,7 @@
       "source_location": "L94",
       "_origin": "ast",
       "id": "tests_test_terminal_progress_terminalprogresstests_test_compact_full_run_sized_updates_stay_under_line_budget",
-      "community": 7,
+      "community": 0,
       "norm_label": ".test_compact_full_run_sized_updates_stay_under_line_budget()"
     },
     {
@@ -9860,7 +9830,7 @@
       "source_location": "L213",
       "_origin": "ast",
       "id": "tests_test_terminal_progress_terminalprogresstests_test_story_clustering_progress_reaches_final_total",
-      "community": 7,
+      "community": 0,
       "norm_label": ".test_story_clustering_progress_reaches_final_total()"
     },
     {
@@ -9950,7 +9920,7 @@
       "source_location": "L108",
       "_origin": "ast",
       "id": "tests_test_topicless_global_pipeline_topiclessglobalpipelinetests_test_source_loading_rejects_removed_topic_scope_fields",
-      "community": 6,
+      "community": 23,
       "norm_label": ".test_source_loading_rejects_removed_topic_scope_fields()"
     },
     {
@@ -10000,7 +9970,7 @@
       "source_location": "L1",
       "_origin": "ast",
       "id": "todays_news",
-      "community": 25,
+      "community": 30,
       "norm_label": "todays_news.py"
     },
     {
@@ -10010,7 +9980,7 @@
       "source_location": "L1",
       "_origin": "ast",
       "id": "todays_news_rationale_1",
-      "community": 25,
+      "community": 30,
       "norm_label": "compatibility wrapper for the daily news cli.  preferred usage:     uv run news"
     },
     {
@@ -11497,35 +11467,15 @@
   ],
   "links": [
     {
-      "relation": "contains",
-      "confidence": "EXTRACTED",
-      "source_file": ".claude/settings.local.json",
-      "source_location": "L2",
-      "weight": 1.0,
-      "confidence_score": 1.0,
-      "source": "claude_settings_local",
-      "target": "claude_settings_local_permissions"
-    },
-    {
-      "relation": "contains",
-      "confidence": "EXTRACTED",
-      "source_file": ".claude/settings.local.json",
-      "source_location": "L3",
-      "weight": 1.0,
-      "confidence_score": 1.0,
-      "source": "claude_settings_local_permissions",
-      "target": "claude_settings_local_permissions_allow"
-    },
-    {
       "relation": "imports_from",
       "context": "import",
       "confidence": "EXTRACTED",
       "source_file": "news_pipeline/article_collection.py",
       "source_location": "L14",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_article_collection",
-      "target": "news_pipeline_init"
+      "target": "news_pipeline_init",
+      "confidence_score": 1.0
     },
     {
       "relation": "rationale_for",
@@ -11587,9 +11537,9 @@
       "source_file": "news_pipeline/article_collection.py",
       "source_location": "L279",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_article_collection",
-      "target": "news_pipeline_article_collection_article_candidates_from_source_context"
+      "target": "news_pipeline_article_collection_article_candidates_from_source_context",
+      "confidence_score": 1.0
     },
     {
       "relation": "contains",
@@ -11597,9 +11547,9 @@
       "source_file": "news_pipeline/article_collection.py",
       "source_location": "L76",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_article_collection",
-      "target": "news_pipeline_article_collection_articlecollectionadapters"
+      "target": "news_pipeline_article_collection_articlecollectionadapters",
+      "confidence_score": 1.0
     },
     {
       "relation": "contains",
@@ -11607,9 +11557,9 @@
       "source_file": "news_pipeline/article_collection.py",
       "source_location": "L47",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_article_collection",
-      "target": "news_pipeline_article_collection_articlecollectionrequest"
+      "target": "news_pipeline_article_collection_articlecollectionrequest",
+      "confidence_score": 1.0
     },
     {
       "relation": "contains",
@@ -11617,9 +11567,9 @@
       "source_file": "news_pipeline/article_collection.py",
       "source_location": "L70",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_article_collection",
-      "target": "news_pipeline_article_collection_articlecollectionresult"
+      "target": "news_pipeline_article_collection_articlecollectionresult",
+      "confidence_score": 1.0
     },
     {
       "relation": "contains",
@@ -11627,9 +11577,9 @@
       "source_file": "news_pipeline/article_collection.py",
       "source_location": "L62",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_article_collection",
-      "target": "news_pipeline_article_collection_articlecollectionstats"
+      "target": "news_pipeline_article_collection_articlecollectionstats",
+      "confidence_score": 1.0
     },
     {
       "relation": "contains",
@@ -11637,9 +11587,9 @@
       "source_file": "news_pipeline/article_collection.py",
       "source_location": "L86",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_article_collection",
-      "target": "news_pipeline_article_collection_collect_article_candidates"
+      "target": "news_pipeline_article_collection_collect_article_candidates",
+      "confidence_score": 1.0
     },
     {
       "relation": "contains",
@@ -11647,9 +11597,9 @@
       "source_file": "news_pipeline/article_collection.py",
       "source_location": "L144",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_article_collection",
-      "target": "news_pipeline_article_collection_collect_source_contexts"
+      "target": "news_pipeline_article_collection_collect_source_contexts",
+      "confidence_score": 1.0
     },
     {
       "relation": "contains",
@@ -11657,9 +11607,9 @@
       "source_file": "news_pipeline/article_collection.py",
       "source_location": "L446",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_article_collection",
-      "target": "news_pipeline_article_collection_load_seen_urls"
+      "target": "news_pipeline_article_collection_load_seen_urls",
+      "confidence_score": 1.0
     },
     {
       "relation": "contains",
@@ -11667,9 +11617,9 @@
       "source_file": "news_pipeline/article_collection.py",
       "source_location": "L481",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_article_collection",
-      "target": "news_pipeline_article_collection_normalize_url_for_dedupe"
+      "target": "news_pipeline_article_collection_normalize_url_for_dedupe",
+      "confidence_score": 1.0
     },
     {
       "relation": "contains",
@@ -11677,9 +11627,9 @@
       "source_file": "news_pipeline/article_collection.py",
       "source_location": "L23",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_article_collection",
-      "target": "news_pipeline_article_collection_progresslike"
+      "target": "news_pipeline_article_collection_progresslike",
+      "confidence_score": 1.0
     },
     {
       "relation": "contains",
@@ -11687,9 +11637,9 @@
       "source_file": "news_pipeline/article_collection.py",
       "source_location": "L429",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_article_collection",
-      "target": "news_pipeline_article_collection_record_candidate_url_artifact"
+      "target": "news_pipeline_article_collection_record_candidate_url_artifact",
+      "confidence_score": 1.0
     },
     {
       "relation": "contains",
@@ -11697,9 +11647,9 @@
       "source_file": "news_pipeline/article_collection.py",
       "source_location": "L414",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_article_collection",
-      "target": "news_pipeline_article_collection_record_collection_summary"
+      "target": "news_pipeline_article_collection_record_collection_summary",
+      "confidence_score": 1.0
     },
     {
       "relation": "contains",
@@ -11707,9 +11657,9 @@
       "source_file": "news_pipeline/article_collection.py",
       "source_location": "L456",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_article_collection",
-      "target": "news_pipeline_article_collection_record_run_urls"
+      "target": "news_pipeline_article_collection_record_run_urls",
+      "confidence_score": 1.0
     },
     {
       "relation": "contains",
@@ -11717,9 +11667,9 @@
       "source_file": "news_pipeline/article_collection.py",
       "source_location": "L243",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_article_collection",
-      "target": "news_pipeline_article_collection_record_source_timing"
+      "target": "news_pipeline_article_collection_record_source_timing",
+      "confidence_score": 1.0
     },
     {
       "relation": "contains",
@@ -11727,9 +11677,9 @@
       "source_file": "news_pipeline/article_collection.py",
       "source_location": "L394",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_article_collection",
-      "target": "news_pipeline_article_collection_source_context_error_run"
+      "target": "news_pipeline_article_collection_source_context_error_run",
+      "confidence_score": 1.0
     },
     {
       "relation": "contains",
@@ -11737,9 +11687,9 @@
       "source_file": "news_pipeline/article_collection.py",
       "source_location": "L199",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_article_collection",
-      "target": "news_pipeline_article_collection_source_run_from_context"
+      "target": "news_pipeline_article_collection_source_run_from_context",
+      "confidence_score": 1.0
     },
     {
       "relation": "imports_from",
@@ -11748,9 +11698,9 @@
       "source_file": "news_pipeline/article_collection.py",
       "source_location": "L15",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_article_collection",
-      "target": "news_pipeline_config"
+      "target": "news_pipeline_config",
+      "confidence_score": 1.0
     },
     {
       "relation": "imports",
@@ -11759,9 +11709,9 @@
       "source_file": "news_pipeline/article_collection.py",
       "source_location": "L15",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_article_collection",
-      "target": "news_pipeline_config_runtimeconfig"
+      "target": "news_pipeline_config_runtimeconfig",
+      "confidence_score": 1.0
     },
     {
       "relation": "imports_from",
@@ -11770,9 +11720,9 @@
       "source_file": "news_pipeline/article_collection.py",
       "source_location": "L16",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_article_collection",
-      "target": "news_pipeline_diagnostics"
+      "target": "news_pipeline_diagnostics",
+      "confidence_score": 1.0
     },
     {
       "relation": "imports",
@@ -11781,9 +11731,9 @@
       "source_file": "news_pipeline/article_collection.py",
       "source_location": "L16",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_article_collection",
-      "target": "news_pipeline_diagnostics_rundiagnostics"
+      "target": "news_pipeline_diagnostics_rundiagnostics",
+      "confidence_score": 1.0
     },
     {
       "relation": "imports_from",
@@ -11792,9 +11742,9 @@
       "source_file": "news_pipeline/article_collection.py",
       "source_location": "L14",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_article_collection",
-      "target": "news_pipeline_history_store"
+      "target": "news_pipeline_history_store",
+      "confidence_score": 1.0
     },
     {
       "relation": "imports_from",
@@ -11803,9 +11753,9 @@
       "source_file": "news_pipeline/article_collection.py",
       "source_location": "L17",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_article_collection",
-      "target": "news_pipeline_run_finalizer"
+      "target": "news_pipeline_run_finalizer",
+      "confidence_score": 1.0
     },
     {
       "relation": "imports",
@@ -11814,9 +11764,9 @@
       "source_file": "news_pipeline/article_collection.py",
       "source_location": "L17",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_article_collection",
-      "target": "news_pipeline_run_finalizer_runfinalizer"
+      "target": "news_pipeline_run_finalizer_runfinalizer",
+      "confidence_score": 1.0
     },
     {
       "relation": "rationale_for",
@@ -11824,20 +11774,20 @@
       "source_file": "news_pipeline/article_collection.py",
       "source_location": "L1",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_article_collection_rationale_1",
-      "target": "news_pipeline_article_collection"
+      "target": "news_pipeline_article_collection",
+      "confidence_score": 1.0
     },
     {
       "relation": "imports_from",
       "context": "import",
       "confidence": "EXTRACTED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L104",
+      "source_location": "L103",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_pipeline",
-      "target": "news_pipeline_article_collection"
+      "target": "news_pipeline_article_collection",
+      "confidence_score": 1.0
     },
     {
       "relation": "imports_from",
@@ -11846,9 +11796,9 @@
       "source_file": "tests/test_article_collection.py",
       "source_location": "L9",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "tests_test_article_collection",
-      "target": "news_pipeline_article_collection"
+      "target": "news_pipeline_article_collection",
+      "confidence_score": 1.0
     },
     {
       "relation": "references",
@@ -11857,9 +11807,9 @@
       "source_file": "news_pipeline/article_collection.py",
       "source_location": "L86",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_article_collection_collect_article_candidates",
-      "target": "news_pipeline_article_collection_progresslike"
+      "target": "news_pipeline_article_collection_progresslike",
+      "confidence_score": 1.0
     },
     {
       "relation": "references",
@@ -11868,9 +11818,9 @@
       "source_file": "news_pipeline/article_collection.py",
       "source_location": "L144",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_article_collection_collect_source_contexts",
-      "target": "news_pipeline_article_collection_progresslike"
+      "target": "news_pipeline_article_collection_progresslike",
+      "confidence_score": 1.0
     },
     {
       "relation": "method",
@@ -11878,9 +11828,9 @@
       "source_file": "news_pipeline/article_collection.py",
       "source_location": "L24",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_article_collection_progresslike",
-      "target": "news_pipeline_article_collection_progresslike_detail"
+      "target": "news_pipeline_article_collection_progresslike_detail",
+      "confidence_score": 1.0
     },
     {
       "relation": "method",
@@ -11888,9 +11838,9 @@
       "source_file": "news_pipeline/article_collection.py",
       "source_location": "L43",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_article_collection_progresslike",
-      "target": "news_pipeline_article_collection_progresslike_finish_meter"
+      "target": "news_pipeline_article_collection_progresslike_finish_meter",
+      "confidence_score": 1.0
     },
     {
       "relation": "method",
@@ -11898,9 +11848,9 @@
       "source_file": "news_pipeline/article_collection.py",
       "source_location": "L28",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_article_collection_progresslike",
-      "target": "news_pipeline_article_collection_progresslike_source_completed"
+      "target": "news_pipeline_article_collection_progresslike_source_completed",
+      "confidence_score": 1.0
     },
     {
       "relation": "method",
@@ -11908,9 +11858,9 @@
       "source_file": "news_pipeline/article_collection.py",
       "source_location": "L36",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_article_collection_progresslike",
-      "target": "news_pipeline_article_collection_progresslike_update_source_fresh_articles"
+      "target": "news_pipeline_article_collection_progresslike_update_source_fresh_articles",
+      "confidence_score": 1.0
     },
     {
       "relation": "method",
@@ -11918,9 +11868,9 @@
       "source_file": "news_pipeline/article_collection.py",
       "source_location": "L26",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_article_collection_progresslike",
-      "target": "news_pipeline_article_collection_progresslike_warning"
+      "target": "news_pipeline_article_collection_progresslike_warning",
+      "confidence_score": 1.0
     },
     {
       "relation": "uses",
@@ -11928,9 +11878,9 @@
       "source_file": "news_pipeline/article_collection.py",
       "source_location": "L15",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "news_pipeline_article_collection_progresslike",
-      "target": "news_pipeline_config_runtimeconfig"
+      "target": "news_pipeline_config_runtimeconfig",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
@@ -11938,9 +11888,9 @@
       "source_file": "news_pipeline/article_collection.py",
       "source_location": "L16",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "news_pipeline_article_collection_progresslike",
-      "target": "news_pipeline_diagnostics_rundiagnostics"
+      "target": "news_pipeline_diagnostics_rundiagnostics",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
@@ -11948,9 +11898,9 @@
       "source_file": "news_pipeline/article_collection.py",
       "source_location": "L17",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "news_pipeline_article_collection_progresslike",
-      "target": "news_pipeline_run_finalizer_runfinalizer"
+      "target": "news_pipeline_run_finalizer_runfinalizer",
+      "confidence_score": 0.5
     },
     {
       "relation": "inherits",
@@ -11958,9 +11908,9 @@
       "source_file": "news_pipeline/article_collection.py",
       "source_location": "L23",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_article_collection_progresslike",
-      "target": "protocol"
+      "target": "protocol",
+      "confidence_score": 1.0
     },
     {
       "relation": "references",
@@ -11969,9 +11919,9 @@
       "source_file": "news_pipeline/article_collection.py",
       "source_location": "L414",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_article_collection_record_collection_summary",
-      "target": "news_pipeline_article_collection_progresslike"
+      "target": "news_pipeline_article_collection_progresslike",
+      "confidence_score": 1.0
     },
     {
       "relation": "references",
@@ -11980,9 +11930,9 @@
       "source_file": "news_pipeline/article_collection.py",
       "source_location": "L243",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_article_collection_record_source_timing",
-      "target": "news_pipeline_article_collection_progresslike"
+      "target": "news_pipeline_article_collection_progresslike",
+      "confidence_score": 1.0
     },
     {
       "relation": "references",
@@ -11991,9 +11941,9 @@
       "source_file": "news_pipeline/article_collection.py",
       "source_location": "L199",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_article_collection_source_run_from_context",
-      "target": "news_pipeline_article_collection_progresslike"
+      "target": "news_pipeline_article_collection_progresslike",
+      "confidence_score": 1.0
     },
     {
       "relation": "inherits",
@@ -12001,9 +11951,9 @@
       "source_file": "news_pipeline/run_finalizer.py",
       "source_location": "L25",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_run_finalizer_cleanupvisibleoutputs",
-      "target": "protocol"
+      "target": "protocol",
+      "confidence_score": 1.0
     },
     {
       "relation": "calls",
@@ -12012,9 +11962,9 @@
       "source_file": "news_pipeline/article_collection.py",
       "source_location": "L153",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_article_collection_collect_source_contexts",
-      "target": "news_pipeline_article_collection_progresslike_detail"
+      "target": "news_pipeline_article_collection_progresslike_detail",
+      "confidence_score": 1.0
     },
     {
       "relation": "calls",
@@ -12023,9 +11973,9 @@
       "source_file": "news_pipeline/article_collection.py",
       "source_location": "L417",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_article_collection_record_collection_summary",
-      "target": "news_pipeline_article_collection_progresslike_detail"
+      "target": "news_pipeline_article_collection_progresslike_detail",
+      "confidence_score": 1.0
     },
     {
       "relation": "calls",
@@ -12034,9 +11984,9 @@
       "source_file": "news_pipeline/article_collection.py",
       "source_location": "L452",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_article_collection_load_seen_urls",
-      "target": "news_pipeline_article_collection_progresslike_warning"
+      "target": "news_pipeline_article_collection_progresslike_warning",
+      "confidence_score": 1.0
     },
     {
       "relation": "calls",
@@ -12045,9 +11995,9 @@
       "source_file": "news_pipeline/article_collection.py",
       "source_location": "L473",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_article_collection_record_run_urls",
-      "target": "news_pipeline_article_collection_progresslike_warning"
+      "target": "news_pipeline_article_collection_progresslike_warning",
+      "confidence_score": 1.0
     },
     {
       "relation": "calls",
@@ -12056,9 +12006,9 @@
       "source_file": "news_pipeline/article_collection.py",
       "source_location": "L267",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_article_collection_record_source_timing",
-      "target": "news_pipeline_article_collection_progresslike_warning"
+      "target": "news_pipeline_article_collection_progresslike_warning",
+      "confidence_score": 1.0
     },
     {
       "relation": "calls",
@@ -12067,9 +12017,9 @@
       "source_file": "news_pipeline/article_collection.py",
       "source_location": "L216",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_article_collection_source_run_from_context",
-      "target": "news_pipeline_article_collection_progresslike_warning"
+      "target": "news_pipeline_article_collection_progresslike_warning",
+      "confidence_score": 1.0
     },
     {
       "relation": "calls",
@@ -12078,9 +12028,9 @@
       "source_file": "news_pipeline/article_collection.py",
       "source_location": "L186",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_article_collection_collect_source_contexts",
-      "target": "news_pipeline_article_collection_progresslike_source_completed"
+      "target": "news_pipeline_article_collection_progresslike_source_completed",
+      "confidence_score": 1.0
     },
     {
       "relation": "calls",
@@ -12089,9 +12039,9 @@
       "source_file": "news_pipeline/article_collection.py",
       "source_location": "L115",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_article_collection_collect_article_candidates",
-      "target": "news_pipeline_article_collection_progresslike_update_source_fresh_articles"
+      "target": "news_pipeline_article_collection_progresslike_update_source_fresh_articles",
+      "confidence_score": 1.0
     },
     {
       "relation": "calls",
@@ -12100,19 +12050,19 @@
       "source_file": "news_pipeline/article_collection.py",
       "source_location": "L122",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_article_collection_collect_article_candidates",
-      "target": "news_pipeline_article_collection_progresslike_finish_meter"
+      "target": "news_pipeline_article_collection_progresslike_finish_meter",
+      "confidence_score": 1.0
     },
     {
       "relation": "uses",
       "confidence": "INFERRED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L104",
+      "source_location": "L103",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "aimessage",
-      "target": "news_pipeline_article_collection_articlecollectionrequest"
+      "target": "news_pipeline_article_collection_articlecollectionrequest",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
@@ -12120,29 +12070,29 @@
       "source_file": "tests/test_article_collection.py",
       "source_location": "L9",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "articlecollectionrequest",
-      "target": "news_pipeline_article_collection_articlecollectionrequest"
+      "target": "news_pipeline_article_collection_articlecollectionrequest",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
       "confidence": "INFERRED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L104",
+      "source_location": "L103",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "chatopenai",
-      "target": "news_pipeline_article_collection_articlecollectionrequest"
+      "target": "news_pipeline_article_collection_articlecollectionrequest",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
       "confidence": "INFERRED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L104",
+      "source_location": "L103",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "modelsamplingsettings",
-      "target": "news_pipeline_article_collection_articlecollectionrequest"
+      "target": "news_pipeline_article_collection_articlecollectionrequest",
+      "confidence_score": 0.5
     },
     {
       "relation": "references",
@@ -12151,9 +12101,9 @@
       "source_file": "news_pipeline/article_collection.py",
       "source_location": "L279",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_article_collection_article_candidates_from_source_context",
-      "target": "news_pipeline_article_collection_articlecollectionrequest"
+      "target": "news_pipeline_article_collection_articlecollectionrequest",
+      "confidence_score": 1.0
     },
     {
       "relation": "uses",
@@ -12161,9 +12111,9 @@
       "source_file": "news_pipeline/article_collection.py",
       "source_location": "L15",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "news_pipeline_article_collection_articlecollectionrequest",
-      "target": "news_pipeline_config_runtimeconfig"
+      "target": "news_pipeline_config_runtimeconfig",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
@@ -12171,9 +12121,9 @@
       "source_file": "news_pipeline/article_collection.py",
       "source_location": "L16",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "news_pipeline_article_collection_articlecollectionrequest",
-      "target": "news_pipeline_diagnostics_rundiagnostics"
+      "target": "news_pipeline_diagnostics_rundiagnostics",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
@@ -12181,9 +12131,9 @@
       "source_file": "news_pipeline/article_collection.py",
       "source_location": "L17",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "news_pipeline_article_collection_articlecollectionrequest",
-      "target": "news_pipeline_run_finalizer_runfinalizer"
+      "target": "news_pipeline_run_finalizer_runfinalizer",
+      "confidence_score": 0.5
     },
     {
       "relation": "references",
@@ -12192,9 +12142,9 @@
       "source_file": "news_pipeline/article_collection.py",
       "source_location": "L86",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_article_collection_collect_article_candidates",
-      "target": "news_pipeline_article_collection_articlecollectionrequest"
+      "target": "news_pipeline_article_collection_articlecollectionrequest",
+      "confidence_score": 1.0
     },
     {
       "relation": "references",
@@ -12203,9 +12153,9 @@
       "source_file": "news_pipeline/article_collection.py",
       "source_location": "L144",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_article_collection_collect_source_contexts",
-      "target": "news_pipeline_article_collection_articlecollectionrequest"
+      "target": "news_pipeline_article_collection_articlecollectionrequest",
+      "confidence_score": 1.0
     },
     {
       "relation": "references",
@@ -12214,9 +12164,9 @@
       "source_file": "news_pipeline/article_collection.py",
       "source_location": "L446",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_article_collection_load_seen_urls",
-      "target": "news_pipeline_article_collection_articlecollectionrequest"
+      "target": "news_pipeline_article_collection_articlecollectionrequest",
+      "confidence_score": 1.0
     },
     {
       "relation": "references",
@@ -12225,9 +12175,9 @@
       "source_file": "news_pipeline/article_collection.py",
       "source_location": "L429",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_article_collection_record_candidate_url_artifact",
-      "target": "news_pipeline_article_collection_articlecollectionrequest"
+      "target": "news_pipeline_article_collection_articlecollectionrequest",
+      "confidence_score": 1.0
     },
     {
       "relation": "references",
@@ -12236,9 +12186,9 @@
       "source_file": "news_pipeline/article_collection.py",
       "source_location": "L456",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_article_collection_record_run_urls",
-      "target": "news_pipeline_article_collection_articlecollectionrequest"
+      "target": "news_pipeline_article_collection_articlecollectionrequest",
+      "confidence_score": 1.0
     },
     {
       "relation": "references",
@@ -12247,9 +12197,9 @@
       "source_file": "news_pipeline/article_collection.py",
       "source_location": "L243",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_article_collection_record_source_timing",
-      "target": "news_pipeline_article_collection_articlecollectionrequest"
+      "target": "news_pipeline_article_collection_articlecollectionrequest",
+      "confidence_score": 1.0
     },
     {
       "relation": "references",
@@ -12258,191 +12208,191 @@
       "source_file": "news_pipeline/article_collection.py",
       "source_location": "L199",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_article_collection_source_run_from_context",
-      "target": "news_pipeline_article_collection_articlecollectionrequest"
+      "target": "news_pipeline_article_collection_articlecollectionrequest",
+      "confidence_score": 1.0
     },
     {
       "relation": "imports",
       "context": "import",
       "confidence": "EXTRACTED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L104",
+      "source_location": "L103",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_pipeline",
-      "target": "news_pipeline_article_collection_articlecollectionrequest"
+      "target": "news_pipeline_article_collection_articlecollectionrequest",
+      "confidence_score": 1.0
     },
     {
       "relation": "uses",
       "confidence": "INFERRED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L104",
+      "source_location": "L103",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "news_pipeline_pipeline_articlescrapetimeouterror",
-      "target": "news_pipeline_article_collection_articlecollectionrequest"
+      "target": "news_pipeline_article_collection_articlecollectionrequest",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
       "confidence": "INFERRED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L104",
+      "source_location": "L103",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "news_pipeline_pipeline_managedmodelserverexited",
-      "target": "news_pipeline_article_collection_articlecollectionrequest"
+      "target": "news_pipeline_article_collection_articlecollectionrequest",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
       "confidence": "INFERRED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L104",
+      "source_location": "L103",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "news_pipeline_pipeline_progresstracker",
-      "target": "news_pipeline_article_collection_articlecollectionrequest"
+      "target": "news_pipeline_article_collection_articlecollectionrequest",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
       "confidence": "INFERRED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L104",
+      "source_location": "L103",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "news_pipeline_pipeline_py_any",
-      "target": "news_pipeline_article_collection_articlecollectionrequest"
+      "target": "news_pipeline_article_collection_articlecollectionrequest",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
       "confidence": "INFERRED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L104",
+      "source_location": "L103",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "news_pipeline_pipeline_py_articlesummarizationruntime",
-      "target": "news_pipeline_article_collection_articlecollectionrequest"
+      "target": "news_pipeline_article_collection_articlecollectionrequest",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
       "confidence": "INFERRED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L104",
+      "source_location": "L103",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "news_pipeline_pipeline_py_basemessage",
-      "target": "news_pipeline_article_collection_articlecollectionrequest"
+      "target": "news_pipeline_article_collection_articlecollectionrequest",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
       "confidence": "INFERRED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L104",
+      "source_location": "L103",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "news_pipeline_pipeline_py_counter",
-      "target": "news_pipeline_article_collection_articlecollectionrequest"
+      "target": "news_pipeline_article_collection_articlecollectionrequest",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
       "confidence": "INFERRED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L104",
+      "source_location": "L103",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "news_pipeline_pipeline_py_datetime",
-      "target": "news_pipeline_article_collection_articlecollectionrequest"
+      "target": "news_pipeline_article_collection_articlecollectionrequest",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
       "confidence": "INFERRED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L104",
+      "source_location": "L103",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "news_pipeline_pipeline_py_exception",
-      "target": "news_pipeline_article_collection_articlecollectionrequest"
+      "target": "news_pipeline_article_collection_articlecollectionrequest",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
       "confidence": "INFERRED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L104",
+      "source_location": "L103",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "news_pipeline_pipeline_py_rundiagnostics",
-      "target": "news_pipeline_article_collection_articlecollectionrequest"
+      "target": "news_pipeline_article_collection_articlecollectionrequest",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
       "confidence": "INFERRED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L104",
+      "source_location": "L103",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "news_pipeline_pipeline_py_runfinalizer",
-      "target": "news_pipeline_article_collection_articlecollectionrequest"
+      "target": "news_pipeline_article_collection_articlecollectionrequest",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
       "confidence": "INFERRED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L104",
+      "source_location": "L103",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "news_pipeline_pipeline_py_storydraftingruntime",
-      "target": "news_pipeline_article_collection_articlecollectionrequest"
+      "target": "news_pipeline_article_collection_articlecollectionrequest",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
       "confidence": "INFERRED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L104",
+      "source_location": "L103",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "news_pipeline_pipeline_py_storyselectionruntime",
-      "target": "news_pipeline_article_collection_articlecollectionrequest"
+      "target": "news_pipeline_article_collection_articlecollectionrequest",
+      "confidence_score": 0.5
     },
     {
       "relation": "calls",
       "context": "call",
       "confidence": "EXTRACTED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L5484",
+      "source_location": "L5230",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_pipeline_run_pipeline",
-      "target": "news_pipeline_article_collection_articlecollectionrequest"
+      "target": "news_pipeline_article_collection_articlecollectionrequest",
+      "confidence_score": 1.0
     },
     {
       "relation": "uses",
       "confidence": "INFERRED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L104",
+      "source_location": "L103",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "news_pipeline_pipeline_runsession",
-      "target": "news_pipeline_article_collection_articlecollectionrequest"
+      "target": "news_pipeline_article_collection_articlecollectionrequest",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
       "confidence": "INFERRED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L104",
+      "source_location": "L103",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "popen",
-      "target": "news_pipeline_article_collection_articlecollectionrequest"
+      "target": "news_pipeline_article_collection_articlecollectionrequest",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
       "confidence": "INFERRED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L104",
+      "source_location": "L103",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "runtimeconfig",
-      "target": "news_pipeline_article_collection_articlecollectionrequest"
+      "target": "news_pipeline_article_collection_articlecollectionrequest",
+      "confidence_score": 0.5
     },
     {
       "relation": "imports",
@@ -12451,9 +12401,9 @@
       "source_file": "tests/test_article_collection.py",
       "source_location": "L9",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "tests_test_article_collection",
-      "target": "news_pipeline_article_collection_articlecollectionrequest"
+      "target": "news_pipeline_article_collection_articlecollectionrequest",
+      "confidence_score": 1.0
     },
     {
       "relation": "uses",
@@ -12461,9 +12411,9 @@
       "source_file": "tests/test_article_collection.py",
       "source_location": "L9",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "tests_test_article_collection_articlecollectiontests",
-      "target": "news_pipeline_article_collection_articlecollectionrequest"
+      "target": "news_pipeline_article_collection_articlecollectionrequest",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
@@ -12471,9 +12421,9 @@
       "source_file": "tests/test_article_collection.py",
       "source_location": "L9",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "tests_test_article_collection_finalizer",
-      "target": "news_pipeline_article_collection_articlecollectionrequest"
+      "target": "news_pipeline_article_collection_articlecollectionrequest",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
@@ -12481,9 +12431,9 @@
       "source_file": "tests/test_article_collection.py",
       "source_location": "L9",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "tests_test_article_collection_progress",
-      "target": "news_pipeline_article_collection_articlecollectionrequest"
+      "target": "news_pipeline_article_collection_articlecollectionrequest",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
@@ -12491,9 +12441,9 @@
       "source_file": "tests/test_article_collection.py",
       "source_location": "L9",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "tests_test_article_collection_py_any",
-      "target": "news_pipeline_article_collection_articlecollectionrequest"
+      "target": "news_pipeline_article_collection_articlecollectionrequest",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
@@ -12501,9 +12451,9 @@
       "source_file": "tests/test_article_collection.py",
       "source_location": "L9",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "tests_test_article_collection_py_path",
-      "target": "news_pipeline_article_collection_articlecollectionrequest"
+      "target": "news_pipeline_article_collection_articlecollectionrequest",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
@@ -12511,19 +12461,19 @@
       "source_file": "tests/test_article_collection.py",
       "source_location": "L9",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "tests_test_article_collection_py_rundiagnostics",
-      "target": "news_pipeline_article_collection_articlecollectionrequest"
+      "target": "news_pipeline_article_collection_articlecollectionrequest",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
       "confidence": "INFERRED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L104",
+      "source_location": "L103",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "textio",
-      "target": "news_pipeline_article_collection_articlecollectionrequest"
+      "target": "news_pipeline_article_collection_articlecollectionrequest",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
@@ -12531,9 +12481,9 @@
       "source_file": "news_pipeline/article_collection.py",
       "source_location": "L15",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "news_pipeline_article_collection_articlecollectionstats",
-      "target": "news_pipeline_config_runtimeconfig"
+      "target": "news_pipeline_config_runtimeconfig",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
@@ -12541,9 +12491,9 @@
       "source_file": "news_pipeline/article_collection.py",
       "source_location": "L16",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "news_pipeline_article_collection_articlecollectionstats",
-      "target": "news_pipeline_diagnostics_rundiagnostics"
+      "target": "news_pipeline_diagnostics_rundiagnostics",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
@@ -12551,9 +12501,9 @@
       "source_file": "news_pipeline/article_collection.py",
       "source_location": "L17",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "news_pipeline_article_collection_articlecollectionstats",
-      "target": "news_pipeline_run_finalizer_runfinalizer"
+      "target": "news_pipeline_run_finalizer_runfinalizer",
+      "confidence_score": 0.5
     },
     {
       "relation": "calls",
@@ -12562,9 +12512,9 @@
       "source_file": "news_pipeline/article_collection.py",
       "source_location": "L123",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_article_collection_collect_article_candidates",
-      "target": "news_pipeline_article_collection_articlecollectionstats"
+      "target": "news_pipeline_article_collection_articlecollectionstats",
+      "confidence_score": 1.0
     },
     {
       "relation": "references",
@@ -12573,9 +12523,9 @@
       "source_file": "news_pipeline/article_collection.py",
       "source_location": "L414",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_article_collection_record_collection_summary",
-      "target": "news_pipeline_article_collection_articlecollectionstats"
+      "target": "news_pipeline_article_collection_articlecollectionstats",
+      "confidence_score": 1.0
     },
     {
       "relation": "uses",
@@ -12583,9 +12533,9 @@
       "source_file": "news_pipeline/article_collection.py",
       "source_location": "L15",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "news_pipeline_article_collection_articlecollectionresult",
-      "target": "news_pipeline_config_runtimeconfig"
+      "target": "news_pipeline_config_runtimeconfig",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
@@ -12593,9 +12543,9 @@
       "source_file": "news_pipeline/article_collection.py",
       "source_location": "L16",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "news_pipeline_article_collection_articlecollectionresult",
-      "target": "news_pipeline_diagnostics_rundiagnostics"
+      "target": "news_pipeline_diagnostics_rundiagnostics",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
@@ -12603,9 +12553,9 @@
       "source_file": "news_pipeline/article_collection.py",
       "source_location": "L17",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "news_pipeline_article_collection_articlecollectionresult",
-      "target": "news_pipeline_run_finalizer_runfinalizer"
+      "target": "news_pipeline_run_finalizer_runfinalizer",
+      "confidence_score": 0.5
     },
     {
       "relation": "references",
@@ -12614,19 +12564,19 @@
       "source_file": "news_pipeline/article_collection.py",
       "source_location": "L86",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_article_collection_collect_article_candidates",
-      "target": "news_pipeline_article_collection_articlecollectionresult"
+      "target": "news_pipeline_article_collection_articlecollectionresult",
+      "confidence_score": 1.0
     },
     {
       "relation": "uses",
       "confidence": "INFERRED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L104",
+      "source_location": "L103",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "aimessage",
-      "target": "news_pipeline_article_collection_articlecollectionadapters"
+      "target": "news_pipeline_article_collection_articlecollectionadapters",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
@@ -12634,29 +12584,29 @@
       "source_file": "tests/test_article_collection.py",
       "source_location": "L9",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "articlecollectionrequest",
-      "target": "news_pipeline_article_collection_articlecollectionadapters"
+      "target": "news_pipeline_article_collection_articlecollectionadapters",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
       "confidence": "INFERRED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L104",
+      "source_location": "L103",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "chatopenai",
-      "target": "news_pipeline_article_collection_articlecollectionadapters"
+      "target": "news_pipeline_article_collection_articlecollectionadapters",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
       "confidence": "INFERRED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L104",
+      "source_location": "L103",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "modelsamplingsettings",
-      "target": "news_pipeline_article_collection_articlecollectionadapters"
+      "target": "news_pipeline_article_collection_articlecollectionadapters",
+      "confidence_score": 0.5
     },
     {
       "relation": "references",
@@ -12665,9 +12615,9 @@
       "source_file": "news_pipeline/article_collection.py",
       "source_location": "L279",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_article_collection_article_candidates_from_source_context",
-      "target": "news_pipeline_article_collection_articlecollectionadapters"
+      "target": "news_pipeline_article_collection_articlecollectionadapters",
+      "confidence_score": 1.0
     },
     {
       "relation": "uses",
@@ -12675,9 +12625,9 @@
       "source_file": "news_pipeline/article_collection.py",
       "source_location": "L15",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "news_pipeline_article_collection_articlecollectionadapters",
-      "target": "news_pipeline_config_runtimeconfig"
+      "target": "news_pipeline_config_runtimeconfig",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
@@ -12685,9 +12635,9 @@
       "source_file": "news_pipeline/article_collection.py",
       "source_location": "L16",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "news_pipeline_article_collection_articlecollectionadapters",
-      "target": "news_pipeline_diagnostics_rundiagnostics"
+      "target": "news_pipeline_diagnostics_rundiagnostics",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
@@ -12695,9 +12645,9 @@
       "source_file": "news_pipeline/article_collection.py",
       "source_location": "L17",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "news_pipeline_article_collection_articlecollectionadapters",
-      "target": "news_pipeline_run_finalizer_runfinalizer"
+      "target": "news_pipeline_run_finalizer_runfinalizer",
+      "confidence_score": 0.5
     },
     {
       "relation": "references",
@@ -12706,9 +12656,9 @@
       "source_file": "news_pipeline/article_collection.py",
       "source_location": "L86",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_article_collection_collect_article_candidates",
-      "target": "news_pipeline_article_collection_articlecollectionadapters"
+      "target": "news_pipeline_article_collection_articlecollectionadapters",
+      "confidence_score": 1.0
     },
     {
       "relation": "references",
@@ -12717,9 +12667,9 @@
       "source_file": "news_pipeline/article_collection.py",
       "source_location": "L144",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_article_collection_collect_source_contexts",
-      "target": "news_pipeline_article_collection_articlecollectionadapters"
+      "target": "news_pipeline_article_collection_articlecollectionadapters",
+      "confidence_score": 1.0
     },
     {
       "relation": "references",
@@ -12728,9 +12678,9 @@
       "source_file": "news_pipeline/article_collection.py",
       "source_location": "L446",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_article_collection_load_seen_urls",
-      "target": "news_pipeline_article_collection_articlecollectionadapters"
+      "target": "news_pipeline_article_collection_articlecollectionadapters",
+      "confidence_score": 1.0
     },
     {
       "relation": "references",
@@ -12739,9 +12689,9 @@
       "source_file": "news_pipeline/article_collection.py",
       "source_location": "L429",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_article_collection_record_candidate_url_artifact",
-      "target": "news_pipeline_article_collection_articlecollectionadapters"
+      "target": "news_pipeline_article_collection_articlecollectionadapters",
+      "confidence_score": 1.0
     },
     {
       "relation": "references",
@@ -12750,9 +12700,9 @@
       "source_file": "news_pipeline/article_collection.py",
       "source_location": "L456",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_article_collection_record_run_urls",
-      "target": "news_pipeline_article_collection_articlecollectionadapters"
+      "target": "news_pipeline_article_collection_articlecollectionadapters",
+      "confidence_score": 1.0
     },
     {
       "relation": "references",
@@ -12761,191 +12711,191 @@
       "source_file": "news_pipeline/article_collection.py",
       "source_location": "L199",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_article_collection_source_run_from_context",
-      "target": "news_pipeline_article_collection_articlecollectionadapters"
+      "target": "news_pipeline_article_collection_articlecollectionadapters",
+      "confidence_score": 1.0
     },
     {
       "relation": "imports",
       "context": "import",
       "confidence": "EXTRACTED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L104",
+      "source_location": "L103",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_pipeline",
-      "target": "news_pipeline_article_collection_articlecollectionadapters"
+      "target": "news_pipeline_article_collection_articlecollectionadapters",
+      "confidence_score": 1.0
     },
     {
       "relation": "uses",
       "confidence": "INFERRED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L104",
+      "source_location": "L103",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "news_pipeline_pipeline_articlescrapetimeouterror",
-      "target": "news_pipeline_article_collection_articlecollectionadapters"
+      "target": "news_pipeline_article_collection_articlecollectionadapters",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
       "confidence": "INFERRED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L104",
+      "source_location": "L103",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "news_pipeline_pipeline_managedmodelserverexited",
-      "target": "news_pipeline_article_collection_articlecollectionadapters"
+      "target": "news_pipeline_article_collection_articlecollectionadapters",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
       "confidence": "INFERRED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L104",
+      "source_location": "L103",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "news_pipeline_pipeline_progresstracker",
-      "target": "news_pipeline_article_collection_articlecollectionadapters"
+      "target": "news_pipeline_article_collection_articlecollectionadapters",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
       "confidence": "INFERRED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L104",
+      "source_location": "L103",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "news_pipeline_pipeline_py_any",
-      "target": "news_pipeline_article_collection_articlecollectionadapters"
+      "target": "news_pipeline_article_collection_articlecollectionadapters",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
       "confidence": "INFERRED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L104",
+      "source_location": "L103",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "news_pipeline_pipeline_py_articlesummarizationruntime",
-      "target": "news_pipeline_article_collection_articlecollectionadapters"
+      "target": "news_pipeline_article_collection_articlecollectionadapters",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
       "confidence": "INFERRED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L104",
+      "source_location": "L103",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "news_pipeline_pipeline_py_basemessage",
-      "target": "news_pipeline_article_collection_articlecollectionadapters"
+      "target": "news_pipeline_article_collection_articlecollectionadapters",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
       "confidence": "INFERRED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L104",
+      "source_location": "L103",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "news_pipeline_pipeline_py_counter",
-      "target": "news_pipeline_article_collection_articlecollectionadapters"
+      "target": "news_pipeline_article_collection_articlecollectionadapters",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
       "confidence": "INFERRED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L104",
+      "source_location": "L103",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "news_pipeline_pipeline_py_datetime",
-      "target": "news_pipeline_article_collection_articlecollectionadapters"
+      "target": "news_pipeline_article_collection_articlecollectionadapters",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
       "confidence": "INFERRED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L104",
+      "source_location": "L103",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "news_pipeline_pipeline_py_exception",
-      "target": "news_pipeline_article_collection_articlecollectionadapters"
+      "target": "news_pipeline_article_collection_articlecollectionadapters",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
       "confidence": "INFERRED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L104",
+      "source_location": "L103",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "news_pipeline_pipeline_py_rundiagnostics",
-      "target": "news_pipeline_article_collection_articlecollectionadapters"
+      "target": "news_pipeline_article_collection_articlecollectionadapters",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
       "confidence": "INFERRED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L104",
+      "source_location": "L103",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "news_pipeline_pipeline_py_runfinalizer",
-      "target": "news_pipeline_article_collection_articlecollectionadapters"
+      "target": "news_pipeline_article_collection_articlecollectionadapters",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
       "confidence": "INFERRED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L104",
+      "source_location": "L103",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "news_pipeline_pipeline_py_storydraftingruntime",
-      "target": "news_pipeline_article_collection_articlecollectionadapters"
+      "target": "news_pipeline_article_collection_articlecollectionadapters",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
       "confidence": "INFERRED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L104",
+      "source_location": "L103",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "news_pipeline_pipeline_py_storyselectionruntime",
-      "target": "news_pipeline_article_collection_articlecollectionadapters"
+      "target": "news_pipeline_article_collection_articlecollectionadapters",
+      "confidence_score": 0.5
     },
     {
       "relation": "calls",
       "context": "call",
       "confidence": "EXTRACTED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L5500",
+      "source_location": "L5246",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_pipeline_run_pipeline",
-      "target": "news_pipeline_article_collection_articlecollectionadapters"
+      "target": "news_pipeline_article_collection_articlecollectionadapters",
+      "confidence_score": 1.0
     },
     {
       "relation": "uses",
       "confidence": "INFERRED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L104",
+      "source_location": "L103",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "news_pipeline_pipeline_runsession",
-      "target": "news_pipeline_article_collection_articlecollectionadapters"
+      "target": "news_pipeline_article_collection_articlecollectionadapters",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
       "confidence": "INFERRED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L104",
+      "source_location": "L103",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "popen",
-      "target": "news_pipeline_article_collection_articlecollectionadapters"
+      "target": "news_pipeline_article_collection_articlecollectionadapters",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
       "confidence": "INFERRED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L104",
+      "source_location": "L103",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "runtimeconfig",
-      "target": "news_pipeline_article_collection_articlecollectionadapters"
+      "target": "news_pipeline_article_collection_articlecollectionadapters",
+      "confidence_score": 0.5
     },
     {
       "relation": "imports",
@@ -12954,9 +12904,9 @@
       "source_file": "tests/test_article_collection.py",
       "source_location": "L9",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "tests_test_article_collection",
-      "target": "news_pipeline_article_collection_articlecollectionadapters"
+      "target": "news_pipeline_article_collection_articlecollectionadapters",
+      "confidence_score": 1.0
     },
     {
       "relation": "uses",
@@ -12964,9 +12914,9 @@
       "source_file": "tests/test_article_collection.py",
       "source_location": "L9",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "tests_test_article_collection_articlecollectiontests",
-      "target": "news_pipeline_article_collection_articlecollectionadapters"
+      "target": "news_pipeline_article_collection_articlecollectionadapters",
+      "confidence_score": 0.5
     },
     {
       "relation": "calls",
@@ -12996,9 +12946,9 @@
       "source_file": "tests/test_article_collection.py",
       "source_location": "L9",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "tests_test_article_collection_finalizer",
-      "target": "news_pipeline_article_collection_articlecollectionadapters"
+      "target": "news_pipeline_article_collection_articlecollectionadapters",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
@@ -13006,9 +12956,9 @@
       "source_file": "tests/test_article_collection.py",
       "source_location": "L9",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "tests_test_article_collection_progress",
-      "target": "news_pipeline_article_collection_articlecollectionadapters"
+      "target": "news_pipeline_article_collection_articlecollectionadapters",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
@@ -13016,9 +12966,9 @@
       "source_file": "tests/test_article_collection.py",
       "source_location": "L9",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "tests_test_article_collection_py_any",
-      "target": "news_pipeline_article_collection_articlecollectionadapters"
+      "target": "news_pipeline_article_collection_articlecollectionadapters",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
@@ -13026,9 +12976,9 @@
       "source_file": "tests/test_article_collection.py",
       "source_location": "L9",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "tests_test_article_collection_py_path",
-      "target": "news_pipeline_article_collection_articlecollectionadapters"
+      "target": "news_pipeline_article_collection_articlecollectionadapters",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
@@ -13036,19 +12986,19 @@
       "source_file": "tests/test_article_collection.py",
       "source_location": "L9",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "tests_test_article_collection_py_rundiagnostics",
-      "target": "news_pipeline_article_collection_articlecollectionadapters"
+      "target": "news_pipeline_article_collection_articlecollectionadapters",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
       "confidence": "INFERRED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L104",
+      "source_location": "L103",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "textio",
-      "target": "news_pipeline_article_collection_articlecollectionadapters"
+      "target": "news_pipeline_article_collection_articlecollectionadapters",
+      "confidence_score": 0.5
     },
     {
       "relation": "calls",
@@ -13057,9 +13007,9 @@
       "source_file": "news_pipeline/article_collection.py",
       "source_location": "L101",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_article_collection_collect_article_candidates",
-      "target": "news_pipeline_article_collection_collect_source_contexts"
+      "target": "news_pipeline_article_collection_collect_source_contexts",
+      "confidence_score": 1.0
     },
     {
       "relation": "calls",
@@ -13068,9 +13018,9 @@
       "source_file": "news_pipeline/article_collection.py",
       "source_location": "L93",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_article_collection_collect_article_candidates",
-      "target": "news_pipeline_article_collection_load_seen_urls"
+      "target": "news_pipeline_article_collection_load_seen_urls",
+      "confidence_score": 1.0
     },
     {
       "relation": "references",
@@ -13079,9 +13029,9 @@
       "source_file": "news_pipeline/article_collection.py",
       "source_location": "L86",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_article_collection_collect_article_candidates",
-      "target": "news_pipeline_article_collection_py_rundiagnostics"
+      "target": "news_pipeline_article_collection_py_rundiagnostics",
+      "confidence_score": 1.0
     },
     {
       "relation": "references",
@@ -13090,9 +13040,9 @@
       "source_file": "news_pipeline/article_collection.py",
       "source_location": "L86",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_article_collection_collect_article_candidates",
-      "target": "news_pipeline_article_collection_py_runfinalizer"
+      "target": "news_pipeline_article_collection_py_runfinalizer",
+      "confidence_score": 1.0
     },
     {
       "relation": "calls",
@@ -13101,9 +13051,9 @@
       "source_file": "news_pipeline/article_collection.py",
       "source_location": "L138",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_article_collection_collect_article_candidates",
-      "target": "news_pipeline_article_collection_record_candidate_url_artifact"
+      "target": "news_pipeline_article_collection_record_candidate_url_artifact",
+      "confidence_score": 1.0
     },
     {
       "relation": "calls",
@@ -13112,9 +13062,9 @@
       "source_file": "news_pipeline/article_collection.py",
       "source_location": "L129",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_article_collection_collect_article_candidates",
-      "target": "news_pipeline_article_collection_record_collection_summary"
+      "target": "news_pipeline_article_collection_record_collection_summary",
+      "confidence_score": 1.0
     },
     {
       "relation": "calls",
@@ -13123,9 +13073,9 @@
       "source_file": "news_pipeline/article_collection.py",
       "source_location": "L140",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_article_collection_collect_article_candidates",
-      "target": "news_pipeline_article_collection_record_run_urls"
+      "target": "news_pipeline_article_collection_record_run_urls",
+      "confidence_score": 1.0
     },
     {
       "relation": "calls",
@@ -13134,31 +13084,31 @@
       "source_file": "news_pipeline/article_collection.py",
       "source_location": "L102",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_article_collection_collect_article_candidates",
-      "target": "news_pipeline_article_collection_source_run_from_context"
+      "target": "news_pipeline_article_collection_source_run_from_context",
+      "confidence_score": 1.0
     },
     {
       "relation": "imports",
       "context": "import",
       "confidence": "EXTRACTED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L104",
+      "source_location": "L103",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_pipeline",
-      "target": "news_pipeline_article_collection_collect_article_candidates"
+      "target": "news_pipeline_article_collection_collect_article_candidates",
+      "confidence_score": 1.0
     },
     {
       "relation": "calls",
       "context": "call",
       "confidence": "EXTRACTED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L5483",
+      "source_location": "L5229",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_pipeline_run_pipeline",
-      "target": "news_pipeline_article_collection_collect_article_candidates"
+      "target": "news_pipeline_article_collection_collect_article_candidates",
+      "confidence_score": 1.0
     },
     {
       "relation": "imports",
@@ -13167,9 +13117,9 @@
       "source_file": "tests/test_article_collection.py",
       "source_location": "L9",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "tests_test_article_collection",
-      "target": "news_pipeline_article_collection_collect_article_candidates"
+      "target": "news_pipeline_article_collection_collect_article_candidates",
+      "confidence_score": 1.0
     },
     {
       "relation": "calls",
@@ -13199,9 +13149,9 @@
       "source_file": "news_pipeline/article_collection.py",
       "source_location": "L15",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "news_pipeline_article_collection_py_rundiagnostics",
-      "target": "news_pipeline_config_runtimeconfig"
+      "target": "news_pipeline_config_runtimeconfig",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
@@ -13209,9 +13159,9 @@
       "source_file": "news_pipeline/article_collection.py",
       "source_location": "L16",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "news_pipeline_article_collection_py_rundiagnostics",
-      "target": "news_pipeline_diagnostics_rundiagnostics"
+      "target": "news_pipeline_diagnostics_rundiagnostics",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
@@ -13219,9 +13169,9 @@
       "source_file": "news_pipeline/article_collection.py",
       "source_location": "L17",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "news_pipeline_article_collection_py_rundiagnostics",
-      "target": "news_pipeline_run_finalizer_runfinalizer"
+      "target": "news_pipeline_run_finalizer_runfinalizer",
+      "confidence_score": 0.5
     },
     {
       "relation": "references",
@@ -13230,9 +13180,9 @@
       "source_file": "news_pipeline/article_collection.py",
       "source_location": "L429",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_article_collection_record_candidate_url_artifact",
-      "target": "news_pipeline_article_collection_py_rundiagnostics"
+      "target": "news_pipeline_article_collection_py_rundiagnostics",
+      "confidence_score": 1.0
     },
     {
       "relation": "references",
@@ -13241,9 +13191,9 @@
       "source_file": "news_pipeline/article_collection.py",
       "source_location": "L243",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_article_collection_record_source_timing",
-      "target": "news_pipeline_article_collection_py_rundiagnostics"
+      "target": "news_pipeline_article_collection_py_rundiagnostics",
+      "confidence_score": 1.0
     },
     {
       "relation": "references",
@@ -13252,9 +13202,9 @@
       "source_file": "news_pipeline/article_collection.py",
       "source_location": "L199",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_article_collection_source_run_from_context",
-      "target": "news_pipeline_article_collection_py_rundiagnostics"
+      "target": "news_pipeline_article_collection_py_rundiagnostics",
+      "confidence_score": 1.0
     },
     {
       "relation": "uses",
@@ -13262,9 +13212,9 @@
       "source_file": "news_pipeline/article_collection.py",
       "source_location": "L15",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "news_pipeline_article_collection_py_runfinalizer",
-      "target": "news_pipeline_config_runtimeconfig"
+      "target": "news_pipeline_config_runtimeconfig",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
@@ -13272,9 +13222,9 @@
       "source_file": "news_pipeline/article_collection.py",
       "source_location": "L16",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "news_pipeline_article_collection_py_runfinalizer",
-      "target": "news_pipeline_diagnostics_rundiagnostics"
+      "target": "news_pipeline_diagnostics_rundiagnostics",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
@@ -13282,9 +13232,9 @@
       "source_file": "news_pipeline/article_collection.py",
       "source_location": "L17",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "news_pipeline_article_collection_py_runfinalizer",
-      "target": "news_pipeline_run_finalizer_runfinalizer"
+      "target": "news_pipeline_run_finalizer_runfinalizer",
+      "confidence_score": 0.5
     },
     {
       "relation": "references",
@@ -13293,9 +13243,9 @@
       "source_file": "news_pipeline/article_collection.py",
       "source_location": "L144",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_article_collection_collect_source_contexts",
-      "target": "news_pipeline_article_collection_py_any"
+      "target": "news_pipeline_article_collection_py_any",
+      "confidence_score": 1.0
     },
     {
       "relation": "references",
@@ -13304,9 +13254,9 @@
       "source_file": "news_pipeline/article_collection.py",
       "source_location": "L279",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_article_collection_article_candidates_from_source_context",
-      "target": "news_pipeline_article_collection_py_any"
+      "target": "news_pipeline_article_collection_py_any",
+      "confidence_score": 1.0
     },
     {
       "relation": "uses",
@@ -13314,9 +13264,9 @@
       "source_file": "news_pipeline/article_collection.py",
       "source_location": "L15",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "news_pipeline_article_collection_py_any",
-      "target": "news_pipeline_config_runtimeconfig"
+      "target": "news_pipeline_config_runtimeconfig",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
@@ -13324,9 +13274,9 @@
       "source_file": "news_pipeline/article_collection.py",
       "source_location": "L16",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "news_pipeline_article_collection_py_any",
-      "target": "news_pipeline_diagnostics_rundiagnostics"
+      "target": "news_pipeline_diagnostics_rundiagnostics",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
@@ -13334,9 +13284,9 @@
       "source_file": "news_pipeline/article_collection.py",
       "source_location": "L17",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "news_pipeline_article_collection_py_any",
-      "target": "news_pipeline_run_finalizer_runfinalizer"
+      "target": "news_pipeline_run_finalizer_runfinalizer",
+      "confidence_score": 0.5
     },
     {
       "relation": "references",
@@ -13345,9 +13295,9 @@
       "source_file": "news_pipeline/article_collection.py",
       "source_location": "L456",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_article_collection_record_run_urls",
-      "target": "news_pipeline_article_collection_py_any"
+      "target": "news_pipeline_article_collection_py_any",
+      "confidence_score": 1.0
     },
     {
       "relation": "references",
@@ -13356,9 +13306,9 @@
       "source_file": "news_pipeline/article_collection.py",
       "source_location": "L243",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_article_collection_record_source_timing",
-      "target": "news_pipeline_article_collection_py_any"
+      "target": "news_pipeline_article_collection_py_any",
+      "confidence_score": 1.0
     },
     {
       "relation": "references",
@@ -13367,9 +13317,9 @@
       "source_file": "news_pipeline/article_collection.py",
       "source_location": "L394",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_article_collection_source_context_error_run",
-      "target": "news_pipeline_article_collection_py_any"
+      "target": "news_pipeline_article_collection_py_any",
+      "confidence_score": 1.0
     },
     {
       "relation": "references",
@@ -13378,9 +13328,9 @@
       "source_file": "news_pipeline/article_collection.py",
       "source_location": "L199",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_article_collection_source_run_from_context",
-      "target": "news_pipeline_article_collection_py_any"
+      "target": "news_pipeline_article_collection_py_any",
+      "confidence_score": 1.0
     },
     {
       "relation": "calls",
@@ -13389,9 +13339,9 @@
       "source_file": "news_pipeline/article_collection.py",
       "source_location": "L218",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_article_collection_source_run_from_context",
-      "target": "news_pipeline_article_collection_article_candidates_from_source_context"
+      "target": "news_pipeline_article_collection_article_candidates_from_source_context",
+      "confidence_score": 1.0
     },
     {
       "relation": "calls",
@@ -13400,9 +13350,9 @@
       "source_file": "news_pipeline/article_collection.py",
       "source_location": "L231",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_article_collection_source_run_from_context",
-      "target": "news_pipeline_article_collection_record_source_timing"
+      "target": "news_pipeline_article_collection_record_source_timing",
+      "confidence_score": 1.0
     },
     {
       "relation": "calls",
@@ -13411,9 +13361,9 @@
       "source_file": "news_pipeline/article_collection.py",
       "source_location": "L215",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_article_collection_source_run_from_context",
-      "target": "news_pipeline_article_collection_source_context_error_run"
+      "target": "news_pipeline_article_collection_source_context_error_run",
+      "confidence_score": 1.0
     },
     {
       "relation": "calls",
@@ -13422,9 +13372,9 @@
       "source_file": "news_pipeline/article_collection.py",
       "source_location": "L318",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_article_collection_article_candidates_from_source_context",
-      "target": "news_pipeline_article_collection_normalize_url_for_dedupe"
+      "target": "news_pipeline_article_collection_normalize_url_for_dedupe",
+      "confidence_score": 1.0
     },
     {
       "relation": "contains",
@@ -20040,9 +19990,9 @@
       "source_file": "tests/test_article_collection.py",
       "source_location": "L14",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "tests_test_article_collection",
-      "target": "news_pipeline_diagnostics"
+      "target": "news_pipeline_diagnostics",
+      "confidence_score": 1.0
     },
     {
       "relation": "imports_from",
@@ -20082,9 +20032,9 @@
       "source_file": "tests/test_article_collection.py",
       "source_location": "L14",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "articlecollectionrequest",
-      "target": "news_pipeline_diagnostics_rundiagnostics"
+      "target": "news_pipeline_diagnostics_rundiagnostics",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
@@ -20404,7 +20354,7 @@
       "relation": "uses",
       "confidence": "INFERRED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L102",
+      "source_location": "L101",
       "weight": 0.8,
       "confidence_score": 0.5,
       "source": "news_pipeline_pipeline_py_any",
@@ -20414,7 +20364,7 @@
       "relation": "uses",
       "confidence": "INFERRED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L102",
+      "source_location": "L101",
       "weight": 0.8,
       "confidence_score": 0.5,
       "source": "news_pipeline_pipeline_py_articlesummarizationruntime",
@@ -20424,7 +20374,7 @@
       "relation": "uses",
       "confidence": "INFERRED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L102",
+      "source_location": "L101",
       "weight": 0.8,
       "confidence_score": 0.5,
       "source": "news_pipeline_pipeline_py_basemessage",
@@ -20434,7 +20384,7 @@
       "relation": "uses",
       "confidence": "INFERRED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L102",
+      "source_location": "L101",
       "weight": 0.8,
       "confidence_score": 0.5,
       "source": "news_pipeline_pipeline_py_counter",
@@ -20444,7 +20394,7 @@
       "relation": "uses",
       "confidence": "INFERRED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L102",
+      "source_location": "L101",
       "weight": 0.8,
       "confidence_score": 0.5,
       "source": "news_pipeline_pipeline_py_datetime",
@@ -20454,7 +20404,7 @@
       "relation": "uses",
       "confidence": "INFERRED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L102",
+      "source_location": "L101",
       "weight": 0.8,
       "confidence_score": 0.5,
       "source": "news_pipeline_pipeline_py_exception",
@@ -20464,7 +20414,7 @@
       "relation": "uses",
       "confidence": "INFERRED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L102",
+      "source_location": "L101",
       "weight": 0.8,
       "confidence_score": 0.5,
       "source": "news_pipeline_pipeline_py_rundiagnostics",
@@ -20547,9 +20497,9 @@
       "source_file": "news_pipeline/run_finalizer.py",
       "source_location": "L10",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "news_pipeline_run_finalizer_cleanupvisibleoutputs",
-      "target": "news_pipeline_diagnostics_rundiagnostics"
+      "target": "news_pipeline_diagnostics_rundiagnostics",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
@@ -20577,9 +20527,9 @@
       "source_file": "news_pipeline/run_finalizer.py",
       "source_location": "L10",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "news_pipeline_run_finalizer_py_path",
-      "target": "news_pipeline_diagnostics_rundiagnostics"
+      "target": "news_pipeline_diagnostics_rundiagnostics",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
@@ -20638,9 +20588,9 @@
       "source_file": "tests/test_article_collection.py",
       "source_location": "L14",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "tests_test_article_collection",
-      "target": "news_pipeline_diagnostics_rundiagnostics"
+      "target": "news_pipeline_diagnostics_rundiagnostics",
+      "confidence_score": 1.0
     },
     {
       "relation": "uses",
@@ -20648,9 +20598,9 @@
       "source_file": "tests/test_article_collection.py",
       "source_location": "L14",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "tests_test_article_collection_articlecollectiontests",
-      "target": "news_pipeline_diagnostics_rundiagnostics"
+      "target": "news_pipeline_diagnostics_rundiagnostics",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
@@ -20658,9 +20608,9 @@
       "source_file": "tests/test_article_collection.py",
       "source_location": "L14",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "tests_test_article_collection_finalizer",
-      "target": "news_pipeline_diagnostics_rundiagnostics"
+      "target": "news_pipeline_diagnostics_rundiagnostics",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
@@ -20668,9 +20618,9 @@
       "source_file": "tests/test_article_collection.py",
       "source_location": "L14",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "tests_test_article_collection_progress",
-      "target": "news_pipeline_diagnostics_rundiagnostics"
+      "target": "news_pipeline_diagnostics_rundiagnostics",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
@@ -20678,9 +20628,9 @@
       "source_file": "tests/test_article_collection.py",
       "source_location": "L14",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "tests_test_article_collection_py_any",
-      "target": "news_pipeline_diagnostics_rundiagnostics"
+      "target": "news_pipeline_diagnostics_rundiagnostics",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
@@ -20688,9 +20638,9 @@
       "source_file": "tests/test_article_collection.py",
       "source_location": "L14",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "tests_test_article_collection_py_path",
-      "target": "news_pipeline_diagnostics_rundiagnostics"
+      "target": "news_pipeline_diagnostics_rundiagnostics",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
@@ -20698,9 +20648,9 @@
       "source_file": "tests/test_article_collection.py",
       "source_location": "L14",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "tests_test_article_collection_py_rundiagnostics",
-      "target": "news_pipeline_diagnostics_rundiagnostics"
+      "target": "news_pipeline_diagnostics_rundiagnostics",
+      "confidence_score": 0.5
     },
     {
       "relation": "imports",
@@ -26529,7 +26479,7 @@
       "context": "generic_arg",
       "confidence": "EXTRACTED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L460",
+      "source_location": "L457",
       "weight": 1.0,
       "confidence_score": 1.0,
       "source": "news_pipeline_pipeline_ordered_unique_article_ids",
@@ -26562,7 +26512,7 @@
       "context": "generic_arg",
       "confidence": "EXTRACTED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L943",
+      "source_location": "L940",
       "weight": 1.0,
       "confidence_score": 1.0,
       "source": "news_pipeline_pipeline_article_confirms_wire_attribution",
@@ -26573,7 +26523,7 @@
       "context": "generic_arg",
       "confidence": "EXTRACTED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L2333",
+      "source_location": "L2100",
       "weight": 1.0,
       "confidence_score": 1.0,
       "source": "news_pipeline_pipeline_article_translation_decision",
@@ -26584,7 +26534,7 @@
       "context": "generic_arg",
       "confidence": "EXTRACTED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L506",
+      "source_location": "L503",
       "weight": 1.0,
       "confidence_score": 1.0,
       "source": "news_pipeline_pipeline_budget_article_targets_for_summary",
@@ -26595,7 +26545,7 @@
       "context": "generic_arg",
       "confidence": "EXTRACTED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L4499",
+      "source_location": "L4266",
       "weight": 1.0,
       "confidence_score": 1.0,
       "source": "news_pipeline_pipeline_build_html_synthesis",
@@ -26606,7 +26556,7 @@
       "context": "generic_arg",
       "confidence": "EXTRACTED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L4605",
+      "source_location": "L4372",
       "weight": 1.0,
       "confidence_score": 1.0,
       "source": "news_pipeline_pipeline_build_report_body",
@@ -26617,7 +26567,7 @@
       "context": "generic_arg",
       "confidence": "EXTRACTED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L4653",
+      "source_location": "L4420",
       "weight": 1.0,
       "confidence_score": 1.0,
       "source": "news_pipeline_pipeline_build_report_html",
@@ -26628,7 +26578,7 @@
       "context": "generic_arg",
       "confidence": "EXTRACTED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L678",
+      "source_location": "L675",
       "weight": 1.0,
       "confidence_score": 1.0,
       "source": "news_pipeline_pipeline_capture_activity_snapshot",
@@ -26639,7 +26589,7 @@
       "context": "parameter_type",
       "confidence": "EXTRACTED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L3442",
+      "source_location": "L3209",
       "weight": 1.0,
       "confidence_score": 1.0,
       "source": "news_pipeline_pipeline_coerce_int",
@@ -26650,7 +26600,7 @@
       "context": "generic_arg",
       "confidence": "EXTRACTED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L1101",
+      "source_location": "L1099",
       "weight": 1.0,
       "confidence_score": 1.0,
       "source": "news_pipeline_pipeline_compat_runtime_values",
@@ -26661,7 +26611,7 @@
       "context": "generic_arg",
       "confidence": "EXTRACTED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L787",
+      "source_location": "L784",
       "weight": 1.0,
       "confidence_score": 1.0,
       "source": "news_pipeline_pipeline_configured_source_display_name",
@@ -26672,7 +26622,7 @@
       "context": "generic_arg",
       "confidence": "EXTRACTED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L998",
+      "source_location": "L995",
       "weight": 1.0,
       "confidence_score": 1.0,
       "source": "news_pipeline_pipeline_confirm_wire_source_match",
@@ -26683,7 +26633,7 @@
       "context": "generic_arg",
       "confidence": "EXTRACTED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L4761",
+      "source_location": "L4528",
       "weight": 1.0,
       "confidence_score": 1.0,
       "source": "news_pipeline_pipeline_dedupe_story_drafts_for_global_selection",
@@ -26694,7 +26644,7 @@
       "context": "generic_arg",
       "confidence": "EXTRACTED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L1050",
+      "source_location": "L1047",
       "weight": 1.0,
       "confidence_score": 1.0,
       "source": "news_pipeline_pipeline_excluded_feed_item_reason",
@@ -26705,7 +26655,7 @@
       "context": "generic_arg",
       "confidence": "EXTRACTED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L898",
+      "source_location": "L895",
       "weight": 1.0,
       "confidence_score": 1.0,
       "source": "news_pipeline_pipeline_feed_item_matches_configured_source",
@@ -26716,7 +26666,7 @@
       "context": "generic_arg",
       "confidence": "EXTRACTED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L791",
+      "source_location": "L788",
       "weight": 1.0,
       "confidence_score": 1.0,
       "source": "news_pipeline_pipeline_feed_item_source_labels",
@@ -26727,7 +26677,7 @@
       "context": "generic_arg",
       "confidence": "EXTRACTED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L3251",
+      "source_location": "L3018",
       "weight": 1.0,
       "confidence_score": 1.0,
       "source": "news_pipeline_pipeline_fetch_source_context_for_collection",
@@ -26738,7 +26688,7 @@
       "context": "generic_arg",
       "confidence": "EXTRACTED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L3884",
+      "source_location": "L3651",
       "weight": 1.0,
       "confidence_score": 1.0,
       "source": "news_pipeline_pipeline_filter_reports_for_references",
@@ -26749,7 +26699,7 @@
       "context": "parameter_type",
       "confidence": "EXTRACTED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L2451",
+      "source_location": "L2218",
       "weight": 1.0,
       "confidence_score": 1.0,
       "source": "news_pipeline_pipeline_format_translation_prompt",
@@ -26760,7 +26710,7 @@
       "context": "generic_arg",
       "confidence": "EXTRACTED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L4294",
+      "source_location": "L4061",
       "weight": 1.0,
       "confidence_score": 1.0,
       "source": "news_pipeline_pipeline_generate_report_image_art",
@@ -26771,7 +26721,7 @@
       "context": "generic_arg",
       "confidence": "EXTRACTED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L2467",
+      "source_location": "L2234",
       "weight": 1.0,
       "confidence_score": 1.0,
       "source": "news_pipeline_pipeline_load_translation_model_resources",
@@ -26782,7 +26732,7 @@
       "context": "generic_arg",
       "confidence": "EXTRACTED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L3915",
+      "source_location": "L3682",
       "weight": 1.0,
       "confidence_score": 1.0,
       "source": "news_pipeline_pipeline_maybe_email_report",
@@ -26793,7 +26743,7 @@
       "context": "generic_arg",
       "confidence": "EXTRACTED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L4935",
+      "source_location": "L4933",
       "weight": 1.0,
       "confidence_score": 1.0,
       "source": "news_pipeline_pipeline_model_call_stats_snapshot",
@@ -26804,7 +26754,7 @@
       "context": "generic_arg",
       "confidence": "EXTRACTED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L3401",
+      "source_location": "L3168",
       "weight": 1.0,
       "confidence_score": 1.0,
       "source": "news_pipeline_pipeline_model_extra_body",
@@ -26815,7 +26765,7 @@
       "context": "generic_arg",
       "confidence": "EXTRACTED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L3461",
+      "source_location": "L3228",
       "weight": 1.0,
       "confidence_score": 1.0,
       "source": "news_pipeline_pipeline_model_token_usage_entry_locked",
@@ -26826,7 +26776,7 @@
       "context": "generic_arg",
       "confidence": "EXTRACTED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L634",
+      "source_location": "L631",
       "weight": 1.0,
       "confidence_score": 1.0,
       "source": "news_pipeline_pipeline_parse_activity_command_output",
@@ -26837,7 +26787,7 @@
       "context": "generic_arg",
       "confidence": "EXTRACTED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L4816",
+      "source_location": "L4583",
       "weight": 1.0,
       "confidence_score": 1.0,
       "source": "news_pipeline_pipeline_persist_grouped_synthesis_dataset_debug",
@@ -26848,7 +26798,7 @@
       "context": "generic_arg",
       "confidence": "EXTRACTED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L5008",
+      "source_location": "L4802",
       "weight": 1.0,
       "confidence_score": 1.0,
       "source": "news_pipeline_pipeline_preflight_model_server",
@@ -26859,7 +26809,7 @@
       "context": "generic_arg",
       "confidence": "EXTRACTED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L4972",
+      "source_location": "L4766",
       "weight": 1.0,
       "confidence_score": 1.0,
       "source": "news_pipeline_pipeline_preflight_openai_model_server",
@@ -26870,7 +26820,7 @@
       "context": "generic_arg",
       "confidence": "EXTRACTED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L5016",
+      "source_location": "L4810",
       "weight": 1.0,
       "confidence_score": 1.0,
       "source": "news_pipeline_pipeline_preflight_translation_model_server",
@@ -26881,7 +26831,7 @@
       "context": "generic_arg",
       "confidence": "EXTRACTED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L5024",
+      "source_location": "L4818",
       "weight": 1.0,
       "confidence_score": 1.0,
       "source": "news_pipeline_pipeline_probe_chat_completion",
@@ -26892,7 +26842,7 @@
       "context": "generic_arg",
       "confidence": "EXTRACTED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L5049",
+      "source_location": "L4843",
       "weight": 1.0,
       "confidence_score": 1.0,
       "source": "news_pipeline_pipeline_probe_model_generation",
@@ -26903,7 +26853,7 @@
       "context": "generic_arg",
       "confidence": "EXTRACTED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L5068",
+      "source_location": "L4862",
       "weight": 1.0,
       "confidence_score": 1.0,
       "source": "news_pipeline_pipeline_probe_translation_model_generation",
@@ -26914,7 +26864,7 @@
       "context": "generic_arg",
       "confidence": "EXTRACTED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L1530",
+      "source_location": "L1297",
       "weight": 1.0,
       "confidence_score": 1.0,
       "source": "news_pipeline_pipeline_progresstracker_story_clustering_progress",
@@ -26925,7 +26875,7 @@
       "context": "generic_arg",
       "confidence": "EXTRACTED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L1549",
+      "source_location": "L1316",
       "weight": 1.0,
       "confidence_score": 1.0,
       "source": "news_pipeline_pipeline_progresstracker_story_draft_completed",
@@ -26936,7 +26886,7 @@
       "context": "generic_arg",
       "confidence": "EXTRACTED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L1561",
+      "source_location": "L1553",
       "weight": 1.0,
       "confidence_score": 1.0,
       "source": "news_pipeline_pipeline_progresstracker_story_selection_progress",
@@ -26947,7 +26897,7 @@
       "context": "generic_arg",
       "confidence": "EXTRACTED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L802",
+      "source_location": "L799",
       "weight": 1.0,
       "confidence_score": 1.0,
       "source": "news_pipeline_pipeline_publisher_source_label",
@@ -26988,7 +26938,7 @@
       "context": "generic_arg",
       "confidence": "EXTRACTED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L702",
+      "source_location": "L699",
       "weight": 1.0,
       "confidence_score": 1.0,
       "source": "news_pipeline_pipeline_record_activity_snapshot",
@@ -26999,7 +26949,7 @@
       "context": "generic_arg",
       "confidence": "EXTRACTED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L1039",
+      "source_location": "L1036",
       "weight": 1.0,
       "confidence_score": 1.0,
       "source": "news_pipeline_pipeline_record_feed_source_rejection",
@@ -27010,7 +26960,7 @@
       "context": "generic_arg",
       "confidence": "EXTRACTED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L4486",
+      "source_location": "L4253",
       "weight": 1.0,
       "confidence_score": 1.0,
       "source": "news_pipeline_pipeline_render_html_paragraphs",
@@ -27021,7 +26971,7 @@
       "context": "generic_arg",
       "confidence": "EXTRACTED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L4734",
+      "source_location": "L4501",
       "weight": 1.0,
       "confidence_score": 1.0,
       "source": "news_pipeline_pipeline_report_entry_debug_record",
@@ -27032,7 +26982,7 @@
       "context": "generic_arg",
       "confidence": "EXTRACTED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L4754",
+      "source_location": "L4521",
       "weight": 1.0,
       "confidence_score": 1.0,
       "source": "news_pipeline_pipeline_report_entry_debug_records",
@@ -27043,7 +26993,7 @@
       "context": "generic_arg",
       "confidence": "EXTRACTED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L2242",
+      "source_location": "L2009",
       "weight": 1.0,
       "confidence_score": 1.0,
       "source": "news_pipeline_pipeline_resolve_and_scrape_feed_article",
@@ -27054,7 +27004,7 @@
       "context": "generic_arg",
       "confidence": "EXTRACTED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L652",
+      "source_location": "L649",
       "weight": 1.0,
       "confidence_score": 1.0,
       "source": "news_pipeline_pipeline_run_activity_command",
@@ -27065,7 +27015,7 @@
       "context": "parameter_type",
       "confidence": "EXTRACTED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L1212",
+      "source_location": "L1210",
       "weight": 1.0,
       "confidence_score": 1.0,
       "source": "news_pipeline_pipeline_runsession_init",
@@ -27076,7 +27026,7 @@
       "context": "generic_arg",
       "confidence": "EXTRACTED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L3377",
+      "source_location": "L3144",
       "weight": 1.0,
       "confidence_score": 1.0,
       "source": "news_pipeline_pipeline_sampling_to_extra_body",
@@ -27087,7 +27037,7 @@
       "context": "generic_arg",
       "confidence": "EXTRACTED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L770",
+      "source_location": "L767",
       "weight": 1.0,
       "confidence_score": 1.0,
       "source": "news_pipeline_pipeline_source_match_aliases",
@@ -27098,7 +27048,7 @@
       "context": "generic_arg",
       "confidence": "EXTRACTED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L779",
+      "source_location": "L776",
       "weight": 1.0,
       "confidence_score": 1.0,
       "source": "news_pipeline_pipeline_source_match_mode",
@@ -27109,7 +27059,7 @@
       "context": "generic_arg",
       "confidence": "EXTRACTED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L824",
+      "source_location": "L821",
       "weight": 1.0,
       "confidence_score": 1.0,
       "source": "news_pipeline_pipeline_source_match_public_metadata",
@@ -27120,7 +27070,7 @@
       "context": "generic_arg",
       "confidence": "EXTRACTED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L833",
+      "source_location": "L830",
       "weight": 1.0,
       "confidence_score": 1.0,
       "source": "news_pipeline_pipeline_source_match_result_for_feed_item",
@@ -27131,7 +27081,7 @@
       "context": "generic_arg",
       "confidence": "EXTRACTED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L1734",
+      "source_location": "L1501",
       "weight": 1.0,
       "confidence_score": 1.0,
       "source": "news_pipeline_pipeline_story_drafting_progress",
@@ -27142,7 +27092,7 @@
       "context": "generic_arg",
       "confidence": "EXTRACTED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L472",
+      "source_location": "L469",
       "weight": 1.0,
       "confidence_score": 1.0,
       "source": "news_pipeline_pipeline_story_record_article_ids",
@@ -27153,7 +27103,7 @@
       "context": "generic_arg",
       "confidence": "EXTRACTED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L2425",
+      "source_location": "L2192",
       "weight": 1.0,
       "confidence_score": 1.0,
       "source": "news_pipeline_pipeline_translation_messages",
@@ -27164,7 +27114,7 @@
       "context": "generic_arg",
       "confidence": "EXTRACTED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L2441",
+      "source_location": "L2208",
       "weight": 1.0,
       "confidence_score": 1.0,
       "source": "news_pipeline_pipeline_translation_payload",
@@ -27175,7 +27125,7 @@
       "context": "generic_arg",
       "confidence": "EXTRACTED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L2402",
+      "source_location": "L2169",
       "weight": 1.0,
       "confidence_score": 1.0,
       "source": "news_pipeline_pipeline_translation_response_content",
@@ -27186,7 +27136,7 @@
       "context": "generic_arg",
       "confidence": "EXTRACTED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L5088",
+      "source_location": "L4882",
       "weight": 1.0,
       "confidence_score": 1.0,
       "source": "news_pipeline_pipeline_wait_for_managed_model_server",
@@ -27197,7 +27147,7 @@
       "context": "generic_arg",
       "confidence": "EXTRACTED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L5114",
+      "source_location": "L4908",
       "weight": 1.0,
       "confidence_score": 1.0,
       "source": "news_pipeline_pipeline_wait_for_managed_translation_model_server",
@@ -27208,7 +27158,7 @@
       "context": "generic_arg",
       "confidence": "EXTRACTED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L909",
+      "source_location": "L906",
       "weight": 1.0,
       "confidence_score": 1.0,
       "source": "news_pipeline_pipeline_wire_attribution_aliases",
@@ -27219,7 +27169,7 @@
       "context": "generic_arg",
       "confidence": "EXTRACTED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L1022",
+      "source_location": "L1019",
       "weight": 1.0,
       "confidence_score": 1.0,
       "source": "news_pipeline_pipeline_wire_source_unattributed_rejection",
@@ -27230,7 +27180,7 @@
       "context": "generic_arg",
       "confidence": "EXTRACTED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L479",
+      "source_location": "L476",
       "weight": 1.0,
       "confidence_score": 1.0,
       "source": "news_pipeline_pipeline_with_budgeted_story_article_ids",
@@ -27241,10 +27191,21 @@
       "context": "generic_arg",
       "confidence": "EXTRACTED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L2381",
+      "source_location": "L2148",
       "weight": 1.0,
       "confidence_score": 1.0,
       "source": "news_pipeline_pipeline_with_translation_metadata",
+      "target": "news_pipeline_pipeline_py_any"
+    },
+    {
+      "relation": "references",
+      "context": "generic_arg",
+      "confidence": "EXTRACTED",
+      "source_file": "news_pipeline/pipeline.py",
+      "source_location": "L1328",
+      "weight": 1.0,
+      "confidence_score": 1.0,
+      "source": "news_pipeline_story_selection",
       "target": "news_pipeline_pipeline_py_any"
     },
     {
@@ -27438,7 +27399,7 @@
       "context": "parameter_type",
       "confidence": "EXTRACTED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L702",
+      "source_location": "L699",
       "weight": 1.0,
       "confidence_score": 1.0,
       "source": "news_pipeline_pipeline_record_activity_snapshot",
@@ -27460,7 +27421,7 @@
       "context": "parameter_type",
       "confidence": "EXTRACTED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L4961",
+      "source_location": "L4959",
       "weight": 1.0,
       "confidence_score": 1.0,
       "source": "news_pipeline_pipeline_active_run_finalizer",
@@ -27471,7 +27432,7 @@
       "context": "parameter_type",
       "confidence": "EXTRACTED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L710",
+      "source_location": "L707",
       "weight": 1.0,
       "confidence_score": 1.0,
       "source": "news_pipeline_pipeline_attach_pending_activity_snapshots",
@@ -27482,7 +27443,7 @@
       "context": "parameter_type",
       "confidence": "EXTRACTED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L4968",
+      "source_location": "L4966",
       "weight": 1.0,
       "confidence_score": 1.0,
       "source": "news_pipeline_pipeline_finish_run_diagnostics",
@@ -27493,7 +27454,7 @@
       "context": "return_type",
       "confidence": "EXTRACTED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L4856",
+      "source_location": "L4623",
       "weight": 1.0,
       "confidence_score": 1.0,
       "source": "news_pipeline_pipeline_new_run_diagnostics",
@@ -27504,7 +27465,7 @@
       "context": "parameter_type",
       "confidence": "EXTRACTED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L4940",
+      "source_location": "L4938",
       "weight": 1.0,
       "confidence_score": 1.0,
       "source": "news_pipeline_pipeline_new_run_finalizer",
@@ -27545,7 +27506,7 @@
       "context": "parameter_type",
       "confidence": "EXTRACTED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L2569",
+      "source_location": "L2336",
       "weight": 1.0,
       "confidence_score": 1.0,
       "source": "news_pipeline_pipeline_translate_article_candidates",
@@ -27886,7 +27847,7 @@
       "context": "parameter_type",
       "confidence": "EXTRACTED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L1039",
+      "source_location": "L1036",
       "weight": 1.0,
       "confidence_score": 1.0,
       "source": "news_pipeline_pipeline_record_feed_source_rejection",
@@ -27897,7 +27858,7 @@
       "context": "call",
       "confidence": "EXTRACTED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L2877",
+      "source_location": "L2644",
       "weight": 1.0,
       "confidence_score": 1.0,
       "source": "news_pipeline_pipeline_get_direct_source_article_context",
@@ -27938,7 +27899,7 @@
       "context": "call",
       "confidence": "EXTRACTED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L5452",
+      "source_location": "L5264",
       "weight": 1.0,
       "confidence_score": 1.0,
       "source": "news_pipeline_pipeline_run_pipeline",
@@ -29685,7 +29646,7 @@
       "context": "parameter_type",
       "confidence": "EXTRACTED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L1577",
+      "source_location": "L1344",
       "weight": 1.0,
       "confidence_score": 1.0,
       "source": "news_pipeline_pipeline_progresstracker_retrying",
@@ -29696,7 +29657,7 @@
       "context": "parameter_type",
       "confidence": "EXTRACTED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L5167",
+      "source_location": "L4961",
       "weight": 1.0,
       "confidence_score": 1.0,
       "source": "news_pipeline_pipeline_finalize_failed_run",
@@ -29707,7 +29668,7 @@
       "context": "parameter_type",
       "confidence": "EXTRACTED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L3427",
+      "source_location": "L3194",
       "weight": 1.0,
       "confidence_score": 1.0,
       "source": "news_pipeline_pipeline_is_transient_model_error",
@@ -29718,7 +29679,7 @@
       "context": "parameter_type",
       "confidence": "EXTRACTED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L1591",
+      "source_location": "L1358",
       "weight": 1.0,
       "confidence_score": 1.0,
       "source": "news_pipeline_pipeline_progresstracker_retry",
@@ -29957,7 +29918,7 @@
       "context": "return_type",
       "confidence": "EXTRACTED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L1717",
+      "source_location": "L1484",
       "weight": 1.0,
       "confidence_score": 1.0,
       "source": "news_pipeline_pipeline_article_summarization_runtime",
@@ -30094,7 +30055,7 @@
       "context": "return_type",
       "confidence": "EXTRACTED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L1741",
+      "source_location": "L1733",
       "weight": 1.0,
       "confidence_score": 1.0,
       "source": "news_pipeline_pipeline_story_drafting_runtime",
@@ -30157,7 +30118,7 @@
       "context": "return_type",
       "confidence": "EXTRACTED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L1764",
+      "source_location": "L1756",
       "weight": 1.0,
       "confidence_score": 1.0,
       "source": "news_pipeline_pipeline_story_selection_runtime",
@@ -30893,7 +30854,7 @@
       "context": "return_type",
       "confidence": "EXTRACTED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L2722",
+      "source_location": "L2489",
       "weight": 1.0,
       "confidence_score": 1.0,
       "source": "news_pipeline_pipeline_parse_feed_datetime",
@@ -30904,7 +30865,7 @@
       "context": "parameter_type",
       "confidence": "EXTRACTED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L3910",
+      "source_location": "L3677",
       "weight": 1.0,
       "confidence_score": 1.0,
       "source": "news_pipeline_pipeline_build_email_subject",
@@ -30915,7 +30876,7 @@
       "context": "parameter_type",
       "confidence": "EXTRACTED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L2777",
+      "source_location": "L2544",
       "weight": 1.0,
       "confidence_score": 1.0,
       "source": "news_pipeline_pipeline_is_within_recent_window",
@@ -31584,7 +31545,7 @@
       "context": "parameter_type",
       "confidence": "EXTRACTED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L3656",
+      "source_location": "L3423",
       "weight": 1.0,
       "confidence_score": 1.0,
       "source": "news_pipeline_pipeline_estimate_message_token_count",
@@ -32360,7 +32321,7 @@
       "context": "return_type",
       "confidence": "EXTRACTED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L4940",
+      "source_location": "L4938",
       "weight": 1.0,
       "confidence_score": 1.0,
       "source": "news_pipeline_pipeline_new_run_finalizer",
@@ -32415,7 +32376,7 @@
       "context": "return_type",
       "confidence": "EXTRACTED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L4961",
+      "source_location": "L4959",
       "weight": 1.0,
       "confidence_score": 1.0,
       "source": "news_pipeline_pipeline_active_run_finalizer",
@@ -32849,9 +32810,9 @@
       "source_file": "news_pipeline/run_finalizer.py",
       "source_location": "L25",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_run_finalizer",
-      "target": "news_pipeline_run_finalizer_cleanupvisibleoutputs"
+      "target": "news_pipeline_run_finalizer_cleanupvisibleoutputs",
+      "confidence_score": 1.0
     },
     {
       "relation": "contains",
@@ -32972,9 +32933,9 @@
       "source_file": "news_pipeline/run_finalizer.py",
       "source_location": "L26",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_run_finalizer_cleanupvisibleoutputs",
-      "target": "news_pipeline_run_finalizer_cleanupvisibleoutputs_call"
+      "target": "news_pipeline_run_finalizer_cleanupvisibleoutputs_call",
+      "confidence_score": 1.0
     },
     {
       "relation": "references",
@@ -32983,9 +32944,9 @@
       "source_file": "news_pipeline/run_finalizer.py",
       "source_location": "L26",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_run_finalizer_cleanupvisibleoutputs_call",
-      "target": "news_pipeline_run_finalizer_py_path"
+      "target": "news_pipeline_run_finalizer_py_path",
+      "confidence_score": 1.0
     },
     {
       "relation": "imports",
@@ -41929,9 +41890,9 @@
       "source_file": "tests/test_article_collection.py",
       "source_location": "L60",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "tests_test_article_collection",
-      "target": "tests_test_article_collection_articlecollectiontests"
+      "target": "tests_test_article_collection_articlecollectiontests",
+      "confidence_score": 1.0
     },
     {
       "relation": "contains",
@@ -41939,9 +41900,9 @@
       "source_file": "tests/test_article_collection.py",
       "source_location": "L52",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "tests_test_article_collection",
-      "target": "tests_test_article_collection_finalizer"
+      "target": "tests_test_article_collection_finalizer",
+      "confidence_score": 1.0
     },
     {
       "relation": "contains",
@@ -41949,9 +41910,9 @@
       "source_file": "tests/test_article_collection.py",
       "source_location": "L17",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "tests_test_article_collection",
-      "target": "tests_test_article_collection_progress"
+      "target": "tests_test_article_collection_progress",
+      "confidence_score": 1.0
     },
     {
       "relation": "calls",
@@ -41960,9 +41921,9 @@
       "source_file": "tests/test_article_collection.py",
       "source_location": "L66",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "tests_test_article_collection_articlecollectiontests_test_collect_records_candidates_diagnostics_history_and_artifact",
-      "target": "tests_test_article_collection_progress"
+      "target": "tests_test_article_collection_progress",
+      "confidence_score": 1.0
     },
     {
       "relation": "calls",
@@ -41971,9 +41932,9 @@
       "source_file": "tests/test_article_collection.py",
       "source_location": "L171",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "tests_test_article_collection_articlecollectiontests_test_history_write_failure_falls_back_to_url_file",
-      "target": "tests_test_article_collection_progress"
+      "target": "tests_test_article_collection_progress",
+      "confidence_score": 1.0
     },
     {
       "relation": "method",
@@ -41981,9 +41942,9 @@
       "source_file": "tests/test_article_collection.py",
       "source_location": "L25",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "tests_test_article_collection_progress",
-      "target": "tests_test_article_collection_progress_detail"
+      "target": "tests_test_article_collection_progress_detail",
+      "confidence_score": 1.0
     },
     {
       "relation": "method",
@@ -41991,9 +41952,9 @@
       "source_file": "tests/test_article_collection.py",
       "source_location": "L48",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "tests_test_article_collection_progress",
-      "target": "tests_test_article_collection_progress_finish_meter"
+      "target": "tests_test_article_collection_progress_finish_meter",
+      "confidence_score": 1.0
     },
     {
       "relation": "method",
@@ -42001,9 +41962,9 @@
       "source_file": "tests/test_article_collection.py",
       "source_location": "L18",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "tests_test_article_collection_progress",
-      "target": "tests_test_article_collection_progress_init"
+      "target": "tests_test_article_collection_progress_init",
+      "confidence_score": 1.0
     },
     {
       "relation": "method",
@@ -42011,9 +41972,9 @@
       "source_file": "tests/test_article_collection.py",
       "source_location": "L31",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "tests_test_article_collection_progress",
-      "target": "tests_test_article_collection_progress_source_completed"
+      "target": "tests_test_article_collection_progress_source_completed",
+      "confidence_score": 1.0
     },
     {
       "relation": "method",
@@ -42021,9 +41982,9 @@
       "source_file": "tests/test_article_collection.py",
       "source_location": "L40",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "tests_test_article_collection_progress",
-      "target": "tests_test_article_collection_progress_update_source_fresh_articles"
+      "target": "tests_test_article_collection_progress_update_source_fresh_articles",
+      "confidence_score": 1.0
     },
     {
       "relation": "method",
@@ -42031,9 +41992,9 @@
       "source_file": "tests/test_article_collection.py",
       "source_location": "L28",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "tests_test_article_collection_progress",
-      "target": "tests_test_article_collection_progress_warning"
+      "target": "tests_test_article_collection_progress_warning",
+      "confidence_score": 1.0
     },
     {
       "relation": "calls",
@@ -42042,9 +42003,9 @@
       "source_file": "tests/test_article_collection.py",
       "source_location": "L65",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "tests_test_article_collection_articlecollectiontests_test_collect_records_candidates_diagnostics_history_and_artifact",
-      "target": "tests_test_article_collection_finalizer"
+      "target": "tests_test_article_collection_finalizer",
+      "confidence_score": 1.0
     },
     {
       "relation": "calls",
@@ -42053,9 +42014,9 @@
       "source_file": "tests/test_article_collection.py",
       "source_location": "L170",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "tests_test_article_collection_articlecollectiontests_test_history_write_failure_falls_back_to_url_file",
-      "target": "tests_test_article_collection_finalizer"
+      "target": "tests_test_article_collection_finalizer",
+      "confidence_score": 1.0
     },
     {
       "relation": "method",
@@ -42063,9 +42024,9 @@
       "source_file": "tests/test_article_collection.py",
       "source_location": "L53",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "tests_test_article_collection_finalizer",
-      "target": "tests_test_article_collection_finalizer_init"
+      "target": "tests_test_article_collection_finalizer_init",
+      "confidence_score": 1.0
     },
     {
       "relation": "method",
@@ -42073,9 +42034,9 @@
       "source_file": "tests/test_article_collection.py",
       "source_location": "L56",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "tests_test_article_collection_finalizer",
-      "target": "tests_test_article_collection_finalizer_record_candidate_articles"
+      "target": "tests_test_article_collection_finalizer_record_candidate_articles",
+      "confidence_score": 1.0
     },
     {
       "relation": "references",
@@ -42084,9 +42045,9 @@
       "source_file": "tests/test_article_collection.py",
       "source_location": "L56",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "tests_test_article_collection_finalizer_record_candidate_articles",
-      "target": "tests_test_article_collection_py_any"
+      "target": "tests_test_article_collection_py_any",
+      "confidence_score": 1.0
     },
     {
       "relation": "references",
@@ -42095,9 +42056,9 @@
       "source_file": "tests/test_article_collection.py",
       "source_location": "L235",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "tests_test_article_collection_articlecollectiontests_article",
-      "target": "tests_test_article_collection_py_any"
+      "target": "tests_test_article_collection_py_any",
+      "confidence_score": 1.0
     },
     {
       "relation": "references",
@@ -42106,9 +42067,9 @@
       "source_file": "tests/test_article_collection.py",
       "source_location": "L215",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "tests_test_article_collection_articlecollectiontests_direct_context",
-      "target": "tests_test_article_collection_py_any"
+      "target": "tests_test_article_collection_py_any",
+      "confidence_score": 1.0
     },
     {
       "relation": "method",
@@ -42116,9 +42077,9 @@
       "source_file": "tests/test_article_collection.py",
       "source_location": "L235",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "tests_test_article_collection_articlecollectiontests",
-      "target": "tests_test_article_collection_articlecollectiontests_article"
+      "target": "tests_test_article_collection_articlecollectiontests_article",
+      "confidence_score": 1.0
     },
     {
       "relation": "method",
@@ -42126,9 +42087,9 @@
       "source_file": "tests/test_article_collection.py",
       "source_location": "L205",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "tests_test_article_collection_articlecollectiontests",
-      "target": "tests_test_article_collection_articlecollectiontests_diagnostics"
+      "target": "tests_test_article_collection_articlecollectiontests_diagnostics",
+      "confidence_score": 1.0
     },
     {
       "relation": "method",
@@ -42136,9 +42097,9 @@
       "source_file": "tests/test_article_collection.py",
       "source_location": "L215",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "tests_test_article_collection_articlecollectiontests",
-      "target": "tests_test_article_collection_articlecollectiontests_direct_context"
+      "target": "tests_test_article_collection_articlecollectiontests_direct_context",
+      "confidence_score": 1.0
     },
     {
       "relation": "method",
@@ -42146,9 +42107,9 @@
       "source_file": "tests/test_article_collection.py",
       "source_location": "L190",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "tests_test_article_collection_articlecollectiontests",
-      "target": "tests_test_article_collection_articlecollectiontests_request"
+      "target": "tests_test_article_collection_articlecollectiontests_request",
+      "confidence_score": 1.0
     },
     {
       "relation": "method",
@@ -42156,9 +42117,9 @@
       "source_file": "tests/test_article_collection.py",
       "source_location": "L61",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "tests_test_article_collection_articlecollectiontests",
-      "target": "tests_test_article_collection_articlecollectiontests_test_collect_records_candidates_diagnostics_history_and_artifact"
+      "target": "tests_test_article_collection_articlecollectiontests_test_collect_records_candidates_diagnostics_history_and_artifact",
+      "confidence_score": 1.0
     },
     {
       "relation": "method",
@@ -42166,9 +42127,9 @@
       "source_file": "tests/test_article_collection.py",
       "source_location": "L159",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "tests_test_article_collection_articlecollectiontests",
-      "target": "tests_test_article_collection_articlecollectiontests_test_history_write_failure_falls_back_to_url_file"
+      "target": "tests_test_article_collection_articlecollectiontests_test_history_write_failure_falls_back_to_url_file",
+      "confidence_score": 1.0
     },
     {
       "relation": "calls",
@@ -42177,9 +42138,9 @@
       "source_file": "tests/test_article_collection.py",
       "source_location": "L64",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "tests_test_article_collection_articlecollectiontests_test_collect_records_candidates_diagnostics_history_and_artifact",
-      "target": "tests_test_article_collection_articlecollectiontests_diagnostics"
+      "target": "tests_test_article_collection_articlecollectiontests_diagnostics",
+      "confidence_score": 1.0
     },
     {
       "relation": "calls",
@@ -42188,9 +42149,9 @@
       "source_file": "tests/test_article_collection.py",
       "source_location": "L126",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "tests_test_article_collection_articlecollectiontests_test_collect_records_candidates_diagnostics_history_and_artifact",
-      "target": "tests_test_article_collection_articlecollectiontests_request"
+      "target": "tests_test_article_collection_articlecollectiontests_request",
+      "confidence_score": 1.0
     },
     {
       "relation": "calls",
@@ -42199,9 +42160,9 @@
       "source_file": "tests/test_article_collection.py",
       "source_location": "L63",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "tests_test_article_collection_articlecollectiontests_test_collect_records_candidates_diagnostics_history_and_artifact",
-      "target": "tests_test_article_collection_py_path"
+      "target": "tests_test_article_collection_py_path",
+      "confidence_score": 1.0
     },
     {
       "relation": "calls",
@@ -42210,9 +42171,9 @@
       "source_file": "tests/test_article_collection.py",
       "source_location": "L180",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "tests_test_article_collection_articlecollectiontests_test_history_write_failure_falls_back_to_url_file",
-      "target": "tests_test_article_collection_articlecollectiontests_article"
+      "target": "tests_test_article_collection_articlecollectiontests_article",
+      "confidence_score": 1.0
     },
     {
       "relation": "calls",
@@ -42221,9 +42182,9 @@
       "source_file": "tests/test_article_collection.py",
       "source_location": "L169",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "tests_test_article_collection_articlecollectiontests_test_history_write_failure_falls_back_to_url_file",
-      "target": "tests_test_article_collection_articlecollectiontests_diagnostics"
+      "target": "tests_test_article_collection_articlecollectiontests_diagnostics",
+      "confidence_score": 1.0
     },
     {
       "relation": "calls",
@@ -42232,9 +42193,9 @@
       "source_file": "tests/test_article_collection.py",
       "source_location": "L180",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "tests_test_article_collection_articlecollectiontests_test_history_write_failure_falls_back_to_url_file",
-      "target": "tests_test_article_collection_articlecollectiontests_direct_context"
+      "target": "tests_test_article_collection_articlecollectiontests_direct_context",
+      "confidence_score": 1.0
     },
     {
       "relation": "calls",
@@ -42243,9 +42204,9 @@
       "source_file": "tests/test_article_collection.py",
       "source_location": "L168",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "tests_test_article_collection_articlecollectiontests_test_history_write_failure_falls_back_to_url_file",
-      "target": "tests_test_article_collection_articlecollectiontests_request"
+      "target": "tests_test_article_collection_articlecollectiontests_request",
+      "confidence_score": 1.0
     },
     {
       "relation": "calls",
@@ -42254,9 +42215,9 @@
       "source_file": "tests/test_article_collection.py",
       "source_location": "L161",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "tests_test_article_collection_articlecollectiontests_test_history_write_failure_falls_back_to_url_file",
-      "target": "tests_test_article_collection_py_path"
+      "target": "tests_test_article_collection_py_path",
+      "confidence_score": 1.0
     },
     {
       "relation": "references",
@@ -42265,9 +42226,9 @@
       "source_file": "tests/test_article_collection.py",
       "source_location": "L190",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "tests_test_article_collection_articlecollectiontests_request",
-      "target": "articlecollectionrequest"
+      "target": "articlecollectionrequest",
+      "confidence_score": 1.0
     },
     {
       "relation": "references",
@@ -42276,9 +42237,9 @@
       "source_file": "tests/test_article_collection.py",
       "source_location": "L190",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "tests_test_article_collection_articlecollectiontests_request",
-      "target": "tests_test_article_collection_py_path"
+      "target": "tests_test_article_collection_py_path",
+      "confidence_score": 1.0
     },
     {
       "relation": "references",
@@ -42287,9 +42248,9 @@
       "source_file": "tests/test_article_collection.py",
       "source_location": "L205",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "tests_test_article_collection_articlecollectiontests_diagnostics",
-      "target": "tests_test_article_collection_py_path"
+      "target": "tests_test_article_collection_py_path",
+      "confidence_score": 1.0
     },
     {
       "relation": "references",
@@ -42298,9 +42259,9 @@
       "source_file": "tests/test_article_collection.py",
       "source_location": "L205",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "tests_test_article_collection_articlecollectiontests_diagnostics",
-      "target": "tests_test_article_collection_py_rundiagnostics"
+      "target": "tests_test_article_collection_py_rundiagnostics",
+      "confidence_score": 1.0
     },
     {
       "relation": "contains",
@@ -44220,9 +44181,9 @@
       "source_file": "CONTEXT.md",
       "source_location": "L9",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "context_context",
-      "target": "context_article_collection_funnel"
+      "target": "context_article_collection_funnel",
+      "confidence_score": 1.0
     },
     {
       "relation": "contains",
