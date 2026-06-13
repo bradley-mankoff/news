@@ -4,12 +4,11 @@
 - **Fallback**: RTK cmd fail? Retry once plain. State fallback.
 
 ## 2. graphify
-Knowledge graph in `graphify-out/`.
+Knowledge graph in local generated `graphify-out/`. Directory is gitignored; never stage or commit it.
 - **Command**: User type `/graphify` → call `skill` tool with `skill: "graphify"` before other tasks.
-- **Querying**: Questions → `graphify query "<question>"` (needs `graphify-out/graph.json`). `graphify path "<A>" "<B>"` for relations, `graphify explain "<concept>"` for concepts.
-- **Skip Conditions**: Dirty files in `graphify-out/` normal. Skip only if debug bad graph output or user forbid.
-- **Navigation**: `graphify-out/wiki/index.md` exist? Use it, not raw source. Read `GRAPH_REPORT.md` only for broad review.
-- **Update**: Run `graphify update .` (AST-only, free) after code change.
+- **Querying**: Questions → `graphify query "<question>"` (requires local `graphify-out/graph.json`). If missing/stale, run `graphify update .` first. Use `graphify path "<A>" "<B>"` for relations, `graphify explain "<concept>"` for concepts.
+- **Navigation**: Use `graphify-out/wiki/index.md` when present; otherwise regenerate with `graphify update .` then `graphify export wiki`. Read `GRAPH_REPORT.md` only for big reviews.
+- **Update**: After any code change, run `graphify update .` (AST-only, free), then `graphify export wiki`. Leave resulting `graphify-out/` files untracked.
 
 ## 3. Karpathy Execution Guidelines
 ### A. Think Before Coding (No Assumptions)
