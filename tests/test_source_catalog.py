@@ -83,7 +83,6 @@ class SourceCatalogTests(unittest.TestCase):
                             "weight": "1.5",
                             "nations": "US\nCA",
                             "notes": "",
-                            "ignored": "value",
                         },
                     )
                 ],
@@ -102,9 +101,16 @@ class SourceCatalogTests(unittest.TestCase):
                 "    weight: 1.5\n",
                 text,
             )
-            self.assertNotIn("ignored:", text)
             self.assertNotIn("notes:", text)
             self.assertIn("top_funnel_providers:", text)
+
+    def test_upsert_rejects_unknown_source_fields(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "sources.yaml"
+            _write_sources(path)
+
+            with self.assertRaisesRegex(ValueError, "Unsupported source field 'langauge'"):
+                apply_source_catalog_patch(path, [UpsertSource("Alpha", {"langauge": "en"})])
 
     def test_ui_append_only_rejects_duplicate_source(self) -> None:
         with TemporaryDirectory() as tmpdir:
@@ -202,6 +208,22 @@ class SourceCatalogTests(unittest.TestCase):
             data = path.read_bytes()
             self.assertIn(b"\r\n", data)
             self.assertNotIn(b"\n", data.replace(b"\r\n", b""))
+
+    def test_written_source_file_ends_with_newline(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "sources.yaml"
+            path.write_text(
+                "sources:\n"
+                "  - key: Alpha\n"
+                "    url: https://example.com/alpha.xml\n"
+                "  - key: Beta\n"
+                "    url: https://example.com/beta.xml",
+                encoding="utf-8",
+            )
+
+            apply_source_catalog_patch(path, [DeleteSources({"Alpha"})])
+
+            self.assertTrue(path.read_text(encoding="utf-8").endswith("\n"))
 
 
 if __name__ == "__main__":

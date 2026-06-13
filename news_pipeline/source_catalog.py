@@ -258,11 +258,14 @@ def _apply_upsert(lines: list[str], edit: UpsertSource) -> tuple[list[str], int]
     if edit.append_only and existing:
         raise ValueError(f"Source {key!r} already exists.")
     record = existing or {"key": key, "name": key, "language": "en", "tier": "peripheral", "url": ""}
-    for field, value in dict(edit.updates or {}).items():
-        if field == "updates":
-            continue
+    fields_to_apply = {
+        field: value
+        for field, value in dict(edit.updates or {}).items()
+        if field != "updates"
+    }
+    for field, value in fields_to_apply.items():
         if field not in SOURCE_FIELD_ORDER and field not in record:
-            continue
+            raise ValueError(f"Unsupported source field {field!r}.")
         coerced = _coerce_source_value(field, value)
         if field in {"key", "name", "url"} or coerced not in (None, "", []):
             record[field] = coerced
@@ -349,11 +352,11 @@ def _apply_translation(lines: list[str], edit: MarkTranslationRequired) -> tuple
         if language:
             language_line = _direct_source_field_line(lines, start, end, "translation_source_language")
             if language_line is None:
-                insert_at = requires_line + 1 if requires_line is not None else _preferred_field_insert_line(
+                insert_at = _preferred_field_insert_line(
                     lines,
                     start,
                     end,
-                    ("language", "url", "region", "name"),
+                    ("requires_translation", "language", "url", "region", "name"),
                 )
                 edits.append(("insert", insert_at, f"    translation_source_language: {language}{newline}"))
     _apply_line_edits(lines, edits)
@@ -401,7 +404,10 @@ def apply_source_catalog_patch(path: Path, edits: Iterable[SourceCatalogEdit]) -
         edit_count += count
 
     if edit_count:
-        path.write_text("".join(lines), encoding="utf-8")
+        content = "".join(lines)
+        if content and not content.endswith("\n"):
+            content += _newline_for(lines)
+        path.write_text(content, encoding="utf-8")
     return SourceCatalogPatchResult(
         path=str(path),
         edit_count=edit_count,
