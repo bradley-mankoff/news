@@ -870,7 +870,7 @@
       "source_location": "L1",
       "_origin": "ast",
       "id": "news_pipeline_cli",
-      "community": 16,
+      "community": 13,
       "norm_label": "cli.py"
     },
     {
@@ -880,7 +880,7 @@
       "source_location": "L65",
       "_origin": "ast",
       "id": "news_pipeline_cli_consume_preset_arg",
-      "community": 16,
+      "community": 13,
       "norm_label": "_consume_preset_arg()"
     },
     {
@@ -890,7 +890,7 @@
       "source_location": "L86",
       "_origin": "ast",
       "id": "news_pipeline_cli_apply_cli_preset",
-      "community": 16,
+      "community": 13,
       "norm_label": "_apply_cli_preset()"
     },
     {
@@ -900,7 +900,7 @@
       "source_location": "L97",
       "_origin": "ast",
       "id": "news_pipeline_cli_run_pipeline_command",
-      "community": 16,
+      "community": 13,
       "norm_label": "_run_pipeline_command()"
     },
     {
@@ -910,7 +910,7 @@
       "source_location": "L104",
       "_origin": "ast",
       "id": "news_pipeline_cli_print_model_server_command",
-      "community": 16,
+      "community": 13,
       "norm_label": "_print_model_server_command()"
     },
     {
@@ -920,7 +920,7 @@
       "source_location": "L111",
       "_origin": "ast",
       "id": "news_pipeline_cli_print_codex_model_server_command",
-      "community": 16,
+      "community": 13,
       "norm_label": "_print_codex_model_server_command()"
     },
     {
@@ -930,7 +930,7 @@
       "source_location": "L116",
       "_origin": "ast",
       "id": "news_pipeline_cli_serve_unsubscribe",
-      "community": 16,
+      "community": 13,
       "norm_label": "_serve_unsubscribe()"
     },
     {
@@ -940,7 +940,7 @@
       "source_location": "L123",
       "_origin": "ast",
       "id": "news_pipeline_cli_run_ui",
-      "community": 16,
+      "community": 13,
       "norm_label": "_run_ui()"
     },
     {
@@ -950,7 +950,7 @@
       "source_location": "L129",
       "_origin": "ast",
       "id": "news_pipeline_cli_run_history",
-      "community": 16,
+      "community": 13,
       "norm_label": "_run_history()"
     },
     {
@@ -960,7 +960,7 @@
       "source_location": "L147",
       "_origin": "ast",
       "id": "news_pipeline_cli_main",
-      "community": 16,
+      "community": 13,
       "norm_label": "main()"
     },
     {
@@ -970,7 +970,7 @@
       "source_location": "L1",
       "_origin": "ast",
       "id": "news_pipeline_cli_rationale_1",
-      "community": 16,
+      "community": 13,
       "norm_label": "command-line entry point for the daily news pipeline."
     },
     {
@@ -1000,7 +1000,7 @@
       "source_location": "L154",
       "_origin": "ast",
       "id": "news_pipeline_config_modelsamplingsettings",
-      "community": 10,
+      "community": 0,
       "norm_label": "modelsamplingsettings"
     },
     {
@@ -1010,7 +1010,7 @@
       "source_location": "L164",
       "_origin": "ast",
       "id": "news_pipeline_config_modelruntimeprofile",
-      "community": 10,
+      "community": 30,
       "norm_label": "modelruntimeprofile"
     },
     {
@@ -1020,7 +1020,7 @@
       "source_location": "L183",
       "_origin": "ast",
       "id": "news_pipeline_config_runtimeconfig",
-      "community": 10,
+      "community": 0,
       "norm_label": "runtimeconfig"
     },
     {
@@ -1050,7 +1050,7 @@
       "source_location": "L381",
       "_origin": "ast",
       "id": "news_pipeline_config_bool_env",
-      "community": 10,
+      "community": 29,
       "norm_label": "_bool_env()"
     },
     {
@@ -1060,7 +1060,7 @@
       "source_location": "L388",
       "_origin": "ast",
       "id": "news_pipeline_config_int_env",
-      "community": 10,
+      "community": 30,
       "norm_label": "_int_env()"
     },
     {
@@ -1100,7 +1100,7 @@
       "source_location": "L411",
       "_origin": "ast",
       "id": "news_pipeline_config_load_run_presets",
-      "community": 2,
+      "community": 14,
       "norm_label": "load_run_presets()"
     },
     {
@@ -1110,7 +1110,7 @@
       "source_location": "L411",
       "_origin": "ast",
       "id": "news_pipeline_config_py_path",
-      "community": 10,
+      "community": 14,
       "norm_label": "path"
     },
     {
@@ -1120,7 +1120,7 @@
       "source_location": "L411",
       "_origin": "ast",
       "id": "news_pipeline_config_py_any",
-      "community": 10,
+      "community": 14,
       "norm_label": "any"
     },
     {
@@ -1130,7 +1130,7 @@
       "source_location": "L440",
       "_origin": "ast",
       "id": "news_pipeline_config_run_preset_env",
-      "community": 2,
+      "community": 14,
       "norm_label": "run_preset_env()"
     },
     {
@@ -1150,7 +1150,7 @@
       "source_location": "L453",
       "_origin": "ast",
       "id": "news_pipeline_config_apply_run_preset_to_environment",
-      "community": 10,
+      "community": 13,
       "norm_label": "apply_run_preset_to_environment()"
     },
     {
@@ -1160,7 +1160,7 @@
       "source_location": "L482",
       "_origin": "ast",
       "id": "news_pipeline_config_configured_min_articles_per_story",
-      "community": 10,
+      "community": 30,
       "norm_label": "configured_min_articles_per_story()"
     },
     {
@@ -1180,7 +1180,7 @@
       "source_location": "L493",
       "_origin": "ast",
       "id": "news_pipeline_config_resolve_model_name",
-      "community": 10,
+      "community": 29,
       "norm_label": "resolve_model_name()"
     },
     {
@@ -1190,7 +1190,7 @@
       "source_location": "L503",
       "_origin": "ast",
       "id": "news_pipeline_config_is_codex_test_model_reference",
-      "community": 10,
+      "community": 29,
       "norm_label": "is_codex_test_model_reference()"
     },
     {
@@ -1200,7 +1200,7 @@
       "source_location": "L511",
       "_origin": "ast",
       "id": "news_pipeline_config_is_gemma_4_model_reference",
-      "community": 10,
+      "community": 15,
       "norm_label": "is_gemma_4_model_reference()"
     },
     {
@@ -1230,7 +1230,7 @@
       "source_location": "L536",
       "_origin": "ast",
       "id": "news_pipeline_config_configured_model_reference",
-      "community": 10,
+      "community": 29,
       "norm_label": "_configured_model_reference()"
     },
     {
@@ -1240,7 +1240,7 @@
       "source_location": "L543",
       "_origin": "ast",
       "id": "news_pipeline_config_configured_model_name",
-      "community": 10,
+      "community": 29,
       "norm_label": "_configured_model_name()"
     },
     {
@@ -1270,7 +1270,7 @@
       "source_location": "L558",
       "_origin": "ast",
       "id": "news_pipeline_config_default_total_article_summary_cap",
-      "community": 10,
+      "community": 30,
       "norm_label": "_default_total_article_summary_cap()"
     },
     {
@@ -1280,7 +1280,7 @@
       "source_location": "L568",
       "_origin": "ast",
       "id": "news_pipeline_config_default_article_summary_concurrency",
-      "community": 10,
+      "community": 29,
       "norm_label": "_default_article_summary_concurrency()"
     },
     {
@@ -1290,7 +1290,7 @@
       "source_location": "L574",
       "_origin": "ast",
       "id": "news_pipeline_config_default_story_synthesis_concurrency",
-      "community": 10,
+      "community": 29,
       "norm_label": "_default_story_synthesis_concurrency()"
     },
     {
@@ -1320,7 +1320,7 @@
       "source_location": "L590",
       "_origin": "ast",
       "id": "news_pipeline_config_infer_model_profile_key",
-      "community": 10,
+      "community": 29,
       "norm_label": "infer_model_profile_key()"
     },
     {
@@ -1330,7 +1330,7 @@
       "source_location": "L609",
       "_origin": "ast",
       "id": "news_pipeline_config_configured_model_profile_key",
-      "community": 10,
+      "community": 29,
       "norm_label": "_configured_model_profile_key()"
     },
     {
@@ -1340,7 +1340,7 @@
       "source_location": "L626",
       "_origin": "ast",
       "id": "news_pipeline_config_override_sampling_from_env",
-      "community": 10,
+      "community": 30,
       "norm_label": "_override_sampling_from_env()"
     },
     {
@@ -1350,7 +1350,7 @@
       "source_location": "L647",
       "_origin": "ast",
       "id": "news_pipeline_config_profile_sampling_with_base_overrides",
-      "community": 10,
+      "community": 30,
       "norm_label": "_profile_sampling_with_base_overrides()"
     },
     {
@@ -1360,7 +1360,7 @@
       "source_location": "L665",
       "_origin": "ast",
       "id": "news_pipeline_config_override_profile_from_env",
-      "community": 10,
+      "community": 30,
       "norm_label": "_override_profile_from_env()"
     },
     {
@@ -1370,7 +1370,7 @@
       "source_location": "L722",
       "_origin": "ast",
       "id": "news_pipeline_config_configured_model_profile",
-      "community": 10,
+      "community": 30,
       "norm_label": "configured_model_profile()"
     },
     {
@@ -1380,7 +1380,7 @@
       "source_location": "L731",
       "_origin": "ast",
       "id": "news_pipeline_config_build_model_server_command",
-      "community": 10,
+      "community": 30,
       "norm_label": "build_model_server_command()"
     },
     {
@@ -1390,7 +1390,7 @@
       "source_location": "L762",
       "_origin": "ast",
       "id": "news_pipeline_config_coerce_bool_value",
-      "community": 10,
+      "community": 14,
       "norm_label": "_coerce_bool_value()"
     },
     {
@@ -1400,7 +1400,7 @@
       "source_location": "L772",
       "_origin": "ast",
       "id": "news_pipeline_config_coerce_float_value",
-      "community": 10,
+      "community": 14,
       "norm_label": "_coerce_float_value()"
     },
     {
@@ -1410,7 +1410,7 @@
       "source_location": "L779",
       "_origin": "ast",
       "id": "news_pipeline_config_coerce_int_value",
-      "community": 10,
+      "community": 14,
       "norm_label": "_coerce_int_value()"
     },
     {
@@ -1420,7 +1420,7 @@
       "source_location": "L786",
       "_origin": "ast",
       "id": "news_pipeline_config_load_yaml_mapping",
-      "community": 10,
+      "community": 14,
       "norm_label": "_load_yaml_mapping()"
     },
     {
@@ -1430,7 +1430,7 @@
       "source_location": "L796",
       "_origin": "ast",
       "id": "news_pipeline_config_load_password_from_env_json",
-      "community": 10,
+      "community": 14,
       "norm_label": "_load_password_from_env_json()"
     },
     {
@@ -1480,7 +1480,7 @@
       "source_location": "L898",
       "_origin": "ast",
       "id": "news_pipeline_config_coerce_source_text_list",
-      "community": 10,
+      "community": 14,
       "norm_label": "_coerce_source_text_list()"
     },
     {
@@ -1490,7 +1490,7 @@
       "source_location": "L919",
       "_origin": "ast",
       "id": "news_pipeline_config_source_requires_translation",
-      "community": 10,
+      "community": 14,
       "norm_label": "_source_requires_translation()"
     },
     {
@@ -1510,7 +1510,7 @@
       "source_location": "L939",
       "_origin": "ast",
       "id": "news_pipeline_config_normalize_source_scope",
-      "community": 10,
+      "community": 14,
       "norm_label": "_normalize_source_scope()"
     },
     {
@@ -1520,7 +1520,7 @@
       "source_location": "L951",
       "_origin": "ast",
       "id": "news_pipeline_config_configured_source_scope",
-      "community": 10,
+      "community": 14,
       "norm_label": "_configured_source_scope()"
     },
     {
@@ -1550,7 +1550,7 @@
       "source_location": "L972",
       "_origin": "ast",
       "id": "news_pipeline_config_source_enabled_for_scope",
-      "community": 10,
+      "community": 14,
       "norm_label": "_source_enabled_for_scope()"
     },
     {
@@ -1560,7 +1560,7 @@
       "source_location": "L988",
       "_origin": "ast",
       "id": "news_pipeline_config_normalize_source_match_mode",
-      "community": 10,
+      "community": 14,
       "norm_label": "_normalize_source_match_mode()"
     },
     {
@@ -1570,7 +1570,7 @@
       "source_location": "L998",
       "_origin": "ast",
       "id": "news_pipeline_config_reject_removed_source_topic_fields",
-      "community": 10,
+      "community": 14,
       "norm_label": "_reject_removed_source_topic_fields()"
     },
     {
@@ -1580,7 +1580,7 @@
       "source_location": "L1008",
       "_origin": "ast",
       "id": "news_pipeline_config_load_sources",
-      "community": 10,
+      "community": 14,
       "norm_label": "load_sources()"
     },
     {
@@ -1640,7 +1640,7 @@
       "source_location": "L1197",
       "_origin": "ast",
       "id": "news_pipeline_config_load_top_funnel_providers",
-      "community": 10,
+      "community": 14,
       "norm_label": "load_top_funnel_providers()"
     },
     {
@@ -1650,7 +1650,7 @@
       "source_location": "L1235",
       "_origin": "ast",
       "id": "news_pipeline_config_load_recipients",
-      "community": 10,
+      "community": 14,
       "norm_label": "load_recipients()"
     },
     {
@@ -1660,7 +1660,7 @@
       "source_location": "L1258",
       "_origin": "ast",
       "id": "news_pipeline_config_update_recipient_pause_setting",
-      "community": 10,
+      "community": 14,
       "norm_label": "update_recipient_pause_setting()"
     },
     {
@@ -1680,7 +1680,7 @@
       "source_location": "L1292",
       "_origin": "ast",
       "id": "news_pipeline_config_reject_removed_topic_env_vars",
-      "community": 16,
+      "community": 13,
       "norm_label": "reject_removed_topic_env_vars()"
     },
     {
@@ -1690,7 +1690,7 @@
       "source_location": "L1302",
       "_origin": "ast",
       "id": "news_pipeline_config_load_runtime_config",
-      "community": 10,
+      "community": 15,
       "norm_label": "load_runtime_config()"
     },
     {
@@ -1700,7 +1700,7 @@
       "source_location": "L1449",
       "_origin": "ast",
       "id": "news_pipeline_config_coerce_pause_value",
-      "community": 10,
+      "community": 14,
       "norm_label": "_coerce_pause_value()"
     },
     {
@@ -1720,7 +1720,7 @@
       "source_location": "L494",
       "_origin": "ast",
       "id": "news_pipeline_config_rationale_494",
-      "community": 10,
+      "community": 29,
       "norm_label": "resolve a friendly model alias to the hugging face repo loaded by mlx."
     },
     {
@@ -3000,7 +3000,7 @@
       "source_location": "L632",
       "_origin": "ast",
       "id": "news_pipeline_pipeline_parse_activity_command_output",
-      "community": 27,
+      "community": 12,
       "norm_label": "_parse_activity_command_output()"
     },
     {
@@ -3010,7 +3010,7 @@
       "source_location": "L650",
       "_origin": "ast",
       "id": "news_pipeline_pipeline_run_activity_command",
-      "community": 27,
+      "community": 12,
       "norm_label": "_run_activity_command()"
     },
     {
@@ -3020,7 +3020,7 @@
       "source_location": "L676",
       "_origin": "ast",
       "id": "news_pipeline_pipeline_capture_activity_snapshot",
-      "community": 27,
+      "community": 12,
       "norm_label": "capture_activity_snapshot()"
     },
     {
@@ -3300,7 +3300,7 @@
       "source_location": "L1099",
       "_origin": "ast",
       "id": "runtimeconfig",
-      "community": 10,
+      "community": 0,
       "norm_label": "runtimeconfig"
     },
     {
@@ -3320,7 +3320,7 @@
       "source_location": "L1210",
       "_origin": "ast",
       "id": "news_pipeline_pipeline_runsession_init",
-      "community": 10,
+      "community": 0,
       "norm_label": ".__init__()"
     },
     {
@@ -3770,7 +3770,7 @@
       "source_location": "L1709",
       "_origin": "ast",
       "id": "news_pipeline_pipeline_py_articlesummarizationruntime",
-      "community": 6,
+      "community": 0,
       "norm_label": "articlesummarizationruntime"
     },
     {
@@ -3790,7 +3790,7 @@
       "source_location": "L1733",
       "_origin": "ast",
       "id": "news_pipeline_pipeline_story_drafting_runtime",
-      "community": 10,
+      "community": 0,
       "norm_label": "_story_drafting_runtime()"
     },
     {
@@ -3800,7 +3800,7 @@
       "source_location": "L1733",
       "_origin": "ast",
       "id": "news_pipeline_pipeline_py_storydraftingruntime",
-      "community": 10,
+      "community": 0,
       "norm_label": "storydraftingruntime"
     },
     {
@@ -3810,7 +3810,7 @@
       "source_location": "L1756",
       "_origin": "ast",
       "id": "news_pipeline_pipeline_story_selection_runtime",
-      "community": 10,
+      "community": 0,
       "norm_label": "_story_selection_runtime()"
     },
     {
@@ -3820,7 +3820,7 @@
       "source_location": "L1756",
       "_origin": "ast",
       "id": "news_pipeline_pipeline_py_storyselectionruntime",
-      "community": 10,
+      "community": 0,
       "norm_label": "storyselectionruntime"
     },
     {
@@ -3840,7 +3840,7 @@
       "source_location": "L1780",
       "_origin": "ast",
       "id": "news_pipeline_pipeline_run_per_story_synthesis",
-      "community": 10,
+      "community": 0,
       "norm_label": "run_per_story_synthesis()"
     },
     {
@@ -3860,7 +3860,7 @@
       "source_location": "L1842",
       "_origin": "ast",
       "id": "news_pipeline_pipeline_load_recipient_config",
-      "community": 10,
+      "community": 14,
       "norm_label": "load_recipient_config()"
     },
     {
@@ -3870,7 +3870,7 @@
       "source_location": "L1853",
       "_origin": "ast",
       "id": "news_pipeline_pipeline_base64url_encode",
-      "community": 8,
+      "community": 32,
       "norm_label": "_base64url_encode()"
     },
     {
@@ -3880,7 +3880,7 @@
       "source_location": "L1857",
       "_origin": "ast",
       "id": "news_pipeline_pipeline_base64url_decode",
-      "community": 8,
+      "community": 32,
       "norm_label": "_base64url_decode()"
     },
     {
@@ -3890,7 +3890,7 @@
       "source_location": "L1862",
       "_origin": "ast",
       "id": "news_pipeline_pipeline_unsubscribe_signing_secret",
-      "community": 8,
+      "community": 32,
       "norm_label": "_unsubscribe_signing_secret()"
     },
     {
@@ -3900,7 +3900,7 @@
       "source_location": "L1867",
       "_origin": "ast",
       "id": "news_pipeline_pipeline_build_unsubscribe_token",
-      "community": 8,
+      "community": 32,
       "norm_label": "build_unsubscribe_token()"
     },
     {
@@ -3910,7 +3910,7 @@
       "source_location": "L1882",
       "_origin": "ast",
       "id": "news_pipeline_pipeline_parse_unsubscribe_token",
-      "community": 8,
+      "community": 32,
       "norm_label": "parse_unsubscribe_token()"
     },
     {
@@ -3920,7 +3920,7 @@
       "source_location": "L1904",
       "_origin": "ast",
       "id": "news_pipeline_pipeline_build_unsubscribe_url",
-      "community": 8,
+      "community": 32,
       "norm_label": "build_unsubscribe_url()"
     },
     {
@@ -3930,7 +3930,7 @@
       "source_location": "L1910",
       "_origin": "ast",
       "id": "news_pipeline_pipeline_update_client_pause_setting",
-      "community": 10,
+      "community": 14,
       "norm_label": "update_client_pause_setting()"
     },
     {
@@ -3940,7 +3940,7 @@
       "source_location": "L1918",
       "_origin": "ast",
       "id": "news_pipeline_pipeline_serve_unsubscribe_endpoint",
-      "community": 16,
+      "community": 13,
       "norm_label": "serve_unsubscribe_endpoint()"
     },
     {
@@ -3950,7 +3950,7 @@
       "source_location": "L1973",
       "_origin": "ast",
       "id": "news_pipeline_pipeline_get_active_recipient_config",
-      "community": 8,
+      "community": 0,
       "norm_label": "get_active_recipient_config()"
     },
     {
@@ -3960,7 +3960,7 @@
       "source_location": "L1998",
       "_origin": "ast",
       "id": "news_pipeline_pipeline_slugify_report_suffix",
-      "community": 8,
+      "community": 0,
       "norm_label": "_slugify_report_suffix()"
     },
     {
@@ -4020,7 +4020,7 @@
       "source_location": "L2160",
       "_origin": "ast",
       "id": "news_pipeline_pipeline_articlescrapetimeouterror",
-      "community": 10,
+      "community": 0,
       "norm_label": "articlescrapetimeouterror"
     },
     {
@@ -4140,7 +4140,7 @@
       "source_location": "L2394",
       "_origin": "ast",
       "id": "news_pipeline_pipeline_translation_response_content",
-      "community": 12,
+      "community": 11,
       "norm_label": "_translation_response_content()"
     },
     {
@@ -4150,7 +4150,7 @@
       "source_location": "L2417",
       "_origin": "ast",
       "id": "news_pipeline_pipeline_translation_messages",
-      "community": 12,
+      "community": 11,
       "norm_label": "_translation_messages()"
     },
     {
@@ -4160,7 +4160,7 @@
       "source_location": "L2433",
       "_origin": "ast",
       "id": "news_pipeline_pipeline_translation_payload",
-      "community": 12,
+      "community": 11,
       "norm_label": "_translation_payload()"
     },
     {
@@ -4170,7 +4170,7 @@
       "source_location": "L2443",
       "_origin": "ast",
       "id": "news_pipeline_pipeline_format_translation_prompt",
-      "community": 12,
+      "community": 11,
       "norm_label": "_format_translation_prompt()"
     },
     {
@@ -4190,7 +4190,7 @@
       "source_location": "L2491",
       "_origin": "ast",
       "id": "news_pipeline_pipeline_unload_translation_model_resources",
-      "community": 16,
+      "community": 13,
       "norm_label": "_unload_translation_model_resources()"
     },
     {
@@ -4200,7 +4200,7 @@
       "source_location": "L2505",
       "_origin": "ast",
       "id": "news_pipeline_pipeline_generate_translation_text",
-      "community": 8,
+      "community": 11,
       "norm_label": "_generate_translation_text()"
     },
     {
@@ -4210,7 +4210,7 @@
       "source_location": "L2525",
       "_origin": "ast",
       "id": "news_pipeline_pipeline_translate_text_with_translation_model",
-      "community": 8,
+      "community": 0,
       "norm_label": "_translate_text_with_translation_model()"
     },
     {
@@ -4230,7 +4230,7 @@
       "source_location": "L2670",
       "_origin": "ast",
       "id": "news_pipeline_pipeline_extract_sentences",
-      "community": 25,
+      "community": 8,
       "norm_label": "_extract_sentences()"
     },
     {
@@ -4240,7 +4240,7 @@
       "source_location": "L2678",
       "_origin": "ast",
       "id": "news_pipeline_pipeline_build_article_heading",
-      "community": 25,
+      "community": 8,
       "norm_label": "_build_article_heading()"
     },
     {
@@ -4250,7 +4250,7 @@
       "source_location": "L2683",
       "_origin": "ast",
       "id": "news_pipeline_pipeline_format_article_metadata",
-      "community": 25,
+      "community": 8,
       "norm_label": "_format_article_metadata()"
     },
     {
@@ -4260,7 +4260,7 @@
       "source_location": "L2696",
       "_origin": "ast",
       "id": "news_pipeline_pipeline_build_article_fallback_entry",
-      "community": 25,
+      "community": 8,
       "norm_label": "build_article_fallback_entry()"
     },
     {
@@ -4400,7 +4400,7 @@
       "source_location": "L3369",
       "_origin": "ast",
       "id": "news_pipeline_pipeline_sampling_to_extra_body",
-      "community": 11,
+      "community": 43,
       "norm_label": "_sampling_to_extra_body()"
     },
     {
@@ -4410,7 +4410,7 @@
       "source_location": "L3369",
       "_origin": "ast",
       "id": "modelsamplingsettings",
-      "community": 11,
+      "community": 43,
       "norm_label": "modelsamplingsettings"
     },
     {
@@ -4420,7 +4420,7 @@
       "source_location": "L3379",
       "_origin": "ast",
       "id": "news_pipeline_pipeline_sampling_to_dict",
-      "community": 11,
+      "community": 43,
       "norm_label": "_sampling_to_dict()"
     },
     {
@@ -4430,7 +4430,7 @@
       "source_location": "L3386",
       "_origin": "ast",
       "id": "news_pipeline_pipeline_task_sampling_to_dict",
-      "community": 11,
+      "community": 43,
       "norm_label": "_task_sampling_to_dict()"
     },
     {
@@ -4440,7 +4440,7 @@
       "source_location": "L3393",
       "_origin": "ast",
       "id": "news_pipeline_pipeline_model_extra_body",
-      "community": 11,
+      "community": 43,
       "norm_label": "_model_extra_body()"
     },
     {
@@ -4590,7 +4590,7 @@
       "source_location": "L3648",
       "_origin": "ast",
       "id": "news_pipeline_pipeline_py_basemessage",
-      "community": 18,
+      "community": 0,
       "norm_label": "basemessage"
     },
     {
@@ -4690,7 +4690,7 @@
       "source_location": "L3807",
       "_origin": "ast",
       "id": "news_pipeline_pipeline_normalize_report_entry",
-      "community": 25,
+      "community": 8,
       "norm_label": "normalize_report_entry()"
     },
     {
@@ -4710,7 +4710,7 @@
       "source_location": "L3862",
       "_origin": "ast",
       "id": "news_pipeline_pipeline_report_story_label",
-      "community": 14,
+      "community": 25,
       "norm_label": "_report_story_label()"
     },
     {
@@ -4720,7 +4720,7 @@
       "source_location": "L3867",
       "_origin": "ast",
       "id": "news_pipeline_pipeline_report_summary_text",
-      "community": 14,
+      "community": 25,
       "norm_label": "_report_summary_text()"
     },
     {
@@ -4750,7 +4750,7 @@
       "source_location": "L3887",
       "_origin": "ast",
       "id": "news_pipeline_pipeline_extract_first_name",
-      "community": 13,
+      "community": 23,
       "norm_label": "_extract_first_name()"
     },
     {
@@ -4780,7 +4780,7 @@
       "source_location": "L4001",
       "_origin": "ast",
       "id": "news_pipeline_pipeline_first_sentences",
-      "community": 14,
+      "community": 25,
       "norm_label": "_first_sentences()"
     },
     {
@@ -4790,7 +4790,7 @@
       "source_location": "L4014",
       "_origin": "ast",
       "id": "news_pipeline_pipeline_fallback_synthesis_paragraph_from_summaries",
-      "community": 14,
+      "community": 25,
       "norm_label": "_fallback_synthesis_paragraph_from_summaries()"
     },
     {
@@ -4800,7 +4800,7 @@
       "source_location": "L4024",
       "_origin": "ast",
       "id": "news_pipeline_pipeline_build_fallback_final_synthesis_preview",
-      "community": 14,
+      "community": 25,
       "norm_label": "build_fallback_final_synthesis_preview()"
     },
     {
@@ -4930,7 +4930,7 @@
       "source_location": "L4424",
       "_origin": "ast",
       "id": "news_pipeline_pipeline_collect_grouped_headlines",
-      "community": 13,
+      "community": 23,
       "norm_label": "_collect_grouped_headlines()"
     },
     {
@@ -4940,7 +4940,7 @@
       "source_location": "L4462",
       "_origin": "ast",
       "id": "news_pipeline_pipeline_build_plain_text_article_listing",
-      "community": 13,
+      "community": 23,
       "norm_label": "_build_plain_text_article_listing()"
     },
     {
@@ -4970,7 +4970,7 @@
       "source_location": "L4548",
       "_origin": "ast",
       "id": "news_pipeline_pipeline_build_html_article_listing",
-      "community": 13,
+      "community": 23,
       "norm_label": "_build_html_article_listing()"
     },
     {
@@ -4980,7 +4980,7 @@
       "source_location": "L4597",
       "_origin": "ast",
       "id": "news_pipeline_pipeline_build_report_body",
-      "community": 13,
+      "community": 23,
       "norm_label": "build_report_body()"
     },
     {
@@ -4990,7 +4990,7 @@
       "source_location": "L4645",
       "_origin": "ast",
       "id": "news_pipeline_pipeline_build_report_html",
-      "community": 13,
+      "community": 23,
       "norm_label": "build_report_html()"
     },
     {
@@ -5000,7 +5000,7 @@
       "source_location": "L4726",
       "_origin": "ast",
       "id": "news_pipeline_pipeline_report_entry_debug_record",
-      "community": 14,
+      "community": 25,
       "norm_label": "_report_entry_debug_record()"
     },
     {
@@ -5010,7 +5010,7 @@
       "source_location": "L4746",
       "_origin": "ast",
       "id": "news_pipeline_pipeline_report_entry_debug_records",
-      "community": 14,
+      "community": 25,
       "norm_label": "_report_entry_debug_records()"
     },
     {
@@ -5030,7 +5030,7 @@
       "source_location": "L4780",
       "_origin": "ast",
       "id": "news_pipeline_pipeline_persist_article_summaries_debug",
-      "community": 14,
+      "community": 25,
       "norm_label": "_persist_article_summaries_debug()"
     },
     {
@@ -5050,7 +5050,7 @@
       "source_location": "L4848",
       "_origin": "ast",
       "id": "news_pipeline_pipeline_new_run_diagnostics",
-      "community": 11,
+      "community": 0,
       "norm_label": "_new_run_diagnostics()"
     },
     {
@@ -5100,7 +5100,7 @@
       "source_location": "L5043",
       "_origin": "ast",
       "id": "news_pipeline_pipeline_probe_chat_completion",
-      "community": 12,
+      "community": 11,
       "norm_label": "_probe_chat_completion()"
     },
     {
@@ -5110,7 +5110,7 @@
       "source_location": "L5068",
       "_origin": "ast",
       "id": "news_pipeline_pipeline_probe_model_generation",
-      "community": 12,
+      "community": 11,
       "norm_label": "probe_model_generation()"
     },
     {
@@ -5120,7 +5120,7 @@
       "source_location": "L5087",
       "_origin": "ast",
       "id": "news_pipeline_pipeline_probe_translation_model_generation",
-      "community": 12,
+      "community": 11,
       "norm_label": "probe_translation_model_generation()"
     },
     {
@@ -5240,7 +5240,7 @@
       "source_location": "L5400",
       "_origin": "ast",
       "id": "news_pipeline_pipeline_run_translation_model_smoke_test",
-      "community": 16,
+      "community": 13,
       "norm_label": "run_translation_model_smoke_test()"
     },
     {
@@ -5270,7 +5270,7 @@
       "source_location": "L677",
       "_origin": "ast",
       "id": "news_pipeline_pipeline_rationale_677",
-      "community": 27,
+      "community": 12,
       "norm_label": "collect macos memory/activity signals without making the run depend on them."
     },
     {
@@ -5290,7 +5290,7 @@
       "source_location": "L1843",
       "_origin": "ast",
       "id": "news_pipeline_pipeline_rationale_1843",
-      "community": 10,
+      "community": 14,
       "norm_label": "load active recipient metadata from config/recipients.yaml."
     },
     {
@@ -5330,7 +5330,7 @@
       "source_location": "L2161",
       "_origin": "ast",
       "id": "news_pipeline_pipeline_rationale_2161",
-      "community": 10,
+      "community": 0,
       "norm_label": "raised when one article scrape exceeds the run's hard scrape deadline."
     },
     {
@@ -5360,7 +5360,7 @@
       "source_location": "L4025",
       "_origin": "ast",
       "id": "news_pipeline_pipeline_rationale_4025",
-      "community": 14,
+      "community": 25,
       "norm_label": "create grouped prose when final synthesis repeatedly returns empty."
     },
     {
@@ -8060,7 +8060,7 @@
       "source_location": "L1696",
       "_origin": "ast",
       "id": "news_pipeline_ui_main",
-      "community": 16,
+      "community": 13,
       "norm_label": "main()"
     },
     {
@@ -8120,7 +8120,7 @@
       "source_location": "L1",
       "_origin": "ast",
       "id": "tests_test_citations",
-      "community": 13,
+      "community": 23,
       "norm_label": "test_citations.py"
     },
     {
@@ -8270,7 +8270,7 @@
       "source_location": "L328",
       "_origin": "ast",
       "id": "tests_test_citations_citationintegrationtests",
-      "community": 13,
+      "community": 23,
       "norm_label": "citationintegrationtests"
     },
     {
@@ -8280,7 +8280,7 @@
       "source_location": "L329",
       "_origin": "ast",
       "id": "tests_test_citations_citationintegrationtests_test_report_renderers_use_sources_section_when_citations_exist",
-      "community": 13,
+      "community": 23,
       "norm_label": ".test_report_renderers_use_sources_section_when_citations_exist()"
     },
     {
@@ -8300,7 +8300,7 @@
       "source_location": "L17",
       "_origin": "ast",
       "id": "tests_test_failed_run_logging_failedrunloggingtests",
-      "community": 3,
+      "community": 7,
       "norm_label": "failedrunloggingtests"
     },
     {
@@ -8310,7 +8310,7 @@
       "source_location": "L18",
       "_origin": "ast",
       "id": "tests_test_failed_run_logging_failedrunloggingtests_teardown",
-      "community": 3,
+      "community": 7,
       "norm_label": ".teardown()"
     },
     {
@@ -8320,7 +8320,7 @@
       "source_location": "L33",
       "_origin": "ast",
       "id": "tests_test_failed_run_logging_failedrunloggingtests_test_run_logging_creates_missing_parents_and_tees_progress",
-      "community": 3,
+      "community": 7,
       "norm_label": ".test_run_logging_creates_missing_parents_and_tees_progress()"
     },
     {
@@ -8330,7 +8330,7 @@
       "source_location": "L59",
       "_origin": "ast",
       "id": "tests_test_failed_run_logging_failedrunloggingtests_test_failed_run_writes_rolling_artifacts_and_history_status",
-      "community": 3,
+      "community": 7,
       "norm_label": ".test_failed_run_writes_rolling_artifacts_and_history_status()"
     },
     {
@@ -8340,7 +8340,7 @@
       "source_location": "L115",
       "_origin": "ast",
       "id": "tests_test_failed_run_logging_failedrunloggingtests_test_run_pipeline_delegates_to_run_session",
-      "community": 3,
+      "community": 7,
       "norm_label": ".test_run_pipeline_delegates_to_run_session()"
     },
     {
@@ -8350,7 +8350,7 @@
       "source_location": "L1",
       "_origin": "ast",
       "id": "tests_test_gemma4_article_budget",
-      "community": 10,
+      "community": 15,
       "norm_label": "test_gemma4_article_budget.py"
     },
     {
@@ -8360,7 +8360,7 @@
       "source_location": "L19",
       "_origin": "ast",
       "id": "tests_test_gemma4_article_budget_article",
-      "community": 10,
+      "community": 15,
       "norm_label": "_article()"
     },
     {
@@ -8370,7 +8370,7 @@
       "source_location": "L28",
       "_origin": "ast",
       "id": "tests_test_gemma4_article_budget_story",
-      "community": 10,
+      "community": 15,
       "norm_label": "_story()"
     },
     {
@@ -8380,7 +8380,7 @@
       "source_location": "L40",
       "_origin": "ast",
       "id": "tests_test_gemma4_article_budget_article_ids",
-      "community": 10,
+      "community": 15,
       "norm_label": "_article_ids()"
     },
     {
@@ -8390,7 +8390,7 @@
       "source_location": "L44",
       "_origin": "ast",
       "id": "tests_test_gemma4_article_budget_gemma4articlebudgettests",
-      "community": 10,
+      "community": 15,
       "norm_label": "gemma4articlebudgettests"
     },
     {
@@ -8400,7 +8400,7 @@
       "source_location": "L45",
       "_origin": "ast",
       "id": "tests_test_gemma4_article_budget_gemma4articlebudgettests_test_gemma_4_detection_uses_alias_and_resolved_name",
-      "community": 10,
+      "community": 15,
       "norm_label": ".test_gemma_4_detection_uses_alias_and_resolved_name()"
     },
     {
@@ -8410,7 +8410,7 @@
       "source_location": "L56",
       "_origin": "ast",
       "id": "tests_test_gemma4_article_budget_gemma4articlebudgettests_test_gemma_4_cap_is_40_by_default",
-      "community": 10,
+      "community": 15,
       "norm_label": ".test_gemma_4_cap_is_40_by_default()"
     },
     {
@@ -8420,7 +8420,7 @@
       "source_location": "L66",
       "_origin": "ast",
       "id": "tests_test_gemma4_article_budget_gemma4articlebudgettests_test_large_gemma_4_uses_article_parallelism_only",
-      "community": 10,
+      "community": 15,
       "norm_label": ".test_large_gemma_4_uses_article_parallelism_only()"
     },
     {
@@ -8430,7 +8430,7 @@
       "source_location": "L80",
       "_origin": "ast",
       "id": "tests_test_gemma4_article_budget_gemma4articlebudgettests_test_tiny_gemma_uses_higher_article_parallelism_and_story_synthesis_two",
-      "community": 10,
+      "community": 15,
       "norm_label": ".test_tiny_gemma_uses_higher_article_parallelism_and_story_synthesis_two()"
     },
     {
@@ -8440,7 +8440,7 @@
       "source_location": "L94",
       "_origin": "ast",
       "id": "tests_test_gemma4_article_budget_gemma4articlebudgettests_test_non_gemma_preserves_four_by_four_stage_concurrency",
-      "community": 10,
+      "community": 15,
       "norm_label": ".test_non_gemma_preserves_four_by_four_stage_concurrency()"
     },
     {
@@ -8450,7 +8450,7 @@
       "source_location": "L108",
       "_origin": "ast",
       "id": "tests_test_gemma4_article_budget_gemma4articlebudgettests_test_stage_concurrency_env_vars_do_not_override_model_profile",
-      "community": 10,
+      "community": 15,
       "norm_label": ".test_stage_concurrency_env_vars_do_not_override_model_profile()"
     },
     {
@@ -8460,7 +8460,7 @@
       "source_location": "L124",
       "_origin": "ast",
       "id": "tests_test_gemma4_article_budget_gemma4articlebudgettests_test_non_gemma_keeps_profile_cap_and_explicit_override_wins",
-      "community": 10,
+      "community": 30,
       "norm_label": ".test_non_gemma_keeps_profile_cap_and_explicit_override_wins()"
     },
     {
@@ -8470,7 +8470,7 @@
       "source_location": "L133",
       "_origin": "ast",
       "id": "tests_test_gemma4_article_budget_gemma4articlebudgettests_test_budget_keeps_all_articles_below_cap",
-      "community": 10,
+      "community": 15,
       "norm_label": ".test_budget_keeps_all_articles_below_cap()"
     },
     {
@@ -8480,7 +8480,7 @@
       "source_location": "L151",
       "_origin": "ast",
       "id": "tests_test_gemma4_article_budget_gemma4articlebudgettests_test_budget_keeps_whole_ranked_stories_when_possible",
-      "community": 10,
+      "community": 15,
       "norm_label": ".test_budget_keeps_whole_ranked_stories_when_possible()"
     },
     {
@@ -8490,7 +8490,7 @@
       "source_location": "L179",
       "_origin": "ast",
       "id": "tests_test_gemma4_article_budget_gemma4articlebudgettests_test_budget_truncates_single_story_larger_than_cap",
-      "community": 10,
+      "community": 15,
       "norm_label": ".test_budget_truncates_single_story_larger_than_cap()"
     },
     {
@@ -8910,7 +8910,7 @@
       "source_location": "",
       "_origin": "ast",
       "id": "stringio",
-      "community": 3,
+      "community": 7,
       "norm_label": "stringio"
     },
     {
@@ -9120,7 +9120,7 @@
       "source_location": "L108",
       "_origin": "ast",
       "id": "tests_test_topicless_global_pipeline_topiclessglobalpipelinetests_test_source_loading_rejects_removed_topic_scope_fields",
-      "community": 6,
+      "community": 14,
       "norm_label": ".test_source_loading_rejects_removed_topic_scope_fields()"
     },
     {
@@ -9160,7 +9160,7 @@
       "source_location": "L248",
       "_origin": "ast",
       "id": "tests_test_topicless_global_pipeline_topiclessglobalpipelinetests_test_report_rendering_uses_story_listing_without_topic_grouping",
-      "community": 13,
+      "community": 23,
       "norm_label": ".test_report_rendering_uses_story_listing_without_topic_grouping()"
     },
     {
@@ -9170,7 +9170,7 @@
       "source_location": "L1",
       "_origin": "ast",
       "id": "todays_news",
-      "community": 16,
+      "community": 13,
       "norm_label": "todays_news.py"
     },
     {
@@ -9180,7 +9180,7 @@
       "source_location": "L1",
       "_origin": "ast",
       "id": "todays_news_rationale_1",
-      "community": 16,
+      "community": 13,
       "norm_label": "compatibility wrapper for the daily news cli.  preferred usage:     uv run news"
     },
     {
@@ -9190,7 +9190,7 @@
       "source_location": "L1",
       "_origin": "ast",
       "id": "agents",
-      "community": 15,
+      "community": 31,
       "norm_label": "agents.md"
     },
     {
@@ -9200,7 +9200,7 @@
       "source_location": "L1",
       "_origin": "ast",
       "id": "agents_1_rtk_commands_env",
-      "community": 15,
+      "community": 31,
       "norm_label": "1. rtk commands & env"
     },
     {
@@ -9210,7 +9210,7 @@
       "source_location": "L6",
       "_origin": "ast",
       "id": "agents_2_graphify",
-      "community": 15,
+      "community": 31,
       "norm_label": "2. graphify"
     },
     {
@@ -9220,7 +9220,7 @@
       "source_location": "L14",
       "_origin": "ast",
       "id": "agents_3_karpathy_execution_guidelines",
-      "community": 15,
+      "community": 31,
       "norm_label": "3. karpathy execution guidelines"
     },
     {
@@ -9230,7 +9230,7 @@
       "source_location": "L15",
       "_origin": "ast",
       "id": "agents_a_think_before_coding_no_assumptions",
-      "community": 15,
+      "community": 31,
       "norm_label": "a. think before coding (no assumptions)"
     },
     {
@@ -9240,7 +9240,7 @@
       "source_location": "L19",
       "_origin": "ast",
       "id": "agents_b_simplicity_first_no_speculation",
-      "community": 15,
+      "community": 31,
       "norm_label": "b. simplicity first (no speculation)"
     },
     {
@@ -9250,7 +9250,7 @@
       "source_location": "L23",
       "_origin": "ast",
       "id": "agents_c_surgical_changes_no_renovation",
-      "community": 15,
+      "community": 31,
       "norm_label": "c. surgical changes (no renovation)"
     },
     {
@@ -9260,7 +9260,7 @@
       "source_location": "L27",
       "_origin": "ast",
       "id": "agents_d_goal_driven_execution_verify",
-      "community": 15,
+      "community": 31,
       "norm_label": "d. goal-driven execution (verify)"
     },
     {
@@ -9270,7 +9270,7 @@
       "source_location": "L1",
       "_origin": "ast",
       "id": "context",
-      "community": 23,
+      "community": 44,
       "norm_label": "context.md"
     },
     {
@@ -9280,7 +9280,7 @@
       "source_location": "L1",
       "_origin": "ast",
       "id": "context_context",
-      "community": 23,
+      "community": 44,
       "norm_label": "context"
     },
     {
@@ -9290,7 +9290,7 @@
       "source_location": "L3",
       "_origin": "ast",
       "id": "context_run_session",
-      "community": 23,
+      "community": 44,
       "norm_label": "run session"
     },
     {
@@ -9484,6 +9484,526 @@
       "norm_label": "cli commands"
     },
     {
+      "label": "RTK Shell Command Rule",
+      "file_type": "rationale",
+      "source_file": "AGENTS.md",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null,
+      "community": 36,
+      "norm_label": "rtk shell command rule",
+      "id": "agents_rtk_shell_rule"
+    },
+    {
+      "label": "Terse Output Protocol",
+      "file_type": "rationale",
+      "source_file": "AGENTS.md",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null,
+      "community": 36,
+      "norm_label": "terse output protocol",
+      "id": "agents_terse_output_protocol"
+    },
+    {
+      "label": "RTK Database Path",
+      "file_type": "concept",
+      "source_file": "AGENTS.md",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null,
+      "community": 36,
+      "norm_label": "rtk database path",
+      "id": "agents_rtk_db_path"
+    },
+    {
+      "label": "UV Python Project",
+      "file_type": "concept",
+      "source_file": "README.md",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null,
+      "community": 26,
+      "norm_label": "uv python project",
+      "id": "readme_uv_project"
+    },
+    {
+      "label": "News UI Command",
+      "file_type": "concept",
+      "source_file": "README.md",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null,
+      "community": 26,
+      "norm_label": "news ui command",
+      "id": "readme_news_ui"
+    },
+    {
+      "label": "News Run Command",
+      "file_type": "concept",
+      "source_file": "README.md",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null,
+      "community": 26,
+      "norm_label": "news run command",
+      "id": "readme_news_run"
+    },
+    {
+      "label": "NEWS_MODEL Variable",
+      "file_type": "concept",
+      "source_file": "README.md",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null,
+      "community": 34,
+      "norm_label": "news_model variable",
+      "id": "readme_news_model"
+    },
+    {
+      "label": "NEWS_SOURCE_SCOPE Variable",
+      "file_type": "concept",
+      "source_file": "README.md",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null,
+      "community": 33,
+      "norm_label": "news_source_scope variable",
+      "id": "readme_news_source_scope"
+    },
+    {
+      "label": "NEWS_RECIPIENT_SCOPE Variable",
+      "file_type": "concept",
+      "source_file": "README.md",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null,
+      "community": 28,
+      "norm_label": "news_recipient_scope variable",
+      "id": "readme_news_recipient_scope"
+    },
+    {
+      "label": "NEWS_BLOCK_REUSED_URLS Variable",
+      "file_type": "concept",
+      "source_file": "README.md",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null,
+      "community": 27,
+      "norm_label": "news_block_reused_urls variable",
+      "id": "readme_news_block_reused_urls"
+    },
+    {
+      "label": "NEWS_IMAGE_ENABLED Variable",
+      "file_type": "concept",
+      "source_file": "README.md",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null,
+      "community": 26,
+      "norm_label": "news_image_enabled variable",
+      "id": "readme_news_image_enabled"
+    },
+    {
+      "label": "Model Aliases",
+      "file_type": "concept",
+      "source_file": "README.md",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null,
+      "community": 34,
+      "norm_label": "model aliases",
+      "id": "readme_model_aliases"
+    },
+    {
+      "label": "gemma-e2b-tiny Alias",
+      "file_type": "concept",
+      "source_file": "README.md",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null,
+      "community": 33,
+      "norm_label": "gemma-e2b-tiny alias",
+      "id": "readme_gemma_e2b_tiny"
+    },
+    {
+      "label": "gemma-26b-moe Alias",
+      "file_type": "concept",
+      "source_file": "README.md",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null,
+      "community": 27,
+      "norm_label": "gemma-26b-moe alias",
+      "id": "readme_gemma_26b_moe"
+    },
+    {
+      "label": "qwen-9b-dense Alias",
+      "file_type": "concept",
+      "source_file": "README.md",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null,
+      "community": 34,
+      "norm_label": "qwen-9b-dense alias",
+      "id": "readme_qwen_9b_dense"
+    },
+    {
+      "label": "Output Directory Structure",
+      "file_type": "concept",
+      "source_file": "README.md",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null,
+      "community": 26,
+      "norm_label": "output directory structure",
+      "id": "readme_output_dir"
+    },
+    {
+      "label": "News History DuckDB",
+      "file_type": "concept",
+      "source_file": "README.md",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null,
+      "community": 26,
+      "norm_label": "news history duckdb",
+      "id": "readme_history_db"
+    },
+    {
+      "label": "config/sources.yaml",
+      "file_type": "document",
+      "source_file": "README.md",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null,
+      "community": 16,
+      "norm_label": "config/sources.yaml",
+      "id": "readme_sources_yaml"
+    },
+    {
+      "label": "config/recipients.yaml",
+      "file_type": "document",
+      "source_file": "README.md",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null,
+      "community": 28,
+      "norm_label": "config/recipients.yaml",
+      "id": "readme_recipients_yaml"
+    },
+    {
+      "label": "NEWS_PRESET Variable",
+      "file_type": "concept",
+      "source_file": "SETTINGS.md",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null,
+      "community": 19,
+      "norm_label": "news_preset variable",
+      "id": "settings_news_preset"
+    },
+    {
+      "label": "NEWS_MODEL Variable",
+      "file_type": "concept",
+      "source_file": "SETTINGS.md",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null,
+      "community": 34,
+      "norm_label": "news_model variable",
+      "id": "settings_news_model"
+    },
+    {
+      "label": "NEWS_SOURCE_SCOPE Variable",
+      "file_type": "concept",
+      "source_file": "SETTINGS.md",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null,
+      "community": 33,
+      "norm_label": "news_source_scope variable",
+      "id": "settings_news_source_scope"
+    },
+    {
+      "label": "NEWS_RECIPIENT_SCOPE Variable",
+      "file_type": "concept",
+      "source_file": "SETTINGS.md",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null,
+      "community": 28,
+      "norm_label": "news_recipient_scope variable",
+      "id": "settings_news_recipient_scope"
+    },
+    {
+      "label": "NEWS_BLOCK_REUSED_URLS Variable",
+      "file_type": "concept",
+      "source_file": "SETTINGS.md",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null,
+      "community": 27,
+      "norm_label": "news_block_reused_urls variable",
+      "id": "settings_news_block_reused_urls"
+    },
+    {
+      "label": "NEWS_IMAGE_ENABLED Variable",
+      "file_type": "concept",
+      "source_file": "SETTINGS.md",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null,
+      "community": 26,
+      "norm_label": "news_image_enabled variable",
+      "id": "settings_news_image_enabled"
+    },
+    {
+      "label": "NEWS_RECENT_WINDOW_HOURS Variable",
+      "file_type": "concept",
+      "source_file": "SETTINGS.md",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null,
+      "community": 19,
+      "norm_label": "news_recent_window_hours variable",
+      "id": "settings_news_recent_window_hours"
+    },
+    {
+      "label": "NEWS_MAX_ARTICLES_PER_SOURCE Variable",
+      "file_type": "concept",
+      "source_file": "SETTINGS.md",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null,
+      "community": 19,
+      "norm_label": "news_max_articles_per_source variable",
+      "id": "settings_news_max_articles_per_source"
+    },
+    {
+      "label": "NEWS_MIN_ARTICLES_PER_STORY Variable",
+      "file_type": "concept",
+      "source_file": "SETTINGS.md",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null,
+      "community": 33,
+      "norm_label": "news_min_articles_per_story variable",
+      "id": "settings_news_min_articles_per_story"
+    },
+    {
+      "label": "NEWS_STORY_CLUSTER_SIMILARITY_THRESHOLD Variable",
+      "file_type": "concept",
+      "source_file": "SETTINGS.md",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null,
+      "community": 27,
+      "norm_label": "news_story_cluster_similarity_threshold variable",
+      "id": "settings_news_story_cluster_similarity_threshold"
+    },
+    {
+      "label": "NEWS_MODEL_BASE_URL Variable",
+      "file_type": "concept",
+      "source_file": "SETTINGS.md",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null,
+      "community": 19,
+      "norm_label": "news_model_base_url variable",
+      "id": "settings_news_model_base_url"
+    },
+    {
+      "label": "NEWS_BRADLEY_RECIPIENT Variable",
+      "file_type": "concept",
+      "source_file": "SETTINGS.md",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null,
+      "community": 28,
+      "norm_label": "news_bradley_recipient variable",
+      "id": "settings_news_bradley_recipient"
+    },
+    {
+      "label": "NEWS_TRANSLATION_TARGET_LANGUAGE Variable",
+      "file_type": "concept",
+      "source_file": "SETTINGS.md",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null,
+      "community": 19,
+      "norm_label": "news_translation_target_language variable",
+      "id": "settings_news_translation_target_language"
+    },
+    {
+      "label": "NEWS_SOURCES_YAML Variable",
+      "file_type": "concept",
+      "source_file": "SETTINGS.md",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null,
+      "community": 33,
+      "norm_label": "news_sources_yaml variable",
+      "id": "settings_news_sources_yaml"
+    },
+    {
+      "label": "NEWS_RECIPIENTS_YAML Variable",
+      "file_type": "concept",
+      "source_file": "SETTINGS.md",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null,
+      "community": 28,
+      "norm_label": "news_recipients_yaml variable",
+      "id": "settings_news_recipients_yaml"
+    },
+    {
+      "label": "NEWS_OUTPUT_DIR Variable",
+      "file_type": "concept",
+      "source_file": "SETTINGS.md",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null,
+      "community": 19,
+      "norm_label": "news_output_dir variable",
+      "id": "settings_news_output_dir"
+    },
+    {
+      "label": "NEWS_HISTORY_DB Variable",
+      "file_type": "concept",
+      "source_file": "SETTINGS.md",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null,
+      "community": 19,
+      "norm_label": "news_history_db variable",
+      "id": "settings_news_history_db"
+    },
+    {
+      "label": "SMTP Configuration Variables",
+      "file_type": "concept",
+      "source_file": "SETTINGS.md",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null,
+      "community": 19,
+      "norm_label": "smtp configuration variables",
+      "id": "settings_news_smtp_config"
+    },
+    {
+      "label": "Removed Topic-Scoped Variables",
+      "file_type": "concept",
+      "source_file": "SETTINGS.md",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null,
+      "community": 19,
+      "norm_label": "removed topic-scoped variables",
+      "id": "settings_removed_topic_vars"
+    },
+    {
+      "label": "Model Aliases Table",
+      "file_type": "concept",
+      "source_file": "SETTINGS.md",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null,
+      "community": 34,
+      "norm_label": "model aliases table",
+      "id": "settings_model_aliases"
+    },
+    {
+      "label": "config/run_presets.yaml Reference",
+      "file_type": "concept",
+      "source_file": "SETTINGS.md",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null,
+      "community": 19,
+      "norm_label": "config/run_presets.yaml reference",
+      "id": "settings_run_presets_yaml"
+    },
+    {
       "label": "Claude PR Review Workflow Setup Script",
       "file_type": "document",
       "source_file": "claude_pr_tool_settings.txt",
@@ -9599,6 +10119,370 @@
       "community": 24,
       "norm_label": "claude-haiku-4-5 model",
       "id": "workflow_claude_haiku"
+    },
+    {
+      "label": "Bradley Mankoff Recipient",
+      "file_type": "document",
+      "source_file": "config/recipients.yaml",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null,
+      "community": 28,
+      "norm_label": "bradley mankoff recipient",
+      "id": "recipients_bradley_mankoff"
+    },
+    {
+      "label": "Aidan Coon Recipient",
+      "file_type": "document",
+      "source_file": "config/recipients.yaml",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null,
+      "community": 28,
+      "norm_label": "aidan coon recipient",
+      "id": "recipients_aidan_coon"
+    },
+    {
+      "label": "Andr\u00e9s Calzacorta Recipient",
+      "file_type": "document",
+      "source_file": "config/recipients.yaml",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null,
+      "community": 40,
+      "norm_label": "andres calzacorta recipient",
+      "id": "recipients_andres_calzacorta"
+    },
+    {
+      "label": "Isaac Bodemann Recipient",
+      "file_type": "document",
+      "source_file": "config/recipients.yaml",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null,
+      "community": 41,
+      "norm_label": "isaac bodemann recipient",
+      "id": "recipients_isaac_bodemann"
+    },
+    {
+      "label": "Default Run Preset",
+      "file_type": "document",
+      "source_file": "config/run_presets.yaml",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null,
+      "community": 33,
+      "norm_label": "default run preset",
+      "id": "presets_default_preset"
+    },
+    {
+      "label": "Dev Run Preset",
+      "file_type": "document",
+      "source_file": "config/run_presets.yaml",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null,
+      "community": 33,
+      "norm_label": "dev run preset",
+      "id": "presets_dev_preset"
+    },
+    {
+      "label": "Local Production Run Preset",
+      "file_type": "document",
+      "source_file": "config/run_presets.yaml",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null,
+      "community": 27,
+      "norm_label": "local production run preset",
+      "id": "presets_local_prod_preset"
+    },
+    {
+      "label": "Loose Local Production Run Preset",
+      "file_type": "document",
+      "source_file": "config/run_presets.yaml",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null,
+      "community": 27,
+      "norm_label": "loose local production run preset",
+      "id": "presets_loose_local_prod_preset"
+    },
+    {
+      "label": "Production Run Preset",
+      "file_type": "document",
+      "source_file": "config/run_presets.yaml",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null,
+      "community": 27,
+      "norm_label": "production run preset",
+      "id": "presets_prod_preset"
+    },
+    {
+      "label": "Al Jazeera Source",
+      "file_type": "document",
+      "source_file": "config/sources.yaml",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null,
+      "community": 16,
+      "norm_label": "al jazeera source",
+      "id": "sources_al_jazeera"
+    },
+    {
+      "label": "Associated Press Source",
+      "file_type": "document",
+      "source_file": "config/sources.yaml",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null,
+      "community": 16,
+      "norm_label": "associated press source",
+      "id": "sources_ap_news"
+    },
+    {
+      "label": "BBC World News Source",
+      "file_type": "document",
+      "source_file": "config/sources.yaml",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null,
+      "community": 16,
+      "norm_label": "bbc world news source",
+      "id": "sources_bbc_world"
+    },
+    {
+      "label": "Reuters Source",
+      "file_type": "document",
+      "source_file": "config/sources.yaml",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null,
+      "community": 16,
+      "norm_label": "reuters source",
+      "id": "sources_reuters"
+    },
+    {
+      "label": "New York Times Source",
+      "file_type": "document",
+      "source_file": "config/sources.yaml",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null,
+      "community": 16,
+      "norm_label": "new york times source",
+      "id": "sources_nyt"
+    },
+    {
+      "label": "The Guardian Source",
+      "file_type": "document",
+      "source_file": "config/sources.yaml",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null,
+      "community": 16,
+      "norm_label": "the guardian source",
+      "id": "sources_guardian"
+    },
+    {
+      "label": "NPR Source",
+      "file_type": "document",
+      "source_file": "config/sources.yaml",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null,
+      "community": 16,
+      "norm_label": "npr source",
+      "id": "sources_npr"
+    },
+    {
+      "label": "Xinhua News Agency Source",
+      "file_type": "document",
+      "source_file": "config/sources.yaml",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null,
+      "community": 16,
+      "norm_label": "xinhua news agency source",
+      "id": "sources_xinhua"
+    },
+    {
+      "label": "South China Morning Post Source",
+      "file_type": "document",
+      "source_file": "config/sources.yaml",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null,
+      "community": 16,
+      "norm_label": "south china morning post source",
+      "id": "sources_scmp"
+    },
+    {
+      "label": "AFP Source",
+      "file_type": "document",
+      "source_file": "config/sources.yaml",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null,
+      "community": 16,
+      "norm_label": "afp source",
+      "id": "sources_afp"
+    },
+    {
+      "label": "CNA Source",
+      "file_type": "document",
+      "source_file": "config/sources.yaml",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null,
+      "community": 16,
+      "norm_label": "cna source",
+      "id": "sources_cna"
+    },
+    {
+      "label": "CNBC Business Source",
+      "file_type": "document",
+      "source_file": "config/sources.yaml",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null,
+      "community": 42,
+      "norm_label": "cnbc business source",
+      "id": "sources_cnbc_business"
+    },
+    {
+      "label": "TechCrunch Source",
+      "file_type": "document",
+      "source_file": "config/sources.yaml",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null,
+      "community": 16,
+      "norm_label": "techcrunch source",
+      "id": "sources_techcrunch"
+    },
+    {
+      "label": "Ars Technica Source",
+      "file_type": "document",
+      "source_file": "config/sources.yaml",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null,
+      "community": 16,
+      "norm_label": "ars technica source",
+      "id": "sources_ars_technica"
+    },
+    {
+      "label": "The Verge Source",
+      "file_type": "document",
+      "source_file": "config/sources.yaml",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null,
+      "community": 16,
+      "norm_label": "the verge source",
+      "id": "sources_the_verge"
+    },
+    {
+      "label": "NHK World Japan Source",
+      "file_type": "document",
+      "source_file": "config/sources.yaml",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null,
+      "community": 16,
+      "norm_label": "nhk world japan source",
+      "id": "sources_nhk_world"
+    },
+    {
+      "label": "Core Tier Sources",
+      "file_type": "concept",
+      "source_file": "config/sources.yaml",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null,
+      "community": 16,
+      "norm_label": "core tier sources",
+      "id": "sources_core_tier"
+    },
+    {
+      "label": "Peripheral Tier Sources",
+      "file_type": "concept",
+      "source_file": "config/sources.yaml",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null,
+      "community": 16,
+      "norm_label": "peripheral tier sources",
+      "id": "sources_peripheral_tier"
+    },
+    {
+      "label": "Wire Attribution Source Match Mode",
+      "file_type": "concept",
+      "source_file": "config/sources.yaml",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null,
+      "community": 16,
+      "norm_label": "wire attribution source match mode",
+      "id": "sources_wire_attribution_mode"
     }
   ],
   "links": [
@@ -9671,9 +10555,9 @@
       "source_file": "news_pipeline/article_summarization.py",
       "source_location": "L17",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_article_summarization",
-      "target": "news_pipeline_article_summarization_articlesummarizationruntime"
+      "target": "news_pipeline_article_summarization_articlesummarizationruntime",
+      "confidence_score": 1.0
     },
     {
       "relation": "contains",
@@ -9774,9 +10658,9 @@
       "source_file": "news_pipeline/article_summarization.py",
       "source_location": "L102",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_article_summarization_build_article_summary_app",
-      "target": "news_pipeline_article_summarization_articlesummarizationruntime"
+      "target": "news_pipeline_article_summarization_articlesummarizationruntime",
+      "confidence_score": 1.0
     },
     {
       "relation": "references",
@@ -9785,9 +10669,9 @@
       "source_file": "news_pipeline/article_summarization.py",
       "source_location": "L46",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_article_summarization_build_article_summary_prompt_messages",
-      "target": "news_pipeline_article_summarization_articlesummarizationruntime"
+      "target": "news_pipeline_article_summarization_articlesummarizationruntime",
+      "confidence_score": 1.0
     },
     {
       "relation": "references",
@@ -9796,9 +10680,9 @@
       "source_file": "news_pipeline/article_summarization.py",
       "source_location": "L39",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_article_summarization_notify_article_completed",
-      "target": "news_pipeline_article_summarization_articlesummarizationruntime"
+      "target": "news_pipeline_article_summarization_articlesummarizationruntime",
+      "confidence_score": 1.0
     },
     {
       "relation": "references",
@@ -9807,9 +10691,9 @@
       "source_file": "news_pipeline/article_summarization.py",
       "source_location": "L201",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_article_summarization_run_article_summary_pass",
-      "target": "news_pipeline_article_summarization_articlesummarizationruntime"
+      "target": "news_pipeline_article_summarization_articlesummarizationruntime",
+      "confidence_score": 1.0
     },
     {
       "relation": "imports",
@@ -9818,9 +10702,9 @@
       "source_file": "tests/test_topicless_global_pipeline.py",
       "source_location": "L9",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "tests_test_topicless_global_pipeline",
-      "target": "news_pipeline_article_summarization_articlesummarizationruntime"
+      "target": "news_pipeline_article_summarization_articlesummarizationruntime",
+      "confidence_score": 1.0
     },
     {
       "relation": "calls",
@@ -9829,9 +10713,9 @@
       "source_file": "tests/test_topicless_global_pipeline.py",
       "source_location": "L25",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "tests_test_topicless_global_pipeline_article_runtime",
-      "target": "news_pipeline_article_summarization_articlesummarizationruntime"
+      "target": "news_pipeline_article_summarization_articlesummarizationruntime",
+      "confidence_score": 1.0
     },
     {
       "relation": "uses",
@@ -9839,9 +10723,9 @@
       "source_file": "tests/test_topicless_global_pipeline.py",
       "source_location": "L9",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "tests_test_topicless_global_pipeline_py_articlesummarizationruntime",
-      "target": "news_pipeline_article_summarization_articlesummarizationruntime"
+      "target": "news_pipeline_article_summarization_articlesummarizationruntime",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
@@ -9849,9 +10733,9 @@
       "source_file": "tests/test_topicless_global_pipeline.py",
       "source_location": "L9",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "tests_test_topicless_global_pipeline_py_storyselectionruntime",
-      "target": "news_pipeline_article_summarization_articlesummarizationruntime"
+      "target": "news_pipeline_article_summarization_articlesummarizationruntime",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
@@ -9859,9 +10743,9 @@
       "source_file": "tests/test_topicless_global_pipeline.py",
       "source_location": "L9",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "tests_test_topicless_global_pipeline_topiclessglobalpipelinetests",
-      "target": "news_pipeline_article_summarization_articlesummarizationruntime"
+      "target": "news_pipeline_article_summarization_articlesummarizationruntime",
+      "confidence_score": 0.5
     },
     {
       "relation": "inherits",
@@ -10067,9 +10951,9 @@
       "source_file": "news_pipeline/citations.py",
       "source_location": "L1209",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_citations",
-      "target": "news_pipeline_citations_citation_source_url_by_number"
+      "target": "news_pipeline_citations_citation_source_url_by_number",
+      "confidence_score": 1.0
     },
     {
       "relation": "contains",
@@ -10207,9 +11091,9 @@
       "source_file": "news_pipeline/citations.py",
       "source_location": "L414",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_citations",
-      "target": "news_pipeline_citations_normalize_source_id"
+      "target": "news_pipeline_citations_normalize_source_id",
+      "confidence_score": 1.0
     },
     {
       "relation": "contains",
@@ -10308,9 +11192,9 @@
       "source_file": "news_pipeline/citations.py",
       "source_location": "L1256",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_citations",
-      "target": "news_pipeline_citations_render_html_source_item"
+      "target": "news_pipeline_citations_render_html_source_item",
+      "confidence_score": 1.0
     },
     {
       "relation": "contains",
@@ -10318,9 +11202,9 @@
       "source_file": "news_pipeline/citations.py",
       "source_location": "L1296",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_citations",
-      "target": "news_pipeline_citations_render_html_source_section"
+      "target": "news_pipeline_citations_render_html_source_section",
+      "confidence_score": 1.0
     },
     {
       "relation": "contains",
@@ -10358,9 +11242,9 @@
       "source_file": "news_pipeline/citations.py",
       "source_location": "L1123",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_citations",
-      "target": "news_pipeline_citations_render_plain_text_source_section"
+      "target": "news_pipeline_citations_render_plain_text_source_section",
+      "confidence_score": 1.0
     },
     {
       "relation": "contains",
@@ -10747,9 +11631,9 @@
       "source_file": "news_pipeline/citations.py",
       "source_location": "L1209",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_citations_citation_source_url_by_number",
-      "target": "news_pipeline_citations_py_any"
+      "target": "news_pipeline_citations_py_any",
+      "confidence_score": 1.0
     },
     {
       "relation": "references",
@@ -10923,9 +11807,9 @@
       "source_file": "news_pipeline/citations.py",
       "source_location": "L1256",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_citations_render_html_source_item",
-      "target": "news_pipeline_citations_py_any"
+      "target": "news_pipeline_citations_py_any",
+      "confidence_score": 1.0
     },
     {
       "relation": "references",
@@ -10934,9 +11818,9 @@
       "source_file": "news_pipeline/citations.py",
       "source_location": "L1296",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_citations_render_html_source_section",
-      "target": "news_pipeline_citations_py_any"
+      "target": "news_pipeline_citations_py_any",
+      "confidence_score": 1.0
     },
     {
       "relation": "references",
@@ -10978,9 +11862,9 @@
       "source_file": "news_pipeline/citations.py",
       "source_location": "L1123",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_citations_render_plain_text_source_section",
-      "target": "news_pipeline_citations_py_any"
+      "target": "news_pipeline_citations_py_any",
+      "confidence_score": 1.0
     },
     {
       "relation": "references",
@@ -11319,9 +12203,9 @@
       "source_file": "news_pipeline/citations.py",
       "source_location": "L203",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_citations_source_local_id",
-      "target": "news_pipeline_citations_normalize_source_id"
+      "target": "news_pipeline_citations_normalize_source_id",
+      "confidence_score": 1.0
     },
     {
       "relation": "calls",
@@ -11428,9 +12312,9 @@
       "source_file": "news_pipeline/citations.py",
       "source_location": "L349",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_citations_citation_precedence_dependency_records_from_annotated",
-      "target": "news_pipeline_citations_normalize_source_id"
+      "target": "news_pipeline_citations_normalize_source_id",
+      "confidence_score": 1.0
     },
     {
       "relation": "calls",
@@ -11503,9 +12387,9 @@
       "source_file": "news_pipeline/citations.py",
       "source_location": "L565",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_citations_citation_dependency_map",
-      "target": "news_pipeline_citations_normalize_source_id"
+      "target": "news_pipeline_citations_normalize_source_id",
+      "confidence_score": 1.0
     },
     {
       "relation": "calls",
@@ -11514,9 +12398,9 @@
       "source_file": "news_pipeline/citations.py",
       "source_location": "L531",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_citations_fallback_source_ids",
-      "target": "news_pipeline_citations_normalize_source_id"
+      "target": "news_pipeline_citations_normalize_source_id",
+      "confidence_score": 1.0
     },
     {
       "relation": "calls",
@@ -11525,9 +12409,9 @@
       "source_file": "news_pipeline/citations.py",
       "source_location": "L442",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_citations_marker_source_ids",
-      "target": "news_pipeline_citations_normalize_source_id"
+      "target": "news_pipeline_citations_normalize_source_id",
+      "confidence_score": 1.0
     },
     {
       "relation": "calls",
@@ -11536,9 +12420,9 @@
       "source_file": "news_pipeline/citations.py",
       "source_location": "L912",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_citations_normalized_sentence_source_ids",
-      "target": "news_pipeline_citations_normalize_source_id"
+      "target": "news_pipeline_citations_normalize_source_id",
+      "confidence_score": 1.0
     },
     {
       "relation": "calls",
@@ -11547,9 +12431,9 @@
       "source_file": "news_pipeline/citations.py",
       "source_location": "L960",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_citations_render_cited_story",
-      "target": "news_pipeline_citations_normalize_source_id"
+      "target": "news_pipeline_citations_normalize_source_id",
+      "confidence_score": 1.0
     },
     {
       "relation": "calls",
@@ -11558,9 +12442,9 @@
       "source_file": "news_pipeline/citations.py",
       "source_location": "L752",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_citations_validate_cited_story_text",
-      "target": "news_pipeline_citations_normalize_source_id"
+      "target": "news_pipeline_citations_normalize_source_id",
+      "confidence_score": 1.0
     },
     {
       "relation": "calls",
@@ -11905,9 +12789,9 @@
       "source_file": "news_pipeline/citations.py",
       "source_location": "L1276",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_citations_render_html_source_item",
-      "target": "news_pipeline_citations_format_source_published_timestamp"
+      "target": "news_pipeline_citations_format_source_published_timestamp",
+      "confidence_score": 1.0
     },
     {
       "relation": "calls",
@@ -12077,9 +12961,9 @@
       "source_file": "news_pipeline/citations.py",
       "source_location": "L1262",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_citations_render_html_source_item",
-      "target": "news_pipeline_citations_citation_source_number"
+      "target": "news_pipeline_citations_citation_source_number",
+      "confidence_score": 1.0
     },
     {
       "relation": "calls",
@@ -12088,9 +12972,9 @@
       "source_file": "news_pipeline/citations.py",
       "source_location": "L1303",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_citations_render_html_source_section",
-      "target": "news_pipeline_citations_citation_source_number"
+      "target": "news_pipeline_citations_citation_source_number",
+      "confidence_score": 1.0
     },
     {
       "relation": "calls",
@@ -12176,9 +13060,9 @@
       "source_file": "news_pipeline/citations.py",
       "source_location": "L1126",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_citations_render_plain_text_source_section",
-      "target": "news_pipeline_citations_render_plain_text_source"
+      "target": "news_pipeline_citations_render_plain_text_source",
+      "confidence_score": 1.0
     },
     {
       "relation": "calls",
@@ -12198,9 +13082,9 @@
       "source_file": "news_pipeline/citations.py",
       "source_location": "L1175",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_citations_render_plain_text_sources",
-      "target": "news_pipeline_citations_render_plain_text_source_section"
+      "target": "news_pipeline_citations_render_plain_text_source_section",
+      "confidence_score": 1.0
     },
     {
       "relation": "calls",
@@ -12242,9 +13126,9 @@
       "source_file": "news_pipeline/citations.py",
       "source_location": "L1228",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_citations_render_html_text_with_citations",
-      "target": "news_pipeline_citations_citation_source_url_by_number"
+      "target": "news_pipeline_citations_citation_source_url_by_number",
+      "confidence_score": 1.0
     },
     {
       "relation": "calls",
@@ -12253,9 +13137,9 @@
       "source_file": "news_pipeline/citations.py",
       "source_location": "L1305",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_citations_render_html_source_section",
-      "target": "news_pipeline_citations_render_html_source_item"
+      "target": "news_pipeline_citations_render_html_source_item",
+      "confidence_score": 1.0
     },
     {
       "relation": "calls",
@@ -12264,9 +13148,9 @@
       "source_file": "news_pipeline/citations.py",
       "source_location": "L1353",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_citations_render_html_sources",
-      "target": "news_pipeline_citations_render_html_source_item"
+      "target": "news_pipeline_citations_render_html_source_item",
+      "confidence_score": 1.0
     },
     {
       "relation": "calls",
@@ -12275,9 +13159,9 @@
       "source_file": "news_pipeline/citations.py",
       "source_location": "L1336",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_citations_render_html_sources",
-      "target": "news_pipeline_citations_render_html_source_section"
+      "target": "news_pipeline_citations_render_html_source_section",
+      "confidence_score": 1.0
     },
     {
       "relation": "contains",
@@ -13218,9 +14102,9 @@
       "source_file": "news_pipeline/config.py",
       "source_location": "L939",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_config",
-      "target": "news_pipeline_config_normalize_source_scope"
+      "target": "news_pipeline_config_normalize_source_scope",
+      "confidence_score": 1.0
     },
     {
       "relation": "contains",
@@ -13618,9 +14502,9 @@
       "source_file": "news_pipeline/pipeline.py",
       "source_location": "L90",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "news_pipeline_pipeline_managedmodelserverexited",
-      "target": "news_pipeline_config_modelsamplingsettings"
+      "target": "news_pipeline_config_modelsamplingsettings",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
@@ -13708,9 +14592,9 @@
       "source_file": "news_pipeline/pipeline.py",
       "source_location": "L90",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "news_pipeline_pipeline_py_storydraftingruntime",
-      "target": "news_pipeline_config_modelsamplingsettings"
+      "target": "news_pipeline_config_modelsamplingsettings",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
@@ -13718,9 +14602,9 @@
       "source_file": "news_pipeline/pipeline.py",
       "source_location": "L90",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "news_pipeline_pipeline_py_storyselectionruntime",
-      "target": "news_pipeline_config_modelsamplingsettings"
+      "target": "news_pipeline_config_modelsamplingsettings",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
@@ -13728,9 +14612,9 @@
       "source_file": "news_pipeline/pipeline.py",
       "source_location": "L90",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "news_pipeline_pipeline_runsession",
-      "target": "news_pipeline_config_modelsamplingsettings"
+      "target": "news_pipeline_config_modelsamplingsettings",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
@@ -13768,9 +14652,9 @@
       "source_file": "news_pipeline/pipeline.py",
       "source_location": "L90",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "runtimeconfig",
-      "target": "news_pipeline_config_modelsamplingsettings"
+      "target": "news_pipeline_config_modelsamplingsettings",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
@@ -13843,9 +14727,9 @@
       "source_file": "news_pipeline/pipeline.py",
       "source_location": "L90",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "aimessage",
-      "target": "news_pipeline_config_runtimeconfig"
+      "target": "news_pipeline_config_runtimeconfig",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
@@ -13853,9 +14737,9 @@
       "source_file": "news_pipeline/pipeline.py",
       "source_location": "L90",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "chatopenai",
-      "target": "news_pipeline_config_runtimeconfig"
+      "target": "news_pipeline_config_runtimeconfig",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
@@ -13863,9 +14747,9 @@
       "source_file": "news_pipeline/pipeline.py",
       "source_location": "L90",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "modelsamplingsettings",
-      "target": "news_pipeline_config_runtimeconfig"
+      "target": "news_pipeline_config_runtimeconfig",
+      "confidence_score": 0.5
     },
     {
       "relation": "references",
@@ -13896,9 +14780,9 @@
       "source_file": "news_pipeline/pipeline.py",
       "source_location": "L90",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_pipeline",
-      "target": "news_pipeline_config_runtimeconfig"
+      "target": "news_pipeline_config_runtimeconfig",
+      "confidence_score": 1.0
     },
     {
       "relation": "uses",
@@ -13906,9 +14790,9 @@
       "source_file": "news_pipeline/pipeline.py",
       "source_location": "L90",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "news_pipeline_pipeline_articlescrapetimeouterror",
-      "target": "news_pipeline_config_runtimeconfig"
+      "target": "news_pipeline_config_runtimeconfig",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
@@ -13916,9 +14800,9 @@
       "source_file": "news_pipeline/pipeline.py",
       "source_location": "L90",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "news_pipeline_pipeline_managedmodelserverexited",
-      "target": "news_pipeline_config_runtimeconfig"
+      "target": "news_pipeline_config_runtimeconfig",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
@@ -13926,9 +14810,9 @@
       "source_file": "news_pipeline/pipeline.py",
       "source_location": "L90",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "news_pipeline_pipeline_progresstracker",
-      "target": "news_pipeline_config_runtimeconfig"
+      "target": "news_pipeline_config_runtimeconfig",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
@@ -13936,9 +14820,9 @@
       "source_file": "news_pipeline/pipeline.py",
       "source_location": "L90",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "news_pipeline_pipeline_py_any",
-      "target": "news_pipeline_config_runtimeconfig"
+      "target": "news_pipeline_config_runtimeconfig",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
@@ -13946,9 +14830,9 @@
       "source_file": "news_pipeline/pipeline.py",
       "source_location": "L90",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "news_pipeline_pipeline_py_articlesummarizationruntime",
-      "target": "news_pipeline_config_runtimeconfig"
+      "target": "news_pipeline_config_runtimeconfig",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
@@ -13956,9 +14840,9 @@
       "source_file": "news_pipeline/pipeline.py",
       "source_location": "L90",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "news_pipeline_pipeline_py_basemessage",
-      "target": "news_pipeline_config_runtimeconfig"
+      "target": "news_pipeline_config_runtimeconfig",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
@@ -13966,9 +14850,9 @@
       "source_file": "news_pipeline/pipeline.py",
       "source_location": "L90",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "news_pipeline_pipeline_py_counter",
-      "target": "news_pipeline_config_runtimeconfig"
+      "target": "news_pipeline_config_runtimeconfig",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
@@ -13976,9 +14860,9 @@
       "source_file": "news_pipeline/pipeline.py",
       "source_location": "L90",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "news_pipeline_pipeline_py_datetime",
-      "target": "news_pipeline_config_runtimeconfig"
+      "target": "news_pipeline_config_runtimeconfig",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
@@ -13986,9 +14870,9 @@
       "source_file": "news_pipeline/pipeline.py",
       "source_location": "L90",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "news_pipeline_pipeline_py_exception",
-      "target": "news_pipeline_config_runtimeconfig"
+      "target": "news_pipeline_config_runtimeconfig",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
@@ -13996,9 +14880,9 @@
       "source_file": "news_pipeline/pipeline.py",
       "source_location": "L90",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "news_pipeline_pipeline_py_rundiagnostics",
-      "target": "news_pipeline_config_runtimeconfig"
+      "target": "news_pipeline_config_runtimeconfig",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
@@ -14006,9 +14890,9 @@
       "source_file": "news_pipeline/pipeline.py",
       "source_location": "L90",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "news_pipeline_pipeline_py_storydraftingruntime",
-      "target": "news_pipeline_config_runtimeconfig"
+      "target": "news_pipeline_config_runtimeconfig",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
@@ -14016,9 +14900,9 @@
       "source_file": "news_pipeline/pipeline.py",
       "source_location": "L90",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "news_pipeline_pipeline_py_storyselectionruntime",
-      "target": "news_pipeline_config_runtimeconfig"
+      "target": "news_pipeline_config_runtimeconfig",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
@@ -14026,9 +14910,9 @@
       "source_file": "news_pipeline/pipeline.py",
       "source_location": "L90",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "news_pipeline_pipeline_runsession",
-      "target": "news_pipeline_config_runtimeconfig"
+      "target": "news_pipeline_config_runtimeconfig",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
@@ -14036,9 +14920,9 @@
       "source_file": "news_pipeline/pipeline.py",
       "source_location": "L90",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "popen",
-      "target": "news_pipeline_config_runtimeconfig"
+      "target": "news_pipeline_config_runtimeconfig",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
@@ -14046,9 +14930,9 @@
       "source_file": "news_pipeline/pipeline.py",
       "source_location": "L90",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "runtimeconfig",
-      "target": "news_pipeline_config_runtimeconfig"
+      "target": "news_pipeline_config_runtimeconfig",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
@@ -14056,9 +14940,9 @@
       "source_file": "news_pipeline/pipeline.py",
       "source_location": "L90",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "textio",
-      "target": "news_pipeline_config_runtimeconfig"
+      "target": "news_pipeline_config_runtimeconfig",
+      "confidence_score": 0.5
     },
     {
       "relation": "calls",
@@ -14650,9 +15534,9 @@
       "source_file": "news_pipeline/config.py",
       "source_location": "L939",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_config_normalize_source_scope",
-      "target": "news_pipeline_config_py_any"
+      "target": "news_pipeline_config_py_any",
+      "confidence_score": 1.0
     },
     {
       "relation": "references",
@@ -15550,9 +16434,9 @@
       "source_file": "news_pipeline/config.py",
       "source_location": "L952",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_config_configured_source_scope",
-      "target": "news_pipeline_config_normalize_source_scope"
+      "target": "news_pipeline_config_normalize_source_scope",
+      "confidence_score": 1.0
     },
     {
       "relation": "calls",
@@ -15561,9 +16445,9 @@
       "source_file": "news_pipeline/config.py",
       "source_location": "L1022",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_config_load_sources",
-      "target": "news_pipeline_config_normalize_source_scope"
+      "target": "news_pipeline_config_normalize_source_scope",
+      "confidence_score": 1.0
     },
     {
       "relation": "calls",
@@ -15572,9 +16456,9 @@
       "source_file": "news_pipeline/config.py",
       "source_location": "L981",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_config_source_enabled_for_scope",
-      "target": "news_pipeline_config_normalize_source_scope"
+      "target": "news_pipeline_config_normalize_source_scope",
+      "confidence_score": 1.0
     },
     {
       "relation": "calls",
@@ -15834,11 +16718,11 @@
       "context": "call",
       "confidence": "EXTRACTED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L1619",
+      "source_location": "L1844",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_pipeline_load_recipient_config",
-      "target": "news_pipeline_config_load_recipients"
+      "target": "news_pipeline_config_load_recipients",
+      "confidence_score": 1.0
     },
     {
       "relation": "calls",
@@ -16549,11 +17433,11 @@
       "relation": "uses",
       "confidence": "INFERRED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L101",
+      "source_location": "L102",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "news_pipeline_pipeline_managedmodelserverexited",
-      "target": "news_pipeline_diagnostics_rundiagnostics"
+      "target": "news_pipeline_diagnostics_rundiagnostics",
+      "confidence_score": 0.5
     },
     {
       "relation": "calls",
@@ -16650,21 +17534,11 @@
       "relation": "uses",
       "confidence": "INFERRED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L101",
+      "source_location": "L102",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "news_pipeline_pipeline_py_storydraftingruntime",
-      "target": "news_pipeline_diagnostics_rundiagnostics"
-    },
-    {
-      "relation": "uses",
-      "confidence": "INFERRED",
-      "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L101",
-      "weight": 0.8,
-      "confidence_score": 0.5,
-      "source": "news_pipeline_pipeline_py_storyselectionruntime",
-      "target": "news_pipeline_diagnostics_rundiagnostics"
+      "target": "news_pipeline_diagnostics_rundiagnostics",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
@@ -16672,9 +17546,19 @@
       "source_file": "news_pipeline/pipeline.py",
       "source_location": "L102",
       "weight": 0.8,
-      "confidence_score": 0.5,
+      "source": "news_pipeline_pipeline_py_storyselectionruntime",
+      "target": "news_pipeline_diagnostics_rundiagnostics",
+      "confidence_score": 0.5
+    },
+    {
+      "relation": "uses",
+      "confidence": "INFERRED",
+      "source_file": "news_pipeline/pipeline.py",
+      "source_location": "L102",
+      "weight": 0.8,
       "source": "news_pipeline_pipeline_runsession",
-      "target": "news_pipeline_diagnostics_rundiagnostics"
+      "target": "news_pipeline_diagnostics_rundiagnostics",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
@@ -16712,9 +17596,9 @@
       "source_file": "news_pipeline/pipeline.py",
       "source_location": "L102",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "runtimeconfig",
-      "target": "news_pipeline_diagnostics_rundiagnostics"
+      "target": "news_pipeline_diagnostics_rundiagnostics",
+      "confidence_score": 0.5
     },
     {
       "relation": "imports",
@@ -20281,11 +21165,11 @@
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L1642",
+      "source_location": "L1867",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_pipeline",
-      "target": "news_pipeline_pipeline_build_unsubscribe_token"
+      "target": "news_pipeline_pipeline_build_unsubscribe_token",
+      "confidence_score": 1.0
     },
     {
       "relation": "contains",
@@ -20363,9 +21247,9 @@
       "source_file": "news_pipeline/pipeline.py",
       "source_location": "L1099",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_pipeline",
-      "target": "news_pipeline_pipeline_compat_runtime_values"
+      "target": "news_pipeline_pipeline_compat_runtime_values",
+      "confidence_score": 1.0
     },
     {
       "relation": "contains",
@@ -20881,11 +21765,11 @@
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L1617",
+      "source_location": "L1842",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_pipeline",
-      "target": "news_pipeline_pipeline_load_recipient_config"
+      "target": "news_pipeline_pipeline_load_recipient_config",
+      "confidence_score": 1.0
     },
     {
       "relation": "contains",
@@ -20921,11 +21805,11 @@
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L343",
+      "source_location": "L344",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_pipeline",
-      "target": "news_pipeline_pipeline_managed_model_server_exit_message"
+      "target": "news_pipeline_pipeline_managed_model_server_exit_message",
+      "confidence_score": 1.0
     },
     {
       "relation": "contains",
@@ -20961,11 +21845,11 @@
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L329",
+      "source_location": "L330",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_pipeline",
-      "target": "news_pipeline_pipeline_managedmodelserverexited"
+      "target": "news_pipeline_pipeline_managedmodelserverexited",
+      "confidence_score": 1.0
     },
     {
       "relation": "contains",
@@ -21432,7 +22316,7 @@
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L1759",
+      "source_location": "L1555",
       "weight": 1.0,
       "confidence_score": 1.0,
       "source": "news_pipeline_pipeline",
@@ -21462,11 +22346,11 @@
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L1187",
+      "source_location": "L1207",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_pipeline",
-      "target": "news_pipeline_pipeline_runsession"
+      "target": "news_pipeline_pipeline_runsession",
+      "confidence_score": 1.0
     },
     {
       "relation": "contains",
@@ -22119,22 +23003,22 @@
       "relation": "inherits",
       "confidence": "EXTRACTED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L329",
+      "source_location": "L330",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_pipeline_managedmodelserverexited",
-      "target": "runtimeerror"
+      "target": "runtimeerror",
+      "confidence_score": 1.0
     },
     {
       "relation": "calls",
       "context": "call",
       "confidence": "EXTRACTED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L382",
+      "source_location": "L383",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_pipeline_raise_if_managed_model_server_exited",
-      "target": "news_pipeline_pipeline_managedmodelserverexited"
+      "target": "news_pipeline_pipeline_managedmodelserverexited",
+      "confidence_score": 1.0
     },
     {
       "relation": "rationale_for",
@@ -22142,9 +23026,9 @@
       "source_file": "news_pipeline/pipeline.py",
       "source_location": "L331",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_pipeline_rationale_331",
-      "target": "news_pipeline_pipeline_managedmodelserverexited"
+      "target": "news_pipeline_pipeline_managedmodelserverexited",
+      "confidence_score": 1.0
     },
     {
       "relation": "calls",
@@ -22205,11 +23089,11 @@
       "context": "call",
       "confidence": "EXTRACTED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L1241",
+      "source_location": "L1261",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_pipeline_runsession_activate",
-      "target": "runtimeerror"
+      "target": "runtimeerror",
+      "confidence_score": 1.0
     },
     {
       "relation": "calls",
@@ -22282,22 +23166,22 @@
       "context": "call",
       "confidence": "EXTRACTED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L346",
+      "source_location": "L347",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_pipeline_managed_model_server_exit_message",
-      "target": "news_pipeline_pipeline_managed_model_server_log_path"
+      "target": "news_pipeline_pipeline_managed_model_server_log_path",
+      "confidence_score": 1.0
     },
     {
       "relation": "calls",
       "context": "call",
       "confidence": "EXTRACTED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L382",
+      "source_location": "L383",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_pipeline_raise_if_managed_model_server_exited",
-      "target": "news_pipeline_pipeline_managed_model_server_exit_message"
+      "target": "news_pipeline_pipeline_managed_model_server_exit_message",
+      "confidence_score": 1.0
     },
     {
       "relation": "calls",
@@ -22581,9 +23465,9 @@
       "source_file": "news_pipeline/pipeline.py",
       "source_location": "L1099",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_pipeline_compat_runtime_values",
-      "target": "news_pipeline_pipeline_py_any"
+      "target": "news_pipeline_pipeline_py_any",
+      "confidence_score": 1.0
     },
     {
       "relation": "references",
@@ -22854,11 +23738,11 @@
       "context": "generic_arg",
       "confidence": "EXTRACTED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L1328",
+      "source_location": "L1553",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_pipeline_progresstracker_story_selection_progress",
-      "target": "news_pipeline_pipeline_py_any"
+      "target": "news_pipeline_pipeline_py_any",
+      "confidence_score": 1.0
     },
     {
       "relation": "references",
@@ -22953,11 +23837,11 @@
       "context": "parameter_type",
       "confidence": "EXTRACTED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L1190",
+      "source_location": "L1210",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_pipeline_runsession_init",
-      "target": "news_pipeline_pipeline_py_any"
+      "target": "news_pipeline_pipeline_py_any",
+      "confidence_score": 1.0
     },
     {
       "relation": "references",
@@ -23285,9 +24169,9 @@
       "source_file": "news_pipeline/pipeline.py",
       "source_location": "L652",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_pipeline_run_activity_command",
-      "target": "news_pipeline_pipeline_runsession_run"
+      "target": "news_pipeline_pipeline_runsession_run",
+      "confidence_score": 1.0
     },
     {
       "relation": "rationale_for",
@@ -23295,9 +24179,9 @@
       "source_file": "news_pipeline/pipeline.py",
       "source_location": "L677",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_pipeline_rationale_677",
-      "target": "news_pipeline_pipeline_capture_activity_snapshot"
+      "target": "news_pipeline_pipeline_capture_activity_snapshot",
+      "confidence_score": 1.0
     },
     {
       "relation": "calls",
@@ -23812,31 +24696,31 @@
       "source_file": "news_pipeline/pipeline.py",
       "source_location": "L1099",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_pipeline_compat_runtime_values",
-      "target": "runtimeconfig"
+      "target": "runtimeconfig",
+      "confidence_score": 1.0
     },
     {
       "relation": "calls",
       "context": "call",
       "confidence": "EXTRACTED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L1243",
+      "source_location": "L1262",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_pipeline_runsession_activate",
-      "target": "news_pipeline_pipeline_compat_runtime_values"
+      "target": "news_pipeline_pipeline_compat_runtime_values",
+      "confidence_score": 1.0
     },
     {
       "relation": "references",
       "context": "parameter_type",
       "confidence": "EXTRACTED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L1190",
+      "source_location": "L1210",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_pipeline_runsession_init",
-      "target": "runtimeconfig"
+      "target": "runtimeconfig",
+      "confidence_score": 1.0
     },
     {
       "relation": "rationale_for",
@@ -23853,11 +24737,41 @@
       "context": "call",
       "confidence": "EXTRACTED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L5156",
+      "source_location": "L5205",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_pipeline_run_pipeline",
-      "target": "news_pipeline_pipeline_runsession"
+      "target": "news_pipeline_pipeline_runsession",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "news_pipeline/pipeline.py",
+      "source_location": "L1256",
+      "weight": 1.0,
+      "source": "news_pipeline_pipeline_runsession",
+      "target": "news_pipeline_pipeline_runsession_activate",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "news_pipeline/pipeline.py",
+      "source_location": "L1307",
+      "weight": 1.0,
+      "source": "news_pipeline_pipeline_runsession",
+      "target": "news_pipeline_pipeline_runsession_capture_from_legacy_globals",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "news_pipeline/pipeline.py",
+      "source_location": "L1210",
+      "weight": 1.0,
+      "source": "news_pipeline_pipeline_runsession",
+      "target": "news_pipeline_pipeline_runsession_init",
+      "confidence_score": 1.0
     },
     {
       "relation": "method",
@@ -23865,181 +24779,151 @@
       "source_file": "news_pipeline/pipeline.py",
       "source_location": "L1236",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_pipeline_runsession",
-      "target": "news_pipeline_pipeline_runsession_activate"
+      "target": "news_pipeline_pipeline_runsession_run",
+      "confidence_score": 1.0
     },
     {
       "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "news_pipeline/pipeline.py",
+      "source_location": "L1290",
+      "weight": 1.0,
+      "source": "news_pipeline_pipeline_runsession",
+      "target": "news_pipeline_pipeline_runsession_sync_to_legacy_globals",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "news_pipeline/pipeline.py",
+      "source_location": "L4268",
+      "weight": 1.0,
+      "source": "news_pipeline_pipeline_generate_image_with_mflux",
+      "target": "news_pipeline_pipeline_runsession_run",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "news_pipeline/pipeline.py",
+      "source_location": "L5205",
+      "weight": 1.0,
+      "source": "news_pipeline_pipeline_run_pipeline",
+      "target": "news_pipeline_pipeline_runsession_run",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "news_pipeline/pipeline.py",
+      "source_location": "L1250",
+      "weight": 1.0,
+      "source": "news_pipeline_pipeline_runsession_run",
+      "target": "news_pipeline_pipeline_finalize_failed_run",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "news_pipeline/pipeline.py",
+      "source_location": "L1241",
+      "weight": 1.0,
+      "source": "news_pipeline_pipeline_runsession_run",
+      "target": "news_pipeline_pipeline_managed_model_server",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "news_pipeline/pipeline.py",
+      "source_location": "L1248",
+      "weight": 1.0,
+      "source": "news_pipeline_pipeline_runsession_run",
+      "target": "news_pipeline_pipeline_progresstracker_detail",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "news_pipeline/pipeline.py",
+      "source_location": "L1253",
+      "weight": 1.0,
+      "source": "news_pipeline_pipeline_runsession_run",
+      "target": "news_pipeline_pipeline_progresstracker_finish",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "news_pipeline/pipeline.py",
+      "source_location": "L1247",
+      "weight": 1.0,
+      "source": "news_pipeline_pipeline_runsession_run",
+      "target": "news_pipeline_pipeline_progresstracker_step",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "news_pipeline/pipeline.py",
+      "source_location": "L1239",
+      "weight": 1.0,
+      "source": "news_pipeline_pipeline_runsession_run",
+      "target": "news_pipeline_pipeline_run_logging",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "news_pipeline/pipeline.py",
+      "source_location": "L1238",
+      "weight": 1.0,
+      "source": "news_pipeline_pipeline_runsession_run",
+      "target": "news_pipeline_pipeline_runsession_activate",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "news_pipeline/pipeline.py",
+      "source_location": "L1249",
+      "weight": 1.0,
+      "source": "news_pipeline_pipeline_runsession_run",
+      "target": "news_pipeline_pipeline_write_run_log",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
       "confidence": "EXTRACTED",
       "source_file": "news_pipeline/pipeline.py",
       "source_location": "L1286",
       "weight": 1.0,
-      "confidence_score": 1.0,
-      "source": "news_pipeline_pipeline_runsession",
-      "target": "news_pipeline_pipeline_runsession_capture_from_legacy_globals"
-    },
-    {
-      "relation": "method",
-      "confidence": "EXTRACTED",
-      "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L1190",
-      "weight": 1.0,
-      "confidence_score": 1.0,
-      "source": "news_pipeline_pipeline_runsession",
-      "target": "news_pipeline_pipeline_runsession_init"
-    },
-    {
-      "relation": "method",
-      "confidence": "EXTRACTED",
-      "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L1216",
-      "weight": 1.0,
-      "confidence_score": 1.0,
-      "source": "news_pipeline_pipeline_runsession",
-      "target": "news_pipeline_pipeline_runsession_run"
-    },
-    {
-      "relation": "method",
-      "confidence": "EXTRACTED",
-      "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L1269",
-      "weight": 1.0,
-      "confidence_score": 1.0,
-      "source": "news_pipeline_pipeline_runsession",
-      "target": "news_pipeline_pipeline_runsession_sync_to_legacy_globals"
-    },
-    {
-      "relation": "calls",
-      "context": "call",
-      "confidence": "EXTRACTED",
-      "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L4219",
-      "weight": 1.0,
-      "confidence_score": 1.0,
-      "source": "news_pipeline_pipeline_generate_image_with_mflux",
-      "target": "news_pipeline_pipeline_runsession_run"
-    },
-    {
-      "relation": "calls",
-      "context": "call",
-      "confidence": "EXTRACTED",
-      "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L5156",
-      "weight": 1.0,
-      "confidence_score": 1.0,
-      "source": "news_pipeline_pipeline_run_pipeline",
-      "target": "news_pipeline_pipeline_runsession_run"
-    },
-    {
-      "relation": "calls",
-      "context": "call",
-      "confidence": "EXTRACTED",
-      "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L1230",
-      "weight": 1.0,
-      "confidence_score": 1.0,
-      "source": "news_pipeline_pipeline_runsession_run",
-      "target": "news_pipeline_pipeline_finalize_failed_run"
-    },
-    {
-      "relation": "calls",
-      "context": "call",
-      "confidence": "EXTRACTED",
-      "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L1221",
-      "weight": 1.0,
-      "confidence_score": 1.0,
-      "source": "news_pipeline_pipeline_runsession_run",
-      "target": "news_pipeline_pipeline_managed_model_server"
-    },
-    {
-      "relation": "calls",
-      "context": "call",
-      "confidence": "EXTRACTED",
-      "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L1228",
-      "weight": 1.0,
-      "confidence_score": 1.0,
-      "source": "news_pipeline_pipeline_runsession_run",
-      "target": "news_pipeline_pipeline_progresstracker_detail"
-    },
-    {
-      "relation": "calls",
-      "context": "call",
-      "confidence": "EXTRACTED",
-      "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L1233",
-      "weight": 1.0,
-      "confidence_score": 1.0,
-      "source": "news_pipeline_pipeline_runsession_run",
-      "target": "news_pipeline_pipeline_progresstracker_finish"
-    },
-    {
-      "relation": "calls",
-      "context": "call",
-      "confidence": "EXTRACTED",
-      "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L1227",
-      "weight": 1.0,
-      "confidence_score": 1.0,
-      "source": "news_pipeline_pipeline_runsession_run",
-      "target": "news_pipeline_pipeline_progresstracker_step"
-    },
-    {
-      "relation": "calls",
-      "context": "call",
-      "confidence": "EXTRACTED",
-      "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L1219",
-      "weight": 1.0,
-      "confidence_score": 1.0,
-      "source": "news_pipeline_pipeline_runsession_run",
-      "target": "news_pipeline_pipeline_run_logging"
-    },
-    {
-      "relation": "calls",
-      "context": "call",
-      "confidence": "EXTRACTED",
-      "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L1218",
-      "weight": 1.0,
-      "confidence_score": 1.0,
-      "source": "news_pipeline_pipeline_runsession_run",
-      "target": "news_pipeline_pipeline_runsession_activate"
-    },
-    {
-      "relation": "calls",
-      "context": "call",
-      "confidence": "EXTRACTED",
-      "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L1229",
-      "weight": 1.0,
-      "confidence_score": 1.0,
-      "source": "news_pipeline_pipeline_runsession_run",
-      "target": "news_pipeline_pipeline_write_run_log"
-    },
-    {
-      "relation": "calls",
-      "context": "call",
-      "confidence": "EXTRACTED",
-      "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L1265",
-      "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_pipeline_runsession_activate",
-      "target": "news_pipeline_pipeline_runsession_capture_from_legacy_globals"
+      "target": "news_pipeline_pipeline_runsession_capture_from_legacy_globals",
+      "confidence_score": 1.0
     },
     {
       "relation": "calls",
       "context": "call",
       "confidence": "EXTRACTED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L1260",
+      "source_location": "L1281",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_pipeline_runsession_activate",
-      "target": "news_pipeline_pipeline_runsession_sync_to_legacy_globals"
+      "target": "news_pipeline_pipeline_runsession_sync_to_legacy_globals",
+      "confidence_score": 1.0
     },
     {
       "relation": "calls",
@@ -24423,11 +25307,11 @@
       "relation": "method",
       "confidence": "EXTRACTED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L1328",
+      "source_location": "L1553",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_pipeline_progresstracker",
-      "target": "news_pipeline_pipeline_progresstracker_story_selection_progress"
+      "target": "news_pipeline_pipeline_progresstracker_story_selection_progress",
+      "confidence_score": 1.0
     },
     {
       "relation": "method",
@@ -24953,11 +25837,11 @@
       "context": "call",
       "confidence": "EXTRACTED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L1335",
+      "source_location": "L1560",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_pipeline_progresstracker_story_selection_progress",
-      "target": "news_pipeline_pipeline_progresstracker_start_meter"
+      "target": "news_pipeline_pipeline_progresstracker_start_meter",
+      "confidence_score": 1.0
     },
     {
       "relation": "calls",
@@ -25063,11 +25947,11 @@
       "context": "call",
       "confidence": "EXTRACTED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L1333",
+      "source_location": "L1558",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_pipeline_progresstracker_story_selection_progress",
-      "target": "news_pipeline_pipeline_progresstracker_update_meter"
+      "target": "news_pipeline_pipeline_progresstracker_update_meter",
+      "confidence_score": 1.0
     },
     {
       "relation": "calls",
@@ -25731,7 +26615,7 @@
       "context": "call",
       "confidence": "EXTRACTED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L1766",
+      "source_location": "L1562",
       "weight": 1.0,
       "confidence_score": 1.0,
       "source": "news_pipeline_pipeline_run_per_story_synthesis",
@@ -25753,18 +26637,18 @@
       "context": "return_type",
       "confidence": "EXTRACTED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L1508",
+      "source_location": "L1733",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_pipeline_story_drafting_runtime",
-      "target": "news_pipeline_pipeline_py_storydraftingruntime"
+      "target": "news_pipeline_pipeline_py_storydraftingruntime",
+      "confidence_score": 1.0
     },
     {
       "relation": "calls",
       "context": "call",
       "confidence": "EXTRACTED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L1772",
+      "source_location": "L1568",
       "weight": 1.0,
       "confidence_score": 1.0,
       "source": "news_pipeline_pipeline_run_per_story_synthesis",
@@ -25786,11 +26670,11 @@
       "context": "return_type",
       "confidence": "EXTRACTED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L1531",
+      "source_location": "L1756",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_pipeline_story_selection_runtime",
-      "target": "news_pipeline_pipeline_py_storyselectionruntime"
+      "target": "news_pipeline_pipeline_py_storyselectionruntime",
+      "confidence_score": 1.0
     },
     {
       "relation": "calls",
@@ -25808,7 +26692,7 @@
       "context": "call",
       "confidence": "EXTRACTED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L1784",
+      "source_location": "L1580",
       "weight": 1.0,
       "confidence_score": 1.0,
       "source": "news_pipeline_pipeline_run_per_story_synthesis",
@@ -25840,22 +26724,22 @@
       "context": "call",
       "confidence": "EXTRACTED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L5703",
+      "source_location": "L5914",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_pipeline_run_pipeline",
-      "target": "news_pipeline_pipeline_load_recipient_config"
+      "target": "news_pipeline_pipeline_load_recipient_config",
+      "confidence_score": 1.0
     },
     {
       "relation": "calls",
       "context": "call",
       "confidence": "EXTRACTED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L1648",
+      "source_location": "L1873",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_pipeline_build_unsubscribe_token",
-      "target": "news_pipeline_pipeline_base64url_encode"
+      "target": "news_pipeline_pipeline_base64url_encode",
+      "confidence_score": 1.0
     },
     {
       "relation": "calls",
@@ -25884,11 +26768,11 @@
       "context": "call",
       "confidence": "EXTRACTED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L1650",
+      "source_location": "L1875",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_pipeline_build_unsubscribe_token",
-      "target": "news_pipeline_pipeline_unsubscribe_signing_secret"
+      "target": "news_pipeline_pipeline_unsubscribe_signing_secret",
+      "confidence_score": 1.0
     },
     {
       "relation": "calls",
@@ -25917,11 +26801,11 @@
       "context": "call",
       "confidence": "EXTRACTED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L1680",
+      "source_location": "L1905",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_pipeline_build_unsubscribe_url",
-      "target": "news_pipeline_pipeline_build_unsubscribe_token"
+      "target": "news_pipeline_pipeline_build_unsubscribe_token",
+      "confidence_score": 1.0
     },
     {
       "relation": "calls",
@@ -36215,9 +37099,9 @@
       "source_file": "news_pipeline/ui.py",
       "source_location": "L820",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_ui_runmanager",
-      "target": "news_pipeline_ui_runmanager_init"
+      "target": "news_pipeline_ui_runmanager_init",
+      "confidence_score": 1.0
     },
     {
       "relation": "method",
@@ -36947,9 +37831,9 @@
       "source_file": "tests/test_failed_run_logging.py",
       "source_location": "L115",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "tests_test_failed_run_logging_failedrunloggingtests",
-      "target": "tests_test_failed_run_logging_failedrunloggingtests_test_run_pipeline_delegates_to_run_session"
+      "target": "tests_test_failed_run_logging_failedrunloggingtests_test_run_pipeline_delegates_to_run_session",
+      "confidence_score": 1.0
     },
     {
       "relation": "calls",
@@ -37959,9 +38843,9 @@
       "source_file": "tests/test_terminal_progress.py",
       "source_location": "L18",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "tests_test_terminal_progress_fakepipe",
-      "target": "tests_test_terminal_progress_fakepipe_isatty"
+      "target": "tests_test_terminal_progress_fakepipe_isatty",
+      "confidence_score": 1.0
     },
     {
       "relation": "calls",
@@ -38271,9 +39155,9 @@
       "source_file": "AGENTS.md",
       "source_location": "L1",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "agents",
-      "target": "agents_1_rtk_commands_env"
+      "target": "agents_1_rtk_commands_env",
+      "confidence_score": 1.0
     },
     {
       "relation": "contains",
@@ -38281,9 +39165,9 @@
       "source_file": "AGENTS.md",
       "source_location": "L6",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "agents",
-      "target": "agents_2_graphify"
+      "target": "agents_2_graphify",
+      "confidence_score": 1.0
     },
     {
       "relation": "contains",
@@ -38291,9 +39175,9 @@
       "source_file": "AGENTS.md",
       "source_location": "L14",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "agents",
-      "target": "agents_3_karpathy_execution_guidelines"
+      "target": "agents_3_karpathy_execution_guidelines",
+      "confidence_score": 1.0
     },
     {
       "relation": "contains",
@@ -38301,9 +39185,9 @@
       "source_file": "AGENTS.md",
       "source_location": "L15",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "agents_3_karpathy_execution_guidelines",
-      "target": "agents_a_think_before_coding_no_assumptions"
+      "target": "agents_a_think_before_coding_no_assumptions",
+      "confidence_score": 1.0
     },
     {
       "relation": "contains",
@@ -38311,9 +39195,9 @@
       "source_file": "AGENTS.md",
       "source_location": "L19",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "agents_3_karpathy_execution_guidelines",
-      "target": "agents_b_simplicity_first_no_speculation"
+      "target": "agents_b_simplicity_first_no_speculation",
+      "confidence_score": 1.0
     },
     {
       "relation": "contains",
@@ -38321,9 +39205,9 @@
       "source_file": "AGENTS.md",
       "source_location": "L23",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "agents_3_karpathy_execution_guidelines",
-      "target": "agents_c_surgical_changes_no_renovation"
+      "target": "agents_c_surgical_changes_no_renovation",
+      "confidence_score": 1.0
     },
     {
       "relation": "contains",
@@ -38331,9 +39215,9 @@
       "source_file": "AGENTS.md",
       "source_location": "L27",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "agents_3_karpathy_execution_guidelines",
-      "target": "agents_d_goal_driven_execution_verify"
+      "target": "agents_d_goal_driven_execution_verify",
+      "confidence_score": 1.0
     },
     {
       "relation": "contains",
@@ -38341,9 +39225,9 @@
       "source_file": "CONTEXT.md",
       "source_location": "L1",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "context",
-      "target": "context_context"
+      "target": "context_context",
+      "confidence_score": 1.0
     },
     {
       "relation": "contains",
@@ -38351,9 +39235,9 @@
       "source_file": "CONTEXT.md",
       "source_location": "L3",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "context_context",
-      "target": "context_run_session"
+      "target": "context_run_session",
+      "confidence_score": 1.0
     },
     {
       "relation": "contains",
@@ -38361,9 +39245,9 @@
       "source_file": "README.md",
       "source_location": "L1",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "readme",
-      "target": "readme_daily_news_pipeline"
+      "target": "readme_daily_news_pipeline",
+      "confidence_score": 1.0
     },
     {
       "relation": "contains",
@@ -38371,9 +39255,9 @@
       "source_file": "README.md",
       "source_location": "L42",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "readme_daily_news_pipeline",
-      "target": "readme_cli"
+      "target": "readme_cli",
+      "confidence_score": 1.0
     },
     {
       "relation": "contains",
@@ -38381,9 +39265,99 @@
       "source_file": "README.md",
       "source_location": "L129",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "readme_daily_news_pipeline",
-      "target": "readme_configuration"
+      "target": "readme_configuration",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "README.md",
+      "source_location": null,
+      "weight": 1.0,
+      "source": "readme_daily_news_pipeline",
+      "target": "readme_history_db"
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "README.md",
+      "source_location": null,
+      "weight": 1.0,
+      "source": "readme_daily_news_pipeline",
+      "target": "readme_news_block_reused_urls"
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "README.md",
+      "source_location": null,
+      "weight": 1.0,
+      "source": "readme_daily_news_pipeline",
+      "target": "readme_news_image_enabled"
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "README.md",
+      "source_location": null,
+      "weight": 1.0,
+      "source": "readme_daily_news_pipeline",
+      "target": "readme_news_model"
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "README.md",
+      "source_location": null,
+      "weight": 1.0,
+      "source": "readme_daily_news_pipeline",
+      "target": "readme_news_recipient_scope"
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "README.md",
+      "source_location": null,
+      "weight": 1.0,
+      "source": "readme_daily_news_pipeline",
+      "target": "readme_news_run"
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "README.md",
+      "source_location": null,
+      "weight": 1.0,
+      "source": "readme_daily_news_pipeline",
+      "target": "readme_news_source_scope"
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "README.md",
+      "source_location": null,
+      "weight": 1.0,
+      "source": "readme_daily_news_pipeline",
+      "target": "readme_news_ui"
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "README.md",
+      "source_location": null,
+      "weight": 1.0,
+      "source": "readme_daily_news_pipeline",
+      "target": "readme_output_dir"
     },
     {
       "relation": "contains",
@@ -38391,9 +39365,19 @@
       "source_file": "README.md",
       "source_location": "L139",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "readme_daily_news_pipeline",
-      "target": "readme_outputs"
+      "target": "readme_outputs",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "README.md",
+      "source_location": null,
+      "weight": 1.0,
+      "source": "readme_daily_news_pipeline",
+      "target": "readme_recipients_yaml"
     },
     {
       "relation": "references",
@@ -38411,9 +39395,19 @@
       "source_file": "README.md",
       "source_location": "L61",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "readme_daily_news_pipeline",
-      "target": "readme_runtime_variables"
+      "target": "readme_runtime_variables",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "README.md",
+      "source_location": null,
+      "weight": 1.0,
+      "source": "readme_daily_news_pipeline",
+      "target": "readme_sources_yaml"
     },
     {
       "relation": "contains",
@@ -38421,9 +39415,19 @@
       "source_file": "README.md",
       "source_location": "L14",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "readme_daily_news_pipeline",
-      "target": "readme_ui"
+      "target": "readme_ui",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "README.md",
+      "source_location": null,
+      "weight": 1.0,
+      "source": "readme_daily_news_pipeline",
+      "target": "readme_uv_project"
     },
     {
       "relation": "contains",
@@ -38431,9 +39435,9 @@
       "source_file": "README.md",
       "source_location": "L115",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "readme_runtime_variables",
-      "target": "readme_image"
+      "target": "readme_image",
+      "confidence_score": 1.0
     },
     {
       "relation": "contains",
@@ -38441,9 +39445,9 @@
       "source_file": "README.md",
       "source_location": "L91",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "readme_runtime_variables",
-      "target": "readme_model"
+      "target": "readme_model",
+      "confidence_score": 1.0
     },
     {
       "relation": "contains",
@@ -38451,9 +39455,59 @@
       "source_file": "README.md",
       "source_location": "L67",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "readme_runtime_variables",
-      "target": "readme_run_presets"
+      "target": "readme_run_presets",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "references",
+      "confidence": "INFERRED",
+      "confidence_score": 0.85,
+      "source_file": "README.md",
+      "source_location": null,
+      "weight": 0.85,
+      "source": "readme_run_presets",
+      "target": "presets_default_preset"
+    },
+    {
+      "relation": "references",
+      "confidence": "INFERRED",
+      "confidence_score": 0.85,
+      "source_file": "README.md",
+      "source_location": null,
+      "weight": 0.85,
+      "source": "readme_run_presets",
+      "target": "presets_dev_preset"
+    },
+    {
+      "relation": "references",
+      "confidence": "INFERRED",
+      "confidence_score": 0.85,
+      "source_file": "README.md",
+      "source_location": null,
+      "weight": 0.85,
+      "source": "readme_run_presets",
+      "target": "presets_local_prod_preset"
+    },
+    {
+      "relation": "references",
+      "confidence": "INFERRED",
+      "confidence_score": 0.85,
+      "source_file": "README.md",
+      "source_location": null,
+      "weight": 0.85,
+      "source": "readme_run_presets",
+      "target": "presets_prod_preset"
+    },
+    {
+      "relation": "conceptually_related_to",
+      "confidence": "INFERRED",
+      "confidence_score": 0.9,
+      "source_file": "README.md",
+      "source_location": null,
+      "weight": 0.9,
+      "source": "readme_run_presets",
+      "target": "readme_news_run"
     },
     {
       "relation": "contains",
@@ -38461,9 +39515,9 @@
       "source_file": "SETTINGS.md",
       "source_location": "L1",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "settings",
-      "target": "settings_settings_reference"
+      "target": "settings_settings_reference",
+      "confidence_score": 1.0
     },
     {
       "relation": "contains",
@@ -38471,9 +39525,9 @@
       "source_file": "SETTINGS.md",
       "source_location": "L36",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "settings_settings_reference",
-      "target": "settings_advanced_tuning"
+      "target": "settings_advanced_tuning",
+      "confidence_score": 1.0
     },
     {
       "relation": "contains",
@@ -38481,9 +39535,9 @@
       "source_file": "SETTINGS.md",
       "source_location": "L123",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "settings_settings_reference",
-      "target": "settings_cli_commands"
+      "target": "settings_cli_commands",
+      "confidence_score": 1.0
     },
     {
       "relation": "contains",
@@ -38491,9 +39545,9 @@
       "source_file": "SETTINGS.md",
       "source_location": "L15",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "settings_settings_reference",
-      "target": "settings_default_run_knobs"
+      "target": "settings_default_run_knobs",
+      "confidence_score": 1.0
     },
     {
       "relation": "contains",
@@ -38501,9 +39555,19 @@
       "source_file": "SETTINGS.md",
       "source_location": "L73",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "settings_settings_reference",
-      "target": "settings_infrastructure"
+      "target": "settings_infrastructure",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "SETTINGS.md",
+      "source_location": null,
+      "weight": 1.0,
+      "source": "settings_settings_reference",
+      "target": "settings_model_aliases"
     },
     {
       "relation": "contains",
@@ -38511,9 +39575,189 @@
       "source_file": "SETTINGS.md",
       "source_location": "L49",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "settings_settings_reference",
-      "target": "settings_model_and_translation"
+      "target": "settings_model_and_translation",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "SETTINGS.md",
+      "source_location": null,
+      "weight": 1.0,
+      "source": "settings_settings_reference",
+      "target": "settings_news_block_reused_urls"
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "SETTINGS.md",
+      "source_location": null,
+      "weight": 1.0,
+      "source": "settings_settings_reference",
+      "target": "settings_news_bradley_recipient"
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "SETTINGS.md",
+      "source_location": null,
+      "weight": 1.0,
+      "source": "settings_settings_reference",
+      "target": "settings_news_history_db"
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "SETTINGS.md",
+      "source_location": null,
+      "weight": 1.0,
+      "source": "settings_settings_reference",
+      "target": "settings_news_image_enabled"
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "SETTINGS.md",
+      "source_location": null,
+      "weight": 1.0,
+      "source": "settings_settings_reference",
+      "target": "settings_news_max_articles_per_source"
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "SETTINGS.md",
+      "source_location": null,
+      "weight": 1.0,
+      "source": "settings_settings_reference",
+      "target": "settings_news_min_articles_per_story"
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "SETTINGS.md",
+      "source_location": null,
+      "weight": 1.0,
+      "source": "settings_settings_reference",
+      "target": "settings_news_model"
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "SETTINGS.md",
+      "source_location": null,
+      "weight": 1.0,
+      "source": "settings_settings_reference",
+      "target": "settings_news_model_base_url"
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "SETTINGS.md",
+      "source_location": null,
+      "weight": 1.0,
+      "source": "settings_settings_reference",
+      "target": "settings_news_output_dir"
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "SETTINGS.md",
+      "source_location": null,
+      "weight": 1.0,
+      "source": "settings_settings_reference",
+      "target": "settings_news_preset"
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "SETTINGS.md",
+      "source_location": null,
+      "weight": 1.0,
+      "source": "settings_settings_reference",
+      "target": "settings_news_recent_window_hours"
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "SETTINGS.md",
+      "source_location": null,
+      "weight": 1.0,
+      "source": "settings_settings_reference",
+      "target": "settings_news_recipient_scope"
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "SETTINGS.md",
+      "source_location": null,
+      "weight": 1.0,
+      "source": "settings_settings_reference",
+      "target": "settings_news_recipients_yaml"
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "SETTINGS.md",
+      "source_location": null,
+      "weight": 1.0,
+      "source": "settings_settings_reference",
+      "target": "settings_news_smtp_config"
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "SETTINGS.md",
+      "source_location": null,
+      "weight": 1.0,
+      "source": "settings_settings_reference",
+      "target": "settings_news_source_scope"
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "SETTINGS.md",
+      "source_location": null,
+      "weight": 1.0,
+      "source": "settings_settings_reference",
+      "target": "settings_news_sources_yaml"
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "SETTINGS.md",
+      "source_location": null,
+      "weight": 1.0,
+      "source": "settings_settings_reference",
+      "target": "settings_news_story_cluster_similarity_threshold"
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "SETTINGS.md",
+      "source_location": null,
+      "weight": 1.0,
+      "source": "settings_settings_reference",
+      "target": "settings_news_translation_target_language"
     },
     {
       "relation": "contains",
@@ -38521,9 +39765,29 @@
       "source_file": "SETTINGS.md",
       "source_location": "L106",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "settings_settings_reference",
-      "target": "settings_removed_settings"
+      "target": "settings_removed_settings",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "SETTINGS.md",
+      "source_location": null,
+      "weight": 1.0,
+      "source": "settings_settings_reference",
+      "target": "settings_removed_topic_vars"
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "SETTINGS.md",
+      "source_location": null,
+      "weight": 1.0,
+      "source": "settings_settings_reference",
+      "target": "settings_run_presets_yaml"
     },
     {
       "relation": "contains",
@@ -38531,9 +39795,329 @@
       "source_file": "SETTINGS.md",
       "source_location": "L92",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "settings_settings_reference",
-      "target": "settings_yaml_files"
+      "target": "settings_yaml_files",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "AGENTS.md",
+      "source_location": null,
+      "weight": 1.0,
+      "source": "agents_rtk_shell_rule",
+      "target": "agents_rtk_db_path"
+    },
+    {
+      "relation": "conceptually_related_to",
+      "confidence": "INFERRED",
+      "confidence_score": 0.6,
+      "source_file": "AGENTS.md",
+      "source_location": null,
+      "weight": 0.6,
+      "source": "agents_terse_output_protocol",
+      "target": "agents_rtk_shell_rule"
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "README.md",
+      "source_location": null,
+      "weight": 1.0,
+      "source": "readme_news_model",
+      "target": "readme_model_aliases"
+    },
+    {
+      "relation": "semantically_similar_to",
+      "confidence": "EXTRACTED",
+      "confidence_score": 0.95,
+      "source_file": "README.md",
+      "source_location": null,
+      "weight": 0.95,
+      "source": "readme_news_model",
+      "target": "settings_news_model"
+    },
+    {
+      "relation": "semantically_similar_to",
+      "confidence": "EXTRACTED",
+      "confidence_score": 0.95,
+      "source_file": "README.md",
+      "source_location": null,
+      "weight": 0.95,
+      "source": "readme_news_source_scope",
+      "target": "settings_news_source_scope"
+    },
+    {
+      "relation": "semantically_similar_to",
+      "confidence": "EXTRACTED",
+      "confidence_score": 0.95,
+      "source_file": "README.md",
+      "source_location": null,
+      "weight": 0.95,
+      "source": "readme_news_recipient_scope",
+      "target": "settings_news_recipient_scope"
+    },
+    {
+      "relation": "semantically_similar_to",
+      "confidence": "EXTRACTED",
+      "confidence_score": 0.95,
+      "source_file": "README.md",
+      "source_location": null,
+      "weight": 0.95,
+      "source": "readme_news_block_reused_urls",
+      "target": "settings_news_block_reused_urls"
+    },
+    {
+      "relation": "semantically_similar_to",
+      "confidence": "EXTRACTED",
+      "confidence_score": 0.95,
+      "source_file": "README.md",
+      "source_location": null,
+      "weight": 0.95,
+      "source": "readme_news_image_enabled",
+      "target": "settings_news_image_enabled"
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "README.md",
+      "source_location": null,
+      "weight": 1.0,
+      "source": "readme_model_aliases",
+      "target": "readme_gemma_26b_moe"
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "README.md",
+      "source_location": null,
+      "weight": 1.0,
+      "source": "readme_model_aliases",
+      "target": "readme_gemma_e2b_tiny"
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "README.md",
+      "source_location": null,
+      "weight": 1.0,
+      "source": "readme_model_aliases",
+      "target": "readme_qwen_9b_dense"
+    },
+    {
+      "relation": "semantically_similar_to",
+      "confidence": "INFERRED",
+      "confidence_score": 0.9,
+      "source_file": "README.md",
+      "source_location": null,
+      "weight": 0.9,
+      "source": "readme_model_aliases",
+      "target": "settings_model_aliases"
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "config/run_presets.yaml",
+      "source_location": null,
+      "weight": 1.0,
+      "source": "presets_default_preset",
+      "target": "readme_gemma_e2b_tiny"
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "config/run_presets.yaml",
+      "source_location": null,
+      "weight": 1.0,
+      "source": "presets_dev_preset",
+      "target": "readme_gemma_e2b_tiny"
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "config/run_presets.yaml",
+      "source_location": null,
+      "weight": 1.0,
+      "source": "presets_local_prod_preset",
+      "target": "readme_gemma_26b_moe"
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "config/run_presets.yaml",
+      "source_location": null,
+      "weight": 1.0,
+      "source": "presets_loose_local_prod_preset",
+      "target": "readme_gemma_26b_moe"
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "config/run_presets.yaml",
+      "source_location": null,
+      "weight": 1.0,
+      "source": "presets_prod_preset",
+      "target": "readme_gemma_26b_moe"
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "README.md",
+      "source_location": null,
+      "weight": 1.0,
+      "source": "readme_sources_yaml",
+      "target": "sources_core_tier"
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "README.md",
+      "source_location": null,
+      "weight": 1.0,
+      "source": "readme_sources_yaml",
+      "target": "sources_peripheral_tier"
+    },
+    {
+      "relation": "references",
+      "confidence": "INFERRED",
+      "confidence_score": 0.9,
+      "source_file": "README.md",
+      "source_location": null,
+      "weight": 0.9,
+      "source": "readme_recipients_yaml",
+      "target": "recipients_aidan_coon"
+    },
+    {
+      "relation": "references",
+      "confidence": "INFERRED",
+      "confidence_score": 0.9,
+      "source_file": "README.md",
+      "source_location": null,
+      "weight": 0.9,
+      "source": "readme_recipients_yaml",
+      "target": "recipients_bradley_mankoff"
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "SETTINGS.md",
+      "source_location": null,
+      "weight": 1.0,
+      "source": "settings_news_model",
+      "target": "settings_model_aliases"
+    },
+    {
+      "relation": "shares_data_with",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "config/run_presets.yaml",
+      "source_location": null,
+      "weight": 1.0,
+      "source": "presets_default_preset",
+      "target": "settings_news_source_scope"
+    },
+    {
+      "relation": "conceptually_related_to",
+      "confidence": "INFERRED",
+      "confidence_score": 0.85,
+      "source_file": "SETTINGS.md",
+      "source_location": null,
+      "weight": 0.85,
+      "source": "settings_news_source_scope",
+      "target": "settings_news_sources_yaml"
+    },
+    {
+      "relation": "shares_data_with",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "config/run_presets.yaml",
+      "source_location": null,
+      "weight": 1.0,
+      "source": "presets_default_preset",
+      "target": "settings_news_recipient_scope"
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "SETTINGS.md",
+      "source_location": null,
+      "weight": 1.0,
+      "source": "settings_news_recipient_scope",
+      "target": "settings_news_bradley_recipient"
+    },
+    {
+      "relation": "conceptually_related_to",
+      "confidence": "INFERRED",
+      "confidence_score": 0.85,
+      "source_file": "SETTINGS.md",
+      "source_location": null,
+      "weight": 0.85,
+      "source": "settings_news_recipient_scope",
+      "target": "settings_news_recipients_yaml"
+    },
+    {
+      "relation": "shares_data_with",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "config/run_presets.yaml",
+      "source_location": null,
+      "weight": 1.0,
+      "source": "presets_prod_preset",
+      "target": "settings_news_block_reused_urls"
+    },
+    {
+      "relation": "shares_data_with",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "config/run_presets.yaml",
+      "source_location": null,
+      "weight": 1.0,
+      "source": "presets_dev_preset",
+      "target": "settings_news_min_articles_per_story"
+    },
+    {
+      "relation": "shares_data_with",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "config/run_presets.yaml",
+      "source_location": null,
+      "weight": 1.0,
+      "source": "presets_loose_local_prod_preset",
+      "target": "settings_news_story_cluster_similarity_threshold"
+    },
+    {
+      "relation": "conceptually_related_to",
+      "confidence": "INFERRED",
+      "confidence_score": 0.85,
+      "source_file": "SETTINGS.md",
+      "source_location": null,
+      "weight": 0.85,
+      "source": "settings_news_sources_yaml",
+      "target": "sources_core_tier"
+    },
+    {
+      "relation": "conceptually_related_to",
+      "confidence": "INFERRED",
+      "confidence_score": 0.85,
+      "source_file": "SETTINGS.md",
+      "source_location": null,
+      "weight": 0.85,
+      "source": "settings_news_recipients_yaml",
+      "target": "recipients_bradley_mankoff"
     },
     {
       "relation": "references",
@@ -38634,8 +40218,208 @@
       "weight": 1.0,
       "source": "workflow_claude_pr_review",
       "target": "workflow_review_md"
+    },
+    {
+      "relation": "conceptually_related_to",
+      "confidence": "AMBIGUOUS",
+      "confidence_score": 0.5,
+      "source_file": "config/run_presets.yaml",
+      "source_location": null,
+      "weight": 0.5,
+      "source": "presets_prod_preset",
+      "target": "recipients_bradley_mankoff"
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "config/sources.yaml",
+      "source_location": null,
+      "weight": 1.0,
+      "source": "sources_al_jazeera",
+      "target": "sources_core_tier"
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "config/sources.yaml",
+      "source_location": null,
+      "weight": 1.0,
+      "source": "sources_ap_news",
+      "target": "sources_core_tier"
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "config/sources.yaml",
+      "source_location": null,
+      "weight": 1.0,
+      "source": "sources_ap_news",
+      "target": "sources_wire_attribution_mode"
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "config/sources.yaml",
+      "source_location": null,
+      "weight": 1.0,
+      "source": "sources_bbc_world",
+      "target": "sources_core_tier"
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "config/sources.yaml",
+      "source_location": null,
+      "weight": 1.0,
+      "source": "sources_reuters",
+      "target": "sources_peripheral_tier"
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "config/sources.yaml",
+      "source_location": null,
+      "weight": 1.0,
+      "source": "sources_reuters",
+      "target": "sources_wire_attribution_mode"
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "config/sources.yaml",
+      "source_location": null,
+      "weight": 1.0,
+      "source": "sources_nyt",
+      "target": "sources_peripheral_tier"
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "config/sources.yaml",
+      "source_location": null,
+      "weight": 1.0,
+      "source": "sources_guardian",
+      "target": "sources_core_tier"
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "config/sources.yaml",
+      "source_location": null,
+      "weight": 1.0,
+      "source": "sources_npr",
+      "target": "sources_core_tier"
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "config/sources.yaml",
+      "source_location": null,
+      "weight": 1.0,
+      "source": "sources_xinhua",
+      "target": "sources_core_tier"
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "config/sources.yaml",
+      "source_location": null,
+      "weight": 1.0,
+      "source": "sources_xinhua",
+      "target": "sources_wire_attribution_mode"
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "config/sources.yaml",
+      "source_location": null,
+      "weight": 1.0,
+      "source": "sources_scmp",
+      "target": "sources_core_tier"
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "config/sources.yaml",
+      "source_location": null,
+      "weight": 1.0,
+      "source": "sources_afp",
+      "target": "sources_peripheral_tier"
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "config/sources.yaml",
+      "source_location": null,
+      "weight": 1.0,
+      "source": "sources_afp",
+      "target": "sources_wire_attribution_mode"
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "config/sources.yaml",
+      "source_location": null,
+      "weight": 1.0,
+      "source": "sources_cna",
+      "target": "sources_core_tier"
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "config/sources.yaml",
+      "source_location": null,
+      "weight": 1.0,
+      "source": "sources_techcrunch",
+      "target": "sources_core_tier"
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "config/sources.yaml",
+      "source_location": null,
+      "weight": 1.0,
+      "source": "sources_ars_technica",
+      "target": "sources_core_tier"
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "config/sources.yaml",
+      "source_location": null,
+      "weight": 1.0,
+      "source": "sources_the_verge",
+      "target": "sources_peripheral_tier"
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "config/sources.yaml",
+      "source_location": null,
+      "weight": 1.0,
+      "source": "sources_nhk_world",
+      "target": "sources_core_tier"
     }
   ],
   "hyperedges": [],
-  "built_at_commit": "693a15e73023c5d57d26d25016d7ff0c06655c6c"
+  "built_at_commit": "c623bcd418e118241baf114c4f8c29ffe4fa095b"
 }
