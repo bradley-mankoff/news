@@ -89,6 +89,7 @@ from openai import APIConnectionError, APITimeoutError, InternalServerError, Rat
 
 from .config import (
     ModelSamplingSettings,
+    RuntimeConfig,
     ensure_codex_safe_model_reference,
     is_gemma_4_model_reference,
     load_recipients,
@@ -1091,6 +1092,230 @@ LOW_COVERAGE_SYNTHESIS_PATTERNS = [
 
 RUN_LOG_FILE: TextIO | None = None
 RUN_LOG_FILES: list[TextIO] = []
+ACTIVE_RUN_SESSION: "RunSession | None" = None
+_RUN_SESSION_LOCK = RLock()
+
+
+def _compat_runtime_values(config: RuntimeConfig) -> dict[str, Any]:
+    model_profile = config.model_profile
+    return {
+        "CONFIG": config,
+        "MODEL_NAME": config.model_name,
+        "MODEL_REFERENCE": config.model_reference,
+        "MODEL_PROFILE": model_profile,
+        "MODEL_PROFILE_KEY": model_profile.key,
+        "MODEL_BASE_URL": config.model_base_url,
+        "MODEL_BACKEND": config.model_backend,
+        "MODEL_SERVER_COMMAND": config.model_server_command,
+        "TRANSLATION_MODEL_REFERENCE": config.translation_model_reference,
+        "TRANSLATION_MODEL_NAME": config.translation_model_name,
+        "TRANSLATION_MODEL_BASE_URL": config.translation_model_base_url,
+        "TRANSLATION_MODEL_BACKEND": config.translation_model_backend,
+        "TRANSLATION_MODEL_SERVER_COMMAND": config.translation_model_server_command,
+        "TRANSLATION_TARGET_LANGUAGE": config.translation_target_language,
+        "TRANSLATION_ENABLED": config.translation_enabled,
+        "BRADLEY_RECIPIENT": config.bradley_recipient,
+        "RECENT_WINDOW_HOURS": config.recent_window_hours,
+        "MAX_ARTICLES_PER_SOURCE": config.max_articles_per_source,
+        "TOP_OF_FUNNEL_PER_PROVIDER": config.top_of_funnel_per_provider,
+        "RUN_STARTED_AT": config.run_started_at,
+        "RUN_DATE": config.run_date,
+        "timestamp": config.timestamp,
+        "OUTPUT_DIR": str(config.output_dir),
+        "RUN_OUTPUT_DIR": str(config.run_output_dir),
+        "RUN_STAGING_DIR": str(config.run_staging_dir),
+        "LATEST_RUN_MARKDOWN_PATH": str(config.latest_run_markdown_path),
+        "LATEST_RUN_LOG_PATH": str(config.latest_run_log_path),
+        "LATEST_RUN_DETAILS_PATH": str(config.latest_run_details_path),
+        "HISTORY_DB_PATH": str(config.history_db_path),
+        "HISTORY_EXPORT_CSV": config.history_export_csv,
+        "WRITE_LEGACY_DIAGNOSTICS": config.write_legacy_diagnostics,
+        "PRESET_ID": config.preset_id,
+        "SOURCE_SCOPE": config.source_scope,
+        "RECIPIENT_SCOPE": config.recipient_scope,
+        "URL_REUSE_BLOCKING_ENABLED": config.url_reuse_blocking_enabled,
+        "RELAXED_FINAL_SYNTHESIS_GUARDS": config.relaxed_final_synthesis_guards,
+        "RUN_USED_URLS_PATH": str(config.run_used_urls_path),
+        "RUN_LOG_PATH": os.path.join(str(config.run_output_dir), f"run_log_{config.timestamp}.log"),
+        "EMAIL_RECIPIENTS_FALLBACK": config.email_recipients_fallback,
+        "EMAIL_FROM": config.email_from,
+        "SMTP_HOST": config.smtp_host,
+        "SMTP_PORT": config.smtp_port,
+        "SMTP_USERNAME": config.smtp_username,
+        "SMTP_USE_SSL": config.smtp_use_ssl,
+        "SMTP_PASSWORD": config.smtp_password,
+        "UNSUBSCRIBE_BASE_URL": config.unsubscribe_base_url,
+        "UNSUBSCRIBE_HOST": config.unsubscribe_host,
+        "UNSUBSCRIBE_PORT": config.unsubscribe_port,
+        "UNSUBSCRIBE_SECRET": config.unsubscribe_secret,
+        "MODEL_MAX_INPUT_TOKENS": model_profile.model_max_input_tokens,
+        "TOKEN_ENCODING_NAME": config.token_encoding_name,
+        "MODEL_CONCURRENCY": max(1, config.model_concurrency),
+        "ARTICLE_SUMMARY_CONCURRENCY": max(1, config.article_summary_concurrency),
+        "STORY_SYNTHESIS_CONCURRENCY": max(1, config.story_synthesis_concurrency),
+        "SOURCE_COLLECTION_CONCURRENCY": max(1, config.source_collection_concurrency),
+        "ARTICLE_TEXT_TOKEN_LIMIT": max(500, model_profile.article_text_token_limit),
+        "TOTAL_ARTICLE_SUMMARY_CAP": max(0, model_profile.total_article_summary_cap),
+        "MODEL_IS_GEMMA_4": is_gemma_4_model_reference(config.model_reference),
+        "TOTAL_ARTICLE_SUMMARY_CAP_GEMMA_4_DERIVED": (
+            is_gemma_4_model_reference(config.model_reference)
+            and "NEWS_TOTAL_ARTICLE_SUMMARY_CAP" not in os.environ
+        ),
+        "TRANSLATION_MAX_TOKENS": max(100, model_profile.translation_max_tokens),
+        "ARTICLE_SUMMARY_MAX_TOKENS": max(100, model_profile.article_summary_max_tokens),
+        "FINAL_SYNTHESIS_MAX_TOKENS": max(100, model_profile.final_synthesis_max_tokens),
+        "TITLE_GENERATION_MAX_TOKENS": max(20, model_profile.title_generation_max_tokens),
+        "MIN_ARTICLES_PER_STORY": max(2, config.min_articles_per_story),
+        "STORY_SCALE_SCREENING_ENABLED": _bool_env("NEWS_STORY_SCALE_SCREENING_ENABLED", True),
+        "MAX_STORIES": max(1, _int_env("NEWS_MAX_STORIES", 4)),
+        "STORY_CLUSTER_SIMILARITY_THRESHOLD": min(
+            1.0,
+            max(0.0, config.story_cluster_similarity_threshold),
+        ),
+        "STORY_SELECTION_OVERLAP_THRESHOLD": _bounded_env_float(
+            "NEWS_STORY_SELECTION_OVERLAP_THRESHOLD",
+            0.25,
+        ),
+        "STORY_EMBEDDING_DEDUP_THRESHOLD": _bounded_env_float(
+            "NEWS_STORY_DEDUP_THRESHOLD",
+            0.85,
+        ),
+        "STORY_BACKFILL_BATCH_MULTIPLIER": max(
+            1,
+            _int_env("NEWS_STORY_BACKFILL_BATCH_MULTIPLIER", 2),
+        ),
+        "IMAGE_GENERATION_ENABLED": config.image_generation_enabled,
+        "IMAGE_GENERATION_FAIL_ON_ERROR": config.image_generation_fail_on_error,
+        "IMAGE_WIDTH": max(256, config.image_width),
+        "IMAGE_HEIGHT": max(256, config.image_height),
+        "IMAGE_STEPS": max(1, config.image_steps),
+        "IMAGE_CROP_BOTTOM_RATIO": min(max(config.image_crop_bottom_ratio, 0.0), 0.35),
+        "IMAGE_MODEL_ID": config.image_model_id,
+        "IMAGE_BASE_MODEL": config.image_base_model,
+        "IMAGE_MODEL_LABEL": (
+            config.image_model_id.split("/")[-1]
+            if "/" in config.image_model_id
+            else config.image_model_id
+        ),
+        "MODEL_DEFAULT_SAMPLING": model_profile.default_sampling,
+        "MODEL_REASONING_SAMPLING": model_profile.reasoning_sampling,
+        "MODEL_TASK_SAMPLING": model_profile.task_sampling,
+        "SOURCE_FEEDS": load_sources(config.sources_path, source_scope=config.source_scope),
+    }
+
+
+class RunSession:
+    """Owns the state and lifecycle for one daily news run."""
+
+    def __init__(
+        self,
+        config: RuntimeConfig,
+        *,
+        progress: Any | None = None,
+    ) -> None:
+        self.config = config
+        self.progress = progress or progress_tracker
+        self.diagnostics: RunDiagnostics | None = None
+        self.model_call_stats: dict[str, Any] = {
+            "calls": {},
+            "token_usage": {},
+            "retries": 0,
+            "fallbacks": 0,
+            "failures": {},
+        }
+        self.activity_snapshots: list[dict[str, Any]] = []
+        self.run_log_file: TextIO | None = None
+        self.run_log_files: list[TextIO] = []
+        self.managed_model_server_active = False
+        self.managed_model_server_ready = False
+        self.managed_model_server_external = False
+        self.managed_model_server_process: subprocess.Popen | None = None
+        self.managed_model_server_log_file: TextIO | None = None
+        self.managed_model_server_exit_recorded = False
+
+    def run(self, run_impl: Callable[[], None] | None = None) -> None:
+        implementation = run_impl or _run_pipeline
+        with self._activate():
+            with run_logging():
+                try:
+                    with managed_model_server():
+                        implementation()
+                except Exception as error:
+                    traceback_text = "".join(
+                        traceback.format_exception(type(error), error, error.__traceback__)
+                    )
+                    progress_tracker.step("finalize", "Daily news run failed. See the run log for details.")
+                    progress_tracker.detail(f"Run failed: {type(error).__name__}: {error}")
+                    _write_run_log(traceback_text)
+                    _finalize_failed_run(error, traceback_text)
+                    raise
+                else:
+                    progress_tracker.finish("done")
+
+    @contextmanager
+    def _activate(self):
+        global ACTIVE_RUN_SESSION
+        global progress_tracker
+        with _RUN_SESSION_LOCK:
+            if ACTIVE_RUN_SESSION is not None:
+                raise RuntimeError("Another daily news run session is already active in this process.")
+            runtime_values = _compat_runtime_values(self.config)
+            names = {
+                *list(runtime_values),
+                "ACTIVE_RUN_DIAGNOSTICS",
+                "MODEL_CALL_STATS",
+                "RUN_ACTIVITY_SNAPSHOTS",
+                "RUN_LOG_FILE",
+                "RUN_LOG_FILES",
+                "MANAGED_MODEL_SERVER_ACTIVE",
+                "MANAGED_MODEL_SERVER_READY",
+                "MANAGED_MODEL_SERVER_EXTERNAL",
+                "MANAGED_MODEL_SERVER_PROCESS",
+                "MANAGED_MODEL_SERVER_LOG_FILE",
+                "MANAGED_MODEL_SERVER_EXIT_RECORDED",
+                "progress_tracker",
+            }
+            previous = {name: globals().get(name) for name in names}
+            globals().update(runtime_values)
+            progress_tracker = self.progress
+            self._sync_to_legacy_globals()
+            ACTIVE_RUN_SESSION = self
+            try:
+                yield
+            finally:
+                self._capture_from_legacy_globals()
+                ACTIVE_RUN_SESSION = None
+                globals().update(previous)
+
+    def _sync_to_legacy_globals(self) -> None:
+        globals().update(
+            {
+                "ACTIVE_RUN_DIAGNOSTICS": self.diagnostics,
+                "MODEL_CALL_STATS": self.model_call_stats,
+                "RUN_ACTIVITY_SNAPSHOTS": self.activity_snapshots,
+                "RUN_LOG_FILE": self.run_log_file,
+                "RUN_LOG_FILES": self.run_log_files,
+                "MANAGED_MODEL_SERVER_ACTIVE": self.managed_model_server_active,
+                "MANAGED_MODEL_SERVER_READY": self.managed_model_server_ready,
+                "MANAGED_MODEL_SERVER_EXTERNAL": self.managed_model_server_external,
+                "MANAGED_MODEL_SERVER_PROCESS": self.managed_model_server_process,
+                "MANAGED_MODEL_SERVER_LOG_FILE": self.managed_model_server_log_file,
+                "MANAGED_MODEL_SERVER_EXIT_RECORDED": self.managed_model_server_exit_recorded,
+            }
+        )
+
+    def _capture_from_legacy_globals(self) -> None:
+        self.diagnostics = ACTIVE_RUN_DIAGNOSTICS
+        self.model_call_stats = MODEL_CALL_STATS
+        self.activity_snapshots = RUN_ACTIVITY_SNAPSHOTS
+        self.run_log_file = RUN_LOG_FILE
+        self.run_log_files = RUN_LOG_FILES
+        self.managed_model_server_active = MANAGED_MODEL_SERVER_ACTIVE
+        self.managed_model_server_ready = MANAGED_MODEL_SERVER_READY
+        self.managed_model_server_external = MANAGED_MODEL_SERVER_EXTERNAL
+        self.managed_model_server_process = MANAGED_MODEL_SERVER_PROCESS
+        self.managed_model_server_log_file = MANAGED_MODEL_SERVER_LOG_FILE
+        self.managed_model_server_exit_recorded = MANAGED_MODEL_SERVER_EXIT_RECORDED
 
 
 def _clean_progress_message(message: str) -> str:
@@ -4977,21 +5202,7 @@ def _finalize_failed_run(error: Exception, traceback_text: str) -> None:
 
 
 def run_pipeline() -> None:
-    with run_logging():
-        try:
-            with managed_model_server():
-                _run_pipeline()
-        except Exception as error:
-            traceback_text = "".join(
-                traceback.format_exception(type(error), error, error.__traceback__)
-            )
-            progress_tracker.step("finalize", "Daily news run failed. See the run log for details.")
-            progress_tracker.detail(f"Run failed: {type(error).__name__}: {error}")
-            _write_run_log(traceback_text)
-            _finalize_failed_run(error, traceback_text)
-            raise
-        else:
-            progress_tracker.finish("done")
+    RunSession(CONFIG).run()
 
 
 @contextmanager
