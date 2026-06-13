@@ -100,6 +100,7 @@ from .config import (
     write_source_translation_flags,
 )
 from .diagnostics import RunDiagnostics
+from .run_finalizer import RunFinalizer, RunFinalizerAdapters, RunFinalizerConfig
 from . import history_store
 from . import article_summarization as article_summarization_stage
 from . import citations as citations_stage
@@ -317,6 +318,7 @@ MODEL_CALL_STATS: dict[str, Any] = {
 MODEL_CALL_STATS_LOCK = Lock()
 RUN_ACTIVITY_SNAPSHOTS: list[dict[str, Any]] = []
 ACTIVE_RUN_DIAGNOSTICS: RunDiagnostics | None = None
+ACTIVE_RUN_FINALIZER: RunFinalizer | None = None
 MANAGED_MODEL_SERVER_ACTIVE = False
 MANAGED_MODEL_SERVER_READY = False
 MANAGED_MODEL_SERVER_READY_LOCK = Lock()
@@ -1216,6 +1218,7 @@ class RunSession:
         self.config = config
         self.progress = progress or progress_tracker
         self.diagnostics: RunDiagnostics | None = None
+        self.finalizer: RunFinalizer | None = None
         self.model_call_stats: dict[str, Any] = {
             "calls": {},
             "token_usage": {},
@@ -1263,6 +1266,7 @@ class RunSession:
             names = {
                 *list(runtime_values),
                 "ACTIVE_RUN_DIAGNOSTICS",
+                "ACTIVE_RUN_FINALIZER",
                 "MODEL_CALL_STATS",
                 "RUN_ACTIVITY_SNAPSHOTS",
                 "RUN_LOG_FILE",
@@ -1291,6 +1295,7 @@ class RunSession:
         globals().update(
             {
                 "ACTIVE_RUN_DIAGNOSTICS": self.diagnostics,
+                "ACTIVE_RUN_FINALIZER": self.finalizer,
                 "MODEL_CALL_STATS": self.model_call_stats,
                 "RUN_ACTIVITY_SNAPSHOTS": self.activity_snapshots,
                 "RUN_LOG_FILE": self.run_log_file,
@@ -1306,6 +1311,7 @@ class RunSession:
 
     def _capture_from_legacy_globals(self) -> None:
         self.diagnostics = ACTIVE_RUN_DIAGNOSTICS
+        self.finalizer = ACTIVE_RUN_FINALIZER
         self.model_call_stats = MODEL_CALL_STATS
         self.activity_snapshots = RUN_ACTIVITY_SNAPSHOTS
         self.run_log_file = RUN_LOG_FILE
@@ -4924,6 +4930,43 @@ def _new_run_diagnostics(source_count: int) -> RunDiagnostics:
     return diagnostics
 
 
+def _model_call_stats_snapshot() -> dict[str, Any]:
+    with MODEL_CALL_STATS_LOCK:
+        return json.loads(json.dumps(MODEL_CALL_STATS))
+
+
+def _new_run_finalizer(diagnostics: RunDiagnostics) -> RunFinalizer:
+    return RunFinalizer(
+        diagnostics=diagnostics,
+        config=RunFinalizerConfig(
+            run_id=timestamp,
+            latest_run_details_path=CONFIG.latest_run_details_path,
+            latest_run_markdown_path=CONFIG.latest_run_markdown_path,
+            latest_run_log_path=CONFIG.latest_run_log_path,
+            history_db_path=CONFIG.history_db_path,
+            output_dir=CONFIG.output_dir,
+            run_log_path=RUN_LOG_PATH,
+            history_export_csv=HISTORY_EXPORT_CSV,
+        ),
+        adapters=RunFinalizerAdapters(
+            attach_pending_activity_snapshots=_attach_pending_activity_snapshots,
+            model_call_stats_snapshot=_model_call_stats_snapshot,
+            progress=progress_tracker,
+        ),
+    )
+
+
+def _active_run_finalizer(diagnostics: RunDiagnostics) -> RunFinalizer:
+    global ACTIVE_RUN_FINALIZER
+    if ACTIVE_RUN_FINALIZER is None or ACTIVE_RUN_FINALIZER.diagnostics is not diagnostics:
+        ACTIVE_RUN_FINALIZER = _new_run_finalizer(diagnostics)
+    return ACTIVE_RUN_FINALIZER
+
+
+def _finish_run_diagnostics(diagnostics: RunDiagnostics) -> None:
+    _active_run_finalizer(diagnostics).finish()
+
+
 def _write_run_diagnostics(
     diagnostics: RunDiagnostics,
     *,
@@ -4934,58 +4977,20 @@ def _write_run_diagnostics(
     article_summary_records: list[dict[str, Any]] | None = None,
     story_summary_records: list[dict[str, Any]] | None = None,
 ) -> None:
-    _attach_pending_activity_snapshots(diagnostics)
-    with MODEL_CALL_STATS_LOCK:
-        diagnostics.record_model_call_stats(json.loads(json.dumps(MODEL_CALL_STATS)))
-    try:
-        details_path = diagnostics.write_details_json(CONFIG.latest_run_details_path)
-        progress_tracker.detail(f"Latest run details saved: {details_path}")
-    except Exception as error:
-        progress_tracker.warning(f"Latest run details write failed: {error}")
-
-    try:
-        history_store.write_run_history(
-            CONFIG.history_db_path,
-            run_id=timestamp,
-            diagnostics=diagnostics,
-            candidate_articles=candidate_articles,
-            summarized_articles=summarized_articles,
-            selected_articles=selected_articles,
-            article_summary_records=article_summary_records,
-            story_summary_records=story_summary_records,
-            run_log_path=RUN_LOG_PATH,
-            export_csv=HISTORY_EXPORT_CSV,
-        )
-        progress_tracker.detail("Saved run history.")
-        progress_tracker.detail(f"Run history saved: {CONFIG.history_db_path}")
-    except Exception as error:
-        progress_tracker.warning(f"Run history write failed: {error}")
-
-    try:
-        review_path = diagnostics.write_run_review_markdown(
-            CONFIG.latest_run_markdown_path,
-            report_body=report_body,
-        )
-        progress_tracker.detail(f"Latest readable run review saved: {review_path}")
-    except Exception as error:
-        progress_tracker.warning(f"Latest readable run review write failed: {error}")
-
-    try:
-        deleted_count, deleted_bytes = history_store.cleanup_visible_outputs(
-            CONFIG.output_dir,
-            keep_paths=[
-                CONFIG.latest_run_markdown_path,
-                CONFIG.latest_run_log_path,
-                CONFIG.latest_run_details_path,
-            ],
-        )
-        if deleted_count:
-            progress_tracker.detail(
-                f"Cleaned {deleted_count} transient daily output file(s) "
-                f"after publishing latest_run.md ({deleted_bytes} bytes)."
-            )
-    except Exception as error:
-        progress_tracker.warning(f"Visible daily output cleanup failed: {error}")
+    finalizer = _active_run_finalizer(diagnostics)
+    if report_body:
+        finalizer.record_report_body(report_body)
+    if candidate_articles is not None:
+        finalizer.record_candidate_articles(candidate_articles)
+    if summarized_articles is not None:
+        finalizer.record_summarized_articles(summarized_articles)
+    if selected_articles is not None:
+        finalizer.record_selected_articles(selected_articles)
+    if article_summary_records is not None:
+        finalizer.record_article_summary_records(article_summary_records)
+    if story_summary_records is not None:
+        finalizer.record_story_summary_records(story_summary_records)
+    finalizer.finish()
 
 
 def _preflight_openai_model_server(
@@ -5189,14 +5194,8 @@ def _finalize_failed_run(error: Exception, traceback_text: str) -> None:
     if diagnostics is None:
         diagnostics = _new_run_diagnostics(len(SOURCE_FEEDS))
         ACTIVE_RUN_DIAGNOSTICS = diagnostics
-    diagnostics.event(
-        "failed",
-        error_type=type(error).__name__,
-        error_message=str(error),
-        traceback=traceback_text,
-    )
     try:
-        _write_run_diagnostics(diagnostics)
+        _active_run_finalizer(diagnostics).finish_failed(error, traceback_text)
     except Exception as finalizer_error:
         progress_tracker.warning(f"Failed-run diagnostics finalization failed: {finalizer_error}")
 
@@ -5421,12 +5420,14 @@ def run_translation_model_smoke_test() -> int:
 
 def _run_pipeline() -> None:
     global ACTIVE_RUN_DIAGNOSTICS
+    global ACTIVE_RUN_FINALIZER
     all_sources = list(SOURCE_FEEDS.keys())
     sources = all_sources
     effective_total_article_summary_cap = TOTAL_ARTICLE_SUMMARY_CAP
 
     diagnostics = _new_run_diagnostics(len(sources))
     ACTIVE_RUN_DIAGNOSTICS = diagnostics
+    ACTIVE_RUN_FINALIZER = _new_run_finalizer(diagnostics)
     image_status = "image on" if IMAGE_GENERATION_ENABLED else "image off"
     send_target = "Bradley only" if RECIPIENT_SCOPE == "bradley" else "active recipients"
     preset_label = PRESET_ID or "custom"
@@ -5599,11 +5600,12 @@ def _run_pipeline() -> None:
             count=candidate_url_count,
             run_used_urls_path=RUN_USED_URLS_PATH,
         )
+    _active_run_finalizer(diagnostics).record_candidate_articles(article_candidates)
     _record_run_urls(candidate_urls, article_candidates)
     if not article_candidates:
         progress_tracker.step("finalize", "No recent article candidates available; stopping run.")
         diagnostics.event("aborted", reason="no_article_candidates")
-        _write_run_diagnostics(diagnostics, candidate_articles=article_candidates)
+        _finish_run_diagnostics(diagnostics)
         return
 
     diagnostics.event(
@@ -5678,10 +5680,7 @@ def _run_pipeline() -> None:
     if not clustered_article_targets:
         progress_tracker.step("finalize", "No multi-article story clusters available; stopping run.")
         diagnostics.event("aborted", reason="no_supported_story_clusters")
-        _write_run_diagnostics(
-            diagnostics,
-            candidate_articles=article_candidates,
-        )
+        _finish_run_diagnostics(diagnostics)
         return
 
     if MANAGED_MODEL_SERVER_ACTIVE and not MANAGED_MODEL_SERVER_READY:
@@ -5699,6 +5698,8 @@ def _run_pipeline() -> None:
     progress_tracker.finish_meter(detail=f"{len(article_summary_reports)} article summaries")
     diagnostics.article_summary_count = len(article_summary_reports)
     article_summary_records = _report_entry_debug_records(article_summary_reports)
+    _active_run_finalizer(diagnostics).record_summarized_articles(clustered_article_targets)
+    _active_run_finalizer(diagnostics).record_article_summary_records(article_summary_records)
     article_summaries_path = _persist_article_summaries_debug(article_summary_reports)
     if article_summaries_path:
         diagnostics.record_artifact(
@@ -5892,14 +5893,11 @@ def _run_pipeline() -> None:
     if not final_reports:
         progress_tracker.step("finalize", "No global stories selected; stopping run.")
         diagnostics.event("aborted", reason="no_global_story_matches")
-        _write_run_diagnostics(
-            diagnostics,
-            candidate_articles=article_candidates,
-            summarized_articles=clustered_article_targets,
-            article_summary_records=article_summary_records,
-        )
+        _finish_run_diagnostics(diagnostics)
         return
     story_summary_records = _report_entry_debug_records(final_reports)
+    _active_run_finalizer(diagnostics).record_selected_articles(selected_articles)
+    _active_run_finalizer(diagnostics).record_story_summary_records(story_summary_records)
     story_assigned_summaries_path = _persist_article_summaries_debug(
         final_reports,
         label="story_assigned_article_summaries",
@@ -5921,14 +5919,7 @@ def _run_pipeline() -> None:
     if not recipient_list:
         progress_tracker.step("finalize", "No recipients configured; stopping after summaries.")
         diagnostics.event("completed_without_recipients")
-        _write_run_diagnostics(
-            diagnostics,
-            candidate_articles=article_candidates,
-            summarized_articles=clustered_article_targets,
-            selected_articles=selected_articles,
-            article_summary_records=article_summary_records,
-            story_summary_records=story_summary_records,
-        )
+        _finish_run_diagnostics(diagnostics)
         return
 
     prompt_label = "default prompt"
@@ -6056,13 +6047,6 @@ def _run_pipeline() -> None:
         progress_tracker.detail("Finished report. Final prose will be embedded in latest_run.md.")
 
     diagnostics.event("completed")
-    _write_run_diagnostics(
-        diagnostics,
-        report_body=report_body,
-        candidate_articles=article_candidates,
-        summarized_articles=clustered_article_targets,
-        selected_articles=selected_articles,
-        article_summary_records=article_summary_records,
-        story_summary_records=story_summary_records,
-    )
+    _active_run_finalizer(diagnostics).record_report_body(report_body)
+    _finish_run_diagnostics(diagnostics)
     sync_assistant_context_latest_output(CONFIG)

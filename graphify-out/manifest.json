@@ -45,8 +45,8 @@
     "semantic_hash": "9949c37b19fff29ea7e8c7b5d49471a3"
   },
   "news_pipeline/pipeline.py": {
-    "mtime": 1781313252.9682488,
-    "ast_hash": "1a2abcba460693b62e11800236a3b2f0",
+    "mtime": 1781314733.474572,
+    "ast_hash": "74aaa2e9579dd0e6260189b0a2a828a0",
     "semantic_hash": ""
   },
   "news_pipeline/source_checks.py": {
@@ -150,8 +150,8 @@
     "semantic_hash": ""
   },
   "CONTEXT.md": {
-    "mtime": 1781312616.49308,
-    "ast_hash": "6a215e8fb4813459c7770aafcfc77430",
+    "mtime": 1781314099.4813833,
+    "ast_hash": "c89e4b567f8150b73b99246a3eef8a2a",
     "semantic_hash": ""
   },
   "README.md": {
@@ -187,6 +187,36 @@
   "config/sources.yaml": {
     "mtime": 1780874683.0520928,
     "ast_hash": "d97caa41919359f4d8b24b7a36c79e0f",
+    "semantic_hash": ""
+  },
+  "news_pipeline/run_finalizer.py": {
+    "mtime": 1781314665.878984,
+    "ast_hash": "fc3984686043071e85eddf44d923308d",
+    "semantic_hash": ""
+  },
+  "tests/test_run_finalizer.py": {
+    "mtime": 1781314768.0188227,
+    "ast_hash": "f2958ab1300f8ff551b0b04417005931",
+    "semantic_hash": ""
+  },
+  "docs/adr/0001-record-architecture-decisions-in-docs-adr.md": {
+    "mtime": 1781313976.9756157,
+    "ast_hash": "7e3b8b8a164fcc2ae0798b76f982dd64",
+    "semantic_hash": ""
+  },
+  "docs/adr/0002-run-session-owns-daily-run-lifecycle-state.md": {
+    "mtime": 1781314064.7673793,
+    "ast_hash": "a5de8b7c227503422d8c93ae924f7f73",
+    "semantic_hash": ""
+  },
+  "docs/adr/0003-run-finalization-finishes-recorded-run-outcomes.md": {
+    "mtime": 1781314064.8615634,
+    "ast_hash": "5be4f331a42e30724cd7fb9f88fca4b5",
+    "semantic_hash": ""
+  },
+  "docs/adr/README.md": {
+    "mtime": 1781313976.8676486,
+    "ast_hash": "201f6c1283c6f870256e1a160943192a",
     "semantic_hash": ""
   }
 }
