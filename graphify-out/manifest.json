@@ -1,222 +1,217 @@
 {
-  ".claude/settings.local.json": {
-    "mtime": 1779773302.6115367,
-    "ast_hash": "6a025c9b2bbfc75e95596b7f5de5d69f",
-    "semantic_hash": "6a025c9b2bbfc75e95596b7f5de5d69f"
-  },
   "news_pipeline/__init__.py": {
-    "mtime": 1777759318.7823913,
+    "mtime": 1781373308.0479786,
     "ast_hash": "1fca9bfa11d5710fe963e595d860a791",
     "semantic_hash": "1fca9bfa11d5710fe963e595d860a791"
   },
   "news_pipeline/article_summarization.py": {
-    "mtime": 1780786285.0170524,
+    "mtime": 1781373308.0483203,
     "ast_hash": "e03a475b3333fce5f2efaba5d5a09caa",
     "semantic_hash": "e03a475b3333fce5f2efaba5d5a09caa"
   },
   "news_pipeline/citations.py": {
-    "mtime": 1780788148.9235065,
+    "mtime": 1781373308.0487123,
     "ast_hash": "a9a7d7a6c944fb7abcf966ac80b04135",
     "semantic_hash": "a9a7d7a6c944fb7abcf966ac80b04135"
   },
   "news_pipeline/cli.py": {
-    "mtime": 1780875585.7298598,
+    "mtime": 1781373308.0490775,
     "ast_hash": "a2de54a69bcbb8619442f85d484b7495",
     "semantic_hash": "a2de54a69bcbb8619442f85d484b7495"
   },
   "news_pipeline/config.py": {
-    "mtime": 1780876318.736791,
+    "mtime": 1781373308.049392,
     "ast_hash": "ee90883963d74aa340df507e90013b29",
     "semantic_hash": "ee90883963d74aa340df507e90013b29"
   },
   "news_pipeline/diagnostics.py": {
-    "mtime": 1780875735.3540149,
+    "mtime": 1781373308.049786,
     "ast_hash": "cbd8731f48d61bc4a5ef9da3ef81f430",
     "semantic_hash": "cbd8731f48d61bc4a5ef9da3ef81f430"
   },
   "news_pipeline/embeddings.py": {
-    "mtime": 1780767979.3792443,
+    "mtime": 1781373308.0502272,
     "ast_hash": "933fe04d6dcbf35247b60f584552074b",
     "semantic_hash": "933fe04d6dcbf35247b60f584552074b"
   },
   "news_pipeline/history_store.py": {
-    "mtime": 1780875865.3048215,
+    "mtime": 1781373308.050527,
     "ast_hash": "9949c37b19fff29ea7e8c7b5d49471a3",
     "semantic_hash": "9949c37b19fff29ea7e8c7b5d49471a3"
   },
   "news_pipeline/pipeline.py": {
-    "mtime": 1781323351.7601411,
-    "ast_hash": "05050c6a80bd657c5449d78164d37781",
+    "mtime": 1781373466.327594,
+    "ast_hash": "460c1ce60472f108f8c96ddd5d2ca71e",
     "semantic_hash": ""
   },
   "news_pipeline/source_checks.py": {
-    "mtime": 1780006086.0030897,
+    "mtime": 1781373308.0518162,
     "ast_hash": "af455869d982f8f25f711b7c59cdfe66",
     "semantic_hash": "af455869d982f8f25f711b7c59cdfe66"
   },
   "news_pipeline/story_clustering.py": {
-    "mtime": 1780786324.0369549,
+    "mtime": 1781373308.0522041,
     "ast_hash": "258ddaa2f6adb5d71819984204ecdf20",
     "semantic_hash": "258ddaa2f6adb5d71819984204ecdf20"
   },
   "news_pipeline/story_drafting.py": {
-    "mtime": 1780875653.8410552,
+    "mtime": 1781373308.0524879,
     "ast_hash": "618a103a5708483b69fdc01c8bebbd3e",
     "semantic_hash": "618a103a5708483b69fdc01c8bebbd3e"
   },
   "news_pipeline/story_selection.py": {
-    "mtime": 1780875657.3300707,
+    "mtime": 1781373308.0527606,
     "ast_hash": "95c5994cf03f908fba289b93ae90433d",
     "semantic_hash": "95c5994cf03f908fba289b93ae90433d"
   },
   "news_pipeline/text_cleaning.py": {
-    "mtime": 1780797532.0539985,
+    "mtime": 1781373308.053079,
     "ast_hash": "00620581679993101fc95aa7c92f8390",
     "semantic_hash": "00620581679993101fc95aa7c92f8390"
   },
   "news_pipeline/text_matching.py": {
-    "mtime": 1780768039.664246,
+    "mtime": 1781373308.0534554,
     "ast_hash": "7a056d85227fe735bbb2dcce6085a15e",
     "semantic_hash": "7a056d85227fe735bbb2dcce6085a15e"
   },
   "news_pipeline/ui.py": {
-    "mtime": 1780875725.7792525,
+    "mtime": 1781373308.0538123,
     "ast_hash": "701360f6c9ff78d1669768ba39161756",
     "semantic_hash": "701360f6c9ff78d1669768ba39161756"
   },
   "tests/__init__.py": {
-    "mtime": 1778978498.3879244,
+    "mtime": 1781373308.054423,
     "ast_hash": "f9678be99f778a2c6ee40d3f4c1f1020",
     "semantic_hash": "f9678be99f778a2c6ee40d3f4c1f1020"
   },
   "tests/pipeline_component_fixtures.py": {
-    "mtime": 1779899986.8063815,
+    "mtime": 1781373308.0546815,
     "ast_hash": "9d9c3f5afe87ec2939d889ca76e843ae",
     "semantic_hash": "9d9c3f5afe87ec2939d889ca76e843ae"
   },
   "tests/test_citations.py": {
-    "mtime": 1780788338.4930096,
+    "mtime": 1781373308.054923,
     "ast_hash": "adde10d5ef20ef2466b9f3d8ef7ac137",
     "semantic_hash": "adde10d5ef20ef2466b9f3d8ef7ac137"
   },
   "tests/test_failed_run_logging.py": {
-    "mtime": 1781323376.940661,
+    "mtime": 1781373308.0551336,
     "ast_hash": "10d37c2b1f2a6d4945d0e29a878e1931",
     "semantic_hash": ""
   },
   "tests/test_gemma4_article_budget.py": {
-    "mtime": 1780876259.4414968,
+    "mtime": 1781373308.0553432,
     "ast_hash": "626ce4ae2f07eaa7d9f534e8298cf85b",
     "semantic_hash": "626ce4ae2f07eaa7d9f534e8298cf85b"
   },
   "tests/test_grouped_citation_references.py": {
-    "mtime": 1780788269.357461,
+    "mtime": 1781373308.0555558,
     "ast_hash": "856183fbc77ac52fe9783fe33fe1ca7c",
     "semantic_hash": "856183fbc77ac52fe9783fe33fe1ca7c"
   },
   "tests/test_history_store.py": {
-    "mtime": 1780876159.0933874,
+    "mtime": 1781373308.0557773,
     "ast_hash": "6ce622c13782c3fbb56e40eb93da7e85",
     "semantic_hash": "6ce622c13782c3fbb56e40eb93da7e85"
   },
   "tests/test_story_drafting.py": {
-    "mtime": 1780875997.0886004,
+    "mtime": 1781373308.0562234,
     "ast_hash": "6af7daf8bd1d9fbbc5c296feb19396c4",
     "semantic_hash": "6af7daf8bd1d9fbbc5c296feb19396c4"
   },
   "tests/test_terminal_progress.py": {
-    "mtime": 1780876251.2486145,
+    "mtime": 1781373308.0564418,
     "ast_hash": "3dfe7faa28821add4969167eec9628ae",
     "semantic_hash": "3dfe7faa28821add4969167eec9628ae"
   },
   "tests/test_topicless_global_pipeline.py": {
-    "mtime": 1780875992.0710392,
+    "mtime": 1781373308.0567143,
     "ast_hash": "404a730ea6f86c0195d179d1b4a0a7e5",
     "semantic_hash": "404a730ea6f86c0195d179d1b4a0a7e5"
   },
   "todays_news.py": {
-    "mtime": 1780875897.7629235,
+    "mtime": 1781373308.0572937,
     "ast_hash": "80df272bfee4c0d6acb36594bf11ba0b",
     "semantic_hash": "80df272bfee4c0d6acb36594bf11ba0b"
   },
   ".github/workflows/claude-review.yml": {
-    "mtime": 1779899918.8184566,
+    "mtime": 1781373308.0350976,
     "ast_hash": "9e946a9b9f594157ac80586258672e24",
     "semantic_hash": ""
   },
   "AGENTS.md": {
-    "mtime": 1781309630.6893258,
+    "mtime": 1781373308.0363326,
     "ast_hash": "b8e57ac11c7cf28ff3da5846a83254a7",
     "semantic_hash": ""
   },
   "CONTEXT.md": {
-    "mtime": 1781315053.5025418,
-    "ast_hash": "6a215e8fb4813459c7770aafcfc77430",
+    "mtime": 1781373366.3399072,
+    "ast_hash": "dfdc30e3af4655636fd51c521d4cbed5",
     "semantic_hash": ""
   },
   "README.md": {
-    "mtime": 1780876070.6980238,
+    "mtime": 1781373308.0369396,
     "ast_hash": "67ace6b8e7aec10162bebf574f5e0b3c",
     "semantic_hash": ""
   },
   "SETTINGS.md": {
-    "mtime": 1780876137.7123628,
+    "mtime": 1781373308.0371816,
     "ast_hash": "915560c3dff533f6ee37bf94f6e12340",
     "semantic_hash": ""
   },
-  "caveman-compress-commands.txt": {
-    "mtime": 1781309339.0715423,
-    "ast_hash": "f1768cde79f7d80739a86083f4014ddd",
-    "semantic_hash": ""
-  },
-  "claude_pr_tool_settings.txt": {
-    "mtime": 1779417032.867214,
-    "ast_hash": "60c92938caa98e16ec89bd365db29494",
-    "semantic_hash": ""
-  },
   "config/recipients.yaml": {
-    "mtime": 1780874687.2411258,
+    "mtime": 1781373308.037861,
     "ast_hash": "9b965407aedd5e42ee3fc04d7ace647d",
     "semantic_hash": ""
   },
   "config/run_presets.yaml": {
-    "mtime": 1780875105.8873835,
+    "mtime": 1781373308.0380843,
     "ast_hash": "31241f661cd41de5d653c7c8ac4a14bf",
     "semantic_hash": ""
   },
   "config/sources.yaml": {
-    "mtime": 1780874683.0520928,
+    "mtime": 1781373308.038563,
     "ast_hash": "d97caa41919359f4d8b24b7a36c79e0f",
     "semantic_hash": ""
   },
   "news_pipeline/run_finalizer.py": {
-    "mtime": 1781314665.878984,
-    "ast_hash": "fc3984686043071e85eddf44d923308d",
+    "mtime": 1781373483.9909503,
+    "ast_hash": "90f681648f6fa08a7bd3c7d6077021ee",
     "semantic_hash": ""
   },
   "tests/test_run_finalizer.py": {
-    "mtime": 1781314768.0188227,
+    "mtime": 1781373308.0559916,
     "ast_hash": "f2958ab1300f8ff551b0b04417005931",
     "semantic_hash": ""
   },
   "docs/adr/0001-record-architecture-decisions-in-docs-adr.md": {
-    "mtime": 1781313976.9756157,
+    "mtime": 1781373308.0389872,
     "ast_hash": "7e3b8b8a164fcc2ae0798b76f982dd64",
     "semantic_hash": ""
   },
   "docs/adr/0002-run-session-owns-daily-run-lifecycle-state.md": {
-    "mtime": 1781314064.7673793,
+    "mtime": 1781373308.0391717,
     "ast_hash": "a5de8b7c227503422d8c93ae924f7f73",
     "semantic_hash": ""
   },
   "docs/adr/0003-run-finalization-finishes-recorded-run-outcomes.md": {
-    "mtime": 1781314064.8615634,
+    "mtime": 1781373308.0394325,
     "ast_hash": "5be4f331a42e30724cd7fb9f88fca4b5",
     "semantic_hash": ""
   },
   "docs/adr/README.md": {
-    "mtime": 1781313976.8676486,
+    "mtime": 1781373308.0396423,
     "ast_hash": "201f6c1283c6f870256e1a160943192a",
+    "semantic_hash": ""
+  },
+  "news_pipeline/article_collection.py": {
+    "mtime": 1781373366.3455713,
+    "ast_hash": "3014817cb7a3ce82df8c3352c529dfa7",
+    "semantic_hash": ""
+  },
+  "tests/test_article_collection.py": {
+    "mtime": 1781373366.3473363,
+    "ast_hash": "4d0aa9f1f79747cf7dab6ae5db9739e7",
     "semantic_hash": ""
   }
 }
