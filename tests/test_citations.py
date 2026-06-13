@@ -4,10 +4,6 @@ import unittest
 
 from news_pipeline import citations as citations_stage
 from news_pipeline.pipeline import build_report_body, build_report_html
-from news_pipeline.story_topic_assignment import (
-    StoryTopicRuntime,
-    build_precomputed_story_synthesis,
-)
 
 
 def _source(local_id: str, **overrides):
@@ -330,65 +326,6 @@ class CitationHelperTests(unittest.TestCase):
 
 
 class CitationIntegrationTests(unittest.TestCase):
-    def test_precomputed_story_synthesis_assigns_global_citations(self) -> None:
-        sources = [
-            _source("S1", title="Levee repairs approved", url="https://example.com/levee"),
-            _source("S2", title="Cooling centers open", url="https://example.com/cooling"),
-        ]
-        selected_story_topic_matches = [
-            {
-                "topic_key": "climate_resilience",
-                "topic_title": "Climate Resilience",
-                "story_key": "story-1",
-                "story_title": "City resilience plan",
-                "paragraph": "Officials approved levee repairs. The city opened cooling centers.",
-                "cited_sentences": [
-                    {"text": "Officials approved levee repairs.", "source_ids": ["S1"]},
-                    {"text": "The city opened cooling centers.", "source_ids": ["S2"]},
-                ],
-                "citation_sources": sources,
-                "citation_diagnostics": {"repaired_sentence_count": 0},
-                "topic_fit_score": 9,
-            }
-        ]
-        topics = [{"key": "climate_resilience", "title": "Climate Resilience"}]
-        runtime = StoryTopicRuntime(
-            max_stories_per_topic=2,
-            min_score=1,
-            diversity_min_distance=0.5,
-            model_max_input_tokens=1000,
-            model_profile_key="test",
-            model_reference="test",
-            model_name="test",
-            model_backend="test",
-            relaxed_final_synthesis_guards=True,
-            us_topic_country_gate_enabled=False,
-            build_chat_model=lambda **_kwargs: object(),
-            invoke_with_retries=lambda *_args, **_kwargs: object(),
-            build_article_heading=lambda article: str(article.get("title") or ""),
-            format_article_metadata=lambda article: "",
-            format_topic_section_header=lambda title: title.upper(),
-            final_synthesis_word_count=lambda text: len(str(text).split()),
-            is_low_confidence_report_entry=lambda entry: False,
-            report_reference_key=lambda entry: entry,
-        )
-
-        synthesis, token_stats, debug = build_precomputed_story_synthesis(
-            selected_story_topic_matches,
-            topics,
-            ["report-1"],
-            runtime,
-        )
-
-        self.assertIn("Officials approved levee repairs.[1]", synthesis)
-        self.assertIn("The city opened cooling centers.[2]", synthesis)
-        self.assertEqual(token_stats["citation_source_count"], 2)
-        self.assertEqual(
-            [source["title"] for source in token_stats["citation_sources"]],
-            ["Levee repairs approved", "Cooling centers open"],
-        )
-        self.assertEqual(len(debug["citation_diagnostics"]), 1)
-
     def test_report_renderers_use_sources_section_when_citations_exist(self) -> None:
         citation_sources = [
             {

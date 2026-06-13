@@ -13,9 +13,6 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, Remove
 from langgraph.graph import END, StateGraph
 from langgraph.graph.message import add_messages
 
-from .topic_context import build_topic_context, topic_records_by_key
-
-
 @dataclass(frozen=True)
 class ArticleSummarizationRuntime:
     source_feeds: dict[str, dict[str, Any]]
@@ -29,7 +26,7 @@ class ArticleSummarizationRuntime:
     invoke_with_retries: Callable[..., AIMessage]
     has_structured_entry: Callable[[str, str], bool]
     normalize_report_entry: Callable[[dict, str], str]
-    article_completed: Callable[[], None]
+    article_completed: Callable[..., None]
 
 
 class ArticleSummaryState(TypedDict):
@@ -39,21 +36,11 @@ class ArticleSummaryState(TypedDict):
     empty_response_count: int
 
 
-def _attach_topic_context_to_articles(article_targets: list[dict], topics: list[dict]) -> list[dict]:
-    topics_by_key = topic_records_by_key(topics)
-    for article in article_targets:
-        topic_key = str(article.get("topic_key") or "").strip()
-        topic = topics_by_key.get(topic_key)
-        fallback_title = str(
-            article.get("topic_title") or "unassigned at article-summary stage"
-        )
-        if not topic and str(article.get("topic_context") or "").strip():
-            continue
-        article["topic_context"] = build_topic_context(
-            topic,
-            fallback_title=fallback_title,
-        )
-    return article_targets
+def _notify_article_completed(runtime: ArticleSummarizationRuntime, article: dict) -> None:
+    try:
+        runtime.article_completed(article)
+    except TypeError:
+        runtime.article_completed()
 
 
 def build_article_summary_prompt_messages(
@@ -69,28 +56,23 @@ def build_article_summary_prompt_messages(
         else source_name
     )
     display_name = str(current_article.get("source_display_name") or display_name)
-    topic_title = current_article.get("topic_title")
     target = runtime.build_article_heading(current_article)
-    topic_format_line = f"\n- Topic: {topic_title}" if topic_title else ""
-    topic_context = str(current_article.get("topic_context") or "").strip()
-    if not topic_context:
-        topic_context = build_topic_context(
-            None,
-            fallback_title=str(topic_title or "unassigned at article-summary stage"),
-        )
+    selection_guidance = (
+        "7. Prioritize facts that help later clustering and story synthesis; include major "
+        "concrete developments without inventing relevance."
+    )
     system_prompt = SystemMessage(content=textwrap.dedent(f"""
         Today: {now_label}.
         Current Task: Summarize one preselected article from the last {runtime.recent_window_hours} hours
-        for story discovery and later topic assignment.
+        for story discovery, selection, and synthesis.
         1. Use only the provided article metadata, URL, description, and article text.
         2. Do not call tools in this step.
         3. Ignore outlet style and focus on concrete reported claims.
         4. Include key facts: what reportedly happened, where, timeline, named actors, casualties or damage if reported, and what remains unconfirmed.
         5. If the article text is thin, summarize only what is actually supported by the provided text and metadata.
-        6. Do not recap the general history of a longstanding topic or conflict; include background only
+        6. Do not recap the general history of a longstanding subject or conflict; include background only
            when the article reports a new fact about it or one short clause is needed for orientation.
-        7. Use the provided Topic context to prioritize facts relevant to this topic, but include
-           major concrete developments even if they complicate the topic framing; do not invent topic relevance.
+        {selection_guidance}
         8. Start your response with 'DATABASE_ENTRY:' and then exactly the requested Markdown block.
         9. Do not include any text before 'DATABASE_ENTRY:' or after the summary.
     """).strip())
@@ -101,8 +83,6 @@ def build_article_summary_prompt_messages(
         f"Source: {display_name}\n"
         f"Published: {current_article.get('pub_date') or 'Unknown publish time'}\n"
         f"URL: {current_article.get('url') or 'N/A'}\n"
-        f"Topic: {topic_title or 'unassigned at article-summary stage'}\n"
-        f"Topic context:\n{topic_context}\n"
         f"{story_line}"
         f"Description: {current_article.get('description') or 'N/A'}\n"
         f"Article text:\n{current_article.get('text') or 'N/A'}\n\n"
@@ -112,7 +92,7 @@ def build_article_summary_prompt_messages(
         "Metadata:\n"
         f"- Source: {display_name}\n"
         f"- Published: {current_article.get('pub_date') or 'Unknown publish time'}\n"
-        f"- URL: {current_article.get('url') or 'N/A'}{topic_format_line}\n\n"
+        f"- URL: {current_article.get('url') or 'N/A'}\n\n"
         "Summary:\n"
         "<4-7 sentence article summary in plain prose, no brackets>"
     )
@@ -155,7 +135,7 @@ def _build_article_summary_app(runtime: ArticleSummarizationRuntime):
             article = state["articles_remaining"][0]
             fallback_summary = runtime.build_article_fallback_entry(article).split("DATABASE_ENTRY:\n", 1)[1]
             wipe_messages = [RemoveMessage(id=m.id) for m in state["messages"]]
-            runtime.article_completed()
+            _notify_article_completed(runtime, article)
             return {
                 "messages": wipe_messages + [HumanMessage(content="Proceed to next target.")],
                 "final_reports": state["final_reports"] + [fallback_summary],
@@ -167,7 +147,7 @@ def _build_article_summary_app(runtime: ArticleSummarizationRuntime):
             "messages": [HumanMessage(content=(
                 "Format Error: respond with exactly one article block only. "
                 "Use 'DATABASE_ENTRY:' followed by '### article title', then 'Metadata:' with Source/Published/URL bullets "
-                "(plus Topic when provided), then 'Summary:'. "
+                "then 'Summary:'. "
                 "Do not add commentary, correction text, code fences, or trailing notes."
             ))]
         }
@@ -179,7 +159,7 @@ def _build_article_summary_app(runtime: ArticleSummarizationRuntime):
 
         if runtime.has_structured_entry(last_message.content, heading_name):
             summary = runtime.normalize_report_entry(current_article, last_message.content)
-            runtime.article_completed()
+            _notify_article_completed(runtime, current_article)
 
             wipe_messages = [RemoveMessage(id=m.id) for m in state["messages"]]
             remaining_articles = state["articles_remaining"][1:]
@@ -220,19 +200,16 @@ def _build_article_summary_app(runtime: ArticleSummarizationRuntime):
 
 def run_article_summary_pass(
     article_targets: list[dict],
-    topics: list[dict],
     runtime: ArticleSummarizationRuntime,
 ) -> list[str]:
     if not article_targets:
         return []
 
-    article_targets = _attach_topic_context_to_articles(article_targets, topics)
-
     if runtime.article_summary_concurrency > 1 and len(article_targets) > 1:
         ordered_results: list[tuple[int, list[str]]] = []
         with ThreadPoolExecutor(max_workers=runtime.article_summary_concurrency) as executor:
             future_map = {
-                executor.submit(run_article_summary_pass, [article], topics, runtime): index
+                executor.submit(run_article_summary_pass, [article], runtime): index
                 for index, article in enumerate(article_targets)
             }
             for future in as_completed(future_map):

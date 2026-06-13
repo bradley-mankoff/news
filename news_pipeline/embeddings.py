@@ -1,23 +1,4 @@
-"""Sentence embedding utilities for semantic article-topic classification and story dedup.
-
-Primary entry points:
-  classify_articles_by_topic(articles, topics, threshold) -> list[dict]
-      Overwrites each article's topic_key/topic_title with the best semantic match above
-      threshold, then deduplicates by (url, topic_key).
-
-  dedup_story_drafts_within_topic(story_drafts, threshold) -> list[dict]
-      Removes near-duplicate story drafts within a single topic using cosine similarity
-      on their drafted paragraph text.
-
-Model:
-  Loads sentence-transformers lazily; falls back gracefully if not installed.
-  Default: all-mpnet-base-v2 (768d, CPU/MPS-friendly, strong semantic quality).
-  Override with NEWS_EMBEDDING_MODEL env var.
-
-Cache:
-  Article embeddings are cached in output/embedding_cache.db (SQLite + pickle).
-  Cache is keyed by SHA-256 of the input text so reruns skip re-embedding.
-"""
+"""Sentence embedding utilities for cached text embeddings and global story dedup."""
 
 from __future__ import annotations
 
@@ -25,7 +6,6 @@ import hashlib
 import logging
 import os
 import pickle
-import re
 import sqlite3
 from typing import Any
 
@@ -142,155 +122,12 @@ def embed_articles(articles: list[dict]) -> "np.ndarray":  # type: ignore[name-d
     return np.stack([cached[h] for h in hashes]).astype(np.float32)
 
 
-def embed_topics(topics: list[dict]) -> dict[str, "np.ndarray"]:  # type: ignore[name-defined]
-    """Embed topic descriptions. Returns {topic_key: embedding_vector}."""
-    if not topics:
-        return {}
-    topic_keys = [str(t.get("key") or t.get("id") or "") for t in topics]
-    if len(set(topic_keys)) != len(topic_keys):
-        seen = set()
-        dupes = []
-        for key in topic_keys:
-            if key in seen:
-                dupes.append(key)
-            else:
-                seen.add(key)
-        logger.warning("Duplicate topic keys detected, embeddings will be overwritten: %s", dupes)
-    topic_texts = [
-        str(t.get("description") or t.get("rationale") or t.get("title") or "")
-        for t in topics
-    ]
-    vecs = embed_texts(topic_texts)
-    return {k: vecs[i] for i, k in enumerate(topic_keys)}
-
-
-def classify_articles_by_topic(
-    articles: list[dict],
-    topics: list[dict],
-    *,
-    threshold: float = 0.20,
-) -> list[dict]:
-    """Assign each article to every topic whose cosine similarity meets threshold.
-
-    An article may appear multiple times in the output — once per matching topic —
-    so it can contribute to story clusters in each relevant topic independently.
-    Articles that match no topic above threshold are dropped entirely.
-
-    After classification, duplicates with identical (url, topic_key) are dropped so
-    the same article is never processed twice for the same topic.
-
-    Logs per-topic article counts for diagnostic tuning.
-    """
-    import numpy as np
-
-    if not articles or not topics:
-        return articles
-
-    logger.info(
-        "Embedding-classifying %d articles across %d topics (threshold=%.2f).",
-        len(articles),
-        len(topics),
-        threshold,
-    )
-
-    article_vecs = embed_articles(articles)
-    topic_emb = embed_topics(topics)
-    topic_keys = [str(t.get("key") or t.get("id") or "") for t in topics]
-    topic_titles = {
-        str(t.get("key") or t.get("id") or ""): str(t.get("title") or "")
-        for t in topics
-    }
-
-    topic_matrix = np.stack([topic_emb[k] for k in topic_keys])  # (T, D)
-    sims = article_vecs @ topic_matrix.T  # (N, T)
-
-    classified: list[dict] = []
-    dropped = 0
-    for i, article in enumerate(articles):
-        matched = False
-        for j, topic_key in enumerate(topic_keys):
-            score = float(sims[i, j])
-            if score >= threshold:
-                classified.append(
-                    {
-                        **article,
-                        "topic_key": topic_key,
-                        "topic_title": topic_titles.get(topic_key, ""),
-                        "embedding_topic_score": round(score, 4),
-                    }
-                )
-                matched = True
-        if not matched:
-            dropped += 1
-
-    if dropped:
-        logger.info(
-            "Embedding classification: dropped %d off-topic article(s) below threshold %.2f.",
-            dropped,
-            threshold,
-        )
-
-    classified = _dedup_by_url_topic(classified)
-
-    counts: dict[str, int] = {}
-    for a in classified:
-        k = str(a.get("topic_key") or "unassigned")
-        counts[k] = counts.get(k, 0) + 1
-    for t in topics:
-        k = str(t.get("key") or t.get("id") or "")
-        title = topic_titles.get(k, k)
-        logger.info("  %s: %d articles after embedding classification", title, counts.get(k, 0))
-
-    return classified
-
-
-def _dedup_by_url_topic(articles: list[dict]) -> list[dict]:
-    """Drop duplicates with the same (canonical_url, topic_key) pair."""
-    seen: set[tuple[str, str]] = set()
-    result: list[dict] = []
-    for article in articles:
-        url = _canonical_url(
-            str(article.get("resolved_url") or article.get("url") or "")
-        )
-        topic_key = str(article.get("topic_key") or "").strip()
-        key = (url, topic_key)
-        if url and key in seen:
-            continue
-        if url:
-            seen.add(key)
-        result.append(article)
-    return result
-
-
-def _canonical_url(url: str) -> str:
-    raw = url.strip()
-    if not raw:
-        return ""
-    raw = re.sub(r"^https?://", "", raw, flags=re.IGNORECASE)
-    raw = re.sub(r"^www\.", "", raw, flags=re.IGNORECASE)
-    raw = raw.split("#", 1)[0]
-    if "?" in raw:
-        base, query = raw.split("?", 1)
-        kept = [
-            kv
-            for kv in query.split("&")
-            if kv
-            and not re.match(
-                r"^(utm_|gclid|fbclid|mc_cid|mc_eid|ref|ref_src|cmpid|cmp|igshid)",
-                kv,
-                flags=re.IGNORECASE,
-            )
-        ]
-        raw = base + ("?" + "&".join(kept) if kept else "")
-    return raw.rstrip("/").lower()
-
-
-def dedup_story_drafts_within_topic(
+def dedup_story_drafts(
     story_drafts: list[dict],
     *,
     threshold: float = 0.85,
 ) -> list[dict]:
-    """Remove near-duplicate story drafts within a single topic.
+    """Remove near-duplicate story drafts globally.
 
     Compares paragraph text embeddings pairwise. When two stories exceed threshold,
     the one with more source articles is kept; recency breaks ties.
@@ -323,7 +160,7 @@ def dedup_story_drafts_within_topic(
     kept = [s for idx, s in enumerate(story_drafts) if idx not in dropped]
     if dropped:
         logger.info(
-            "Story dedup: dropped %d near-duplicate story draft(s) within topic "
+            "Story dedup: dropped %d near-duplicate story draft(s) globally "
             "(threshold=%.2f).",
             len(dropped),
             threshold,

@@ -1,6 +1,6 @@
 # >>> news-pipeline core context >>>
 # Refreshed by news_pipeline.config.load_runtime_config().
-# Ignore everything, then re-include core pipeline files plus the latest completed output run.
+# Ignore everything, then re-include core pipeline files plus rolling run artifacts.
 *
 !AGENTS.md
 !.codexignore
@@ -16,8 +16,7 @@
 !news_pipeline/
 !news_pipeline/**
 !config/
-!config/client.yaml
-!config/topics.yaml
+!config/run_presets.yaml
 !config/sources.yaml
 !config/recipients.yaml
 __pycache__/
@@ -27,21 +26,11 @@ __pycache__/
 .DS_Store
 **/.DS_Store
 
-# Keep generated output context narrowed to run 2026-06-01_18-46-40.
+# Keep generated output context narrowed to rolling run review artifacts.
 !output/
 !output/daily_outputs/
 output/daily_outputs/*
-!output/daily_outputs/2026-06-01/
-!output/daily_outputs/2026-06-01/article_summaries_2026-06-01_18-46-40.json
-!output/daily_outputs/2026-06-01/candidate_urls_2026-06-01_18-46-40.txt
-!output/daily_outputs/2026-06-01/news_report_2026-06-01_18-46-40_tiny_codex_default_prompt.txt
-!output/daily_outputs/2026-06-01/news_report_2026-06-01_18-46-40_tiny_codex_default_prompt_primary_dataset.json
-!output/daily_outputs/2026-06-01/news_report_2026-06-01_18-46-40_tiny_codex_default_prompt_primary_dataset.txt
-!output/daily_outputs/2026-06-01/run_details_2026-06-01_18-46-40.json
-!output/daily_outputs/2026-06-01/run_details_2026-06-01_18-46-40.md
-!output/daily_outputs/2026-06-01/run_log_2026-06-01_18-46-40.log
-!output/daily_outputs/2026-06-01/run_summary_2026-06-01_18-46-40.md
-!output/daily_outputs/2026-06-01/selected_article_urls_2026-06-01_18-46-40.txt
-!output/daily_outputs/2026-06-01/topic_assigned_article_summaries_2026-06-01_18-46-40.json
-!output/daily_outputs/2026-06-01/topics_2026-06-01_18-46-40.json
+!output/daily_outputs/latest_run.md
+!output/daily_outputs/latest_run.log
+!output/daily_outputs/latest_run_details.json
 # <<< news-pipeline core context <<<

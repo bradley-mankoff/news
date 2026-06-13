@@ -19,6 +19,7 @@ dependencies = [
     "sentence-transformers>=3.0.0",
     "numpy>=1.24.0",
     "googlenewsdecoder>=0.1.7",
+    "duckdb>=1.4.4",
 ]
 
 [project.scripts]

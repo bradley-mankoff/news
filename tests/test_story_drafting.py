@@ -12,15 +12,11 @@ from news_pipeline.story_drafting import (
     run_story_synthesis_block,
     story_summary_blocks_from_clusters,
 )
-from news_pipeline.story_topic_assignment import (
-    StoryTopicRuntime,
-    build_precomputed_story_synthesis,
-)
 
 
 def _story_drafting_runtime() -> StoryDraftingRuntime:
     return StoryDraftingRuntime(
-        article_summary_concurrency=1,
+        story_synthesis_concurrency=1,
         final_synthesis_max_tokens=1000,
         model_reference="test",
         model_name="test",
@@ -33,7 +29,7 @@ def _story_drafting_runtime() -> StoryDraftingRuntime:
         strip_prompt_echo_lines=lambda text: text,
         strip_model_artifacts=lambda text: text,
         is_low_coverage_synthesis_section=lambda text: not str(text or "").strip(),
-        dev_synthesis_paragraph_from_summaries=lambda summaries: " ".join(summaries),
+        fallback_synthesis_paragraph_from_summaries=lambda summaries: " ".join(summaries),
         final_synthesis_word_count=lambda text: len(str(text or "").split()),
     )
 
@@ -43,29 +39,6 @@ def _story_drafting_runtime_with_response(content: str) -> StoryDraftingRuntime:
         _story_drafting_runtime(),
         invoke_with_retries=lambda *_args, **_kwargs: SimpleNamespace(content=content),
         extract_prompt_tokens_from_response=lambda _response: 7,
-    )
-
-
-def _story_topic_runtime() -> StoryTopicRuntime:
-    return StoryTopicRuntime(
-        max_stories_per_topic=2,
-        min_score=1,
-        diversity_min_distance=0.5,
-        model_max_input_tokens=1000,
-        model_profile_key="test",
-        model_reference="test",
-        model_name="test",
-        model_backend="test",
-        relaxed_final_synthesis_guards=True,
-        us_topic_country_gate_enabled=False,
-        build_chat_model=lambda **_kwargs: object(),
-        invoke_with_retries=lambda *_args, **_kwargs: object(),
-        build_article_heading=lambda article: str(article.get("title") or ""),
-        format_article_metadata=lambda _article: "",
-        format_topic_section_header=lambda title: title.upper(),
-        final_synthesis_word_count=lambda text: len(str(text or "").split()),
-        is_low_confidence_report_entry=lambda _entry: False,
-        report_reference_key=lambda entry: entry,
     )
 
 
@@ -366,88 +339,6 @@ class StoryDraftingTests(unittest.TestCase):
 
         self.assertTrue(result["valid"])
         self.assertEqual(result["reason"], "accepted")
-
-
-class StoryContradictionRenderingTests(unittest.TestCase):
-    def test_precomputed_story_synthesis_renders_cited_contradiction_chunk(self) -> None:
-        sources = [
-            _source("S1", title="Ten homes damaged", url="https://example.com/ten"),
-            _source("S2", title="Twelve homes damaged", url="https://example.com/twelve"),
-        ]
-        selected_story_topic_matches = [
-            {
-                "topic_key": "weather",
-                "topic_title": "Weather",
-                "story_key": "story-1",
-                "story_title": "Storm damage",
-                "main_story_paragraph": "Officials reported storm damage.",
-                "cited_sentences": [
-                    {"text": "Officials reported storm damage.", "source_ids": ["S1"]},
-                ],
-                "contradictions_paragraph": (
-                    "One article reported 10 damaged homes, while another reported 12."
-                ),
-                "contradiction_cited_sentences": [
-                    {
-                        "text": (
-                            "One article reported 10 damaged homes, while another reported 12."
-                        ),
-                        "source_ids": ["S1", "S2"],
-                    }
-                ],
-                "citation_sources": sources,
-                "citation_diagnostics": {},
-                "contradiction_citation_diagnostics": {},
-                "topic_fit_score": 9,
-            }
-        ]
-
-        synthesis, token_stats, debug = build_precomputed_story_synthesis(
-            selected_story_topic_matches,
-            [{"key": "weather", "title": "Weather"}],
-            ["report-1"],
-            _story_topic_runtime(),
-        )
-
-        self.assertIn("Officials reported storm damage.[1]", synthesis)
-        self.assertIn(
-            "Contradictions: One article reported 10 damaged homes, "
-            "while another reported 12.[1][2]",
-            synthesis,
-        )
-        self.assertEqual(token_stats["citation_source_count"], 2)
-        self.assertTrue(debug["attempts"][0]["contradiction_rendered"])
-
-    def test_precomputed_story_synthesis_omits_empty_contradiction_chunk(self) -> None:
-        sources = [_source("S1", title="Storm damage", url="https://example.com/storm")]
-        selected_story_topic_matches = [
-            {
-                "topic_key": "weather",
-                "topic_title": "Weather",
-                "story_key": "story-1",
-                "story_title": "Storm damage",
-                "main_story_paragraph": "Officials reported storm damage.",
-                "cited_sentences": [
-                    {"text": "Officials reported storm damage.", "source_ids": ["S1"]},
-                ],
-                "contradictions_paragraph": "",
-                "contradiction_cited_sentences": [],
-                "citation_sources": sources,
-                "citation_diagnostics": {},
-                "topic_fit_score": 9,
-            }
-        ]
-
-        synthesis, _token_stats, debug = build_precomputed_story_synthesis(
-            selected_story_topic_matches,
-            [{"key": "weather", "title": "Weather"}],
-            ["report-1"],
-            _story_topic_runtime(),
-        )
-
-        self.assertNotIn("Contradictions:", synthesis)
-        self.assertNotIn("\n\n\n", synthesis)
-        self.assertFalse(debug["attempts"][0]["contradiction_rendered"])
 
 
 if __name__ == "__main__":

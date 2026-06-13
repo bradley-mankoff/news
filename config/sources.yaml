@@ -1,25 +1,18 @@
 # Canonical RSS/Atom source pool for the daily news pipeline.
 #
 # Source entries are deduped across the former current, larger, and Plenary pools.
-# Runtime source selection uses two independent gates:
-# - tier controls pool size: dev uses tier: core; local-prod, loose-local-prod,
-#   and prod use tier: core plus tier: peripheral.
-# - allowed_topic_ids controls topical scope; only sources whose allowed_topic_ids
-#   intersect the active runtime topic IDs are selected.
-# Every source should declare allowed_topic_ids. Broad/general sources include the
-# original four daily topics; topical sources may also include sports,
-# entertainment, and science/space/technology.
+# Runtime source selection is global and story-first:
+# - NEWS_SOURCE_SCOPE=core uses tier: core; NEWS_SOURCE_SCOPE=peripheral uses
+#   tier: core plus tier: peripheral.
+# - language controls normal selection: English sources are selected; translation
+#   metadata is retained for later review but translation is disabled by default.
+# No story-category metadata participates in source selection on this branch.
 #
 sources:
   - key: AFP
     name: Agence France-Presse
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     region: global/western
     url: https://news.google.com/rss/search?q=when:24h+source:AFP&hl=en-US&gl=US&ceid=US:en
     homepage: https://www.afp.com/
@@ -32,11 +25,6 @@ sources:
     name: Al Jazeera
     language: en
     tier: core
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     region: qatar/global south
     url: https://www.aljazeera.com/xml/rss/all.xml
     homepage: https://www.aljazeera.com/
@@ -44,11 +32,6 @@ sources:
     name: Associated Press
     language: en
     tier: core
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     region: us/western
     url: https://news.google.com/rss/search?q=when:24h+source:Associated+Press&hl=en-US&gl=US&ceid=US:en
     homepage: https://apnews.com/
@@ -63,11 +46,6 @@ sources:
     name: BBC World News
     language: en
     tier: core
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - United Kingdom
     region: uk/western
@@ -77,11 +55,6 @@ sources:
     name: CNA
     language: en
     tier: core
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     region: singapore/non-western
     url: https://www.channelnewsasia.com/api/v1/rss-outbound-feed?_format=xml
     homepage: https://www.channelnewsasia.com/
@@ -89,11 +62,6 @@ sources:
     name: CNBC Business
     language: en
     tier: core
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     region: us/western
     url: https://www.cnbc.com/id/10001147/device/rss/rss.html
     homepage: https://www.cnbc.com/business/
@@ -101,11 +69,6 @@ sources:
     name: CNBC Economy
     language: en
     tier: core
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     region: us/western
     url: https://www.cnbc.com/id/20910258/device/rss/rss.html
     homepage: https://www.cnbc.com/economy/
@@ -113,11 +76,6 @@ sources:
     name: CNBC World
     language: en
     tier: core
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - United States
     region: global/western
@@ -127,11 +85,6 @@ sources:
     name: Dawn
     language: en
     tier: core
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     region: pakistan/non-western
     url: https://www.dawn.com/feeds/home
     homepage: https://www.dawn.com/
@@ -139,11 +92,6 @@ sources:
     name: Deutsche Welle
     language: en
     tier: core
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     region: germany/western
     url: https://rss.dw.com/xml/rss-en-top
     homepage: https://www.dw.com/
@@ -151,11 +99,6 @@ sources:
     name: France 24
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - France
     region: france/western
@@ -165,11 +108,6 @@ sources:
     name: NDTV
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     region: india/non-western
     url: https://feeds.feedburner.com/ndtvnews-world-news
     homepage: https://www.ndtv.com/
@@ -177,11 +115,6 @@ sources:
     name: NPR
     language: en
     tier: core
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     region: us/western
     url: https://feeds.npr.org/1001/rss.xml
     homepage: https://www.npr.org/
@@ -189,11 +122,6 @@ sources:
     name: NPR Business
     language: en
     tier: core
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     region: us/western
     url: https://feeds.npr.org/1006/rss.xml
     homepage: https://www.npr.org/sections/business/
@@ -201,11 +129,6 @@ sources:
     name: NPR Politics
     language: en
     tier: core
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     region: us/western
     url: https://feeds.npr.org/1014/rss.xml
     homepage: https://www.npr.org/politics
@@ -213,11 +136,6 @@ sources:
     name: POLITICO
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     region: us/western
     url: https://rss.politico.com/politics-news.xml
     homepage: https://www.politico.com/
@@ -225,11 +143,6 @@ sources:
     name: Reuters
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     region: global/western
     url: https://news.google.com/rss/search?q=when:24h+source:Reuters&hl=en-US&gl=US&ceid=US:en
     homepage: https://www.reuters.com/
@@ -242,11 +155,6 @@ sources:
     name: South China Morning Post
     language: en
     tier: core
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     region: hong kong/non-western
     url: https://news.google.com/rss/search?q=when:24h+source:South+China+Morning+Post&hl=en-US&gl=US&ceid=US:en
     homepage: https://www.scmp.com/
@@ -258,11 +166,6 @@ sources:
     name: The Hill
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     region: us/western
     url: https://thehill.com/feed/
     homepage: https://thehill.com/
@@ -270,11 +173,6 @@ sources:
     name: The Hindu
     language: en
     tier: core
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - India
     region: india/non-western
@@ -284,11 +182,6 @@ sources:
     name: United Press International
     language: en
     tier: core
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     region: us/western
     url: https://rss.upi.com/news/tn_int.rss
     homepage: https://www.upi.com/
@@ -296,11 +189,6 @@ sources:
     name: Yonhap News Agency
     language: en
     tier: core
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     region: south korea/non-western
     url: https://en.yna.co.kr/RSS/news.xml
     homepage: https://en.yna.co.kr/
@@ -308,11 +196,6 @@ sources:
     name: Axios
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - South Africa
     url: https://api.axios.com/feed
@@ -321,90 +204,54 @@ sources:
     name: Bloomberg
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     url: https://feeds.bloomberg.com/markets/news.rss
     homepage: https://feeds.bloomberg.com/
   - key: Democracy Now
     name: Democracy Now!
     language: en
     tier: core
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     url: https://www.democracynow.org/democracynow.rss
     homepage: https://www.democracynow.org/
   - key: Financial Times
     name: Financial Times
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     url: https://www.ft.com/rss/home
     homepage: https://www.ft.com/
   - key: MarketWatch
     name: MarketWatch
     language: en
     tier: core
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     url: https://feeds.marketwatch.com/marketwatch/topstories
     homepage: https://feeds.marketwatch.com/
   - key: MIT Technology Review
     name: MIT Technology Review
     language: en
     tier: core
-    allowed_topic_ids:
-      - science_space_tech
     url: https://www.technologyreview.com/feed
     homepage: https://www.technologyreview.com/
   - key: Mother Jones
     name: Mother Jones
     language: en
     tier: core
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     url: https://www.motherjones.com/feed
     homepage: https://www.motherjones.com/
   - key: NASA News
     name: NASA News
     language: en
     tier: core
-    allowed_topic_ids:
-      - science_space_tech
     url: https://www.nasa.gov/rss/dyn/breaking_news.rss
     homepage: https://www.nasa.gov/
   - key: New Scientist
     name: New Scientist
     language: en
     tier: core
-    allowed_topic_ids:
-      - science_space_tech
     url: https://www.newscientist.com/feed/home
     homepage: https://www.newscientist.com/
   - key: NHK World Japan
     name: NHK World Japan
     language: en
     tier: core
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     requires_translation: true
     translation_source_language: ja
     url: https://www3.nhk.or.jp/rss/news/cat0.xml
@@ -413,22 +260,12 @@ sources:
     name: ProPublica
     language: en
     tier: core
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     url: https://feeds.propublica.org/propublica/main
     homepage: https://feeds.propublica.org/
   - key: The Guardian
     name: The Guardian
     language: en
     tier: core
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - United Kingdom
     url: https://www.theguardian.com/world/rss
@@ -437,18 +274,12 @@ sources:
     name: The Intercept
     language: en
     tier: core
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     url: https://theintercept.com/feed/?lang=en
     homepage: https://theintercept.com/
   - key: The New York Times
     name: The New York Times
     language: en
     tier: peripheral
-    allowed_topic_ids: []
     nations:
       - United States
     url: https://rss.nytimes.com/services/xml/rss/nyt/HomePage.xml
@@ -458,22 +289,12 @@ sources:
     name: Vox
     language: en
     tier: core
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     url: https://www.vox.com/rss/index.xml
     homepage: https://www.vox.com/
   - key: Plenary The Nation Top Stories
     name: The Nation - Top Stories
     language: en
     tier: core
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - Pakistan
     region: plenary country/Pakistan
@@ -483,11 +304,6 @@ sources:
     name: Anadolu Agency
     language: en
     tier: core
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     region: turkey/non-western
     url: https://www.aa.com.tr/en/rss/default?cat=live
     homepage: https://www.aa.com.tr/en
@@ -495,11 +311,6 @@ sources:
     name: BBC Business
     language: en
     tier: core
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     region: uk/western
     url: https://feeds.bbci.co.uk/news/business/rss.xml
     homepage: https://www.bbc.com/news/business
@@ -507,11 +318,6 @@ sources:
     name: CNBC Asia
     language: en
     tier: core
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     region: asia/non-western
     url: https://www.cnbc.com/id/19832390/device/rss/rss.html
     homepage: https://www.cnbc.com/asia/
@@ -519,11 +325,6 @@ sources:
     name: CNBC Europe
     language: en
     tier: core
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     region: europe/western
     url: https://www.cnbc.com/id/19794221/device/rss/rss.html
     homepage: https://www.cnbc.com/europe/
@@ -531,11 +332,6 @@ sources:
     name: NPR Economy
     language: en
     tier: core
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     region: us/western
     url: https://feeds.npr.org/1017/rss.xml
     homepage: https://www.npr.org/sections/economy/
@@ -543,11 +339,6 @@ sources:
     name: Xinhua News Agency
     language: en
     tier: core
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     region: china/non-western
     url: https://news.google.com/rss/search?q=when:24h+source:Xinhua&hl=en-US&gl=US&ceid=US:en
     homepage: https://english.news.cn/
@@ -559,173 +350,114 @@ sources:
     name: Ars Technica
     language: en
     tier: core
-    allowed_topic_ids:
-      - science_space_tech
     url: http://feeds.arstechnica.com/arstechnica/index
     homepage: http://feeds.arstechnica.com/
   - key: Benedict Evans
     name: Benedict Evans
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - science_space_tech
     url: https://www.ben-evans.com/benedictevans?format=rss
     homepage: https://www.ben-evans.com/
   - key: BuzzFeed News
     name: BuzzFeed News
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     url: https://www.buzzfeednews.com/news.xml
     homepage: https://www.buzzfeednews.com/
   - key: Common Dreams
     name: Common Dreams
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     url: https://www.commondreams.org/feeds/feed.rss
     homepage: https://www.commondreams.org/
   - key: Electronic Frontier Foundation
     name: Electronic Frontier Foundation
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - science_space_tech
     url: https://www.eff.org/rss/updates.xml
     homepage: https://www.eff.org/
   - key: Engadget
     name: Engadget
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - science_space_tech
     url: https://www.engadget.com/rss.xml
     homepage: https://www.engadget.com/
   - key: Entrepreneur
     name: Entrepreneur
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     url: https://www.entrepreneur.com/latest.rss
     homepage: https://www.entrepreneur.com/
   - key: Fast Company
     name: Fast Company
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     url: https://www.fastcompany.com/rss
     homepage: https://www.fastcompany.com/
   - key: Forbes
     name: Forbes
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     url: https://www.forbes.com/innovation/feed2
     homepage: https://www.forbes.com/
   - key: Gizmodo
     name: Gizmodo
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - science_space_tech
     url: https://gizmodo.com/rss
     homepage: https://gizmodo.com/
   - key: Hacker News
     name: Hacker News
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - science_space_tech
     url: https://hnrss.org/frontpage
     homepage: https://hnrss.org/
   - key: Have I Been Pwned
     name: Have I Been Pwned
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - science_space_tech
     url: https://feeds.feedburner.com/HaveIBeenPwnedLatestBreaches
     homepage: https://feeds.feedburner.com/
   - key: Inc. Magazine
     name: Inc. Magazine
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     url: https://www.inc.com/rss
     homepage: https://www.inc.com/
   - key: Kaspersky Security Blog
     name: Kaspersky Security Blog
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - science_space_tech
     url: https://www.kaspersky.com/blog/feed
     homepage: https://www.kaspersky.com/
   - key: Krebs on Security
     name: Krebs on Security
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - science_space_tech
     url: https://krebsonsecurity.com/feed
     homepage: https://krebsonsecurity.com/
   - key: Lifehacker
     name: Lifehacker
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     url: https://lifehacker.com/rss
     homepage: https://lifehacker.com/
   - key: Live Science
     name: Live Science
     language: en
     tier: core
-    allowed_topic_ids:
-      - science_space_tech
     url: https://www.livescience.com/feeds/all
     homepage: https://www.livescience.com/
   - key: Malwarebytes Labs
     name: Malwarebytes Labs
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - science_space_tech
     url: https://blog.malwarebytes.com/feed
     homepage: https://blog.malwarebytes.com/
   - key: Phys.org
     name: Phys.org
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - science_space_tech
     url: https://news.google.com/rss/search?q=when:24h+source:Phys.org&hl=en-US&gl=US&ceid=US:en
     homepage: https://phys.org/
     strict_source_match: true
@@ -735,202 +467,138 @@ sources:
     name: Reason Magazine
     language: en
     tier: core
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     url: https://reason.com/feed
     homepage: https://reason.com/
   - key: Salon
     name: Salon
     language: en
     tier: core
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     url: https://www.salon.com/feed
     homepage: https://www.salon.com/
   - key: SANS Internet Storm Center
     name: SANS Internet Storm Center
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - science_space_tech
     url: https://isc.sans.edu/rssfeed.xml
     homepage: https://isc.sans.edu/
   - key: Schneier on Security
     name: Schneier on Security
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - science_space_tech
     url: https://www.schneier.com/feed
     homepage: https://www.schneier.com/
   - key: ScienceDaily
     name: ScienceDaily
     language: en
     tier: core
-    allowed_topic_ids:
-      - science_space_tech
     url: https://www.sciencedaily.com/rss/all.xml
     homepage: https://www.sciencedaily.com/
   - key: Security Week
     name: Security Week
     language: en
     tier: core
-    allowed_topic_ids:
-      - science_space_tech
     url: https://www.securityweek.com/feed
     homepage: https://www.securityweek.com/
   - key: Seeking Alpha
     name: Seeking Alpha
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     url: https://seekingalpha.com/feed.xml
     homepage: https://seekingalpha.com/
   - key: Space.com
     name: Space.com
     language: en
     tier: core
-    allowed_topic_ids:
-      - science_space_tech
     url: https://www.space.com/feeds/all
     homepage: https://www.space.com/
   - key: Stratechery
     name: Stratechery
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - science_space_tech
     url: https://stratechery.com/feed
     homepage: https://stratechery.com/
   - key: TechCrunch
     name: TechCrunch
     language: en
     tier: core
-    allowed_topic_ids:
-      - science_space_tech
     url: https://techcrunch.com/feed
     homepage: https://techcrunch.com/
   - key: TechRadar
     name: TechRadar
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - science_space_tech
     url: https://www.techradar.com/rss
     homepage: https://www.techradar.com/
   - key: The American Conservative
     name: The American Conservative
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     url: https://www.theamericanconservative.com/feed
     homepage: https://www.theamericanconservative.com/
   - key: The Hacker News
     name: The Hacker News
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - science_space_tech
     url: https://feeds.feedburner.com/TheHackersNews
     homepage: https://feeds.feedburner.com/
   - key: The Next Web
     name: The Next Web
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - science_space_tech
     url: https://thenextweb.com/feed
     homepage: https://thenextweb.com/
   - key: The Verge
     name: The Verge
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - science_space_tech
     url: https://www.theverge.com/rss/index.xml
     homepage: https://www.theverge.com/
   - key: Tim Ferriss
     name: Tim Ferriss
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     url: https://tim.blog/feed
     homepage: https://tim.blog/
   - key: Tor Project Blog
     name: Tor Project Blog
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - science_space_tech
     url: https://blog.torproject.org/feed
     homepage: https://blog.torproject.org/
   - key: Troy Hunt
     name: Troy Hunt
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - science_space_tech
     url: https://www.troyhunt.com/rss
     homepage: https://www.troyhunt.com/
   - key: Truthout
     name: Truthout
     language: en
     tier: core
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     url: https://truthout.org/feed
     homepage: https://truthout.org/
   - key: VentureBeat
     name: VentureBeat
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - science_space_tech
     url: https://venturebeat.com/feed
     homepage: https://venturebeat.com/
   - key: Wired
     name: Wired
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - science_space_tech
     url: https://www.wired.com/feed/rss
     homepage: https://www.wired.com/
   - key: ZDNet
     name: ZDNet
     language: en
     tier: core
-    allowed_topic_ids:
-      - science_space_tech
     url: https://www.zdnet.com/news/rss.xml
     homepage: https://www.zdnet.com/
   - key: Plenary r space news articles and discussion
     name: '/r/space: news, articles and discussion'
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - science_space_tech
     region: plenary recommended/Space
     url: https://www.reddit.com/r/space/.rss?format=xml
     homepage: https://www.reddit.com/
@@ -938,8 +606,6 @@ sources:
     name: 60-Second Science
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - science_space_tech
     region: plenary recommended/Science
     url: http://rss.sciam.com/sciam/60secsciencepodcast
     homepage: http://rss.sciam.com/
@@ -947,11 +613,6 @@ sources:
     name: Abante Tonite
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - Philippines
     region: plenary country/Philippines
@@ -961,8 +622,6 @@ sources:
     name: Accidental Tech Podcast
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - science_space_tech
     region: plenary recommended/Tech
     url: https://atp.fm/rss
     homepage: https://atp.fm/
@@ -970,7 +629,6 @@ sources:
     name: Afford Anything
     language: en
     tier: peripheral
-    allowed_topic_ids: []
     region: plenary recommended/Personal finance
     url: https://affordanything.com/feed/
     homepage: https://affordanything.com/
@@ -978,11 +636,6 @@ sources:
     name: All News
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     region: plenary recommended/Business & Economy
     url: https://www.investing.com/rss/news.rss
     homepage: https://www.investing.com/
@@ -990,11 +643,6 @@ sources:
     name: 'All: BreakingNews.ie'
     language: en
     tier: core
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - Ireland
     region: plenary country/Ireland
@@ -1004,11 +652,6 @@ sources:
     name: BBC News - India
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - India
     region: plenary country/India
@@ -1018,8 +661,6 @@ sources:
     name: BBC News - Science & Environment
     language: en
     tier: core
-    allowed_topic_ids:
-      - science_space_tech
     region: plenary recommended/Science
     url: http://feeds.bbci.co.uk/news/science_and_environment/rss.xml
     homepage: http://feeds.bbci.co.uk/
@@ -1027,11 +668,6 @@ sources:
     name: BD24Live.com
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - Bangladesh
     region: plenary country/Bangladesh
@@ -1041,11 +677,6 @@ sources:
     name: Breaking News on Seeking Alpha
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     region: plenary recommended/Business & Economy
     url: https://seekingalpha.com/market_currents.xml
     homepage: https://seekingalpha.com/
@@ -1053,11 +684,6 @@ sources:
     name: Brisbane Times - Latest News
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - Australia
     region: plenary country/Australia
@@ -1067,11 +693,6 @@ sources:
     name: Business Line - Home
     language: en
     tier: core
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - India
     region: plenary country/India
@@ -1081,11 +702,6 @@ sources:
     name: Business News - Latest Headlines
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - Australia
     region: plenary country/Australia
@@ -1095,11 +711,6 @@ sources:
     name: BusinessWorld
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - Philippines
     region: plenary country/Philippines
@@ -1109,11 +720,6 @@ sources:
     name: CBC | Top Stories News
     language: en
     tier: core
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - Canada
     region: plenary country/Canada
@@ -1123,8 +729,6 @@ sources:
     name: Clockwise
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - science_space_tech
     region: plenary recommended/Tech
     url: https://www.relay.fm/clockwise/feed
     homepage: https://www.relay.fm/
@@ -1132,8 +736,6 @@ sources:
     name: CNET News
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - science_space_tech
     region: plenary recommended/Tech
     url: https://www.cnet.com/rss/news/
     homepage: https://www.cnet.com/
@@ -1141,11 +743,6 @@ sources:
     name: Crikey
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - Australia
     region: plenary country/Australia
@@ -1155,11 +752,6 @@ sources:
     name: Current PH
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - Philippines
     region: plenary country/Philippines
@@ -1169,11 +761,6 @@ sources:
     name: 'Daily Express :: News Feed'
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - United Kingdom
     region: plenary country/United Kingdom
@@ -1183,12 +770,6 @@ sources:
     name: Daily Maverick
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
-      - science_space_tech
     nations:
       - South Africa
     region: plenary country/South Africa
@@ -1198,11 +779,6 @@ sources:
     name: Daily Post Nigeria
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - Nigeria
     region: plenary country/Nigeria
@@ -1214,12 +790,6 @@ sources:
       World news | Business news | Politics | Technology news
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
-      - science_space_tech
     nations:
       - India
     region: plenary country/India
@@ -1229,8 +799,6 @@ sources:
     name: Discovery
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - science_space_tech
     region: plenary recommended/Science
     url: https://podcasts.files.bbci.co.uk/p002w557.rss
     homepage: https://podcasts.files.bbci.co.uk/
@@ -1238,11 +806,6 @@ sources:
     name: Duct Tape Marketing
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     region: plenary recommended/Business & Economy
     url: https://ducttape.libsyn.com/rss
     homepage: https://ducttape.libsyn.com/
@@ -1250,11 +813,6 @@ sources:
     name: Economic Times
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - India
     region: plenary country/India
@@ -1264,11 +822,6 @@ sources:
     name: Euro Weekly News Spain
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - Spain
     region: plenary country/Spain
@@ -1278,8 +831,6 @@ sources:
     name: Feld Thoughts
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_business_finance
     region: plenary recommended/Startups
     url: https://feld.com/feed
     homepage: https://feld.com/
@@ -1287,11 +838,6 @@ sources:
     name: Financial Post
     language: en
     tier: core
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - Canada
     region: plenary country/Canada
@@ -1301,7 +847,6 @@ sources:
     name: Financial Samurai
     language: en
     tier: peripheral
-    allowed_topic_ids: []
     region: plenary recommended/Personal finance
     url: https://www.financialsamurai.com/feed/
     homepage: https://www.financialsamurai.com/
@@ -1309,8 +854,6 @@ sources:
     name: FlowingData
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - science_space_tech
     region: plenary recommended/Science
     url: https://flowingdata.com/feed
     homepage: https://flowingdata.com/
@@ -1318,11 +861,6 @@ sources:
     name: Forbes - Business
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     region: plenary recommended/Business & Economy
     url: https://www.forbes.com/business/feed/
     homepage: https://www.forbes.com/
@@ -1330,11 +868,6 @@ sources:
     name: Fortune
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     region: plenary recommended/Business & Economy
     url: https://fortune.com/feed
     homepage: https://fortune.com/
@@ -1342,11 +875,6 @@ sources:
     name: FOX News
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - United States
     region: plenary country/United States
@@ -1356,11 +884,6 @@ sources:
     name: Free Press Journal
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - India
     region: plenary country/India
@@ -1370,11 +893,6 @@ sources:
     name: globalnews ca
     language: en
     tier: core
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - Canada
     region: plenary country/Canada
@@ -1384,11 +902,6 @@ sources:
     name: GMA News Online / News
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - Philippines
     region: plenary country/Philippines
@@ -1398,11 +911,6 @@ sources:
     name: HBR IdeaCast
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     region: plenary recommended/Business & Economy
     url: http://feeds.harvardbusiness.org/harvardbusiness/ideacast
     homepage: http://feeds.harvardbusiness.org/
@@ -1410,8 +918,6 @@ sources:
     name: Hidden Brain
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - science_space_tech
     region: plenary recommended/Science
     url: https://feeds.npr.org/510308/podcast.xml
     homepage: https://feeds.npr.org/
@@ -1419,11 +925,6 @@ sources:
     name: Home | Mail Online
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - United Kingdom
     region: plenary country/United Kingdom
@@ -1433,11 +934,6 @@ sources:
     name: Hong Kong Free Press HKFP
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - Hong Kong SAR China
     region: plenary country/Hong Kong SAR China
@@ -1447,11 +943,6 @@ sources:
     name: hongkongnews.net latest rss headlines
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - Hong Kong SAR China
     region: plenary country/Hong Kong SAR China
@@ -1461,11 +952,6 @@ sources:
     name: How I Built This with Guy Raz
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     region: plenary recommended/Business & Economy
     url: https://feeds.npr.org/510313/podcast.xml
     homepage: https://feeds.npr.org/
@@ -1473,7 +959,6 @@ sources:
     name: I Will Teach You To Be Rich
     language: en
     tier: peripheral
-    allowed_topic_ids: []
     region: plenary recommended/Personal finance
     url: https://www.iwillteachyoutoberich.com/feed/
     homepage: https://www.iwillteachyoutoberich.com/
@@ -1481,11 +966,6 @@ sources:
     name: Independent Australia
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - Australia
     region: plenary country/Australia
@@ -1495,11 +975,6 @@ sources:
     name: India Today | Latest Stories
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - India
     region: plenary country/India
@@ -1509,11 +984,6 @@ sources:
     name: India | The Guardian
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - India
     region: plenary country/India
@@ -1523,11 +993,6 @@ sources:
     name: Information Nigeria
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - Nigeria
     region: plenary country/Nigeria
@@ -1537,11 +1002,6 @@ sources:
     name: INQUIRER.net
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - Philippines
     region: plenary country/Philippines
@@ -1551,8 +1011,6 @@ sources:
     name: Inside Intercom
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_business_finance
     region: plenary recommended/Startups
     url: https://www.intercom.com/blog/feed
     homepage: https://www.intercom.com/
@@ -1560,11 +1018,6 @@ sources:
     name: Interaksyon
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - Philippines
     region: plenary country/Philippines
@@ -1574,11 +1027,6 @@ sources:
     name: IOL section feed for News
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - South Africa
     region: plenary country/South Africa
@@ -1588,11 +1036,6 @@ sources:
     name: IrishCentral.com - Top Stories
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - Ireland
     region: plenary country/Ireland
@@ -1602,11 +1045,6 @@ sources:
     name: IrishExaminer.com
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - Ireland
     region: plenary country/Ireland
@@ -1616,11 +1054,6 @@ sources:
     name: Italy | The Guardian
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - Italy
     region: plenary country/Italy
@@ -1630,11 +1063,6 @@ sources:
     name: Japan Today
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - Japan
     region: plenary country/Japan
@@ -1644,11 +1072,6 @@ sources:
     name: Legit.ng
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - Nigeria
     region: plenary country/Nigeria
@@ -1658,7 +1081,6 @@ sources:
     name: Making Sense Of Cents
     language: en
     tier: peripheral
-    allowed_topic_ids: []
     region: plenary recommended/Personal finance
     url: https://www.makingsenseofcents.com/feed
     homepage: https://www.makingsenseofcents.com/
@@ -1666,8 +1088,6 @@ sources:
     name: Mashable
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - science_space_tech
     region: plenary recommended/Tech
     url: http://feeds.mashable.com/Mashable
     homepage: http://feeds.mashable.com/
@@ -1675,8 +1095,6 @@ sources:
     name: Masters of Scale with Reid Hoffman
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_business_finance
     region: plenary recommended/Startups
     url: https://rss.art19.com/masters-of-scale
     homepage: https://rss.art19.com/
@@ -1684,11 +1102,6 @@ sources:
     name: Mexico News Daily
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - Mexico
     region: plenary country/Mexico
@@ -1698,11 +1111,6 @@ sources:
     name: Mexico | The Guardian
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - Mexico
     region: plenary country/Mexico
@@ -1712,11 +1120,6 @@ sources:
     name: Michael West
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - Australia
     region: plenary country/Australia
@@ -1726,7 +1129,6 @@ sources:
     name: "Money Saving Mom\xAE"
     language: en
     tier: peripheral
-    allowed_topic_ids: []
     region: plenary recommended/Personal finance
     url: https://moneysavingmom.com/feed/
     homepage: https://moneysavingmom.com/
@@ -1734,7 +1136,6 @@ sources:
     name: Money Under 30
     language: en
     tier: peripheral
-    allowed_topic_ids: []
     region: plenary recommended/Personal finance
     url: https://www.moneyunder30.com/feed
     homepage: https://www.moneyunder30.com/
@@ -1742,11 +1143,6 @@ sources:
     name: Moneyweb
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - South Africa
     region: plenary country/South Africa
@@ -1756,7 +1152,6 @@ sources:
     name: MyWifeQuitHerJob.com
     language: en
     tier: peripheral
-    allowed_topic_ids: []
     region: plenary recommended/Personal finance
     url: https://mywifequitherjob.com/feed/
     homepage: https://mywifequitherjob.com/
@@ -1764,11 +1159,6 @@ sources:
     name: National Post
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - Canada
     region: plenary country/Canada
@@ -1778,11 +1168,6 @@ sources:
     name: NDTV News -   Topstories
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - India
     region: plenary country/India
@@ -1792,7 +1177,6 @@ sources:
     name: Nerd's Eye View | Kitces.com
     language: en
     tier: peripheral
-    allowed_topic_ids: []
     region: plenary recommended/Personal finance
     url: http://feeds.feedblitz.com/kitcesnerdseyeview&x=1
     homepage: http://feeds.feedblitz.com/
@@ -1800,7 +1184,6 @@ sources:
     name: NerdWallet
     language: en
     tier: peripheral
-    allowed_topic_ids: []
     region: plenary recommended/Personal finance
     url: https://www.nerdwallet.com/blog/feed/
     homepage: https://www.nerdwallet.com/
@@ -1808,8 +1191,6 @@ sources:
     name: New Scientist - Space
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - science_space_tech
     region: plenary recommended/Space
     url: https://www.newscientist.com/subject/space/feed/
     homepage: https://www.newscientist.com/
@@ -1817,11 +1198,6 @@ sources:
     name: News Blog
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - Pakistan
     region: plenary country/Pakistan
@@ -1831,11 +1207,6 @@ sources:
     name: News On Japan
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - Japan
     region: plenary country/Japan
@@ -1845,11 +1216,6 @@ sources:
     name: Nigerian News. Latest Nigeria News. Your online Nigerian Newspaper.
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - Nigeria
     region: plenary country/Nigeria
@@ -1859,7 +1225,6 @@ sources:
     name: NYT > Japan
     language: en
     tier: peripheral
-    allowed_topic_ids: []
     nations:
       - Japan
     region: plenary country/Japan
@@ -1870,7 +1235,6 @@ sources:
     name: NYT > Science
     language: en
     tier: peripheral
-    allowed_topic_ids: []
     region: plenary recommended/Science
     url: https://rss.nytimes.com/services/xml/rss/nyt/Science.xml
     homepage: https://rss.nytimes.com/
@@ -1879,7 +1243,6 @@ sources:
     name: NYT > World News
     language: en
     tier: peripheral
-    allowed_topic_ids: []
     region: plenary recommended/News
     url: https://rss.nytimes.com/services/xml/rss/nyt/World.xml
     homepage: https://rss.nytimes.com/
@@ -1888,7 +1251,6 @@ sources:
     name: Oblivious Investor
     language: en
     tier: peripheral
-    allowed_topic_ids: []
     region: plenary recommended/Personal finance
     url: https://obliviousinvestor.com/feed/
     homepage: https://obliviousinvestor.com/
@@ -1896,8 +1258,6 @@ sources:
     name: omnycontent com
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - science_space_tech
     region: plenary recommended/Science
     url: https://www.omnycontent.com/d/playlist/aaea4e69-af51-495e-afc9-a9760146922b/2a195077-f014-41d2-8313-ab190186b4c2/277bcd5c-0a05-4c14-8ba6-ab190186b4d5/podcast.rss
     homepage: https://www.omnycontent.com/
@@ -1905,11 +1265,6 @@ sources:
     name: Ottawa Citizen
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - Canada
     region: plenary country/Canada
@@ -1919,7 +1274,6 @@ sources:
     name: Personal Finance
     language: en
     tier: peripheral
-    allowed_topic_ids: []
     region: plenary recommended/Personal finance
     url: https://reddit.com/r/personalfinance/.rss
     homepage: https://reddit.com/
@@ -1927,11 +1281,6 @@ sources:
     name: PerthNow
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - Australia
     region: plenary country/Australia
@@ -1941,11 +1290,6 @@ sources:
     name: philstar.com - RSS Headlines
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - Philippines
     region: plenary country/Philippines
@@ -1955,11 +1299,6 @@ sources:
     name: Playbook
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - United States
     region: plenary country/United States
@@ -1969,11 +1308,6 @@ sources:
     name: PravdaReport
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - Russia
     region: plenary country/Russia
@@ -1983,11 +1317,6 @@ sources:
     name: Premium Times Nigeria
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - Nigeria
     region: plenary country/Nigeria
@@ -1997,8 +1326,6 @@ sources:
     name: "Product Hunt \u2014 The best new products, every day"
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - science_space_tech
     region: plenary recommended/Startups
     url: https://www.producthunt.com/feed
     homepage: https://www.producthunt.com/
@@ -2006,8 +1333,6 @@ sources:
     name: Radiolab
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - science_space_tech
     region: plenary recommended/Science
     url: http://feeds.wnyc.org/radiolab
     homepage: http://feeds.wnyc.org/
@@ -2015,8 +1340,6 @@ sources:
     name: ReadWrite
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - science_space_tech
     region: plenary recommended/Tech
     url: https://readwrite.com/feed/
     homepage: https://readwrite.com/
@@ -2024,8 +1347,6 @@ sources:
     name: Reddit Science
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - science_space_tech
     region: plenary recommended/Science
     url: https://reddit.com/r/science/.rss
     homepage: https://reddit.com/
@@ -2033,11 +1354,6 @@ sources:
     name: RT - Daily news
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - Russia
     region: plenary country/Russia
@@ -2047,8 +1363,6 @@ sources:
     name: 'Sawbones: A Marital Tour of Misguided Medicine'
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - science_space_tech
     region: plenary recommended/Science
     url: https://feeds.simplecast.com/y1LF_sn2
     homepage: https://feeds.simplecast.com/
@@ -2056,8 +1370,6 @@ sources:
     name: Science Latest
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - science_space_tech
     region: plenary recommended/Science
     url: https://www.wired.com/feed/category/science/latest/rss
     homepage: https://www.wired.com/
@@ -2065,8 +1377,6 @@ sources:
     name: Science-Based Medicine
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - science_space_tech
     region: plenary recommended/Science
     url: https://sciencebasedmedicine.org/feed/
     homepage: https://sciencebasedmedicine.org/
@@ -2074,8 +1384,6 @@ sources:
     name: 'Scientific American Content: Global'
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - science_space_tech
     region: plenary recommended/Science
     url: http://rss.sciam.com/ScientificAmerican-Global
     homepage: http://rss.sciam.com/
@@ -2083,11 +1391,6 @@ sources:
     name: Scroll.in
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - India
     region: plenary country/India
@@ -2097,8 +1400,6 @@ sources:
     name: shirtloadsofscience libsyn com
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - science_space_tech
     region: plenary recommended/Science
     url: https://shirtloadsofscience.libsyn.com/rss
     homepage: https://shirtloadsofscience.libsyn.com/
@@ -2106,8 +1407,6 @@ sources:
     name: Sky & Telescope
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - science_space_tech
     region: plenary recommended/Space
     url: https://www.skyandtelescope.com/feed/
     homepage: https://www.skyandtelescope.com/
@@ -2115,8 +1414,6 @@ sources:
     name: Small Business Trends
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_business_finance
     region: plenary recommended/Startups
     url: https://feeds2.feedburner.com/SmallBusinessTrends
     homepage: https://feeds2.feedburner.com/
@@ -2124,8 +1421,6 @@ sources:
     name: Space | The Guardian
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - science_space_tech
     region: plenary recommended/Space
     url: https://www.theguardian.com/science/space/rss
     homepage: https://www.theguardian.com/
@@ -2133,11 +1428,6 @@ sources:
     name: Swarajya
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - India
     region: plenary country/India
@@ -2147,11 +1437,6 @@ sources:
     name: Sydney Morning Herald - Latest News
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - Australia
     region: plenary country/Australia
@@ -2161,11 +1446,6 @@ sources:
     name: TechCentral
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - South Africa
     region: plenary country/South Africa
@@ -2175,8 +1455,6 @@ sources:
     name: TechGenyz
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - science_space_tech
     nations:
       - India
     region: plenary country/India
@@ -2186,8 +1464,6 @@ sources:
     name: TED Talks Daily (SD video)
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - science_space_tech
     region: plenary recommended/Science
     url: https://pa.tedcdn.com/feeds/talks.rss
     homepage: https://pa.tedcdn.com/
@@ -2195,11 +1471,6 @@ sources:
     name: The Age - Latest News
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - Australia
     region: plenary country/Australia
@@ -2209,11 +1480,6 @@ sources:
     name: The Canberra Times - Local News
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - Australia
     region: plenary country/Australia
@@ -2223,11 +1489,6 @@ sources:
     name: The Citizen
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - South Africa
     region: plenary country/South Africa
@@ -2237,7 +1498,6 @@ sources:
     name: The College Investor
     language: en
     tier: peripheral
-    allowed_topic_ids: []
     region: plenary recommended/Personal finance
     url: https://thecollegeinvestor.com/feed/
     homepage: https://thecollegeinvestor.com/
@@ -2245,11 +1505,6 @@ sources:
     name: The Express Tribune
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - Pakistan
     region: plenary country/Pakistan
@@ -2259,11 +1514,6 @@ sources:
     name: The Independent
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - United Kingdom
     region: plenary country/United Kingdom
@@ -2273,8 +1523,6 @@ sources:
     name: The Keyword
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - science_space_tech
     region: plenary recommended/Tech
     url: https://www.blog.google/rss/
     homepage: https://www.blog.google/
@@ -2282,11 +1530,6 @@ sources:
     name: The Local
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - Italy
       - Spain
@@ -2297,11 +1540,6 @@ sources:
     name: The Moscow Times - Independent News From Russia
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - Russia
     region: plenary country/Russia
@@ -2311,11 +1549,6 @@ sources:
     name: The Province
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - Canada
     region: plenary country/Canada
@@ -2325,11 +1558,6 @@ sources:
     name: The Rio Times
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - Brazil
     region: plenary country/Brazil
@@ -2339,11 +1567,6 @@ sources:
     name: The South African
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - South Africa
     region: plenary country/South Africa
@@ -2353,8 +1576,6 @@ sources:
     name: The Startup Junkies Podcast
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_business_finance
     region: plenary recommended/Startups
     url: https://startupjunkie.libsyn.com/rss
     homepage: https://startupjunkie.libsyn.com/
@@ -2362,8 +1583,6 @@ sources:
     name: The Tim Ferriss Show
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_business_finance
     region: plenary recommended/Startups
     url: https://rss.art19.com/tim-ferriss-show
     homepage: https://rss.art19.com/
@@ -2371,8 +1590,6 @@ sources:
     name: The Vergecast
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - science_space_tech
     region: plenary recommended/Tech
     url: https://feeds.megaphone.fm/vergecast
     homepage: https://feeds.megaphone.fm/
@@ -2380,8 +1597,6 @@ sources:
     name: The42
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - sports
     nations:
       - Ireland
     region: plenary country/Ireland
@@ -2391,11 +1606,6 @@ sources:
     name: TheJournal.ie
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - Ireland
     region: plenary country/Ireland
@@ -2405,8 +1615,6 @@ sources:
     name: "This Week in Science \u2013 The Kickass Science Podcast"
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - science_space_tech
     region: plenary recommended/Science
     url: http://www.twis.org/feed/
     homepage: http://www.twis.org/
@@ -2414,8 +1622,6 @@ sources:
     name: This Week in Tech (Audio)
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - science_space_tech
     region: plenary recommended/Tech
     url: https://feeds.twit.tv/twit.xml
     homepage: https://feeds.twit.tv/
@@ -2423,11 +1629,6 @@ sources:
     name: Times of India
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - India
     region: plenary country/India
@@ -2437,11 +1638,6 @@ sources:
     name: Top stories - Google News
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     region: plenary recommended/News
     url: https://news.google.com/rss
     homepage: https://news.google.com/
@@ -2449,11 +1645,6 @@ sources:
     name: Toronto Sun - RSS Feed
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - Canada
     region: plenary country/Canada
@@ -2463,8 +1654,6 @@ sources:
     name: UNBOX PH
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - science_space_tech
     nations:
       - Philippines
     region: plenary country/Philippines
@@ -2474,11 +1663,6 @@ sources:
     name: World & Nation
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - United States
     region: plenary country/United States
@@ -2488,11 +1672,6 @@ sources:
     name: World News
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     region: plenary recommended/News
     url: https://www.reddit.com/r/worldnews/.rss
     homepage: https://www.reddit.com/
@@ -2500,11 +1679,6 @@ sources:
     name: World News - Breaking News, Top Stories
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - United States
     region: plenary country/United States
@@ -2516,11 +1690,6 @@ sources:
       of India
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     region: plenary recommended/News
     url: https://timesofindia.indiatimes.com/rssfeeds/296589292.cms
     homepage: https://timesofindia.indiatimes.com/
@@ -2528,11 +1697,6 @@ sources:
     name: Yahoo Finance
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     region: plenary recommended/Business & Economy
     url: https://finance.yahoo.com/news/rssindex
     homepage: https://finance.yahoo.com/
@@ -2540,11 +1704,6 @@ sources:
     name: Yahoo News - Latest News & Headlines
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - United States
     region: plenary country/United States
@@ -2554,11 +1713,6 @@ sources:
     name: 24 Horas
     language: es
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - Mexico
     region: plenary country/Mexico
@@ -2568,11 +1722,6 @@ sources:
     name: 8 Columnas
     language: es
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - Mexico
     region: plenary country/Mexico
@@ -2582,11 +1731,6 @@ sources:
     name: Adnkronos - ultimoratop
     language: it
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - Italy
     region: plenary country/Italy
@@ -2596,11 +1740,6 @@ sources:
     name: Aktuell - FAZ.NET
     language: de
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - Germany
     region: plenary country/Germany
@@ -2611,11 +1750,6 @@ sources:
       \u30FC\uFF06\u30B9\u30BF\u30FC\u30C8\u30A2\u30C3\u30D7\u60C5\u5831"
     language: ja
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - Japan
     region: plenary country/Japan
@@ -2625,11 +1759,6 @@ sources:
     name: Dziennik.pl Dziennik - dziennik.pl
     language: pl
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - Poland
     region: plenary country/Poland
@@ -2639,11 +1768,6 @@ sources:
     name: El Financiero
     language: es
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - Mexico
     region: plenary country/Mexico
@@ -2653,11 +1777,6 @@ sources:
     name: "El Informador :: Noticias de Jalisco, M\xE9xico, Deportes & Entretenimiento"
     language: es
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - Mexico
     region: plenary country/Mexico
@@ -2667,11 +1786,6 @@ sources:
     name: "EL PA\xCDS: el peri\xF3dico global"
     language: es
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - Spain
     region: plenary country/Spain
@@ -2681,11 +1795,6 @@ sources:
     name: ElDiario.es - ElDiario.es
     language: es
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - Spain
     region: plenary country/Spain
@@ -2695,11 +1804,6 @@ sources:
     name: ElNorte
     language: es
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - Mexico
     region: plenary country/Mexico
@@ -2709,11 +1813,6 @@ sources:
     name: "Espa\xF1a"
     language: es
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - Spain
     region: plenary country/Spain
@@ -2723,11 +1822,6 @@ sources:
     name: Folha de S.Paulo - Em cima da hora - Principal
     language: pt
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - Brazil
     region: plenary country/Brazil
@@ -2737,11 +1831,6 @@ sources:
     name: Franceinfo - Les Titres
     language: fr
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - France
     region: plenary country/France
@@ -2751,11 +1840,6 @@ sources:
     name: Gazeta.ua
     language: uk
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - Ukraine
     region: plenary country/Ukraine
@@ -2765,11 +1849,6 @@ sources:
     name: "GazetaPrawna.pl - biznes, podatki, prawo, finanse, wiadomo\u015Bci, praca"
     language: pl
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - Poland
     region: plenary country/Poland
@@ -2779,11 +1858,6 @@ sources:
     name: https://www.rp.pl
     language: pl
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - Poland
     region: plenary country/Poland
@@ -2793,11 +1867,6 @@ sources:
     name: huffingtonpost.es
     language: es
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - Spain
     region: plenary country/Spain
@@ -2807,11 +1876,6 @@ sources:
     name: Il Mattino Web
     language: it
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - Italy
     region: plenary country/Italy
@@ -2821,11 +1885,6 @@ sources:
     name: Internazionale
     language: it
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - Italy
     region: plenary country/Italy
@@ -2835,11 +1894,6 @@ sources:
     name: jagonews24.com | rss Feed
     language: hi
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - Bangladesh
     region: plenary country/Bangladesh
@@ -2849,11 +1903,6 @@ sources:
     name: L'essentiel
     language: fr
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - France
     region: plenary country/France
@@ -2863,11 +1912,6 @@ sources:
     name: L'Obs - A la une
     language: fr
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - France
     region: plenary country/France
@@ -2879,11 +1923,6 @@ sources:
       gion Occitanie et des environs - ladepeche.fr"
     language: fr
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - France
     region: plenary country/France
@@ -2893,11 +1932,6 @@ sources:
     name: "LaPresse.ca - Actualit\xE9s"
     language: fr
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - Canada
     region: plenary country/Canada
@@ -2909,11 +1943,6 @@ sources:
       \u092F\u0942\u095B | - Amar Ujala"
     language: hi
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - India
     region: plenary country/India
@@ -2923,11 +1952,6 @@ sources:
     name: Le Huffington Post
     language: fr
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - France
     region: plenary country/France
@@ -2937,11 +1961,6 @@ sources:
     name: "Le Monde.fr - Actualit\xE9s et Infos en France et dans le monde"
     language: fr
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - France
     region: plenary country/France
@@ -2951,11 +1970,6 @@ sources:
     name: "Lenta.ru : \u041D\u043E\u0432\u043E\u0441\u0442\u0438"
     language: ru
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - Russia
     region: plenary country/Russia
@@ -2965,11 +1979,6 @@ sources:
     name: Libero Quotidiano
     language: it
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - Italy
     region: plenary country/Italy
@@ -2979,11 +1988,6 @@ sources:
     name: "Lo \xFAltimo en Vanguardia MX"
     language: es
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - Mexico
     region: plenary country/Mexico
@@ -2993,11 +1997,6 @@ sources:
     name: Mediapart
     language: fr
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - France
     region: plenary country/France
@@ -3007,11 +2006,6 @@ sources:
     name: Meduza.io
     language: ru
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - Russia
     region: plenary country/Russia
@@ -3021,11 +2015,6 @@ sources:
     name: Milan News
     language: it
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - Italy
     region: plenary country/Italy
@@ -3035,11 +2024,6 @@ sources:
     name: Najnowsze
     language: pl
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - Poland
     region: plenary country/Poland
@@ -3049,11 +2033,6 @@ sources:
     name: Newsweek Polska
     language: pl
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - Poland
     region: plenary country/Poland
@@ -3063,11 +2042,6 @@ sources:
     name: "Ouest-France - Actualit\xE9"
     language: fr
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - France
     region: plenary country/France
@@ -3077,11 +2051,6 @@ sources:
     name: Panorama
     language: it
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - Italy
     region: plenary country/Italy
@@ -3091,11 +2060,6 @@ sources:
     name: Portada // expansion
     language: es
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - Spain
     region: plenary country/Spain
@@ -3105,11 +2069,6 @@ sources:
     name: "Portada, El Siglo de Torre\xF3n"
     language: es
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - Mexico
     region: plenary country/Mexico
@@ -3119,11 +2078,6 @@ sources:
     name: Reforma
     language: es
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - Mexico
     region: plenary country/Mexico
@@ -3133,11 +2087,6 @@ sources:
     name: Repubblica.it > Homepage
     language: it
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - Italy
     region: plenary country/Italy
@@ -3147,11 +2096,6 @@ sources:
     name: Republika Online RSS Feed
     language: id
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - Indonesia
     region: plenary country/Indonesia
@@ -3161,11 +2105,6 @@ sources:
     name: RMF24.pl
     language: pl
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - Poland
     region: plenary country/Poland
@@ -3175,11 +2114,6 @@ sources:
     name: RSS di   - ANSA.it
     language: it
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - Italy
     region: plenary country/Italy
@@ -3189,11 +2123,6 @@ sources:
     name: tagesschau.de - Die Nachrichten der ARD
     language: de
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - Germany
     region: plenary country/Germany
@@ -3203,11 +2132,6 @@ sources:
     name: 'Top Stories News - Gujarat Samachar : World''s Leading Gujarati Newspaper'
     language: hi
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - India
     region: plenary country/India
@@ -3217,11 +2141,6 @@ sources:
     name: Tribunnews.com
     language: id
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - Indonesia
     region: plenary country/Indonesia
@@ -3231,11 +2150,6 @@ sources:
     name: UOL
     language: pt
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - Brazil
     region: plenary country/Brazil
@@ -3245,11 +2159,6 @@ sources:
     name: www.wirtualnemedia.pl
     language: pl
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - Poland
     region: plenary country/Poland
@@ -3259,11 +2168,6 @@ sources:
     name: "ZEIT ONLINE | Nachrichten, Hintergr\xFCnde und Debatten"
     language: de
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - Germany
     region: plenary country/Germany
@@ -3273,11 +2177,6 @@ sources:
     name: "\u041D\u043E\u0432\u0438\u043D\u0438 \u043D\u0430 tsn.ua"
     language: pl
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - Ukraine
     region: plenary country/Ukraine
@@ -3288,11 +2187,6 @@ sources:
       \u043E\u0441\u0442\u0438 \u043D\u0430 \u0441\u0430\u0439\u0442\u0435 korrespondent.net"
     language: ru
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - Ukraine
     region: plenary country/Ukraine
@@ -3303,11 +2197,6 @@ sources:
       \u043E\u0441\u0442\u0438"
     language: ru
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - Bangladesh
       - India
@@ -3326,11 +2215,6 @@ sources:
       \ | Khabaronline"
     language: fa
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - Iran
     region: plenary country/Iran
@@ -3342,11 +2226,6 @@ sources:
       \u0646 | Mehr News Agency"
     language: fa
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - Iran
     region: plenary country/Iran
@@ -3356,452 +2235,312 @@ sources:
     name: 9to5Mac
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     url: https://9to5mac.com/feed
     homepage: https://9to5mac.com/
   - key: Aeon
     name: Aeon
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - entertainment
     url: https://aeon.co/feed.rss
     homepage: https://aeon.co/
   - key: Android Central
     name: Android Central
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - science_space_tech
     url: https://www.androidcentral.com/rss.xml
     homepage: https://www.androidcentral.com/
   - key: Angular Blog
     name: Angular Blog
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - science_space_tech
     url: https://blog.angular.io/feed
     homepage: https://blog.angular.io/
   - key: Ars Technica OpenSource
     name: Ars Technica OpenSource
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - science_space_tech
     url: https://arstechnica.com/open-source/feed
     homepage: https://arstechnica.com/
   - key: Atlas Obscura
     name: Atlas Obscura
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - entertainment
     url: https://www.atlasobscura.com/feeds/latest
     homepage: https://www.atlasobscura.com/
   - key: AWS News
     name: AWS News
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - science_space_tech
     url: https://aws.amazon.com/blogs/aws/feed
     homepage: https://aws.amazon.com/
   - key: Boing Boing
     name: Boing Boing
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - entertainment
     url: https://boingboing.net/feed
     homepage: https://boingboing.net/
   - key: Brain Pickings
     name: Brain Pickings
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - entertainment
     url: https://www.brainpickings.org/feed
     homepage: https://www.brainpickings.org/
   - key: CleanTechnica
     name: CleanTechnica
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - science_space_tech
     url: https://cleantechnica.com/feed
     homepage: https://cleantechnica.com/
   - key: Cool Hunting
     name: Cool Hunting
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - entertainment
     url: https://coolhunting.com/feed
     homepage: https://coolhunting.com/
   - key: CSS-Tricks
     name: CSS-Tricks
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - science_space_tech
     url: https://css-tricks.com/feed
     homepage: https://css-tricks.com/
   - key: Dev.to
     name: Dev.to
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - science_space_tech
     url: https://dev.to/feed
     homepage: https://dev.to/
   - key: Docker Blog
     name: Docker Blog
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - science_space_tech
     url: https://www.docker.com/blog/feed
     homepage: https://www.docker.com/
   - key: Eurogamer
     name: Eurogamer
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - entertainment
     url: https://www.eurogamer.net/?format=rss
     homepage: https://www.eurogamer.net/
   - key: FreeCodeCamp
     name: FreeCodeCamp
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - science_space_tech
     url: https://www.freecodecamp.org/news/rss
     homepage: https://www.freecodecamp.org/
   - key: GameSpot
     name: GameSpot
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - entertainment
     url: https://www.gamespot.com/feeds/mashup
     homepage: https://www.gamespot.com/
   - key: GitHub Blog
     name: GitHub Blog
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - science_space_tech
     url: https://github.blog/feed
     homepage: https://github.blog/
   - key: Go Blog
     name: Go Blog
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - science_space_tech
     url: https://blog.golang.org/feed.atom
     homepage: https://blog.golang.org/
   - key: IEEE Spectrum
     name: IEEE Spectrum
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - science_space_tech
     url: https://spectrum.ieee.org/rss/fulltext
     homepage: https://spectrum.ieee.org/
   - key: IGN
     name: IGN
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - entertainment
     url: http://feeds.ign.com/ign/all
     homepage: http://feeds.ign.com/
   - key: IndieWire
     name: IndieWire
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - entertainment
     url: https://www.indiewire.com/feed
     homepage: https://www.indiewire.com/
   - key: Kotaku
     name: Kotaku
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - entertainment
     url: https://kotaku.com/rss
     homepage: https://kotaku.com/
   - key: Kottke.org
     name: Kottke.org
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - entertainment
     url: https://feeds.kottke.org/main
     homepage: https://feeds.kottke.org/
   - key: Kubernetes Blog
     name: Kubernetes Blog
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - science_space_tech
     url: https://kubernetes.io/feed.xml
     homepage: https://kubernetes.io/
   - key: LessWrong
     name: LessWrong
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     url: https://www.lesswrong.com/feed.xml
     homepage: https://www.lesswrong.com/
   - key: Marginal Revolution
     name: Marginal Revolution
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     url: https://marginalrevolution.com/feed
     homepage: https://marginalrevolution.com/
   - key: Martin Fowler
     name: Martin Fowler
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - science_space_tech
     url: https://martinfowler.com/feed.atom
     homepage: https://martinfowler.com/
   - key: Men's Health
     name: Men's Health
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     url: https://www.menshealth.com/rss/all.xml
     homepage: https://www.menshealth.com/
   - key: Mental Floss
     name: Mental Floss
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - entertainment
     url: https://mentalfloss.com/feed
     homepage: https://mentalfloss.com/
   - key: Microsoft Developer Blog
     name: Microsoft Developer Blog
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - science_space_tech
     url: https://devblogs.microsoft.com/feed
     homepage: https://devblogs.microsoft.com/
   - key: Mindful
     name: Mindful
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     url: https://www.mindful.org/feed
     homepage: https://www.mindful.org/
   - key: Mozilla Hacks
     name: Mozilla Hacks
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - science_space_tech
     url: https://hacks.mozilla.org/feed
     homepage: https://hacks.mozilla.org/
   - key: Next Big Future
     name: Next Big Future
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - science_space_tech
     url: https://www.nextbigfuture.com/feed
     homepage: https://www.nextbigfuture.com/
   - key: Node.js Blog
     name: Node.js Blog
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - science_space_tech
     url: https://nodejs.org/en/feed/blog.xml
     homepage: https://nodejs.org/
   - key: Open Culture
     name: Open Culture
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - entertainment
     url: http://www.openculture.com/feed
     homepage: http://www.openculture.com/
   - key: Phoronix
     name: Phoronix
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - science_space_tech
     url: https://www.phoronix.com/rss.php
     homepage: https://www.phoronix.com/
   - key: Polygon
     name: Polygon
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - entertainment
     url: https://www.polygon.com/rss/index.xml
     homepage: https://www.polygon.com/
   - key: Rock Paper Shotgun
     name: Rock Paper Shotgun
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - entertainment
     url: https://www.rockpapershotgun.com/feed
     homepage: https://www.rockpapershotgun.com/
   - key: Rolling Stone
     name: Rolling Stone
     language: en
     tier: core
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
-      - entertainment
     url: https://www.rollingstone.com/feed
     homepage: https://www.rollingstone.com/
   - key: Rust Blog
     name: Rust Blog
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - science_space_tech
     url: https://blog.rust-lang.org/feed.xml
     homepage: https://blog.rust-lang.org/
   - key: Singularity Hub
     name: Singularity Hub
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - science_space_tech
     url: https://singularityhub.com/feed
     homepage: https://singularityhub.com/
   - key: Smashing Magazine
     name: Smashing Magazine
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - science_space_tech
     url: https://www.smashingmagazine.com/feed
     homepage: https://www.smashingmagazine.com/
   - key: Stack Overflow Blog
     name: Stack Overflow Blog
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - science_space_tech
     url: https://stackoverflow.blog/feed
     homepage: https://stackoverflow.blog/
   - key: The Hollywood Reporter
     name: The Hollywood Reporter
     language: en
     tier: core
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
-      - entertainment
     url: https://www.hollywoodreporter.com/feed
     homepage: https://www.hollywoodreporter.com/
   - key: The Minimalists
     name: The Minimalists
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     url: https://www.theminimalists.com/rss
     homepage: https://www.theminimalists.com/
   - key: Tom's Hardware
     name: Tom's Hardware
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - science_space_tech
     url: https://www.tomshardware.com/feeds/all
     homepage: https://www.tomshardware.com/
   - key: Variety
     name: Variety
     language: en
     tier: core
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
-      - entertainment
     url: https://variety.com/feed
     homepage: https://variety.com/
   - key: Women's Health
     name: Women's Health
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     url: https://www.womenshealthmag.com/rss/all.xml
     homepage: https://www.womenshealthmag.com/
   - key: XDA Developers
     name: XDA Developers
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - science_space_tech
     url: https://www.xda-developers.com/feed
     homepage: https://www.xda-developers.com/
   - key: Yoga Journal
     name: Yoga Journal
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     url: https://www.yogajournal.com/rss
     homepage: https://www.yogajournal.com/
   - key: Plenary Film
     name: /Film
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - entertainment
     region: plenary recommended/Movies
     url: https://feeds2.feedburner.com/slashfilm
     homepage: https://feeds2.feedburner.com/
@@ -3809,11 +2548,6 @@ sources:
     name: 500px
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     region: plenary recommended/Photography
     url: https://iso.500px.com/feed/
     homepage: https://iso.500px.com/
@@ -3821,11 +2555,6 @@ sources:
     name: A Beautiful Mess
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     region: plenary recommended/DIY
     url: https://abeautifulmess.com/feed
     homepage: https://abeautifulmess.com/
@@ -3833,8 +2562,6 @@ sources:
     name: Ain't It Cool News Feed
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - entertainment
     region: plenary recommended/Movies
     url: https://www.aintitcool.com/node/feed/
     homepage: https://www.aintitcool.com/
@@ -3842,8 +2569,6 @@ sources:
     name: Android
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - science_space_tech
     region: plenary recommended/Android
     url: https://www.reddit.com/r/android/.rss
     homepage: https://www.reddit.com/
@@ -3851,8 +2576,6 @@ sources:
     name: Android Authority
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - science_space_tech
     region: plenary recommended/Android
     url: https://www.androidauthority.com/feed
     homepage: https://www.androidauthority.com/
@@ -3860,8 +2583,6 @@ sources:
     name: Android Central - Android Forums, News, Reviews, Help and Android Wallpapers
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - science_space_tech
     region: plenary recommended/Android
     url: http://feeds.androidcentral.com/androidcentral
     homepage: http://feeds.androidcentral.com/
@@ -3869,8 +2590,6 @@ sources:
     name: Android Developers Blog
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - science_space_tech
     region: plenary recommended/Android Development
     url: http://feeds.feedburner.com/blogspot/hsDu
     homepage: http://feeds.feedburner.com/
@@ -3878,8 +2597,6 @@ sources:
     name: "Android Police \u2013 Android news, reviews, apps, games, phones, tablets"
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - science_space_tech
     region: plenary recommended/Android
     url: http://feeds.feedburner.com/AndroidPolice
     homepage: http://feeds.feedburner.com/
@@ -3887,8 +2604,6 @@ sources:
     name: Apple Newsroom
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - science_space_tech
     region: plenary recommended/Apple
     url: https://www.apple.com/newsroom/rss-feed.rss
     homepage: https://www.apple.com/
@@ -3896,8 +2611,6 @@ sources:
     name: AppleInsider News
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - science_space_tech
     region: plenary recommended/Apple
     url: https://appleinsider.com/rss/news/
     homepage: https://appleinsider.com/
@@ -3905,7 +2618,6 @@ sources:
     name: ArchDaily
     language: en
     tier: peripheral
-    allowed_topic_ids: []
     region: plenary recommended/Architecture
     url: http://feeds.feedburner.com/Archdaily
     homepage: http://feeds.feedburner.com/
@@ -3913,7 +2625,6 @@ sources:
     name: Architectural Digest
     language: en
     tier: peripheral
-    allowed_topic_ids: []
     region: plenary recommended/Architecture
     url: https://www.architecturaldigest.com/feed/rss
     homepage: https://www.architecturaldigest.com/
@@ -3921,7 +2632,6 @@ sources:
     name: Architecture
     language: en
     tier: peripheral
-    allowed_topic_ids: []
     region: plenary recommended/Architecture
     url: https://www.reddit.com/r/architecture/.rss
     homepage: https://www.reddit.com/
@@ -3929,7 +2639,6 @@ sources:
     name: "architecture \u2013 designboom | architecture & design magazine"
     language: en
     tier: peripheral
-    allowed_topic_ids: []
     region: plenary recommended/Architecture
     url: https://www.designboom.com/architecture/feed/
     homepage: https://www.designboom.com/
@@ -3937,7 +2646,6 @@ sources:
     name: Autocar India - All Bike Reviews
     language: en
     tier: peripheral
-    allowed_topic_ids: []
     region: plenary recommended/Cars
     url: https://www.autocarindia.com/RSS/rss.ashx?type=all_bikes
     homepage: https://www.autocarindia.com/
@@ -3945,7 +2653,6 @@ sources:
     name: Autocar India - All Car Reviews
     language: en
     tier: peripheral
-    allowed_topic_ids: []
     region: plenary recommended/Cars
     url: https://www.autocarindia.com/RSS/rss.ashx?type=all_cars
     homepage: https://www.autocarindia.com/
@@ -3953,7 +2660,6 @@ sources:
     name: Autocar India - News
     language: en
     tier: peripheral
-    allowed_topic_ids: []
     region: plenary recommended/Cars
     url: https://www.autocarindia.com/RSS/rss.ashx?type=News
     homepage: https://www.autocarindia.com/
@@ -3961,7 +2667,6 @@ sources:
     name: Autocar RSS Feed
     language: en
     tier: peripheral
-    allowed_topic_ids: []
     region: plenary recommended/Cars
     url: https://www.autocar.co.uk/rss
     homepage: https://www.autocar.co.uk/
@@ -3969,8 +2674,6 @@ sources:
     name: BBC Sport - Cricket
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - sports
     region: plenary recommended/Cricket
     url: http://feeds.bbci.co.uk/sport/cricket/rss.xml
     homepage: http://feeds.bbci.co.uk/
@@ -3978,8 +2681,6 @@ sources:
     name: BBC Sport - Sport
     language: en
     tier: core
-    allowed_topic_ids:
-      - sports
     region: plenary recommended/Sports
     url: http://feeds.bbci.co.uk/sport/rss.xml
     homepage: http://feeds.bbci.co.uk/
@@ -3987,8 +2688,6 @@ sources:
     name: BBC Sport - Tennis
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - sports
     region: plenary recommended/Tennis
     url: http://feeds.bbci.co.uk/sport/tennis/rss.xml
     homepage: http://feeds.bbci.co.uk/
@@ -3996,8 +2695,6 @@ sources:
     name: Beauty - ELLE
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - entertainment
     region: plenary recommended/Beauty
     url: https://www.elle.com/rss/beauty.xml/
     homepage: https://www.elle.com/
@@ -4005,8 +2702,6 @@ sources:
     name: Beauty - Fashionista
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - entertainment
     region: plenary recommended/Beauty
     url: https://fashionista.com/.rss/excerpt/beauty
     homepage: https://fashionista.com/
@@ -4014,7 +2709,6 @@ sources:
     name: Bike EXIF
     language: en
     tier: peripheral
-    allowed_topic_ids: []
     region: plenary recommended/Cars
     url: https://www.bikeexif.com/feed
     homepage: https://www.bikeexif.com/
@@ -4022,8 +2716,6 @@ sources:
     name: "Blog \u2013 Hackaday"
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - science_space_tech
     region: plenary recommended/DIY
     url: https://hackaday.com/blog/feed/
     homepage: https://hackaday.com/
@@ -4031,7 +2723,6 @@ sources:
     name: BMW BLOG
     language: en
     tier: peripheral
-    allowed_topic_ids: []
     region: plenary recommended/Cars
     url: https://feeds.feedburner.com/BmwBlog
     homepage: https://feeds.feedburner.com/
@@ -4039,8 +2730,6 @@ sources:
     name: BOOK RIOT
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - entertainment
     region: plenary recommended/Books
     url: https://bookriot.com/feed/
     homepage: https://bookriot.com/
@@ -4048,11 +2737,6 @@ sources:
     name: "Canon Rumors \u2013 Your best source for Canon rumors, leaks and gossip"
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     region: plenary recommended/Photography
     url: https://www.canonrumors.com/feed/
     homepage: https://www.canonrumors.com/
@@ -4060,7 +2744,6 @@ sources:
     name: Carscoops
     language: en
     tier: peripheral
-    allowed_topic_ids: []
     region: plenary recommended/Cars
     url: https://www.carscoops.com/feed/
     homepage: https://www.carscoops.com/
@@ -4068,8 +2751,6 @@ sources:
     name: ComingSoon.net
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - entertainment
     region: plenary recommended/Movies
     url: https://www.comingsoon.net/feed
     homepage: https://www.comingsoon.net/
@@ -4077,8 +2758,6 @@ sources:
     name: Consequence
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - entertainment
     region: plenary recommended/Music
     url: http://consequenceofsound.net/feed
     homepage: http://consequenceofsound.net/
@@ -4086,7 +2765,6 @@ sources:
     name: Core77
     language: en
     tier: peripheral
-    allowed_topic_ids: []
     region: plenary recommended/Interior design
     url: http://feeds.feedburner.com/core77/blog
     homepage: http://feeds.feedburner.com/
@@ -4094,8 +2772,6 @@ sources:
     name: Cricket
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - sports
     region: plenary recommended/Cricket
     url: https://www.reddit.com/r/Cricket/.rss
     homepage: https://www.reddit.com/
@@ -4103,8 +2779,6 @@ sources:
     name: Cricket news from ESPN Cricinfo.com
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - sports
     region: plenary recommended/Cricket
     url: http://www.espncricinfo.com/rss/content/story/feeds/0.xml
     homepage: http://www.espncricinfo.com/
@@ -4112,8 +2786,6 @@ sources:
     name: Cricket | The Guardian
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - sports
     region: plenary recommended/Cricket
     url: https://www.theguardian.com/sport/cricket/rss
     homepage: https://www.theguardian.com/
@@ -4121,8 +2793,6 @@ sources:
     name: Cult of Mac
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - science_space_tech
     region: plenary recommended/Apple
     url: https://www.cultofmac.com/feed
     homepage: https://www.cultofmac.com/
@@ -4130,8 +2800,6 @@ sources:
     name: cynicaldeveloper com
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - science_space_tech
     region: plenary recommended/Programming
     url: https://cynicaldeveloper.com/feed/podcast
     homepage: https://cynicaldeveloper.com/
@@ -4139,8 +2807,6 @@ sources:
     name: Dan Lew Codes
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - science_space_tech
     region: plenary recommended/Android Development
     url: https://blog.danlew.net/rss/
     homepage: https://blog.danlew.net/
@@ -4148,8 +2814,6 @@ sources:
     name: Daring Fireball
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - science_space_tech
     region: plenary recommended/Apple
     url: https://daringfireball.net/feeds/main
     homepage: https://daringfireball.net/
@@ -4157,12 +2821,6 @@ sources:
     name: Deadline
     language: en
     tier: core
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
-      - entertainment
     region: plenary recommended/Movies
     url: https://deadline.com/feed/
     homepage: https://deadline.com/
@@ -4170,7 +2828,6 @@ sources:
     name: "Design MilkInterior Design \u2013 Design Milk"
     language: en
     tier: peripheral
-    allowed_topic_ids: []
     region: plenary recommended/Interior design
     url: https://design-milk.com/category/interior-design/feed/
     homepage: https://design-milk.com/
@@ -4178,8 +2835,6 @@ sources:
     name: Developer Tea
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - science_space_tech
     region: plenary recommended/Programming
     url: https://feeds.simplecast.com/dLRotFGk
     homepage: https://feeds.simplecast.com/
@@ -4187,8 +2842,6 @@ sources:
     name: Developing Android Apps
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - science_space_tech
     region: plenary recommended/Android Development
     url: https://reddit.com/r/androiddev.rss
     homepage: https://reddit.com/
@@ -4196,8 +2849,6 @@ sources:
     name: Droid Life
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - science_space_tech
     region: plenary recommended/Android
     url: https://www.droid-life.com/feed
     homepage: https://www.droid-life.com/
@@ -4205,8 +2856,6 @@ sources:
     name: EDM.com - The Latest Electronic Dance Music News, Reviews & Artists
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - entertainment
     region: plenary recommended/Music
     url: https://edm.com/.rss/full/
     homepage: https://edm.com/
@@ -4214,8 +2863,6 @@ sources:
     name: EFL Championship
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - sports
     region: plenary recommended/Football
     url: https://www.reddit.com/r/Championship/.rss?format=xml
     homepage: https://www.reddit.com/
@@ -4223,8 +2870,6 @@ sources:
     name: Escapist Magazine
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - entertainment
     region: plenary recommended/Gaming
     url: https://www.escapistmagazine.com/v2/feed/
     homepage: https://www.escapistmagazine.com/
@@ -4232,7 +2877,6 @@ sources:
     name: FAIL Blog
     language: en
     tier: peripheral
-    allowed_topic_ids: []
     region: plenary recommended/Funny
     url: http://feeds.feedburner.com/failblog
     homepage: http://feeds.feedburner.com/
@@ -4240,8 +2884,6 @@ sources:
     name: Fashion - ELLE
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - entertainment
     region: plenary recommended/Fashion
     url: https://www.elle.com/rss/fashion.xml/
     homepage: https://www.elle.com/
@@ -4249,8 +2891,6 @@ sources:
     name: Fashion | The Guardian
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - entertainment
     region: plenary recommended/Fashion
     url: https://www.theguardian.com/fashion/rss
     homepage: https://www.theguardian.com/
@@ -4258,8 +2898,6 @@ sources:
     name: FashionBeans Men's Fashion and Style Feed
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - entertainment
     region: plenary recommended/Fashion
     url: https://www.fashionbeans.com/rss-feed/?category=fashion
     homepage: https://www.fashionbeans.com/
@@ -4267,8 +2905,6 @@ sources:
     name: Fashionista
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - entertainment
     region: plenary recommended/Fashion
     url: https://fashionista.com/.rss/excerpt/
     homepage: https://fashionista.com/
@@ -4276,8 +2912,6 @@ sources:
     name: FirstShowing.net
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - entertainment
     region: plenary recommended/Movies
     url: https://www.firstshowing.net/feed/
     homepage: https://www.firstshowing.net/
@@ -4285,8 +2919,6 @@ sources:
     name: Football - The People's Sport
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - sports
     region: plenary recommended/Football
     url: https://www.reddit.com/r/football/.rss?format=xml
     homepage: https://www.reddit.com/
@@ -4294,7 +2926,6 @@ sources:
     name: Formula 1
     language: en
     tier: peripheral
-    allowed_topic_ids: []
     region: plenary recommended/Cars
     url: https://www.reddit.com/r/formula1/.rss
     homepage: https://www.reddit.com/
@@ -4302,8 +2933,6 @@ sources:
     name: GitLab
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - science_space_tech
     region: plenary recommended/Programming
     url: https://about.gitlab.com/atom.xml
     homepage: https://about.gitlab.com/
@@ -4311,8 +2940,6 @@ sources:
     name: GSMArena.com - Latest articles
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - science_space_tech
     region: plenary recommended/Android
     url: https://www.gsmarena.com/rss-news-reviews.php3
     homepage: https://www.gsmarena.com/
@@ -4320,7 +2947,6 @@ sources:
     name: History in 28-minutes
     language: en
     tier: peripheral
-    allowed_topic_ids: []
     region: plenary recommended/History
     url: https://www.historyisnowmagazine.com/blog?format=RSS
     homepage: https://www.historyisnowmagazine.com/
@@ -4328,7 +2954,6 @@ sources:
     name: How Sweet Eats
     language: en
     tier: peripheral
-    allowed_topic_ids: []
     region: plenary recommended/Food
     url: https://www.howsweeteats.com/feed/
     homepage: https://www.howsweeteats.com/
@@ -4336,11 +2961,6 @@ sources:
     name: How-To Geek
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     region: plenary recommended/DIY
     url: https://www.howtogeek.com/feed/
     homepage: https://www.howtogeek.com/
@@ -4348,7 +2968,6 @@ sources:
     name: I Can Has Cheezburger?
     language: en
     tier: peripheral
-    allowed_topic_ids: []
     region: plenary recommended/Funny
     url: http://feeds.feedburner.com/icanhascheezburger
     homepage: http://feeds.feedburner.com/
@@ -4356,11 +2975,6 @@ sources:
     name: IKEA Hackers
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     region: plenary recommended/DIY
     url: https://www.ikeahackers.net/feed
     homepage: https://www.ikeahackers.net/
@@ -4368,7 +2982,6 @@ sources:
     name: In My Own Style
     language: en
     tier: peripheral
-    allowed_topic_ids: []
     region: plenary recommended/Interior design
     url: https://inmyownstyle.com/feed
     homepage: https://inmyownstyle.com/
@@ -4376,8 +2989,6 @@ sources:
     name: InfoQ
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - science_space_tech
     region: plenary recommended/Programming
     url: https://feed.infoq.com
     homepage: https://feed.infoq.com/
@@ -4385,7 +2996,6 @@ sources:
     name: Interior Design (Interior Architecture)
     language: en
     tier: peripheral
-    allowed_topic_ids: []
     region: plenary recommended/Interior design
     url: https://www.reddit.com/r/InteriorDesign/.rss
     homepage: https://www.reddit.com/
@@ -4393,7 +3003,6 @@ sources:
     name: Interior Design Ideas
     language: en
     tier: peripheral
-    allowed_topic_ids: []
     region: plenary recommended/Interior design
     url: http://www.home-designing.com/feed
     homepage: http://www.home-designing.com/
@@ -4401,8 +3010,6 @@ sources:
     name: Jalopnik
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - entertainment
     region: plenary recommended/Cars
     url: https://jalopnik.com/rss
     homepage: https://jalopnik.com/
@@ -4410,8 +3017,6 @@ sources:
     name: JetBrains Blog
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - science_space_tech
     region: plenary recommended/Programming
     url: https://blog.jetbrains.com/feed
     homepage: https://blog.jetbrains.com/
@@ -4419,7 +3024,6 @@ sources:
     name: Kitchn | Inspiring cooks, nourishing homes
     language: en
     tier: peripheral
-    allowed_topic_ids: []
     region: plenary recommended/Food
     url: https://www.thekitchn.com/main.rss
     homepage: https://www.thekitchn.com/
@@ -4427,7 +3031,6 @@ sources:
     name: Latest Content - Car and Driver
     language: en
     tier: peripheral
-    allowed_topic_ids: []
     region: plenary recommended/Cars
     url: https://www.caranddriver.com/rss/all.xml/
     homepage: https://www.caranddriver.com/
@@ -4435,11 +3038,6 @@ sources:
     name: Light Stalking
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     region: plenary recommended/Photography
     url: https://www.lightstalking.com/feed/
     homepage: https://www.lightstalking.com/
@@ -4447,11 +3045,6 @@ sources:
     name: Lightroom Killer Tips
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     region: plenary recommended/Photography
     url: https://lightroomkillertips.com/feed/
     homepage: https://lightroomkillertips.com/
@@ -4459,8 +3052,6 @@ sources:
     name: MacStories
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - science_space_tech
     region: plenary recommended/Apple
     url: https://www.macstories.net/feed
     homepage: https://www.macstories.net/
@@ -4468,8 +3059,6 @@ sources:
     name: Macworld.com
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - science_space_tech
     region: plenary recommended/Apple
     url: https://www.macworld.com/index.rss
     homepage: https://www.macworld.com/
@@ -4477,8 +3066,6 @@ sources:
     name: Movie News and Discussion
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - entertainment
     region: plenary recommended/Movies
     url: https://reddit.com/r/movies/.rss
     homepage: https://reddit.com/
@@ -4486,8 +3073,6 @@ sources:
     name: Movies
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - entertainment
     region: plenary recommended/Movies
     url: https://www.bleedingcool.com/movies/feed/
     homepage: https://www.bleedingcool.com/
@@ -4495,11 +3080,6 @@ sources:
     name: MUO - Feed
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     region: plenary recommended/DIY
     url: https://www.makeuseof.com/feed/
     homepage: https://www.makeuseof.com/
@@ -4507,8 +3087,6 @@ sources:
     name: Music Business Worldwide
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - entertainment
     region: plenary recommended/Music
     url: https://www.musicbusinessworldwide.com/feed/
     homepage: https://www.musicbusinessworldwide.com/
@@ -4516,8 +3094,6 @@ sources:
     name: NDTV Sports - Cricket
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - sports
     region: plenary recommended/Cricket
     url: http://feeds.feedburner.com/ndtvsports-cricket
     homepage: http://feeds.feedburner.com/
@@ -4525,8 +3101,6 @@ sources:
     name: News - Apple Developer
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - science_space_tech
     region: plenary recommended/iOS Development
     url: https://developer.apple.com/news/rss/news.rss
     homepage: https://developer.apple.com/
@@ -4534,7 +3108,6 @@ sources:
     name: NN/g latest articles and announcements
     language: en
     tier: peripheral
-    allowed_topic_ids: []
     region: plenary recommended/UI - UX
     url: https://www.nngroup.com/feed/rss/
     homepage: https://www.nngroup.com/
@@ -4542,7 +3115,6 @@ sources:
     name: NYT > Food
     language: en
     tier: peripheral
-    allowed_topic_ids: []
     region: plenary recommended/Food
     url: https://rss.nytimes.com/services/xml/rss/nyt/DiningandWine.xml
     homepage: https://rss.nytimes.com/
@@ -4551,7 +3123,6 @@ sources:
     name: NYT > Style
     language: en
     tier: peripheral
-    allowed_topic_ids: []
     region: plenary recommended/Fashion
     url: https://rss.nytimes.com/services/xml/rss/nyt/FashionandStyle.xml
     homepage: https://rss.nytimes.com/
@@ -4560,7 +3131,6 @@ sources:
     name: NYT > Travel
     language: en
     tier: peripheral
-    allowed_topic_ids: []
     region: plenary recommended/Travel
     url: https://rss.nytimes.com/services/xml/rss/nyt/Travel.xml
     homepage: https://rss.nytimes.com/
@@ -4569,8 +3139,6 @@ sources:
     name: OS X Daily
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - science_space_tech
     region: plenary recommended/Apple
     url: http://feeds.feedburner.com/osxdaily
     homepage: http://feeds.feedburner.com/
@@ -4578,8 +3146,6 @@ sources:
     name: "Page Array \u2013 NewInBooks"
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - entertainment
     region: plenary recommended/Books
     url: https://www.newinbooks.com/feed/
     homepage: https://www.newinbooks.com/
@@ -4587,7 +3153,6 @@ sources:
     name: Penny Arcade
     language: en
     tier: peripheral
-    allowed_topic_ids: []
     region: plenary recommended/Funny
     url: https://www.penny-arcade.com/feed
     homepage: https://www.penny-arcade.com/
@@ -4595,8 +3160,6 @@ sources:
     name: peRFect Tennis
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - sports
     region: plenary recommended/Tennis
     url: https://www.perfect-tennis.com/feed/
     homepage: https://www.perfect-tennis.com/
@@ -4604,11 +3167,6 @@ sources:
     name: PetaPixel
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     region: plenary recommended/Photography
     url: https://petapixel.com/feed/
     homepage: https://petapixel.com/
@@ -4616,8 +3174,6 @@ sources:
     name: Phandroid
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - science_space_tech
     region: plenary recommended/Android
     url: http://feeds2.feedburner.com/AndroidPhoneFans
     homepage: http://feeds2.feedburner.com/
@@ -4625,8 +3181,6 @@ sources:
     name: PlayStation.Blog
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - entertainment
     region: plenary recommended/Gaming
     url: http://feeds.feedburner.com/psblog
     homepage: http://feeds.feedburner.com/
@@ -4634,8 +3188,6 @@ sources:
     name: "Podcast \u2013 Software Engineering Daily"
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - science_space_tech
     region: plenary recommended/Programming
     url: https://softwareengineeringdaily.com/category/podcast/feed
     homepage: https://softwareengineeringdaily.com/
@@ -4643,8 +3195,6 @@ sources:
     name: POPSUGAR Beauty
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - entertainment
     region: plenary recommended/Beauty
     url: https://www.popsugar.com/beauty/feed
     homepage: https://www.popsugar.com/
@@ -4652,8 +3202,6 @@ sources:
     name: PostSecret
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - entertainment
     region: plenary recommended/Funny
     url: https://postsecret.com/feed/?alt=rss
     homepage: https://postsecret.com/
@@ -4661,8 +3209,6 @@ sources:
     name: ProAndroidDev - Medium
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - science_space_tech
     region: plenary recommended/Android Development
     url: https://proandroiddev.com/feed
     homepage: https://proandroiddev.com/
@@ -4670,8 +3216,6 @@ sources:
     name: programming
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - science_space_tech
     region: plenary recommended/Programming
     url: https://www.reddit.com/r/programming/.rss
     homepage: https://www.reddit.com/
@@ -4679,8 +3223,6 @@ sources:
     name: r/gaming
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - entertainment
     region: plenary recommended/Gaming
     url: https://www.reddit.com/r/gaming.rss
     homepage: https://www.reddit.com/
@@ -4688,8 +3230,6 @@ sources:
     name: r/iPhone
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - science_space_tech
     region: plenary recommended/Apple
     url: https://www.reddit.com/r/iphone/.rss
     homepage: https://www.reddit.com/
@@ -4697,8 +3237,6 @@ sources:
     name: Reddit Sports
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - sports
     region: plenary recommended/Sports
     url: https://www.reddit.com/r/sports.rss
     homepage: https://www.reddit.com/
@@ -4706,8 +3244,6 @@ sources:
     name: Refinery29
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - entertainment
     region: plenary recommended/Fashion
     url: https://www.refinery29.com/fashion/rss.xml
     homepage: https://www.refinery29.com/
@@ -4715,8 +3251,6 @@ sources:
     name: 'RSS: News'
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - entertainment
     region: plenary recommended/Music
     url: http://pitchfork.com/rss/news
     homepage: http://pitchfork.com/
@@ -4724,8 +3258,6 @@ sources:
     name: Saket Narayan
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - science_space_tech
     region: plenary recommended/Android Development
     url: https://saket.me/feed/
     homepage: https://saket.me/
@@ -4733,8 +3265,6 @@ sources:
     name: Saturday Morning Breakfast Cereal
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - entertainment
     region: plenary recommended/Funny
     url: https://www.smbc-comics.com/comic/rss
     homepage: https://www.smbc-comics.com/
@@ -4742,8 +3272,6 @@ sources:
     name: Scripting News
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - science_space_tech
     region: plenary recommended/Programming
     url: http://scripting.com/rss.xml
     homepage: http://scripting.com/
@@ -4751,7 +3279,6 @@ sources:
     name: Shutterbean
     language: en
     tier: peripheral
-    allowed_topic_ids: []
     region: plenary recommended/Food
     url: http://www.shutterbean.com/feed/
     homepage: http://www.shutterbean.com/
@@ -4759,7 +3286,6 @@ sources:
     name: Skinnytaste
     language: en
     tier: peripheral
-    allowed_topic_ids: []
     region: plenary recommended/Food
     url: https://www.skinnytaste.com/feed/
     homepage: https://www.skinnytaste.com/
@@ -4767,8 +3293,6 @@ sources:
     name: Sky Sports Cricket Podcast
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - sports
     region: plenary recommended/Cricket
     url: https://www.spreaker.com/show/3387348/episodes/feed
     homepage: https://www.spreaker.com/
@@ -4776,7 +3300,6 @@ sources:
     name: smitten kitchen
     language: en
     tier: peripheral
-    allowed_topic_ids: []
     region: plenary recommended/Food
     url: http://feeds.feedburner.com/smittenkitchen
     homepage: http://feeds.feedburner.com/
@@ -4784,8 +3307,6 @@ sources:
     name: So many books, so little time
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - entertainment
     region: plenary recommended/Books
     url: https://reddit.com/r/books/.rss
     homepage: https://reddit.com/
@@ -4793,8 +3314,6 @@ sources:
     name: Soccer News
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - sports
     region: plenary recommended/Football
     url: https://www.soccernews.com/feed
     homepage: https://www.soccernews.com/
@@ -4802,8 +3321,6 @@ sources:
     name: Software Defined Talk
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - science_space_tech
     region: plenary recommended/Programming
     url: https://feeds.fireside.fm/sdt/rss
     homepage: https://feeds.fireside.fm/
@@ -4812,8 +3329,6 @@ sources:
     name: Software Engineering Radio - The Podcast for Professional Software Developers
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - science_space_tech
     region: plenary recommended/Programming
     url: http://feeds.feedburner.com/se-radio
     homepage: http://feeds.feedburner.com/
@@ -4821,8 +3336,6 @@ sources:
     name: Song Exploder
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - entertainment
     region: plenary recommended/Music
     url: http://songexploder.net/feed
     homepage: http://songexploder.net/
@@ -4830,8 +3343,6 @@ sources:
     name: Sports News - Latest Sports and Football News | Sky News
     language: en
     tier: core
-    allowed_topic_ids:
-      - sports
     region: plenary recommended/Sports
     url: http://feeds.skynews.com/feeds/rss/sports.xml
     homepage: http://feeds.skynews.com/
@@ -4839,8 +3350,6 @@ sources:
     name: Sportskeeda
     language: en
     tier: core
-    allowed_topic_ids:
-      - sports
     region: plenary recommended/Sports
     url: https://www.sportskeeda.com/feed
     homepage: https://www.sportskeeda.com/
@@ -4848,8 +3357,6 @@ sources:
     name: Stack Abuse
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - science_space_tech
     region: plenary recommended/Programming
     url: https://stackabuse.com/rss/
     homepage: https://stackabuse.com/
@@ -4857,8 +3364,6 @@ sources:
     name: Stumped
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - sports
     region: plenary recommended/Cricket
     url: https://podcasts.files.bbci.co.uk/p02gsrmh.rss
     homepage: https://podcasts.files.bbci.co.uk/
@@ -4866,8 +3371,6 @@ sources:
     name: Switch Hit Podcast
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - sports
     region: plenary recommended/Cricket
     url: https://feeds.megaphone.fm/ESP9247246951
     homepage: https://feeds.megaphone.fm/
@@ -4875,8 +3378,6 @@ sources:
     name: Tailenders
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - sports
     region: plenary recommended/Cricket
     url: https://podcasts.files.bbci.co.uk/p02pcb4w.rss
     homepage: https://podcasts.files.bbci.co.uk/
@@ -4884,8 +3385,6 @@ sources:
     name: TalkAndroid
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - science_space_tech
     region: plenary recommended/Android
     url: http://feeds.feedburner.com/AndroidNewsGoogleAndroidForums
     homepage: http://feeds.feedburner.com/
@@ -4893,8 +3392,6 @@ sources:
     name: Television News and Discussion
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - entertainment
     region: plenary recommended/Television
     url: https://reddit.com/r/television/.rss
     homepage: https://reddit.com/
@@ -4902,8 +3399,6 @@ sources:
     name: Tennis News & Discussion
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - sports
     region: plenary recommended/Tennis
     url: https://www.reddit.com/r/tennis/.rss
     homepage: https://www.reddit.com/
@@ -4911,8 +3406,6 @@ sources:
     name: Test Match Special
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - sports
     region: plenary recommended/Cricket
     url: https://podcasts.files.bbci.co.uk/p02nrsl2.rss
     homepage: https://podcasts.files.bbci.co.uk/
@@ -4920,8 +3413,6 @@ sources:
     name: The Airbnb Tech Blog - Medium
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - science_space_tech
     region: plenary recommended/Programming
     url: https://medium.com/feed/airbnb-engineering
     homepage: https://medium.com/
@@ -4929,8 +3420,6 @@ sources:
     name: The Ancient Gaming Noob
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - entertainment
     region: plenary recommended/Gaming
     url: http://feeds.feedburner.com/TheAncientGamingNoob
     homepage: http://feeds.feedburner.com/
@@ -4938,7 +3427,6 @@ sources:
     name: "The Architect\u2019s Newspaper"
     language: en
     tier: peripheral
-    allowed_topic_ids: []
     region: plenary recommended/Architecture
     url: https://archpaper.com/feed
     homepage: https://archpaper.com/
@@ -4946,8 +3434,6 @@ sources:
     name: The Beauty Look Book
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - entertainment
     region: plenary recommended/Beauty
     url: https://thebeautylookbook.com/feed
     homepage: https://thebeautylookbook.com/
@@ -4955,8 +3441,6 @@ sources:
     name: The best vintage and classic cars for sale online | Bring a Trailer
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - entertainment
     region: plenary recommended/Cars
     url: https://bringatrailer.com/feed/
     homepage: https://bringatrailer.com/
@@ -4964,8 +3448,6 @@ sources:
     name: The Bloggess
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - entertainment
     region: plenary recommended/Funny
     url: https://thebloggess.com/feed/
     homepage: https://thebloggess.com/
@@ -4973,7 +3455,6 @@ sources:
     name: The Daily WTF
     language: en
     tier: peripheral
-    allowed_topic_ids: []
     region: plenary recommended/Funny
     url: http://syndication.thedailywtf.com/TheDailyWtf
     homepage: http://syndication.thedailywtf.com/
@@ -4983,8 +3464,6 @@ sources:
       | Australia's most popular design blog.
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - entertainment
     region: plenary recommended/Interior design
     url: https://thedesignfiles.net/feed/
     homepage: https://thedesignfiles.net/
@@ -4992,8 +3471,6 @@ sources:
     name: The History Reader
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - entertainment
     region: plenary recommended/History
     url: https://www.thehistoryreader.com/feed/
     homepage: https://www.thehistoryreader.com/
@@ -5001,7 +3478,6 @@ sources:
     name: The Inspired Room
     language: en
     tier: peripheral
-    allowed_topic_ids: []
     region: plenary recommended/Interior design
     url: https://theinspiredroom.net/feed/
     homepage: https://theinspiredroom.net/
@@ -5009,8 +3485,6 @@ sources:
     name: The Loop
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - science_space_tech
     region: plenary recommended/Apple
     url: https://www.loopinsight.com/feed
     homepage: https://www.loopinsight.com/
@@ -5018,7 +3492,6 @@ sources:
     name: the memory palace
     language: en
     tier: peripheral
-    allowed_topic_ids: []
     region: plenary recommended/History
     url: http://feeds.thememorypalace.us/thememorypalace
     homepage: http://feeds.thememorypalace.us/
@@ -5026,8 +3499,6 @@ sources:
     name: The Onion
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - entertainment
     region: plenary recommended/Funny
     url: https://www.theonion.com/rss
     homepage: https://www.theonion.com/
@@ -5035,8 +3506,6 @@ sources:
     name: The Stack Overflow Podcast
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - science_space_tech
     region: plenary recommended/Programming
     url: https://feeds.simplecast.com/XA_851k3
     homepage: https://feeds.simplecast.com/
@@ -5044,8 +3513,6 @@ sources:
     name: The Truth About Cars
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - entertainment
     region: plenary recommended/Cars
     url: https://www.thetruthaboutcars.com/feed/
     homepage: https://www.thetruthaboutcars.com/
@@ -5053,8 +3520,6 @@ sources:
     name: The unofficial Apple community
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - science_space_tech
     region: plenary recommended/Apple
     url: https://www.reddit.com/r/apple/.rss
     homepage: https://www.reddit.com/
@@ -5062,7 +3527,6 @@ sources:
     name: Throughline
     language: en
     tier: peripheral
-    allowed_topic_ids: []
     region: plenary recommended/History
     url: https://feeds.npr.org/510333/podcast.xml
     homepage: https://feeds.npr.org/
@@ -5070,8 +3534,6 @@ sources:
     name: 'Top Gear: The Philippine authority on cars and the automotive industry'
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - entertainment
     nations:
       - Philippines
     region: plenary country/Philippines
@@ -5081,9 +3543,6 @@ sources:
     name: TouchArcade - iPhone, iPad, Android Games Forum
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - entertainment
-      - science_space_tech
     region: plenary recommended/Gaming
     url: https://toucharcade.com/community/forums/-/index.rss
     homepage: https://toucharcade.com/
@@ -5091,7 +3550,6 @@ sources:
     name: Travel | The Guardian
     language: en
     tier: peripheral
-    allowed_topic_ids: []
     region: plenary recommended/Travel
     url: https://www.theguardian.com/uk/travel/rss
     homepage: https://www.theguardian.com/
@@ -5099,7 +3557,6 @@ sources:
     name: Trendir
     language: en
     tier: peripheral
-    allowed_topic_ids: []
     region: plenary recommended/Interior design
     url: https://www.trendir.com/feed/
     homepage: https://www.trendir.com/
@@ -5107,8 +3564,6 @@ sources:
     name: TV Fanatic
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - entertainment
     region: plenary recommended/Television
     url: https://www.tvfanatic.com/rss.xml
     homepage: https://www.tvfanatic.com/
@@ -5116,8 +3571,6 @@ sources:
     name: TVLine
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - entertainment
     region: plenary recommended/Television
     url: https://tvline.com/feed/
     homepage: https://tvline.com/
@@ -5125,7 +3578,6 @@ sources:
     name: User Experience
     language: en
     tier: peripheral
-    allowed_topic_ids: []
     region: plenary recommended/UI - UX
     url: https://www.reddit.com/r/userexperience/.rss
     homepage: https://www.reddit.com/
@@ -5133,7 +3585,6 @@ sources:
     name: UX Collective - Medium
     language: en
     tier: peripheral
-    allowed_topic_ids: []
     region: plenary recommended/UI - UX
     url: https://uxdesign.cc/feed
     homepage: https://uxdesign.cc/
@@ -5141,8 +3592,6 @@ sources:
     name: Who What Wear
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - entertainment
     region: plenary recommended/Fashion
     url: https://www.whowhatwear.com/rss
     homepage: https://www.whowhatwear.com/
@@ -5150,8 +3599,6 @@ sources:
     name: Xbox's Major Nelson
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - entertainment
     region: plenary recommended/Gaming
     url: https://majornelson.com/feed/
     homepage: https://majornelson.com/
@@ -5159,8 +3606,6 @@ sources:
     name: xkcd.com
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - entertainment
     region: plenary recommended/Funny
     url: https://xkcd.com/rss.xml
     homepage: https://xkcd.com/
@@ -5168,8 +3613,6 @@ sources:
     name: Yahoo! Sports - News, Scores, Standings, Rumors, Fantasy Games
     language: en
     tier: core
-    allowed_topic_ids:
-      - sports
     region: plenary recommended/Sports
     url: https://sports.yahoo.com/rss/
     homepage: https://sports.yahoo.com/
@@ -5177,8 +3620,6 @@ sources:
     name: Yanko Design
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - entertainment
     region: plenary recommended/Interior design
     url: http://feeds.feedburner.com/yankodesign
     homepage: http://feeds.feedburner.com/
@@ -5186,11 +3627,6 @@ sources:
     name: ABC News Australia
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - Australia
     region: australia/western
@@ -5200,11 +3636,6 @@ sources:
     name: Ada Derana English
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - Sri Lanka
     region: sri lanka/non-western
@@ -5214,11 +3645,6 @@ sources:
     name: Africanews
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     region: africa/non-western
     url: https://news.google.com/rss/search?q=when:24h+source:Africanews&hl=en-US&gl=US&ceid=US:en
     homepage: https://www.africanews.com/
@@ -5230,11 +3656,6 @@ sources:
     name: AllAfrica
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     region: africa/non-western
     url: https://allafrica.com/tools/headlines/rdf/latest/headlines.rdf
     homepage: https://allafrica.com/
@@ -5242,11 +3663,6 @@ sources:
     name: Balkan Insight
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     region: balkans/europe
     url: https://balkaninsight.com/feed/
     homepage: https://balkaninsight.com/
@@ -5254,11 +3670,6 @@ sources:
     name: Bangkok Post
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - Thailand
     region: thailand/non-western
@@ -5268,11 +3679,6 @@ sources:
     name: SBS News
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - Australia
     region: australia/western
@@ -5282,8 +3688,6 @@ sources:
     name: BleepingComputer
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - science_space_tech
     region: us/western
     url: https://www.bleepingcomputer.com/feed/
     homepage: https://www.bleepingcomputer.com/
@@ -5291,11 +3695,6 @@ sources:
     name: Buenos Aires Herald
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - Argentina
     region: argentina/latin america
@@ -5305,11 +3704,6 @@ sources:
     name: Buenos Aires Times
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - Argentina
     region: argentina/latin america
@@ -5319,11 +3713,6 @@ sources:
     name: Business Insider
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     region: us/western
     url: https://www.businessinsider.com/rss
     homepage: https://www.businessinsider.com/
@@ -5331,11 +3720,6 @@ sources:
     name: BusinessDay Nigeria
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - Nigeria
     region: nigeria/non-western
@@ -5345,11 +3729,6 @@ sources:
     name: CBS News
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     region: us/western
     url: https://www.cbsnews.com/latest/rss/main
     homepage: https://www.cbsnews.com/
@@ -5357,11 +3736,6 @@ sources:
     name: CBS News World
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     region: us/western
     url: https://www.cbsnews.com/latest/rss/world
     homepage: https://www.cbsnews.com/world/
@@ -5369,11 +3743,6 @@ sources:
     name: CNN
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     region: us/western
     url: https://news.google.com/rss/search?q=when:24h+source:CNN&hl=en-US&gl=US&ceid=US:en
     homepage: https://www.cnn.com/
@@ -5384,11 +3753,6 @@ sources:
     name: CTV News
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - Canada
     region: canada/western
@@ -5401,11 +3765,6 @@ sources:
     name: Colombia Reports
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - Colombia
     region: colombia/latin america
@@ -5415,8 +3774,6 @@ sources:
     name: CyberScoop
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - science_space_tech
     region: us/western
     url: https://cyberscoop.com/feed/
     homepage: https://cyberscoop.com/
@@ -5424,11 +3781,6 @@ sources:
     name: Daily Nation Kenya
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - Kenya
     region: kenya/non-western
@@ -5438,11 +3790,6 @@ sources:
     name: Daily Sabah
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - Turkey
     region: turkey/non-western
@@ -5455,11 +3802,6 @@ sources:
     name: The Daily Star Bangladesh
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - Bangladesh
     region: bangladesh/non-western
@@ -5469,8 +3811,6 @@ sources:
     name: Dark Reading
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - science_space_tech
     region: us/western
     url: https://www.darkreading.com/rss.xml
     homepage: https://www.darkreading.com/
@@ -5478,11 +3818,6 @@ sources:
     name: EL PAIS English
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     region: spain/global
     url: https://feeds.elpais.com/mrss-s/pages/ep/site/english.elpais.com/portada
     homepage: https://english.elpais.com/
@@ -5490,11 +3825,6 @@ sources:
     name: EUobserver
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     region: europe/western
     url: https://euobserver.com/feed/
     homepage: https://euobserver.com/
@@ -5502,11 +3832,6 @@ sources:
     name: Euractiv
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     region: europe/western
     url: https://www.euractiv.com/feed/
     homepage: https://www.euractiv.com/
@@ -5514,11 +3839,6 @@ sources:
     name: Euronews
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     region: europe/western
     url: https://www.euronews.com/rss?level=theme&name=news
     homepage: https://www.euronews.com/
@@ -5526,11 +3846,6 @@ sources:
     name: Free Malaysia Today
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - Malaysia
     region: malaysia/non-western
@@ -5540,8 +3855,6 @@ sources:
     name: Futurism
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - science_space_tech
     region: us/western
     url: https://futurism.com/feed
     homepage: https://futurism.com/
@@ -5549,11 +3862,6 @@ sources:
     name: The Globe and Mail
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - Canada
     region: canada/western
@@ -5563,11 +3871,6 @@ sources:
     name: GroundUp
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - South Africa
     region: south africa/non-western
@@ -5577,11 +3880,6 @@ sources:
     name: Hindustan Times India News
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - India
     region: india/non-western
@@ -5591,11 +3889,6 @@ sources:
     name: The Indian Express
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - India
     region: india/non-western
@@ -5605,11 +3898,6 @@ sources:
     name: InSight Crime
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     region: latin america/non-western
     url: https://insightcrime.org/feed/
     homepage: https://insightcrime.org/
@@ -5617,11 +3905,6 @@ sources:
     name: Iran International English
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - Iran
     region: iran/middle east
@@ -5631,11 +3914,6 @@ sources:
     name: Jamaica Gleaner
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - Jamaica
     region: jamaica/caribbean
@@ -5645,11 +3923,6 @@ sources:
     name: Khaama Press
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - Afghanistan
     region: afghanistan/non-western
@@ -5659,11 +3932,6 @@ sources:
     name: The Korea Times
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - South Korea
     region: south korea/non-western
@@ -5673,11 +3941,6 @@ sources:
     name: The Kyiv Independent
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - Ukraine
     region: ukraine/europe
@@ -5687,11 +3950,6 @@ sources:
     name: Kyiv Post
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - Ukraine
     region: ukraine/europe
@@ -5701,11 +3959,6 @@ sources:
     name: Latin America Reports
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     region: latin america/non-western
     url: https://latinamericareports.com/feed/
     homepage: https://latinamericareports.com/
@@ -5713,11 +3966,6 @@ sources:
     name: Mail & Guardian
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - South Africa
     region: south africa/non-western
@@ -5727,11 +3975,6 @@ sources:
     name: Malay Mail
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - Malaysia
     region: malaysia/non-western
@@ -5741,11 +3984,6 @@ sources:
     name: Meduza English
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     region: russia/europe
     url: https://meduza.io/rss2/en/all
     homepage: https://meduza.io/en
@@ -5753,11 +3991,6 @@ sources:
     name: MercoPress
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     region: latin america/non-western
     url: https://en.mercopress.com/rss
     homepage: https://en.mercopress.com/
@@ -5765,11 +3998,6 @@ sources:
     name: Middle East Eye
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     region: middle east/non-western
     url: https://www.middleeasteye.net/rss
     homepage: https://www.middleeasteye.net/
@@ -5777,11 +4005,6 @@ sources:
     name: Mizzima
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - Myanmar
     region: myanmar/non-western
@@ -5791,11 +4014,6 @@ sources:
     name: NBC News
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     region: us/western
     url: https://feeds.nbcnews.com/nbcnews/public/news
     homepage: https://www.nbcnews.com/
@@ -5803,11 +4021,6 @@ sources:
     name: NBC News World
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     region: us/western
     url: https://feeds.nbcnews.com/nbcnews/public/world
     homepage: https://www.nbcnews.com/world
@@ -5815,11 +4028,6 @@ sources:
     name: News24
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - South Africa
     region: south africa/non-western
@@ -5832,11 +4040,6 @@ sources:
     name: Nikkei Asia
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     region: asia/non-western
     url: https://news.google.com/rss/search?q=when:24h+source:Nikkei+Asia&hl=en-US&gl=US&ceid=US:en
     homepage: https://asia.nikkei.com/
@@ -5847,11 +4050,6 @@ sources:
     name: PBS NewsHour
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     region: us/western
     url: https://www.pbs.org/newshour/feeds/rss/headlines
     homepage: https://www.pbs.org/newshour/
@@ -5859,11 +4057,6 @@ sources:
     name: PBS NewsHour World
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     region: us/western
     url: https://www.pbs.org/newshour/feeds/rss/world
     homepage: https://www.pbs.org/newshour/world
@@ -5871,8 +4064,6 @@ sources:
     name: PCMag
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - science_space_tech
     region: us/western
     url: https://www.pcmag.com/feeds/rss/latest
     homepage: https://www.pcmag.com/
@@ -5880,11 +4071,6 @@ sources:
     name: POLITICO Europe
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     region: europe/western
     url: https://www.politico.eu/feed/
     homepage: https://www.politico.eu/
@@ -5892,11 +4078,6 @@ sources:
     name: Punch Nigeria
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - Nigeria
     region: nigeria/non-western
@@ -5906,8 +4087,6 @@ sources:
     name: Quanta Magazine
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - science_space_tech
     region: us/western
     url: https://www.quantamagazine.org/feed/
     homepage: https://www.quantamagazine.org/
@@ -5915,11 +4094,6 @@ sources:
     name: Quartz
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     region: global/western
     url: https://qz.com/rss
     homepage: https://qz.com/
@@ -5927,8 +4101,6 @@ sources:
     name: Rest of World
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - science_space_tech
     region: global/non-western
     url: https://restofworld.org/feed/latest/
     homepage: https://restofworld.org/
@@ -5936,11 +4108,6 @@ sources:
     name: RNZ News
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - New Zealand
     region: new zealand/western
@@ -5950,11 +4117,6 @@ sources:
     name: RTE News
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - Ireland
     region: ireland/western
@@ -5964,11 +4126,6 @@ sources:
     name: Sahara Reporters
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - Nigeria
     region: nigeria/non-western
@@ -5978,8 +4135,6 @@ sources:
     name: ScienceAlert
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - science_space_tech
     region: australia/western
     url: https://www.sciencealert.com/feed
     homepage: https://www.sciencealert.com/
@@ -5987,8 +4142,6 @@ sources:
     name: STAT News
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - science_space_tech
     region: us/western
     url: https://www.statnews.com/feed/
     homepage: https://www.statnews.com/
@@ -5996,11 +4149,6 @@ sources:
     name: Taipei Times
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - Taiwan
     region: taiwan/non-western
@@ -6010,8 +4158,6 @@ sources:
     name: 404 Media
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - science_space_tech
     region: us/western
     url: https://www.404media.co/rss/
     homepage: https://www.404media.co/
@@ -6019,11 +4165,6 @@ sources:
     name: Tempo English
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - Indonesia
     region: indonesia/non-western
@@ -6033,11 +4174,6 @@ sources:
     name: The Conversation
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     region: global/western
     url: https://theconversation.com/articles.atom
     homepage: https://theconversation.com/
@@ -6045,11 +4181,6 @@ sources:
     name: The Diplomat
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     region: asia/non-western
     url: https://thediplomat.com/feed/
     homepage: https://thediplomat.com/
@@ -6057,11 +4188,6 @@ sources:
     name: The Jakarta Post
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - Indonesia
     region: indonesia/non-western
@@ -6074,11 +4200,6 @@ sources:
     name: The New Arab
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     region: middle east/non-western
     url: https://www.newarab.com/rss
     homepage: https://www.newarab.com/
@@ -6086,11 +4207,6 @@ sources:
     name: The Quint
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - India
     region: india/non-western
@@ -6103,8 +4219,6 @@ sources:
     name: The Record from Recorded Future News
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - science_space_tech
     region: us/western
     url: https://therecord.media/feed
     homepage: https://therecord.media/
@@ -6112,8 +4226,6 @@ sources:
     name: The Register
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - science_space_tech
     region: uk/western
     url: https://www.theregister.com/headlines.atom
     homepage: https://www.theregister.com/
@@ -6121,11 +4233,6 @@ sources:
     name: The Straits Times
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - Singapore
     region: singapore/non-western
@@ -6138,11 +4245,6 @@ sources:
     name: TheCable
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - Nigeria
     region: nigeria/non-western
@@ -6156,11 +4258,6 @@ sources:
     name: ThePrint
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - India
     region: india/non-western
@@ -6174,11 +4271,6 @@ sources:
     name: Thai PBS World
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - Thailand
     region: thailand/non-western
@@ -6191,11 +4283,6 @@ sources:
     name: The Tico Times
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - Costa Rica
     region: costa rica/latin america
@@ -6205,11 +4292,6 @@ sources:
     name: The Times of Israel
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - Israel
     region: israel/middle east
@@ -6219,11 +4301,6 @@ sources:
     name: TOLOnews
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - Afghanistan
     region: afghanistan/non-western
@@ -6233,11 +4310,6 @@ sources:
     name: Ukrinform
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - Ukraine
     region: ukraine/europe
@@ -6247,8 +4319,6 @@ sources:
     name: Universe Today
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - science_space_tech
     region: global/western
     url: https://www.universetoday.com/feed/
     homepage: https://www.universetoday.com/
@@ -6256,11 +4326,6 @@ sources:
     name: USA Today
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     region: us/western
     url: https://news.google.com/rss/search?q=when:24h+source:USA+Today&hl=en-US&gl=US&ceid=US:en
     homepage: https://www.usatoday.com/
@@ -6271,11 +4336,6 @@ sources:
     name: Viet Nam News
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - Vietnam
     region: vietnam/non-western
@@ -6285,11 +4345,6 @@ sources:
     name: VnExpress International
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     nations:
       - Vietnam
     region: vietnam/non-western
@@ -6299,11 +4354,6 @@ sources:
     name: The Wall Street Journal
     language: en
     tier: peripheral
-    allowed_topic_ids:
-      - global_crises_conflict
-      - us_economy
-      - global_business_finance
-      - us_politics
     region: us/western
     url: https://news.google.com/rss/search?q=when:24h+source:The+Wall+Street+Journal&hl=en-US&gl=US&ceid=US:en
     homepage: https://www.wsj.com/

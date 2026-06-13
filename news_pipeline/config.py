@@ -2,10 +2,7 @@
 
 The pipeline is intentionally driven by small YAML files in ``config/``:
 
-- ``sources.yaml`` defines article feeds searched after source-tier and topic
-  selection.
-- ``client.yaml`` selects active predefined topics.
-- ``topics.yaml`` defines predefined topic relevance vocabulary.
+- ``sources.yaml`` defines article feeds searched by run-mode tier and language.
 - ``recipients.yaml`` defines email recipients and optional personal prompts.
 
 Environment variables can override runtime knobs without editing YAML. See
@@ -20,13 +17,14 @@ import re
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 import yaml
 
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 CONFIG_DIR = ROOT_DIR / "config"
+RUN_PRESETS_PATH = CONFIG_DIR / "run_presets.yaml"
 CURSORIGNORE_MANAGED_START = "# >>> news-pipeline latest output >>>"
 CURSORIGNORE_MANAGED_END = "# <<< news-pipeline latest output <<<"
 ASSISTANT_CONTEXT_MANAGED_START = "# >>> news-pipeline core context >>>"
@@ -48,8 +46,7 @@ ASSISTANT_CONTEXT_CORE_PATTERNS = (
     "!news_pipeline/",
     "!news_pipeline/**",
     "!config/",
-    "!config/client.yaml",
-    "!config/topics.yaml",
+    "!config/run_presets.yaml",
     "!config/sources.yaml",
     "!config/recipients.yaml",
     "__pycache__/",
@@ -65,20 +62,19 @@ DEFAULT_MODEL_ALIAS = "gemma-26b-moe"
 CODEX_TEST_MODEL_ALIAS = "gemma-e2b-tiny"
 CODEX_TEST_MODEL_NAME = "deadbydawn101/gemma-4-E2B-Heretic-Uncensored-mlx-4bit"
 DEFAULT_TRANSLATION_MODEL = "google/translategemma-4b-it"
-DEV_RUN_MODE = "dev"
-LOCAL_PROD_RUN_MODE = "local-prod"
-LOOSE_LOCAL_PROD_RUN_MODE = "loose-local-prod"
-PROD_RUN_MODE = "prod"
-RUN_MODES = (DEV_RUN_MODE, LOCAL_PROD_RUN_MODE, LOOSE_LOCAL_PROD_RUN_MODE, PROD_RUN_MODE)
-LOCAL_PROD_REVIEW_RUN_MODES = {LOCAL_PROD_RUN_MODE, LOOSE_LOCAL_PROD_RUN_MODE}
-DEV_MATCHING_DEFAULT_RUN_MODES = {DEV_RUN_MODE, LOOSE_LOCAL_PROD_RUN_MODE}
+GEMMA_4_ARTICLE_SUMMARY_CAP = 40
 CORE_SOURCE_TIER = "core"
 PERIPHERAL_SOURCE_TIER = "peripheral"
-RUN_MODE_SOURCE_TIERS = {
-    DEV_RUN_MODE: {CORE_SOURCE_TIER},
-    LOCAL_PROD_RUN_MODE: {CORE_SOURCE_TIER, PERIPHERAL_SOURCE_TIER},
-    LOOSE_LOCAL_PROD_RUN_MODE: {CORE_SOURCE_TIER, PERIPHERAL_SOURCE_TIER},
-    PROD_RUN_MODE: {CORE_SOURCE_TIER, PERIPHERAL_SOURCE_TIER},
+SOURCE_SCOPE_CORE = CORE_SOURCE_TIER
+SOURCE_SCOPE_PERIPHERAL = PERIPHERAL_SOURCE_TIER
+SOURCE_SCOPES = (SOURCE_SCOPE_CORE, SOURCE_SCOPE_PERIPHERAL)
+RECIPIENT_SCOPE_BRADLEY = "bradley"
+RECIPIENT_SCOPE_ALL = "all"
+RECIPIENT_SCOPES = (RECIPIENT_SCOPE_BRADLEY, RECIPIENT_SCOPE_ALL)
+PRESET_ENV_VAR = "NEWS_PRESET"
+SOURCE_SCOPE_TIERS = {
+    SOURCE_SCOPE_CORE: {CORE_SOURCE_TIER},
+    SOURCE_SCOPE_PERIPHERAL: {CORE_SOURCE_TIER, PERIPHERAL_SOURCE_TIER},
 }
 SOURCE_MATCH_MODE_FEED_LABEL = "feed_label"
 SOURCE_MATCH_MODE_WIRE_ATTRIBUTION = "wire_attribution"
@@ -100,6 +96,34 @@ UNSUPPORTED_MODEL_REFERENCES = {
     "TheCluster/Qwen3.5-9B-Claude-4.6-HighIQ-INSTRUCT-HERETIC-UNCENSORED-MLX-mxfp8",
 }
 CODEX_RUNTIME_ENV_VARS = ("CODEX_SANDBOX", "CODEX_CI", "CODEX_THREAD_ID")
+REMOVED_TOPIC_ENV_VARS = (
+    "NEWS_TOPIC_IDS",
+    "NEWS_TOPIC_MODE",
+    "NEWS_CLIENT_YAML",
+    "NEWS_TOPICS_YAML",
+    "NEWS_MODEL_TOPIC_CLUSTERING",
+    "NEWS_MODEL_TOPIC_COUNTRY_GATE",
+    "NEWS_MODEL_STORY_TOPIC_VALIDATION",
+    "NEWS_NUM_TOP_TOPICS",
+    "NEWS_TOP_TOPIC_PROBES",
+    "NEWS_TOPIC_RELEVANCE_MIN_SCORE",
+    "NEWS_STORY_TOPIC_FIT_MIN_SCORE",
+    "NEWS_STORY_TOPIC_VALIDATION_ENABLED",
+    "NEWS_US_TOPIC_COUNTRY_GATE_ENABLED",
+    "NEWS_MAX_STORIES_PER_TOPIC",
+    "NEWS_TOPIC_EMBEDDING_THRESHOLD",
+    "NEWS_PER_SOURCE_TOPIC_ARTICLE_CAP",
+    "NEWS_SUMMARY_SCOPE",
+)
+REMOVED_SOURCE_TOPIC_FIELDS = {
+    "allowed_topic_ids",
+    "only_topic_ids",
+    "source_topic_ids",
+    "can_seed_topics",
+    "seed_topics",
+    "can_validate_topics",
+    "validate_topics",
+}
 
 
 @dataclass(frozen=True)
@@ -111,14 +135,11 @@ class NewsSource:
     region: str | None = None
     language: str | None = None
     tier: str = PERIPHERAL_SOURCE_TIER
-    allowed_topic_ids: tuple[str, ...] = ()
     nations: tuple[str, ...] = ()
     frame: str | None = None
     provider_type: str | None = None
     intended_role: str | None = None
     weight: float = 1.0
-    can_seed_topics: bool = False
-    can_validate_topics: bool = False
     can_enrich_coverage: bool = True
     strict_source_match: bool = False
     source_match_mode: str = "feed_label"
@@ -143,17 +164,12 @@ class ModelSamplingSettings:
 class ModelRuntimeProfile:
     key: str
     model_max_input_tokens: int
-    article_summary_concurrency: int
     article_text_token_limit: int
     total_article_summary_cap: int
-    per_topic_article_summary_cap: int
-    topic_clustering_max_tokens: int
     translation_max_tokens: int
     article_summary_max_tokens: int
     final_synthesis_max_tokens: int
     title_generation_max_tokens: int
-    server_decode_concurrency: int
-    server_prompt_concurrency: int
     server_prefill_step_size: int
     server_prompt_cache_size: int
     server_prompt_cache_bytes: str
@@ -167,8 +183,6 @@ class ModelRuntimeProfile:
 class RuntimeConfig:
     root_dir: Path
     sources_path: Path
-    client_path: Path
-    topics_path: Path
     recipients_path: Path
     env_json_path: Path
     run_started_at: datetime
@@ -176,25 +190,28 @@ class RuntimeConfig:
     timestamp: str
     output_dir: Path
     run_output_dir: Path
-    used_urls_filename: str
-    dev_used_urls_filename: str
-    local_prod_used_urls_filename: str
+    latest_run_markdown_path: Path
+    latest_run_log_path: Path
+    latest_run_details_path: Path
+    run_staging_dir: Path
+    history_db_path: Path
+    history_export_csv: bool
+    write_legacy_diagnostics: bool
     run_used_urls_path: Path
-    legacy_seen_urls_path: Path
-    run_mode: str
-    dev: bool
-    local_prod: bool
-    loose_local_prod: bool
-    bradley_only_delivery: bool
-    shared_url_history_enabled: bool
+    preset_id: str
+    source_scope: str
+    recipient_scope: str
+    url_reuse_blocking_enabled: bool
     relaxed_final_synthesis_guards: bool
-    topic_mode: str
-    topic_ids: tuple[str, ...]
     model_reference: str
     model_name: str
     model_profile: ModelRuntimeProfile
     model_base_url: str
     model_backend: str
+    model_concurrency: int
+    article_summary_concurrency: int
+    story_synthesis_concurrency: int
+    source_collection_concurrency: int
     model_server_command: str
     translation_model_reference: str
     translation_model_name: str
@@ -205,11 +222,8 @@ class RuntimeConfig:
     translation_enabled: bool
     recent_window_hours: int
     max_articles_per_source: int
-    num_top_topics: int
-    top_topic_probes: int
     top_of_funnel_per_provider: int
-    summary_scope_label: str
-    bradley_only_recipient: str
+    bradley_recipient: str
     email_recipients_fallback: list[str]
     email_from: str
     smtp_host: str
@@ -230,13 +244,7 @@ class RuntimeConfig:
     image_crop_bottom_ratio: float
     image_model_id: str
     image_base_model: str
-    per_source_topic_article_cap: int
-    topic_relevance_min_score: int
-    story_topic_fit_min_score: int
-    story_topic_validation_enabled: bool
     min_articles_per_story: int
-    max_stories_per_topic: int
-    topic_embedding_similarity_threshold: float
     story_cluster_similarity_threshold: float
 
 
@@ -263,9 +271,8 @@ def _task_sampling(
     default: ModelSamplingSettings,
     reasoning: ModelSamplingSettings,
     translation: ModelSamplingSettings | None = None,
-    topic_clustering: ModelSamplingSettings | None = None,
-    topic_country_gate: ModelSamplingSettings | None = None,
-    story_topic_validation: ModelSamplingSettings | None = None,
+    story_discovery: ModelSamplingSettings | None = None,
+    story_scale_screening: ModelSamplingSettings | None = None,
     article_summary: ModelSamplingSettings | None = None,
     final_synthesis: ModelSamplingSettings | None = None,
     title_generation: ModelSamplingSettings | None = None,
@@ -273,11 +280,8 @@ def _task_sampling(
     return {
         "default": default,
         "translation": translation or default,
-        "topic_clustering": topic_clustering or reasoning,
-        "topic_country_gate": topic_country_gate
-        or _sampling(0.0, 0.9, 20, 0.0, 0.0, 1.05),
-        "story_topic_validation": story_topic_validation
-        or topic_country_gate
+        "story_discovery": story_discovery or reasoning,
+        "story_scale_screening": story_scale_screening
         or _sampling(0.0, 0.9, 20, 0.0, 0.0, 1.05),
         "article_summary": article_summary or default,
         "final_synthesis": final_synthesis or reasoning,
@@ -293,33 +297,33 @@ QWEN_SYNTHESIS_SAMPLING = _sampling(0.25, 0.85, 20, 0.0, 0.3, 1.05)
 TINY_GEMMA_DEFAULT_SAMPLING = _sampling(0.15, 0.8, 20, 0.02, 0.0, 1.1)
 TINY_GEMMA_REASONING_SAMPLING = _sampling(0.25, 0.85, 30, 0.02, 0.2, 1.08)
 
+DEFAULT_PIPELINE_CONCURRENCY = 4
+DEFAULT_ARTICLE_SUMMARY_CONCURRENCY = DEFAULT_PIPELINE_CONCURRENCY
+DEFAULT_STORY_SYNTHESIS_CONCURRENCY = DEFAULT_PIPELINE_CONCURRENCY
+DEFAULT_SOURCE_COLLECTION_CONCURRENCY = DEFAULT_PIPELINE_CONCURRENCY
+
 
 MODEL_RUNTIME_PROFILES = {
     "big_conservative": ModelRuntimeProfile(
         key="big_conservative",
-        model_max_input_tokens=7000,
-        article_summary_concurrency=1,
-        article_text_token_limit=6000,
+        model_max_input_tokens=6000,
+        article_text_token_limit=4500,
         total_article_summary_cap=72,
-        per_topic_article_summary_cap=24,
-        topic_clustering_max_tokens=1800,
         translation_max_tokens=1800,
-        article_summary_max_tokens=1600,
-        final_synthesis_max_tokens=2200,
+        article_summary_max_tokens=1000,
+        final_synthesis_max_tokens=1800,
         title_generation_max_tokens=50,
-        server_decode_concurrency=1,
-        server_prompt_concurrency=1,
         server_prefill_step_size=512,
         server_prompt_cache_size=2,
         server_prompt_cache_bytes="512MB",
-        server_max_tokens=2500,
+        server_max_tokens=1800,
         default_sampling=GEMMA_DEFAULT_SAMPLING,
         reasoning_sampling=GEMMA_REASONING_SAMPLING,
         task_sampling=_task_sampling(
             default=GEMMA_DEFAULT_SAMPLING,
             reasoning=GEMMA_REASONING_SAMPLING,
             translation=_sampling(0.0, 0.9, 20, 0.0, 0.0, 1.05),
-            topic_clustering=_sampling(0.15, 0.85, 30, 0.02, 0.2, 1.05),
+            story_discovery=_sampling(0.15, 0.85, 30, 0.02, 0.2, 1.05),
             article_summary=_sampling(0.2, 0.85, 30, 0.02, 0.2, 1.08),
             final_synthesis=GEMMA_REASONING_SAMPLING,
             title_generation=_sampling(0.45, 0.9, 40, 0.0, 0.3, 1.05),
@@ -328,17 +332,12 @@ MODEL_RUNTIME_PROFILES = {
     "small_aggressive": ModelRuntimeProfile(
         key="small_aggressive",
         model_max_input_tokens=12000,
-        article_summary_concurrency=4,
         article_text_token_limit=8000,
         total_article_summary_cap=36,
-        per_topic_article_summary_cap=12,
-        topic_clustering_max_tokens=2200,
         translation_max_tokens=2400,
         article_summary_max_tokens=1800,
         final_synthesis_max_tokens=2400,
         title_generation_max_tokens=60,
-        server_decode_concurrency=4,
-        server_prompt_concurrency=4,
         server_prefill_step_size=2048,
         server_prompt_cache_size=16,
         server_prompt_cache_bytes="3GB",
@@ -354,17 +353,12 @@ MODEL_RUNTIME_PROFILES = {
     "tiny_codex": ModelRuntimeProfile(
         key="tiny_codex",
         model_max_input_tokens=5000,
-        article_summary_concurrency=1,
         article_text_token_limit=4000,
         total_article_summary_cap=24,
-        per_topic_article_summary_cap=8,
-        topic_clustering_max_tokens=900,
         translation_max_tokens=900,
         article_summary_max_tokens=700,
         final_synthesis_max_tokens=1100,
         title_generation_max_tokens=40,
-        server_decode_concurrency=1,
-        server_prompt_concurrency=1,
         server_prefill_step_size=512,
         server_prompt_cache_size=2,
         server_prompt_cache_bytes="256MB",
@@ -375,7 +369,7 @@ MODEL_RUNTIME_PROFILES = {
             default=TINY_GEMMA_DEFAULT_SAMPLING,
             reasoning=TINY_GEMMA_REASONING_SAMPLING,
             translation=_sampling(0.0, 0.85, 20, 0.0, 0.0, 1.05),
-            topic_clustering=_sampling(0.1, 0.8, 20, 0.02, 0.2, 1.08),
+            story_discovery=_sampling(0.1, 0.8, 20, 0.02, 0.2, 1.08),
             article_summary=_sampling(0.15, 0.8, 20, 0.02, 0.1, 1.08),
             final_synthesis=TINY_GEMMA_REASONING_SAMPLING,
             title_generation=_sampling(0.35, 0.85, 30, 0.0, 0.2, 1.05),
@@ -410,94 +404,90 @@ def _str_env(name: str, default: str) -> str:
     return default if raw is None else raw.strip()
 
 
-def _configured_run_mode() -> str:
-    explicit_mode = _str_env("NEWS_RUN_MODE", "").strip().lower().replace("_", "-")
-    aliases = {
-        "production": "prod",
-        "true-prod": "prod",
-        "true-production": "prod",
-        "localprod": "local-prod",
-        "loose-localprod": "loose-local-prod",
-        "loose-local-production": "loose-local-prod",
-        "looselocal-prod": "loose-local-prod",
-        "looselocalprod": "loose-local-prod",
-    }
-    if explicit_mode:
-        mode = aliases.get(explicit_mode, explicit_mode)
-        if mode not in RUN_MODES:
-            raise ValueError(
-                "NEWS_RUN_MODE must be one of: "
-                + ", ".join(RUN_MODES)
-            )
-        return mode
-
-    return DEV_RUN_MODE if _bool_env("NEWS_DEV", True) else PROD_RUN_MODE
+def normalize_preset_id(value: str | None) -> str:
+    return str(value or "").strip()
 
 
-def _uses_dev_matching_defaults(run_mode: str) -> bool:
-    return run_mode in DEV_MATCHING_DEFAULT_RUN_MODES
+def load_run_presets(path: Path | None = None) -> dict[str, dict[str, Any]]:
+    presets_path = path or RUN_PRESETS_PATH
+    payload = _load_yaml_mapping(presets_path)
+    raw_presets = payload.get("presets", {})
+    if not isinstance(raw_presets, dict):
+        raise ValueError(f"{presets_path} must define presets as a mapping.")
+
+    presets: dict[str, dict[str, Any]] = {}
+    for raw_id, raw_preset in raw_presets.items():
+        preset_id = normalize_preset_id(str(raw_id))
+        if not preset_id or not isinstance(raw_preset, dict):
+            continue
+        raw_env = raw_preset.get("env", {})
+        if not isinstance(raw_env, dict):
+            raise ValueError(f"Preset {preset_id!r} env must be a mapping.")
+        env = {
+            str(name).strip(): str(value).strip()
+            for name, value in raw_env.items()
+            if str(name).strip() and value is not None and str(value).strip() != ""
+        }
+        presets[preset_id] = {
+            "id": preset_id,
+            "name": str(raw_preset.get("name") or preset_id).strip(),
+            "description": str(raw_preset.get("description") or "").strip(),
+            "env": env,
+        }
+    return presets
 
 
-def configured_topic_mode() -> str:
-    raw_mode = _str_env("NEWS_TOPIC_MODE", "predefined").strip().lower().replace("_", "-")
-    aliases = {
-        "fixed": "predefined",
-        "static": "predefined",
-        "configured": "predefined",
-    }
-    mode = aliases.get(raw_mode, raw_mode)
-    if mode != "predefined":
-        raise ValueError("NEWS_TOPIC_MODE must be predefined; dynamic topic discovery has been retired")
-    return "predefined"
+def run_preset_env(preset_id: str, path: Path | None = None) -> dict[str, str]:
+    normalized = normalize_preset_id(preset_id)
+    presets = load_run_presets(path)
+    if normalized not in presets:
+        valid = ", ".join(sorted(presets)) or "none configured"
+        raise ValueError(f"Unknown run preset {preset_id!r}. Available presets: {valid}.")
+    return dict(presets[normalized].get("env") or {})
 
 
-def configured_max_stories_per_topic(run_mode: str | None = None) -> int:
-    mode = run_mode or _configured_run_mode()
-    default = 2 if mode == "dev" else 4
-    return max(1, _int_env("NEWS_MAX_STORIES_PER_TOPIC", default))
+def _configured_preset_id() -> str:
+    return normalize_preset_id(_str_env(PRESET_ENV_VAR, ""))
 
 
-def configured_min_articles_per_story(run_mode: str | None = None) -> int:
-    mode = run_mode or _configured_run_mode()
-    default = 2 if mode == "dev" else 4
-    return max(2, _int_env("NEWS_MIN_ARTICLES_PER_STORY", default))
+def apply_run_preset_to_environment(
+    preset_id: str | None = None,
+    *,
+    override_existing: bool = False,
+) -> str:
+    normalized = normalize_preset_id(preset_id) if preset_id is not None else _configured_preset_id()
+    if not normalized:
+        return ""
+    previous_preset_id = normalize_preset_id(os.getenv("NEWS_ACTIVE_PRESET"))
+    previous_env: dict[str, str] = {}
+    if previous_preset_id and previous_preset_id != normalized:
+        try:
+            previous_env = run_preset_env(previous_preset_id)
+        except ValueError:
+            previous_env = {}
+    preset_env = run_preset_env(normalized)
+    for name, value in preset_env.items():
+        current_value = os.getenv(name)
+        came_from_previous_preset = (
+            bool(previous_env)
+            and name in previous_env
+            and current_value == previous_env.get(name)
+        )
+        if override_existing or not current_value or came_from_previous_preset:
+            os.environ[name] = value
+    os.environ["NEWS_ACTIVE_PRESET"] = normalized
+    return normalized
 
 
-def configured_topic_embedding_similarity_threshold(run_mode: str | None = None) -> float:
-    mode = run_mode or _configured_run_mode()
-    default = 0.18 if _uses_dev_matching_defaults(mode) else 0.20
+def configured_min_articles_per_story() -> int:
+    return max(2, _int_env("NEWS_MIN_ARTICLES_PER_STORY", 4))
+
+
+def configured_story_cluster_similarity_threshold() -> float:
     return min(
         1.0,
-        max(0.0, _float_env("NEWS_TOPIC_EMBEDDING_THRESHOLD", default)),
+        max(0.0, _float_env("NEWS_STORY_CLUSTER_SIMILARITY_THRESHOLD", 0.27)),
     )
-
-
-def configured_story_cluster_similarity_threshold(run_mode: str | None = None) -> float:
-    mode = run_mode or _configured_run_mode()
-    default = 0.27
-    return min(
-        1.0,
-        max(0.0, _float_env("NEWS_STORY_CLUSTER_SIMILARITY_THRESHOLD", default)),
-    )
-
-
-def configured_topic_relevance_min_score(run_mode: str | None = None) -> int:
-    mode = run_mode or _configured_run_mode()
-    default = 6 if _uses_dev_matching_defaults(mode) else 8
-    try:
-        return max(1, _int_env("NEWS_TOPIC_RELEVANCE_MIN_SCORE", default))
-    except ValueError:
-        return default
-
-
-def configured_story_topic_fit_min_score(run_mode: str | None = None) -> int:
-    mode = run_mode or _configured_run_mode()
-    topic_default = configured_topic_relevance_min_score(mode)
-    default = 4 if mode in {DEV_RUN_MODE, LOOSE_LOCAL_PROD_RUN_MODE} else 6
-    try:
-        return max(1, _int_env("NEWS_STORY_TOPIC_FIT_MIN_SCORE", default))
-    except ValueError:
-        return default
 
 
 def resolve_model_name(model_reference: str) -> str:
@@ -518,6 +508,15 @@ def is_codex_test_model_reference(model_reference: str) -> bool:
     )
 
 
+def is_gemma_4_model_reference(model_reference: str) -> bool:
+    clean_reference = (model_reference or "").strip()
+    resolved_name = resolve_model_name(clean_reference)
+    return any(
+        "gemma-4" in value.lower() or "gemma4" in value.lower()
+        for value in (clean_reference, resolved_name)
+    )
+
+
 def codex_model_guard_active() -> bool:
     return any(_str_env(name, "") for name in CODEX_RUNTIME_ENV_VARS)
 
@@ -534,15 +533,11 @@ def ensure_codex_safe_model_reference(model_reference: str) -> None:
     )
 
 
-def _configured_model_reference(run_mode: str | None = None) -> str:
+def _configured_model_reference() -> str:
     if _bool_env("NEWS_CODEX_TESTING", False):
         return CODEX_TEST_MODEL_ALIAS
-    mode = run_mode or _configured_run_mode()
     selected_model = _str_env("NEWS_MODEL", "")
-    raw_model_name = _str_env("NEWS_MODEL_NAME", "")
-    mode_default_model = CODEX_TEST_MODEL_ALIAS if mode == "dev" else DEFAULT_MODEL_ALIAS
-    default_model = _str_env("NEWS_DEFAULT_MODEL", mode_default_model) or mode_default_model
-    return selected_model or raw_model_name or default_model
+    return selected_model or DEFAULT_MODEL_ALIAS
 
 
 def _configured_model_name() -> str:
@@ -557,13 +552,31 @@ def infer_model_backend(model_reference: str) -> str:
 
 
 def _configured_model_backend(model_reference: str) -> str:
-    explicit_backend = _str_env("NEWS_MODEL_BACKEND", "")
-    if explicit_backend:
-        normalized = explicit_backend.strip().lower().replace("_", "-")
-        if normalized not in {"mlx-lm", "mlx-vlm"}:
-            raise ValueError("NEWS_MODEL_BACKEND must be one of: mlx-lm, mlx-vlm")
-        return normalized
     return infer_model_backend(model_reference)
+
+
+def _default_total_article_summary_cap(
+    profile: ModelRuntimeProfile,
+    *,
+    model_reference: str,
+) -> int:
+    if is_gemma_4_model_reference(model_reference):
+        return GEMMA_4_ARTICLE_SUMMARY_CAP
+    return profile.total_article_summary_cap
+
+
+def _default_article_summary_concurrency(model_reference: str) -> int:
+    if is_codex_test_model_reference(model_reference):
+        return 8
+    return DEFAULT_ARTICLE_SUMMARY_CONCURRENCY
+
+
+def _default_story_synthesis_concurrency(model_reference: str) -> int:
+    if is_codex_test_model_reference(model_reference):
+        return 2
+    if is_gemma_4_model_reference(model_reference):
+        return 1
+    return DEFAULT_STORY_SYNTHESIS_CONCURRENCY
 
 
 def _configured_translation_model_reference() -> str:
@@ -571,12 +584,6 @@ def _configured_translation_model_reference() -> str:
 
 
 def _configured_translation_model_backend(model_reference: str) -> str:
-    explicit_backend = _str_env("NEWS_TRANSLATION_MODEL_BACKEND", "")
-    if explicit_backend:
-        normalized = explicit_backend.strip().lower().replace("_", "-")
-        if normalized not in {"mlx-lm", "mlx-vlm"}:
-            raise ValueError("NEWS_TRANSLATION_MODEL_BACKEND must be one of: mlx-lm, mlx-vlm")
-        return normalized
     return infer_model_backend(model_reference)
 
 
@@ -602,21 +609,14 @@ def infer_model_profile_key(model_reference: str) -> str:
 def _configured_model_profile_key(model_reference: str) -> str:
     if _bool_env("NEWS_CODEX_TESTING", False):
         return "tiny_codex"
-    explicit_profile = _str_env("NEWS_MODEL_PROFILE", "")
-    if explicit_profile:
-        if explicit_profile not in MODEL_RUNTIME_PROFILES:
-            valid = ", ".join(sorted(MODEL_RUNTIME_PROFILES))
-            raise ValueError(f"NEWS_MODEL_PROFILE must be one of: {valid}")
-        return explicit_profile
     return infer_model_profile_key(model_reference)
 
 
 MODEL_TASK_SAMPLING_ENV_PREFIXES = {
     "default": "NEWS_MODEL",
     "translation": "NEWS_MODEL_TRANSLATION",
-    "topic_clustering": "NEWS_MODEL_TOPIC_CLUSTERING",
-    "topic_country_gate": "NEWS_MODEL_TOPIC_COUNTRY_GATE",
-    "story_topic_validation": "NEWS_MODEL_STORY_TOPIC_VALIDATION",
+    "story_discovery": "NEWS_MODEL_STORY_DISCOVERY",
+    "story_scale_screening": "NEWS_MODEL_STORY_SCALE_SCREENING",
     "article_summary": "NEWS_MODEL_ARTICLE_SUMMARY",
     "final_synthesis": "NEWS_MODEL_FINAL_SYNTHESIS",
     "title_generation": "NEWS_MODEL_TITLE_GENERATION",
@@ -662,7 +662,11 @@ def _profile_sampling_with_base_overrides(
     return task_sampling
 
 
-def _override_profile_from_env(profile: ModelRuntimeProfile) -> ModelRuntimeProfile:
+def _override_profile_from_env(
+    profile: ModelRuntimeProfile,
+    *,
+    model_reference: str,
+) -> ModelRuntimeProfile:
     default_sampling = _override_sampling_from_env(
         profile.default_sampling,
         prefix="NEWS_MODEL",
@@ -677,30 +681,18 @@ def _override_profile_from_env(profile: ModelRuntimeProfile) -> ModelRuntimeProf
             "NEWS_MODEL_MAX_INPUT_TOKENS",
             profile.model_max_input_tokens,
         ),
-        article_summary_concurrency=_int_env(
-            "NEWS_ARTICLE_SUMMARY_CONCURRENCY",
-            profile.article_summary_concurrency,
-        ),
         article_text_token_limit=_int_env(
             "NEWS_ARTICLE_TEXT_TOKEN_LIMIT",
             profile.article_text_token_limit,
         ),
         total_article_summary_cap=_int_env(
             "NEWS_TOTAL_ARTICLE_SUMMARY_CAP",
-            profile.total_article_summary_cap,
+            _default_total_article_summary_cap(
+                profile,
+                model_reference=model_reference,
+            ),
         ),
-        per_topic_article_summary_cap=_int_env(
-            "NEWS_PER_TOPIC_ARTICLE_SUMMARY_CAP",
-            profile.per_topic_article_summary_cap,
-        ),
-        topic_clustering_max_tokens=_int_env(
-            "NEWS_TOPIC_CLUSTERING_MAX_TOKENS",
-            profile.topic_clustering_max_tokens,
-        ),
-        translation_max_tokens=_int_env(
-            "NEWS_TRANSLATION_MAX_TOKENS",
-            profile.translation_max_tokens,
-        ),
+        translation_max_tokens=profile.translation_max_tokens,
         article_summary_max_tokens=_int_env(
             "NEWS_ARTICLE_SUMMARY_MAX_TOKENS",
             profile.article_summary_max_tokens,
@@ -713,30 +705,10 @@ def _override_profile_from_env(profile: ModelRuntimeProfile) -> ModelRuntimeProf
             "NEWS_TITLE_GENERATION_MAX_TOKENS",
             profile.title_generation_max_tokens,
         ),
-        server_decode_concurrency=_int_env(
-            "NEWS_SERVER_DECODE_CONCURRENCY",
-            profile.server_decode_concurrency,
-        ),
-        server_prompt_concurrency=_int_env(
-            "NEWS_SERVER_PROMPT_CONCURRENCY",
-            profile.server_prompt_concurrency,
-        ),
-        server_prefill_step_size=_int_env(
-            "NEWS_SERVER_PREFILL_STEP_SIZE",
-            profile.server_prefill_step_size,
-        ),
-        server_prompt_cache_size=_int_env(
-            "NEWS_SERVER_PROMPT_CACHE_SIZE",
-            profile.server_prompt_cache_size,
-        ),
-        server_prompt_cache_bytes=_str_env(
-            "NEWS_SERVER_PROMPT_CACHE_BYTES",
-            profile.server_prompt_cache_bytes,
-        ),
-        server_max_tokens=_int_env(
-            "NEWS_SERVER_MAX_TOKENS",
-            profile.server_max_tokens,
-        ),
+        server_prefill_step_size=profile.server_prefill_step_size,
+        server_prompt_cache_size=profile.server_prompt_cache_size,
+        server_prompt_cache_bytes=profile.server_prompt_cache_bytes,
+        server_max_tokens=profile.server_max_tokens,
         default_sampling=default_sampling,
         reasoning_sampling=reasoning_sampling,
         task_sampling=_profile_sampling_with_base_overrides(
@@ -750,7 +722,10 @@ def _override_profile_from_env(profile: ModelRuntimeProfile) -> ModelRuntimeProf
 def configured_model_profile(model_reference: str | None = None) -> ModelRuntimeProfile:
     reference = model_reference or _configured_model_reference()
     profile_key = _configured_model_profile_key(reference)
-    return _override_profile_from_env(MODEL_RUNTIME_PROFILES[profile_key])
+    return _override_profile_from_env(
+        MODEL_RUNTIME_PROFILES[profile_key],
+        model_reference=reference,
+    )
 
 
 def build_model_server_command(
@@ -758,7 +733,9 @@ def build_model_server_command(
     profile: ModelRuntimeProfile,
     *,
     backend: str = "mlx-lm",
+    model_concurrency: int = DEFAULT_PIPELINE_CONCURRENCY,
 ) -> str:
+    concurrency = max(1, int(model_concurrency))
     if backend == "mlx-vlm":
         return (
             "uv run python -m mlx_vlm.server "
@@ -772,8 +749,8 @@ def build_model_server_command(
     return (
         "uv run python -m mlx_lm server "
         f"--model {model_name} "
-        f"--decode-concurrency {profile.server_decode_concurrency} "
-        f"--prompt-concurrency {profile.server_prompt_concurrency} "
+        f"--decode-concurrency {concurrency} "
+        f"--prompt-concurrency {concurrency} "
         f"--prefill-step-size {profile.server_prefill_step_size} "
         f"--prompt-cache-size {profile.server_prompt_cache_size} "
         f"--prompt-cache-bytes {profile.server_prompt_cache_bytes} "
@@ -847,39 +824,23 @@ def _latest_run_output_patterns(
     if not output_dir.exists():
         return []
 
-    files_by_timestamp: dict[str, list[Path]] = {}
-    for path in output_dir.rglob("*"):
-        if not path.is_file():
-            continue
-        match = RUN_OUTPUT_TIMESTAMP_RE.search(path.name)
-        if not match:
-            continue
-        files_by_timestamp.setdefault(match.group(0), []).append(path)
-
-    if not files_by_timestamp:
-        return []
-
-    latest_timestamp = max(files_by_timestamp)
-    latest_files = sorted(files_by_timestamp[latest_timestamp])
-    latest_dirs = sorted({path.parent for path in latest_files})
+    latest_paths = (
+        output_dir / "latest_run.md",
+        output_dir / "latest_run.log",
+        output_dir / "latest_run_details.json",
+    )
     patterns = [
         "",
-        f"# Keep generated output context narrowed to run {latest_timestamp}.",
+        "# Keep generated output context narrowed to rolling run review artifacts.",
         f"!{output_parent}/",
         f"!{output_path}/",
         f"{output_path}/*",
     ]
-    for directory in latest_dirs:
+    for latest_path in latest_paths:
         try:
-            directory_pattern = directory.relative_to(root_dir).as_posix().rstrip("/")
+            file_pattern = latest_path.relative_to(root_dir).as_posix()
         except ValueError:
-            continue
-        patterns.append(f"!{directory_pattern}/")
-    for path in latest_files:
-        try:
-            file_pattern = path.relative_to(root_dir).as_posix()
-        except ValueError:
-            continue
+            return patterns
         patterns.append(f"!{file_pattern}")
     return patterns
 
@@ -895,7 +856,7 @@ def _sync_cursorignore_latest_output(
     managed_lines = [
         ASSISTANT_CONTEXT_MANAGED_START,
         "# Refreshed by news_pipeline.config.load_runtime_config().",
-        "# Ignore everything, then re-include core pipeline files plus the latest completed output run.",
+        "# Ignore everything, then re-include core pipeline files plus rolling run artifacts.",
         *ASSISTANT_CONTEXT_CORE_PATTERNS,
         *latest_output_patterns,
         ASSISTANT_CONTEXT_MANAGED_END,
@@ -955,47 +916,6 @@ def _coerce_source_text_list(value: Any) -> list[str]:
     return clean_items
 
 
-def normalize_topic_id(value: Any) -> str:
-    raw_value = str(value or "").strip().lower()
-    if not raw_value:
-        return ""
-    return re.sub(r"[^a-z0-9_]+", "_", raw_value).strip("_")
-
-
-def coerce_topic_id_list(value: Any) -> list[str]:
-    if value is None:
-        return []
-    if isinstance(value, str):
-        items = value.split(",")
-    elif isinstance(value, (list, tuple, set)):
-        items = value
-    else:
-        return []
-
-    topic_ids: list[str] = []
-    seen: set[str] = set()
-    for item in items:
-        topic_id = normalize_topic_id(item)
-        if not topic_id or topic_id in seen:
-            continue
-        seen.add(topic_id)
-        topic_ids.append(topic_id)
-    return topic_ids
-
-
-def parse_topic_id_csv(value: str) -> list[str]:
-    return coerce_topic_id_list(value)
-
-
-def _source_allowed_topic_ids(raw_source: dict[str, Any]) -> list[str]:
-    return coerce_topic_id_list(
-        raw_source.get(
-            "allowed_topic_ids",
-            raw_source.get("only_topic_ids", raw_source.get("source_topic_ids")),
-        )
-    )
-
-
 def _source_requires_translation(raw_source: dict[str, Any]) -> bool:
     explicit = raw_source.get("requires_translation", raw_source.get("translate"))
     if explicit is not None:
@@ -1007,8 +927,6 @@ def _normalize_source_tier(value: Any, *, source_key: str | None = None) -> str:
     tier = str(value or "").strip().lower()
     if not tier:
         return PERIPHERAL_SOURCE_TIER
-    if tier == DEV_RUN_MODE:
-        return CORE_SOURCE_TIER
     if tier in {CORE_SOURCE_TIER, PERIPHERAL_SOURCE_TIER}:
         return tier
     source_label = f" for source {source_key!r}" if source_key else ""
@@ -1018,19 +936,49 @@ def _normalize_source_tier(value: Any, *, source_key: str | None = None) -> str:
     )
 
 
-def _source_enabled_for_run(
+def _normalize_source_scope(value: Any) -> str:
+    scope = str(value or SOURCE_SCOPE_CORE).strip().lower().replace("_", "-")
+    aliases = {
+        "all": SOURCE_SCOPE_PERIPHERAL,
+        "full": SOURCE_SCOPE_PERIPHERAL,
+    }
+    normalized = aliases.get(scope, scope)
+    if normalized not in SOURCE_SCOPES:
+        raise ValueError("NEWS_SOURCE_SCOPE must be one of: " + ", ".join(SOURCE_SCOPES))
+    return normalized
+
+
+def _configured_source_scope() -> str:
+    return _normalize_source_scope(_str_env("NEWS_SOURCE_SCOPE", SOURCE_SCOPE_CORE))
+
+
+def _normalize_recipient_scope(value: Any) -> str:
+    scope = str(value or RECIPIENT_SCOPE_BRADLEY).strip().lower().replace("_", "-")
+    aliases = {
+        "bradley-only": RECIPIENT_SCOPE_BRADLEY,
+        "single": RECIPIENT_SCOPE_BRADLEY,
+        "full": RECIPIENT_SCOPE_ALL,
+    }
+    normalized = aliases.get(scope, scope)
+    if normalized not in RECIPIENT_SCOPES:
+        raise ValueError("NEWS_RECIPIENT_SCOPE must be one of: " + ", ".join(RECIPIENT_SCOPES))
+    return normalized
+
+
+def _configured_recipient_scope() -> str:
+    return _normalize_recipient_scope(_str_env("NEWS_RECIPIENT_SCOPE", RECIPIENT_SCOPE_BRADLEY))
+
+
+def _source_enabled_for_scope(
     raw_source: dict[str, Any],
-    run_mode: str,
+    source_scope: str,
     *,
     source_key: str | None = None,
 ) -> bool:
     language = str(raw_source.get("language") or "").strip().lower()
     if language != "en" or _source_requires_translation(raw_source):
         return False
-    selected_tiers = RUN_MODE_SOURCE_TIERS.get(
-        run_mode,
-        RUN_MODE_SOURCE_TIERS[DEV_RUN_MODE],
-    )
+    selected_tiers = SOURCE_SCOPE_TIERS[_normalize_source_scope(source_scope)]
     return (
         _normalize_source_tier(raw_source.get("tier"), source_key=source_key)
         in selected_tiers
@@ -1047,11 +995,20 @@ def _normalize_source_match_mode(value: Any, *, source_key: str) -> str:
     return mode
 
 
+def _reject_removed_source_topic_fields(raw_source: dict[str, Any], *, source_key: str) -> None:
+    removed_fields = sorted(REMOVED_SOURCE_TOPIC_FIELDS.intersection(raw_source))
+    if removed_fields:
+        raise ValueError(
+            f"config/sources.yaml source {source_key!r} uses removed topic field(s): "
+            + ", ".join(removed_fields)
+            + ". This branch uses global story-first source selection."
+        )
+
+
 def load_sources(
     path: Path | None = None,
     *,
-    run_mode: str | None = None,
-    active_topic_ids: list[str] | tuple[str, ...] | None = None,
+    source_scope: str | None = None,
     include_inactive: bool = False,
 ) -> dict[str, dict[str, Any]]:
     sources_path = path or CONFIG_DIR / "sources.yaml"
@@ -1061,13 +1018,11 @@ def load_sources(
         raise ValueError(f"{sources_path} must define sources as a list.")
 
     sources: dict[str, dict[str, Any]] = {}
-    selected_topic_ids = (
-        coerce_topic_id_list(active_topic_ids)
-        if active_topic_ids is not None
-        else list(_configured_topic_ids())
+    selected_source_scope = (
+        _normalize_source_scope(source_scope)
+        if source_scope is not None
+        else _configured_source_scope()
     )
-    selected_run_mode = run_mode or _configured_run_mode()
-    active_topic_id_set = set(selected_topic_ids)
     for raw_source in raw_sources:
         if not isinstance(raw_source, dict):
             continue
@@ -1075,19 +1030,11 @@ def load_sources(
         url = str(raw_source.get("url") or "").strip()
         if not key or not url:
             continue
-        if not include_inactive and not _source_enabled_for_run(
+        _reject_removed_source_topic_fields(raw_source, source_key=key)
+        if not include_inactive and not _source_enabled_for_scope(
             raw_source,
-            selected_run_mode,
+            selected_source_scope,
             source_key=key,
-        ):
-            continue
-        allowed_topic_ids = _source_allowed_topic_ids(raw_source)
-        if (
-            not include_inactive
-            and (
-                not allowed_topic_ids
-                or not active_topic_id_set.intersection(allowed_topic_ids)
-            )
         ):
             continue
         raw_source_match_aliases = raw_source.get("source_match_aliases") or []
@@ -1111,20 +1058,11 @@ def load_sources(
             "region": str(raw_source.get("region") or "").strip() or None,
             "language": language or None,
             "tier": tier,
-            "allowed_topic_ids": allowed_topic_ids,
             "nations": _coerce_source_text_list(raw_source.get("nations")),
             "frame": str(raw_source.get("frame") or raw_source.get("region") or "").strip() or None,
             "provider_type": str(raw_source.get("provider_type") or "article_feed").strip(),
             "intended_role": str(raw_source.get("intended_role") or "article enrichment").strip(),
             "weight": _coerce_float_value(raw_source.get("weight"), 1.0),
-            "can_seed_topics": _coerce_bool_value(
-                raw_source.get("can_seed_topics", raw_source.get("seed_topics")),
-                False,
-            ),
-            "can_validate_topics": _coerce_bool_value(
-                raw_source.get("can_validate_topics", raw_source.get("validate_topics")),
-                False,
-            ),
             "can_enrich_coverage": _coerce_bool_value(
                 raw_source.get("can_enrich_coverage", raw_source.get("enrich_coverage")),
                 True,
@@ -1272,6 +1210,7 @@ def load_top_funnel_providers(path: Path | None = None) -> dict[str, dict[str, A
         fetcher = str(raw_provider.get("fetcher") or "rss").strip()
         if not key or not url:
             continue
+        _reject_removed_source_topic_fields(raw_provider, source_key=key)
         providers[key] = {
             "key": key,
             "name": str(raw_provider.get("name") or key).strip(),
@@ -1282,14 +1221,6 @@ def load_top_funnel_providers(path: Path | None = None) -> dict[str, dict[str, A
             "provider_type": str(raw_provider.get("provider_type") or "rss").strip(),
             "intended_role": str(raw_provider.get("intended_role") or "").strip() or None,
             "weight": _coerce_float_value(raw_provider.get("weight"), 1.0),
-            "can_seed_topics": _coerce_bool_value(
-                raw_provider.get("can_seed_topics", raw_provider.get("seed_topics")),
-                False,
-            ),
-            "can_validate_topics": _coerce_bool_value(
-                raw_provider.get("can_validate_topics", raw_provider.get("validate_topics")),
-                False,
-            ),
             "can_enrich_coverage": _coerce_bool_value(
                 raw_provider.get("can_enrich_coverage", raw_provider.get("enrich_coverage")),
                 False,
@@ -1299,174 +1230,6 @@ def load_top_funnel_providers(path: Path | None = None) -> dict[str, dict[str, A
     if not providers:
         raise ValueError(f"No valid top_funnel_providers entries found in {sources_path}.")
     return providers
-
-
-def _coerce_text_list(value: Any, *, field_name: str, topic_id: str, path: Path) -> list[str]:
-    if value is None:
-        return []
-    if not isinstance(value, list):
-        raise ValueError(f"{path} topic {topic_id!r} must define {field_name} as a list.")
-
-    values: list[str] = []
-    seen: set[str] = set()
-    for raw_item in value:
-        clean_item = str(raw_item or "").strip().lower()
-        if not clean_item or clean_item in seen:
-            continue
-        seen.add(clean_item)
-        values.append(clean_item)
-    return values
-
-
-def load_client_config(path: Path | None = None) -> dict[str, Any]:
-    client_path = path or CONFIG_DIR / "client.yaml"
-    payload = _load_yaml_mapping(client_path)
-    raw_topic_ids = payload.get("topic_ids", payload.get("topics", []))
-    if not isinstance(raw_topic_ids, list):
-        raise ValueError(f"{client_path} must define topic_ids as a list.")
-
-    topic_ids: list[str] = []
-    seen: set[str] = set()
-    duplicates: set[str] = set()
-    for raw_topic_id in raw_topic_ids:
-        topic_id = str(raw_topic_id or "").strip()
-        if not topic_id:
-            continue
-        if topic_id in seen:
-            duplicates.add(topic_id)
-        seen.add(topic_id)
-        topic_ids.append(topic_id)
-
-    if duplicates:
-        duplicate_list = ", ".join(sorted(duplicates))
-        raise ValueError(f"{client_path} contains duplicate topic_ids: {duplicate_list}")
-    if not topic_ids:
-        raise ValueError(f"{client_path} must define at least one topic_id.")
-
-    return {"topic_ids": topic_ids}
-
-
-def _configured_topic_ids(client_path: Path | None = None) -> tuple[str, ...]:
-    runtime_topic_ids = os.getenv("NEWS_TOPIC_IDS", "").strip()
-    if runtime_topic_ids:
-        topic_ids = coerce_topic_id_list(runtime_topic_ids)
-        if not topic_ids:
-            raise ValueError("NEWS_TOPIC_IDS must contain at least one topic id.")
-        return tuple(topic_ids)
-    return tuple(load_client_config(client_path)["topic_ids"])
-
-
-def load_topic_definitions(path: Path | None = None) -> dict[str, dict[str, Any]]:
-    topics_path = path or CONFIG_DIR / "topics.yaml"
-    payload = _load_yaml_mapping(topics_path)
-    raw_topics = payload.get("topics", [])
-    if not isinstance(raw_topics, list):
-        raise ValueError(f"{topics_path} must define topics as a list.")
-
-    topics: dict[str, dict[str, Any]] = {}
-    duplicates: set[str] = set()
-    for raw_topic in raw_topics:
-        if not isinstance(raw_topic, dict):
-            continue
-        topic_id = str(raw_topic.get("id") or raw_topic.get("key") or "").strip()
-        if not topic_id:
-            continue
-        if topic_id in topics:
-            duplicates.add(topic_id)
-            continue
-
-        title = str(raw_topic.get("title") or "").strip()
-        if not title:
-            raise ValueError(f"{topics_path} topic {topic_id!r} must define a title.")
-
-        keywords = _coerce_text_list(
-            raw_topic.get("keywords"),
-            field_name="keywords",
-            topic_id=topic_id,
-            path=topics_path,
-        )
-        boost_phrases = _coerce_text_list(
-            raw_topic.get("boost_phrases"),
-            field_name="boost_phrases",
-            topic_id=topic_id,
-            path=topics_path,
-        )
-        if not keywords and not boost_phrases:
-            raise ValueError(
-                f"{topics_path} topic {topic_id!r} must define keywords or boost_phrases."
-            )
-
-        topics[topic_id] = {
-            "id": topic_id,
-            "title": title,
-            "description": str(raw_topic.get("description") or "").strip(),
-            "rationale": str(raw_topic.get("rationale") or "").strip(),
-            "keywords": keywords,
-            "boost_phrases": boost_phrases,
-            "required_context_terms": _coerce_text_list(
-                raw_topic.get("required_context_terms"),
-                field_name="required_context_terms",
-                topic_id=topic_id,
-                path=topics_path,
-            ),
-            "max_articles_per_source": (
-                _coerce_int_value(raw_topic.get("max_articles_per_source"), 0)
-                if raw_topic.get("max_articles_per_source") is not None
-                else None
-            ),
-            "frame_tags": _coerce_text_list(
-                raw_topic.get("frame_tags"),
-                field_name="frame_tags",
-                topic_id=topic_id,
-                path=topics_path,
-            ),
-        }
-
-    if duplicates:
-        duplicate_list = ", ".join(sorted(duplicates))
-        raise ValueError(f"{topics_path} contains duplicate topic ids: {duplicate_list}")
-    if not topics:
-        raise ValueError(f"No valid topic entries found in {topics_path}.")
-    return topics
-
-
-def load_predefined_topics(
-    *,
-    client_path: Path | None = None,
-    topics_path: Path | None = None,
-    default_max_articles_per_source: int = 6,
-    topic_ids: list[str] | tuple[str, ...] | None = None,
-) -> list[dict[str, Any]]:
-    resolved_client_path = client_path or CONFIG_DIR / "client.yaml"
-    resolved_topics_path = topics_path or CONFIG_DIR / "topics.yaml"
-    selected_topic_ids = (
-        coerce_topic_id_list(topic_ids)
-        if topic_ids is not None
-        else load_client_config(resolved_client_path)["topic_ids"]
-    )
-    if not selected_topic_ids:
-        raise ValueError("Runtime topic selection must include at least one topic_id.")
-    topic_definitions = load_topic_definitions(resolved_topics_path)
-
-    selected_topics: list[dict[str, Any]] = []
-    for topic_id in selected_topic_ids:
-        if topic_id not in topic_definitions:
-            topic_source = (
-                "runtime topic selection"
-                if topic_ids is not None
-                else str(resolved_client_path)
-            )
-            raise ValueError(
-                f"{topic_source} references unknown topic_id {topic_id!r} "
-                f"not found in {resolved_topics_path}."
-            )
-        topic = dict(topic_definitions[topic_id])
-        topic["key"] = topic["id"]
-        if topic.get("max_articles_per_source") is None:
-            topic["max_articles_per_source"] = default_max_articles_per_source
-        selected_topics.append(topic)
-
-    return selected_topics
 
 
 def load_recipients(path: Path | None = None) -> dict[str, dict[str, Any]]:
@@ -1515,47 +1278,62 @@ def update_recipient_pause_setting(
 
     if updated_count:
         with recipients_path.open("w", encoding="utf-8") as handle:
-            yaml.safe_dump(payload, handle, sort_keys=False, allow_unicode=False)
+            yaml.safe_dump(payload, handle, sort_keys=False, allow_unicode=True)
     return updated_count
 
 
-def load_runtime_config() -> RuntimeConfig:
+def configured_removed_topic_env_vars(
+    environ: Mapping[str, str] | None = None,
+) -> list[str]:
+    values = environ if environ is not None else os.environ
+    return [name for name in REMOVED_TOPIC_ENV_VARS if name in values]
+
+
+def reject_removed_topic_env_vars() -> None:
+    configured = configured_removed_topic_env_vars()
+    if configured:
+        raise ValueError(
+            "Topic-based runtime configuration has been removed from this branch. "
+            "Unset removed environment variable(s): "
+            + ", ".join(sorted(configured))
+        )
+
+
+def load_runtime_config(*, materialize_outputs: bool = True) -> RuntimeConfig:
+    reject_removed_topic_env_vars()
+    preset_id = apply_run_preset_to_environment() or "custom"
     run_started_at = datetime.now()
     run_date = run_started_at.strftime("%Y-%m-%d")
     timestamp = run_started_at.strftime("%Y-%m-%d_%H-%M-%S")
 
     sources_path = ROOT_DIR / _str_env("NEWS_SOURCES_YAML", "config/sources.yaml")
-    client_path = ROOT_DIR / _str_env("NEWS_CLIENT_YAML", "config/client.yaml")
-    topics_path = ROOT_DIR / _str_env("NEWS_TOPICS_YAML", "config/topics.yaml")
     recipients_path = ROOT_DIR / _str_env("NEWS_RECIPIENTS_YAML", "config/recipients.yaml")
-    topic_ids = _configured_topic_ids(client_path)
 
     output_dir = ROOT_DIR / _str_env("NEWS_OUTPUT_DIR", "output/daily_outputs")
-    run_output_dir = output_dir / run_date
-    output_dir.mkdir(parents=True, exist_ok=True)
-    run_output_dir.mkdir(parents=True, exist_ok=True)
-    _sync_cursorignore_latest_output(ROOT_DIR, output_dir, run_output_dir)
+    history_db_path = ROOT_DIR / _str_env("NEWS_HISTORY_DB", "output/history/news_history.duckdb")
+    history_export_csv = _bool_env("NEWS_HISTORY_EXPORT_CSV", True)
+    write_legacy_diagnostics = _bool_env("NEWS_WRITE_LEGACY_DIAGNOSTICS", False)
+    run_staging_dir = output_dir / ".staging" / timestamp
+    run_output_dir = run_staging_dir
+    latest_run_markdown_path = output_dir / "latest_run.md"
+    latest_run_log_path = output_dir / "latest_run.log"
+    latest_run_details_path = output_dir / "latest_run_details.json"
+    if materialize_outputs:
+        output_dir.mkdir(parents=True, exist_ok=True)
+        history_db_path.parent.mkdir(parents=True, exist_ok=True)
+        run_staging_dir.mkdir(parents=True, exist_ok=True)
+        _sync_cursorignore_latest_output(ROOT_DIR, output_dir, run_output_dir)
 
-    bradley_only_recipient = _str_env("NEWS_DEV_RECIPIENT", "bradley@mankoff.com")
-    run_mode = _configured_run_mode()
-    dev = run_mode == DEV_RUN_MODE
-    loose_local_prod = run_mode == LOOSE_LOCAL_PROD_RUN_MODE
-    local_prod = run_mode in LOCAL_PROD_REVIEW_RUN_MODES
-    bradley_only_delivery = dev or local_prod
-    local_prod_use_shared_history = _bool_env("NEWS_LOCAL_PROD_USE_SHARED_HISTORY", False)
-    shared_url_history_enabled = (not dev and not local_prod) or (
-        local_prod and local_prod_use_shared_history
+    bradley_recipient = _str_env("NEWS_BRADLEY_RECIPIENT", "bradley@mankoff.com")
+    source_scope = _configured_source_scope()
+    recipient_scope = _configured_recipient_scope()
+    url_reuse_blocking_enabled = _bool_env("NEWS_BLOCK_REUSED_URLS", False)
+    relaxed_final_synthesis_guards = _bool_env("NEWS_RELAX_FINAL_SYNTHESIS_GUARDS", False)
+    tracked_urls_filename = "tracked_urls.txt"
+    blocking_urls_filename = "blocking_urls.txt"
+    run_used_urls_filename = (
+        blocking_urls_filename if url_reuse_blocking_enabled else tracked_urls_filename
     )
-    relaxed_final_synthesis_guards = dev and _bool_env("NEWS_DEV_RELAXED_FINAL_GUARDS", True)
-    used_urls_filename = "used_urls.txt"
-    dev_used_urls_filename = "dev_used_urls.txt"
-    local_prod_used_urls_filename = "local_prod_used_urls.txt"
-    if dev:
-        run_used_urls_filename = dev_used_urls_filename
-    elif local_prod and not shared_url_history_enabled:
-        run_used_urls_filename = local_prod_used_urls_filename
-    else:
-        run_used_urls_filename = used_urls_filename
     env_json_path = ROOT_DIR / _str_env("NEWS_ENV_JSON", "env.json")
     email_from = _str_env("NEWS_EMAIL_FROM", "bradley.mankoff@gmail.com")
     smtp_password = (
@@ -1564,15 +1342,23 @@ def load_runtime_config() -> RuntimeConfig:
     )
     fallback_recipients = [
         addr.strip()
-        for addr in _str_env("NEWS_EMAIL_RECIPIENTS", bradley_only_recipient).split(",")
+        for addr in _str_env("NEWS_EMAIL_RECIPIENTS", bradley_recipient).split(",")
         if addr.strip()
     ]
 
-    model_reference = _configured_model_reference(run_mode)
+    model_reference = _configured_model_reference()
     model_name = resolve_model_name(model_reference)
     model_profile = configured_model_profile(model_reference)
     model_base_url = _str_env("NEWS_MODEL_BASE_URL", "http://127.0.0.1:8080/v1")
     model_backend = _configured_model_backend(model_reference)
+    article_summary_concurrency = max(1, _default_article_summary_concurrency(model_reference))
+    story_synthesis_concurrency = max(1, _default_story_synthesis_concurrency(model_reference))
+    model_concurrency = max(
+        1,
+        article_summary_concurrency,
+        story_synthesis_concurrency,
+    )
+    source_collection_concurrency = DEFAULT_SOURCE_COLLECTION_CONCURRENCY
     translation_model_reference = _configured_translation_model_reference()
     translation_model_name = resolve_model_name(translation_model_reference)
     translation_model_profile = configured_model_profile(translation_model_reference)
@@ -1581,8 +1367,6 @@ def load_runtime_config() -> RuntimeConfig:
     return RuntimeConfig(
         root_dir=ROOT_DIR,
         sources_path=sources_path,
-        client_path=client_path,
-        topics_path=topics_path,
         recipients_path=recipients_path,
         env_json_path=env_json_path,
         run_started_at=run_started_at,
@@ -1590,29 +1374,33 @@ def load_runtime_config() -> RuntimeConfig:
         timestamp=timestamp,
         output_dir=output_dir,
         run_output_dir=run_output_dir,
-        used_urls_filename=used_urls_filename,
-        dev_used_urls_filename=dev_used_urls_filename,
-        local_prod_used_urls_filename=local_prod_used_urls_filename,
+        latest_run_markdown_path=latest_run_markdown_path,
+        latest_run_log_path=latest_run_log_path,
+        latest_run_details_path=latest_run_details_path,
+        run_staging_dir=run_staging_dir,
+        history_db_path=history_db_path,
+        history_export_csv=history_export_csv,
+        write_legacy_diagnostics=write_legacy_diagnostics,
         run_used_urls_path=run_output_dir / run_used_urls_filename,
-        legacy_seen_urls_path=output_dir / "seen_urls.txt",
-        run_mode=run_mode,
-        dev=dev,
-        local_prod=local_prod,
-        loose_local_prod=loose_local_prod,
-        bradley_only_delivery=bradley_only_delivery,
-        shared_url_history_enabled=shared_url_history_enabled,
+        preset_id=preset_id,
+        source_scope=source_scope,
+        recipient_scope=recipient_scope,
+        url_reuse_blocking_enabled=url_reuse_blocking_enabled,
         relaxed_final_synthesis_guards=relaxed_final_synthesis_guards,
-        topic_mode=configured_topic_mode(),
-        topic_ids=topic_ids,
         model_reference=model_reference,
         model_name=model_name,
         model_profile=model_profile,
         model_base_url=model_base_url,
         model_backend=model_backend,
+        model_concurrency=model_concurrency,
+        article_summary_concurrency=article_summary_concurrency,
+        story_synthesis_concurrency=story_synthesis_concurrency,
+        source_collection_concurrency=source_collection_concurrency,
         model_server_command=build_model_server_command(
             model_name,
             model_profile,
             backend=model_backend,
+            model_concurrency=model_concurrency,
         ),
         translation_model_reference=translation_model_reference,
         translation_model_name=translation_model_name,
@@ -1622,16 +1410,14 @@ def load_runtime_config() -> RuntimeConfig:
             translation_model_name,
             translation_model_profile,
             backend=translation_model_backend,
+            model_concurrency=model_concurrency,
         ),
         translation_target_language=_str_env("NEWS_TRANSLATION_TARGET_LANGUAGE", "en") or "en",
-        translation_enabled=_bool_env("NEWS_TRANSLATION_ENABLED", False),
+        translation_enabled=False,
         recent_window_hours=_int_env("NEWS_RECENT_WINDOW_HOURS", 24),
         max_articles_per_source=_int_env("NEWS_MAX_ARTICLES_PER_SOURCE", 6),
-        num_top_topics=_int_env("NEWS_NUM_TOP_TOPICS", 4),
-        top_topic_probes=_int_env("NEWS_TOP_TOPIC_PROBES", 4),
         top_of_funnel_per_provider=_int_env("NEWS_TOP_OF_FUNNEL_PER_PROVIDER", 10),
-        summary_scope_label=_str_env("NEWS_SUMMARY_SCOPE", "today's selected news topics"),
-        bradley_only_recipient=bradley_only_recipient,
+        bradley_recipient=bradley_recipient,
         email_recipients_fallback=fallback_recipients,
         email_from=email_from,
         smtp_host=_str_env("NEWS_SMTP_HOST", "smtp.gmail.com"),
@@ -1647,25 +1433,16 @@ def load_runtime_config() -> RuntimeConfig:
         unsubscribe_port=_int_env("NEWS_UNSUBSCRIBE_PORT", 8765),
         unsubscribe_secret=_str_env("NEWS_UNSUBSCRIBE_SECRET", ""),
         token_encoding_name=_str_env("NEWS_TOKEN_ENCODING", "o200k_base") or "o200k_base",
-        image_generation_enabled=_bool_env("NEWS_IMAGE_ENABLED", not dev),
-        image_generation_fail_on_error=_bool_env("NEWS_IMAGE_FAIL_ON_ERROR", False),
-        image_width=_int_env("NEWS_IMAGE_WIDTH", 1024),
-        image_height=_int_env("NEWS_IMAGE_HEIGHT", 1024),
-        image_steps=_int_env("NEWS_IMAGE_STEPS", 4),
-        image_crop_bottom_ratio=_float_env("NEWS_IMAGE_CROP_BOTTOM_RATIO", 0.12),
-        image_model_id=_str_env("NEWS_IMAGE_MODEL_ID", "Runpod/FLUX.2-klein-4B-mflux-4bit"),
-        image_base_model=_str_env("NEWS_IMAGE_BASE_MODEL", "flux2-klein-4b"),
-        per_source_topic_article_cap=_int_env("NEWS_PER_SOURCE_TOPIC_ARTICLE_CAP", 1),
-        topic_relevance_min_score=configured_topic_relevance_min_score(run_mode),
-        story_topic_fit_min_score=configured_story_topic_fit_min_score(run_mode),
-        story_topic_validation_enabled=_bool_env(
-            "NEWS_STORY_TOPIC_VALIDATION_ENABLED",
-            _bool_env("NEWS_US_TOPIC_COUNTRY_GATE_ENABLED", True),
-        ),
-        min_articles_per_story=configured_min_articles_per_story(run_mode),
-        max_stories_per_topic=configured_max_stories_per_topic(run_mode),
-        topic_embedding_similarity_threshold=configured_topic_embedding_similarity_threshold(run_mode),
-        story_cluster_similarity_threshold=configured_story_cluster_similarity_threshold(run_mode),
+        image_generation_enabled=_bool_env("NEWS_IMAGE_ENABLED", False),
+        image_generation_fail_on_error=False,
+        image_width=1024,
+        image_height=1024,
+        image_steps=4,
+        image_crop_bottom_ratio=0.12,
+        image_model_id="Runpod/FLUX.2-klein-4B-mflux-4bit",
+        image_base_model="flux2-klein-4b",
+        min_articles_per_story=configured_min_articles_per_story(),
+        story_cluster_similarity_threshold=configured_story_cluster_similarity_threshold(),
     )
 
 

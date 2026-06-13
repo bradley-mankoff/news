@@ -1,11 +1,8 @@
 """Compatibility wrapper for the daily news CLI.
 
 Preferred usage:
-    uv run news dev
-    uv run news dev --topics sports,science_space_tech
-    uv run news local-prod
-    uv run news loose-local-prod
-    uv run news prod
+    uv run news run --preset NAME
+    NEWS_SOURCE_SCOPE=peripheral uv run news run
 """
 
 from news_pipeline.cli import main
