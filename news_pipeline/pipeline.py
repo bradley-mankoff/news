@@ -4711,6 +4711,17 @@ def _new_run_finalizer(diagnostics: RunDiagnostics, config: RuntimeConfig) -> Ru
 
 def _active_run_finalizer(diagnostics: RunDiagnostics, config: RuntimeConfig) -> RunFinalizer:
     global ACTIVE_RUN_FINALIZER
+    global ACTIVE_RUN_DIAGNOSTICS
+    if ACTIVE_RUN_SESSION is not None:
+        ACTIVE_RUN_DIAGNOSTICS = diagnostics
+        ACTIVE_RUN_SESSION.diagnostics = diagnostics
+        if (
+            ACTIVE_RUN_SESSION.finalizer is None
+            or ACTIVE_RUN_SESSION.finalizer.diagnostics is not diagnostics
+        ):
+            ACTIVE_RUN_SESSION.finalizer = _new_run_finalizer(diagnostics, config)
+        ACTIVE_RUN_FINALIZER = ACTIVE_RUN_SESSION.finalizer
+        return ACTIVE_RUN_SESSION.finalizer
     if ACTIVE_RUN_FINALIZER is None or ACTIVE_RUN_FINALIZER.diagnostics is not diagnostics:
         ACTIVE_RUN_FINALIZER = _new_run_finalizer(diagnostics, config)
     return ACTIVE_RUN_FINALIZER
@@ -5154,7 +5165,7 @@ def _run_pipeline() -> None:
 
     diagnostics = _new_run_diagnostics(len(sources))
     ACTIVE_RUN_DIAGNOSTICS = diagnostics
-    ACTIVE_RUN_FINALIZER = _new_run_finalizer(diagnostics, CONFIG)
+    ACTIVE_RUN_FINALIZER = _active_run_finalizer(diagnostics, CONFIG)
     image_status = "image on" if IMAGE_GENERATION_ENABLED else "image off"
     send_target = "Bradley only" if RECIPIENT_SCOPE == "bradley" else "active recipients"
     preset_label = PRESET_ID or "custom"

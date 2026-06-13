@@ -113,6 +113,45 @@ class FailedRunLoggingTests(unittest.TestCase):
                 self.assertEqual(run_id, timestamp)
                 self.assertEqual(status, "failed")
 
+    def test_session_finalizer_survives_compat_global_drift(self) -> None:
+        timestamp = "2026-06-06_11-00-00"
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            output_dir = root / "daily_outputs"
+            run_output_dir = output_dir / ".staging" / timestamp
+            history_db_path = root / "history" / "news_history.duckdb"
+            run_started_at = datetime(2026, 6, 6, 11, 0, 0)
+
+            test_config = replace(
+                pipeline.CONFIG,
+                run_started_at=run_started_at,
+                run_date="2026-06-06",
+                timestamp=timestamp,
+                output_dir=output_dir,
+                run_output_dir=run_output_dir,
+                run_staging_dir=run_output_dir,
+                latest_run_markdown_path=output_dir / "latest_run.md",
+                latest_run_log_path=output_dir / "latest_run.log",
+                latest_run_details_path=output_dir / "latest_run_details.json",
+                history_db_path=history_db_path,
+            )
+
+            def finish_after_candidate_collection() -> None:
+                diagnostics = pipeline._new_run_diagnostics(1)
+                finalizer = pipeline._active_run_finalizer(diagnostics, test_config)
+                finalizer.record_candidate_articles(
+                    [{"url": "https://example.com/a", "title": "A", "source": "Example"}]
+                )
+                pipeline.ACTIVE_RUN_FINALIZER = None
+                diagnostics.event("aborted", reason="no_article_candidates")
+                pipeline._finish_run_diagnostics(diagnostics, test_config)
+
+            with redirect_stdout(StringIO()):
+                pipeline.RunSession(test_config).run(finish_after_candidate_collection)
+
+            with connect(history_db_path) as con:
+                self.assertEqual(con.execute("SELECT COUNT(*) FROM run_articles").fetchone()[0], 1)
+
     def test_run_pipeline_delegates_to_run_session(self) -> None:
         with patch.object(pipeline.RunSession, "run") as run:
             pipeline.run_pipeline()

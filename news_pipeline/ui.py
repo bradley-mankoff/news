@@ -40,38 +40,17 @@ from .config import (
     normalize_preset_id,
     run_preset_env,
 )
+from .source_catalog import (
+    DeleteSources,
+    UpsertSource,
+    apply_source_catalog_patch,
+    load_source_records,
+)
 
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8766
 CONFIG_ENV_LOCK = threading.Lock()
-SOURCE_FIELD_ORDER = (
-    "key",
-    "name",
-    "language",
-    "tier",
-    "region",
-    "nations",
-    "url",
-    "homepage",
-    "provider_type",
-    "intended_role",
-    "weight",
-    "can_enrich_coverage",
-    "strict_source_match",
-    "source_match_mode",
-    "requires_translation",
-    "translation_source_language",
-    "source_match_aliases",
-    "notes",
-)
-SOURCE_LIST_FIELDS = {"nations", "source_match_aliases"}
-SOURCE_BOOL_FIELDS = {
-    "can_enrich_coverage",
-    "strict_source_match",
-    "requires_translation",
-}
-SOURCE_FLOAT_FIELDS = {"weight"}
 RECIPIENT_HEADER = """# Email recipients for generated reports.
 #
 # Usage:
@@ -476,76 +455,6 @@ def duplicate_preset(body: dict[str, Any]) -> dict[str, Any]:
     return {"path": str(RUN_PRESETS_PATH), "preset": records[target_id]}
 
 
-def _source_block_ranges(lines: list[str]) -> list[tuple[int, int]]:
-    ranges: list[tuple[int, int]] = []
-    in_sources = False
-    start: int | None = None
-    for index, line in enumerate(lines):
-        if not in_sources:
-            if line.startswith("sources:"):
-                in_sources = True
-            continue
-        if line.startswith("  - "):
-            if start is not None:
-                ranges.append((start, index))
-            start = index
-            continue
-        if start is not None and line.strip() and not line.startswith((" ", "#")):
-            ranges.append((start, index))
-            start = None
-            break
-    if start is not None:
-        ranges.append((start, len(lines)))
-    return ranges
-
-
-def _source_block_key(lines: list[str], start: int, end: int) -> str:
-    try:
-        payload = yaml.safe_load("sources:\n" + "".join(lines[start:end])) or {}
-    except yaml.YAMLError:
-        return ""
-    records = payload.get("sources", []) if isinstance(payload, dict) else []
-    if not records or not isinstance(records[0], dict):
-        return ""
-    return str(records[0].get("key") or records[0].get("name") or "").strip()
-
-
-def _yaml_scalar(value: Any) -> str:
-    if isinstance(value, bool):
-        return "true" if value else "false"
-    if isinstance(value, (int, float)):
-        return str(value)
-    return json.dumps(str(value), ensure_ascii=False)
-
-
-def _ordered_source_record(record: dict[str, Any]) -> dict[str, Any]:
-    ordered: dict[str, Any] = {}
-    for field in SOURCE_FIELD_ORDER:
-        if field not in record:
-            continue
-        value = record.get(field)
-        if field not in {"key", "name", "url"} and value in (None, "", []):
-            continue
-        ordered[field] = value
-    for field, value in record.items():
-        if field not in ordered and field not in SOURCE_FIELD_ORDER:
-            ordered[field] = value
-    return ordered
-
-
-def _render_source_block(record: dict[str, Any]) -> list[str]:
-    lines: list[str] = []
-    for index, (field, value) in enumerate(_ordered_source_record(record).items()):
-        prefix = "  - " if index == 0 else "    "
-        if isinstance(value, list):
-            lines.append(f"{prefix}{field}:\n")
-            for item in value:
-                lines.append(f"      - {_yaml_scalar(item)}\n")
-        else:
-            lines.append(f"{prefix}{field}: {_yaml_scalar(value)}\n")
-    return lines
-
-
 def _coerce_bool(value: Any) -> bool:
     if isinstance(value, bool):
         return value
@@ -554,44 +463,10 @@ def _coerce_bool(value: Any) -> bool:
     return str(value).strip().lower() in {"1", "true", "yes", "on"}
 
 
-def _coerce_source_value(field: str, value: Any) -> Any:
-    if field in SOURCE_BOOL_FIELDS:
-        return _coerce_bool(value)
-    if field in SOURCE_FLOAT_FIELDS:
-        if value in (None, ""):
-            return None
-        return float(value)
-    if field in SOURCE_LIST_FIELDS:
-        if value is None:
-            return []
-        if isinstance(value, list):
-            return [str(item).strip() for item in value if str(item).strip()]
-        return [item.strip() for item in str(value).replace(",", "\n").splitlines() if item.strip()]
-    if value is None:
-        return None
-    return str(value).strip()
-
-
-def _source_records(path: Path) -> list[dict[str, Any]]:
-    payload = _load_yaml_mapping(path)
-    records = payload.get("sources", [])
-    if not isinstance(records, list):
-        return []
-    return [record for record in records if isinstance(record, dict)]
-
-
 def list_sources() -> dict[str, Any]:
     path = _config_path_from_env("NEWS_SOURCES_YAML", "config/sources.yaml")
-    records = _source_records(path)
+    records = load_source_records(path)
     return {"path": str(path), "sources": records}
-
-
-def _find_source_range(lines: list[str], key: str) -> tuple[int, int] | None:
-    clean_key = key.strip()
-    for start, end in _source_block_ranges(lines):
-        if _source_block_key(lines, start, end) == clean_key:
-            return start, end
-    return None
 
 
 def upsert_source(body: dict[str, Any], *, append_only: bool = False) -> dict[str, Any]:
@@ -603,48 +478,18 @@ def upsert_source(body: dict[str, Any], *, append_only: bool = False) -> dict[st
     if not key:
         raise ValueError("Source key is required.")
 
-    records = _source_records(path)
-    existing = next((dict(record) for record in records if str(record.get("key") or "").strip() == key), None)
-    if append_only and existing:
-        raise ValueError(f"Source {key!r} already exists.")
-    record = existing or {"key": key, "name": key, "language": "en", "tier": "peripheral", "url": ""}
-    for field, value in dict(updates or {}).items():
-        if field == "updates":
-            continue
-        if field not in SOURCE_FIELD_ORDER and field not in record:
-            continue
-        coerced = _coerce_source_value(field, value)
-        if field in {"key", "name", "url"} or coerced not in (None, "", []):
-            record[field] = coerced
-        else:
-            record.pop(field, None)
-
-    lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
-    block = _render_source_block(record)
-    source_range = None if append_only else _find_source_range(lines, key)
-    if source_range:
-        start, end = source_range
-        lines[start:end] = block
-    else:
-        if lines and not lines[-1].endswith("\n"):
-            lines[-1] += "\n"
-        if not any(line.startswith("sources:") for line in lines):
-            lines.append("sources:\n")
-        lines.extend(block)
-    path.write_text("".join(lines), encoding="utf-8")
-    return {"path": str(path), "source": record}
+    result = apply_source_catalog_patch(path, [UpsertSource(key, dict(updates or {}), append_only=append_only)])
+    result_key = str(dict(updates or {}).get("key") or key).strip()
+    record = next((record for record in result.records if str(record.get("key") or "").strip() == result_key), {})
+    return {"path": result.path, "source": record}
 
 
 def delete_source(key: str) -> dict[str, Any]:
     path = _config_path_from_env("NEWS_SOURCES_YAML", "config/sources.yaml")
-    lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
-    source_range = _find_source_range(lines, key)
-    if not source_range:
+    result = apply_source_catalog_patch(path, [DeleteSources({key})])
+    if result.edit_count == 0:
         raise ValueError(f"Source {key!r} not found.")
-    start, end = source_range
-    del lines[start:end]
-    path.write_text("".join(lines), encoding="utf-8")
-    return {"path": str(path), "deleted": key}
+    return {"path": result.path, "deleted": key}
 
 
 def list_recipients() -> dict[str, Any]:

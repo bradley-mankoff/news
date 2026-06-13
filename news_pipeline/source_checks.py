@@ -22,9 +22,13 @@ from pathlib import Path
 from typing import Any
 from xml.etree import ElementTree
 
-import yaml
-
 from .config import ROOT_DIR
+from .source_catalog import (
+    DeleteSources,
+    SetSourceLanguages,
+    apply_source_catalog_patch,
+    load_source_rows,
+)
 
 
 LANGUAGE_DETECTION_MODEL = "papluca/xlm-roberta-base-language-detection"
@@ -34,7 +38,6 @@ RECENT_SOURCE_WINDOW_DAYS = 7
 ARTICLE_PROBE_SAMPLE_SIZE = 5
 TEXT_TAG_RE = re.compile(r"<[^>]+>")
 WHITESPACE_RE = re.compile(r"\s+")
-SOURCE_FIELD_RE = re.compile(r"^    ([A-Za-z_][A-Za-z0-9_-]*):")
 PORTUGUESE_DATE_TOKEN_MAP = {
     "Dom": "Sun",
     "Seg": "Mon",
@@ -79,39 +82,8 @@ def _default_sources_yaml() -> Path:
     return ROOT_DIR / (os.environ.get("NEWS_SOURCES_YAML") or "config/sources.yaml")
 
 
-def _load_yaml(path: Path) -> dict[str, Any]:
-    with path.open(encoding="utf-8") as handle:
-        payload = yaml.safe_load(handle) or {}
-    if not isinstance(payload, dict):
-        raise ValueError(f"{path} must contain a YAML mapping.")
-    return payload
-
-
 def _source_rows(path: Path) -> list[dict[str, Any]]:
-    payload = _load_yaml(path)
-    rows: list[dict[str, Any]] = []
-
-    records = payload.get("sources", [])
-    if not isinstance(records, list):
-        return rows
-    for record in records:
-        if not isinstance(record, dict):
-            continue
-        key = str(record.get("key") or record.get("name") or "").strip()
-        url = str(record.get("url") or "").strip()
-        if not key or not url:
-            continue
-        rows.append(
-            {
-                "section": "sources",
-                "key": key,
-                "name": str(record.get("name") or key),
-                "url": url,
-                "fetcher": str(record.get("fetcher") or "rss").strip().lower(),
-                "language": str(record.get("language") or "").strip(),
-            }
-        )
-    return rows
+    return load_source_rows(path)
 
 
 def _decompress_response_body(content: bytes, content_encoding: str) -> bytes:
@@ -835,115 +807,19 @@ def _probe_article_body(url: str, timeout: int) -> tuple[bool, str]:
         return False, f"error: {exc!s}"
 
 
-def _source_block_ranges(lines: list[str]) -> list[tuple[int, int]]:
-    ranges: list[tuple[int, int]] = []
-    in_sources = False
-    start: int | None = None
-
-    for index, line in enumerate(lines):
-        if not in_sources:
-            if line.startswith("sources:"):
-                in_sources = True
-            continue
-        if line.startswith("  - "):
-            if start is not None:
-                ranges.append((start, index))
-            start = index
-            continue
-        if start is not None and line.strip() and not line.startswith((" ", "#")):
-            ranges.append((start, index))
-            start = None
-            break
-
-    if start is not None:
-        ranges.append((start, len(lines)))
-    return ranges
-
-
-def _source_block_key(lines: list[str], start: int, end: int) -> str:
-    try:
-        payload = yaml.safe_load("sources:\n" + "".join(lines[start:end])) or {}
-    except yaml.YAMLError:
-        return ""
-    records = payload.get("sources", []) if isinstance(payload, dict) else []
-    if not records or not isinstance(records[0], dict):
-        return ""
-    return str(records[0].get("key") or records[0].get("name") or "").strip()
-
-
-def _direct_field_line(lines: list[str], start: int, end: int, field: str) -> int | None:
-    for index in range(start, end):
-        match = SOURCE_FIELD_RE.match(lines[index])
-        if match and match.group(1) == field:
-            return index
-    return None
-
-
-def _preferred_language_insert_line(lines: list[str], start: int, end: int) -> int:
-    for field in ("url", "region", "name"):
-        field_line = _direct_field_line(lines, start, end, field)
-        if field_line is not None:
-            return field_line + 1
-    return start + 1
-
-
 def write_source_languages(path: Path, results: list[dict[str, Any]], *, overwrite: bool = False) -> int:
     detected = {
         str(result["key"]): str(result["language"])
         for result in results
         if result.get("ok") and result.get("language") and not result.get("skipped")
     }
-    if not detected:
-        return 0
-
-    lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
-    newline = "\n"
-    for line in lines:
-        if line.endswith("\r\n"):
-            newline = "\r\n"
-            break
-    edits: list[tuple[str, int, str]] = []
-
-    for start, end in _source_block_ranges(lines):
-        key = _source_block_key(lines, start, end)
-        if key not in detected:
-            continue
-        language_line = f"    language: {detected[key]}{newline}"
-        existing_line = _direct_field_line(lines, start, end, "language")
-        if existing_line is not None:
-            if overwrite:
-                edits.append(("replace", existing_line, language_line))
-            continue
-        edits.append(("insert", _preferred_language_insert_line(lines, start, end), language_line))
-
-    for action, index, line in reversed(edits):
-        if action == "replace":
-            lines[index] = line
-        else:
-            lines.insert(index, line)
-
-    if edits:
-        path.write_text("".join(lines), encoding="utf-8")
-    return len(edits)
+    result = apply_source_catalog_patch(path, [SetSourceLanguages(detected, overwrite=overwrite)])
+    return result.edit_count
 
 
 def remove_source_blocks(path: Path, keys: set[str]) -> int:
-    if not keys:
-        return 0
-
-    lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
-    ranges_to_remove: list[tuple[int, int]] = []
-    for start, end in _source_block_ranges(lines):
-        key = _source_block_key(lines, start, end)
-        if key in keys:
-            ranges_to_remove.append((start, end))
-
-    for start, end in reversed(ranges_to_remove):
-        del lines[start:end]
-
-    if ranges_to_remove:
-        path.write_text("".join(lines), encoding="utf-8")
-    return len(ranges_to_remove)
+    result = apply_source_catalog_patch(path, [DeleteSources(keys)])
+    return result.edit_count
 
 
 def _status(result: dict[str, Any]) -> str:
