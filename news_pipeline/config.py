@@ -21,6 +21,8 @@ from typing import Any, Mapping
 
 import yaml
 
+from .source_catalog import MarkTranslationRequired, apply_source_catalog_patch
+
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 CONFIG_DIR = ROOT_DIR / "config"
@@ -57,7 +59,6 @@ ASSISTANT_CONTEXT_CORE_PATTERNS = (
     "**/.DS_Store",
 )
 RUN_OUTPUT_TIMESTAMP_RE = re.compile(r"\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}")
-SOURCE_FIELD_RE = re.compile(r"^    ([A-Za-z_][A-Za-z0-9_-]*):")
 DEFAULT_MODEL_ALIAS = "gemma-26b-moe"
 CODEX_TEST_MODEL_ALIAS = "gemma-e2b-tiny"
 CODEX_TEST_MODEL_NAME = "deadbydawn101/gemma-4-E2B-Heretic-Uncensored-mlx-4bit"
@@ -1087,111 +1088,12 @@ def load_sources(
     return sources
 
 
-def _source_block_ranges(lines: list[str]) -> list[tuple[int, int]]:
-    ranges: list[tuple[int, int]] = []
-    in_sources = False
-    start: int | None = None
-    for index, line in enumerate(lines):
-        if not in_sources:
-            if line.startswith("sources:"):
-                in_sources = True
-            continue
-        if line.startswith("  - "):
-            if start is not None:
-                ranges.append((start, index))
-            start = index
-            continue
-        if start is not None and line.strip() and not line.startswith((" ", "#")):
-            ranges.append((start, index))
-            start = None
-            break
-    if start is not None:
-        ranges.append((start, len(lines)))
-    return ranges
-
-
-def _source_block_key(lines: list[str], start: int, end: int) -> str:
-    try:
-        payload = yaml.safe_load("sources:\n" + "".join(lines[start:end])) or {}
-    except yaml.YAMLError:
-        return ""
-    records = payload.get("sources", []) if isinstance(payload, dict) else []
-    if not records or not isinstance(records[0], dict):
-        return ""
-    return str(records[0].get("key") or records[0].get("name") or "").strip()
-
-
-def _direct_source_field_line(lines: list[str], start: int, end: int, field: str) -> int | None:
-    for index in range(start, end):
-        match = SOURCE_FIELD_RE.match(lines[index])
-        if match and match.group(1) == field:
-            return index
-    return None
-
-
-def _preferred_translation_insert_line(lines: list[str], start: int, end: int) -> int:
-    for field in ("language", "url", "region", "name"):
-        field_line = _direct_source_field_line(lines, start, end, field)
-        if field_line is not None:
-            return field_line + 1
-    return start + 1
-
-
 def write_source_translation_flags(
     path: Path,
     source_languages: dict[str, str | None],
 ) -> int:
-    updates = {
-        str(key).strip(): str(language or "").strip().lower()
-        for key, language in source_languages.items()
-        if str(key).strip()
-    }
-    if not updates:
-        return 0
-
-    lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
-    newline = "\n"
-    for line in lines:
-        if line.endswith("\r\n"):
-            newline = "\r\n"
-            break
-
-    edits: list[tuple[str, int, str]] = []
-    for start, end in _source_block_ranges(lines):
-        key = _source_block_key(lines, start, end)
-        if key not in updates:
-            continue
-        language = updates[key]
-        requires_line = _direct_source_field_line(lines, start, end, "requires_translation")
-        if requires_line is not None:
-            if lines[requires_line].strip().lower() != "requires_translation: true":
-                edits.append(("replace", requires_line, f"    requires_translation: true{newline}"))
-        else:
-            edits.append((
-                "insert",
-                _preferred_translation_insert_line(lines, start, end),
-                f"    requires_translation: true{newline}",
-            ))
-
-        if language:
-            language_line = _direct_source_field_line(lines, start, end, "translation_source_language")
-            if language_line is None:
-                insert_at = requires_line + 1 if requires_line is not None else _preferred_translation_insert_line(lines, start, end)
-                edits.append((
-                    "insert",
-                    insert_at,
-                    f"    translation_source_language: {language}{newline}",
-                ))
-
-    for action, index, line in reversed(edits):
-        if action == "replace":
-            lines[index] = line
-        else:
-            lines.insert(index, line)
-
-    if edits:
-        path.write_text("".join(lines), encoding="utf-8")
-    return len(edits)
+    result = apply_source_catalog_patch(path, [MarkTranslationRequired(source_languages)])
+    return result.edit_count
 
 
 def load_top_funnel_providers(path: Path | None = None) -> dict[str, dict[str, Any]]:

@@ -11,6 +11,30 @@ uv run python -c 'import platform; print(platform.machine())'
 
 On Apple Silicon, the platform check should print `arm64`.
 
+## PR Review Flow
+
+The Claude PR reviewer is intentionally not push-triggered. Normal pushes to an
+open PR should run regular checks, but should not start a fresh AI review loop.
+
+Use this flow:
+
+1. Push your feature branch as often as needed.
+2. Open the PR as a draft while the branch is still being shaped.
+3. Mark the PR ready for review when you want one Claude review pass.
+4. Fix the review comments and push the fixes to the same branch.
+5. Do not expect Claude to rerun on that fix push.
+6. To request another review manually, open GitHub Actions, choose
+   `Claude PR Review`, click `Run workflow`, and enter the PR number.
+
+Manual CLI trigger:
+
+```bash
+gh workflow run "Claude PR Review" -f pr_number=123
+```
+
+Opening a non-draft PR also starts one review pass. Reopening a non-draft PR
+starts one review pass. Draft PRs are skipped until they are marked ready.
+
 ## UI
 
 Start the local control panel from the repo root:

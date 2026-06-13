@@ -323,7 +323,7 @@ def _article_candidates_from_source_context(
             source_run["rejected_counts"]["duplicate_this_run"] += 1
             continue
         if request.url_reuse_blocking_enabled and (
-            url in seen_urls or adapters.normalize_history_url(url) in seen_urls
+            url in seen_urls or adapters.normalize_history_url(url) in seen_urls or run_dedupe_key in seen_urls
         ):
             source_run["rejected_counts"]["seen_in_history"] += 1
             continue
@@ -447,7 +447,13 @@ def _load_seen_urls(request: ArticleCollectionRequest, adapters: ArticleCollecti
     if not request.url_reuse_blocking_enabled:
         return set()
     try:
-        return set(adapters.blocking_urls(request.config.history_db_path))
+        seen_urls = set(adapters.blocking_urls(request.config.history_db_path))
+        return seen_urls | {
+            key
+            for url in seen_urls
+            for key in (adapters.normalize_history_url(url), _normalize_url_for_dedupe(url))
+            if key
+        }
     except Exception as error:
         logger.warning("Could not read DuckDB URL history: %s", error)
         return set()
