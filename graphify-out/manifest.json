@@ -220,13 +220,13 @@
     "semantic_hash": ""
   },
   "news_pipeline/article_collection.py": {
-    "mtime": 1781324553.7109342,
-    "ast_hash": "3014817cb7a3ce82df8c3352c529dfa7",
+    "mtime": 1781374885.495221,
+    "ast_hash": "1be2bb7bd929662f5f299fad2f834da9",
     "semantic_hash": ""
   },
   "tests/test_article_collection.py": {
-    "mtime": 1781324535.622211,
-    "ast_hash": "4d0aa9f1f79747cf7dab6ae5db9739e7",
+    "mtime": 1781374896.9391892,
+    "ast_hash": "1e7805ed1e13b0eba97da8d9b53c59ac",
     "semantic_hash": ""
   },
   "news_pipeline/source_catalog.py": {

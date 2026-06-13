@@ -156,6 +156,42 @@ class ArticleCollectionTests(unittest.TestCase):
             self.assertIn("slow_source", event_labels)
             self.assertEqual(event_labels[-1], "article_collection")
 
+    def test_history_check_uses_run_dedupe_key(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            upsert_calls: list[dict[str, Any]] = []
+
+            result = collect_article_candidates(
+                self._request(root, sources=["alpha"]),
+                self._diagnostics(root),
+                _Finalizer(),  # type: ignore[arg-type]
+                _Progress(),
+                ArticleCollectionAdapters(
+                    fetch_source_context=lambda source_index, source_name: {
+                        "source_index": source_index,
+                        "source": source_name,
+                        "started_at": "2026-06-01T10:00:00+00:00",
+                        "completed_at": "2026-06-01T10:00:00+00:00",
+                        "elapsed_seconds": 0.0,
+                        "error_reason": "",
+                        "direct_context": self._direct_context(
+                            [
+                                self._article("https://www.example.com/a", "History Duplicate"),
+                                self._article("https://example.com/b", "Fresh"),
+                            ]
+                        ),
+                    },
+                    blocking_urls=lambda _path: {"https://example.com/a?utm_source=x"},
+                    upsert_url_history=lambda *args, **kwargs: upsert_calls.append(
+                        {"args": args, "kwargs": kwargs}
+                    ),
+                ),
+            )
+
+            self.assertEqual([article["title"] for article in result.article_candidates], ["Fresh"])
+            self.assertEqual(result.stats.rejected_counts["seen_in_history"], 1)
+            self.assertEqual(upsert_calls[0]["kwargs"]["urls"], ["https://example.com/b"])
+
     def test_history_write_failure_falls_back_to_url_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
@@ -246,4 +282,3 @@ class ArticleCollectionTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

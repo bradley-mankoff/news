@@ -1,16 +1,16 @@
 # Graph Report - news  (2026-06-13)
 
 ## Corpus Check
-- 42 files · ~75,089 words
+- 42 files · ~75,190 words
 - Verdict: corpus is large enough that graph structure adds value.
 
 ## Summary
-- 1155 nodes · 3363 edges · 42 communities (34 shown, 8 thin omitted)
+- 1156 nodes · 3374 edges · 43 communities (35 shown, 8 thin omitted)
 - Extraction: 90% EXTRACTED · 10% INFERRED · 0% AMBIGUOUS · INFERRED: 324 edges (avg confidence: 0.52)
 - Token cost: 0 input · 0 output
 
 ## Graph Freshness
-- Built from commit: `4919e68a`
+- Built from commit: `eda2bafa`
 - Run `git rev-parse HEAD` and compare to check if the graph is stale.
 - Run `graphify update .` after code changes (no API cost).
 
@@ -47,6 +47,7 @@
 - [[_COMMUNITY_Community 29|Community 29]]
 - [[_COMMUNITY_Community 30|Community 30]]
 - [[_COMMUNITY_Community 31|Community 31]]
+- [[_COMMUNITY_Community 32|Community 32]]
 - [[_COMMUNITY_Community 33|Community 33]]
 - [[_COMMUNITY_Community 34|Community 34]]
 - [[_COMMUNITY_Community 36|Community 36]]
@@ -65,7 +66,7 @@
 4. `RunFinalizer` - 52 edges
 5. `run_pipeline()` - 50 edges
 6. `Any` - 45 edges
-7. `ArticleCollectionAdapters` - 43 edges
+7. `ArticleCollectionAdapters` - 44 edges
 8. `ArticleCollectionRequest` - 42 edges
 9. `Any` - 40 edges
 10. `RuntimeConfig` - 34 edges
@@ -88,11 +89,11 @@
 - 1-file cycle: `news_pipeline/source_checks.py -> news_pipeline/source_checks.py`
 - 1-file cycle: `news_pipeline/story_clustering.py -> news_pipeline/story_clustering.py`
 
-## Communities (42 total, 8 thin omitted)
+## Communities (43 total, 8 thin omitted)
 
 ### Community 0 - "Community 0"
-Cohesion: 0.08
-Nodes (17): _clean_progress_message(), generate_image_with_mflux(), generate_report_image_art(), get_active_recipient_config(), load_recipient_config(), maybe_email_report(), ProgressTracker, Load active recipient metadata from config/recipients.yaml. (+9 more)
+Cohesion: 0.11
+Nodes (14): _clean_progress_message(), generate_image_with_mflux(), generate_report_image_art(), get_active_recipient_config(), load_recipient_config(), maybe_email_report(), ProgressTracker, Load active recipient metadata from config/recipients.yaml. (+6 more)
 
 ### Community 1 - "Community 1"
 Cohesion: 0.06
@@ -119,12 +120,12 @@ Cohesion: 0.08
 Nodes (51): ArticleSummarizationRuntime, ArticleSummaryState, _build_article_summary_app(), build_article_summary_prompt_messages(), _notify_article_completed(), BaseMessage, Article summarization pass for retained story-cluster articles., run_article_summary_pass() (+43 more)
 
 ### Community 7 - "Community 7"
-Cohesion: 0.13
-Nodes (31): _annotated_citation_sources(), _article_body_evidence(), _article_lookup_by_id(), article_summary_lookup_by_id(), build_story_synthesis_prompt_messages(), _citation_diagnostics_with_presence(), clean_story_synthesis_contradictions(), clean_story_synthesis_headline() (+23 more)
+Cohesion: 0.10
+Nodes (34): _annotated_citation_sources(), _article_body_evidence(), _article_lookup_by_id(), article_summary_lookup_by_id(), build_story_synthesis_prompt_messages(), _citation_diagnostics_with_presence(), clean_story_synthesis_contradictions(), clean_story_synthesis_headline() (+26 more)
 
 ### Community 8 - "Community 8"
 Cohesion: 0.08
-Nodes (39): add_headline_overlay(), _append_unique_urls(), _article_scrape_deadline(), _bool_env(), _bounded_env_float(), build_article_fallback_entry(), _build_article_heading(), build_fallback_final_synthesis_preview() (+31 more)
+Nodes (41): add_headline_overlay(), _append_unique_urls(), _article_scrape_deadline(), _bool_env(), _bounded_env_float(), build_article_fallback_entry(), _build_article_heading(), build_fallback_final_synthesis_preview() (+33 more)
 
 ### Community 9 - "Community 9"
 Cohesion: 0.06
@@ -132,15 +133,15 @@ Nodes (76): AIMessage, ArticleCollectionRequest, ChatOpenAI, ModelSamplingSettin
 
 ### Community 10 - "Community 10"
 Cohesion: 0.05
-Nodes (89): _apply_cli_preset(), _consume_preset_arg(), main(), _print_codex_model_server_command(), _print_model_server_command(), Command-line entry point for the daily news pipeline., _run_history(), _run_pipeline_command() (+81 more)
+Nodes (86): _apply_cli_preset(), _consume_preset_arg(), main(), _print_codex_model_server_command(), _print_model_server_command(), Command-line entry point for the daily news pipeline., _run_history(), _run_pipeline_command() (+78 more)
 
 ### Community 11 - "Community 11"
-Cohesion: 0.19
-Nodes (20): _duckdb(), build_chat_model(), _ensure_main_model_server_ready(), managed_model_server(), _managed_model_server_exit_message(), _managed_model_server_log_path(), managed_translation_model_server(), _managed_translation_model_server_log_path() (+12 more)
+Cohesion: 0.17
+Nodes (23): codex_model_guard_active(), ensure_codex_safe_model_reference(), _duckdb(), build_chat_model(), _ensure_main_model_server_ready(), _load_translation_model_resources(), managed_model_server(), _managed_model_server_exit_message() (+15 more)
 
 ### Community 12 - "Community 12"
-Cohesion: 0.08
-Nodes (43): _article_confirms_wire_attribution(), capture_activity_snapshot(), _configured_source_display_name(), _confirm_wire_source_match(), _dedupe_story_drafts_for_global_selection(), _excluded_feed_item_reason(), _feed_item_matches_configured_source(), _feed_item_source_labels() (+35 more)
+Cohesion: 0.10
+Nodes (37): _article_confirms_wire_attribution(), _budget_article_targets_for_summary(), _configured_source_display_name(), _confirm_wire_source_match(), _dedupe_story_drafts_for_global_selection(), _excluded_feed_item_reason(), _feed_item_matches_configured_source(), _feed_item_source_labels() (+29 more)
 
 ### Community 13 - "Community 13"
 Cohesion: 0.40
@@ -204,11 +205,15 @@ Nodes (7): NEWS_RECIPIENT_SCOPE Variable, config/recipients.yaml, Aidan Coon Rec
 
 ### Community 30 - "Community 30"
 Cohesion: 0.25
-Nodes (8): _article_translation_decision(), _generate_translation_text(), _infer_script_translation_language(), _load_translation_model_resources(), _normalize_translation_language(), _text_looks_non_english(), _translate_text_with_translation_model(), _with_translation_metadata()
+Nodes (8): _article_translation_decision(), _format_translation_prompt(), _generate_translation_text(), _infer_script_translation_language(), _normalize_translation_language(), _text_looks_non_english(), _translate_text_with_translation_model(), _with_translation_metadata()
 
 ### Community 31 - "Community 31"
 Cohesion: 0.25
 Nodes (7): 1. RTK Commands & Env, 2. graphify, 3. Karpathy Execution Guidelines, A. Think Before Coding (No Assumptions), B. Simplicity First (No Speculation), C. Surgical Changes (No Renovation), D. Goal-Driven Execution (Verify)
+
+### Community 32 - "Community 32"
+Cohesion: 0.50
+Nodes (4): capture_activity_snapshot(), _parse_activity_command_output(), Collect macOS memory/activity signals without making the run depend on them., _run_activity_command()
 
 ### Community 33 - "Community 33"
 Cohesion: 0.29

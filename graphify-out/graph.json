@@ -297,7 +297,7 @@
       "label": "_record_run_urls()",
       "file_type": "code",
       "source_file": "news_pipeline/article_collection.py",
-      "source_location": "L456",
+      "source_location": "L462",
       "_origin": "ast",
       "id": "news_pipeline_article_collection_record_run_urls",
       "community": 9,
@@ -307,7 +307,7 @@
       "label": "_normalize_url_for_dedupe()",
       "file_type": "code",
       "source_file": "news_pipeline/article_collection.py",
-      "source_location": "L481",
+      "source_location": "L487",
       "_origin": "ast",
       "id": "news_pipeline_article_collection_normalize_url_for_dedupe",
       "community": 9,
@@ -1480,7 +1480,7 @@
       "source_location": "L521",
       "_origin": "ast",
       "id": "news_pipeline_config_codex_model_guard_active",
-      "community": 10,
+      "community": 11,
       "norm_label": "codex_model_guard_active()"
     },
     {
@@ -1490,7 +1490,7 @@
       "source_location": "L525",
       "_origin": "ast",
       "id": "news_pipeline_config_ensure_codex_safe_model_reference",
-      "community": 10,
+      "community": 11,
       "norm_label": "ensure_codex_safe_model_reference()"
     },
     {
@@ -3190,7 +3190,7 @@
       "source_location": "L478",
       "_origin": "ast",
       "id": "news_pipeline_pipeline_budget_article_targets_for_summary",
-      "community": 10,
+      "community": 12,
       "norm_label": "_budget_article_targets_for_summary()"
     },
     {
@@ -3210,7 +3210,7 @@
       "source_location": "L606",
       "_origin": "ast",
       "id": "news_pipeline_pipeline_parse_activity_command_output",
-      "community": 12,
+      "community": 32,
       "norm_label": "_parse_activity_command_output()"
     },
     {
@@ -3220,7 +3220,7 @@
       "source_location": "L624",
       "_origin": "ast",
       "id": "news_pipeline_pipeline_run_activity_command",
-      "community": 12,
+      "community": 32,
       "norm_label": "_run_activity_command()"
     },
     {
@@ -3230,7 +3230,7 @@
       "source_location": "L650",
       "_origin": "ast",
       "id": "news_pipeline_pipeline_capture_activity_snapshot",
-      "community": 12,
+      "community": 32,
       "norm_label": "capture_activity_snapshot()"
     },
     {
@@ -4380,7 +4380,7 @@
       "source_location": "L2423",
       "_origin": "ast",
       "id": "news_pipeline_pipeline_format_translation_prompt",
-      "community": 12,
+      "community": 30,
       "norm_label": "_format_translation_prompt()"
     },
     {
@@ -4390,7 +4390,7 @@
       "source_location": "L2439",
       "_origin": "ast",
       "id": "news_pipeline_pipeline_load_translation_model_resources",
-      "community": 30,
+      "community": 11,
       "norm_label": "_load_translation_model_resources()"
     },
     {
@@ -4560,7 +4560,7 @@
       "source_location": "L3128",
       "_origin": "ast",
       "id": "news_pipeline_pipeline_sampling_to_extra_body",
-      "community": 12,
+      "community": 8,
       "norm_label": "_sampling_to_extra_body()"
     },
     {
@@ -4600,7 +4600,7 @@
       "source_location": "L3152",
       "_origin": "ast",
       "id": "news_pipeline_pipeline_model_extra_body",
-      "community": 12,
+      "community": 8,
       "norm_label": "_model_extra_body()"
     },
     {
@@ -5470,7 +5470,7 @@
       "source_location": "L651",
       "_origin": "ast",
       "id": "news_pipeline_pipeline_rationale_651",
-      "community": 12,
+      "community": 32,
       "norm_label": "collect macos memory/activity signals without making the run depend on them."
     },
     {
@@ -8864,10 +8864,20 @@
       "norm_label": ".test_collect_records_candidates_diagnostics_history_and_artifact()"
     },
     {
-      "label": ".test_history_write_failure_falls_back_to_url_file()",
+      "label": ".test_history_check_uses_run_dedupe_key()",
       "file_type": "code",
       "source_file": "tests/test_article_collection.py",
       "source_location": "L159",
+      "_origin": "ast",
+      "id": "tests_test_article_collection_articlecollectiontests_test_history_check_uses_run_dedupe_key",
+      "community": 9,
+      "norm_label": ".test_history_check_uses_run_dedupe_key()"
+    },
+    {
+      "label": ".test_history_write_failure_falls_back_to_url_file()",
+      "file_type": "code",
+      "source_file": "tests/test_article_collection.py",
+      "source_location": "L195",
       "_origin": "ast",
       "id": "tests_test_article_collection_articlecollectiontests_test_history_write_failure_falls_back_to_url_file",
       "community": 9,
@@ -8877,7 +8887,7 @@
       "label": "._request()",
       "file_type": "code",
       "source_file": "tests/test_article_collection.py",
-      "source_location": "L190",
+      "source_location": "L226",
       "_origin": "ast",
       "id": "tests_test_article_collection_articlecollectiontests_request",
       "community": 9,
@@ -8887,7 +8897,7 @@
       "label": "Path",
       "file_type": "code",
       "source_file": "tests/test_article_collection.py",
-      "source_location": "L190",
+      "source_location": "L226",
       "_origin": "ast",
       "id": "tests_test_article_collection_py_path",
       "community": 9,
@@ -8897,7 +8907,7 @@
       "label": "ArticleCollectionRequest",
       "file_type": "code",
       "source_file": "tests/test_article_collection.py",
-      "source_location": "L190",
+      "source_location": "L226",
       "_origin": "ast",
       "id": "articlecollectionrequest",
       "community": 9,
@@ -8907,7 +8917,7 @@
       "label": "._diagnostics()",
       "file_type": "code",
       "source_file": "tests/test_article_collection.py",
-      "source_location": "L205",
+      "source_location": "L241",
       "_origin": "ast",
       "id": "tests_test_article_collection_articlecollectiontests_diagnostics",
       "community": 9,
@@ -8917,7 +8927,7 @@
       "label": "RunDiagnostics",
       "file_type": "code",
       "source_file": "tests/test_article_collection.py",
-      "source_location": "L205",
+      "source_location": "L241",
       "_origin": "ast",
       "id": "tests_test_article_collection_py_rundiagnostics",
       "community": 9,
@@ -8927,7 +8937,7 @@
       "label": "._direct_context()",
       "file_type": "code",
       "source_file": "tests/test_article_collection.py",
-      "source_location": "L215",
+      "source_location": "L251",
       "_origin": "ast",
       "id": "tests_test_article_collection_articlecollectiontests_direct_context",
       "community": 9,
@@ -8937,7 +8947,7 @@
       "label": "._article()",
       "file_type": "code",
       "source_file": "tests/test_article_collection.py",
-      "source_location": "L235",
+      "source_location": "L271",
       "_origin": "ast",
       "id": "tests_test_article_collection_articlecollectiontests_article",
       "community": 9,
@@ -10010,7 +10020,7 @@
       "source_location": "L12",
       "_origin": "ast",
       "id": "tests_test_terminal_progress_faketty",
-      "community": 0,
+      "community": 7,
       "norm_label": "faketty"
     },
     {
@@ -10030,7 +10040,7 @@
       "source_location": "L13",
       "_origin": "ast",
       "id": "tests_test_terminal_progress_faketty_isatty",
-      "community": 0,
+      "community": 7,
       "norm_label": ".isatty()"
     },
     {
@@ -10040,7 +10050,7 @@
       "source_location": "L17",
       "_origin": "ast",
       "id": "tests_test_terminal_progress_fakepipe",
-      "community": 0,
+      "community": 7,
       "norm_label": "fakepipe"
     },
     {
@@ -10050,7 +10060,7 @@
       "source_location": "L18",
       "_origin": "ast",
       "id": "tests_test_terminal_progress_fakepipe_isatty",
-      "community": 0,
+      "community": 7,
       "norm_label": ".isatty()"
     },
     {
@@ -10080,7 +10090,7 @@
       "source_location": "L43",
       "_origin": "ast",
       "id": "tests_test_terminal_progress_terminalprogresstests",
-      "community": 0,
+      "community": 7,
       "norm_label": "terminalprogresstests"
     },
     {
@@ -10090,7 +10100,7 @@
       "source_location": "L44",
       "_origin": "ast",
       "id": "tests_test_terminal_progress_terminalprogresstests_test_compact_tty_source_progress_suppresses_intermediate_items",
-      "community": 0,
+      "community": 7,
       "norm_label": ".test_compact_tty_source_progress_suppresses_intermediate_items()"
     },
     {
@@ -10100,7 +10110,7 @@
       "source_location": "L61",
       "_origin": "ast",
       "id": "tests_test_terminal_progress_terminalprogresstests_test_live_tty_source_progress_uses_one_mutable_line",
-      "community": 0,
+      "community": 7,
       "norm_label": ".test_live_tty_source_progress_uses_one_mutable_line()"
     },
     {
@@ -10110,7 +10120,7 @@
       "source_location": "L78",
       "_origin": "ast",
       "id": "tests_test_terminal_progress_terminalprogresstests_test_non_tty_source_progress_suppresses_intermediate_items",
-      "community": 0,
+      "community": 7,
       "norm_label": ".test_non_tty_source_progress_suppresses_intermediate_items()"
     },
     {
@@ -10120,7 +10130,7 @@
       "source_location": "L94",
       "_origin": "ast",
       "id": "tests_test_terminal_progress_terminalprogresstests_test_compact_full_run_sized_updates_stay_under_line_budget",
-      "community": 0,
+      "community": 7,
       "norm_label": ".test_compact_full_run_sized_updates_stay_under_line_budget()"
     },
     {
@@ -10140,7 +10150,7 @@
       "source_location": "L213",
       "_origin": "ast",
       "id": "tests_test_terminal_progress_terminalprogresstests_test_story_clustering_progress_reaches_final_total",
-      "community": 0,
+      "community": 7,
       "norm_label": ".test_story_clustering_progress_reaches_final_total()"
     },
     {
@@ -12609,9 +12619,9 @@
       "source_file": "news_pipeline/pipeline.py",
       "source_location": "L103",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "news_pipeline_pipeline_py_articlesummarizationruntime",
-      "target": "news_pipeline_article_collection_articlecollectionrequest"
+      "target": "news_pipeline_article_collection_articlecollectionrequest",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
@@ -12619,9 +12629,9 @@
       "source_file": "news_pipeline/pipeline.py",
       "source_location": "L103",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "news_pipeline_pipeline_py_basemessage",
-      "target": "news_pipeline_article_collection_articlecollectionrequest"
+      "target": "news_pipeline_article_collection_articlecollectionrequest",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
@@ -12629,9 +12639,9 @@
       "source_file": "news_pipeline/pipeline.py",
       "source_location": "L103",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "news_pipeline_pipeline_py_counter",
-      "target": "news_pipeline_article_collection_articlecollectionrequest"
+      "target": "news_pipeline_article_collection_articlecollectionrequest",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
@@ -12657,21 +12667,21 @@
       "relation": "uses",
       "confidence": "INFERRED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L104",
+      "source_location": "L103",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "news_pipeline_pipeline_py_rundiagnostics",
-      "target": "news_pipeline_article_collection_articlecollectionrequest"
+      "target": "news_pipeline_article_collection_articlecollectionrequest",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
       "confidence": "INFERRED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L104",
+      "source_location": "L103",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "news_pipeline_pipeline_py_runfinalizer",
-      "target": "news_pipeline_article_collection_articlecollectionrequest"
+      "target": "news_pipeline_article_collection_articlecollectionrequest",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
@@ -12679,9 +12689,9 @@
       "source_file": "news_pipeline/pipeline.py",
       "source_location": "L103",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "news_pipeline_pipeline_py_storydraftingruntime",
-      "target": "news_pipeline_article_collection_articlecollectionrequest"
+      "target": "news_pipeline_article_collection_articlecollectionrequest",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
@@ -12689,9 +12699,9 @@
       "source_file": "news_pipeline/pipeline.py",
       "source_location": "L103",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "news_pipeline_pipeline_py_storyselectionruntime",
-      "target": "news_pipeline_article_collection_articlecollectionrequest"
+      "target": "news_pipeline_article_collection_articlecollectionrequest",
+      "confidence_score": 0.5
     },
     {
       "relation": "calls",
@@ -13112,9 +13122,9 @@
       "source_file": "news_pipeline/pipeline.py",
       "source_location": "L103",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "news_pipeline_pipeline_py_articlesummarizationruntime",
-      "target": "news_pipeline_article_collection_articlecollectionadapters"
+      "target": "news_pipeline_article_collection_articlecollectionadapters",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
@@ -13122,9 +13132,9 @@
       "source_file": "news_pipeline/pipeline.py",
       "source_location": "L103",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "news_pipeline_pipeline_py_basemessage",
-      "target": "news_pipeline_article_collection_articlecollectionadapters"
+      "target": "news_pipeline_article_collection_articlecollectionadapters",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
@@ -13132,9 +13142,9 @@
       "source_file": "news_pipeline/pipeline.py",
       "source_location": "L103",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "news_pipeline_pipeline_py_counter",
-      "target": "news_pipeline_article_collection_articlecollectionadapters"
+      "target": "news_pipeline_article_collection_articlecollectionadapters",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
@@ -13160,21 +13170,21 @@
       "relation": "uses",
       "confidence": "INFERRED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L104",
+      "source_location": "L103",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "news_pipeline_pipeline_py_rundiagnostics",
-      "target": "news_pipeline_article_collection_articlecollectionadapters"
+      "target": "news_pipeline_article_collection_articlecollectionadapters",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
       "confidence": "INFERRED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L104",
+      "source_location": "L103",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "news_pipeline_pipeline_py_runfinalizer",
-      "target": "news_pipeline_article_collection_articlecollectionadapters"
+      "target": "news_pipeline_article_collection_articlecollectionadapters",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
@@ -13182,9 +13192,9 @@
       "source_file": "news_pipeline/pipeline.py",
       "source_location": "L103",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "news_pipeline_pipeline_py_storydraftingruntime",
-      "target": "news_pipeline_article_collection_articlecollectionadapters"
+      "target": "news_pipeline_article_collection_articlecollectionadapters",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
@@ -13192,9 +13202,9 @@
       "source_file": "news_pipeline/pipeline.py",
       "source_location": "L103",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "news_pipeline_pipeline_py_storyselectionruntime",
-      "target": "news_pipeline_article_collection_articlecollectionadapters"
+      "target": "news_pipeline_article_collection_articlecollectionadapters",
+      "confidence_score": 0.5
     },
     {
       "relation": "calls",
@@ -13267,6 +13277,17 @@
       "source_location": "L115",
       "weight": 1.0,
       "source": "tests_test_article_collection_articlecollectiontests_test_collect_records_candidates_diagnostics_history_and_artifact",
+      "target": "news_pipeline_article_collection_articlecollectionadapters"
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "tests/test_article_collection.py",
+      "source_location": "L169",
+      "weight": 1.0,
+      "source": "tests_test_article_collection_articlecollectiontests_test_history_check_uses_run_dedupe_key",
       "target": "news_pipeline_article_collection_articlecollectionadapters"
     },
     {
@@ -13470,6 +13491,17 @@
       "source_location": "L125",
       "weight": 1.0,
       "source": "tests_test_article_collection_articlecollectiontests_test_collect_records_candidates_diagnostics_history_and_artifact",
+      "target": "news_pipeline_article_collection_collect_article_candidates"
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "tests/test_article_collection.py",
+      "source_location": "L164",
+      "weight": 1.0,
+      "source": "tests_test_article_collection_articlecollectiontests_test_history_check_uses_run_dedupe_key",
       "target": "news_pipeline_article_collection_collect_article_candidates"
     },
     {
@@ -13715,6 +13747,17 @@
       "confidence_score": 1.0,
       "source": "news_pipeline_article_collection_article_candidates_from_source_context",
       "target": "news_pipeline_article_collection_normalize_url_for_dedupe"
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "news_pipeline/article_collection.py",
+      "source_location": "L454",
+      "weight": 1.0,
+      "source": "news_pipeline_article_collection_load_seen_urls",
+      "target": "news_pipeline_article_collection_normalize_url_for_dedupe",
+      "confidence_score": 1.0
     },
     {
       "relation": "contains",
@@ -17723,9 +17766,9 @@
       "source_file": "news_pipeline/pipeline.py",
       "source_location": "L89",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "news_pipeline_pipeline_py_articlesummarizationruntime",
-      "target": "news_pipeline_config_modelsamplingsettings"
+      "target": "news_pipeline_config_modelsamplingsettings",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
@@ -17733,9 +17776,9 @@
       "source_file": "news_pipeline/pipeline.py",
       "source_location": "L89",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "news_pipeline_pipeline_py_basemessage",
-      "target": "news_pipeline_config_modelsamplingsettings"
+      "target": "news_pipeline_config_modelsamplingsettings",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
@@ -17743,9 +17786,9 @@
       "source_file": "news_pipeline/pipeline.py",
       "source_location": "L89",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "news_pipeline_pipeline_py_counter",
-      "target": "news_pipeline_config_modelsamplingsettings"
+      "target": "news_pipeline_config_modelsamplingsettings",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
@@ -17771,21 +17814,21 @@
       "relation": "uses",
       "confidence": "INFERRED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L90",
+      "source_location": "L89",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "news_pipeline_pipeline_py_rundiagnostics",
-      "target": "news_pipeline_config_modelsamplingsettings"
+      "target": "news_pipeline_config_modelsamplingsettings",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
       "confidence": "INFERRED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L90",
+      "source_location": "L89",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "news_pipeline_pipeline_py_runfinalizer",
-      "target": "news_pipeline_config_modelsamplingsettings"
+      "target": "news_pipeline_config_modelsamplingsettings",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
@@ -17793,9 +17836,9 @@
       "source_file": "news_pipeline/pipeline.py",
       "source_location": "L89",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "news_pipeline_pipeline_py_storydraftingruntime",
-      "target": "news_pipeline_config_modelsamplingsettings"
+      "target": "news_pipeline_config_modelsamplingsettings",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
@@ -17803,9 +17846,9 @@
       "source_file": "news_pipeline/pipeline.py",
       "source_location": "L89",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "news_pipeline_pipeline_py_storyselectionruntime",
-      "target": "news_pipeline_config_modelsamplingsettings"
+      "target": "news_pipeline_config_modelsamplingsettings",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
@@ -18051,9 +18094,9 @@
       "source_file": "news_pipeline/pipeline.py",
       "source_location": "L89",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "news_pipeline_pipeline_py_articlesummarizationruntime",
-      "target": "news_pipeline_config_runtimeconfig"
+      "target": "news_pipeline_config_runtimeconfig",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
@@ -18061,9 +18104,9 @@
       "source_file": "news_pipeline/pipeline.py",
       "source_location": "L89",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "news_pipeline_pipeline_py_basemessage",
-      "target": "news_pipeline_config_runtimeconfig"
+      "target": "news_pipeline_config_runtimeconfig",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
@@ -18071,9 +18114,9 @@
       "source_file": "news_pipeline/pipeline.py",
       "source_location": "L89",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "news_pipeline_pipeline_py_counter",
-      "target": "news_pipeline_config_runtimeconfig"
+      "target": "news_pipeline_config_runtimeconfig",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
@@ -18099,21 +18142,21 @@
       "relation": "uses",
       "confidence": "INFERRED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L90",
+      "source_location": "L89",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "news_pipeline_pipeline_py_rundiagnostics",
-      "target": "news_pipeline_config_runtimeconfig"
+      "target": "news_pipeline_config_runtimeconfig",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
       "confidence": "INFERRED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L90",
+      "source_location": "L89",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "news_pipeline_pipeline_py_runfinalizer",
-      "target": "news_pipeline_config_runtimeconfig"
+      "target": "news_pipeline_config_runtimeconfig",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
@@ -18121,9 +18164,9 @@
       "source_file": "news_pipeline/pipeline.py",
       "source_location": "L89",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "news_pipeline_pipeline_py_storydraftingruntime",
-      "target": "news_pipeline_config_runtimeconfig"
+      "target": "news_pipeline_config_runtimeconfig",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
@@ -18131,9 +18174,9 @@
       "source_file": "news_pipeline/pipeline.py",
       "source_location": "L89",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "news_pipeline_pipeline_py_storyselectionruntime",
-      "target": "news_pipeline_config_runtimeconfig"
+      "target": "news_pipeline_config_runtimeconfig",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
@@ -20759,9 +20802,9 @@
       "source_file": "news_pipeline/pipeline.py",
       "source_location": "L101",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "news_pipeline_pipeline_py_articlesummarizationruntime",
-      "target": "news_pipeline_diagnostics_rundiagnostics"
+      "target": "news_pipeline_diagnostics_rundiagnostics",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
@@ -20769,9 +20812,9 @@
       "source_file": "news_pipeline/pipeline.py",
       "source_location": "L101",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "news_pipeline_pipeline_py_basemessage",
-      "target": "news_pipeline_diagnostics_rundiagnostics"
+      "target": "news_pipeline_diagnostics_rundiagnostics",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
@@ -20779,9 +20822,9 @@
       "source_file": "news_pipeline/pipeline.py",
       "source_location": "L101",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "news_pipeline_pipeline_py_counter",
-      "target": "news_pipeline_diagnostics_rundiagnostics"
+      "target": "news_pipeline_diagnostics_rundiagnostics",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
@@ -20807,21 +20850,21 @@
       "relation": "uses",
       "confidence": "INFERRED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L102",
+      "source_location": "L101",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "news_pipeline_pipeline_py_rundiagnostics",
-      "target": "news_pipeline_diagnostics_rundiagnostics"
+      "target": "news_pipeline_diagnostics_rundiagnostics",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
       "confidence": "INFERRED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L102",
+      "source_location": "L101",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "news_pipeline_pipeline_py_runfinalizer",
-      "target": "news_pipeline_diagnostics_rundiagnostics"
+      "target": "news_pipeline_diagnostics_rundiagnostics",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
@@ -20829,9 +20872,9 @@
       "source_file": "news_pipeline/pipeline.py",
       "source_location": "L101",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "news_pipeline_pipeline_py_storydraftingruntime",
-      "target": "news_pipeline_diagnostics_rundiagnostics"
+      "target": "news_pipeline_diagnostics_rundiagnostics",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
@@ -20839,9 +20882,9 @@
       "source_file": "news_pipeline/pipeline.py",
       "source_location": "L101",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "news_pipeline_pipeline_py_storyselectionruntime",
-      "target": "news_pipeline_diagnostics_rundiagnostics"
+      "target": "news_pipeline_diagnostics_rundiagnostics",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
@@ -27792,11 +27835,11 @@
       "context": "parameter_type",
       "confidence": "EXTRACTED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L702",
+      "source_location": "L674",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_pipeline_record_activity_snapshot",
-      "target": "news_pipeline_pipeline_py_rundiagnostics"
+      "target": "news_pipeline_pipeline_py_rundiagnostics",
+      "confidence_score": 1.0
     },
     {
       "relation": "calls",
@@ -27814,96 +27857,96 @@
       "context": "parameter_type",
       "confidence": "EXTRACTED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L4961",
+      "source_location": "L4712",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_pipeline_active_run_finalizer",
-      "target": "news_pipeline_pipeline_py_rundiagnostics"
+      "target": "news_pipeline_pipeline_py_rundiagnostics",
+      "confidence_score": 1.0
     },
     {
       "relation": "references",
       "context": "parameter_type",
       "confidence": "EXTRACTED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L710",
+      "source_location": "L682",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_pipeline_attach_pending_activity_snapshots",
-      "target": "news_pipeline_pipeline_py_rundiagnostics"
+      "target": "news_pipeline_pipeline_py_rundiagnostics",
+      "confidence_score": 1.0
     },
     {
       "relation": "references",
       "context": "parameter_type",
       "confidence": "EXTRACTED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L4968",
+      "source_location": "L4730",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_pipeline_finish_run_diagnostics",
-      "target": "news_pipeline_pipeline_py_rundiagnostics"
+      "target": "news_pipeline_pipeline_py_rundiagnostics",
+      "confidence_score": 1.0
     },
     {
       "relation": "references",
       "context": "return_type",
       "confidence": "EXTRACTED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L4856",
+      "source_location": "L4607",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_pipeline_new_run_diagnostics",
-      "target": "news_pipeline_pipeline_py_rundiagnostics"
+      "target": "news_pipeline_pipeline_py_rundiagnostics",
+      "confidence_score": 1.0
     },
     {
       "relation": "references",
       "context": "parameter_type",
       "confidence": "EXTRACTED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L4940",
+      "source_location": "L4691",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_pipeline_new_run_finalizer",
-      "target": "news_pipeline_pipeline_py_rundiagnostics"
+      "target": "news_pipeline_pipeline_py_rundiagnostics",
+      "confidence_score": 1.0
     },
     {
       "relation": "uses",
       "confidence": "INFERRED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L103",
+      "source_location": "L102",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "news_pipeline_pipeline_py_rundiagnostics",
-      "target": "news_pipeline_run_finalizer_runfinalizer"
+      "target": "news_pipeline_run_finalizer_runfinalizer",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
       "confidence": "INFERRED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L103",
+      "source_location": "L102",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "news_pipeline_pipeline_py_rundiagnostics",
-      "target": "news_pipeline_run_finalizer_runfinalizeradapters"
+      "target": "news_pipeline_run_finalizer_runfinalizeradapters",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
       "confidence": "INFERRED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L103",
+      "source_location": "L102",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "news_pipeline_pipeline_py_rundiagnostics",
-      "target": "news_pipeline_run_finalizer_runfinalizerconfig"
+      "target": "news_pipeline_run_finalizer_runfinalizerconfig",
+      "confidence_score": 0.5
     },
     {
       "relation": "references",
       "context": "parameter_type",
       "confidence": "EXTRACTED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L2569",
+      "source_location": "L2541",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_pipeline_translate_article_candidates",
-      "target": "news_pipeline_pipeline_py_rundiagnostics"
+      "target": "news_pipeline_pipeline_py_rundiagnostics",
+      "confidence_score": 1.0
     },
     {
       "relation": "calls",
@@ -28242,9 +28285,9 @@
       "source_file": "news_pipeline/pipeline.py",
       "source_location": "L1011",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_pipeline_record_feed_source_rejection",
-      "target": "news_pipeline_pipeline_py_counter"
+      "target": "news_pipeline_pipeline_py_counter",
+      "confidence_score": 1.0
     },
     {
       "relation": "calls",
@@ -28253,9 +28296,9 @@
       "source_file": "news_pipeline/pipeline.py",
       "source_location": "L2827",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_pipeline_get_direct_source_article_context",
-      "target": "news_pipeline_pipeline_py_counter"
+      "target": "news_pipeline_pipeline_py_counter",
+      "confidence_score": 1.0
     },
     {
       "relation": "uses",
@@ -28263,9 +28306,9 @@
       "source_file": "news_pipeline/pipeline.py",
       "source_location": "L102",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "news_pipeline_pipeline_py_counter",
-      "target": "news_pipeline_run_finalizer_runfinalizer"
+      "target": "news_pipeline_run_finalizer_runfinalizer",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
@@ -28273,9 +28316,9 @@
       "source_file": "news_pipeline/pipeline.py",
       "source_location": "L102",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "news_pipeline_pipeline_py_counter",
-      "target": "news_pipeline_run_finalizer_runfinalizeradapters"
+      "target": "news_pipeline_run_finalizer_runfinalizeradapters",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
@@ -28283,9 +28326,9 @@
       "source_file": "news_pipeline/pipeline.py",
       "source_location": "L102",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "news_pipeline_pipeline_py_counter",
-      "target": "news_pipeline_run_finalizer_runfinalizerconfig"
+      "target": "news_pipeline_run_finalizer_runfinalizerconfig",
+      "confidence_score": 0.5
     },
     {
       "relation": "calls",
@@ -28294,9 +28337,9 @@
       "source_file": "news_pipeline/pipeline.py",
       "source_location": "L5214",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_pipeline_run_pipeline",
-      "target": "news_pipeline_pipeline_py_counter"
+      "target": "news_pipeline_pipeline_py_counter",
+      "confidence_score": 1.0
     },
     {
       "relation": "calls",
@@ -30313,9 +30356,9 @@
       "source_file": "news_pipeline/pipeline.py",
       "source_location": "L1689",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_pipeline_article_summarization_runtime",
-      "target": "news_pipeline_pipeline_py_articlesummarizationruntime"
+      "target": "news_pipeline_pipeline_py_articlesummarizationruntime",
+      "confidence_score": 1.0
     },
     {
       "relation": "calls",
@@ -30397,9 +30440,9 @@
       "source_file": "news_pipeline/pipeline.py",
       "source_location": "L102",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "news_pipeline_pipeline_py_articlesummarizationruntime",
-      "target": "news_pipeline_run_finalizer_runfinalizer"
+      "target": "news_pipeline_run_finalizer_runfinalizer",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
@@ -30407,9 +30450,9 @@
       "source_file": "news_pipeline/pipeline.py",
       "source_location": "L102",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "news_pipeline_pipeline_py_articlesummarizationruntime",
-      "target": "news_pipeline_run_finalizer_runfinalizeradapters"
+      "target": "news_pipeline_run_finalizer_runfinalizeradapters",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
@@ -30417,9 +30460,9 @@
       "source_file": "news_pipeline/pipeline.py",
       "source_location": "L102",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "news_pipeline_pipeline_py_articlesummarizationruntime",
-      "target": "news_pipeline_run_finalizer_runfinalizerconfig"
+      "target": "news_pipeline_run_finalizer_runfinalizerconfig",
+      "confidence_score": 0.5
     },
     {
       "relation": "calls",
@@ -30450,9 +30493,9 @@
       "source_file": "news_pipeline/pipeline.py",
       "source_location": "L1713",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_pipeline_story_drafting_runtime",
-      "target": "news_pipeline_pipeline_py_storydraftingruntime"
+      "target": "news_pipeline_pipeline_py_storydraftingruntime",
+      "confidence_score": 1.0
     },
     {
       "relation": "uses",
@@ -30460,9 +30503,9 @@
       "source_file": "news_pipeline/pipeline.py",
       "source_location": "L102",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "news_pipeline_pipeline_py_storydraftingruntime",
-      "target": "news_pipeline_run_finalizer_runfinalizer"
+      "target": "news_pipeline_run_finalizer_runfinalizer",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
@@ -30470,9 +30513,9 @@
       "source_file": "news_pipeline/pipeline.py",
       "source_location": "L102",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "news_pipeline_pipeline_py_storydraftingruntime",
-      "target": "news_pipeline_run_finalizer_runfinalizeradapters"
+      "target": "news_pipeline_run_finalizer_runfinalizeradapters",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
@@ -30480,9 +30523,9 @@
       "source_file": "news_pipeline/pipeline.py",
       "source_location": "L102",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "news_pipeline_pipeline_py_storydraftingruntime",
-      "target": "news_pipeline_run_finalizer_runfinalizerconfig"
+      "target": "news_pipeline_run_finalizer_runfinalizerconfig",
+      "confidence_score": 0.5
     },
     {
       "relation": "calls",
@@ -30513,9 +30556,9 @@
       "source_file": "news_pipeline/pipeline.py",
       "source_location": "L1736",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_pipeline_story_selection_runtime",
-      "target": "news_pipeline_pipeline_py_storyselectionruntime"
+      "target": "news_pipeline_pipeline_py_storyselectionruntime",
+      "confidence_score": 1.0
     },
     {
       "relation": "uses",
@@ -30523,9 +30566,9 @@
       "source_file": "news_pipeline/pipeline.py",
       "source_location": "L102",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "news_pipeline_pipeline_py_storyselectionruntime",
-      "target": "news_pipeline_run_finalizer_runfinalizer"
+      "target": "news_pipeline_run_finalizer_runfinalizer",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
@@ -30533,9 +30576,9 @@
       "source_file": "news_pipeline/pipeline.py",
       "source_location": "L102",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "news_pipeline_pipeline_py_storyselectionruntime",
-      "target": "news_pipeline_run_finalizer_runfinalizeradapters"
+      "target": "news_pipeline_run_finalizer_runfinalizeradapters",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
@@ -30543,9 +30586,9 @@
       "source_file": "news_pipeline/pipeline.py",
       "source_location": "L102",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "news_pipeline_pipeline_py_storyselectionruntime",
-      "target": "news_pipeline_run_finalizer_runfinalizerconfig"
+      "target": "news_pipeline_run_finalizer_runfinalizerconfig",
+      "confidence_score": 0.5
     },
     {
       "relation": "calls",
@@ -31940,9 +31983,9 @@
       "source_file": "news_pipeline/pipeline.py",
       "source_location": "L3407",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_pipeline_estimate_message_token_count",
-      "target": "news_pipeline_pipeline_py_basemessage"
+      "target": "news_pipeline_pipeline_py_basemessage",
+      "confidence_score": 1.0
     },
     {
       "relation": "uses",
@@ -31950,9 +31993,9 @@
       "source_file": "news_pipeline/pipeline.py",
       "source_location": "L102",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "news_pipeline_pipeline_py_basemessage",
-      "target": "news_pipeline_run_finalizer_runfinalizer"
+      "target": "news_pipeline_run_finalizer_runfinalizer",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
@@ -31960,9 +32003,9 @@
       "source_file": "news_pipeline/pipeline.py",
       "source_location": "L102",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "news_pipeline_pipeline_py_basemessage",
-      "target": "news_pipeline_run_finalizer_runfinalizeradapters"
+      "target": "news_pipeline_run_finalizer_runfinalizeradapters",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
@@ -31970,9 +32013,9 @@
       "source_file": "news_pipeline/pipeline.py",
       "source_location": "L102",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "news_pipeline_pipeline_py_basemessage",
-      "target": "news_pipeline_run_finalizer_runfinalizerconfig"
+      "target": "news_pipeline_run_finalizer_runfinalizerconfig",
+      "confidence_score": 0.5
     },
     {
       "relation": "calls",
@@ -32714,11 +32757,11 @@
       "context": "return_type",
       "confidence": "EXTRACTED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L4940",
+      "source_location": "L4691",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_pipeline_new_run_finalizer",
-      "target": "news_pipeline_pipeline_py_runfinalizer"
+      "target": "news_pipeline_pipeline_py_runfinalizer",
+      "confidence_score": 1.0
     },
     {
       "relation": "calls",
@@ -32769,41 +32812,41 @@
       "context": "return_type",
       "confidence": "EXTRACTED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L4961",
+      "source_location": "L4712",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "news_pipeline_pipeline_active_run_finalizer",
-      "target": "news_pipeline_pipeline_py_runfinalizer"
+      "target": "news_pipeline_pipeline_py_runfinalizer",
+      "confidence_score": 1.0
     },
     {
       "relation": "uses",
       "confidence": "INFERRED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L103",
+      "source_location": "L102",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "news_pipeline_pipeline_py_runfinalizer",
-      "target": "news_pipeline_run_finalizer_runfinalizer"
+      "target": "news_pipeline_run_finalizer_runfinalizer",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
       "confidence": "INFERRED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L103",
+      "source_location": "L102",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "news_pipeline_pipeline_py_runfinalizer",
-      "target": "news_pipeline_run_finalizer_runfinalizeradapters"
+      "target": "news_pipeline_run_finalizer_runfinalizeradapters",
+      "confidence_score": 0.5
     },
     {
       "relation": "uses",
       "confidence": "INFERRED",
       "source_file": "news_pipeline/pipeline.py",
-      "source_location": "L103",
+      "source_location": "L102",
       "weight": 0.8,
-      "confidence_score": 0.5,
       "source": "news_pipeline_pipeline_py_runfinalizer",
-      "target": "news_pipeline_run_finalizer_runfinalizerconfig"
+      "target": "news_pipeline_run_finalizer_runfinalizerconfig",
+      "confidence_score": 0.5
     },
     {
       "relation": "calls",
@@ -43476,6 +43519,17 @@
       "context": "call",
       "confidence": "EXTRACTED",
       "source_file": "tests/test_article_collection.py",
+      "source_location": "L168",
+      "weight": 1.0,
+      "source": "tests_test_article_collection_articlecollectiontests_test_history_check_uses_run_dedupe_key",
+      "target": "tests_test_article_collection_progress",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "tests/test_article_collection.py",
       "source_location": "L171",
       "weight": 1.0,
       "confidence_score": 1.0,
@@ -43552,6 +43606,17 @@
       "confidence_score": 1.0,
       "source": "tests_test_article_collection_articlecollectiontests_test_collect_records_candidates_diagnostics_history_and_artifact",
       "target": "tests_test_article_collection_finalizer"
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "tests/test_article_collection.py",
+      "source_location": "L167",
+      "weight": 1.0,
+      "source": "tests_test_article_collection_articlecollectiontests_test_history_check_uses_run_dedupe_key",
+      "target": "tests_test_article_collection_finalizer",
+      "confidence_score": 1.0
     },
     {
       "relation": "calls",
@@ -43673,6 +43738,16 @@
       "source_file": "tests/test_article_collection.py",
       "source_location": "L159",
       "weight": 1.0,
+      "source": "tests_test_article_collection_articlecollectiontests",
+      "target": "tests_test_article_collection_articlecollectiontests_test_history_check_uses_run_dedupe_key",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "tests/test_article_collection.py",
+      "source_location": "L159",
+      "weight": 1.0,
       "confidence_score": 1.0,
       "source": "tests_test_article_collection_articlecollectiontests",
       "target": "tests_test_article_collection_articlecollectiontests_test_history_write_failure_falls_back_to_url_file"
@@ -43709,6 +43784,61 @@
       "confidence_score": 1.0,
       "source": "tests_test_article_collection_articlecollectiontests_test_collect_records_candidates_diagnostics_history_and_artifact",
       "target": "tests_test_article_collection_py_path"
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "tests/test_article_collection.py",
+      "source_location": "L179",
+      "weight": 1.0,
+      "source": "tests_test_article_collection_articlecollectiontests_test_history_check_uses_run_dedupe_key",
+      "target": "tests_test_article_collection_articlecollectiontests_article",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "tests/test_article_collection.py",
+      "source_location": "L166",
+      "weight": 1.0,
+      "source": "tests_test_article_collection_articlecollectiontests_test_history_check_uses_run_dedupe_key",
+      "target": "tests_test_article_collection_articlecollectiontests_diagnostics",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "tests/test_article_collection.py",
+      "source_location": "L177",
+      "weight": 1.0,
+      "source": "tests_test_article_collection_articlecollectiontests_test_history_check_uses_run_dedupe_key",
+      "target": "tests_test_article_collection_articlecollectiontests_direct_context",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "tests/test_article_collection.py",
+      "source_location": "L165",
+      "weight": 1.0,
+      "source": "tests_test_article_collection_articlecollectiontests_test_history_check_uses_run_dedupe_key",
+      "target": "tests_test_article_collection_articlecollectiontests_request",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "tests/test_article_collection.py",
+      "source_location": "L161",
+      "weight": 1.0,
+      "source": "tests_test_article_collection_articlecollectiontests_test_history_check_uses_run_dedupe_key",
+      "target": "tests_test_article_collection_py_path",
+      "confidence_score": 1.0
     },
     {
       "relation": "calls",
@@ -47403,5 +47533,5 @@
     }
   ],
   "hyperedges": [],
-  "built_at_commit": "4919e68aa90bdc7f5b4fa791dd75a0bebedc0193"
+  "built_at_commit": "eda2bafab028d762d844e3c88233bc1fcab2f315"
 }
