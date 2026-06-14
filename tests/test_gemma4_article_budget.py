@@ -9,6 +9,7 @@ from news_pipeline.config import (
     CODEX_TEST_MODEL_NAME,
     DEFAULT_MODEL_ALIAS,
     GEMMA_4_ARTICLE_SUMMARY_CAP,
+    GEMMA_12B_OPTIQ_MODEL_ALIAS,
     configured_model_profile,
     is_gemma_4_model_reference,
     load_runtime_config,
@@ -51,7 +52,7 @@ class Gemma4ArticleBudgetTests(unittest.TestCase):
         )
         self.assertTrue(is_gemma_4_model_reference(CODEX_TEST_MODEL_ALIAS))
         self.assertTrue(is_gemma_4_model_reference(CODEX_TEST_MODEL_NAME))
-        self.assertFalse(is_gemma_4_model_reference("qwen-9b-dense"))
+        self.assertTrue(is_gemma_4_model_reference(GEMMA_12B_OPTIQ_MODEL_ALIAS))
 
     def test_gemma_4_cap_is_40_by_default(self) -> None:
         with patch.dict(os.environ, {}, clear=True):
@@ -91,25 +92,25 @@ class Gemma4ArticleBudgetTests(unittest.TestCase):
         self.assertEqual(config.story_synthesis_concurrency, 2)
         self.assertEqual(config.model_concurrency, 8)
 
-    def test_non_gemma_preserves_four_by_four_stage_concurrency(self) -> None:
+    def test_gemma_12b_uses_article_parallelism_only(self) -> None:
         with patch.dict(
             os.environ,
             {
-                "NEWS_MODEL": "qwen-9b-dense",
+                "NEWS_MODEL": GEMMA_12B_OPTIQ_MODEL_ALIAS,
             },
             clear=True,
         ):
             config = load_runtime_config(materialize_outputs=False)
 
         self.assertEqual(config.article_summary_concurrency, 4)
-        self.assertEqual(config.story_synthesis_concurrency, 4)
+        self.assertEqual(config.story_synthesis_concurrency, 1)
         self.assertEqual(config.model_concurrency, 4)
 
     def test_stage_concurrency_env_vars_do_not_override_model_profile(self) -> None:
         with patch.dict(
             os.environ,
             {
-                "NEWS_MODEL": "qwen-9b-dense",
+                "NEWS_MODEL": GEMMA_12B_OPTIQ_MODEL_ALIAS,
                 "NEWS_ARTICLE_SUMMARY_CONCURRENCY": "3",
                 "NEWS_STORY_SYNTHESIS_CONCURRENCY": "6",
             },
@@ -118,13 +119,13 @@ class Gemma4ArticleBudgetTests(unittest.TestCase):
             config = load_runtime_config(materialize_outputs=False)
 
         self.assertEqual(config.article_summary_concurrency, 4)
-        self.assertEqual(config.story_synthesis_concurrency, 4)
+        self.assertEqual(config.story_synthesis_concurrency, 1)
         self.assertEqual(config.model_concurrency, 4)
 
-    def test_non_gemma_keeps_profile_cap_and_explicit_override_wins(self) -> None:
+    def test_gemma_12b_uses_gemma_cap_and_explicit_override_wins(self) -> None:
         with patch.dict(os.environ, {}, clear=True):
-            qwen_profile = configured_model_profile("qwen-9b-dense")
-        self.assertEqual(qwen_profile.total_article_summary_cap, 36)
+            gemma_12b_profile = configured_model_profile(GEMMA_12B_OPTIQ_MODEL_ALIAS)
+        self.assertEqual(gemma_12b_profile.total_article_summary_cap, GEMMA_4_ARTICLE_SUMMARY_CAP)
 
         with patch.dict(os.environ, {"NEWS_TOTAL_ARTICLE_SUMMARY_CAP": "55"}, clear=True):
             gemma_profile = configured_model_profile(DEFAULT_MODEL_ALIAS)

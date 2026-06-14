@@ -54,7 +54,7 @@ Built-in model aliases:
 |---|---|
 | `gemma-e2b-tiny` | `deadbydawn101/gemma-4-E2B-Heretic-Uncensored-mlx-4bit` |
 | `gemma-26b-moe` | `mlx-community/gemma-4-26B-A4B-it-heretic-4bit` |
-| `qwen-9b-dense` | `TheCluster/Qwen3.5-9B-Heretic-MLX-mxfp4` |
+| `gemma-12b-optiq` | `mlx-community/gemma-4-12B-it-OptiQ-4bit` |
 
 | Variable | Default | Description |
 |---|---|---|
@@ -67,7 +67,7 @@ Built-in model aliases:
 Print the fully resolved local server command without running the pipeline:
 
 ```bash
-NEWS_MODEL=qwen-9b-dense uv run news model-server-command
+NEWS_MODEL=gemma-12b-optiq uv run news model-server-command
 ```
 
 ## Infrastructure
