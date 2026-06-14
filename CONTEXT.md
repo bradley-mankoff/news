@@ -17,3 +17,10 @@ diagnostics, persists candidate URL history, and yields fresh article candidates
 The Source Catalog is the editable `config/sources.yaml` source list. It owns
 source records, YAML layout, source-language tags, translation retagging, and
 source removal.
+
+## Runtime Config Resolution
+
+Runtime Config Resolution turns base environment values, saved run presets, and
+explicit overrides into one Runtime Config snapshot. It owns runtime knob
+metadata, preset overlay rules, command environment deltas, and removed-setting
+validation before a Run Session starts.

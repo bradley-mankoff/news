@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import contextlib
 import dataclasses
 import json
 import os
@@ -23,22 +22,20 @@ import yaml
 
 from .config import (
     CONFIG_DIR,
-    DEFAULT_MODEL_ALIAS,
-    MODEL_ALIASES,
-    MODEL_TASK_SAMPLING_ENV_PREFIXES,
-    RECIPIENT_SCOPES,
     REMOVED_TOPIC_ENV_VARS,
     ROOT_DIR,
     RUN_PRESETS_PATH,
     SOURCE_SCOPES,
+    RECIPIENT_SCOPES,
     VALID_SOURCE_MATCH_MODES,
     configured_removed_topic_env_vars,
     load_run_presets,
     load_recipients,
-    load_runtime_config,
     load_sources,
     normalize_preset_id,
-    run_preset_env,
+    resolve_runtime_config,
+    RuntimeConfigRequest,
+    runtime_knob_registry,
 )
 from .source_catalog import (
     DeleteSources,
@@ -50,7 +47,6 @@ from .source_catalog import (
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8766
-CONFIG_ENV_LOCK = threading.Lock()
 RECIPIENT_HEADER = """# Email recipients for generated reports.
 #
 # Usage:
@@ -64,94 +60,8 @@ RUN_PRESET_HEADER = """# Saved runtime presets for the daily news pipeline.
 """
 
 
-def _knob(
-    group: str,
-    label: str,
-    env: str,
-    value_type: str = "text",
-    *,
-    default: str | int | float | bool | None = None,
-    options: list[str] | None = None,
-    minimum: int | float | None = None,
-    maximum: int | float | None = None,
-    step: int | float | None = None,
-    advanced: bool = False,
-    secret: bool = False,
-) -> dict[str, Any]:
-    return {
-        "id": env.lower(),
-        "group": group,
-        "label": label,
-        "env": env,
-        "type": value_type,
-        "default": default,
-        "options": options or [],
-        "min": minimum,
-        "max": maximum,
-        "step": step,
-        "advanced": advanced,
-        "secret": secret,
-    }
-
-
 def build_knob_registry() -> list[dict[str, Any]]:
-    knobs = [
-        _knob("Run", "Source scope", "NEWS_SOURCE_SCOPE", "select", default="core", options=list(SOURCE_SCOPES)),
-        _knob("Run", "Recipient scope", "NEWS_RECIPIENT_SCOPE", "select", default="bradley", options=list(RECIPIENT_SCOPES)),
-        _knob("Run", "Block reused URLs", "NEWS_BLOCK_REUSED_URLS", "bool", default=False),
-        _knob("Image", "Image generation", "NEWS_IMAGE_ENABLED", "bool", default=False),
-        _knob("Model", "Model", "NEWS_MODEL", "select", default=DEFAULT_MODEL_ALIAS, options=sorted(MODEL_ALIASES)),
-        _knob("Model", "Model base URL", "NEWS_MODEL_BASE_URL", default="http://127.0.0.1:8080/v1", advanced=True),
-        _knob("Summary", "Model input cap", "NEWS_MODEL_MAX_INPUT_TOKENS", "number", minimum=1, step=1),
-        _knob("Summary", "Article text token limit", "NEWS_ARTICLE_TEXT_TOKEN_LIMIT", "number", minimum=1, step=1),
-        _knob("Summary", "Total article summary cap", "NEWS_TOTAL_ARTICLE_SUMMARY_CAP", "number", minimum=0, step=1),
-        _knob("Summary", "Article summary max tokens", "NEWS_ARTICLE_SUMMARY_MAX_TOKENS", "number", minimum=1, step=1),
-        _knob("Summary", "Story synthesis max tokens", "NEWS_FINAL_SYNTHESIS_MAX_TOKENS", "number", minimum=1, step=1),
-        _knob("Summary", "Title max tokens", "NEWS_TITLE_GENERATION_MAX_TOKENS", "number", minimum=1, step=1),
-        _knob("Story", "Recent window hours", "NEWS_RECENT_WINDOW_HOURS", "number", minimum=1, step=1),
-        _knob("Story", "Max articles per source", "NEWS_MAX_ARTICLES_PER_SOURCE", "number", minimum=1, step=1),
-        _knob("Story", "Top of funnel per provider", "NEWS_TOP_OF_FUNNEL_PER_PROVIDER", "number", minimum=1, step=1),
-        _knob("Story", "Min articles per story", "NEWS_MIN_ARTICLES_PER_STORY", "number", minimum=2, step=1),
-        _knob("Story", "Story cluster similarity", "NEWS_STORY_CLUSTER_SIMILARITY_THRESHOLD", "number", minimum=0, maximum=1, step=0.01),
-        _knob("Story", "Story scale screening", "NEWS_STORY_SCALE_SCREENING_ENABLED", "bool"),
-        _knob("Story", "Max stories", "NEWS_MAX_STORIES", "number", minimum=1, step=1),
-        _knob("Story", "Story selection overlap", "NEWS_STORY_SELECTION_OVERLAP_THRESHOLD", "number", minimum=0, maximum=1, step=0.01),
-        _knob("Story", "Story dedup threshold", "NEWS_STORY_DEDUP_THRESHOLD", "number", minimum=0, maximum=1, step=0.01),
-        _knob("Story", "Backfill batch multiplier", "NEWS_STORY_BACKFILL_BATCH_MULTIPLIER", "number", minimum=1, step=1),
-        _knob("Story", "Component overlap suppress", "NEWS_STORY_COMPONENT_OVERLAP_SUPPRESS_THRESHOLD", "number", minimum=0, maximum=1, step=0.01, advanced=True),
-        _knob("Story", "Relax final synthesis guards", "NEWS_RELAX_FINAL_SYNTHESIS_GUARDS", "bool", advanced=True),
-        _knob("Story", "Embedding model", "NEWS_EMBEDDING_MODEL", default="all-mpnet-base-v2", advanced=True),
-        _knob("Advanced", "Token encoding", "NEWS_TOKEN_ENCODING", default="o200k_base", advanced=True),
-    ]
-
-    sampling_suffixes = [
-        ("TEMPERATURE", "Temperature", "number", 0, 2, 0.01),
-        ("TOP_P", "Top P", "number", 0, 1, 0.01),
-        ("TOP_K", "Top K", "number", 0, None, 1),
-        ("MIN_P", "Min P", "number", 0, 1, 0.01),
-        ("PRESENCE_PENALTY", "Presence penalty", "number", -2, 2, 0.01),
-        ("REPETITION_PENALTY", "Repetition penalty", "number", 0, 3, 0.01),
-    ]
-    sampling_prefixes = {
-        **MODEL_TASK_SAMPLING_ENV_PREFIXES,
-        "reasoning": "NEWS_MODEL_REASONING",
-    }
-    for task, prefix in sorted(sampling_prefixes.items()):
-        task_label = task.replace("_", " ").title()
-        for suffix, suffix_label, value_type, minimum, maximum, step in sampling_suffixes:
-            knobs.append(
-                _knob(
-                    "Sampling",
-                    f"{task_label} {suffix_label}",
-                    f"{prefix}_{suffix}",
-                    value_type,
-                    minimum=minimum,
-                    maximum=maximum,
-                    step=step,
-                    advanced=True,
-                )
-            )
-    return knobs
+    return runtime_knob_registry()
 
 
 def _config_path_from_env(name: str, default: str) -> Path:
@@ -176,19 +86,6 @@ def _json_ready(value: Any) -> Any:
     return value
 
 
-@contextlib.contextmanager
-def _temporary_environ(environ: dict[str, str]):
-    with CONFIG_ENV_LOCK:
-        previous = dict(os.environ)
-        os.environ.clear()
-        os.environ.update(environ)
-        try:
-            yield
-        finally:
-            os.environ.clear()
-            os.environ.update(previous)
-
-
 def _clean_env_for_config(environ: dict[str, str]) -> dict[str, str]:
     clean = dict(environ)
     for name in REMOVED_TOPIC_ENV_VARS:
@@ -196,13 +93,22 @@ def _clean_env_for_config(environ: dict[str, str]) -> dict[str, str]:
     return clean
 
 
-def _runtime_snapshot(env_overlay: dict[str, str] | None = None) -> tuple[dict[str, Any] | None, str | None]:
-    environ = _clean_env_for_config(dict(os.environ))
-    if env_overlay:
-        environ.update(env_overlay)
+def _runtime_snapshot(
+    env_overlay: dict[str, str] | None = None,
+    *,
+    preset_id: str | None = None,
+) -> tuple[dict[str, Any] | None, str | None]:
+    base_env = _clean_env_for_config(dict(os.environ))
     try:
-        with _temporary_environ(environ):
-            config = load_runtime_config(materialize_outputs=False)
+        resolution = resolve_runtime_config(
+            RuntimeConfigRequest(
+                base_env=base_env,
+                preset_id=preset_id,
+                overrides=env_overlay,
+                materialize_outputs=False,
+            )
+        )
+        config = resolution.config
         return {
             "preset_id": config.preset_id or "custom",
             "source_scope": config.source_scope,
@@ -244,6 +150,11 @@ def _runtime_snapshot(env_overlay: dict[str, str] | None = None) -> tuple[dict[s
                 "top_of_funnel_per_provider": config.top_of_funnel_per_provider,
                 "min_articles_per_story": config.min_articles_per_story,
                 "story_cluster_similarity_threshold": config.story_cluster_similarity_threshold,
+                "story_scale_screening_enabled": config.story_scale_screening_enabled,
+                "max_stories": config.max_stories,
+                "story_selection_overlap_threshold": config.story_selection_overlap_threshold,
+                "story_embedding_dedup_threshold": config.story_embedding_dedup_threshold,
+                "story_backfill_batch_multiplier": config.story_backfill_batch_multiplier,
             },
             "image": {
                 "enabled": config.image_generation_enabled,
@@ -568,19 +479,27 @@ def _body_preset_id(body: dict[str, Any]) -> str:
     return normalize_preset_id(str(body.get("preset") or body.get("preset_id") or ""))
 
 
-def _preset_env_for_body(body: dict[str, Any]) -> dict[str, str]:
-    preset_id = _body_preset_id(body)
-    return run_preset_env(preset_id) if preset_id else {}
-
-
 def build_command(body: dict[str, Any]) -> tuple[list[str], dict[str, str]]:
     action = str(body.get("action") or "run").strip()
     options = body.get("options") if isinstance(body.get("options"), dict) else {}
-    env = _normalize_env_overrides(body.get("env"))
+    overrides = _normalize_env_overrides(body.get("env"))
     preset_id = _body_preset_id(body)
-    preset_env = _preset_env_for_body(body)
-    if preset_env:
-        env = {key: value for key, value in env.items() if preset_env.get(key) != value}
+    try:
+        resolution = resolve_runtime_config(
+            RuntimeConfigRequest(
+                base_env=_clean_env_for_config(dict(os.environ)),
+                preset_id=preset_id,
+                overrides=overrides,
+                materialize_outputs=False,
+            )
+        )
+        env = resolution.command_env_delta
+    except ValueError as error:
+        if "Topic-based runtime configuration has been removed" not in str(error):
+            raise
+        env = dict(overrides)
+        if preset_id:
+            env.setdefault("NEWS_PRESET", preset_id)
     command = ["uv", "run", "news"]
     if action == "run":
         command.append("run")
@@ -615,10 +534,10 @@ def build_command(body: dict[str, Any]) -> tuple[list[str], dict[str, str]]:
 def preview_payload(body: dict[str, Any]) -> dict[str, Any]:
     command, env = build_command(body)
     preset_id = _body_preset_id(body)
-    runtime_env = {**_preset_env_for_body(body), **env}
-    if preset_id:
-        runtime_env["NEWS_PRESET"] = preset_id
-    runtime, runtime_error = _runtime_snapshot(runtime_env)
+    runtime, runtime_error = _runtime_snapshot(
+        _normalize_env_overrides(body.get("env")),
+        preset_id=preset_id,
+    )
     rendered = " ".join(shlex.quote(part) for part in command)
     if env:
         rendered = " ".join(f"{key}={shlex.quote(value)}" for key, value in sorted(env.items())) + " " + rendered
@@ -628,7 +547,9 @@ def preview_payload(body: dict[str, Any]) -> dict[str, Any]:
         "env": env,
         "runtime": runtime,
         "runtime_error": runtime_error,
-        "removed_topic_env_vars": sorted(configured_removed_topic_env_vars({**os.environ, **runtime_env})),
+        "removed_topic_env_vars": sorted(
+            configured_removed_topic_env_vars({**os.environ, **_normalize_env_overrides(body.get("env"))})
+        ),
     }
 
 
