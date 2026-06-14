@@ -655,8 +655,6 @@ def infer_model_profile_key(model_reference: str) -> str:
     resolved_model_name = resolve_model_name(clean_reference)
     if resolved_model_name == GEMMA_12B_OPTIQ_MODEL_NAME:
         return "gemma_12b_optiq"
-    if resolved_model_name == DEFAULT_TRANSLATION_MODEL:
-        return "gemma_12b_optiq"
     if clean_reference == "gemma-26b-moe":
         return "big_conservative"
 
