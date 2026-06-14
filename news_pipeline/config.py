@@ -322,6 +322,8 @@ def _task_sampling(
 
 GEMMA_DEFAULT_SAMPLING = _sampling(0.1, 0.8, 20, 0.05, 0.0, 1.1)
 GEMMA_REASONING_SAMPLING = _sampling(0.3, 0.9, 40, 0.02, 0.3, 1.05)
+# Gemma-4 family guidance starts at temp=1/top_p=0.95/top_k=64; task
+# overrides below keep deterministic news extraction/synthesis paths calmer.
 GEMMA_12B_DEFAULT_SAMPLING = _sampling(1.0, 0.95, 64, 0.0, 0.0, 1.0)
 GEMMA_12B_REASONING_SAMPLING = _sampling(0.7, 0.9, 64, 0.0, 0.2, 1.05)
 GEMMA_12B_SYNTHESIS_SAMPLING = _sampling(0.25, 0.85, 40, 0.0, 0.3, 1.05)
@@ -650,17 +652,20 @@ def infer_model_profile_key(model_reference: str) -> str:
         raise ValueError(f"Unsupported model reference: {clean_reference}")
     if is_codex_test_model_reference(clean_reference):
         return "tiny_codex"
-    if resolve_model_name(clean_reference) == GEMMA_12B_OPTIQ_MODEL_NAME:
+    resolved_model_name = resolve_model_name(clean_reference)
+    if resolved_model_name == GEMMA_12B_OPTIQ_MODEL_NAME:
+        return "gemma_12b_optiq"
+    if resolved_model_name == DEFAULT_TRANSLATION_MODEL:
         return "gemma_12b_optiq"
     if clean_reference == "gemma-26b-moe":
         return "big_conservative"
 
-    resolved_name = resolve_model_name(clean_reference).lower()
-    if "gemma-4-26b" in resolved_name or "26b" in resolved_name:
+    resolved_name = resolved_model_name.lower()
+    if "gemma" in resolved_name and "26b" in resolved_name:
         return "big_conservative"
-    if "gemma-4-12b" in resolved_name or "12b" in resolved_name:
+    if "gemma" in resolved_name and "12b" in resolved_name and "optiq" in resolved_name:
         return "gemma_12b_optiq"
-    return "gemma_12b_optiq"
+    raise ValueError(f"Unsupported model reference: {clean_reference or resolved_model_name}")
 
 
 def _configured_model_profile_key(model_reference: str) -> str:
