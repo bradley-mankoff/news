@@ -11,6 +11,8 @@ from typing import Any
 from urllib.parse import urldefrag
 from zoneinfo import ZoneInfo
 
+from .article_summary_records import parse_markdown_entry, to_citation_source
+
 
 TEMPORARY_CITATION_RE = re.compile(r"\[\[([A-Za-z0-9_,;\s-]+)\]\]")
 BRACKETED_TEMPORARY_CITATION_LIST_RE = re.compile(
@@ -371,32 +373,7 @@ def citation_precedence_dependency_records(citation_sources: list[dict[str, Any]
 def parse_article_report_entry(entry: str) -> dict[str, Any]:
     """Extract stable citation metadata from a normalized article summary."""
 
-    clean_entry = str(entry or "")
-    title_match = re.search(r"^###\s+(.+)$", clean_entry, flags=re.MULTILINE)
-    metadata: dict[str, str] = {}
-    for label, value in re.findall(r"^-\s*([^:]+):\s*(.+)$", clean_entry, flags=re.MULTILINE):
-        metadata[label.strip().lower()] = value.strip()
-
-    summary = ""
-    summary_match = re.search(r"Summary:\s*(.*)", clean_entry, flags=re.DOTALL)
-    if summary_match:
-        summary = re.split(r"\n(?:---+|###\s+)", summary_match.group(1), maxsplit=1)[0]
-        summary = re.sub(r"\s+", " ", summary).strip()
-
-    url = metadata.get("url", "")
-    if url == "N/A":
-        url = ""
-
-    return {
-        "title": title_match.group(1).strip() if title_match else "",
-        "source": metadata.get("source", ""),
-        "published": metadata.get("published", ""),
-        "url": url,
-        "article_id": metadata.get("article id", ""),
-        "story": metadata.get("story", ""),
-        "summary": summary,
-        "raw_entry": clean_entry,
-    }
+    return to_citation_source(parse_markdown_entry(entry))
 
 
 def strip_citation_markers(text: str) -> str:

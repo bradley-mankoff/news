@@ -1,6 +1,7 @@
 ## 1. RTK Commands & Env
 - **Env**: Always prefix cmd `RTK_DB_PATH="/Users/home/personal_code/news/.rtk/history.db" rtk ` (e.g. `rtk git status`, `rtk git diff`, `rtk rg`, `rtk find`, `rtk ls`, `rtk cat`, `rtk npm test`, `rtk pytest`, `rtk uv run pytest`).
 - **Rule**: No plain `git status`, `git diff`, `rg`, `find`, `ls`, `cat`, test cmds first.
+- **Exception**: RTK find can’t do compound predicates.
 - **Fallback**: RTK cmd fail? Retry once plain. State fallback.
 
 ## 2. graphify

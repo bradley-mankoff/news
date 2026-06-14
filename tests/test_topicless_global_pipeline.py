@@ -10,6 +10,7 @@ from news_pipeline.article_summarization import (
     ArticleSummarizationRuntime,
     build_article_summary_prompt_messages,
 )
+from news_pipeline.article_summary_records import render_markdown_entry
 from news_pipeline.config import load_sources
 from news_pipeline.pipeline import build_report_body, build_report_html
 from news_pipeline.story_drafting import build_story_synthesis_prompt_messages
@@ -239,8 +240,9 @@ class TopiclessGlobalPipelineTests(unittest.TestCase):
         )
 
         self.assertEqual(report_stats["included_report_count"], 2)
-        self.assertNotIn("- Topic:", "\n".join(reports))
-        self.assertIn("- Story: Story ports", "\n".join(reports))
+        rendered_reports = "\n".join(render_markdown_entry(report) for report in reports)
+        self.assertNotIn("- Topic:", rendered_reports)
+        self.assertIn("- Story: Story ports", rendered_reports)
         self.assertNotIn("Topic:", token_stats["primary_dataset"])
         self.assertNotRegex(synthesis, r"(?m)^##\s+")
         self.assertIn("### Port Talks Resume", synthesis)

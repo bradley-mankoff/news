@@ -12,6 +12,13 @@ from typing import Any, Callable
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 
 from . import citations as citations_stage
+from .article_summary_records import (
+    ArticleSummaryRecord,
+    article_id as record_article_id,
+    records_by_article_id,
+    summary_text as record_summary_text,
+    to_citation_source,
+)
 from .text_cleaning import clean_article_text
 
 
@@ -39,23 +46,16 @@ class StoryDraftingRuntime:
     progress_callback: Callable[[str, dict[str, Any]], None] | None = None
 
 
-def report_summary_text(entry: str) -> str:
-    summary_match = re.search(r"Summary:\s*(.*)", entry or "", flags=re.DOTALL)
-    return re.sub(r"\s+", " ", summary_match.group(1).strip()) if summary_match else ""
+def report_summary_text(entry: ArticleSummaryRecord | str) -> str:
+    return record_summary_text(entry)
 
 
-def report_article_id(entry: str) -> str:
-    article_id_match = re.search(r"^- Article ID:\s*(.+)$", entry or "", flags=re.MULTILINE)
-    return article_id_match.group(1).strip() if article_id_match else ""
+def report_article_id(entry: ArticleSummaryRecord | str) -> str:
+    return record_article_id(entry)
 
 
-def article_summary_lookup_by_id(final_reports: list[str]) -> dict[str, str]:
-    lookup: dict[str, str] = {}
-    for entry in final_reports:
-        article_id = report_article_id(entry)
-        if article_id:
-            lookup[article_id] = entry
-    return lookup
+def article_summary_lookup_by_id(final_reports: list[ArticleSummaryRecord | str]) -> dict[str, ArticleSummaryRecord]:
+    return records_by_article_id(final_reports)
 
 
 def _article_lookup_by_id(article_targets: list[dict] | None) -> dict[str, dict]:
@@ -86,7 +86,7 @@ def _annotated_citation_sources(citation_sources: list[dict[str, Any]]) -> list[
 
 def story_summary_blocks_from_clusters(
     story_records: list[dict],
-    article_summary_lookup: dict[str, str],
+    article_summary_lookup: dict[str, ArticleSummaryRecord],
     article_lookup: dict[str, dict] | None = None,
     *,
     min_articles_per_story: int,
@@ -101,8 +101,8 @@ def story_summary_blocks_from_clusters(
             entry = article_summary_lookup.get(clean_article_id)
             if not entry:
                 continue
-            source_record = citations_stage.parse_article_report_entry(entry)
-            summary_text = str(source_record.get("summary") or report_summary_text(entry)).strip()
+            source_record = to_citation_source(entry)
+            summary_text = str(source_record.get("summary") or "").strip()
             if not summary_text:
                 continue
             source_article = (article_lookup or {}).get(clean_article_id)
@@ -544,7 +544,7 @@ def run_story_synthesis_blocks(
 
 def draft_story_clusters_from_article_summaries(
     story_records: list[dict],
-    article_summary_reports: list[str],
+    article_summary_reports: list[ArticleSummaryRecord | str],
     runtime: StoryDraftingRuntime,
     article_targets: list[dict] | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:

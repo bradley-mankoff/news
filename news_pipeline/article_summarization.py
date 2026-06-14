@@ -13,6 +13,8 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, Remove
 from langgraph.graph import END, StateGraph
 from langgraph.graph.message import add_messages
 
+from .article_summary_records import ArticleSummaryRecord
+
 @dataclass(frozen=True)
 class ArticleSummarizationRuntime:
     source_feeds: dict[str, dict[str, Any]]
@@ -25,13 +27,13 @@ class ArticleSummarizationRuntime:
     build_chat_model: Callable[..., Any]
     invoke_with_retries: Callable[..., AIMessage]
     has_structured_entry: Callable[[str, str], bool]
-    normalize_report_entry: Callable[[dict, str], str]
+    normalize_report_entry: Callable[[dict, str], ArticleSummaryRecord]
     article_completed: Callable[..., None]
 
 
 class ArticleSummaryState(TypedDict):
     messages: Annotated[list[BaseMessage], add_messages]
-    final_reports: list[str]
+    final_reports: list[ArticleSummaryRecord]
     articles_remaining: list[dict]
     empty_response_count: int
 
@@ -133,7 +135,10 @@ def _build_article_summary_app(runtime: ArticleSummarizationRuntime):
 
         if error_count >= 3:
             article = state["articles_remaining"][0]
-            fallback_summary = runtime.build_article_fallback_entry(article).split("DATABASE_ENTRY:\n", 1)[1]
+            fallback_summary = runtime.normalize_report_entry(
+                article,
+                runtime.build_article_fallback_entry(article),
+            )
             wipe_messages = [RemoveMessage(id=m.id) for m in state["messages"]]
             _notify_article_completed(runtime, article)
             return {
@@ -201,12 +206,12 @@ def _build_article_summary_app(runtime: ArticleSummarizationRuntime):
 def run_article_summary_pass(
     article_targets: list[dict],
     runtime: ArticleSummarizationRuntime,
-) -> list[str]:
+) -> list[ArticleSummaryRecord]:
     if not article_targets:
         return []
 
     if runtime.article_summary_concurrency > 1 and len(article_targets) > 1:
-        ordered_results: list[tuple[int, list[str]]] = []
+        ordered_results: list[tuple[int, list[ArticleSummaryRecord]]] = []
         with ThreadPoolExecutor(max_workers=runtime.article_summary_concurrency) as executor:
             future_map = {
                 executor.submit(run_article_summary_pass, [article], runtime): index
@@ -214,7 +219,7 @@ def run_article_summary_pass(
             }
             for future in as_completed(future_map):
                 ordered_results.append((future_map[future], future.result()))
-        final_reports: list[str] = []
+        final_reports: list[ArticleSummaryRecord] = []
         for _, reports in sorted(ordered_results, key=lambda item: item[0]):
             final_reports.extend(reports)
         return final_reports
@@ -228,7 +233,7 @@ def run_article_summary_pass(
     }
 
     recursion_limit = max(80, (len(article_targets) * 12) + 20)
-    final_reports: list[str] = []
+    final_reports: list[ArticleSummaryRecord] = []
     for output in app.stream(inputs, stream_mode="values", config={"recursion_limit": recursion_limit}):
         if "final_reports" in output:
             final_reports = output["final_reports"]
