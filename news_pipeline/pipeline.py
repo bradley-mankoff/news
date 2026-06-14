@@ -126,21 +126,6 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
-
-def _int_env(name: str, default: int) -> int:
-    try:
-        return int(os.environ.get(name, str(default)))
-    except (TypeError, ValueError):
-        return default
-
-
-def _bool_env(name: str, default: bool) -> bool:
-    value = os.environ.get(name)
-    if value is None:
-        return default
-    return str(value).strip().lower() not in {"0", "false", "no", "off", ""}
-
-
 MODEL_RETRY_ATTEMPTS = 4
 MODEL_RETRY_BASE_DELAY_SECONDS = 2
 MODEL_REQUEST_TIMEOUT_SECONDS = 180
@@ -263,42 +248,22 @@ SOURCE_COLLECTION_CONCURRENCY = max(1, CONFIG.source_collection_concurrency)
 ARTICLE_TEXT_TOKEN_LIMIT = max(500, MODEL_PROFILE.article_text_token_limit)
 TOTAL_ARTICLE_SUMMARY_CAP = max(0, MODEL_PROFILE.total_article_summary_cap)
 MODEL_IS_GEMMA_4 = is_gemma_4_model_reference(MODEL_REFERENCE)
-TOTAL_ARTICLE_SUMMARY_CAP_GEMMA_4_DERIVED = (
-    MODEL_IS_GEMMA_4 and "NEWS_TOTAL_ARTICLE_SUMMARY_CAP" not in os.environ
-)
+TOTAL_ARTICLE_SUMMARY_CAP_GEMMA_4_DERIVED = CONFIG.total_article_summary_cap_gemma_4_derived
 TRANSLATION_MAX_TOKENS = max(100, MODEL_PROFILE.translation_max_tokens)
 ARTICLE_SUMMARY_MAX_TOKENS = max(100, MODEL_PROFILE.article_summary_max_tokens)
 FINAL_SYNTHESIS_MAX_TOKENS = max(100, MODEL_PROFILE.final_synthesis_max_tokens)
 TITLE_GENERATION_MAX_TOKENS = max(20, MODEL_PROFILE.title_generation_max_tokens)
 
-
-def _bounded_env_float(name: str, default: float, *, lower: float = 0.0, upper: float = 1.0) -> float:
-    try:
-        value = float(os.getenv(name, str(default)))
-    except ValueError:
-        value = default
-    return min(upper, max(lower, value))
-
-
 MIN_ARTICLES_PER_STORY = max(2, CONFIG.min_articles_per_story)
-STORY_SCALE_SCREENING_ENABLED = _bool_env("NEWS_STORY_SCALE_SCREENING_ENABLED", True)
-MAX_STORIES = max(1, _int_env("NEWS_MAX_STORIES", 4))
+STORY_SCALE_SCREENING_ENABLED = CONFIG.story_scale_screening_enabled
+MAX_STORIES = max(1, CONFIG.max_stories)
 STORY_CLUSTER_SIMILARITY_THRESHOLD = min(
     1.0,
     max(0.0, CONFIG.story_cluster_similarity_threshold),
 )
-STORY_SELECTION_OVERLAP_THRESHOLD = _bounded_env_float(
-    "NEWS_STORY_SELECTION_OVERLAP_THRESHOLD",
-    0.25,
-)
-STORY_EMBEDDING_DEDUP_THRESHOLD = _bounded_env_float(
-    "NEWS_STORY_DEDUP_THRESHOLD",
-    0.85,
-)
-STORY_BACKFILL_BATCH_MULTIPLIER = max(
-    1,
-    _int_env("NEWS_STORY_BACKFILL_BATCH_MULTIPLIER", 2),
-)
+STORY_SELECTION_OVERLAP_THRESHOLD = CONFIG.story_selection_overlap_threshold
+STORY_EMBEDDING_DEDUP_THRESHOLD = CONFIG.story_embedding_dedup_threshold
+STORY_BACKFILL_BATCH_MULTIPLIER = max(1, CONFIG.story_backfill_batch_multiplier)
 IMAGE_GENERATION_ENABLED = CONFIG.image_generation_enabled
 IMAGE_GENERATION_FAIL_ON_ERROR = CONFIG.image_generation_fail_on_error
 IMAGE_WIDTH = max(256, CONFIG.image_width)
@@ -1131,33 +1096,21 @@ def _compat_runtime_values(config: RuntimeConfig) -> dict[str, Any]:
         "ARTICLE_TEXT_TOKEN_LIMIT": max(500, model_profile.article_text_token_limit),
         "TOTAL_ARTICLE_SUMMARY_CAP": max(0, model_profile.total_article_summary_cap),
         "MODEL_IS_GEMMA_4": is_gemma_4_model_reference(config.model_reference),
-        "TOTAL_ARTICLE_SUMMARY_CAP_GEMMA_4_DERIVED": (
-            is_gemma_4_model_reference(config.model_reference)
-            and "NEWS_TOTAL_ARTICLE_SUMMARY_CAP" not in os.environ
-        ),
+        "TOTAL_ARTICLE_SUMMARY_CAP_GEMMA_4_DERIVED": config.total_article_summary_cap_gemma_4_derived,
         "TRANSLATION_MAX_TOKENS": max(100, model_profile.translation_max_tokens),
         "ARTICLE_SUMMARY_MAX_TOKENS": max(100, model_profile.article_summary_max_tokens),
         "FINAL_SYNTHESIS_MAX_TOKENS": max(100, model_profile.final_synthesis_max_tokens),
         "TITLE_GENERATION_MAX_TOKENS": max(20, model_profile.title_generation_max_tokens),
         "MIN_ARTICLES_PER_STORY": max(2, config.min_articles_per_story),
-        "STORY_SCALE_SCREENING_ENABLED": _bool_env("NEWS_STORY_SCALE_SCREENING_ENABLED", True),
-        "MAX_STORIES": max(1, _int_env("NEWS_MAX_STORIES", 4)),
+        "STORY_SCALE_SCREENING_ENABLED": config.story_scale_screening_enabled,
+        "MAX_STORIES": max(1, config.max_stories),
         "STORY_CLUSTER_SIMILARITY_THRESHOLD": min(
             1.0,
             max(0.0, config.story_cluster_similarity_threshold),
         ),
-        "STORY_SELECTION_OVERLAP_THRESHOLD": _bounded_env_float(
-            "NEWS_STORY_SELECTION_OVERLAP_THRESHOLD",
-            0.25,
-        ),
-        "STORY_EMBEDDING_DEDUP_THRESHOLD": _bounded_env_float(
-            "NEWS_STORY_DEDUP_THRESHOLD",
-            0.85,
-        ),
-        "STORY_BACKFILL_BATCH_MULTIPLIER": max(
-            1,
-            _int_env("NEWS_STORY_BACKFILL_BATCH_MULTIPLIER", 2),
-        ),
+        "STORY_SELECTION_OVERLAP_THRESHOLD": config.story_selection_overlap_threshold,
+        "STORY_EMBEDDING_DEDUP_THRESHOLD": config.story_embedding_dedup_threshold,
+        "STORY_BACKFILL_BATCH_MULTIPLIER": max(1, config.story_backfill_batch_multiplier),
         "IMAGE_GENERATION_ENABLED": config.image_generation_enabled,
         "IMAGE_GENERATION_FAIL_ON_ERROR": config.image_generation_fail_on_error,
         "IMAGE_WIDTH": max(256, config.image_width),
