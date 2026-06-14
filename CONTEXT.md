@@ -31,3 +31,10 @@ An Article Summary Record is the normalized result of summarizing one retained
 article. It owns article title, source, published time, URL, Article ID, story
 assignment, summary prose, and Markdown compatibility rendering for downstream
 report and history adapters.
+
+## Story Record
+
+A Story Record is the normalized story-level record produced by global story
+clustering and consumed by story drafting, story selection, budget trimming, and
+debug reporting. It owns story key, story title, selected Article IDs, cluster
+Article IDs, ranking metrics, overlap comparison, and story debug projection.

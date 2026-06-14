@@ -23,6 +23,7 @@ from .text_matching import (
     clean_source_title,
     ordered_match_terms,
 )
+from .story_records import StoryRecord, to_story_dict
 
 
 def _int_env(name: str, default: int) -> int:
@@ -1178,15 +1179,18 @@ def organize_article_targets_into_global_stories(
                 },
             )
         story_records = [
-            {
-                "story_key": f"global-story-{index:02d}",
-                "story_title": article.get("title") or "News update",
-                "article_count": 1,
-                "selected_article_count": 1,
-                "article_ids": [article.get("article_id")],
-                "cluster_article_ids": [article.get("article_id")],
-                "source_count": 1,
-            }
+            to_story_dict(
+                StoryRecord(
+                    story_key=f"global-story-{index:02d}",
+                    story_title=str(article.get("title") or "News update"),
+                    article_ids=(str(article.get("article_id") or ""),),
+                    cluster_article_ids=(str(article.get("article_id") or ""),),
+                    article_count=1,
+                    cluster_article_count=1,
+                    selected_article_count=1,
+                    source_count=1,
+                )
+            )
             for index, article in enumerate(article_targets, start=1)
         ]
         return article_targets, story_records, {
@@ -1231,28 +1235,30 @@ def organize_article_targets_into_global_stories(
             for article_id in story.get("cluster_article_ids", article_ids)
             if str(article_id) in article_lookup
         ]
-        story_record = {
-            "story_key": story_key,
-            "story_title": story_title,
-            "article_count": int(story.get("article_count") or len(cluster_article_ids)),
-            "cluster_article_count": int(story.get("article_count") or len(cluster_article_ids)),
-            "selected_article_count": len(article_ids),
-            "article_ids": article_ids,
-            "cluster_article_ids": cluster_article_ids,
-            "average_similarity": story.get("average_similarity"),
-            "connectedness_score": story.get("connectedness_score"),
-            "story_strength_score": story.get("story_strength_score"),
-            "edge_density": story.get("edge_density"),
-            "mean_best_similarity": story.get("mean_best_similarity"),
-            "min_best_similarity": story.get("min_best_similarity"),
-            "min_member_average_similarity": story.get("min_member_average_similarity"),
-            "min_member_edge_degree": story.get("min_member_edge_degree"),
-            "member_cohesion_floor": story.get("member_cohesion_floor"),
-            "member_edge_degree_floor": story.get("member_edge_degree_floor"),
-            "pruned_article_ids": story.get("pruned_article_ids") or [],
-            "prune_reason": story.get("prune_reason") or "",
-            "source_count": story.get("source_count"),
-        }
+        story_record = to_story_dict(
+            StoryRecord(
+                story_key=story_key,
+                story_title=story_title,
+                article_ids=tuple(article_ids),
+                cluster_article_ids=tuple(cluster_article_ids),
+                article_count=int(story.get("article_count") or len(cluster_article_ids)),
+                cluster_article_count=int(story.get("article_count") or len(cluster_article_ids)),
+                selected_article_count=len(article_ids),
+                average_similarity=story.get("average_similarity"),
+                connectedness_score=story.get("connectedness_score"),
+                story_strength_score=story.get("story_strength_score"),
+                edge_density=story.get("edge_density"),
+                mean_best_similarity=story.get("mean_best_similarity"),
+                min_best_similarity=story.get("min_best_similarity"),
+                min_member_average_similarity=story.get("min_member_average_similarity"),
+                min_member_edge_degree=story.get("min_member_edge_degree"),
+                member_cohesion_floor=story.get("member_cohesion_floor"),
+                member_edge_degree_floor=story.get("member_edge_degree_floor"),
+                pruned_article_ids=tuple(story.get("pruned_article_ids") or []),
+                prune_reason=str(story.get("prune_reason") or ""),
+                source_count=story.get("source_count"),
+            )
+        )
         story_records.append(story_record)
         if story.get("_pair_debug") and not pair_debug:
             pair_debug = story.get("_pair_debug", [])[:STORY_PAIR_DEBUG_LIMIT]

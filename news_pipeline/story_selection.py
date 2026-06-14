@@ -17,6 +17,13 @@ from .article_summary_records import (
     records_by_article_id,
     with_story,
 )
+from .story_records import (
+    ensure_story_record,
+    story_article_id_set,
+    story_article_overlap,
+    story_debug_record,
+    story_rank_key,
+)
 
 
 STORY_SCALE_VERDICTS = {
@@ -326,20 +333,7 @@ def _global_scale_screening_eligible(story: dict[str, Any]) -> bool:
 
 
 def _selected_global_story_debug_record(story: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "story_key": story.get("story_key"),
-        "story_title": story.get("story_title"),
-        "global_selection_rank": story.get("global_selection_rank"),
-        "article_count": story.get("article_count"),
-        "source_count": story.get("source_count"),
-        "story_strength_score": story.get("story_strength_score"),
-        "average_similarity": story.get("average_similarity"),
-        "scale_screening_scale": story.get("scale_screening_scale"),
-        "scale_screening_reason": story.get("scale_screening_reason"),
-        "article_ids": story.get("article_ids", []),
-        "cluster_article_ids": story.get("cluster_article_ids", []),
-        "preview": str(story.get("paragraph") or "")[:500],
-    }
+    return story_debug_record(story)
 
 
 def apply_global_story_scale_screening(
@@ -502,34 +496,18 @@ def apply_global_story_scale_screening(
 
 
 def _story_article_id_set(story: dict[str, Any]) -> set[str]:
-    return {
-        str(article_id or "").strip()
-        for article_id in (story.get("cluster_article_ids") or story.get("article_ids") or [])
-        if str(article_id or "").strip()
-    }
+    return story_article_id_set(story)
 
 
 def _story_article_overlap(
     left: dict[str, Any],
     right: dict[str, Any],
 ) -> tuple[float, set[str]]:
-    left_ids = _story_article_id_set(left)
-    right_ids = _story_article_id_set(right)
-    if not left_ids or not right_ids:
-        return 0.0, set()
-    shared_ids = left_ids & right_ids
-    return len(shared_ids) / max(1, min(len(left_ids), len(right_ids))), shared_ids
+    return story_article_overlap(left, right)
 
 
 def _global_story_rank(story: dict[str, Any]) -> tuple:
-    return (
-        -float(story.get("story_strength_score") or 0.0),
-        -int(story.get("source_count") or 0),
-        -int(story.get("article_count") or 0),
-        -float(story.get("average_similarity") or 0.0),
-        int(story.get("story_rank") or 0),
-        str(story.get("story_title") or ""),
-    )
+    return story_rank_key(story)
 
 
 def select_global_story_drafts(
@@ -629,7 +607,7 @@ def _annotate_summary_entry_for_story(
     record: ArticleSummaryRecord,
     story_match: dict[str, Any],
 ) -> ArticleSummaryRecord:
-    return with_story(record, story_match.get("story_title"))
+    return with_story(record, ensure_story_record(story_match).story_title)
 
 
 def build_story_assigned_article_reports(
@@ -650,8 +628,9 @@ def build_story_assigned_article_reports(
     missing_summary_ids: list[str] = []
     seen_records: set[tuple[str, str]] = set()
     for match in selected_story_matches:
-        story_key = str(match.get("story_key") or "")
-        for article_id in match.get("article_ids", []):
+        story_match = ensure_story_record(match)
+        story_key = story_match.story_key
+        for article_id in story_match.article_ids:
             clean_article_id = str(article_id or "").strip()
             if not clean_article_id:
                 continue
