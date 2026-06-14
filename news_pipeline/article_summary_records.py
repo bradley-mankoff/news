@@ -25,6 +25,11 @@ LOW_CONFIDENCE_SUMMARY_PATTERNS = (
     "provided article metadata and text only contain a headline",
 )
 
+SUMMARY_ARTIFACT_PREFIX_RE = re.compile(
+    r"^(?:let me provide|the correct format|header and proper markdown structure)\b",
+    flags=re.IGNORECASE,
+)
+
 
 @dataclass(frozen=True)
 class ArticleSummaryRecord:
@@ -134,7 +139,7 @@ def normalize_model_response(article: dict[str, Any], raw_text: str) -> ArticleS
         stripped = re.sub(r"^\*+\s*", "", stripped)
         if re.match(r'^[`"\']?\s*prefix\b', stripped, flags=re.IGNORECASE):
             continue
-        if re.match(r"^(let me provide|the correct format|header and proper markdown structure)", stripped, flags=re.IGNORECASE):
+        if SUMMARY_ARTIFACT_PREFIX_RE.match(stripped):
             continue
         if stripped.startswith(f"{heading_name} -"):
             continue
@@ -208,6 +213,11 @@ def render_markdown_entry(record: ArticleSummaryRecord, *, include_database_entr
 
 
 def ensure_record(value: ArticleSummaryRecord | str | dict[str, Any]) -> ArticleSummaryRecord:
+    """Adapt legacy summary shapes into records.
+
+    Dict conversion is intentionally permissive because debug/history rows may
+    omit fields added after they were written.
+    """
     if isinstance(value, ArticleSummaryRecord):
         return value
     if isinstance(value, str):
@@ -233,7 +243,8 @@ def records_by_article_id(records: list[ArticleSummaryRecord | str]) -> dict[str
     return lookup
 
 
-def with_story(record: ArticleSummaryRecord, story_title: Any, story_key: Any = "") -> ArticleSummaryRecord:
+def with_story(record: ArticleSummaryRecord, story_title: Any) -> ArticleSummaryRecord:
+    """Attach story title and invalidate stale Markdown adapters."""
     return replace(record, story=str(story_title or ""), raw_entry="")
 
 

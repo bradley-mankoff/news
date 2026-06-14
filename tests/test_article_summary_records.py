@@ -45,6 +45,32 @@ class ArticleSummaryRecordTests(unittest.TestCase):
         self.assertEqual(record.article_id, "fixture-1")
         self.assertEqual(record.summary, "Officials approved repairs. Trailing junk")
 
+    def test_normalize_model_response_keeps_non_prefix_artifact_words(self) -> None:
+        article = {
+            "article_id": "fixture-1",
+            "title": "Flood plan expands",
+            "source": "Fixture Wire",
+            "pub_date": "Sat, 16 May 2026 15:30:00 GMT",
+            "url": "https://example.com/flood",
+        }
+
+        record = normalize_model_response(
+            article,
+            (
+                "DATABASE_ENTRY:\n"
+                "### Flood plan expands\n"
+                "Metadata:\n"
+                "- Source: Fixture Wire\n\n"
+                "Summary:\n"
+                "Outletme provide updates after officials approved repairs."
+            ),
+        )
+
+        self.assertEqual(
+            record.summary,
+            "Outletme provide updates after officials approved repairs.",
+        )
+
     def test_fallback_record_uses_article_sentences(self) -> None:
         record = fallback_record(
             {

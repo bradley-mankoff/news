@@ -629,7 +629,7 @@ def _annotate_summary_entry_for_story(
     record: ArticleSummaryRecord,
     story_match: dict[str, Any],
 ) -> ArticleSummaryRecord:
-    return with_story(record, story_match.get("story_title"), story_match.get("story_key"))
+    return with_story(record, story_match.get("story_title"))
 
 
 def build_story_assigned_article_reports(
