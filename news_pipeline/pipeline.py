@@ -111,6 +111,7 @@ from . import citations as citations_stage
 from . import embeddings as embeddings_stage
 from . import story_clustering as story_clustering_stage
 from . import story_drafting as story_drafting_stage
+from . import story_records as story_records_stage
 from . import story_selection as story_selection_stage
 from .text_cleaning import (
     clean_article_text as _clean_article_text,
@@ -395,52 +396,6 @@ def _ordered_unique_urls(urls: list[str]) -> list[str]:
     return unique_urls
 
 
-def _ordered_unique_article_ids(raw_article_ids: list[Any]) -> list[str]:
-    seen_article_ids: set[str] = set()
-    article_ids: list[str] = []
-    for article_id in raw_article_ids:
-        clean_article_id = str(article_id or "").strip()
-        if not clean_article_id or clean_article_id in seen_article_ids:
-            continue
-        seen_article_ids.add(clean_article_id)
-        article_ids.append(clean_article_id)
-    return article_ids
-
-
-def _story_record_article_ids(story: dict[str, Any]) -> list[str]:
-    article_ids = _ordered_unique_article_ids(list(story.get("article_ids") or []))
-    if article_ids:
-        return article_ids
-    return _ordered_unique_article_ids(list(story.get("cluster_article_ids") or []))
-
-
-def _with_budgeted_story_article_ids(
-    story: dict[str, Any],
-    article_ids: list[str],
-) -> dict[str, Any]:
-    budgeted_ids = _ordered_unique_article_ids(article_ids)
-    budgeted_id_set = set(budgeted_ids)
-    story_article_ids = [
-        article_id
-        for article_id in _ordered_unique_article_ids(list(story.get("article_ids") or []))
-        if article_id in budgeted_id_set
-    ] or budgeted_ids
-    cluster_article_ids = [
-        article_id
-        for article_id in _ordered_unique_article_ids(list(story.get("cluster_article_ids") or []))
-        if article_id in budgeted_id_set
-    ] or story_article_ids
-    article_count = len(cluster_article_ids)
-    return {
-        **story,
-        "article_ids": story_article_ids,
-        "cluster_article_ids": cluster_article_ids,
-        "article_count": article_count,
-        "cluster_article_count": article_count,
-        "selected_article_count": len(story_article_ids),
-    }
-
-
 def _budget_article_targets_for_summary(
     article_targets: list[dict],
     story_records: list[dict],
@@ -484,7 +439,7 @@ def _budget_article_targets_for_summary(
     for story in story_records:
         story_ids = [
             article_id
-            for article_id in _story_record_article_ids(story)
+            for article_id in story_records_stage.story_article_ids(story)
             if article_id in article_lookup
         ]
         if not story_ids:
@@ -497,7 +452,9 @@ def _budget_article_targets_for_summary(
         ]
         if not new_ids:
             budgeted_story_records.append(
-                _with_budgeted_story_article_ids(story, story_ids)
+                story_records_stage.to_story_dict(
+                    story_records_stage.with_budgeted_article_ids(story, story_ids)
+                )
             )
             continue
 
@@ -506,7 +463,9 @@ def _budget_article_targets_for_summary(
             selected_id_set.update(new_ids)
             remaining -= len(new_ids)
             budgeted_story_records.append(
-                _with_budgeted_story_article_ids(story, story_ids)
+                story_records_stage.to_story_dict(
+                    story_records_stage.with_budgeted_article_ids(story, story_ids)
+                )
             )
             continue
 
@@ -514,7 +473,9 @@ def _budget_article_targets_for_summary(
             selected_ids.extend(new_ids[:cap])
             selected_id_set.update(selected_ids)
             budgeted_story_records.append(
-                _with_budgeted_story_article_ids(story, story_ids[:cap])
+                story_records_stage.to_story_dict(
+                    story_records_stage.with_budgeted_article_ids(story, story_ids[:cap])
+                )
             )
             remaining = 0
             continue

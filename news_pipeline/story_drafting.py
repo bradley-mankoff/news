@@ -19,6 +19,7 @@ from .article_summary_records import (
     summary_text as record_summary_text,
     to_citation_source,
 )
+from .story_records import ensure_story_record
 from .text_cleaning import clean_article_text
 
 
@@ -93,10 +94,11 @@ def story_summary_blocks_from_clusters(
 ) -> list[dict[str, Any]]:
     story_blocks: list[dict[str, Any]] = []
     for story_index, story in enumerate(story_records):
+        story_record = ensure_story_record(story, index=story_index)
         summaries: list[str] = []
         article_ids: list[str] = []
         citation_sources: list[dict[str, Any]] = []
-        for article_id in story.get("cluster_article_ids") or story.get("article_ids") or []:
+        for article_id in story_record.cluster_article_ids or story_record.article_ids:
             clean_article_id = str(article_id or "").strip()
             entry = article_summary_lookup.get(clean_article_id)
             if not entry:
@@ -124,18 +126,18 @@ def story_summary_blocks_from_clusters(
         citation_sources = _annotated_citation_sources(citation_sources)
         story_blocks.append(
             {
-                "story_title": story.get("story_title") or story.get("title") or "News update",
-                "story_key": story.get("story_key") or f"global-story-{story_index + 1:02d}",
+                "story_title": story_record.story_title,
+                "story_key": story_record.story_key,
                 "summaries": summaries,
                 "article_ids": article_ids,
                 "citation_sources": citation_sources,
                 "article_count": len(article_ids),
-                "cluster_article_count": story.get("cluster_article_count") or story.get("article_count"),
-                "source_count": story.get("source_count"),
-                "average_similarity": story.get("average_similarity"),
-                "connectedness_score": story.get("connectedness_score"),
-                "story_strength_score": story.get("story_strength_score"),
-                "edge_density": story.get("edge_density"),
+                "cluster_article_count": story_record.cluster_article_count or story_record.article_count,
+                "source_count": story_record.source_count,
+                "average_similarity": story_record.average_similarity,
+                "connectedness_score": story_record.connectedness_score,
+                "story_strength_score": story_record.story_strength_score,
+                "edge_density": story_record.edge_density,
                 "story_rank": story_index,
             }
         )
