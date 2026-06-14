@@ -119,21 +119,21 @@ Key run-shaping knobs:
 ```bash
 NEWS_MODEL=gemma-e2b-tiny uv run news run
 NEWS_MODEL=gemma-26b-moe uv run news run --preset NAME
-NEWS_MODEL=qwen-9b-dense uv run news run --preset NAME
+NEWS_MODEL=gemma-12b-optiq uv run news run --preset NAME
 ```
 
 Built-in aliases:
 
 - `gemma-e2b-tiny`: `deadbydawn101/gemma-4-E2B-Heretic-Uncensored-mlx-4bit`
 - `gemma-26b-moe`: `mlx-community/gemma-4-26B-A4B-it-heretic-4bit`
-- `qwen-9b-dense`: `TheCluster/Qwen3.5-9B-Heretic-MLX-mxfp4`
+- `gemma-12b-optiq`: `mlx-community/gemma-4-12B-it-OptiQ-4bit`
 
 Normal report runs start the matching local MLX server, wait until it is ready,
 run the pipeline, and stop the managed server when the run exits. To keep a
 server warm manually, print the matching command and run it in another terminal:
 
 ```bash
-NEWS_MODEL=qwen-9b-dense uv run news model-server-command
+NEWS_MODEL=gemma-12b-optiq uv run news model-server-command
 ```
 
 ### Image

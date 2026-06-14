@@ -9,6 +9,8 @@ from pathlib import Path
 from news_pipeline.config import (
     ACTIVE_PRESET_ENV_VAR,
     CODEX_TEST_MODEL_ALIAS,
+    GEMMA_12B_OPTIQ_MODEL_ALIAS,
+    GEMMA_12B_OPTIQ_MODEL_NAME,
     PRESET_ENV_VAR,
     RuntimeConfigRequest,
     load_runtime_config,
@@ -25,7 +27,7 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
             RuntimeConfigRequest(
                 base_env={},
                 preset_id="dev",
-                overrides={"NEWS_MODEL": "qwen-9b-dense"},
+                overrides={"NEWS_MODEL": GEMMA_12B_OPTIQ_MODEL_ALIAS},
                 materialize_outputs=False,
                 run_started_at=datetime(2026, 6, 14, 12, 0, 0),
             )
@@ -36,7 +38,7 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
     def test_preset_base_env_and_overrides_have_documented_precedence(self) -> None:
         resolution = resolve_runtime_config(
             RuntimeConfigRequest(
-                base_env={"NEWS_MODEL": "qwen-9b-dense"},
+                base_env={"NEWS_MODEL": GEMMA_12B_OPTIQ_MODEL_ALIAS},
                 preset_id="dev",
                 overrides={"NEWS_SOURCE_SCOPE": "peripheral"},
                 materialize_outputs=False,
@@ -45,7 +47,10 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
         )
 
         self.assertEqual(resolution.config.preset_id, "dev")
-        self.assertEqual(resolution.config.model_reference, "qwen-9b-dense")
+        self.assertEqual(resolution.config.model_reference, GEMMA_12B_OPTIQ_MODEL_ALIAS)
+        self.assertEqual(resolution.config.model_name, GEMMA_12B_OPTIQ_MODEL_NAME)
+        self.assertEqual(resolution.config.model_backend, "mlx-lm")
+        self.assertIn("python -m mlx_lm server", resolution.config.model_server_command)
         self.assertEqual(resolution.config.source_scope, "peripheral")
         self.assertEqual(resolution.config.recipient_scope, "bradley")
         self.assertEqual(resolution.command_env_delta["NEWS_PRESET"], "dev")

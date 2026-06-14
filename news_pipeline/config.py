@@ -61,6 +61,8 @@ ASSISTANT_CONTEXT_CORE_PATTERNS = (
 )
 RUN_OUTPUT_TIMESTAMP_RE = re.compile(r"\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}")
 DEFAULT_MODEL_ALIAS = "gemma-26b-moe"
+GEMMA_12B_OPTIQ_MODEL_ALIAS = "gemma-12b-optiq"
+GEMMA_12B_OPTIQ_MODEL_NAME = "mlx-community/gemma-4-12B-it-OptiQ-4bit"
 CODEX_TEST_MODEL_ALIAS = "gemma-e2b-tiny"
 CODEX_TEST_MODEL_NAME = "deadbydawn101/gemma-4-E2B-Heretic-Uncensored-mlx-4bit"
 DEFAULT_TRANSLATION_MODEL = "google/translategemma-4b-it"
@@ -87,7 +89,7 @@ VALID_SOURCE_MATCH_MODES = {
     SOURCE_MATCH_MODE_WIRE_ATTRIBUTION,
 }
 MODEL_ALIASES = {
-    "qwen-9b-dense": "TheCluster/Qwen3.5-9B-Heretic-MLX-mxfp4",
+    GEMMA_12B_OPTIQ_MODEL_ALIAS: GEMMA_12B_OPTIQ_MODEL_NAME,
     "gemma-26b-moe": "mlx-community/gemma-4-26B-A4B-it-heretic-4bit",
     f"https://huggingface.co/{DEFAULT_TRANSLATION_MODEL}": DEFAULT_TRANSLATION_MODEL,
     f"https://hf.co/{DEFAULT_TRANSLATION_MODEL}": DEFAULT_TRANSLATION_MODEL,
@@ -95,10 +97,7 @@ MODEL_ALIASES = {
     f"https://huggingface.co/{CODEX_TEST_MODEL_NAME}": CODEX_TEST_MODEL_NAME,
     f"https://hf.co/{CODEX_TEST_MODEL_NAME}": CODEX_TEST_MODEL_NAME,
 }
-UNSUPPORTED_MODEL_REFERENCES = {
-    "qwen-9b-medium",
-    "TheCluster/Qwen3.5-9B-Claude-4.6-HighIQ-INSTRUCT-HERETIC-UNCENSORED-MLX-mxfp8",
-}
+UNSUPPORTED_MODEL_REFERENCES: set[str] = set()
 CODEX_RUNTIME_ENV_VARS = ("CODEX_SANDBOX", "CODEX_CI", "CODEX_THREAD_ID")
 REMOVED_TOPIC_ENV_VARS = (
     "NEWS_TOPIC_IDS",
@@ -323,9 +322,11 @@ def _task_sampling(
 
 GEMMA_DEFAULT_SAMPLING = _sampling(0.1, 0.8, 20, 0.05, 0.0, 1.1)
 GEMMA_REASONING_SAMPLING = _sampling(0.3, 0.9, 40, 0.02, 0.3, 1.05)
-QWEN_INSTRUCT_SAMPLING = _sampling(0.7, 0.8, 20, 0.0, 1.5, 1.0)
-QWEN_REASONING_SAMPLING = _sampling(1.0, 1.0, 40, 0.0, 2.0, 1.0)
-QWEN_SYNTHESIS_SAMPLING = _sampling(0.25, 0.85, 20, 0.0, 0.3, 1.05)
+# Gemma-4 family guidance starts at temp=1/top_p=0.95/top_k=64; task
+# overrides below keep deterministic news extraction/synthesis paths calmer.
+GEMMA_12B_DEFAULT_SAMPLING = _sampling(1.0, 0.95, 64, 0.0, 0.0, 1.0)
+GEMMA_12B_REASONING_SAMPLING = _sampling(0.7, 0.9, 64, 0.0, 0.2, 1.05)
+GEMMA_12B_SYNTHESIS_SAMPLING = _sampling(0.25, 0.85, 40, 0.0, 0.3, 1.05)
 TINY_GEMMA_DEFAULT_SAMPLING = _sampling(0.15, 0.8, 20, 0.02, 0.0, 1.1)
 TINY_GEMMA_REASONING_SAMPLING = _sampling(0.25, 0.85, 30, 0.02, 0.2, 1.08)
 
@@ -361,8 +362,8 @@ MODEL_RUNTIME_PROFILES = {
             title_generation=_sampling(0.45, 0.9, 40, 0.0, 0.3, 1.05),
         ),
     ),
-    "small_aggressive": ModelRuntimeProfile(
-        key="small_aggressive",
+    "gemma_12b_optiq": ModelRuntimeProfile(
+        key="gemma_12b_optiq",
         model_max_input_tokens=12000,
         article_text_token_limit=8000,
         total_article_summary_cap=36,
@@ -374,12 +375,17 @@ MODEL_RUNTIME_PROFILES = {
         server_prompt_cache_size=16,
         server_prompt_cache_bytes="3GB",
         server_max_tokens=2400,
-        default_sampling=QWEN_INSTRUCT_SAMPLING,
-        reasoning_sampling=QWEN_REASONING_SAMPLING,
+        default_sampling=GEMMA_12B_DEFAULT_SAMPLING,
+        reasoning_sampling=GEMMA_12B_REASONING_SAMPLING,
         task_sampling=_task_sampling(
-            default=QWEN_INSTRUCT_SAMPLING,
-            reasoning=QWEN_REASONING_SAMPLING,
-            final_synthesis=QWEN_SYNTHESIS_SAMPLING,
+            default=GEMMA_12B_DEFAULT_SAMPLING,
+            reasoning=GEMMA_12B_REASONING_SAMPLING,
+            translation=_sampling(0.0, 0.9, 20, 0.0, 0.0, 1.05),
+            story_discovery=_sampling(0.2, 0.9, 40, 0.0, 0.2, 1.05),
+            story_scale_screening=_sampling(0.0, 0.9, 20, 0.0, 0.0, 1.05),
+            article_summary=_sampling(0.2, 0.85, 40, 0.0, 0.2, 1.08),
+            final_synthesis=GEMMA_12B_SYNTHESIS_SAMPLING,
+            title_generation=_sampling(0.45, 0.9, 40, 0.0, 0.3, 1.05),
         ),
     ),
     "tiny_codex": ModelRuntimeProfile(
@@ -597,6 +603,8 @@ def _configured_model_name() -> str:
 
 def infer_model_backend(model_reference: str) -> str:
     resolved_name = resolve_model_name(model_reference).lower()
+    if resolved_name == GEMMA_12B_OPTIQ_MODEL_NAME.lower():
+        return "mlx-lm"
     if "gemma-4" in resolved_name or "gemma4" in resolved_name:
         return "mlx-vlm"
     return "mlx-lm"
@@ -644,17 +652,20 @@ def infer_model_profile_key(model_reference: str) -> str:
         raise ValueError(f"Unsupported model reference: {clean_reference}")
     if is_codex_test_model_reference(clean_reference):
         return "tiny_codex"
-    if clean_reference == "qwen-9b-dense":
-        return "small_aggressive"
+    resolved_model_name = resolve_model_name(clean_reference)
+    if resolved_model_name == GEMMA_12B_OPTIQ_MODEL_NAME:
+        return "gemma_12b_optiq"
+    if resolved_model_name == DEFAULT_TRANSLATION_MODEL:
+        return "gemma_12b_optiq"
     if clean_reference == "gemma-26b-moe":
         return "big_conservative"
 
-    resolved_name = resolve_model_name(clean_reference).lower()
-    if "qwen3.5-9b" in resolved_name or "qwen-9b" in resolved_name or "9b" in resolved_name:
-        return "small_aggressive"
-    if "gemma-4-26b" in resolved_name or "26b" in resolved_name:
+    resolved_name = resolved_model_name.lower()
+    if "gemma" in resolved_name and "26b" in resolved_name:
         return "big_conservative"
-    return "small_aggressive"
+    if "gemma" in resolved_name and "12b" in resolved_name and "optiq" in resolved_name:
+        return "gemma_12b_optiq"
+    raise ValueError(f"Unsupported model reference: {clean_reference or resolved_model_name}")
 
 
 def _configured_model_profile_key(model_reference: str) -> str:

@@ -13,18 +13,18 @@ Preset knobs:
 Model selection:
     NEWS_MODEL=gemma-e2b-tiny uv run news run --preset NAME
     NEWS_MODEL=gemma-26b-moe uv run news run --preset NAME
-    NEWS_MODEL=qwen-9b-dense uv run news run --preset NAME
+    NEWS_MODEL=gemma-12b-optiq uv run news run --preset NAME
 
     NEWS_MODEL accepts either a friendly alias above or a full model repo/name.
     Model backend and runtime profile are inferred from the selected model.
 
 Local model server:
-    NEWS_MODEL=qwen-9b-dense uv run news run --preset NAME
+    NEWS_MODEL=gemma-12b-optiq uv run news run --preset NAME
         Starts the matching local MLX server automatically, waits until it
         is ready, runs the pipeline, then shuts the managed server down even if
         the run errors. Server logs are written beside the report output.
 
-    NEWS_MODEL=qwen-9b-dense uv run news model-server-command
+    NEWS_MODEL=gemma-12b-optiq uv run news model-server-command
         Prints the matching MLX server command for the selected model and
         inferred runtime profile without starting the pipeline.
 
