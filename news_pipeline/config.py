@@ -75,6 +75,7 @@ RECIPIENT_SCOPE_ALL = "all"
 RECIPIENT_SCOPES = (RECIPIENT_SCOPE_BRADLEY, RECIPIENT_SCOPE_ALL)
 PRESET_ENV_VAR = "NEWS_PRESET"
 ACTIVE_PRESET_ENV_VAR = "NEWS_ACTIVE_PRESET"
+PRESET_MARKER_ENV_VARS = {PRESET_ENV_VAR, ACTIVE_PRESET_ENV_VAR}
 SOURCE_SCOPE_TIERS = {
     SOURCE_SCOPE_CORE: {CORE_SOURCE_TIER},
     SOURCE_SCOPE_PERIPHERAL: {CORE_SOURCE_TIER, PERIPHERAL_SOURCE_TIER},
@@ -1356,11 +1357,11 @@ def _runtime_command_env_delta(
 ) -> dict[str, str]:
     delta: dict[str, str] = {}
     for name, value in effective_env.items():
+        if name in PRESET_MARKER_ENV_VARS:
+            continue
         if base_env.get(name) == value:
             continue
         if name in preset_env and preset_env.get(name) == value:
-            continue
-        if name in {PRESET_ENV_VAR, ACTIVE_PRESET_ENV_VAR}:
             continue
         delta[name] = value
     if preset_id and preset_id != "custom":
@@ -1382,6 +1383,9 @@ def _resolve_effective_env(
         effective_env[ACTIVE_PRESET_ENV_VAR] = preset_id
     if request.overrides:
         effective_env.update(_clean_env(request.overrides))
+    if preset_id:
+        effective_env[PRESET_ENV_VAR] = preset_id
+        effective_env[ACTIVE_PRESET_ENV_VAR] = preset_id
     return preset_id or "custom", base_env, preset_env, effective_env
 
 

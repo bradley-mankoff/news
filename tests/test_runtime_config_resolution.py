@@ -7,7 +7,9 @@ from datetime import datetime
 from pathlib import Path
 
 from news_pipeline.config import (
+    ACTIVE_PRESET_ENV_VAR,
     CODEX_TEST_MODEL_ALIAS,
+    PRESET_ENV_VAR,
     RuntimeConfigRequest,
     load_runtime_config,
     resolve_runtime_config,
@@ -49,6 +51,39 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
         self.assertEqual(resolution.command_env_delta["NEWS_PRESET"], "dev")
         self.assertEqual(resolution.command_env_delta["NEWS_SOURCE_SCOPE"], "peripheral")
         self.assertNotIn("NEWS_RECIPIENT_SCOPE", resolution.command_env_delta)
+
+    def test_preset_marker_overrides_do_not_desynchronize_resolution(self) -> None:
+        resolution = resolve_runtime_config(
+            RuntimeConfigRequest(
+                base_env={},
+                preset_id="dev",
+                overrides={
+                    PRESET_ENV_VAR: "prod",
+                    ACTIVE_PRESET_ENV_VAR: "prod",
+                    "NEWS_SOURCE_SCOPE": "peripheral",
+                },
+                materialize_outputs=False,
+                run_started_at=datetime(2026, 6, 14, 12, 0, 0),
+            )
+        )
+
+        self.assertEqual(resolution.config.preset_id, "dev")
+        self.assertEqual(resolution.effective_env[PRESET_ENV_VAR], "dev")
+        self.assertEqual(resolution.effective_env[ACTIVE_PRESET_ENV_VAR], "dev")
+        self.assertEqual(
+            resolution.command_env_delta,
+            {"NEWS_PRESET": "dev", "NEWS_SOURCE_SCOPE": "peripheral"},
+        )
+
+    def test_context_env_drives_runtime_config_derivations(self) -> None:
+        config = load_runtime_config(
+            environ={"NEWS_TOTAL_ARTICLE_SUMMARY_CAP": "55"},
+            overrides={"NEWS_MODEL": "gemma-26b-moe"},
+            materialize_outputs=False,
+            run_started_at=datetime(2026, 6, 14, 12, 0, 0),
+        )
+
+        self.assertFalse(config.total_article_summary_cap_gemma_4_derived)
 
     def test_unknown_preset_error_lists_available_presets(self) -> None:
         with self.assertRaisesRegex(ValueError, "Available presets: .*dev"):
