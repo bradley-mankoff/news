@@ -106,6 +106,7 @@ from .article_collection import (
     collect_article_candidates,
 )
 from . import article_summarization as article_summarization_stage
+from . import article_summary_records as article_summary_records_stage
 from . import citations as citations_stage
 from . import embeddings as embeddings_stage
 from . import story_clustering as story_clustering_stage
@@ -998,23 +999,6 @@ def _excluded_feed_item_reason(item: dict[str, Any]) -> str:
 SOURCE_FEEDS = load_sources(CONFIG.sources_path, source_scope=CONFIG.source_scope)
 TOP_FUNNEL_PROVIDERS: dict[str, dict[str, Any]] = {}
 
-LOW_CONFIDENCE_SUMMARY_PATTERNS = [
-    "insufficient to create a substantive summary",
-    "contains only the headline",
-    "only contains the headline",
-    "headline and metadata",
-    "metadata wrapper",
-    "metadata-only entry",
-    "placeholder or metadata-only entry",
-    "article text is missing",
-    "without any supporting article content",
-    "without any substantive reporting content",
-    "cannot provide a detailed summary",
-    "cannot provide a factual summary",
-    "the only concrete information available is the headline",
-    "provided article metadata and text only contain a headline",
-]
-
 LOW_COVERAGE_SYNTHESIS_PATTERNS = [
     "no high-confidence updates in supplied coverage",
     "primary dataset provided for this section is completely empty",
@@ -1706,12 +1690,12 @@ def _story_selection_runtime() -> story_selection_stage.StorySelectionRuntime:
     )
 
 
-def run_article_summary_pass(article_targets: list[dict]) -> list[str]:
+def run_article_summary_pass(article_targets: list[dict]) -> list[article_summary_records_stage.ArticleSummaryRecord]:
     return article_summarization_stage.run_article_summary_pass(article_targets, _article_summarization_runtime())
 
 
 def run_per_story_synthesis(
-    article_summaries: list[str],
+    article_summaries: list[article_summary_records_stage.ArticleSummaryRecord | str],
     story_records: list[dict],
     *,
     min_articles_per_story: int | None = None,
@@ -2600,48 +2584,16 @@ def translate_article_candidates(
     return translated_articles
 
 
-def _extract_sentences(text: str, limit: int = 5) -> List[str]:
-    clean_text = re.sub(r"\s+", " ", (text or "")).strip()
-    if not clean_text:
-        return []
-    sentences = re.split(r"(?<=[.!?])\s+", clean_text)
-    return [sentence.strip() for sentence in sentences if sentence.strip()][:limit]
-
-
 def _build_article_heading(article: dict) -> str:
-    title = (article.get("title") or "Untitled article").strip()
-    return re.sub(r"\s+", " ", title)
+    return article_summary_records_stage.build_article_heading(article)
 
 
 def _format_article_metadata(article: dict) -> str:
-    metadata_lines = [
-        f"- Source: {article.get('source') or 'Unknown source'}",
-        f"- Published: {article.get('pub_date') or 'Unknown publish time'}",
-        f"- URL: {article.get('url') or 'N/A'}",
-    ]
-    if article.get("article_id"):
-        metadata_lines.append(f"- Article ID: {article.get('article_id')}")
-    if article.get("story_title"):
-        metadata_lines.append(f"- Story: {article.get('story_title')}")
-    return "\n".join(metadata_lines)
+    return article_summary_records_stage.format_article_metadata(article)
 
 
 def build_article_fallback_entry(article: dict) -> str:
-    sentences = _extract_sentences(article.get("text", ""), limit=5)
-    summary = " ".join(sentences).strip()
-    if not summary:
-        summary = (
-            "No reliable summary generated because the article was retrieved but the model "
-            "connection failed before a synthesis could be produced."
-        )
-    return (
-        "DATABASE_ENTRY:\n"
-        f"### {_build_article_heading(article)}\n"
-        "Metadata:\n"
-        f"{_format_article_metadata(article)}\n\n"
-        "Summary:\n"
-        f"{summary}"
-    )
+    return article_summary_records_stage.fallback_entry(article)
 
 
 def _parse_feed_datetime(raw_value: str | None) -> datetime | None:
@@ -3507,85 +3459,33 @@ def clean_synthesis_for_publication(text: str, *, relaxed: bool = False) -> str:
 
 
 def has_structured_entry(text: str, heading_name: str) -> bool:
-    clean_text = strip_model_artifacts(text)
-    if "DATABASE_ENTRY:" in clean_text:
-        return True
-    return all(
-        marker in clean_text
-        for marker in (f"### {heading_name}", "Metadata:", "Summary:")
-    )
+    return article_summary_records_stage.has_structured_entry(text, heading_name)
 
 
 def normalize_report_entry(article: dict, raw_text: str) -> str:
-    clean_text = strip_model_artifacts(raw_text)
-    if "DATABASE_ENTRY:" in clean_text:
-        clean_text = clean_text.split("DATABASE_ENTRY:", 1)[1].strip()
-
-    heading_name = _build_article_heading(article)
-    heading_match = re.search(rf"###\s+{re.escape(heading_name)}\b", clean_text)
-    if heading_match:
-        clean_text = clean_text[heading_match.start():]
-
-    metadata_block = _format_article_metadata(article)
-
-    summary = ""
-    summary_match = re.search(r"Summary:\s*(.*)", clean_text, flags=re.DOTALL)
-    if summary_match:
-        summary = summary_match.group(1)
-
-    summary = re.split(r"\n(?:---+|###\s+)", summary, maxsplit=1)[0]
-    summary = strip_model_artifacts(summary)
-
-    filtered_lines = []
-    for line in summary.splitlines():
-        stripped = line.strip()
-        if not stripped:
-            continue
-        stripped = re.sub(r"^\*+\s*", "", stripped)
-        if re.match(r'^[`"\']?\s*prefix\b', stripped, flags=re.IGNORECASE):
-            continue
-        if re.match(r"^(let me provide|the correct format|header and proper markdown structure)", stripped, flags=re.IGNORECASE):
-            continue
-        if stripped.startswith(f"{heading_name} -"):
-            continue
-        if stripped in {"---", "```", "`"}:
-            continue
-        filtered_lines.append(stripped)
-
-    summary = re.sub(r"\s+", " ", " ".join(filtered_lines)).strip()
-    if not summary:
-        summary = "No reliable summary generated because the model failed to format its response."
-
-    return (
-        f"### {heading_name}\n"
-        "Metadata:\n"
-        f"{metadata_block}\n\n"
-        "Summary:\n"
-        f"{summary}"
-    )
+    return article_summary_records_stage.normalize_model_response(article, raw_text)
 
 
 def is_low_confidence_report_entry(entry: str) -> bool:
-    summary_match = re.search(r"Summary:\s*(.*)", entry or "", flags=re.DOTALL)
-    summary_text = summary_match.group(1).lower() if summary_match else (entry or "").lower()
-    return any(pattern in summary_text for pattern in LOW_CONFIDENCE_SUMMARY_PATTERNS)
+    return article_summary_records_stage.is_low_confidence(entry)
 
 
 def _report_story_label(entry: str) -> str:
-    story_match = re.search(r"^- Story:\s*(.+)$", entry or "", flags=re.MULTILINE)
-    return story_match.group(1).strip() if story_match else ""
+    return article_summary_records_stage.story_label(entry)
 
 
 def _report_summary_text(entry: str) -> str:
-    summary_match = re.search(r"Summary:\s*(.*)", entry or "", flags=re.DOTALL)
-    return re.sub(r"\s+", " ", summary_match.group(1).strip()) if summary_match else ""
+    return article_summary_records_stage.summary_text(entry)
 
 
 def _report_reference_key(entry: str) -> str:
-    return hashlib.sha1((entry or "").encode("utf-8")).hexdigest()
+    return article_summary_records_stage.reference_key(entry)
 
 
-def filter_reports_for_references(final_reports: List[str], token_stats: dict[str, Any]) -> List[str]:
+def filter_reports_for_references(
+    final_reports: List[article_summary_records_stage.ArticleSummaryRecord | str],
+    token_stats: dict[str, Any],
+) -> List[article_summary_records_stage.ArticleSummaryRecord | str]:
     included_keys = {
         str(key)
         for key in (token_stats or {}).get("included_report_keys", [])
@@ -3620,7 +3520,7 @@ def maybe_email_report(
     report_title: str,
     report_body: str,
     synthesis_body: str,
-    final_reports: List[str],
+    final_reports: List[article_summary_records_stage.ArticleSummaryRecord | str],
     recipients: List[str],
     recipient_names: List[str],
     image_art: dict[str, Any] | None = None,
@@ -3733,7 +3633,9 @@ def _fallback_synthesis_paragraph_from_summaries(summaries: list[str]) -> str:
     return _first_sentences(paragraph, max_sentences=8, max_chars=1800)
 
 
-def build_fallback_final_synthesis_preview(final_reports: List[str]) -> str:
+def build_fallback_final_synthesis_preview(
+    final_reports: List[article_summary_records_stage.ArticleSummaryRecord | str],
+) -> str:
     """Create grouped prose when final synthesis repeatedly returns empty."""
     grouped: dict[str, list[str]] = {}
 
@@ -4134,13 +4036,13 @@ def _format_plain_text_synthesis(synthesis_body: str) -> str:
 
 
 def _collect_grouped_headlines(
-    final_reports: List[str],
+    final_reports: List[article_summary_records_stage.ArticleSummaryRecord | str],
 ) -> dict[str, List[tuple[str, str | None, str | None, str | None]]]:
     grouped_headlines: dict[str, List[tuple[str, str | None, str | None, str | None]]] = {}
     seen_pairs: set[tuple[str, str, str]] = set()
     for entry in final_reports:
-        source_match = re.search(r"^- Source:\s*(.+)$", entry, flags=re.MULTILINE)
-        source_name = source_match.group(1).strip() if source_match else "Unknown source"
+        record = article_summary_records_stage.ensure_record(entry)
+        source_name = record.source or "Unknown source"
         source_config = SOURCE_FEEDS.get(source_name)
         display_name = (
             source_config.get("name", source_name)
@@ -4152,12 +4054,9 @@ def _collect_grouped_headlines(
             if isinstance(source_config, dict)
             else None
         )
-        title_match = re.search(r"^###\s+(.+)$", entry, flags=re.MULTILINE)
-        title_text = title_match.group(1).strip() if title_match else "Untitled article"
-        url_match = re.search(r"^- URL:\s*(.+)$", entry, flags=re.MULTILINE)
-        url_text = url_match.group(1).strip() if url_match else ""
-        story_match = re.search(r"^- Story:\s*(.+)$", entry, flags=re.MULTILINE)
-        story_title = story_match.group(1).strip() if story_match else ""
+        title_text = record.title or "Untitled article"
+        url_text = record.url
+        story_title = record.story
         normalized_url = url_text if url_text and url_text != "N/A" else ""
         dedupe_key = (source_name, title_text, normalized_url)
         if dedupe_key in seen_pairs:
@@ -4171,7 +4070,7 @@ def _collect_grouped_headlines(
     return grouped_headlines
 
 
-def _build_plain_text_article_listing(final_reports: List[str]) -> str:
+def _build_plain_text_article_listing(final_reports: List[article_summary_records_stage.ArticleSummaryRecord | str]) -> str:
     grouped_headlines = _collect_grouped_headlines(final_reports)
     grouped_sections: list[str] = []
 
@@ -4257,7 +4156,7 @@ def _build_html_synthesis(
     return "".join(blocks)
 
 
-def _build_html_article_listing(final_reports: List[str]) -> str:
+def _build_html_article_listing(final_reports: List[article_summary_records_stage.ArticleSummaryRecord | str]) -> str:
     grouped_headlines = _collect_grouped_headlines(final_reports)
 
     def render_source_entries(
@@ -4309,7 +4208,7 @@ def _build_html_article_listing(final_reports: List[str]) -> str:
 def build_report_body(
     report_title: str,
     synthesis_body: str,
-    final_reports: List[str],
+    final_reports: List[article_summary_records_stage.ArticleSummaryRecord | str],
     image_art: dict[str, Any] | None = None,
     citation_sources: list[dict[str, Any]] | None = None,
     citation_groups: list[dict[str, Any]] | None = None,
@@ -4359,7 +4258,7 @@ def build_report_html(
     recipient_name: str,
     report_title: str,
     synthesis_body: str,
-    final_reports: List[str],
+    final_reports: List[article_summary_records_stage.ArticleSummaryRecord | str],
     image_art: dict[str, Any] | None = None,
     citation_sources: list[dict[str, Any]] | None = None,
     citation_groups: list[dict[str, Any]] | None = None,
@@ -4435,27 +4334,14 @@ def build_report_html(
     )
 
 
-def _report_entry_debug_record(entry: str, index: int) -> dict[str, Any]:
-    title_match = re.search(r"^###\s+(.+)$", entry or "", flags=re.MULTILINE)
-    source_match = re.search(r"^- Source:\s*(.+)$", entry or "", flags=re.MULTILINE)
-    published_match = re.search(r"^- Published:\s*(.+)$", entry or "", flags=re.MULTILINE)
-    url_match = re.search(r"^- URL:\s*(.+)$", entry or "", flags=re.MULTILINE)
-    article_id_match = re.search(r"^- Article ID:\s*(.+)$", entry or "", flags=re.MULTILINE)
-    story_match = re.search(r"^- Story:\s*(.+)$", entry or "", flags=re.MULTILINE)
-    return {
-        "index": index,
-        "title": title_match.group(1).strip() if title_match else "",
-        "source": source_match.group(1).strip() if source_match else "",
-        "published": published_match.group(1).strip() if published_match else "",
-        "url": url_match.group(1).strip() if url_match else "",
-        "article_id": article_id_match.group(1).strip() if article_id_match else "",
-        "story": story_match.group(1).strip() if story_match else "",
-        "summary": _report_summary_text(entry),
-        "raw_entry": entry,
-    }
+def _report_entry_debug_record(entry: article_summary_records_stage.ArticleSummaryRecord | str, index: int) -> dict[str, Any]:
+    return article_summary_records_stage.to_history_record(
+        article_summary_records_stage.ensure_record(entry),
+        index,
+    )
 
 
-def _report_entry_debug_records(entries: List[str]) -> list[dict[str, Any]]:
+def _report_entry_debug_records(entries: List[article_summary_records_stage.ArticleSummaryRecord | str]) -> list[dict[str, Any]]:
     return [
         _report_entry_debug_record(entry, index)
         for index, entry in enumerate(entries, start=1)
@@ -4490,7 +4376,7 @@ def _dedupe_story_drafts_for_global_selection(
 
 
 def _persist_article_summaries_debug(
-    final_reports: List[str],
+    final_reports: List[article_summary_records_stage.ArticleSummaryRecord | str],
     *,
     label: str = "article_summaries",
 ) -> str | None:
@@ -5187,7 +5073,7 @@ def _run_pipeline() -> None:
 
     progress_tracker.reset(total_sources=len(sources))
 
-    final_reports: List[str] = []
+    final_reports: List[article_summary_records_stage.ArticleSummaryRecord | str] = []
 
     # 3) Collect source contexts, dedupe, record source diagnostics, and persist URL history.
     article_collection = collect_article_candidates(
@@ -5299,7 +5185,7 @@ def _run_pipeline() -> None:
         _ensure_main_model_server_ready()
 
     progress_tracker.start_article_summary(len(clustered_article_targets))
-    article_summary_reports: List[str] = []
+    article_summary_reports: List[article_summary_records_stage.ArticleSummaryRecord] = []
     article_summary_reports.extend(
         article_summarization_stage.run_article_summary_pass(
             clustered_article_targets,

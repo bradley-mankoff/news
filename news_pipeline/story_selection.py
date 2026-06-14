@@ -12,7 +12,11 @@ from typing import Any, Callable
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from . import citations as citations_stage
-from .story_drafting import article_summary_lookup_by_id, report_summary_text
+from .article_summary_records import (
+    ArticleSummaryRecord,
+    records_by_article_id,
+    with_story,
+)
 
 
 STORY_SCALE_VERDICTS = {
@@ -622,42 +626,26 @@ def select_global_story_drafts(
 
 
 def _annotate_summary_entry_for_story(
-    entry: str,
-    article: dict,
+    record: ArticleSummaryRecord,
     story_match: dict[str, Any],
-    runtime: StorySelectionRuntime,
-) -> str:
-    title_match = re.search(r"^###\s+(.+)$", entry or "", flags=re.MULTILINE)
-    title = title_match.group(1).strip() if title_match else runtime.build_article_heading(article)
-    summary_text = report_summary_text(entry)
-    annotated_article = {
-        **article,
-        "story_key": story_match.get("story_key"),
-        "story_title": story_match.get("story_title"),
-    }
-    return (
-        f"### {title}\n"
-        "Metadata:\n"
-        f"{runtime.format_article_metadata(annotated_article)}\n\n"
-        "Summary:\n"
-        f"{summary_text}"
-    )
+) -> ArticleSummaryRecord:
+    return with_story(record, story_match.get("story_title"), story_match.get("story_key"))
 
 
 def build_story_assigned_article_reports(
     selected_story_matches: list[dict[str, Any]],
-    article_summary_reports: list[str],
+    article_summary_reports: list[ArticleSummaryRecord | str],
     article_targets: list[dict],
     runtime: StorySelectionRuntime,
-) -> tuple[list[str], dict[str, Any]]:
-    summary_lookup = article_summary_lookup_by_id(article_summary_reports)
+) -> tuple[list[ArticleSummaryRecord], dict[str, Any]]:
+    summary_lookup = records_by_article_id(article_summary_reports)
     article_lookup = {
         str(article.get("article_id") or ""): article
         for article in article_targets
         if article.get("article_id")
     }
 
-    reports: list[str] = []
+    reports: list[ArticleSummaryRecord] = []
     selected_article_ids: set[str] = set()
     missing_summary_ids: list[str] = []
     seen_records: set[tuple[str, str]] = set()
@@ -671,12 +659,12 @@ def build_story_assigned_article_reports(
             if dedupe_key in seen_records:
                 continue
             seen_records.add(dedupe_key)
-            entry = summary_lookup.get(clean_article_id)
+            record = summary_lookup.get(clean_article_id)
             article = article_lookup.get(clean_article_id)
-            if not entry or not article:
+            if not record or not article:
                 missing_summary_ids.append(clean_article_id)
                 continue
-            reports.append(_annotate_summary_entry_for_story(entry, article, match, runtime))
+            reports.append(_annotate_summary_entry_for_story(record, match))
             selected_article_ids.add(clean_article_id)
 
     return reports, {

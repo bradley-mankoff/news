@@ -24,3 +24,10 @@ Runtime Config Resolution turns base environment values, saved run presets, and
 explicit overrides into one Runtime Config snapshot. It owns runtime knob
 metadata, preset overlay rules, command environment deltas, and removed-setting
 validation before a Run Session starts.
+
+## Article Summary Record
+
+An Article Summary Record is the normalized result of summarizing one retained
+article. It owns article title, source, published time, URL, Article ID, story
+assignment, summary prose, and Markdown compatibility rendering for downstream
+report and history adapters.
