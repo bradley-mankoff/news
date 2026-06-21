@@ -27,12 +27,6 @@ Usage:
   uv run news history backfill [--dry-run|--apply]
   uv run news history cleanup [--dry-run|--apply]
   uv run news history export
-
-Wrapper compatibility:
-  uv run todays_news.py --model-server-command
-  uv run todays_news.py --test-translation-model
-  uv run todays_news.py --serve-unsubscribe
-
 """
 
 ACTION_ALIASES = {

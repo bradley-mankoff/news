@@ -33,6 +33,7 @@ from .config import (
     load_recipients,
     load_sources,
     normalize_preset_id,
+    run_preset_env,
     resolve_runtime_config,
     RuntimeConfigRequest,
     runtime_knob_registry,
@@ -93,12 +94,41 @@ def _clean_env_for_config(environ: dict[str, str]) -> dict[str, str]:
     return clean
 
 
+def _ui_base_env(preset_id: str | None, overrides: dict[str, str]) -> dict[str, str]:
+    base_env = _clean_env_for_config(dict(os.environ))
+    if not preset_id:
+        return base_env
+    try:
+        preset_env = run_preset_env(preset_id)
+    except ValueError:
+        return base_env
+    for name in preset_env:
+        if name not in overrides:
+            base_env.pop(name, None)
+    return base_env
+
+
+def _preset_env_over_inherited_env(preset_id: str | None, overrides: dict[str, str]) -> dict[str, str]:
+    if not preset_id:
+        return {}
+    try:
+        preset_env = run_preset_env(preset_id)
+    except ValueError:
+        return {}
+    return {
+        name: value
+        for name, value in preset_env.items()
+        if name not in overrides and os.environ.get(name) not in {None, "", value}
+    }
+
+
 def _runtime_snapshot(
     env_overlay: dict[str, str] | None = None,
     *,
     preset_id: str | None = None,
 ) -> tuple[dict[str, Any] | None, str | None]:
-    base_env = _clean_env_for_config(dict(os.environ))
+    env_overlay = env_overlay or {}
+    base_env = _ui_base_env(preset_id, env_overlay)
     try:
         resolution = resolve_runtime_config(
             RuntimeConfigRequest(
@@ -147,7 +177,6 @@ def _runtime_snapshot(
                 "recent_window_hours": config.recent_window_hours,
                 "source_collection_concurrency": config.source_collection_concurrency,
                 "max_articles_per_source": config.max_articles_per_source,
-                "top_of_funnel_per_provider": config.top_of_funnel_per_provider,
                 "min_articles_per_story": config.min_articles_per_story,
                 "story_cluster_similarity_threshold": config.story_cluster_similarity_threshold,
                 "story_scale_screening_enabled": config.story_scale_screening_enabled,
@@ -487,13 +516,16 @@ def build_command(body: dict[str, Any]) -> tuple[list[str], dict[str, str]]:
     try:
         resolution = resolve_runtime_config(
             RuntimeConfigRequest(
-                base_env=_clean_env_for_config(dict(os.environ)),
+                base_env=_ui_base_env(preset_id, overrides),
                 preset_id=preset_id,
                 overrides=overrides,
                 materialize_outputs=False,
             )
         )
-        env = resolution.command_env_delta
+        env = {
+            **_preset_env_over_inherited_env(preset_id, overrides),
+            **resolution.command_env_delta,
+        }
     except ValueError as error:
         if "Topic-based runtime configuration has been removed" not in str(error):
             raise

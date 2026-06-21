@@ -11,11 +11,12 @@ import os
 import re
 from collections import Counter
 from datetime import datetime, timezone
-from email.utils import parsedate_to_datetime
 from typing import Any, Callable
 from urllib.parse import urlparse
 
 from .text_cleaning import clean_article_text, clean_content_text
+from .text_cleaning import strip_model_artifacts
+from .feed_utils import parse_feed_datetime as _parse_feed_datetime_utc
 from .text_matching import (
     BOILERPLATE_CONTENT_STOPWORDS,
     TEXT_MATCH_STOPWORDS,
@@ -62,17 +63,6 @@ STORY_MEMBER_EDGE_DEGREE_FLOOR = 1
 ProgressCallback = Callable[[str, dict[str, Any]], None]
 
 
-def strip_model_artifacts(text: str) -> str:
-    text = text or ""
-    text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
-    text = re.sub(r"<\|im_(?:start|end)\|>", "", text)
-    text = re.sub(r"&lt;/?(?:analysis|content)&gt;", "", text, flags=re.IGNORECASE)
-    text = re.sub(r"</?(?:analysis|content)>", "", text, flags=re.IGNORECASE)
-    text = text.replace("\r\n", "\n")
-    text = re.sub(r"\n{3,}", "\n\n", text)
-    return text.strip()
-
-
 def strip_inline_markdown(text: str) -> str:
     clean_text = str(text or "")
     clean_text = re.sub(r"\[(.*?)\]\((.*?)\)", r"\1 (\2)", clean_text)
@@ -84,20 +74,10 @@ def strip_inline_markdown(text: str) -> str:
     return clean_text
 
 
-def _parse_feed_datetime(raw_value: str | None) -> datetime | None:
-    if not raw_value:
-        return None
-    try:
-        parsed = parsedate_to_datetime(raw_value)
-        if parsed.tzinfo is not None:
-            return parsed.astimezone(timezone.utc).replace(tzinfo=None)
-        return parsed
-    except Exception:
-        return None
-
-
 def _article_sort_datetime(article: dict) -> datetime:
-    parsed = _parse_feed_datetime(article.get("pub_date"))
+    parsed = _parse_feed_datetime_utc(article.get("pub_date"))
+    if parsed is not None and parsed.tzinfo is not None:
+        parsed = parsed.astimezone(timezone.utc).replace(tzinfo=None)
     return parsed or datetime.min.replace(tzinfo=None)
 
 

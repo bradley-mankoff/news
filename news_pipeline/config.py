@@ -45,7 +45,6 @@ ASSISTANT_CONTEXT_CORE_PATTERNS = (
     "!.codex/config.toml",
     "!pyproject.toml",
     "!uv.lock",
-    "!todays_news.py",
     "!news_pipeline/",
     "!news_pipeline/**",
     "!config/",
@@ -61,8 +60,8 @@ ASSISTANT_CONTEXT_CORE_PATTERNS = (
 )
 RUN_OUTPUT_TIMESTAMP_RE = re.compile(r"\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}")
 DEFAULT_MODEL_ALIAS = "gemma-26b-moe"
-GEMMA_12B_OPTIQ_MODEL_ALIAS = "gemma-12b-optiq"
-GEMMA_12B_OPTIQ_MODEL_NAME = "mlx-community/gemma-4-12B-it-OptiQ-4bit"
+GEMMA_12B_OPTIQ_MODEL_ALIAS = "https://huggingface.co/EgorKodin/Huihui-gemma-4-12B-it-abliterated-mlx-4bit"
+GEMMA_12B_OPTIQ_MODEL_NAME = "EgorKodin/Huihui-gemma-4-12B-it-abliterated-mlx-4bit"
 CODEX_TEST_MODEL_ALIAS = "gemma-e2b-tiny"
 CODEX_TEST_MODEL_NAME = "deadbydawn101/gemma-4-E2B-Heretic-Uncensored-mlx-4bit"
 DEFAULT_TRANSLATION_MODEL = "google/translategemma-4b-it"
@@ -131,30 +130,6 @@ _CONFIG_ENV: ContextVar[Mapping[str, str] | None] = ContextVar(
     "news_pipeline_config_env",
     default=None,
 )
-
-
-@dataclass(frozen=True)
-class NewsSource:
-    key: str
-    name: str
-    url: str
-    homepage: str | None = None
-    region: str | None = None
-    language: str | None = None
-    tier: str = PERIPHERAL_SOURCE_TIER
-    nations: tuple[str, ...] = ()
-    frame: str | None = None
-    provider_type: str | None = None
-    intended_role: str | None = None
-    weight: float = 1.0
-    can_enrich_coverage: bool = True
-    strict_source_match: bool = False
-    source_match_mode: str = "feed_label"
-    requires_translation: bool = False
-    requires_translation_explicit: bool = False
-    translation_source_language: str | None = None
-    source_match_aliases: tuple[str, ...] = ()
-    notes: str | None = None
 
 
 @dataclass(frozen=True)
@@ -229,7 +204,6 @@ class RuntimeConfig:
     translation_enabled: bool
     recent_window_hours: int
     max_articles_per_source: int
-    top_of_funnel_per_provider: int
     bradley_recipient: str
     email_recipients_fallback: list[str]
     email_from: str
@@ -642,6 +616,10 @@ def _configured_translation_model_reference() -> str:
     return _str_env("NEWS_TRANSLATION_MODEL", DEFAULT_TRANSLATION_MODEL) or DEFAULT_TRANSLATION_MODEL
 
 
+def _configured_translation_enabled() -> bool:
+    return _bool_env("NEWS_TRANSLATION_ENABLED", False)
+
+
 def _configured_translation_model_backend(model_reference: str) -> str:
     return infer_model_backend(model_reference)
 
@@ -729,7 +707,6 @@ def runtime_knob_registry() -> list[dict[str, Any]]:
         _runtime_knob("Summary", "Title max tokens", "NEWS_TITLE_GENERATION_MAX_TOKENS", "number", minimum=1, step=1),
         _runtime_knob("Story", "Recent window hours", "NEWS_RECENT_WINDOW_HOURS", "number", minimum=1, step=1),
         _runtime_knob("Story", "Max articles per source", "NEWS_MAX_ARTICLES_PER_SOURCE", "number", minimum=1, step=1),
-        _runtime_knob("Story", "Top of funnel per provider", "NEWS_TOP_OF_FUNNEL_PER_PROVIDER", "number", minimum=1, step=1),
         _runtime_knob("Story", "Min articles per story", "NEWS_MIN_ARTICLES_PER_STORY", "number", minimum=2, step=1),
         _runtime_knob("Story", "Story cluster similarity", "NEWS_STORY_CLUSTER_SIMILARITY_THRESHOLD", "number", minimum=0, maximum=1, step=0.01),
         _runtime_knob("Story", "Story scale screening", "NEWS_STORY_SCALE_SCREENING_ENABLED", "bool"),
@@ -1244,44 +1221,6 @@ def write_source_translation_flags(
     return result.edit_count
 
 
-def load_top_funnel_providers(path: Path | None = None) -> dict[str, dict[str, Any]]:
-    sources_path = path or CONFIG_DIR / "sources.yaml"
-    payload = _load_yaml_mapping(sources_path)
-    raw_providers = payload.get("top_funnel_providers", [])
-    if not isinstance(raw_providers, list):
-        raise ValueError(f"{sources_path} must define top_funnel_providers as a list.")
-
-    providers: dict[str, dict[str, Any]] = {}
-    for raw_provider in raw_providers:
-        if not isinstance(raw_provider, dict):
-            continue
-        key = str(raw_provider.get("key") or raw_provider.get("name") or "").strip()
-        url = str(raw_provider.get("url") or "").strip()
-        fetcher = str(raw_provider.get("fetcher") or "rss").strip()
-        if not key or not url:
-            continue
-        _reject_removed_source_topic_fields(raw_provider, source_key=key)
-        providers[key] = {
-            "key": key,
-            "name": str(raw_provider.get("name") or key).strip(),
-            "url": url,
-            "fetcher": fetcher,
-            "region": str(raw_provider.get("region") or "").strip() or None,
-            "frame": str(raw_provider.get("frame") or raw_provider.get("region") or "").strip() or None,
-            "provider_type": str(raw_provider.get("provider_type") or "rss").strip(),
-            "intended_role": str(raw_provider.get("intended_role") or "").strip() or None,
-            "weight": _coerce_float_value(raw_provider.get("weight"), 1.0),
-            "can_enrich_coverage": _coerce_bool_value(
-                raw_provider.get("can_enrich_coverage", raw_provider.get("enrich_coverage")),
-                False,
-            ),
-            "notes": str(raw_provider.get("notes") or "").strip() or None,
-        }
-    if not providers:
-        raise ValueError(f"No valid top_funnel_providers entries found in {sources_path}.")
-    return providers
-
-
 def load_recipients(path: Path | None = None) -> dict[str, dict[str, Any]]:
     recipients_path = path or CONFIG_DIR / "recipients.yaml"
     payload = _load_yaml_mapping(recipients_path)
@@ -1466,11 +1405,23 @@ def _build_runtime_config(
         story_synthesis_concurrency,
     )
     source_collection_concurrency = DEFAULT_SOURCE_COLLECTION_CONCURRENCY
+    translation_enabled = _configured_translation_enabled()
     translation_model_reference = _configured_translation_model_reference()
     translation_model_name = resolve_model_name(translation_model_reference)
-    translation_model_profile = configured_model_profile(translation_model_reference)
     translation_model_base_url = _str_env("NEWS_TRANSLATION_MODEL_BASE_URL", model_base_url)
     translation_model_backend = _configured_translation_model_backend(translation_model_reference)
+    translation_model_server_command = ""
+    if translation_enabled:
+        try:
+            translation_model_profile = configured_model_profile(translation_model_reference)
+        except ValueError:
+            translation_model_profile = model_profile
+        translation_model_server_command = build_model_server_command(
+            translation_model_name,
+            translation_model_profile,
+            backend=translation_model_backend,
+            model_concurrency=model_concurrency,
+        )
     return RuntimeConfig(
         root_dir=ROOT_DIR,
         sources_path=sources_path,
@@ -1513,17 +1464,11 @@ def _build_runtime_config(
         translation_model_name=translation_model_name,
         translation_model_base_url=translation_model_base_url,
         translation_model_backend=translation_model_backend,
-        translation_model_server_command=build_model_server_command(
-            translation_model_name,
-            translation_model_profile,
-            backend=translation_model_backend,
-            model_concurrency=model_concurrency,
-        ),
+        translation_model_server_command=translation_model_server_command,
         translation_target_language=_str_env("NEWS_TRANSLATION_TARGET_LANGUAGE", "en") or "en",
-        translation_enabled=False,
+        translation_enabled=translation_enabled,
         recent_window_hours=_int_env("NEWS_RECENT_WINDOW_HOURS", 24),
         max_articles_per_source=_int_env("NEWS_MAX_ARTICLES_PER_SOURCE", 6),
-        top_of_funnel_per_provider=_int_env("NEWS_TOP_OF_FUNNEL_PER_PROVIDER", 10),
         bradley_recipient=bradley_recipient,
         email_recipients_fallback=fallback_recipients,
         email_from=email_from,

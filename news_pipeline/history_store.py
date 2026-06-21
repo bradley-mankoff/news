@@ -54,12 +54,6 @@ ROLLING_RUN_FILENAMES = {
 }
 
 
-@dataclass(frozen=True)
-class HistoryConfig:
-    db_path: Path
-    export_csv: bool = True
-
-
 @dataclass
 class HistoryCommandResult:
     action: str

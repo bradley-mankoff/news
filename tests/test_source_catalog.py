@@ -3,7 +3,9 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-from news_pipeline.config import write_source_translation_flags
+import yaml
+
+from news_pipeline.config import CONFIG_DIR, load_sources, write_source_translation_flags
 from news_pipeline.source_catalog import (
     DeleteSources,
     SetSourceLanguages,
@@ -30,9 +32,6 @@ def _write_sources(path: Path, newline: str = "\n") -> None:
             "    url: https://example.com/beta.xml",
             "    language: es",
             "    requires_translation: false",
-            "top_funnel_providers:",
-            "  - key: Provider",
-            "    url: https://example.com/provider.xml",
             "",
         ]
     )
@@ -40,6 +39,67 @@ def _write_sources(path: Path, newline: str = "\n") -> None:
 
 
 class SourceCatalogTests(unittest.TestCase):
+    def test_core_sources_do_not_require_translation(self) -> None:
+        sources_path = CONFIG_DIR / "sources.yaml"
+        payload = yaml.safe_load(sources_path.read_text(encoding="utf-8")) or {}
+        core_translation_sources = [
+            str(source.get("key") or source.get("name") or "")
+            for source in payload.get("sources", [])
+            if isinstance(source, dict)
+            and str(source.get("tier") or "").strip().lower() == "core"
+            and (
+                str(source.get("language") or "").strip().lower() != "en"
+                or bool(source.get("requires_translation", source.get("translate")))
+            )
+        ]
+
+        self.assertEqual(core_translation_sources, [])
+
+    def test_source_loading_excludes_translation_sources_for_all_scopes(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "sources.yaml"
+            path.write_text(
+                yaml.safe_dump(
+                    {
+                        "sources": [
+                            {
+                                "key": "EnglishCore",
+                                "url": "https://example.com/core.xml",
+                                "language": "en",
+                                "tier": "core",
+                            },
+                            {
+                                "key": "EnglishPeripheral",
+                                "url": "https://example.com/peripheral.xml",
+                                "language": "en",
+                                "tier": "peripheral",
+                            },
+                            {
+                                "key": "TranslationRequired",
+                                "url": "https://example.com/translate.xml",
+                                "language": "en",
+                                "tier": "peripheral",
+                                "requires_translation": True,
+                            },
+                            {
+                                "key": "Spanish",
+                                "url": "https://example.com/es.xml",
+                                "language": "es",
+                                "tier": "peripheral",
+                            },
+                        ],
+                    },
+                    sort_keys=False,
+                ),
+                encoding="utf-8",
+            )
+
+            self.assertEqual(list(load_sources(path, source_scope="core")), ["EnglishCore"])
+            self.assertEqual(
+                list(load_sources(path, source_scope="peripheral")),
+                ["EnglishCore", "EnglishPeripheral"],
+            )
+
     def test_load_records_and_source_rows(self) -> None:
         with TemporaryDirectory() as tmpdir:
             path = Path(tmpdir) / "sources.yaml"
@@ -102,7 +162,6 @@ class SourceCatalogTests(unittest.TestCase):
                 text,
             )
             self.assertNotIn("notes:", text)
-            self.assertIn("top_funnel_providers:", text)
 
     def test_upsert_rejects_unknown_source_fields(self) -> None:
         with TemporaryDirectory() as tmpdir:
@@ -133,7 +192,6 @@ class SourceCatalogTests(unittest.TestCase):
             text = path.read_text(encoding="utf-8")
             self.assertNotIn("key: Alpha", text)
             self.assertIn("key: Beta", text)
-            self.assertIn("top_funnel_providers:", text)
 
     def test_language_write_inserts_after_url_and_respects_overwrite_false(self) -> None:
         with TemporaryDirectory() as tmpdir:
@@ -180,12 +238,7 @@ class SourceCatalogTests(unittest.TestCase):
                 "    translation_source_language: fr\n",
                 text,
             )
-            self.assertIn(
-                "    requires_translation: true\n"
-                "    translation_source_language: es\n"
-                "top_funnel_providers:",
-                text,
-            )
+            self.assertIn("    requires_translation: true\n    translation_source_language: es\n", text)
 
     def test_remove_source_blocks_wrapper_preserves_other_yaml(self) -> None:
         with TemporaryDirectory() as tmpdir:
@@ -196,7 +249,6 @@ class SourceCatalogTests(unittest.TestCase):
             text = path.read_text(encoding="utf-8")
             self.assertIn("key: Alpha", text)
             self.assertNotIn("key: Beta", text)
-            self.assertIn("top_funnel_providers:", text)
 
     def test_crlf_source_file_keeps_crlf_when_editing(self) -> None:
         with TemporaryDirectory() as tmpdir:

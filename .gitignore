@@ -25,6 +25,9 @@ graphify-out/
 # VS Code
 .vscode/
 
+# Cursor
+.cursor/
+
 # Local notes
 REVIEW.md
 TO_DO_LIST.txt

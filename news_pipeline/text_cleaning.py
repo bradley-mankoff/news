@@ -87,6 +87,17 @@ def clean_feed_url(text: str | None) -> str:
     return clean_url
 
 
+def strip_model_artifacts(text: str) -> str:
+    text = text or ""
+    text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
+    text = re.sub(r"<\|im_(?:start|end)\|>", "", text)
+    text = re.sub(r"&lt;/?(?:analysis|content)&gt;", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"</?(?:analysis|content)>", "", text, flags=re.IGNORECASE)
+    text = text.replace("\r\n", "\n")
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
+
+
 def _markup_parser_for_text(text: str) -> str:
     return "xml" if XML_DOCUMENT_RE.search(text) else "html.parser"
 
