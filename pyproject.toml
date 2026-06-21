@@ -5,10 +5,6 @@ requires-python = ">=3.12"
 
 dependencies = [
     "langchain-openai",
-    "langchain-community",
-    "langchain",
-    "langgraph>=1.1.3",
-    "datetime",
     "trafilatura",
     "beautifulsoup4",
     "mlx-lm; sys_platform == 'darwin' and platform_machine == 'arm64'",
@@ -24,7 +20,6 @@ dependencies = [
 
 [project.scripts]
 news = "news_pipeline.cli:main"
-todays-news = "news_pipeline.cli:main"
 
 [build-system]
 requires = ["setuptools>=61"]

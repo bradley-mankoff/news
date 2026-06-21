@@ -13,18 +13,18 @@ Preset knobs:
 Model selection:
     NEWS_MODEL=gemma-e2b-tiny uv run news run --preset NAME
     NEWS_MODEL=gemma-26b-moe uv run news run --preset NAME
-    NEWS_MODEL=gemma-12b-optiq uv run news run --preset NAME
+    NEWS_MODEL=https://huggingface.co/EgorKodin/Huihui-gemma-4-12B-it-abliterated-mlx-4bit uv run news run --preset NAME
 
     NEWS_MODEL accepts either a friendly alias above or a full model repo/name.
     Model backend and runtime profile are inferred from the selected model.
 
 Local model server:
-    NEWS_MODEL=gemma-12b-optiq uv run news run --preset NAME
+    NEWS_MODEL=https://huggingface.co/EgorKodin/Huihui-gemma-4-12B-it-abliterated-mlx-4bit uv run news run --preset NAME
         Starts the matching local MLX server automatically, waits until it
         is ready, runs the pipeline, then shuts the managed server down even if
         the run errors. Server logs are written beside the report output.
 
-    NEWS_MODEL=gemma-12b-optiq uv run news model-server-command
+    NEWS_MODEL=https://huggingface.co/EgorKodin/Huihui-gemma-4-12B-it-abliterated-mlx-4bit uv run news model-server-command
         Prints the matching MLX server command for the selected model and
         inferred runtime profile without starting the pipeline.
 
@@ -80,7 +80,7 @@ from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage, SystemMessage, BaseMessage, AIMessage
 from datetime import datetime, timezone, timedelta
 from email.message import EmailMessage
-from email.utils import make_msgid, parsedate_to_datetime
+from email.utils import make_msgid
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import parse_qs, unquote, urlencode, urlparse
 import httpx
@@ -113,11 +113,18 @@ from . import story_clustering as story_clustering_stage
 from . import story_drafting as story_drafting_stage
 from . import story_records as story_records_stage
 from . import story_selection as story_selection_stage
+from .feed_utils import (
+    decode_google_news_article_path as _decode_google_news_article_path,
+    google_news_query_target as _google_news_query_target,
+    is_google_news_url as _is_google_news_url,
+    parse_feed_datetime as _parse_feed_datetime_utc,
+)
 from .text_cleaning import (
     clean_article_text as _clean_article_text,
     clean_content_text as _clean_content_text,
     clean_feed_text as _clean_feed_text,
     clean_feed_url as _clean_feed_url,
+    strip_model_artifacts,
 )
 
 try:
@@ -209,7 +216,6 @@ WIRE_ATTRIBUTION_AFTER_ALIAS = (
 
 RECENT_WINDOW_HOURS = CONFIG.recent_window_hours
 MAX_ARTICLES_PER_SOURCE = CONFIG.max_articles_per_source
-TOP_OF_FUNNEL_PER_PROVIDER = CONFIG.top_of_funnel_per_provider
 
 RUN_STARTED_AT = CONFIG.run_started_at
 RUN_DATE = CONFIG.run_date
@@ -958,7 +964,6 @@ def _excluded_feed_item_reason(item: dict[str, Any]) -> str:
 
 
 SOURCE_FEEDS = load_sources(CONFIG.sources_path, source_scope=CONFIG.source_scope)
-TOP_FUNNEL_PROVIDERS: dict[str, dict[str, Any]] = {}
 
 LOW_COVERAGE_SYNTHESIS_PATTERNS = [
     "no high-confidence updates in supplied coverage",
@@ -1001,7 +1006,6 @@ def _compat_runtime_values(config: RuntimeConfig) -> dict[str, Any]:
         "BRADLEY_RECIPIENT": config.bradley_recipient,
         "RECENT_WINDOW_HOURS": config.recent_window_hours,
         "MAX_ARTICLES_PER_SOURCE": config.max_articles_per_source,
-        "TOP_OF_FUNNEL_PER_PROVIDER": config.top_of_funnel_per_provider,
         "RUN_STARTED_AT": config.run_started_at,
         "RUN_DATE": config.run_date,
         "timestamp": config.timestamp,
@@ -1878,86 +1882,6 @@ def _slugify_report_suffix(value: str) -> str:
     return clean_value or "report"
 
 
-def _is_google_news_url(url: str | None) -> bool:
-    raw_url = str(url or "").strip()
-    if not raw_url:
-        return False
-    try:
-        parsed = urlparse(raw_url)
-    except Exception:
-        return False
-    hostname = (parsed.hostname or "").lower()
-    return hostname == "news.google.com" or hostname.endswith(".news.google.com")
-
-
-def _google_news_query_target(url: str) -> str:
-    try:
-        parsed = urlparse(url)
-        query = parse_qs(parsed.query)
-    except Exception:
-        return ""
-    for key in ("url", "u"):
-        for value in query.get(key, []):
-            candidate = unquote(str(value or "").strip())
-            if candidate.startswith(("http://", "https://")) and not _is_google_news_url(candidate):
-                return candidate
-    return ""
-
-
-def _decode_google_news_article_path(url: str) -> str:
-    """Decode modern Google News RSS article URLs (CBMi... base64 path encoding).
-
-    Two encoding variants are handled:
-    - URL directly encoded in the proto payload (older modern format)
-    - AU_yqL secondary token (current AP/Reuters format) — resolved via Google's
-      batchexecute API using the googlenewsdecoder package.
-
-    HTTP redirects no longer work for these URLs; the path must be decoded.
-    """
-    try:
-        article_id = urlparse(url).path.rstrip("/").split("/")[-1]
-        if not article_id:
-            return ""
-
-        decoded_bytes = base64.urlsafe_b64decode(article_id + "==")
-        decoded_str = decoded_bytes.decode("latin1")
-
-        # Strip known proto header/footer bytes
-        prefix = b"\x08\x13\x22".decode("latin1")
-        if decoded_str.startswith(prefix):
-            decoded_str = decoded_str[len(prefix):]
-        suffix = b"\xd2\x01\x00".decode("latin1")
-        if decoded_str.endswith(suffix):
-            decoded_str = decoded_str[: -len(suffix)]
-
-        # Extract the first length-prefixed string field
-        bytes_array = bytearray(decoded_str, "latin1")
-        if not bytes_array:
-            return ""
-        length = bytes_array[0]
-        candidate = decoded_str[2 : length + 1] if length >= 0x80 else decoded_str[1 : length + 1]
-
-        # Variant 1: URL is directly embedded
-        if candidate.startswith(("http://", "https://")) and not _is_google_news_url(candidate):
-            return candidate
-
-        # Variant 2: AU_yqL secondary token — resolve via batchexecute API
-        if candidate.startswith("AU_yqL"):
-            try:
-                from googlenewsdecoder import gnewsdecoder
-                result = gnewsdecoder(url)
-                if result.get("status"):
-                    resolved = result.get("decoded_url", "")
-                    if resolved and not _is_google_news_url(resolved):
-                        return resolved
-            except Exception:
-                pass
-
-    except Exception:
-        pass
-    return ""
-
-
 def _resolve_google_news_url_details(url: str) -> dict[str, str]:
     """Follow Google News redirect links without treating Google pages as articles."""
     original_url = str(url or "").strip()
@@ -2558,15 +2482,10 @@ def build_article_fallback_entry(article: dict) -> str:
 
 
 def _parse_feed_datetime(raw_value: str | None) -> datetime | None:
-    if not raw_value:
+    parsed = _parse_feed_datetime_utc(raw_value)
+    if parsed is None:
         return None
-    try:
-        parsed = parsedate_to_datetime(raw_value)
-        if parsed.tzinfo is not None:
-            return parsed.astimezone(timezone.utc).replace(tzinfo=None)
-        return parsed
-    except Exception:
-        return None
+    return parsed.astimezone(timezone.utc).replace(tzinfo=None)
 
 
 def _extract_feed_items(feed_xml: str) -> List[dict]:
@@ -3335,16 +3254,6 @@ def extract_prompt_tokens_from_response(message: AIMessage) -> int | None:
                 if isinstance(value, int):
                     return value
     return None
-
-def strip_model_artifacts(text: str) -> str:
-    text = text or ""
-    text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
-    text = re.sub(r"<\|im_(?:start|end)\|>", "", text)
-    text = re.sub(r"&lt;/?(?:analysis|content)&gt;", "", text, flags=re.IGNORECASE)
-    text = re.sub(r"</?(?:analysis|content)>", "", text, flags=re.IGNORECASE)
-    text = text.replace("\r\n", "\n")
-    text = re.sub(r"\n{3,}", "\n\n", text)
-    return text.strip()
 
 
 def _contains_disallowed_final_markup(text: str) -> bool:
@@ -4435,7 +4344,6 @@ def _new_run_diagnostics(source_count: int) -> RunDiagnostics:
             "max_stories": MAX_STORIES,
             "story_selection_overlap_threshold": STORY_SELECTION_OVERLAP_THRESHOLD,
             "story_embedding_dedup_threshold": STORY_EMBEDDING_DEDUP_THRESHOLD,
-            "top_of_funnel_per_provider": TOP_OF_FUNNEL_PER_PROVIDER,
             "story_scale_screening_enabled": STORY_SCALE_SCREENING_ENABLED,
             "model": MODEL_REFERENCE,
             "model_name": MODEL_NAME,

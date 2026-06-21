@@ -117,6 +117,20 @@ def load_source_rows(path: Path) -> list[dict[str, Any]]:
     return rows
 
 
+def _source_record_for_key(records: list[dict[str, Any]], key: str) -> dict[str, Any] | None:
+    clean_key = key.strip()
+    if not clean_key:
+        return None
+    return next(
+        (
+            record
+            for record in records
+            if str(record.get("key") or "").strip() == clean_key
+        ),
+        None,
+    )
+
+
 def _source_block_ranges(lines: list[str]) -> list[tuple[int, int]]:
     ranges: list[tuple[int, int]] = []
     in_sources = False
@@ -249,12 +263,15 @@ def _find_source_range(lines: list[str], key: str) -> tuple[int, int] | None:
     return None
 
 
-def _apply_upsert(lines: list[str], edit: UpsertSource) -> tuple[list[str], int]:
+def _apply_upsert(
+    lines: list[str],
+    records: list[dict[str, Any]],
+    edit: UpsertSource,
+) -> tuple[list[str], list[dict[str, Any]], int]:
     key = edit.key.strip()
     if not key:
         raise ValueError("Source key is required.")
-    records = load_source_records_from_lines(lines)
-    existing = next((dict(record) for record in records if str(record.get("key") or "").strip() == key), None)
+    existing = _source_record_for_key(records, key)
     if edit.append_only and existing:
         raise ValueError(f"Source {key!r} already exists.")
     record = existing or {"key": key, "name": key, "language": "en", "tier": "peripheral", "url": ""}
@@ -284,30 +301,45 @@ def _apply_upsert(lines: list[str], edit: UpsertSource) -> tuple[list[str], int]
         if not any(line.startswith("sources:") for line in lines):
             lines.append(f"sources:{newline}")
         lines.extend(block)
-    return lines, 1
+    if existing is None:
+        records.append(record)
+    return lines, records, 1
 
 
-def _apply_delete(lines: list[str], edit: DeleteSources) -> tuple[list[str], int]:
+def _apply_delete(
+    lines: list[str],
+    records: list[dict[str, Any]],
+    edit: DeleteSources,
+) -> tuple[list[str], list[dict[str, Any]], int]:
     keys = {str(key).strip() for key in edit.keys if str(key).strip()}
     if not keys:
-        return lines, 0
+        return lines, records, 0
     ranges_to_remove: list[tuple[int, int]] = []
     for start, end in _source_block_ranges(lines):
         if _source_block_key(lines, start, end) in keys:
             ranges_to_remove.append((start, end))
     for start, end in reversed(ranges_to_remove):
         del lines[start:end]
-    return lines, len(ranges_to_remove)
+    records[:] = [
+        record
+        for record in records
+        if str(record.get("key") or "").strip() not in keys
+    ]
+    return lines, records, len(ranges_to_remove)
 
 
-def _apply_languages(lines: list[str], edit: SetSourceLanguages) -> tuple[list[str], int]:
+def _apply_languages(
+    lines: list[str],
+    records: list[dict[str, Any]],
+    edit: SetSourceLanguages,
+) -> tuple[list[str], list[dict[str, Any]], int]:
     detected = {
         str(key).strip(): str(language).strip()
         for key, language in edit.languages.items()
         if str(key).strip() and str(language).strip()
     }
     if not detected:
-        return lines, 0
+        return lines, records, 0
     newline = _newline_for(lines)
     edits: list[tuple[str, int, str]] = []
     for start, end in _source_block_ranges(lines):
@@ -316,24 +348,33 @@ def _apply_languages(lines: list[str], edit: SetSourceLanguages) -> tuple[list[s
             continue
         language_line = f"    language: {detected[key]}{newline}"
         existing_line = _direct_source_field_line(lines, start, end, "language")
+        record = _source_record_for_key(records, key)
         if existing_line is not None:
             if edit.overwrite:
                 edits.append(("replace", existing_line, language_line))
+                if record is not None:
+                    record["language"] = detected[key]
             continue
         insert_at = _preferred_field_insert_line(lines, start, end, ("url", "region", "name"))
         edits.append(("insert", insert_at, language_line))
+        if record is not None:
+            record["language"] = detected[key]
     _apply_line_edits(lines, edits)
-    return lines, len(edits)
+    return lines, records, len(edits)
 
 
-def _apply_translation(lines: list[str], edit: MarkTranslationRequired) -> tuple[list[str], int]:
+def _apply_translation(
+    lines: list[str],
+    records: list[dict[str, Any]],
+    edit: MarkTranslationRequired,
+) -> tuple[list[str], list[dict[str, Any]], int]:
     updates = {
         str(key).strip(): str(language or "").strip().lower()
         for key, language in edit.source_languages.items()
         if str(key).strip()
     }
     if not updates:
-        return lines, 0
+        return lines, records, 0
     newline = _newline_for(lines)
     edits: list[tuple[str, int, str]] = []
     for start, end in _source_block_ranges(lines):
@@ -342,12 +383,17 @@ def _apply_translation(lines: list[str], edit: MarkTranslationRequired) -> tuple
             continue
         language = updates[key]
         requires_line = _direct_source_field_line(lines, start, end, "requires_translation")
+        record = _source_record_for_key(records, key)
         if requires_line is not None:
             if lines[requires_line].strip().lower() != "requires_translation: true":
                 edits.append(("replace", requires_line, f"    requires_translation: true{newline}"))
+            if record is not None:
+                record["requires_translation"] = True
         else:
             insert_at = _preferred_field_insert_line(lines, start, end, ("language", "url", "region", "name"))
             edits.append(("insert", insert_at, f"    requires_translation: true{newline}"))
+            if record is not None:
+                record["requires_translation"] = True
 
         if language:
             language_line = _direct_source_field_line(lines, start, end, "translation_source_language")
@@ -359,8 +405,10 @@ def _apply_translation(lines: list[str], edit: MarkTranslationRequired) -> tuple
                     ("requires_translation", "language", "url", "region", "name"),
                 )
                 edits.append(("insert", insert_at, f"    translation_source_language: {language}{newline}"))
+                if record is not None:
+                    record["translation_source_language"] = language
     _apply_line_edits(lines, edits)
-    return lines, len(edits)
+    return lines, records, len(edits)
 
 
 def _apply_line_edits(lines: list[str], edits: list[tuple[str, int, str]]) -> None:
@@ -389,16 +437,17 @@ def apply_source_catalog_patch(path: Path, edits: Iterable[SourceCatalogEdit]) -
             lines = handle.read().splitlines(keepends=True)
     else:
         lines = []
+    records = load_source_records_from_lines(lines)
     edit_count = 0
     for edit in edit_list:
         if isinstance(edit, UpsertSource):
-            lines, count = _apply_upsert(lines, edit)
+            lines, records, count = _apply_upsert(lines, records, edit)
         elif isinstance(edit, DeleteSources):
-            lines, count = _apply_delete(lines, edit)
+            lines, records, count = _apply_delete(lines, records, edit)
         elif isinstance(edit, SetSourceLanguages):
-            lines, count = _apply_languages(lines, edit)
+            lines, records, count = _apply_languages(lines, records, edit)
         elif isinstance(edit, MarkTranslationRequired):
-            lines, count = _apply_translation(lines, edit)
+            lines, records, count = _apply_translation(lines, records, edit)
         else:
             raise TypeError(f"Unsupported source catalog edit: {edit!r}")
         edit_count += count
@@ -411,5 +460,5 @@ def apply_source_catalog_patch(path: Path, edits: Iterable[SourceCatalogEdit]) -
     return SourceCatalogPatchResult(
         path=str(path),
         edit_count=edit_count,
-        records=load_source_records_from_lines(lines),
+        records=records,
     )

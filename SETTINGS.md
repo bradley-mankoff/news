@@ -54,7 +54,7 @@ Built-in model aliases:
 |---|---|
 | `gemma-e2b-tiny` | `deadbydawn101/gemma-4-E2B-Heretic-Uncensored-mlx-4bit` |
 | `gemma-26b-moe` | `mlx-community/gemma-4-26B-A4B-it-heretic-4bit` |
-| `gemma-12b-optiq` | `mlx-community/gemma-4-12B-it-OptiQ-4bit` |
+| `https://huggingface.co/EgorKodin/Huihui-gemma-4-12B-it-abliterated-mlx-4bit` | `EgorKodin/Huihui-gemma-4-12B-it-abliterated-mlx-4bit` |
 
 | Variable | Default | Description |
 |---|---|---|
@@ -67,7 +67,7 @@ Built-in model aliases:
 Print the fully resolved local server command without running the pipeline:
 
 ```bash
-NEWS_MODEL=gemma-12b-optiq uv run news model-server-command
+NEWS_MODEL=https://huggingface.co/EgorKodin/Huihui-gemma-4-12B-it-abliterated-mlx-4bit uv run news model-server-command
 ```
 
 ## Infrastructure

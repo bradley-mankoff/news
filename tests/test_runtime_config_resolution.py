@@ -5,6 +5,7 @@ import tempfile
 import unittest
 from datetime import datetime
 from pathlib import Path
+from unittest.mock import patch
 
 from news_pipeline.config import (
     ACTIVE_PRESET_ENV_VAR,
@@ -136,6 +137,17 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
         self.assertEqual(config.story_backfill_batch_multiplier, 3)
         self.assertFalse(config.total_article_summary_cap_gemma_4_derived)
 
+    def test_translation_config_is_dormant_by_default(self) -> None:
+        config = load_runtime_config(
+            environ={},
+            overrides={"NEWS_MODEL": CODEX_TEST_MODEL_ALIAS},
+            materialize_outputs=False,
+        )
+
+        self.assertFalse(config.translation_enabled)
+        self.assertEqual(config.translation_model_reference, "google/translategemma-4b-it")
+        self.assertEqual(config.translation_model_server_command, "")
+
     def test_ui_command_env_delta_matches_preview_overrides(self) -> None:
         body = {
             "action": "run",
@@ -152,6 +164,18 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
         self.assertEqual(command, ["uv", "run", "news", "run", "--preset", "dev"])
         self.assertEqual(env, {"NEWS_PRESET": "dev", "NEWS_SOURCE_SCOPE": "peripheral"})
         self.assertEqual(preview["env"], env)
+        self.assertEqual(preview["runtime"]["source_scope"], "peripheral")
+
+    def test_ui_command_carries_preset_source_scope_over_existing_env(self) -> None:
+        body = {"action": "run", "preset": "local-prod", "env": {}}
+
+        with patch.dict(os.environ, {"NEWS_SOURCE_SCOPE": "core"}):
+            command, env = build_command(body)
+            preview = preview_payload(body)
+
+        self.assertEqual(command, ["uv", "run", "news", "run", "--preset", "local-prod"])
+        self.assertEqual(env["NEWS_PRESET"], "local-prod")
+        self.assertEqual(env["NEWS_SOURCE_SCOPE"], "peripheral")
         self.assertEqual(preview["runtime"]["source_scope"], "peripheral")
 
     def test_absolute_paths_resolve_from_explicit_env(self) -> None:

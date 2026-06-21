@@ -7,6 +7,8 @@ import re
 from dataclasses import dataclass, replace
 from typing import Any
 
+from .text_cleaning import strip_model_artifacts
+
 
 LOW_CONFIDENCE_SUMMARY_PATTERNS = (
     "insufficient to create a substantive summary",
@@ -59,17 +61,6 @@ def format_article_metadata(article: dict[str, Any]) -> str:
     if article.get("story_title"):
         metadata_lines.append(f"- Story: {article.get('story_title')}")
     return "\n".join(metadata_lines)
-
-
-def strip_model_artifacts(text: str) -> str:
-    text = text or ""
-    text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
-    text = re.sub(r"<\|im_(?:start|end)\|>", "", text)
-    text = re.sub(r"&lt;/?(?:analysis|content)&gt;", "", text, flags=re.IGNORECASE)
-    text = re.sub(r"</?(?:analysis|content)>", "", text, flags=re.IGNORECASE)
-    text = text.replace("\r\n", "\n")
-    text = re.sub(r"\n{3,}", "\n\n", text)
-    return text.strip()
 
 
 def has_structured_entry(text: str, heading_name: str) -> bool:

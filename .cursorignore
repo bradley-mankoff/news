@@ -12,7 +12,6 @@
 !.codex/config.toml
 !pyproject.toml
 !uv.lock
-!todays_news.py
 !news_pipeline/
 !news_pipeline/**
 !config/

@@ -251,7 +251,7 @@ sources:
   - key: NHK World Japan
     name: NHK World Japan
     language: en
-    tier: core
+    tier: peripheral
     requires_translation: true
     translation_source_language: ja
     url: https://www3.nhk.or.jp/rss/news/cat0.xml
