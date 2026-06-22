@@ -58,9 +58,9 @@ uv run news ui --host 0.0.0.0 --port 8766
 ```
 
 The UI runs until you stop it with `Ctrl-C` in the terminal. It can preview the
-exact command and resolved runtime config, launch and stop pipeline runs, set
-`NEWS_` overrides for UI-launched commands, save/load a browser-local env preset,
-run source utilities, and edit `config/sources.yaml` or `config/recipients.yaml`.
+exact command and resolved Runtime Config Snapshot, launch and stop pipeline
+runs, set `NEWS_` overrides for UI-launched commands, save/load Run Presets, run
+source utilities, and edit `config/sources.yaml` or `config/recipients.yaml`.
 Source and recipient edits write those YAML files directly.
 
 ## CLI
@@ -82,24 +82,33 @@ uv run news source-languages --sources-yaml config/sources.yaml --json
 uv run news serve-unsubscribe
 ```
 
-## Runtime Variables
+## Run Settings
 
-Most runtime behavior is controlled by `NEWS_` environment variables. The core
-ones are preset selection, source/recipient scope, URL reuse blocking, model,
-and image generation.
+Most Run Settings are controlled by `NEWS_` environment variables. The core
+ones are Run Preset selection, source/recipient scope, URL reuse blocking, model
+selection, and image generation.
+
+When running from a shell, put `NEWS_` assignments on the same command line or
+export them first:
+
+```bash
+NEWS_MODEL=gemma-e2b-tiny NEWS_IMAGE_ENABLED=0 uv run news run
+export NEWS_MODEL=gemma-e2b-tiny
+uv run news run
+```
 
 ### Run Presets
 
-Saved presets live in `config/run_presets.yaml` as env-style knob maps. Preset
-IDs are opaque data; the code applies the selected preset and then applies any
-explicit shell/UI overrides on top.
+Run Presets live in `config/run_presets.yaml` as env-style Run Settings maps.
+Preset IDs are opaque data; the code applies the selected Run Preset and then
+applies any explicit shell/UI overrides on top.
 
 ```bash
 uv run news run --preset NAME
 NEWS_MODEL=gemma-26b-moe NEWS_IMAGE_ENABLED=1 uv run news run
 ```
 
-Key run-shaping knobs:
+Key Run Settings:
 
 - `NEWS_SOURCE_SCOPE=core|peripheral`: `peripheral` includes both core and
   peripheral sources.
@@ -109,17 +118,26 @@ Key run-shaping knobs:
   previously recorded URLs block future reuse.
 - `NEWS_IMAGE_ENABLED=0|1`: report image generation, default off unless a
   preset enables it.
-- `NEWS_MODEL`: friendly alias or full model repo/name. Backend and runtime
-  profile are inferred from the selected model.
+- `NEWS_MODEL`: default model selection only. Task models are assigned
+  separately with `NEWS_MODEL_ARTICLE_SUMMARY` and
+  `NEWS_MODEL_STORY_DRAFTING`.
 
-### Model
+### Model Selection
 
-`NEWS_MODEL` selects a friendly alias or a full model repo/name:
+`NEWS_MODEL` selects the default model only:
 
 ```bash
 NEWS_MODEL=gemma-e2b-tiny uv run news run
 NEWS_MODEL=gemma-26b-moe uv run news run --preset NAME
 NEWS_MODEL=https://huggingface.co/EgorKodin/Huihui-gemma-4-12B-it-abliterated-mlx-4bit uv run news run --preset NAME
+```
+
+Task-specific model assignments inherit from `NEWS_MODEL` unless you set them
+explicitly:
+
+```bash
+NEWS_MODEL_ARTICLE_SUMMARY=gemma-e2b-tiny uv run news run
+NEWS_MODEL_STORY_DRAFTING=gemma-26b-moe uv run news run --preset NAME
 ```
 
 Built-in aliases:
@@ -136,6 +154,56 @@ server warm manually, print the matching command and run it in another terminal:
 NEWS_MODEL=https://huggingface.co/EgorKodin/Huihui-gemma-4-12B-it-abliterated-mlx-4bit uv run news model-server-command
 ```
 
+If Article Summarization or Story Drafting uses a different model, give that
+task a matching base URL or run it on an externally managed server. The current
+runtime supports one managed local server per shared model/base URL; it does not
+automatically coordinate multiple local servers for one run.
+
+### Model Tuning
+
+Model Tuning Presets live in `config/model_tuning_presets.yaml`. They are saved
+overlays for one model or one model-task pair and are separate from Run
+Presets.
+
+Use these env vars to select a preset:
+
+- `NEWS_MODEL_TUNING_PRESET`
+- `NEWS_MODEL_ARTICLE_SUMMARY_TUNING_PRESET`
+- `NEWS_MODEL_STORY_DRAFTING_TUNING_PRESET`
+
+Precedence is:
+
+1. Backend/model defaults when a tuning field is unset.
+2. Verified model-specific code defaults, if any exist.
+3. The selected Model Tuning Preset.
+4. Explicit `NEWS_` tuning overrides.
+
+Direct tuning overrides still win, such as `NEWS_MODEL_MAX_INPUT_TOKENS`,
+`NEWS_ARTICLE_SUMMARY_MAX_TOKENS`, `NEWS_STORY_DRAFTING_MAX_TOKENS`, and
+sampling env vars like `NEWS_MODEL_ARTICLE_SUMMARY_TEMPERATURE`.
+
+### Pipeline Budget
+
+Pipeline Budget settings are separate from model selection and tuning. They
+cover article text caps, article summary caps, recency windows, article/story
+limits, and story thresholds.
+
+### Model Server Settings
+
+Model Server Settings control the local MLX/OpenAI-compatible server
+configuration:
+
+- `NEWS_MODEL_BASE_URL`
+- `NEWS_MODEL_ARTICLE_SUMMARY_BASE_URL`
+- `NEWS_MODEL_STORY_DRAFTING_BASE_URL`
+- `NEWS_MODEL_SERVER_PREFILL_STEP_SIZE`
+- `NEWS_MODEL_SERVER_PROMPT_CACHE_SIZE`
+- `NEWS_MODEL_SERVER_PROMPT_CACHE_BYTES`
+- `NEWS_MODEL_SERVER_MAX_TOKENS`
+
+The base URL also determines the printed server port. If you point a task model
+at a different base URL, the task needs its own matching server endpoint.
+
 ### Image
 
 `NEWS_IMAGE_ENABLED` controls report image generation:
@@ -148,7 +216,7 @@ NEWS_IMAGE_ENABLED=1 uv run news run --preset NAME
 
 Image generation defaults off unless enabled by a preset or explicit override.
 The image model, dimensions, crop, step count, and fail-open behavior are
-hard-coded runtime defaults rather than normal run knobs.
+hard-coded defaults rather than normal Run Settings.
 
 ## Configuration
 
@@ -156,6 +224,7 @@ hard-coded runtime defaults rather than normal run knobs.
   sources using `NEWS_SOURCE_SCOPE`.
 - `config/recipients.yaml`: active and paused recipients. `NEWS_RECIPIENT_SCOPE`
   chooses Bradley-only or all active recipients.
+- `config/model_tuning_presets.yaml`: saved Model Tuning Presets keyed by id.
 
 Translation is paused by default. The old topic-scoped runtime variables and
 source topic fields have been removed from this branch and are rejected if set.

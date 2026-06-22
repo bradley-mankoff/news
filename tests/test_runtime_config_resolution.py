@@ -5,19 +5,26 @@ import tempfile
 import unittest
 from datetime import datetime
 from pathlib import Path
+import textwrap
 from unittest.mock import patch
 
+from news_pipeline import config as config_module
 from news_pipeline.config import (
     ACTIVE_PRESET_ENV_VAR,
     CODEX_TEST_MODEL_ALIAS,
     GEMMA_12B_OPTIQ_MODEL_ALIAS,
     GEMMA_12B_OPTIQ_MODEL_NAME,
+    MODEL_TASK_ARTICLE_SUMMARY,
+    MODEL_TASK_STORY_DRAFTING,
+    ModelSamplingSettings,
+    ModelServerSettings,
     PRESET_ENV_VAR,
     RuntimeConfigRequest,
+    load_model_tuning_presets,
     load_runtime_config,
     resolve_runtime_config,
 )
-from news_pipeline.ui import build_command, preview_payload
+from news_pipeline.ui import build_command, preview_payload, schema_payload
 
 
 class RuntimeConfigResolutionTests(unittest.TestCase):
@@ -137,6 +144,39 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
         self.assertEqual(config.story_backfill_batch_multiplier, 3)
         self.assertFalse(config.total_article_summary_cap_gemma_4_derived)
 
+    def test_task_model_assignments_can_diverge_from_default_model(self) -> None:
+        config = load_runtime_config(
+            environ={},
+            overrides={
+                "NEWS_MODEL": CODEX_TEST_MODEL_ALIAS,
+                "NEWS_MODEL_ARTICLE_SUMMARY": GEMMA_12B_OPTIQ_MODEL_ALIAS,
+                "NEWS_MODEL_STORY_DRAFTING": "gemma-26b-moe",
+            },
+            materialize_outputs=False,
+        )
+
+        self.assertEqual(config.model_assignments["default"].reference, CODEX_TEST_MODEL_ALIAS)
+        self.assertEqual(
+            config.model_assignments[MODEL_TASK_ARTICLE_SUMMARY].reference,
+            GEMMA_12B_OPTIQ_MODEL_ALIAS,
+        )
+        self.assertEqual(
+            config.model_assignments[MODEL_TASK_ARTICLE_SUMMARY].name,
+            GEMMA_12B_OPTIQ_MODEL_NAME,
+        )
+        self.assertEqual(
+            config.model_assignments[MODEL_TASK_STORY_DRAFTING].reference,
+            "gemma-26b-moe",
+        )
+        self.assertNotEqual(
+            config.model_assignments["default"].reference,
+            config.model_assignments[MODEL_TASK_ARTICLE_SUMMARY].reference,
+        )
+        self.assertNotEqual(
+            config.model_assignments["default"].reference,
+            config.model_assignments[MODEL_TASK_STORY_DRAFTING].reference,
+        )
+
     def test_translation_config_is_dormant_by_default(self) -> None:
         config = load_runtime_config(
             environ={},
@@ -178,6 +218,32 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
         self.assertEqual(env["NEWS_SOURCE_SCOPE"], "peripheral")
         self.assertEqual(preview["runtime"]["source_scope"], "peripheral")
 
+    def test_ui_schema_groups_and_task_models_are_explicit(self) -> None:
+        with patch.dict(os.environ, {"NEWS_MODEL": CODEX_TEST_MODEL_ALIAS}, clear=True):
+            schema = schema_payload()
+
+        groups = {knob["group"] for knob in schema["knobs"]}
+        self.assertTrue(
+            {
+                "Run Settings",
+                "Model Selection",
+                "Model Tuning",
+                "Pipeline Budget",
+                "Model Server Settings",
+            }.issubset(groups)
+        )
+        self.assertNotIn("Image", groups)
+        self.assertNotIn("Story", groups)
+        self.assertNotIn("Infrastructure", groups)
+
+        model = schema["runtime"]["model"]
+        self.assertNotIn("profile", model)
+        self.assertEqual(model["reference"], CODEX_TEST_MODEL_ALIAS)
+        self.assertEqual(model["article_summary"]["reference"], CODEX_TEST_MODEL_ALIAS)
+        self.assertEqual(model["story_drafting"]["reference"], CODEX_TEST_MODEL_ALIAS)
+        self.assertEqual(model["article_summary"]["base_url"], model["base_url"])
+        self.assertEqual(model["story_drafting"]["base_url"], model["base_url"])
+
     def test_absolute_paths_resolve_from_explicit_env(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             output_dir = Path(tmpdir) / "outputs"
@@ -188,6 +254,152 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
             )
 
         self.assertEqual(config.output_dir, output_dir)
+
+    def test_load_model_tuning_presets_missing_and_explicit_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmpdir_path = Path(tmpdir)
+            missing_path = tmpdir_path / "missing-model-tuning.yaml"
+            self.assertEqual(load_model_tuning_presets(missing_path), {})
+
+            preset_path = tmpdir_path / "model_tuning_presets.yaml"
+            preset_path.write_text(
+                textwrap.dedent(
+                    """\
+                    presets:
+                      concise-story-drafting:
+                        model: mlx-community/example-model
+                        task: story_drafting
+                        tuning:
+                          temperature: 0.2
+                          top_p: 0.9
+                          max_tokens: 1400
+                    """
+                ),
+                encoding="utf-8",
+            )
+
+            presets = load_model_tuning_presets(preset_path)
+            self.assertEqual(
+                presets["concise-story-drafting"],
+                {
+                    "id": "concise-story-drafting",
+                    "model": "mlx-community/example-model",
+                    "task": "story_drafting",
+                    "tuning": {
+                        "temperature": 0.2,
+                        "top_p": 0.9,
+                        "max_tokens": 1400,
+                    },
+                },
+            )
+
+    def test_model_tuning_preset_applies_with_env_overrides(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmpdir_path = Path(tmpdir)
+            preset_path = tmpdir_path / "model_tuning_presets.yaml"
+            preset_path.write_text(
+                textwrap.dedent(
+                    """\
+                    presets:
+                      concise-story-drafting:
+                        model: mlx-community/example-model
+                        task: story_drafting
+                        tuning:
+                          temperature: 0.2
+                          top_p: 0.9
+                          max_tokens: 1400
+                      wrong-task:
+                        model: mlx-community/example-model
+                        task: article_summary
+                        tuning:
+                          temperature: 0.1
+                    """
+                ),
+                encoding="utf-8",
+            )
+
+            with patch.dict(
+                os.environ,
+                {
+                    "NEWS_MODEL": CODEX_TEST_MODEL_ALIAS,
+                    "NEWS_MODEL_STORY_DRAFTING": "mlx-community/example-model",
+                    "NEWS_MODEL_STORY_DRAFTING_TUNING_PRESET": "concise-story-drafting",
+                    "NEWS_MODEL_STORY_DRAFTING_TEMPERATURE": "0.4",
+                    "NEWS_STORY_DRAFTING_MAX_TOKENS": "1500",
+                },
+                clear=True,
+            ), patch.object(config_module, "MODEL_TUNING_PRESETS_PATH", preset_path):
+                config = load_runtime_config(materialize_outputs=False)
+                story_tuning = config.model_assignments[MODEL_TASK_STORY_DRAFTING].tuning
+                self.assertEqual(story_tuning.story_drafting_max_tokens, 1500)
+                self.assertEqual(story_tuning.task_sampling[MODEL_TASK_STORY_DRAFTING].temperature, 0.4)
+                self.assertEqual(story_tuning.task_sampling[MODEL_TASK_STORY_DRAFTING].top_p, 0.9)
+                self.assertEqual(
+                    config.model_assignments[MODEL_TASK_STORY_DRAFTING].reference,
+                    "mlx-community/example-model",
+                )
+
+            with patch.dict(
+                os.environ,
+                {
+                    "NEWS_MODEL": CODEX_TEST_MODEL_ALIAS,
+                    "NEWS_MODEL_STORY_DRAFTING": "mlx-community/example-model",
+                    "NEWS_MODEL_STORY_DRAFTING_TUNING_PRESET": "wrong-task",
+                },
+                clear=True,
+            ), patch.object(config_module, "MODEL_TUNING_PRESETS_PATH", preset_path):
+                with self.assertRaisesRegex(
+                    ValueError,
+                    r"wrong-task.*article_summary.*story_drafting",
+                ):
+                    load_runtime_config(materialize_outputs=False)
+
+    def test_sampling_fields_remain_unset_without_override(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "NEWS_MODEL": GEMMA_12B_OPTIQ_MODEL_ALIAS,
+            },
+            clear=True,
+        ):
+            config = load_runtime_config(materialize_outputs=False)
+
+        self.assertEqual(
+            config.model_tuning.task_sampling["default"],
+            ModelSamplingSettings(),
+        )
+
+    def test_model_selection_does_not_change_server_settings(self) -> None:
+        shared_env = {
+            "NEWS_MODEL_BASE_URL": "http://127.0.0.1:8111/v1",
+            "NEWS_MODEL_SERVER_MAX_TOKENS": "777",
+        }
+        config_one = load_runtime_config(
+            materialize_outputs=False,
+            environ={**shared_env, "NEWS_MODEL": CODEX_TEST_MODEL_ALIAS},
+        )
+        config_two = load_runtime_config(
+            materialize_outputs=False,
+            environ={**shared_env, "NEWS_MODEL": GEMMA_12B_OPTIQ_MODEL_ALIAS},
+        )
+
+        self.assertEqual(config_one.model_server_settings, config_two.model_server_settings)
+        self.assertEqual(
+            config_one.model_server_settings,
+            ModelServerSettings(
+                base_url="http://127.0.0.1:8111/v1",
+                prefill_step_size=512,
+                prompt_cache_size=2,
+                prompt_cache_bytes="512MB",
+                max_tokens=777,
+            ),
+        )
+        self.assertIn("--port 8111", config_one.model_server_command)
+        self.assertIn("--max-tokens 777", config_one.model_server_command)
+        self.assertNotIn("--prompt-cache-size", config_one.model_server_command)
+        self.assertNotIn("--prompt-cache-bytes", config_one.model_server_command)
+        self.assertIn("--prompt-cache-size", config_two.model_server_command)
+        self.assertIn("--prompt-cache-bytes", config_two.model_server_command)
 
 
 if __name__ == "__main__":

@@ -125,7 +125,6 @@ def _ensure_schema(con: Any) -> None:
             duration_label VARCHAR,
             model VARCHAR,
             model_name VARCHAR,
-            model_profile VARCHAR,
             model_backend VARCHAR,
             model_default_sampling_json VARCHAR,
             model_task_sampling_json VARCHAR,
@@ -169,6 +168,13 @@ def _ensure_schema(con: Any) -> None:
         )
         """
     )
+    _ensure_columns(
+        con,
+        "runs",
+        {
+            "preset_id": "VARCHAR",
+        },
+    )
     con.execute(
         """
         CREATE TABLE IF NOT EXISTS run_sources (
@@ -192,6 +198,7 @@ def _ensure_schema(con: Any) -> None:
         )
         """
     )
+
     con.execute(
         """
         CREATE TABLE IF NOT EXISTS article_summaries (
@@ -277,6 +284,13 @@ def _ensure_schema(con: Any) -> None:
         )
         """
     )
+
+
+def _ensure_columns(con: Any, table_name: str, columns: dict[str, str]) -> None:
+    existing = {row[1] for row in con.execute(f"PRAGMA table_info('{table_name}')").fetchall()}
+    for column_name, column_type in columns.items():
+        if column_name not in existing:
+            con.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_type}")
 
 
 def normalize_url_for_history(url: str) -> str:
@@ -629,7 +643,6 @@ def _insert_run(con: Any, run_id: str, diagnostics: RunDiagnostics, *, imported_
         "duration_label": stats.get("duration"),
         "model": settings.get("model"),
         "model_name": settings.get("model_name"),
-        "model_profile": settings.get("model_profile"),
         "model_backend": settings.get("model_backend"),
         "model_default_sampling_json": _json(settings.get("model_default_sampling")),
         "model_task_sampling_json": _json(settings.get("model_task_sampling")),

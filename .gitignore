@@ -17,7 +17,7 @@ __pycache__/
 # Output / generated files
 output/
 graphify-out/
-.rtk/history.db
+.rtk/
 
 # MacOS
 .DS_Store
@@ -29,6 +29,7 @@ graphify-out/
 .cursor/
 
 # Local notes
+.agent-daily-logs/
 REVIEW.md
 TO_DO_LIST.txt
 git_cheat_sheet.txt

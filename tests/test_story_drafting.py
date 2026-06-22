@@ -17,7 +17,7 @@ from news_pipeline.story_drafting import (
 def _story_drafting_runtime() -> StoryDraftingRuntime:
     return StoryDraftingRuntime(
         story_synthesis_concurrency=1,
-        final_synthesis_max_tokens=1000,
+        story_drafting_max_tokens=1000,
         model_reference="test",
         model_name="test",
         model_backend="test",
@@ -30,7 +30,7 @@ def _story_drafting_runtime() -> StoryDraftingRuntime:
         strip_model_artifacts=lambda text: text,
         is_low_coverage_synthesis_section=lambda text: not str(text or "").strip(),
         fallback_synthesis_paragraph_from_summaries=lambda summaries: " ".join(summaries),
-        final_synthesis_word_count=lambda text: len(str(text or "").split()),
+        story_drafting_word_count=lambda text: len(str(text or "").split()),
     )
 
 

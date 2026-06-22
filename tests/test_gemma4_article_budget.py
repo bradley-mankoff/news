@@ -8,9 +8,9 @@ from news_pipeline.config import (
     CODEX_TEST_MODEL_ALIAS,
     CODEX_TEST_MODEL_NAME,
     DEFAULT_MODEL_ALIAS,
-    GEMMA_4_ARTICLE_SUMMARY_CAP,
+    DEFAULT_ARTICLE_TEXT_TOKEN_LIMIT,
+    DEFAULT_TOTAL_ARTICLE_SUMMARY_CAP,
     GEMMA_12B_OPTIQ_MODEL_ALIAS,
-    configured_model_profile,
     is_gemma_4_model_reference,
     load_runtime_config,
 )
@@ -54,14 +54,33 @@ class Gemma4ArticleBudgetTests(unittest.TestCase):
         self.assertTrue(is_gemma_4_model_reference(CODEX_TEST_MODEL_NAME))
         self.assertTrue(is_gemma_4_model_reference(GEMMA_12B_OPTIQ_MODEL_ALIAS))
 
-    def test_gemma_4_cap_is_40_by_default(self) -> None:
+    def test_pipeline_budget_defaults_are_model_independent(self) -> None:
         with patch.dict(os.environ, {}, clear=True):
-            config = load_runtime_config(materialize_outputs=False)
+            default_config = load_runtime_config(
+                materialize_outputs=False,
+                environ={"NEWS_MODEL": DEFAULT_MODEL_ALIAS},
+            )
+        with patch.dict(os.environ, {}, clear=True):
+            optiq_config = load_runtime_config(
+                materialize_outputs=False,
+                environ={"NEWS_MODEL": GEMMA_12B_OPTIQ_MODEL_ALIAS},
+            )
 
-        self.assertTrue(is_gemma_4_model_reference(config.model_reference))
         self.assertEqual(
-            config.model_profile.total_article_summary_cap,
-            GEMMA_4_ARTICLE_SUMMARY_CAP,
+            default_config.pipeline_budget.total_article_summary_cap,
+            optiq_config.pipeline_budget.total_article_summary_cap,
+        )
+        self.assertEqual(
+            default_config.pipeline_budget.article_text_token_limit,
+            optiq_config.pipeline_budget.article_text_token_limit,
+        )
+        self.assertEqual(
+            default_config.pipeline_budget.total_article_summary_cap,
+            DEFAULT_TOTAL_ARTICLE_SUMMARY_CAP,
+        )
+        self.assertEqual(
+            default_config.pipeline_budget.article_text_token_limit,
+            DEFAULT_ARTICLE_TEXT_TOKEN_LIMIT,
         )
 
     def test_large_gemma_4_uses_article_parallelism_only(self) -> None:
@@ -106,7 +125,7 @@ class Gemma4ArticleBudgetTests(unittest.TestCase):
         self.assertEqual(config.story_synthesis_concurrency, 1)
         self.assertEqual(config.model_concurrency, 4)
 
-    def test_stage_concurrency_env_vars_do_not_override_model_profile(self) -> None:
+    def test_stage_concurrency_env_vars_do_not_override_model_selection(self) -> None:
         with patch.dict(
             os.environ,
             {
@@ -122,14 +141,22 @@ class Gemma4ArticleBudgetTests(unittest.TestCase):
         self.assertEqual(config.story_synthesis_concurrency, 1)
         self.assertEqual(config.model_concurrency, 4)
 
-    def test_gemma_12b_uses_gemma_cap_and_explicit_override_wins(self) -> None:
-        with patch.dict(os.environ, {}, clear=True):
-            gemma_12b_profile = configured_model_profile(GEMMA_12B_OPTIQ_MODEL_ALIAS)
-        self.assertEqual(gemma_12b_profile.total_article_summary_cap, GEMMA_4_ARTICLE_SUMMARY_CAP)
+    def test_explicit_pipeline_budget_override_wins(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "NEWS_MODEL": GEMMA_12B_OPTIQ_MODEL_ALIAS,
+                "NEWS_TOTAL_ARTICLE_SUMMARY_CAP": "55",
+            },
+            clear=True,
+        ):
+            config = load_runtime_config(materialize_outputs=False)
 
-        with patch.dict(os.environ, {"NEWS_TOTAL_ARTICLE_SUMMARY_CAP": "55"}, clear=True):
-            gemma_profile = configured_model_profile(DEFAULT_MODEL_ALIAS)
-        self.assertEqual(gemma_profile.total_article_summary_cap, 55)
+        self.assertEqual(config.pipeline_budget.total_article_summary_cap, 55)
+        self.assertEqual(
+            config.pipeline_budget.article_text_token_limit,
+            DEFAULT_ARTICLE_TEXT_TOKEN_LIMIT,
+        )
 
     def test_budget_keeps_all_articles_below_cap(self) -> None:
         article_ids = _article_ids(4)

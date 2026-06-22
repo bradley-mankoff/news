@@ -21,9 +21,22 @@ source removal.
 ## Runtime Config Resolution
 
 Runtime Config Resolution turns base environment values, saved run presets, and
-explicit overrides into one Runtime Config snapshot. It owns runtime knob
-metadata, preset overlay rules, command environment deltas, and removed-setting
-validation before a Run Session starts.
+explicit overrides into one Runtime Config snapshot. It is the seam where Run
+Settings become immutable before a Run Session starts. It owns setting metadata,
+Run Preset overlay rules, command environment deltas, and removed-setting
+validation.
+
+## Model Configuration Vocabulary
+
+Run Settings are the whole set of user-controllable values for one Run Session.
+A Run Preset is a saved Run Settings overlay in `config/run_presets.yaml`.
+Task Model Assignment means choosing which model handles a model-using task,
+such as Article Summarization or Story Drafting. Model Tuning means explicit
+inference settings such as sampling and token limits for a selected model. Model
+Defaults are the model or backend defaults used when no Model Tuning is set.
+Pipeline Budget covers non-model limits such as article caps, story caps, text
+truncation, and recency windows. Model Server Settings are adapter settings for
+the local OpenAI-compatible model server.
 
 ## Article Summary Record
 

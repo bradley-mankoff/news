@@ -5,7 +5,7 @@ The pipeline is intentionally driven by small YAML files in ``config/``:
 - ``sources.yaml`` defines article feeds searched by run-mode tier and language.
 - ``recipients.yaml`` defines email recipients and optional personal prompts.
 
-Environment variables can override runtime knobs without editing YAML. See
+Environment variables can override Run Settings without editing YAML. See
 ``README.md`` for the full command list.
 """
 
@@ -15,10 +15,11 @@ import json
 import os
 import re
 from contextvars import ContextVar
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Mapping
+from urllib.parse import urlparse
 
 import yaml
 
@@ -28,6 +29,7 @@ from .source_catalog import MarkTranslationRequired, apply_source_catalog_patch
 ROOT_DIR = Path(__file__).resolve().parent.parent
 CONFIG_DIR = ROOT_DIR / "config"
 RUN_PRESETS_PATH = CONFIG_DIR / "run_presets.yaml"
+MODEL_TUNING_PRESETS_PATH = CONFIG_DIR / "model_tuning_presets.yaml"
 CURSORIGNORE_MANAGED_START = "# >>> news-pipeline latest output >>>"
 CURSORIGNORE_MANAGED_END = "# <<< news-pipeline latest output <<<"
 ASSISTANT_CONTEXT_MANAGED_START = "# >>> news-pipeline core context >>>"
@@ -64,6 +66,8 @@ GEMMA_12B_OPTIQ_MODEL_ALIAS = "https://huggingface.co/EgorKodin/Huihui-gemma-4-1
 GEMMA_12B_OPTIQ_MODEL_NAME = "EgorKodin/Huihui-gemma-4-12B-it-abliterated-mlx-4bit"
 CODEX_TEST_MODEL_ALIAS = "gemma-e2b-tiny"
 CODEX_TEST_MODEL_NAME = "deadbydawn101/gemma-4-E2B-Heretic-Uncensored-mlx-4bit"
+MODEL_TASK_ARTICLE_SUMMARY = "article_summary"
+MODEL_TASK_STORY_DRAFTING = "story_drafting"
 DEFAULT_TRANSLATION_MODEL = "google/translategemma-4b-it"
 GEMMA_4_ARTICLE_SUMMARY_CAP = 40
 CORE_SOURCE_TIER = "core"
@@ -134,31 +138,55 @@ _CONFIG_ENV: ContextVar[Mapping[str, str] | None] = ContextVar(
 
 @dataclass(frozen=True)
 class ModelSamplingSettings:
-    temperature: float
-    top_p: float
-    top_k: int
-    min_p: float
-    presence_penalty: float
-    repetition_penalty: float
+    temperature: float | None = None
+    top_p: float | None = None
+    top_k: int | None = None
+    min_p: float | None = None
+    presence_penalty: float | None = None
+    repetition_penalty: float | None = None
 
 
 @dataclass(frozen=True)
-class ModelRuntimeProfile:
-    key: str
-    model_max_input_tokens: int
+class ModelTuningSettings:
+    model_max_input_tokens: int | None = None
+    article_summary_max_tokens: int | None = None
+    story_drafting_max_tokens: int | None = None
+    title_generation_max_tokens: int | None = None
+    task_sampling: dict[str, ModelSamplingSettings] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class PipelineBudget:
     article_text_token_limit: int
     total_article_summary_cap: int
-    translation_max_tokens: int
-    article_summary_max_tokens: int
-    final_synthesis_max_tokens: int
-    title_generation_max_tokens: int
-    server_prefill_step_size: int
-    server_prompt_cache_size: int
-    server_prompt_cache_bytes: str
-    server_max_tokens: int
-    default_sampling: ModelSamplingSettings
-    reasoning_sampling: ModelSamplingSettings
-    task_sampling: dict[str, ModelSamplingSettings]
+    recent_window_hours: int
+    max_articles_per_source: int
+    min_articles_per_story: int
+    max_stories: int
+    story_cluster_similarity_threshold: float
+    story_selection_overlap_threshold: float
+    story_embedding_dedup_threshold: float
+    story_backfill_batch_multiplier: int
+
+
+@dataclass(frozen=True)
+class ModelServerSettings:
+    base_url: str
+    prefill_step_size: int | None = None
+    prompt_cache_size: int | None = None
+    prompt_cache_bytes: str | None = None
+    max_tokens: int | None = None
+
+
+@dataclass(frozen=True)
+class TaskModelAssignment:
+    task: str
+    reference: str
+    name: str
+    backend: str
+    base_url: str
+    server_command: str
+    tuning: ModelTuningSettings
 
 
 @dataclass(frozen=True)
@@ -184,16 +212,26 @@ class RuntimeConfig:
     source_scope: str
     recipient_scope: str
     url_reuse_blocking_enabled: bool
-    relaxed_final_synthesis_guards: bool
+    relaxed_story_drafting_guards: bool
     model_reference: str
     model_name: str
-    model_profile: ModelRuntimeProfile
     model_base_url: str
     model_backend: str
     model_concurrency: int
     article_summary_concurrency: int
     story_synthesis_concurrency: int
     source_collection_concurrency: int
+    model_max_input_tokens: int
+    article_text_token_limit: int
+    total_article_summary_cap: int
+    translation_max_tokens: int
+    article_summary_max_tokens: int
+    story_drafting_max_tokens: int
+    title_generation_max_tokens: int
+    model_assignments: dict[str, TaskModelAssignment]
+    model_tuning: ModelTuningSettings
+    pipeline_budget: PipelineBudget
+    model_server_settings: ModelServerSettings
     model_server_command: str
     translation_model_reference: str
     translation_model_name: str
@@ -253,141 +291,492 @@ class RuntimeConfigResolution:
     removed_topic_env_vars: list[str]
 
 
-def _sampling(
-    temperature: float,
-    top_p: float,
-    top_k: int,
-    min_p: float,
-    presence_penalty: float,
-    repetition_penalty: float,
-) -> ModelSamplingSettings:
-    return ModelSamplingSettings(
-        temperature=temperature,
-        top_p=top_p,
-        top_k=top_k,
-        min_p=min_p,
-        presence_penalty=presence_penalty,
-        repetition_penalty=repetition_penalty,
-    )
+MODEL_SPECIFIC_TUNING_DEFAULTS: dict[str, ModelTuningSettings] = {}
 
-
-def _task_sampling(
-    *,
-    default: ModelSamplingSettings,
-    reasoning: ModelSamplingSettings,
-    translation: ModelSamplingSettings | None = None,
-    story_discovery: ModelSamplingSettings | None = None,
-    story_scale_screening: ModelSamplingSettings | None = None,
-    article_summary: ModelSamplingSettings | None = None,
-    final_synthesis: ModelSamplingSettings | None = None,
-    title_generation: ModelSamplingSettings | None = None,
-) -> dict[str, ModelSamplingSettings]:
-    return {
-        "default": default,
-        "translation": translation or default,
-        "story_discovery": story_discovery or reasoning,
-        "story_scale_screening": story_scale_screening
-        or _sampling(0.0, 0.9, 20, 0.0, 0.0, 1.05),
-        "article_summary": article_summary or default,
-        "final_synthesis": final_synthesis or reasoning,
-        "title_generation": title_generation or default,
-    }
-
-
-GEMMA_DEFAULT_SAMPLING = _sampling(0.1, 0.8, 20, 0.05, 0.0, 1.1)
-GEMMA_REASONING_SAMPLING = _sampling(0.3, 0.9, 40, 0.02, 0.3, 1.05)
-# Gemma-4 family guidance starts at temp=1/top_p=0.95/top_k=64; task
-# overrides below keep deterministic news extraction/synthesis paths calmer.
-GEMMA_12B_DEFAULT_SAMPLING = _sampling(1.0, 0.95, 64, 0.0, 0.0, 1.0)
-GEMMA_12B_REASONING_SAMPLING = _sampling(0.7, 0.9, 64, 0.0, 0.2, 1.05)
-GEMMA_12B_SYNTHESIS_SAMPLING = _sampling(0.25, 0.85, 40, 0.0, 0.3, 1.05)
-TINY_GEMMA_DEFAULT_SAMPLING = _sampling(0.15, 0.8, 20, 0.02, 0.0, 1.1)
-TINY_GEMMA_REASONING_SAMPLING = _sampling(0.25, 0.85, 30, 0.02, 0.2, 1.08)
 
 DEFAULT_PIPELINE_CONCURRENCY = 4
 DEFAULT_ARTICLE_SUMMARY_CONCURRENCY = DEFAULT_PIPELINE_CONCURRENCY
 DEFAULT_STORY_SYNTHESIS_CONCURRENCY = DEFAULT_PIPELINE_CONCURRENCY
 DEFAULT_SOURCE_COLLECTION_CONCURRENCY = DEFAULT_PIPELINE_CONCURRENCY
-
-
-MODEL_RUNTIME_PROFILES = {
-    "big_conservative": ModelRuntimeProfile(
-        key="big_conservative",
-        model_max_input_tokens=6000,
-        article_text_token_limit=4500,
-        total_article_summary_cap=72,
-        translation_max_tokens=1800,
-        article_summary_max_tokens=1000,
-        final_synthesis_max_tokens=1800,
-        title_generation_max_tokens=50,
-        server_prefill_step_size=512,
-        server_prompt_cache_size=2,
-        server_prompt_cache_bytes="512MB",
-        server_max_tokens=1800,
-        default_sampling=GEMMA_DEFAULT_SAMPLING,
-        reasoning_sampling=GEMMA_REASONING_SAMPLING,
-        task_sampling=_task_sampling(
-            default=GEMMA_DEFAULT_SAMPLING,
-            reasoning=GEMMA_REASONING_SAMPLING,
-            translation=_sampling(0.0, 0.9, 20, 0.0, 0.0, 1.05),
-            story_discovery=_sampling(0.15, 0.85, 30, 0.02, 0.2, 1.05),
-            article_summary=_sampling(0.2, 0.85, 30, 0.02, 0.2, 1.08),
-            final_synthesis=GEMMA_REASONING_SAMPLING,
-            title_generation=_sampling(0.45, 0.9, 40, 0.0, 0.3, 1.05),
-        ),
-    ),
-    "gemma_12b_optiq": ModelRuntimeProfile(
-        key="gemma_12b_optiq",
-        model_max_input_tokens=12000,
-        article_text_token_limit=8000,
-        total_article_summary_cap=36,
-        translation_max_tokens=2400,
-        article_summary_max_tokens=1800,
-        final_synthesis_max_tokens=2400,
-        title_generation_max_tokens=60,
-        server_prefill_step_size=2048,
-        server_prompt_cache_size=16,
-        server_prompt_cache_bytes="3GB",
-        server_max_tokens=2400,
-        default_sampling=GEMMA_12B_DEFAULT_SAMPLING,
-        reasoning_sampling=GEMMA_12B_REASONING_SAMPLING,
-        task_sampling=_task_sampling(
-            default=GEMMA_12B_DEFAULT_SAMPLING,
-            reasoning=GEMMA_12B_REASONING_SAMPLING,
-            translation=_sampling(0.0, 0.9, 20, 0.0, 0.0, 1.05),
-            story_discovery=_sampling(0.2, 0.9, 40, 0.0, 0.2, 1.05),
-            story_scale_screening=_sampling(0.0, 0.9, 20, 0.0, 0.0, 1.05),
-            article_summary=_sampling(0.2, 0.85, 40, 0.0, 0.2, 1.08),
-            final_synthesis=GEMMA_12B_SYNTHESIS_SAMPLING,
-            title_generation=_sampling(0.45, 0.9, 40, 0.0, 0.3, 1.05),
-        ),
-    ),
-    "tiny_codex": ModelRuntimeProfile(
-        key="tiny_codex",
-        model_max_input_tokens=5000,
-        article_text_token_limit=4000,
-        total_article_summary_cap=24,
-        translation_max_tokens=900,
-        article_summary_max_tokens=700,
-        final_synthesis_max_tokens=1100,
-        title_generation_max_tokens=40,
-        server_prefill_step_size=512,
-        server_prompt_cache_size=2,
-        server_prompt_cache_bytes="256MB",
-        server_max_tokens=1200,
-        default_sampling=TINY_GEMMA_DEFAULT_SAMPLING,
-        reasoning_sampling=TINY_GEMMA_REASONING_SAMPLING,
-        task_sampling=_task_sampling(
-            default=TINY_GEMMA_DEFAULT_SAMPLING,
-            reasoning=TINY_GEMMA_REASONING_SAMPLING,
-            translation=_sampling(0.0, 0.85, 20, 0.0, 0.0, 1.05),
-            story_discovery=_sampling(0.1, 0.8, 20, 0.02, 0.2, 1.08),
-            article_summary=_sampling(0.15, 0.8, 20, 0.02, 0.1, 1.08),
-            final_synthesis=TINY_GEMMA_REASONING_SAMPLING,
-            title_generation=_sampling(0.35, 0.85, 30, 0.0, 0.2, 1.05),
-        ),
-    ),
+DEFAULT_TOTAL_ARTICLE_SUMMARY_CAP = 40
+GEMMA_4_ARTICLE_SUMMARY_CAP = DEFAULT_TOTAL_ARTICLE_SUMMARY_CAP
+DEFAULT_ARTICLE_TEXT_TOKEN_LIMIT = 4500
+DEFAULT_MODEL_MAX_INPUT_TOKENS = 6000
+DEFAULT_ARTICLE_SUMMARY_MAX_TOKENS = 1000
+DEFAULT_STORY_DRAFTING_MAX_TOKENS = 1800
+DEFAULT_TITLE_GENERATION_MAX_TOKENS = 50
+DEFAULT_TRANSLATION_MAX_TOKENS = 1800
+DEFAULT_MODEL_SERVER_PREFILL_STEP_SIZE = 512
+DEFAULT_MODEL_SERVER_PROMPT_CACHE_SIZE = 2
+DEFAULT_MODEL_SERVER_PROMPT_CACHE_BYTES = "512MB"
+DEFAULT_MODEL_SERVER_MAX_TOKENS = 1800
+MODEL_TASK_SAMPLING_ENV_PREFIXES = {
+    "default": "NEWS_MODEL",
+    "translation": "NEWS_MODEL_TRANSLATION",
+    "story_discovery": "NEWS_MODEL_STORY_DISCOVERY",
+    "story_scale_screening": "NEWS_MODEL_STORY_SCALE_SCREENING",
+    MODEL_TASK_ARTICLE_SUMMARY: "NEWS_MODEL_ARTICLE_SUMMARY",
+    MODEL_TASK_STORY_DRAFTING: "NEWS_MODEL_STORY_DRAFTING",
+    "title_generation": "NEWS_MODEL_TITLE_GENERATION",
 }
+MODEL_TUNING_PRESET_ENV_VARS = {
+    "default": "NEWS_MODEL_TUNING_PRESET",
+    MODEL_TASK_ARTICLE_SUMMARY: "NEWS_MODEL_ARTICLE_SUMMARY_TUNING_PRESET",
+    MODEL_TASK_STORY_DRAFTING: "NEWS_MODEL_STORY_DRAFTING_TUNING_PRESET",
+}
+MODEL_REASONING_SAMPLING_ENV_PREFIX = "NEWS_MODEL_REASONING"
+
+
+def _empty_model_sampling_map() -> dict[str, ModelSamplingSettings]:
+    return {
+        "default": ModelSamplingSettings(),
+        "translation": ModelSamplingSettings(),
+        "story_discovery": ModelSamplingSettings(),
+        "story_scale_screening": ModelSamplingSettings(),
+        MODEL_TASK_ARTICLE_SUMMARY: ModelSamplingSettings(),
+        MODEL_TASK_STORY_DRAFTING: ModelSamplingSettings(),
+        "title_generation": ModelSamplingSettings(),
+        "reasoning": ModelSamplingSettings(),
+    }
+
+
+def _configured_model_server_settings(base_url: str | None = None) -> ModelServerSettings:
+    return ModelServerSettings(
+        base_url=base_url or _str_env("NEWS_MODEL_BASE_URL", "http://127.0.0.1:8080/v1"),
+        prefill_step_size=_int_env("NEWS_MODEL_SERVER_PREFILL_STEP_SIZE", DEFAULT_MODEL_SERVER_PREFILL_STEP_SIZE),
+        prompt_cache_size=_int_env("NEWS_MODEL_SERVER_PROMPT_CACHE_SIZE", DEFAULT_MODEL_SERVER_PROMPT_CACHE_SIZE),
+        prompt_cache_bytes=_str_env("NEWS_MODEL_SERVER_PROMPT_CACHE_BYTES", DEFAULT_MODEL_SERVER_PROMPT_CACHE_BYTES)
+        or DEFAULT_MODEL_SERVER_PROMPT_CACHE_BYTES,
+        max_tokens=_int_env("NEWS_MODEL_SERVER_MAX_TOKENS", DEFAULT_MODEL_SERVER_MAX_TOKENS),
+    )
+
+
+def _configured_pipeline_budget() -> PipelineBudget:
+    return PipelineBudget(
+        article_text_token_limit=max(
+            500,
+            _int_env("NEWS_ARTICLE_TEXT_TOKEN_LIMIT", DEFAULT_ARTICLE_TEXT_TOKEN_LIMIT),
+        ),
+        total_article_summary_cap=max(
+            0,
+            _int_env("NEWS_TOTAL_ARTICLE_SUMMARY_CAP", DEFAULT_TOTAL_ARTICLE_SUMMARY_CAP),
+        ),
+        recent_window_hours=_int_env("NEWS_RECENT_WINDOW_HOURS", 24),
+        max_articles_per_source=_int_env("NEWS_MAX_ARTICLES_PER_SOURCE", 6),
+        min_articles_per_story=configured_min_articles_per_story(),
+        max_stories=max(1, _int_env("NEWS_MAX_STORIES", 4)),
+        story_cluster_similarity_threshold=configured_story_cluster_similarity_threshold(),
+        story_selection_overlap_threshold=_bounded_env_float(
+            "NEWS_STORY_SELECTION_OVERLAP_THRESHOLD",
+            0.25,
+        ),
+        story_embedding_dedup_threshold=_bounded_env_float(
+            "NEWS_STORY_DEDUP_THRESHOLD",
+            0.85,
+        ),
+        story_backfill_batch_multiplier=max(
+            1,
+            _int_env("NEWS_STORY_BACKFILL_BATCH_MULTIPLIER", 2),
+        ),
+    )
+
+
+def _configured_model_assignments(
+    *,
+    default_reference: str,
+    default_tuning: ModelTuningSettings,
+    default_server_settings: ModelServerSettings,
+    model_concurrency: int,
+    presets: dict[str, dict[str, Any]],
+) -> dict[str, TaskModelAssignment]:
+    default_name = resolve_model_name(default_reference)
+    default_backend = infer_model_backend(default_reference)
+    article_summary_reference = _str_env("NEWS_MODEL_ARTICLE_SUMMARY", default_reference) or default_reference
+    article_summary_base_url = _str_env(
+        "NEWS_MODEL_ARTICLE_SUMMARY_BASE_URL",
+        default_server_settings.base_url,
+    ) or default_server_settings.base_url
+    story_drafting_reference = _str_env("NEWS_MODEL_STORY_DRAFTING", default_reference) or default_reference
+    story_drafting_base_url = _str_env(
+        "NEWS_MODEL_STORY_DRAFTING_BASE_URL",
+        default_server_settings.base_url,
+    ) or default_server_settings.base_url
+
+    article_summary_tuning = _configured_model_tuning(
+        article_summary_reference,
+        task=MODEL_TASK_ARTICLE_SUMMARY,
+        presets=presets,
+    )
+    story_drafting_tuning = _configured_model_tuning(
+        story_drafting_reference,
+        task=MODEL_TASK_STORY_DRAFTING,
+        presets=presets,
+    )
+    default_server_command = build_model_server_command(
+        default_name,
+        default_server_settings,
+        backend=default_backend,
+        model_concurrency=model_concurrency,
+    )
+    article_summary_name = resolve_model_name(article_summary_reference)
+    article_summary_backend = infer_model_backend(article_summary_reference)
+    article_summary_server_command = build_model_server_command(
+        article_summary_name,
+        _configured_model_server_settings(article_summary_base_url),
+        backend=article_summary_backend,
+        model_concurrency=model_concurrency,
+    )
+    story_drafting_name = resolve_model_name(story_drafting_reference)
+    story_drafting_backend = infer_model_backend(story_drafting_reference)
+    story_drafting_server_command = build_model_server_command(
+        story_drafting_name,
+        _configured_model_server_settings(story_drafting_base_url),
+        backend=story_drafting_backend,
+        model_concurrency=model_concurrency,
+    )
+    return {
+        "default": TaskModelAssignment(
+            task="default",
+            reference=default_reference,
+            name=default_name,
+            backend=default_backend,
+            base_url=default_server_settings.base_url,
+            server_command=default_server_command,
+            tuning=default_tuning,
+        ),
+        MODEL_TASK_ARTICLE_SUMMARY: TaskModelAssignment(
+            task=MODEL_TASK_ARTICLE_SUMMARY,
+            reference=article_summary_reference,
+            name=article_summary_name,
+            backend=article_summary_backend,
+            base_url=article_summary_base_url,
+            server_command=article_summary_server_command,
+            tuning=article_summary_tuning,
+        ),
+        MODEL_TASK_STORY_DRAFTING: TaskModelAssignment(
+            task=MODEL_TASK_STORY_DRAFTING,
+            reference=story_drafting_reference,
+            name=story_drafting_name,
+            backend=story_drafting_backend,
+            base_url=story_drafting_base_url,
+            server_command=story_drafting_server_command,
+            tuning=story_drafting_tuning,
+        ),
+    }
+
+
+def _optional_int_env(name: str, environ: Mapping[str, str] | None = None) -> int | None:
+    raw = (environ or _active_env()).get(name)
+    if raw is None or not raw.strip():
+        return None
+    return int(raw.strip())
+
+
+def _optional_float_env(name: str, environ: Mapping[str, str] | None = None) -> float | None:
+    raw = (environ or _active_env()).get(name)
+    if raw is None or not raw.strip():
+        return None
+    return float(raw.strip())
+
+
+def _merge_model_sampling_settings(
+    base: ModelSamplingSettings,
+    overlay: ModelSamplingSettings,
+) -> ModelSamplingSettings:
+    return ModelSamplingSettings(
+        temperature=overlay.temperature if overlay.temperature is not None else base.temperature,
+        top_p=overlay.top_p if overlay.top_p is not None else base.top_p,
+        top_k=overlay.top_k if overlay.top_k is not None else base.top_k,
+        min_p=overlay.min_p if overlay.min_p is not None else base.min_p,
+        presence_penalty=(
+            overlay.presence_penalty
+            if overlay.presence_penalty is not None
+            else base.presence_penalty
+        ),
+        repetition_penalty=(
+            overlay.repetition_penalty
+            if overlay.repetition_penalty is not None
+            else base.repetition_penalty
+        ),
+    )
+
+
+def _merge_model_tuning_settings(
+    base: ModelTuningSettings,
+    overlay: ModelTuningSettings,
+) -> ModelTuningSettings:
+    task_sampling = dict(base.task_sampling)
+    for task, overlay_sampling in overlay.task_sampling.items():
+        task_sampling[task] = _merge_model_sampling_settings(
+            task_sampling.get(task, ModelSamplingSettings()),
+            overlay_sampling,
+        )
+    return ModelTuningSettings(
+        model_max_input_tokens=(
+            overlay.model_max_input_tokens
+            if overlay.model_max_input_tokens is not None
+            else base.model_max_input_tokens
+        ),
+        article_summary_max_tokens=(
+            overlay.article_summary_max_tokens
+            if overlay.article_summary_max_tokens is not None
+            else base.article_summary_max_tokens
+        ),
+        story_drafting_max_tokens=(
+            overlay.story_drafting_max_tokens
+            if overlay.story_drafting_max_tokens is not None
+            else base.story_drafting_max_tokens
+        ),
+        title_generation_max_tokens=(
+            overlay.title_generation_max_tokens
+            if overlay.title_generation_max_tokens is not None
+            else base.title_generation_max_tokens
+        ),
+        task_sampling=task_sampling,
+    )
+
+
+def _base_model_tuning(model_reference: str) -> ModelTuningSettings:
+    resolved_name = resolve_model_name(model_reference)
+    tuning = ModelTuningSettings(
+        model_max_input_tokens=DEFAULT_MODEL_MAX_INPUT_TOKENS,
+        article_summary_max_tokens=DEFAULT_ARTICLE_SUMMARY_MAX_TOKENS,
+        story_drafting_max_tokens=DEFAULT_STORY_DRAFTING_MAX_TOKENS,
+        title_generation_max_tokens=DEFAULT_TITLE_GENERATION_MAX_TOKENS,
+        task_sampling=_empty_model_sampling_map(),
+    )
+    model_default_tuning = MODEL_SPECIFIC_TUNING_DEFAULTS.get(resolved_name)
+    if model_default_tuning is not None:
+        tuning = _merge_model_tuning_settings(tuning, model_default_tuning)
+    return tuning
+
+
+def _task_max_tokens_field(task: str) -> str:
+    if task == "default":
+        return "model_max_input_tokens"
+    if task == MODEL_TASK_ARTICLE_SUMMARY:
+        return "article_summary_max_tokens"
+    if task == MODEL_TASK_STORY_DRAFTING:
+        return "story_drafting_max_tokens"
+    if task == "title_generation":
+        return "title_generation_max_tokens"
+    raise ValueError(f"Unsupported model tuning task {task!r}.")
+
+
+def _selected_model_tuning_preset_id(task: str) -> str:
+    env_var = MODEL_TUNING_PRESET_ENV_VARS.get(task)
+    if not env_var:
+        return ""
+    return normalize_preset_id(_str_env(env_var, ""))
+
+
+def _validate_model_tuning_preset_scope(
+    *,
+    preset_id: str,
+    preset: Mapping[str, Any],
+    assignment_reference: str,
+    assignment_name: str,
+    assignment_task: str,
+) -> None:
+    preset_model = str(preset.get("model") or "").strip()
+    if preset_model and preset_model not in {assignment_reference, assignment_name}:
+        raise ValueError(
+            f"Model tuning preset {preset_id!r} expects model {preset_model!r}, "
+            f"but configured model is {assignment_reference!r} ({assignment_name!r})."
+        )
+    preset_task = str(preset.get("task") or "").strip()
+    if assignment_task == "default":
+        if preset_task:
+            raise ValueError(
+                f"Model tuning preset {preset_id!r} is scoped to task {preset_task!r}, "
+                "but the default model assignment does not accept a task scope."
+            )
+        return
+    if preset_task and preset_task != assignment_task:
+        raise ValueError(
+            f"Model tuning preset {preset_id!r} expects task {preset_task!r}, "
+            f"but configured task is {assignment_task!r}."
+        )
+
+
+def _apply_model_tuning_preset(
+    tuning: ModelTuningSettings,
+    *,
+    preset_id: str,
+    preset: Mapping[str, Any],
+    assignment_task: str,
+) -> ModelTuningSettings:
+    raw_tuning = preset.get("tuning", {})
+    if raw_tuning in (None, ""):
+        raw_tuning = {}
+    if not isinstance(raw_tuning, dict):
+        raise ValueError(f"Model tuning preset {preset_id!r} tuning must be a mapping.")
+
+    updates: dict[str, Any] = {}
+    task_sampling = dict(tuning.task_sampling)
+    target_sampling = task_sampling.get(assignment_task, ModelSamplingSettings())
+    for key, value in raw_tuning.items():
+        field_name = str(key).strip()
+        if field_name in {"temperature", "top_p", "top_k", "min_p", "presence_penalty", "repetition_penalty"}:
+            target_sampling = _merge_model_sampling_settings(
+                target_sampling,
+                _sampling_settings_from_mapping({field_name: value}),
+            )
+            continue
+        if field_name == "max_tokens":
+            field_name = _task_max_tokens_field(assignment_task)
+        if field_name not in {
+            "model_max_input_tokens",
+            "article_summary_max_tokens",
+            "story_drafting_max_tokens",
+            "title_generation_max_tokens",
+        }:
+            raise ValueError(
+                f"Unsupported tuning field {key!r} in model tuning preset {preset_id!r}."
+            )
+        updates[field_name] = _coerce_optional_int_value(value)
+
+    task_sampling[assignment_task] = target_sampling
+    updates["task_sampling"] = task_sampling
+    return replace(tuning, **updates)
+
+
+def _override_sampling_from_env(
+    settings: ModelSamplingSettings,
+    *,
+    prefix: str,
+) -> ModelSamplingSettings:
+    temperature = _optional_float_env(f"{prefix}_TEMPERATURE")
+    top_p = _optional_float_env(f"{prefix}_TOP_P")
+    top_k = _optional_int_env(f"{prefix}_TOP_K")
+    min_p = _optional_float_env(f"{prefix}_MIN_P")
+    presence_penalty = _optional_float_env(f"{prefix}_PRESENCE_PENALTY")
+    repetition_penalty = _optional_float_env(f"{prefix}_REPETITION_PENALTY")
+    return ModelSamplingSettings(
+        temperature=settings.temperature if temperature is None else temperature,
+        top_p=settings.top_p if top_p is None else top_p,
+        top_k=settings.top_k if top_k is None else top_k,
+        min_p=settings.min_p if min_p is None else min_p,
+        presence_penalty=(
+            settings.presence_penalty
+            if presence_penalty is None
+            else presence_penalty
+        ),
+        repetition_penalty=(
+            settings.repetition_penalty
+            if repetition_penalty is None
+            else repetition_penalty
+        ),
+    )
+
+
+def _sampling_settings_from_mapping(raw: Mapping[str, Any] | None) -> ModelSamplingSettings:
+    payload = raw or {}
+    if not isinstance(payload, Mapping):
+        raise ValueError("Model sampling settings must be a mapping.")
+    return ModelSamplingSettings(
+        temperature=_coerce_optional_float_value(payload.get("temperature")),
+        top_p=_coerce_optional_float_value(payload.get("top_p")),
+        top_k=_coerce_optional_int_value(payload.get("top_k")),
+        min_p=_coerce_optional_float_value(payload.get("min_p")),
+        presence_penalty=_coerce_optional_float_value(payload.get("presence_penalty")),
+        repetition_penalty=_coerce_optional_float_value(payload.get("repetition_penalty")),
+    )
+
+
+def _coerce_optional_int_value(value: Any) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, str) and not value.strip():
+        return None
+    return int(value)
+
+
+def _coerce_optional_float_value(value: Any) -> float | None:
+    if value is None:
+        return None
+    if isinstance(value, str) and not value.strip():
+        return None
+    return float(value)
+
+
+def _apply_model_tuning_env_overrides(tuning: ModelTuningSettings) -> ModelTuningSettings:
+    task_sampling = {
+        task: _override_sampling_from_env(
+            tuning.task_sampling.get(task, ModelSamplingSettings()),
+            prefix=prefix,
+        )
+        for task, prefix in MODEL_TASK_SAMPLING_ENV_PREFIXES.items()
+    }
+    task_sampling["reasoning"] = _override_sampling_from_env(
+        tuning.task_sampling.get("reasoning", ModelSamplingSettings()),
+        prefix=MODEL_REASONING_SAMPLING_ENV_PREFIX,
+    )
+    model_max_input_tokens = _optional_int_env("NEWS_MODEL_MAX_INPUT_TOKENS")
+    article_summary_max_tokens = _optional_int_env("NEWS_ARTICLE_SUMMARY_MAX_TOKENS")
+    story_drafting_max_tokens = _optional_int_env("NEWS_STORY_DRAFTING_MAX_TOKENS")
+    title_generation_max_tokens = _optional_int_env("NEWS_TITLE_GENERATION_MAX_TOKENS")
+    return ModelTuningSettings(
+        model_max_input_tokens=(
+            tuning.model_max_input_tokens
+            if model_max_input_tokens is None
+            else model_max_input_tokens
+        ),
+        article_summary_max_tokens=(
+            tuning.article_summary_max_tokens
+            if article_summary_max_tokens is None
+            else article_summary_max_tokens
+        ),
+        story_drafting_max_tokens=(
+            tuning.story_drafting_max_tokens
+            if story_drafting_max_tokens is None
+            else story_drafting_max_tokens
+        ),
+        title_generation_max_tokens=(
+            tuning.title_generation_max_tokens
+            if title_generation_max_tokens is None
+            else title_generation_max_tokens
+        ),
+        task_sampling=task_sampling,
+    )
+
+
+def _configured_model_tuning(
+    model_reference: str,
+    *,
+    task: str = "default",
+    preset_id: str | None = None,
+    presets: dict[str, dict[str, Any]] | None = None,
+) -> ModelTuningSettings:
+    tuning = _base_model_tuning(model_reference)
+    selected_preset_id = (
+        normalize_preset_id(preset_id)
+        if preset_id is not None
+        else _selected_model_tuning_preset_id(task)
+    )
+    if selected_preset_id:
+        preset_records = presets if presets is not None else load_model_tuning_presets()
+        preset = preset_records.get(selected_preset_id)
+        if preset is None:
+            valid = ", ".join(sorted(preset_records)) or "none configured"
+            raise ValueError(
+                f"Unknown model tuning preset {selected_preset_id!r}. Available presets: {valid}."
+            )
+        assignment_name = resolve_model_name(model_reference)
+        _validate_model_tuning_preset_scope(
+            preset_id=selected_preset_id,
+            preset=preset,
+            assignment_reference=model_reference,
+            assignment_name=assignment_name,
+            assignment_task=task,
+        )
+        tuning = _apply_model_tuning_preset(
+            tuning,
+            preset_id=selected_preset_id,
+            preset=preset,
+            assignment_task=task,
+        )
+    return _apply_model_tuning_env_overrides(tuning)
 
 
 def _active_env() -> Mapping[str, str]:
@@ -450,6 +839,47 @@ def load_run_presets(path: Path | None = None) -> dict[str, dict[str, Any]]:
             "description": str(raw_preset.get("description") or "").strip(),
             "env": env,
         }
+    return presets
+
+
+def load_model_tuning_presets(path: Path | None = None) -> dict[str, dict[str, Any]]:
+    """Load saved model tuning presets.
+
+    Preset YAML shape:
+
+    presets:
+      concise-story-drafting:
+        model: mlx-community/example-model
+        task: story_drafting
+        tuning:
+          temperature: 0.2
+          top_p: 0.9
+          max_tokens: 1400
+    """
+    presets_path = path or MODEL_TUNING_PRESETS_PATH
+    payload = _load_yaml_mapping(presets_path)
+    raw_presets = payload.get("presets", {})
+    if not isinstance(raw_presets, dict):
+        raise ValueError(f"{presets_path} must define presets as a mapping.")
+
+    presets: dict[str, dict[str, Any]] = {}
+    for raw_id, raw_preset in raw_presets.items():
+        preset_id = normalize_preset_id(str(raw_id))
+        if not preset_id or not isinstance(raw_preset, dict):
+            continue
+        raw_tuning = raw_preset.get("tuning", {})
+        if raw_tuning in (None, ""):
+            raw_tuning = {}
+        if not isinstance(raw_tuning, dict):
+            raise ValueError(f"Model tuning preset {preset_id!r} tuning must be a mapping.")
+        preset: dict[str, Any] = {"id": preset_id, "tuning": dict(raw_tuning)}
+        raw_model = str(raw_preset.get("model") or "").strip()
+        raw_task = str(raw_preset.get("task") or "").strip()
+        if raw_model:
+            preset["model"] = raw_model
+        if raw_task:
+            preset["task"] = raw_task
+        presets[preset_id] = preset
     return presets
 
 
@@ -588,16 +1018,6 @@ def _configured_model_backend(model_reference: str) -> str:
     return infer_model_backend(model_reference)
 
 
-def _default_total_article_summary_cap(
-    profile: ModelRuntimeProfile,
-    *,
-    model_reference: str,
-) -> int:
-    if is_gemma_4_model_reference(model_reference):
-        return GEMMA_4_ARTICLE_SUMMARY_CAP
-    return profile.total_article_summary_cap
-
-
 def _default_article_summary_concurrency(model_reference: str) -> int:
     if is_codex_test_model_reference(model_reference):
         return 8
@@ -622,43 +1042,6 @@ def _configured_translation_enabled() -> bool:
 
 def _configured_translation_model_backend(model_reference: str) -> str:
     return infer_model_backend(model_reference)
-
-
-def infer_model_profile_key(model_reference: str) -> str:
-    clean_reference = (model_reference or "").strip()
-    if clean_reference in UNSUPPORTED_MODEL_REFERENCES:
-        raise ValueError(f"Unsupported model reference: {clean_reference}")
-    if is_codex_test_model_reference(clean_reference):
-        return "tiny_codex"
-    resolved_model_name = resolve_model_name(clean_reference)
-    if resolved_model_name == GEMMA_12B_OPTIQ_MODEL_NAME:
-        return "gemma_12b_optiq"
-    if clean_reference == "gemma-26b-moe":
-        return "big_conservative"
-
-    resolved_name = resolved_model_name.lower()
-    if "gemma" in resolved_name and "26b" in resolved_name:
-        return "big_conservative"
-    if "gemma" in resolved_name and "12b" in resolved_name and "optiq" in resolved_name:
-        return "gemma_12b_optiq"
-    raise ValueError(f"Unsupported model reference: {clean_reference or resolved_model_name}")
-
-
-def _configured_model_profile_key(model_reference: str) -> str:
-    if _bool_env("NEWS_CODEX_TESTING", False):
-        return "tiny_codex"
-    return infer_model_profile_key(model_reference)
-
-
-MODEL_TASK_SAMPLING_ENV_PREFIXES = {
-    "default": "NEWS_MODEL",
-    "translation": "NEWS_MODEL_TRANSLATION",
-    "story_discovery": "NEWS_MODEL_STORY_DISCOVERY",
-    "story_scale_screening": "NEWS_MODEL_STORY_SCALE_SCREENING",
-    "article_summary": "NEWS_MODEL_ARTICLE_SUMMARY",
-    "final_synthesis": "NEWS_MODEL_FINAL_SYNTHESIS",
-    "title_generation": "NEWS_MODEL_TITLE_GENERATION",
-}
 
 
 def _runtime_knob(
@@ -692,32 +1075,44 @@ def _runtime_knob(
 
 
 def runtime_knob_registry() -> list[dict[str, Any]]:
+    tuning_presets = sorted(load_model_tuning_presets())
     knobs = [
-        _runtime_knob("Run", "Source scope", "NEWS_SOURCE_SCOPE", "select", default="core", options=list(SOURCE_SCOPES)),
-        _runtime_knob("Run", "Recipient scope", "NEWS_RECIPIENT_SCOPE", "select", default="bradley", options=list(RECIPIENT_SCOPES)),
-        _runtime_knob("Run", "Block reused URLs", "NEWS_BLOCK_REUSED_URLS", "bool", default=False),
-        _runtime_knob("Image", "Image generation", "NEWS_IMAGE_ENABLED", "bool", default=False),
-        _runtime_knob("Model", "Model", "NEWS_MODEL", "select", default=DEFAULT_MODEL_ALIAS, options=sorted(MODEL_ALIASES)),
-        _runtime_knob("Model", "Model base URL", "NEWS_MODEL_BASE_URL", default="http://127.0.0.1:8080/v1", advanced=True),
-        _runtime_knob("Summary", "Model input cap", "NEWS_MODEL_MAX_INPUT_TOKENS", "number", minimum=1, step=1),
-        _runtime_knob("Summary", "Article text token limit", "NEWS_ARTICLE_TEXT_TOKEN_LIMIT", "number", minimum=1, step=1),
-        _runtime_knob("Summary", "Total article summary cap", "NEWS_TOTAL_ARTICLE_SUMMARY_CAP", "number", minimum=0, step=1),
-        _runtime_knob("Summary", "Article summary max tokens", "NEWS_ARTICLE_SUMMARY_MAX_TOKENS", "number", minimum=1, step=1),
-        _runtime_knob("Summary", "Story synthesis max tokens", "NEWS_FINAL_SYNTHESIS_MAX_TOKENS", "number", minimum=1, step=1),
-        _runtime_knob("Summary", "Title max tokens", "NEWS_TITLE_GENERATION_MAX_TOKENS", "number", minimum=1, step=1),
-        _runtime_knob("Story", "Recent window hours", "NEWS_RECENT_WINDOW_HOURS", "number", minimum=1, step=1),
-        _runtime_knob("Story", "Max articles per source", "NEWS_MAX_ARTICLES_PER_SOURCE", "number", minimum=1, step=1),
-        _runtime_knob("Story", "Min articles per story", "NEWS_MIN_ARTICLES_PER_STORY", "number", minimum=2, step=1),
-        _runtime_knob("Story", "Story cluster similarity", "NEWS_STORY_CLUSTER_SIMILARITY_THRESHOLD", "number", minimum=0, maximum=1, step=0.01),
-        _runtime_knob("Story", "Story scale screening", "NEWS_STORY_SCALE_SCREENING_ENABLED", "bool"),
-        _runtime_knob("Story", "Max stories", "NEWS_MAX_STORIES", "number", minimum=1, step=1),
-        _runtime_knob("Story", "Story selection overlap", "NEWS_STORY_SELECTION_OVERLAP_THRESHOLD", "number", minimum=0, maximum=1, step=0.01),
-        _runtime_knob("Story", "Story dedup threshold", "NEWS_STORY_DEDUP_THRESHOLD", "number", minimum=0, maximum=1, step=0.01),
-        _runtime_knob("Story", "Backfill batch multiplier", "NEWS_STORY_BACKFILL_BATCH_MULTIPLIER", "number", minimum=1, step=1),
-        _runtime_knob("Story", "Component overlap suppress", "NEWS_STORY_COMPONENT_OVERLAP_SUPPRESS_THRESHOLD", "number", minimum=0, maximum=1, step=0.01, advanced=True),
-        _runtime_knob("Story", "Relax final synthesis guards", "NEWS_RELAX_FINAL_SYNTHESIS_GUARDS", "bool", advanced=True),
-        _runtime_knob("Story", "Embedding model", "NEWS_EMBEDDING_MODEL", default="all-mpnet-base-v2", advanced=True),
-        _runtime_knob("Advanced", "Token encoding", "NEWS_TOKEN_ENCODING", default="o200k_base", advanced=True),
+        _runtime_knob("Run Settings", "Source scope", "NEWS_SOURCE_SCOPE", "select", default="core", options=list(SOURCE_SCOPES)),
+        _runtime_knob("Run Settings", "Recipient scope", "NEWS_RECIPIENT_SCOPE", "select", default="bradley", options=list(RECIPIENT_SCOPES)),
+        _runtime_knob("Run Settings", "Block reused URLs", "NEWS_BLOCK_REUSED_URLS", "bool", default=False),
+        _runtime_knob("Run Settings", "Image generation", "NEWS_IMAGE_ENABLED", "bool", default=False),
+        _runtime_knob("Run Settings", "Story scale screening", "NEWS_STORY_SCALE_SCREENING_ENABLED", "bool"),
+        _runtime_knob("Run Settings", "Relax story drafting guards", "NEWS_RELAX_STORY_DRAFTING_GUARDS", "bool", advanced=True),
+        _runtime_knob("Run Settings", "Embedding model", "NEWS_EMBEDDING_MODEL", default="all-mpnet-base-v2", advanced=True),
+        _runtime_knob("Run Settings", "Token encoding", "NEWS_TOKEN_ENCODING", default="o200k_base", advanced=True),
+        _runtime_knob("Model Selection", "Default model", "NEWS_MODEL", "select", default=DEFAULT_MODEL_ALIAS, options=sorted(MODEL_ALIASES)),
+        _runtime_knob("Model Selection", "Article Summarization model", "NEWS_MODEL_ARTICLE_SUMMARY", "select", options=sorted(MODEL_ALIASES)),
+        _runtime_knob("Model Selection", "Story Drafting model", "NEWS_MODEL_STORY_DRAFTING", "select", options=sorted(MODEL_ALIASES)),
+        _runtime_knob("Model Tuning", "Default tuning preset", "NEWS_MODEL_TUNING_PRESET", "select", options=tuning_presets),
+        _runtime_knob("Model Tuning", "Article Summarization tuning preset", "NEWS_MODEL_ARTICLE_SUMMARY_TUNING_PRESET", "select", options=tuning_presets),
+        _runtime_knob("Model Tuning", "Story Drafting tuning preset", "NEWS_MODEL_STORY_DRAFTING_TUNING_PRESET", "select", options=tuning_presets),
+        _runtime_knob("Model Tuning", "Model input cap", "NEWS_MODEL_MAX_INPUT_TOKENS", "number", minimum=1, step=1),
+        _runtime_knob("Model Tuning", "Article summary max tokens", "NEWS_ARTICLE_SUMMARY_MAX_TOKENS", "number", minimum=1, step=1),
+        _runtime_knob("Model Tuning", "Story drafting max tokens", "NEWS_STORY_DRAFTING_MAX_TOKENS", "number", minimum=1, step=1),
+        _runtime_knob("Model Tuning", "Title max tokens", "NEWS_TITLE_GENERATION_MAX_TOKENS", "number", minimum=1, step=1),
+        _runtime_knob("Pipeline Budget", "Article text token limit", "NEWS_ARTICLE_TEXT_TOKEN_LIMIT", "number", minimum=1, step=1),
+        _runtime_knob("Pipeline Budget", "Total article summary cap", "NEWS_TOTAL_ARTICLE_SUMMARY_CAP", "number", minimum=0, step=1),
+        _runtime_knob("Pipeline Budget", "Recent window hours", "NEWS_RECENT_WINDOW_HOURS", "number", minimum=1, step=1),
+        _runtime_knob("Pipeline Budget", "Max articles per source", "NEWS_MAX_ARTICLES_PER_SOURCE", "number", minimum=1, step=1),
+        _runtime_knob("Pipeline Budget", "Min articles per story", "NEWS_MIN_ARTICLES_PER_STORY", "number", minimum=2, step=1),
+        _runtime_knob("Pipeline Budget", "Max stories", "NEWS_MAX_STORIES", "number", minimum=1, step=1),
+        _runtime_knob("Pipeline Budget", "Story cluster similarity", "NEWS_STORY_CLUSTER_SIMILARITY_THRESHOLD", "number", minimum=0, maximum=1, step=0.01),
+        _runtime_knob("Pipeline Budget", "Story selection overlap", "NEWS_STORY_SELECTION_OVERLAP_THRESHOLD", "number", minimum=0, maximum=1, step=0.01),
+        _runtime_knob("Pipeline Budget", "Story dedup threshold", "NEWS_STORY_DEDUP_THRESHOLD", "number", minimum=0, maximum=1, step=0.01),
+        _runtime_knob("Pipeline Budget", "Backfill batch multiplier", "NEWS_STORY_BACKFILL_BATCH_MULTIPLIER", "number", minimum=1, step=1),
+        _runtime_knob("Pipeline Budget", "Component overlap suppress", "NEWS_STORY_COMPONENT_OVERLAP_SUPPRESS_THRESHOLD", "number", minimum=0, maximum=1, step=0.01, advanced=True),
+        _runtime_knob("Model Server Settings", "Model base URL", "NEWS_MODEL_BASE_URL", default="http://127.0.0.1:8080/v1"),
+        _runtime_knob("Model Server Settings", "Article Summarization base URL", "NEWS_MODEL_ARTICLE_SUMMARY_BASE_URL", default="http://127.0.0.1:8080/v1"),
+        _runtime_knob("Model Server Settings", "Story Drafting base URL", "NEWS_MODEL_STORY_DRAFTING_BASE_URL", default="http://127.0.0.1:8080/v1"),
+        _runtime_knob("Model Server Settings", "Server prefill step size", "NEWS_MODEL_SERVER_PREFILL_STEP_SIZE", "number", minimum=1, step=1),
+        _runtime_knob("Model Server Settings", "Server prompt cache size", "NEWS_MODEL_SERVER_PROMPT_CACHE_SIZE", "number", minimum=0, step=1),
+        _runtime_knob("Model Server Settings", "Server prompt cache bytes", "NEWS_MODEL_SERVER_PROMPT_CACHE_BYTES"),
+        _runtime_knob("Model Server Settings", "Server max tokens", "NEWS_MODEL_SERVER_MAX_TOKENS", "number", minimum=1, step=1),
     ]
     sampling_suffixes = [
         ("TEMPERATURE", "Temperature", "number", 0, 2, 0.01),
@@ -736,7 +1131,7 @@ def runtime_knob_registry() -> list[dict[str, Any]]:
         for suffix, suffix_label, value_type, minimum, maximum, step in sampling_suffixes:
             knobs.append(
                 _runtime_knob(
-                    "Sampling",
+                    "Model Tuning",
                     f"{task_label} {suffix_label}",
                     f"{prefix}_{suffix}",
                     value_type,
@@ -748,140 +1143,48 @@ def runtime_knob_registry() -> list[dict[str, Any]]:
             )
     return knobs
 
-
-def _override_sampling_from_env(
-    settings: ModelSamplingSettings,
-    *,
-    prefix: str,
-) -> ModelSamplingSettings:
-    return ModelSamplingSettings(
-        temperature=_float_env(f"{prefix}_TEMPERATURE", settings.temperature),
-        top_p=_float_env(f"{prefix}_TOP_P", settings.top_p),
-        top_k=_int_env(f"{prefix}_TOP_K", settings.top_k),
-        min_p=_float_env(f"{prefix}_MIN_P", settings.min_p),
-        presence_penalty=_float_env(
-            f"{prefix}_PRESENCE_PENALTY",
-            settings.presence_penalty,
-        ),
-        repetition_penalty=_float_env(
-            f"{prefix}_REPETITION_PENALTY",
-            settings.repetition_penalty,
-        ),
-    )
-
-
-def _profile_sampling_with_base_overrides(
-    profile: ModelRuntimeProfile,
-    *,
-    default_sampling: ModelSamplingSettings,
-    reasoning_sampling: ModelSamplingSettings,
-) -> dict[str, ModelSamplingSettings]:
-    task_sampling: dict[str, ModelSamplingSettings] = {}
-    for task, settings in profile.task_sampling.items():
-        task_base = _override_sampling_from_env(settings, prefix="NEWS_MODEL")
-        if task == "default" or settings == profile.default_sampling:
-            task_base = default_sampling
-        elif settings == profile.reasoning_sampling:
-            task_base = reasoning_sampling
-        prefix = MODEL_TASK_SAMPLING_ENV_PREFIXES.get(task, f"NEWS_MODEL_{task.upper()}")
-        task_sampling[task] = _override_sampling_from_env(task_base, prefix=prefix)
-    return task_sampling
-
-
-def _override_profile_from_env(
-    profile: ModelRuntimeProfile,
-    *,
-    model_reference: str,
-) -> ModelRuntimeProfile:
-    default_sampling = _override_sampling_from_env(
-        profile.default_sampling,
-        prefix="NEWS_MODEL",
-    )
-    reasoning_sampling = _override_sampling_from_env(
-        _override_sampling_from_env(profile.reasoning_sampling, prefix="NEWS_MODEL"),
-        prefix="NEWS_MODEL_REASONING",
-    )
-    return ModelRuntimeProfile(
-        key=profile.key,
-        model_max_input_tokens=_int_env(
-            "NEWS_MODEL_MAX_INPUT_TOKENS",
-            profile.model_max_input_tokens,
-        ),
-        article_text_token_limit=_int_env(
-            "NEWS_ARTICLE_TEXT_TOKEN_LIMIT",
-            profile.article_text_token_limit,
-        ),
-        total_article_summary_cap=_int_env(
-            "NEWS_TOTAL_ARTICLE_SUMMARY_CAP",
-            _default_total_article_summary_cap(
-                profile,
-                model_reference=model_reference,
-            ),
-        ),
-        translation_max_tokens=profile.translation_max_tokens,
-        article_summary_max_tokens=_int_env(
-            "NEWS_ARTICLE_SUMMARY_MAX_TOKENS",
-            profile.article_summary_max_tokens,
-        ),
-        final_synthesis_max_tokens=_int_env(
-            "NEWS_FINAL_SYNTHESIS_MAX_TOKENS",
-            profile.final_synthesis_max_tokens,
-        ),
-        title_generation_max_tokens=_int_env(
-            "NEWS_TITLE_GENERATION_MAX_TOKENS",
-            profile.title_generation_max_tokens,
-        ),
-        server_prefill_step_size=profile.server_prefill_step_size,
-        server_prompt_cache_size=profile.server_prompt_cache_size,
-        server_prompt_cache_bytes=profile.server_prompt_cache_bytes,
-        server_max_tokens=profile.server_max_tokens,
-        default_sampling=default_sampling,
-        reasoning_sampling=reasoning_sampling,
-        task_sampling=_profile_sampling_with_base_overrides(
-            profile,
-            default_sampling=default_sampling,
-            reasoning_sampling=reasoning_sampling,
-        ),
-    )
-
-
-def configured_model_profile(model_reference: str | None = None) -> ModelRuntimeProfile:
-    reference = model_reference or _configured_model_reference()
-    profile_key = _configured_model_profile_key(reference)
-    return _override_profile_from_env(
-        MODEL_RUNTIME_PROFILES[profile_key],
-        model_reference=reference,
-    )
-
-
 def build_model_server_command(
     model_name: str,
-    profile: ModelRuntimeProfile,
+    settings: ModelServerSettings,
     *,
     backend: str = "mlx-lm",
     model_concurrency: int = DEFAULT_PIPELINE_CONCURRENCY,
 ) -> str:
     concurrency = max(1, int(model_concurrency))
+    parsed_base_url = urlparse(settings.base_url or "")
+    port = parsed_base_url.port or 8080
+    extra_flags: list[str] = []
+    if settings.prefill_step_size is not None:
+        extra_flags.extend(["--prefill-step-size", str(settings.prefill_step_size)])
+    if backend != "mlx-vlm":
+        if settings.prompt_cache_size is not None:
+            extra_flags.extend(["--prompt-cache-size", str(settings.prompt_cache_size)])
+        if settings.prompt_cache_bytes:
+            extra_flags.extend(["--prompt-cache-bytes", str(settings.prompt_cache_bytes)])
+    if settings.max_tokens is not None:
+        extra_flags.extend(["--max-tokens", str(settings.max_tokens)])
     if backend == "mlx-vlm":
-        return (
-            "uv run python -m mlx_vlm.server "
-            f"--model {model_name} "
-            "--host 127.0.0.1 "
-            "--port 8080 "
-            f"--prefill-step-size {profile.server_prefill_step_size} "
-            f"--max-tokens {profile.server_max_tokens} "
-            "--log-level INFO"
+        return " ".join(
+            [
+                "uv run python -m mlx_vlm.server",
+                f"--model {model_name}",
+                "--host 127.0.0.1",
+                f"--port {port}",
+                *extra_flags,
+                "--log-level INFO",
+            ]
         )
-    return (
-        "uv run python -m mlx_lm server "
-        f"--model {model_name} "
-        f"--decode-concurrency {concurrency} "
-        f"--prompt-concurrency {concurrency} "
-        f"--prefill-step-size {profile.server_prefill_step_size} "
-        f"--prompt-cache-size {profile.server_prompt_cache_size} "
-        f"--prompt-cache-bytes {profile.server_prompt_cache_bytes} "
-        f"--max-tokens {profile.server_max_tokens} "
-        "--log-level INFO"
+    return " ".join(
+        [
+            "uv run python -m mlx_lm server",
+            f"--model {model_name}",
+            f"--decode-concurrency {concurrency}",
+            f"--prompt-concurrency {concurrency}",
+            "--host 127.0.0.1",
+            f"--port {port}",
+            *extra_flags,
+            "--log-level INFO",
+        ]
     )
 
 
@@ -1370,7 +1673,7 @@ def _build_runtime_config(
     source_scope = _configured_source_scope()
     recipient_scope = _configured_recipient_scope()
     url_reuse_blocking_enabled = _bool_env("NEWS_BLOCK_REUSED_URLS", False)
-    relaxed_final_synthesis_guards = _bool_env("NEWS_RELAX_FINAL_SYNTHESIS_GUARDS", False)
+    relaxed_story_drafting_guards = _bool_env("NEWS_RELAX_STORY_DRAFTING_GUARDS", False)
     tracked_urls_filename = "tracked_urls.txt"
     blocking_urls_filename = "blocking_urls.txt"
     run_used_urls_filename = (
@@ -1388,37 +1691,50 @@ def _build_runtime_config(
         if addr.strip()
     ]
 
-    model_reference = _configured_model_reference()
-    model_name = resolve_model_name(model_reference)
-    model_profile = configured_model_profile(model_reference)
-    total_article_summary_cap_gemma_4_derived = (
-        is_gemma_4_model_reference(model_reference)
-        and "NEWS_TOTAL_ARTICLE_SUMMARY_CAP" not in _active_env()
-    )
+    pipeline_budget = _configured_pipeline_budget()
+    default_reference = _configured_model_reference()
+    default_tuning = _configured_model_tuning(default_reference, task="default")
     model_base_url = _str_env("NEWS_MODEL_BASE_URL", "http://127.0.0.1:8080/v1")
-    model_backend = _configured_model_backend(model_reference)
-    article_summary_concurrency = max(1, _default_article_summary_concurrency(model_reference))
-    story_synthesis_concurrency = max(1, _default_story_synthesis_concurrency(model_reference))
+    model_server_settings = _configured_model_server_settings(model_base_url)
+    tuning_presets = load_model_tuning_presets()
+    model_assignments = _configured_model_assignments(
+        default_reference=default_reference,
+        default_tuning=default_tuning,
+        default_server_settings=model_server_settings,
+        model_concurrency=max(
+            1,
+            _default_article_summary_concurrency(default_reference),
+            _default_story_synthesis_concurrency(default_reference),
+        ),
+        presets=tuning_presets,
+    )
+    default_model_assignment = model_assignments["default"]
+    model_reference = default_model_assignment.reference
+    model_name = default_model_assignment.name
+    model_backend = default_model_assignment.backend
     model_concurrency = max(
         1,
-        article_summary_concurrency,
-        story_synthesis_concurrency,
+        _default_article_summary_concurrency(model_reference),
+        _default_story_synthesis_concurrency(model_reference),
     )
+    article_summary_concurrency = max(1, _default_article_summary_concurrency(model_reference))
+    story_synthesis_concurrency = max(1, _default_story_synthesis_concurrency(model_reference))
     source_collection_concurrency = DEFAULT_SOURCE_COLLECTION_CONCURRENCY
     translation_enabled = _configured_translation_enabled()
     translation_model_reference = _configured_translation_model_reference()
     translation_model_name = resolve_model_name(translation_model_reference)
     translation_model_base_url = _str_env("NEWS_TRANSLATION_MODEL_BASE_URL", model_base_url)
     translation_model_backend = _configured_translation_model_backend(translation_model_reference)
+    translation_model_server_settings = _configured_model_server_settings(translation_model_base_url)
+    translation_max_tokens = _int_env(
+        "NEWS_TRANSLATION_MAX_TOKENS",
+        DEFAULT_TRANSLATION_MAX_TOKENS,
+    )
     translation_model_server_command = ""
     if translation_enabled:
-        try:
-            translation_model_profile = configured_model_profile(translation_model_reference)
-        except ValueError:
-            translation_model_profile = model_profile
         translation_model_server_command = build_model_server_command(
             translation_model_name,
-            translation_model_profile,
+            translation_model_server_settings,
             backend=translation_model_backend,
             model_concurrency=model_concurrency,
         )
@@ -1444,22 +1760,30 @@ def _build_runtime_config(
         source_scope=source_scope,
         recipient_scope=recipient_scope,
         url_reuse_blocking_enabled=url_reuse_blocking_enabled,
-        relaxed_final_synthesis_guards=relaxed_final_synthesis_guards,
+        relaxed_story_drafting_guards=relaxed_story_drafting_guards,
         model_reference=model_reference,
         model_name=model_name,
-        model_profile=model_profile,
         model_base_url=model_base_url,
         model_backend=model_backend,
         model_concurrency=model_concurrency,
         article_summary_concurrency=article_summary_concurrency,
         story_synthesis_concurrency=story_synthesis_concurrency,
         source_collection_concurrency=source_collection_concurrency,
-        model_server_command=build_model_server_command(
-            model_name,
-            model_profile,
-            backend=model_backend,
-            model_concurrency=model_concurrency,
-        ),
+        model_max_input_tokens=default_tuning.model_max_input_tokens or DEFAULT_MODEL_MAX_INPUT_TOKENS,
+        article_text_token_limit=pipeline_budget.article_text_token_limit,
+        total_article_summary_cap=pipeline_budget.total_article_summary_cap,
+        translation_max_tokens=translation_max_tokens,
+        article_summary_max_tokens=default_tuning.article_summary_max_tokens
+        or DEFAULT_ARTICLE_SUMMARY_MAX_TOKENS,
+        story_drafting_max_tokens=default_tuning.story_drafting_max_tokens
+        or DEFAULT_STORY_DRAFTING_MAX_TOKENS,
+        title_generation_max_tokens=default_tuning.title_generation_max_tokens
+        or DEFAULT_TITLE_GENERATION_MAX_TOKENS,
+        model_assignments=model_assignments,
+        model_tuning=default_tuning,
+        pipeline_budget=pipeline_budget,
+        model_server_settings=model_server_settings,
+        model_server_command=default_model_assignment.server_command,
         translation_model_reference=translation_model_reference,
         translation_model_name=translation_model_name,
         translation_model_base_url=translation_model_base_url,
@@ -1467,8 +1791,8 @@ def _build_runtime_config(
         translation_model_server_command=translation_model_server_command,
         translation_target_language=_str_env("NEWS_TRANSLATION_TARGET_LANGUAGE", "en") or "en",
         translation_enabled=translation_enabled,
-        recent_window_hours=_int_env("NEWS_RECENT_WINDOW_HOURS", 24),
-        max_articles_per_source=_int_env("NEWS_MAX_ARTICLES_PER_SOURCE", 6),
+        recent_window_hours=pipeline_budget.recent_window_hours,
+        max_articles_per_source=pipeline_budget.max_articles_per_source,
         bradley_recipient=bradley_recipient,
         email_recipients_fallback=fallback_recipients,
         email_from=email_from,
@@ -1493,23 +1817,14 @@ def _build_runtime_config(
         image_crop_bottom_ratio=0.12,
         image_model_id="Runpod/FLUX.2-klein-4B-mflux-4bit",
         image_base_model="flux2-klein-4b",
-        min_articles_per_story=configured_min_articles_per_story(),
-        story_cluster_similarity_threshold=configured_story_cluster_similarity_threshold(),
-        total_article_summary_cap_gemma_4_derived=total_article_summary_cap_gemma_4_derived,
+        min_articles_per_story=pipeline_budget.min_articles_per_story,
+        story_cluster_similarity_threshold=pipeline_budget.story_cluster_similarity_threshold,
+        total_article_summary_cap_gemma_4_derived=False,
         story_scale_screening_enabled=_bool_env("NEWS_STORY_SCALE_SCREENING_ENABLED", True),
-        max_stories=max(1, _int_env("NEWS_MAX_STORIES", 4)),
-        story_selection_overlap_threshold=_bounded_env_float(
-            "NEWS_STORY_SELECTION_OVERLAP_THRESHOLD",
-            0.25,
-        ),
-        story_embedding_dedup_threshold=_bounded_env_float(
-            "NEWS_STORY_DEDUP_THRESHOLD",
-            0.85,
-        ),
-        story_backfill_batch_multiplier=max(
-            1,
-            _int_env("NEWS_STORY_BACKFILL_BATCH_MULTIPLIER", 2),
-        ),
+        max_stories=pipeline_budget.max_stories,
+        story_selection_overlap_threshold=pipeline_budget.story_selection_overlap_threshold,
+        story_embedding_dedup_threshold=pipeline_budget.story_embedding_dedup_threshold,
+        story_backfill_batch_multiplier=pipeline_budget.story_backfill_batch_multiplier,
     )
 
 

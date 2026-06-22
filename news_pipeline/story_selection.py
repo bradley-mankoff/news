@@ -62,16 +62,16 @@ LOCAL_UNREST_RE = re.compile(
 class StorySelectionRuntime:
     story_scale_screening_enabled: bool
     model_max_input_tokens: int
-    model_profile_key: str
+    model_label: str
     model_reference: str
     model_name: str
     model_backend: str
-    relaxed_final_synthesis_guards: bool
+    relaxed_story_drafting_guards: bool
     build_chat_model: Callable[..., Any]
     invoke_with_retries: Callable[..., Any]
     build_article_heading: Callable[[dict], str]
     format_article_metadata: Callable[[dict], str]
-    final_synthesis_word_count: Callable[[str], int]
+    story_drafting_word_count: Callable[[str], int]
     is_low_confidence_report_entry: Callable[[str], bool]
     report_reference_key: Callable[[str], str]
     progress_callback: Callable[[str, dict[str, Any]], None] | None = None
@@ -833,12 +833,12 @@ def build_precomputed_global_story_synthesis(
                 "contradiction_rendered": bool(rendered_contradiction_paragraph),
                 "valid": True,
                 "reason": "precomputed_story_draft",
-                "word_count": runtime.final_synthesis_word_count(story_body),
+                "word_count": runtime.story_drafting_word_count(story_body),
                 "preview": story_body[:500],
             }
         )
 
-    final_synthesis = "\n\n".join(story_blocks)
+    story_drafting = "\n\n".join(story_blocks)
     citation_sources = citation_registry.sources()
     token_stats = {
         "synthesis_method": "precomputed_global_story_drafts",
@@ -853,7 +853,7 @@ def build_precomputed_global_story_synthesis(
         ),
         "story_blocks_included": len(story_blocks),
         "model_max_input_tokens": runtime.model_max_input_tokens,
-        "model_profile": runtime.model_profile_key,
+        "model_label": runtime.model_label,
         "model": runtime.model_reference,
         "model_name": runtime.model_name,
         "model_backend": runtime.model_backend,
@@ -869,9 +869,9 @@ def build_precomputed_global_story_synthesis(
     }
     debug = {
         "attempts": attempts,
-        "relaxed_guards": runtime.relaxed_final_synthesis_guards,
+        "relaxed_guards": runtime.relaxed_story_drafting_guards,
         "fallback_synthesis_used": False,
         "synthesis_method": "precomputed_global_story_drafts",
         "citation_diagnostics": citation_diagnostics,
     }
-    return final_synthesis, token_stats, debug
+    return story_drafting, token_stats, debug

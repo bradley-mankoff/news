@@ -16,12 +16,13 @@ knobs from process env after its Runtime Config snapshot was built.
 
 Treat Runtime Config Resolution as the Module that turns base environment
 values, saved run presets, and explicit overrides into one Runtime Config
-snapshot. It owns preset precedence, runtime knob metadata, command environment
+snapshot. It owns preset precedence, Run Settings metadata, command environment
 deltas, and removed-setting validation.
 
-CLI and UI code may act as Adapters into Runtime Config Resolution. New runtime
-knobs should be resolved into Runtime Config before a Run Session starts rather
-than read directly from process env inside pipeline compatibility globals.
+CLI and UI code may act as Adapters into Runtime Config Resolution. New Run
+Settings should be resolved into Runtime Config before a Run Session starts
+rather than read directly from process env inside pipeline compatibility
+globals.
 
 ## Consequences
 
