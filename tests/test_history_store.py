@@ -163,6 +163,27 @@ class HistoryStoreTests(unittest.TestCase):
                     "failed",
                 )
 
+    def test_write_run_history_migrates_existing_runs_table(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "history.duckdb"
+            ensure_schema(db_path)
+            with connect(db_path) as con:
+                con.execute("ALTER TABLE runs DROP COLUMN preset_id")
+
+            diagnostics = self._diagnostics("2026-06-01T10:00:00", preset_id="daily")
+            write_run_history(
+                db_path,
+                run_id="2026-06-01_10-00-00",
+                diagnostics=diagnostics,
+                export_csv=False,
+            )
+
+            with connect(db_path) as con:
+                self.assertEqual(
+                    con.execute("SELECT preset_id FROM runs").fetchone()[0],
+                    "daily",
+                )
+
     def test_run_review_markdown_includes_kpis_and_report_preview(self) -> None:
         diagnostics = self._diagnostics("2026-06-01T10:00:00", preset_id="scratch")
         markdown = diagnostics.to_run_review_markdown(
@@ -209,7 +230,7 @@ class HistoryStoreTests(unittest.TestCase):
                 "url_reuse_blocking_enabled": blocking,
                 "source_count": 1,
                 "model": "gemma-e2b-tiny",
-                "model_profile": "tiny_codex",
+                "model_label": "default_model",
                 "story_cluster_similarity_threshold": 0.31,
                 "story_selection_overlap_threshold": 0.25,
                 "story_embedding_dedup_threshold": 0.85,

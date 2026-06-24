@@ -55,9 +55,9 @@ RECIPIENT_HEADER = """# Email recipients for generated reports.
 # - NEWS_RECIPIENT_SCOPE=bradley sends only to bradley@mankoff.com,
 #   regardless of this file.
 """
-RUN_PRESET_HEADER = """# Saved runtime presets for the daily news pipeline.
+RUN_PRESET_HEADER = """# Saved run presets for the daily news pipeline.
 #
-# Presets are env-style defaults. Shell/UI overrides still win.
+# Run Presets are env-style defaults. Shell/UI overrides still win.
 """
 
 
@@ -144,7 +144,7 @@ def _runtime_snapshot(
             "source_scope": config.source_scope,
             "recipient_scope": config.recipient_scope,
             "url_reuse_blocking_enabled": config.url_reuse_blocking_enabled,
-            "relaxed_final_synthesis_guards": config.relaxed_final_synthesis_guards,
+            "relaxed_story_drafting_guards": config.relaxed_story_drafting_guards,
             "paths": {
                 "sources": str(config.sources_path),
                 "recipients": str(config.recipients_path),
@@ -161,8 +161,13 @@ def _runtime_snapshot(
                 "concurrency_source": "derived_from_model_stage_concurrency",
                 "article_summary_concurrency": config.article_summary_concurrency,
                 "story_synthesis_concurrency": config.story_synthesis_concurrency,
-                "profile": _json_ready(config.model_profile),
                 "server_command": config.model_server_command,
+                "assignments": _json_ready(config.model_assignments),
+                "article_summary": _json_ready(config.model_assignments["article_summary"]),
+                "story_drafting": _json_ready(config.model_assignments["story_drafting"]),
+                "tuning": _json_ready(config.model_tuning),
+                "pipeline_budget": _json_ready(config.pipeline_budget),
+                "server_settings": _json_ready(config.model_server_settings),
             },
             "translation": {
                 "enabled": config.translation_enabled,
@@ -952,6 +957,8 @@ HTML = r"""<!doctype html>
     .knob { border: 1px solid var(--line); border-radius: 8px; padding: 10px; background: #fff; }
     .knob label { display: block; font-weight: 600; margin-bottom: 4px; }
     .knob code { color: var(--muted); font-size: 12px; }
+    .knob-details { margin-top: 12px; }
+    .knob-details > summary { cursor: pointer; color: var(--muted); font-weight: 600; }
     .form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 10px; }
     @media (max-width: 780px) {
       main { grid-template-columns: 1fr; }
@@ -973,7 +980,7 @@ HTML = r"""<!doctype html>
       <div class="grid cols">
         <div class="panel">
           <h2>Run</h2>
-          <div class="row"><label for="presetSelect">Preset</label><select id="presetSelect"></select></div>
+          <div class="row"><label for="presetSelect">Run preset</label><select id="presetSelect"></select></div>
           <div class="row"><label for="actionSelect">Action</label><select id="actionSelect"></select></div>
           <div id="sourceOptions">
             <h3>Source Tool Options</h3>
@@ -1018,10 +1025,10 @@ HTML = r"""<!doctype html>
     </section>
     <section id="knobs" class="view">
       <div class="toolbar">
-        <input id="knobSearch" placeholder="Filter knobs">
+        <input id="knobSearch" placeholder="Filter settings">
         <label><input id="showAdvanced" type="checkbox"> Advanced</label>
-        <button id="savePresetBtn">Save preset</button>
-        <button id="loadPresetBtn">Load preset</button>
+        <button id="savePresetBtn">Save run preset</button>
+        <button id="loadPresetBtn">Load run preset</button>
         <button id="clearKnobsBtn">Clear overrides</button>
       </div>
       <div id="knobContainer"></div>
@@ -1035,7 +1042,7 @@ HTML = r"""<!doctype html>
       <div class="grid cols">
         <div class="table-wrap"><table id="presetTable"></table></div>
         <div class="panel">
-          <h2>Preset Editor</h2>
+          <h2>Run Preset Editor</h2>
           <div class="form-grid">
             <label>ID<input id="preset_id"></label>
             <label>Name<input id="preset_name"></label>
@@ -1043,9 +1050,9 @@ HTML = r"""<!doctype html>
           <label>Description<textarea id="preset_description"></textarea></label>
           <label>Environment<textarea id="preset_env" spellcheck="false"></textarea></label>
           <div class="toolbar" style="margin-top:12px">
-            <button id="savePresetEditorBtn" class="primary">Save preset</button>
-            <button id="deletePresetBtn" class="danger">Delete preset</button>
-            <button id="loadPresetIntoKnobsBtn">Load into knobs</button>
+            <button id="savePresetEditorBtn" class="primary">Save run preset</button>
+            <button id="deletePresetBtn" class="danger">Delete run preset</button>
+            <button id="loadPresetIntoKnobsBtn">Load into settings</button>
           </div>
         </div>
       </div>
@@ -1094,8 +1101,8 @@ HTML = r"""<!doctype html>
     const state = { schema: null, presets: [], sources: [], recipients: [], activeRun: null };
     const tabs = [
       ["dashboard", "Dashboard"],
-      ["knobs", "Runtime Knobs"],
-      ["presets", "Presets"],
+      ["knobs", "Run Settings"],
+      ["presets", "Run Presets"],
       ["sources", "Sources"],
       ["recipients", "Recipients"]
     ];
@@ -1182,23 +1189,30 @@ HTML = r"""<!doctype html>
       const runtime = s.runtime || {};
       const source = s.sources || {};
       const recipients = s.recipients || {};
+      const model = runtime.model || {};
+      const assignments = model.assignments || {};
+      const articleSummary = model.article_summary || assignments.article_summary || {};
+      const storyDrafting = model.story_drafting || assignments.story_drafting || {};
       const items = [
-        ["Preset", runtime.preset_id || "custom"],
+        ["Run preset", runtime.preset_id || "custom"],
         ["Source scope", runtime.source_scope || "-"],
         ["Sources", source.total ?? 0],
         ["Core selected", source.selected ? source.selected.core : "-"],
         ["Peripheral selected", source.selected ? source.selected.peripheral : "-"],
         ["Recipients", `${recipients.total ?? 0} total`],
         ["Recipient scope", runtime.recipient_scope || "-"],
-        ["Model", runtime.model ? runtime.model.reference : "-"],
+        ["Model", model.reference || "-"],
+        ["Article Summarization", articleSummary.reference || "-"],
+        ["Story Drafting", storyDrafting.reference || "-"],
         ["Images", runtime.image && runtime.image.enabled ? "on" : "off"]
       ];
-      $("stats").innerHTML = items.map(([label, val]) => `<div class="stat"><span class="muted">${label}</span><strong>${val}</strong></div>`).join("");
+      $("stats").innerHTML = items.map(([label, val]) => `<div class="stat"><span class="muted">${escapeHtml(label)}</span><strong>${escapeHtml(String(val ?? ""))}</strong></div>`).join("");
     }
     function inputForKnob(knob) {
       const current = state.schema.current_env[knob.env] || "";
       if (knob.type === "select") {
-        const opts = ["", ...knob.options].map(opt => `<option value="${opt}" ${current === opt ? "selected" : ""}>${opt}</option>`).join("");
+        const options = current && !knob.options.includes(current) ? [current, ...knob.options] : knob.options;
+        const opts = ["", ...options].map(opt => `<option value="${escapeHtml(opt)}" ${current === opt ? "selected" : ""}>${escapeHtml(opt)}</option>`).join("");
         return `<select data-env="${knob.env}">${opts}</select>`;
       }
       if (knob.type === "bool") {
@@ -1222,23 +1236,46 @@ HTML = r"""<!doctype html>
       const showAdv = checked("showAdvanced");
       const groups = {};
       state.schema.knobs.forEach(knob => {
-        if (knob.advanced && !showAdv) return;
         const hay = `${knob.label} ${knob.env} ${knob.group}`.toLowerCase();
         if (search && !hay.includes(search)) return;
+        if (knob.advanced && !showAdv && knob.group !== "Model Tuning") return;
         (groups[knob.group] ||= []).push(knob);
       });
-      $("knobContainer").innerHTML = Object.entries(groups).map(([group, knobs]) => `
-        <div class="knob-group">
-          <h2>${group}</h2>
-          <div class="knobs">${knobs.map(knob => `
+      const orderedGroups = ["Run Settings", "Model Selection", "Model Tuning", "Pipeline Budget", "Model Server Settings"];
+      const renderKnobCards = list => list.map(knob => `
             <div class="knob">
-              <label>${knob.label}</label>
+              <label>${escapeHtml(knob.label)}</label>
               ${inputForKnob(knob)}
-              <code>${knob.env}</code>
+              <code>${escapeHtml(knob.env)}</code>
             </div>
-          `).join("")}</div>
-        </div>
-      `).join("");
+          `).join("");
+      $("knobContainer").innerHTML = [...orderedGroups, ...Object.keys(groups).filter(group => !orderedGroups.includes(group)).sort()].map(group => {
+        const knobs = groups[group];
+        if (!knobs || !knobs.length) return "";
+        if (group === "Model Tuning") {
+          const basicKnobs = knobs.filter(knob => !knob.advanced);
+          const advancedKnobs = knobs.filter(knob => knob.advanced);
+          const advancedOpen = showAdv || (search && advancedKnobs.some(knob => `${knob.label} ${knob.env}`.toLowerCase().includes(search)));
+          return `
+            <div class="knob-group">
+              <h2>${escapeHtml(group)}</h2>
+              ${basicKnobs.length ? `<div class="knobs">${renderKnobCards(basicKnobs)}</div>` : ""}
+              ${advancedKnobs.length ? `
+                <details class="knob-details"${advancedOpen ? " open" : ""}>
+                  <summary>Advanced tuning</summary>
+                  <div class="knobs">${renderKnobCards(advancedKnobs)}</div>
+                </details>
+              ` : ""}
+            </div>
+          `;
+        }
+        return `
+          <div class="knob-group">
+            <h2>${escapeHtml(group)}</h2>
+            <div class="knobs">${renderKnobCards(knobs)}</div>
+          </div>
+        `;
+      }).join("");
     }
     function escapeHtml(text) {
       return String(text ?? "").replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;").replaceAll('"',"&quot;");

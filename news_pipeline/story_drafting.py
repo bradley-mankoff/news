@@ -30,7 +30,7 @@ MIN_STORY_DRAFT_WORD_COUNT = 50
 @dataclass(frozen=True)
 class StoryDraftingRuntime:
     story_synthesis_concurrency: int
-    final_synthesis_max_tokens: int
+    story_drafting_max_tokens: int
     model_reference: str
     model_name: str
     model_backend: str
@@ -43,7 +43,7 @@ class StoryDraftingRuntime:
     strip_model_artifacts: Callable[[str], str]
     is_low_coverage_synthesis_section: Callable[[str], bool]
     fallback_synthesis_paragraph_from_summaries: Callable[[list[str]], str]
-    final_synthesis_word_count: Callable[[str], int]
+    story_drafting_word_count: Callable[[str], int]
     progress_callback: Callable[[str, dict[str, Any]], None] | None = None
 
 
@@ -433,8 +433,8 @@ def run_story_synthesis_block(
     estimated_input_tokens = sum(runtime.estimate_message_token_count(message) for message in prompt_messages)
     response = runtime.invoke_with_retries(
         runtime.build_chat_model(
-            max_tokens=max(450, min(1100, runtime.final_synthesis_max_tokens)),
-            task="final_synthesis",
+            max_tokens=max(450, min(1100, runtime.story_drafting_max_tokens)),
+            task="story_drafting",
         ),
         prompt_messages,
         task_name=f"story synthesis for {story_block.get('story_title') or 'story'}",
@@ -471,7 +471,7 @@ def run_story_synthesis_block(
         if part
     )
     prompt_tokens = runtime.extract_prompt_tokens_from_response(response)
-    word_count = runtime.final_synthesis_word_count(story_preview)
+    word_count = runtime.story_drafting_word_count(story_preview)
     valid = bool(paragraph) and word_count >= MIN_STORY_DRAFT_WORD_COUNT
     reason = (
         "accepted"

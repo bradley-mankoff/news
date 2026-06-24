@@ -420,10 +420,14 @@ class RunDiagnostics:
             "",
             "| Setting | Value |",
             "| --- | --- |",
-            f"| Model | {_table_value(settings.get('model'))} |",
-            f"| Model profile | {_table_value(settings.get('model_profile'))} |",
-            f"| Model backend | {_table_value(settings.get('model_backend') or 'mlx-lm')} |",
+            f"| Default model | {_table_value(str(settings.get('model')) + ' -> ' + str(settings.get('model_name')))} |",
+            f"| Article Summarization model | {_table_value(_model_assignment_value(settings, 'article_summary'))} |",
+            f"| Story Drafting model | {_table_value(_model_assignment_value(settings, 'story_drafting'))} |",
+            f"| Model backend(s) | {_table_value(_model_backend_value(settings))} |",
             f"| Model input cap | {_table_value(settings.get('model_max_input_tokens'))} |",
+            f"| Article summary cap | {_table_value(settings.get('article_summary_max_tokens'))} |",
+            f"| Story drafting cap | {_table_value(settings.get('story_drafting_max_tokens'))} |",
+            f"| Pipeline budget | {_table_value(_pipeline_budget_value(settings))} |",
             f"| Sources configured | {_table_value(settings.get('source_count'))} |",
             f"| Recent window | {_table_value(_hours_label(settings.get('recent_window_hours')))} |",
             f"| Max global stories | {_table_value(settings.get('max_stories'))} |",
@@ -534,9 +538,14 @@ class RunDiagnostics:
             f"- Slow source warning threshold: {self.settings.get('slow_source_warning_seconds')}s",
             f"- Max global stories: {self.settings.get('max_stories')}",
             f"- Story scale screening enabled: {self.settings.get('story_scale_screening_enabled')}",
-            f"- Model: {self.settings.get('model')} ({self.settings.get('model_profile')})",
-            f"- Model backend: {self.settings.get('model_backend') or 'mlx-lm'}",
+            f"- Default model: {self.settings.get('model')} -> {self.settings.get('model_name')}",
+            f"- Article Summarization model: {_model_assignment_value(self.settings, 'article_summary')}",
+            f"- Story Drafting model: {_model_assignment_value(self.settings, 'story_drafting')}",
+            f"- Model backends: {_model_backend_value(self.settings)}",
             f"- Model input cap: {self.settings.get('model_max_input_tokens')}",
+            f"- Article summary cap: {self.settings.get('article_summary_max_tokens')}",
+            f"- Story drafting cap: {self.settings.get('story_drafting_max_tokens')}",
+            f"- Pipeline budget: {_pipeline_budget_value(self.settings)}",
             f"- Model default sampling: {self.settings.get('model_default_sampling')}",
             f"- Model reasoning sampling: {self.settings.get('model_reasoning_sampling')}",
             f"- Model task sampling: {self.settings.get('model_task_sampling')}",
@@ -769,6 +778,62 @@ def _story_digest(story: dict[str, Any], *, rank: int) -> dict[str, Any]:
     }
 
 
+def _model_assignment_value(settings: dict[str, Any], task: str) -> str:
+    assignments = settings.get("model_assignments") or {}
+    if not isinstance(assignments, dict):
+        return "N/A"
+    record = assignments.get(task) or {}
+    if not isinstance(record, dict):
+        return "N/A"
+    reference = str(record.get("reference") or record.get("name") or "N/A")
+    name = str(record.get("name") or "")
+    backend = str(record.get("backend") or "")
+    base_url = str(record.get("base_url") or "")
+    parts = [reference]
+    if name and name != reference:
+        parts.append(f"({name})")
+    if backend:
+        parts.append(f"[{backend}]")
+    if base_url:
+        parts.append(f"@ {base_url}")
+    return " ".join(parts)
+
+
+def _model_backend_value(settings: dict[str, Any]) -> str:
+    default_backend = str(settings.get("model_backend") or "mlx-lm")
+    assignments = settings.get("model_assignments") or {}
+    if not isinstance(assignments, dict):
+        return default_backend
+    parts = [f"default={default_backend}"]
+    for task in ("article_summary", "story_drafting"):
+        record = assignments.get(task)
+        if not isinstance(record, dict):
+            continue
+        backend = str(record.get("backend") or default_backend)
+        if backend != default_backend:
+            parts.append(f"{task}={backend}")
+    return ", ".join(parts)
+
+
+def _pipeline_budget_value(settings: dict[str, Any]) -> str:
+    budget = settings.get("pipeline_budget") or {}
+    if not isinstance(budget, dict):
+        return "N/A"
+    parts = []
+    for label, key in (
+        ("article_text", "article_text_token_limit"),
+        ("article_summary_cap", "total_article_summary_cap"),
+        ("recent_window", "recent_window_hours"),
+        ("max_articles_per_source", "max_articles_per_source"),
+        ("min_articles_per_story", "min_articles_per_story"),
+        ("max_stories", "max_stories"),
+    ):
+        value = budget.get(key)
+        if value is not None:
+            parts.append(f"{label}={value}")
+    return ", ".join(parts) if parts else "N/A"
+
+
 def _safe_int(value: Any) -> int:
     try:
         return int(value or 0)
@@ -914,7 +979,7 @@ def run_status_from_events(events: list[dict[str, Any]]) -> str:
 def _model_call_bucket(task_name: str) -> str:
     normalized = task_name.strip().lower()
     if normalized.startswith("analysis for final synthesis"):
-        return "final_synthesis"
+        return "story_drafting"
     if normalized.startswith("analysis for "):
         return "article_summary"
     if normalized.startswith("story synthesis for "):

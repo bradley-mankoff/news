@@ -4,7 +4,7 @@ Common usage:
     uv run news run --preset NAME
     NEWS_SOURCE_SCOPE=peripheral NEWS_RECIPIENT_SCOPE=bradley uv run news run
 
-Preset knobs:
+Common Run Settings:
     NEWS_SOURCE_SCOPE=core|peripheral
     NEWS_RECIPIENT_SCOPE=bradley|all
     NEWS_BLOCK_REUSED_URLS=0|1
@@ -16,7 +16,7 @@ Model selection:
     NEWS_MODEL=https://huggingface.co/EgorKodin/Huihui-gemma-4-12B-it-abliterated-mlx-4bit uv run news run --preset NAME
 
     NEWS_MODEL accepts either a friendly alias above or a full model repo/name.
-    Model backend and runtime profile are inferred from the selected model.
+    Task-specific model assignments inherit it unless overridden.
 
 Local model server:
     NEWS_MODEL=https://huggingface.co/EgorKodin/Huihui-gemma-4-12B-it-abliterated-mlx-4bit uv run news run --preset NAME
@@ -25,8 +25,8 @@ Local model server:
         the run errors. Server logs are written beside the report output.
 
     NEWS_MODEL=https://huggingface.co/EgorKodin/Huihui-gemma-4-12B-it-abliterated-mlx-4bit uv run news model-server-command
-        Prints the matching MLX server command for the selected model and
-        inferred runtime profile without starting the pipeline.
+        Prints the matching MLX server command for the selected model without
+        starting the pipeline.
 
     uv run news codex-model-server-command
         Prints the Codex-safe MLX server command for gemma-e2b-tiny. Codex-run
@@ -49,6 +49,7 @@ under ``output/history/`` by default; the human-readable review is published to
 """
 
 import importlib.util
+import dataclasses
 import gc
 import json
 import logging
@@ -89,6 +90,8 @@ from openai import APIConnectionError, APITimeoutError, InternalServerError, Rat
 from .config import (
     ModelSamplingSettings,
     RuntimeConfig,
+    MODEL_TASK_ARTICLE_SUMMARY,
+    MODEL_TASK_STORY_DRAFTING,
     ensure_codex_safe_model_reference,
     is_gemma_4_model_reference,
     load_recipients,
@@ -135,6 +138,23 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
+
+def _filesystem_safe_model_label(value: str) -> str:
+    clean_value = re.sub(r"[^A-Za-z0-9._-]+", "_", str(value or "").strip())
+    clean_value = clean_value.strip("._-")
+    return clean_value or "model"
+
+
+def _json_ready(value: Any) -> Any:
+    if dataclasses.is_dataclass(value):
+        return {key: _json_ready(val) for key, val in dataclasses.asdict(value).items()}
+    if isinstance(value, dict):
+        return {str(key): _json_ready(val) for key, val in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_ready(item) for item in value]
+    return value
+
+
 MODEL_RETRY_ATTEMPTS = 4
 MODEL_RETRY_BASE_DELAY_SECONDS = 2
 MODEL_REQUEST_TIMEOUT_SECONDS = 180
@@ -146,13 +166,16 @@ ARTICLE_SCRAPE_TOTAL_TIMEOUT_SECONDS = max(
 )
 SLOW_SOURCE_WARNING_SECONDS = 60
 CONFIG = load_runtime_config()
+MODEL_ASSIGNMENTS = CONFIG.model_assignments
+MODEL_TUNING = CONFIG.model_tuning
+PIPELINE_BUDGET = CONFIG.pipeline_budget
+MODEL_SERVER_SETTINGS = CONFIG.model_server_settings
 MODEL_NAME = CONFIG.model_name
 MODEL_REFERENCE = CONFIG.model_reference
-MODEL_PROFILE = CONFIG.model_profile
-MODEL_PROFILE_KEY = MODEL_PROFILE.key
 MODEL_BASE_URL = CONFIG.model_base_url
 MODEL_BACKEND = CONFIG.model_backend
 MODEL_SERVER_COMMAND = CONFIG.model_server_command
+MODEL_REPORT_LABEL = _filesystem_safe_model_label(MODEL_REFERENCE)
 TRANSLATION_MODEL_REFERENCE = CONFIG.translation_model_reference
 TRANSLATION_MODEL_NAME = CONFIG.translation_model_name
 TRANSLATION_MODEL_BASE_URL = CONFIG.translation_model_base_url
@@ -233,7 +256,7 @@ PRESET_ID = CONFIG.preset_id
 SOURCE_SCOPE = CONFIG.source_scope
 RECIPIENT_SCOPE = CONFIG.recipient_scope
 URL_REUSE_BLOCKING_ENABLED = CONFIG.url_reuse_blocking_enabled
-RELAXED_FINAL_SYNTHESIS_GUARDS = CONFIG.relaxed_final_synthesis_guards
+RELAXED_STORY_DRAFTING_GUARDS = CONFIG.relaxed_story_drafting_guards
 RUN_USED_URLS_PATH = str(CONFIG.run_used_urls_path)
 RUN_LOG_PATH = os.path.join(RUN_OUTPUT_DIR, f"run_log_{timestamp}.log")
 EMAIL_RECIPIENTS_FALLBACK = CONFIG.email_recipients_fallback
@@ -247,20 +270,20 @@ UNSUBSCRIBE_BASE_URL = CONFIG.unsubscribe_base_url
 UNSUBSCRIBE_HOST = CONFIG.unsubscribe_host
 UNSUBSCRIBE_PORT = CONFIG.unsubscribe_port
 UNSUBSCRIBE_SECRET = CONFIG.unsubscribe_secret
-MODEL_MAX_INPUT_TOKENS = MODEL_PROFILE.model_max_input_tokens
+MODEL_MAX_INPUT_TOKENS = CONFIG.model_max_input_tokens
 TOKEN_ENCODING_NAME = CONFIG.token_encoding_name
 MODEL_CONCURRENCY = max(1, CONFIG.model_concurrency)
 ARTICLE_SUMMARY_CONCURRENCY = max(1, CONFIG.article_summary_concurrency)
 STORY_SYNTHESIS_CONCURRENCY = max(1, CONFIG.story_synthesis_concurrency)
 SOURCE_COLLECTION_CONCURRENCY = max(1, CONFIG.source_collection_concurrency)
-ARTICLE_TEXT_TOKEN_LIMIT = max(500, MODEL_PROFILE.article_text_token_limit)
-TOTAL_ARTICLE_SUMMARY_CAP = max(0, MODEL_PROFILE.total_article_summary_cap)
+ARTICLE_TEXT_TOKEN_LIMIT = max(500, CONFIG.article_text_token_limit)
+TOTAL_ARTICLE_SUMMARY_CAP = max(0, CONFIG.total_article_summary_cap)
 MODEL_IS_GEMMA_4 = is_gemma_4_model_reference(MODEL_REFERENCE)
 TOTAL_ARTICLE_SUMMARY_CAP_GEMMA_4_DERIVED = CONFIG.total_article_summary_cap_gemma_4_derived
-TRANSLATION_MAX_TOKENS = max(100, MODEL_PROFILE.translation_max_tokens)
-ARTICLE_SUMMARY_MAX_TOKENS = max(100, MODEL_PROFILE.article_summary_max_tokens)
-FINAL_SYNTHESIS_MAX_TOKENS = max(100, MODEL_PROFILE.final_synthesis_max_tokens)
-TITLE_GENERATION_MAX_TOKENS = max(20, MODEL_PROFILE.title_generation_max_tokens)
+TRANSLATION_MAX_TOKENS = max(100, CONFIG.translation_max_tokens)
+ARTICLE_SUMMARY_MAX_TOKENS = max(100, CONFIG.article_summary_max_tokens)
+STORY_DRAFTING_MAX_TOKENS = max(100, CONFIG.story_drafting_max_tokens)
+TITLE_GENERATION_MAX_TOKENS = max(20, CONFIG.title_generation_max_tokens)
 
 MIN_ARTICLES_PER_STORY = max(2, CONFIG.min_articles_per_story)
 STORY_SCALE_SCREENING_ENABLED = CONFIG.story_scale_screening_enabled
@@ -281,9 +304,9 @@ IMAGE_CROP_BOTTOM_RATIO = min(max(CONFIG.image_crop_bottom_ratio, 0.0), 0.35)
 IMAGE_MODEL_ID = CONFIG.image_model_id
 IMAGE_BASE_MODEL = CONFIG.image_base_model
 IMAGE_MODEL_LABEL = IMAGE_MODEL_ID.split("/")[-1] if "/" in IMAGE_MODEL_ID else IMAGE_MODEL_ID
-MODEL_DEFAULT_SAMPLING = MODEL_PROFILE.default_sampling
-MODEL_REASONING_SAMPLING = MODEL_PROFILE.reasoning_sampling
-MODEL_TASK_SAMPLING = MODEL_PROFILE.task_sampling
+MODEL_DEFAULT_SAMPLING = MODEL_TUNING.task_sampling.get("default", ModelSamplingSettings())
+MODEL_REASONING_SAMPLING = MODEL_TUNING.task_sampling.get("reasoning", ModelSamplingSettings())
+MODEL_TASK_SAMPLING = MODEL_TUNING.task_sampling
 MODEL_CALL_STATS: dict[str, Any] = {
     "calls": {},
     "token_usage": {},
@@ -986,13 +1009,14 @@ _RUN_SESSION_LOCK = RLock()
 
 
 def _compat_runtime_values(config: RuntimeConfig) -> dict[str, Any]:
-    model_profile = config.model_profile
     return {
         "CONFIG": config,
         "MODEL_NAME": config.model_name,
         "MODEL_REFERENCE": config.model_reference,
-        "MODEL_PROFILE": model_profile,
-        "MODEL_PROFILE_KEY": model_profile.key,
+        "MODEL_ASSIGNMENTS": config.model_assignments,
+        "MODEL_TUNING": config.model_tuning,
+        "PIPELINE_BUDGET": config.pipeline_budget,
+        "MODEL_SERVER_SETTINGS": config.model_server_settings,
         "MODEL_BASE_URL": config.model_base_url,
         "MODEL_BACKEND": config.model_backend,
         "MODEL_SERVER_COMMAND": config.model_server_command,
@@ -1022,7 +1046,7 @@ def _compat_runtime_values(config: RuntimeConfig) -> dict[str, Any]:
         "SOURCE_SCOPE": config.source_scope,
         "RECIPIENT_SCOPE": config.recipient_scope,
         "URL_REUSE_BLOCKING_ENABLED": config.url_reuse_blocking_enabled,
-        "RELAXED_FINAL_SYNTHESIS_GUARDS": config.relaxed_final_synthesis_guards,
+        "RELAXED_STORY_DRAFTING_GUARDS": config.relaxed_story_drafting_guards,
         "RUN_USED_URLS_PATH": str(config.run_used_urls_path),
         "RUN_LOG_PATH": os.path.join(str(config.run_output_dir), f"run_log_{config.timestamp}.log"),
         "EMAIL_RECIPIENTS_FALLBACK": config.email_recipients_fallback,
@@ -1036,20 +1060,20 @@ def _compat_runtime_values(config: RuntimeConfig) -> dict[str, Any]:
         "UNSUBSCRIBE_HOST": config.unsubscribe_host,
         "UNSUBSCRIBE_PORT": config.unsubscribe_port,
         "UNSUBSCRIBE_SECRET": config.unsubscribe_secret,
-        "MODEL_MAX_INPUT_TOKENS": model_profile.model_max_input_tokens,
+        "MODEL_MAX_INPUT_TOKENS": config.model_max_input_tokens,
         "TOKEN_ENCODING_NAME": config.token_encoding_name,
         "MODEL_CONCURRENCY": max(1, config.model_concurrency),
         "ARTICLE_SUMMARY_CONCURRENCY": max(1, config.article_summary_concurrency),
         "STORY_SYNTHESIS_CONCURRENCY": max(1, config.story_synthesis_concurrency),
         "SOURCE_COLLECTION_CONCURRENCY": max(1, config.source_collection_concurrency),
-        "ARTICLE_TEXT_TOKEN_LIMIT": max(500, model_profile.article_text_token_limit),
-        "TOTAL_ARTICLE_SUMMARY_CAP": max(0, model_profile.total_article_summary_cap),
+        "ARTICLE_TEXT_TOKEN_LIMIT": max(500, config.article_text_token_limit),
+        "TOTAL_ARTICLE_SUMMARY_CAP": max(0, config.total_article_summary_cap),
         "MODEL_IS_GEMMA_4": is_gemma_4_model_reference(config.model_reference),
         "TOTAL_ARTICLE_SUMMARY_CAP_GEMMA_4_DERIVED": config.total_article_summary_cap_gemma_4_derived,
-        "TRANSLATION_MAX_TOKENS": max(100, model_profile.translation_max_tokens),
-        "ARTICLE_SUMMARY_MAX_TOKENS": max(100, model_profile.article_summary_max_tokens),
-        "FINAL_SYNTHESIS_MAX_TOKENS": max(100, model_profile.final_synthesis_max_tokens),
-        "TITLE_GENERATION_MAX_TOKENS": max(20, model_profile.title_generation_max_tokens),
+        "TRANSLATION_MAX_TOKENS": max(100, config.translation_max_tokens),
+        "ARTICLE_SUMMARY_MAX_TOKENS": max(100, config.article_summary_max_tokens),
+        "STORY_DRAFTING_MAX_TOKENS": max(100, config.story_drafting_max_tokens),
+        "TITLE_GENERATION_MAX_TOKENS": max(20, config.title_generation_max_tokens),
         "MIN_ARTICLES_PER_STORY": max(2, config.min_articles_per_story),
         "STORY_SCALE_SCREENING_ENABLED": config.story_scale_screening_enabled,
         "MAX_STORIES": max(1, config.max_stories),
@@ -1073,9 +1097,9 @@ def _compat_runtime_values(config: RuntimeConfig) -> dict[str, Any]:
             if "/" in config.image_model_id
             else config.image_model_id
         ),
-        "MODEL_DEFAULT_SAMPLING": model_profile.default_sampling,
-        "MODEL_REASONING_SAMPLING": model_profile.reasoning_sampling,
-        "MODEL_TASK_SAMPLING": model_profile.task_sampling,
+        "MODEL_DEFAULT_SAMPLING": config.model_tuning.task_sampling.get("default", ModelSamplingSettings()),
+        "MODEL_REASONING_SAMPLING": config.model_tuning.task_sampling.get("reasoning", ModelSamplingSettings()),
+        "MODEL_TASK_SAMPLING": config.model_tuning.task_sampling,
         "SOURCE_FEEDS": load_sources(config.sources_path, source_scope=config.source_scope),
     }
 
@@ -1617,7 +1641,7 @@ def _story_drafting_runtime(
 ) -> story_drafting_stage.StoryDraftingRuntime:
     return story_drafting_stage.StoryDraftingRuntime(
         story_synthesis_concurrency=STORY_SYNTHESIS_CONCURRENCY,
-        final_synthesis_max_tokens=FINAL_SYNTHESIS_MAX_TOKENS,
+        story_drafting_max_tokens=STORY_DRAFTING_MAX_TOKENS,
         model_reference=MODEL_REFERENCE,
         model_name=MODEL_NAME,
         model_backend=MODEL_BACKEND,
@@ -1630,7 +1654,7 @@ def _story_drafting_runtime(
         strip_model_artifacts=strip_model_artifacts,
         is_low_coverage_synthesis_section=_is_low_coverage_synthesis_section,
         fallback_synthesis_paragraph_from_summaries=_fallback_synthesis_paragraph_from_summaries,
-        final_synthesis_word_count=_final_synthesis_word_count,
+        story_drafting_word_count=_story_drafting_word_count,
         progress_callback=_story_drafting_progress,
     )
 
@@ -1639,16 +1663,16 @@ def _story_selection_runtime() -> story_selection_stage.StorySelectionRuntime:
     return story_selection_stage.StorySelectionRuntime(
         story_scale_screening_enabled=STORY_SCALE_SCREENING_ENABLED,
         model_max_input_tokens=MODEL_MAX_INPUT_TOKENS,
-        model_profile_key=MODEL_PROFILE_KEY,
+        model_label=MODEL_REPORT_LABEL,
         model_reference=MODEL_REFERENCE,
         model_name=MODEL_NAME,
         model_backend=MODEL_BACKEND,
-        relaxed_final_synthesis_guards=RELAXED_FINAL_SYNTHESIS_GUARDS,
+        relaxed_story_drafting_guards=RELAXED_STORY_DRAFTING_GUARDS,
         build_chat_model=build_chat_model,
         invoke_with_retries=invoke_with_retries,
         build_article_heading=_build_article_heading,
         format_article_metadata=_format_article_metadata,
-        final_synthesis_word_count=_final_synthesis_word_count,
+        story_drafting_word_count=_story_drafting_word_count,
         is_low_confidence_report_entry=is_low_confidence_report_entry,
         report_reference_key=_report_reference_key,
         progress_callback=progress_tracker.story_selection_progress,
@@ -1679,12 +1703,12 @@ def run_per_story_synthesis(
         max_stories=MAX_STORIES,
         overlap_threshold=STORY_SELECTION_OVERLAP_THRESHOLD,
     )
-    final_synthesis, _, _ = story_selection_stage.build_precomputed_global_story_synthesis(
+    story_drafting, _, _ = story_selection_stage.build_precomputed_global_story_synthesis(
         selected_matches,
         article_summaries,
         _story_selection_runtime(),
     )
-    return clean_synthesis_for_publication(final_synthesis, relaxed=RELAXED_FINAL_SYNTHESIS_GUARDS)
+    return clean_synthesis_for_publication(story_drafting, relaxed=RELAXED_STORY_DRAFTING_GUARDS)
 
 
 @contextmanager
@@ -2912,19 +2936,31 @@ VISIBLE_CONTENT_CHAT_TEMPLATE_KWARGS: dict[str, Any] = {"enable_thinking": False
 
 def _sampling_to_extra_body(settings: ModelSamplingSettings) -> dict[str, Any]:
     return {
-        "top_p": settings.top_p,
-        "top_k": settings.top_k,
-        "presence_penalty": settings.presence_penalty,
-        "repetition_penalty": settings.repetition_penalty,
-        "min_p": settings.min_p,
+        key: value
+        for key, value in {
+            "top_p": settings.top_p,
+            "top_k": settings.top_k,
+            "presence_penalty": settings.presence_penalty,
+            "repetition_penalty": settings.repetition_penalty,
+            "min_p": settings.min_p,
+        }.items()
+        if value is not None
     }
 
 
 def _sampling_to_dict(settings: ModelSamplingSettings) -> dict[str, float | int]:
-    return {
-        "temperature": settings.temperature,
-        **_sampling_to_extra_body(settings),
-    }
+    result: dict[str, float | int] = {}
+    if settings.temperature is not None:
+        result["temperature"] = settings.temperature
+    result.update(_sampling_to_extra_body(settings))
+    return result
+
+
+def _model_sampling_kwargs(settings: ModelSamplingSettings) -> dict[str, Any]:
+    kwargs: dict[str, Any] = {}
+    if settings.temperature is not None:
+        kwargs["temperature"] = settings.temperature
+    return kwargs
 
 
 def _task_sampling_to_dict() -> dict[str, dict[str, float | int]]:
@@ -2942,20 +2978,47 @@ def _model_extra_body(settings: ModelSamplingSettings) -> dict[str, Any]:
     return extra_body
 
 
+def _normalized_model_task(task: str) -> str:
+    clean_task = str(task or "default").strip().lower().replace("-", "_")
+    return clean_task or "default"
+
+
+def _task_model_assignment(task: str):
+    normalized_task = _normalized_model_task(task)
+    if normalized_task == MODEL_TASK_ARTICLE_SUMMARY:
+        return MODEL_ASSIGNMENTS[MODEL_TASK_ARTICLE_SUMMARY]
+    if normalized_task == MODEL_TASK_STORY_DRAFTING:
+        return MODEL_ASSIGNMENTS[MODEL_TASK_STORY_DRAFTING]
+    return MODEL_ASSIGNMENTS["default"]
+
+
 def build_chat_model(max_tokens: int, *, task: str = "default") -> ChatOpenAI:
     ensure_codex_safe_model_reference(MODEL_REFERENCE)
+    normalized_task = _normalized_model_task(task)
+    assignment = _task_model_assignment(normalized_task)
     if MANAGED_MODEL_SERVER_ACTIVE:
-        _ensure_main_model_server_ready()
-        _raise_if_managed_model_server_exited()
-    sampling = MODEL_TASK_SAMPLING.get(task, MODEL_DEFAULT_SAMPLING)
+        if assignment.base_url == MODEL_BASE_URL:
+            if assignment.name != MODEL_NAME:
+                raise RuntimeError(
+                    "Managed model server cannot serve multiple different models from the same base URL. "
+                    f"Task {normalized_task!r} wants {assignment.reference!r} ({assignment.name!r}) "
+                    f"but the managed main model is {MODEL_REFERENCE!r} ({MODEL_NAME!r}) at {MODEL_BASE_URL}. "
+                    "Set a per-task base URL or run that task against an external server."
+                )
+            _ensure_main_model_server_ready()
+            _raise_if_managed_model_server_exited()
+    sampling = assignment.tuning.task_sampling.get(
+        normalized_task,
+        assignment.tuning.task_sampling.get("default", ModelSamplingSettings()),
+    )
     return ChatOpenAI(
-        base_url=MODEL_BASE_URL,
+        base_url=assignment.base_url,
         api_key="not-needed",
-        temperature=sampling.temperature,
-        model=MODEL_NAME,
+        model=assignment.name,
         max_tokens=max_tokens,
         max_retries=0,
         timeout=MODEL_REQUEST_TIMEOUT_SECONDS,
+        **_model_sampling_kwargs(sampling),
         extra_body=_model_extra_body(sampling),
     )
 
@@ -3260,7 +3323,7 @@ def _contains_disallowed_final_markup(text: str) -> bool:
     return False
 
 
-def _final_synthesis_word_count(text: str) -> int:
+def _story_drafting_word_count(text: str) -> int:
     return len(re.findall(r"\b\w+\b", text or ""))
 
 
@@ -3501,31 +3564,6 @@ def _fallback_synthesis_paragraph_from_summaries(summaries: list[str]) -> str:
             snippets.append(snippet)
     paragraph = " ".join(snippets)
     return _first_sentences(paragraph, max_sentences=8, max_chars=1800)
-
-
-def build_fallback_final_synthesis_preview(
-    final_reports: List[article_summary_records_stage.ArticleSummaryRecord | str],
-) -> str:
-    """Create grouped prose when final synthesis repeatedly returns empty."""
-    grouped: dict[str, list[str]] = {}
-
-    for report in final_reports:
-        summary_text = _report_summary_text(report)
-        if not summary_text:
-            continue
-        story_label = _report_story_label(report)
-        story_label = story_label or "General update"
-        grouped.setdefault(story_label, []).append(summary_text)
-
-    sections: list[str] = []
-    for story_label, summaries in grouped.items():
-        if len(summaries) < MIN_ARTICLES_PER_STORY:
-            continue
-        paragraph = _fallback_synthesis_paragraph_from_summaries(summaries)
-        if paragraph:
-            sections.append(f"### {story_label}\n\n{paragraph}")
-
-    return "\n\n".join(sections)
 
 
 def _truncate_for_art_prompt(text: str, max_chars: int = 3800) -> str:
@@ -4321,7 +4359,7 @@ def _new_run_diagnostics(source_count: int) -> RunDiagnostics:
             "source_scope": SOURCE_SCOPE,
             "recipient_scope": RECIPIENT_SCOPE,
             "url_reuse_blocking_enabled": URL_REUSE_BLOCKING_ENABLED,
-            "relaxed_final_synthesis_guards": RELAXED_FINAL_SYNTHESIS_GUARDS,
+            "relaxed_story_drafting_guards": RELAXED_STORY_DRAFTING_GUARDS,
             "source_count": source_count,
             "sources_path": str(CONFIG.sources_path),
             "recipients_path": str(CONFIG.recipients_path),
@@ -4347,13 +4385,16 @@ def _new_run_diagnostics(source_count: int) -> RunDiagnostics:
             "story_scale_screening_enabled": STORY_SCALE_SCREENING_ENABLED,
             "model": MODEL_REFERENCE,
             "model_name": MODEL_NAME,
-            "model_profile": MODEL_PROFILE_KEY,
             "model_is_gemma_4": MODEL_IS_GEMMA_4,
             "model_base_url": MODEL_BASE_URL,
             "model_backend": MODEL_BACKEND,
             "model_concurrency": MODEL_CONCURRENCY,
             "model_concurrency_source": "derived_from_model_stage_concurrency",
             "model_server_command": MODEL_SERVER_COMMAND,
+            "model_assignments": _json_ready(MODEL_ASSIGNMENTS),
+            "model_tuning": _json_ready(MODEL_TUNING),
+            "pipeline_budget": _json_ready(PIPELINE_BUDGET),
+            "model_server_settings": _json_ready(MODEL_SERVER_SETTINGS),
             "translation_model": TRANSLATION_MODEL_REFERENCE,
             "translation_model_name": TRANSLATION_MODEL_NAME,
             "translation_model_base_url": TRANSLATION_MODEL_BASE_URL,
@@ -4375,7 +4416,7 @@ def _new_run_diagnostics(source_count: int) -> RunDiagnostics:
             "story_cluster_similarity_threshold": STORY_CLUSTER_SIMILARITY_THRESHOLD,
             "translation_max_tokens": TRANSLATION_MAX_TOKENS,
             "article_summary_max_tokens": ARTICLE_SUMMARY_MAX_TOKENS,
-            "final_synthesis_max_tokens": FINAL_SYNTHESIS_MAX_TOKENS,
+            "story_drafting_max_tokens": STORY_DRAFTING_MAX_TOKENS,
             "title_generation_max_tokens": TITLE_GENERATION_MAX_TOKENS,
             "image_generation_enabled": IMAGE_GENERATION_ENABLED,
             "image_generation_fail_on_error": IMAGE_GENERATION_FAIL_ON_ERROR,
@@ -4880,12 +4921,12 @@ def _run_pipeline() -> None:
     progress_tracker.step(
         "setup",
         (
-            f"{preset_label} | model {MODEL_PROFILE_KEY} | {image_status} | "
+            f"{preset_label} | model {MODEL_REFERENCE} | {image_status} | "
             f"{len(sources)} sources | send {send_target}"
         ),
     )
     progress_tracker.detail(
-        f"Model profile: {MODEL_PROFILE_KEY} | backend: {MODEL_BACKEND} | "
+        f"Default model: {MODEL_NAME} | backend: {MODEL_BACKEND} | "
         f"model: {MODEL_REFERENCE} -> {MODEL_NAME}"
     )
     progress_tracker.detail(
@@ -5302,11 +5343,11 @@ def _run_pipeline() -> None:
 
     report_asset_path = os.path.join(
         RUN_OUTPUT_DIR,
-        f"news_report_{timestamp}_{MODEL_PROFILE_KEY}_default_prompt.txt",
+        f"news_report_{timestamp}_{MODEL_REPORT_LABEL}_default_prompt.txt",
     )
     report_body = ""
     progress_tracker.set_final_step("synthesis", 2)
-    final_synthesis, token_stats, synthesis_debug = (
+    story_drafting, token_stats, synthesis_debug = (
         story_selection_stage.build_precomputed_global_story_synthesis(
             selected_story_matches,
             final_reports,
@@ -5322,8 +5363,8 @@ def _run_pipeline() -> None:
             recipients=recipient_list,
         )
     synthesis_body = clean_synthesis_for_publication(
-        final_synthesis,
-        relaxed=RELAXED_FINAL_SYNTHESIS_GUARDS,
+        story_drafting,
+        relaxed=RELAXED_STORY_DRAFTING_GUARDS,
     )
     citation_sources = list((token_stats or {}).get("citation_sources") or [])
     citation_groups = list((token_stats or {}).get("citation_groups") or [])
@@ -5331,7 +5372,7 @@ def _run_pipeline() -> None:
         last_attempt = (synthesis_debug.get("attempts") or [{}])[-1]
         skip_reason = (
             last_attempt.get("reason")
-            if not final_synthesis
+            if not story_drafting
             else "publication cleaner removed all synthesis sections"
         )
         progress_tracker.detail(
@@ -5339,17 +5380,17 @@ def _run_pipeline() -> None:
             f"({skip_reason}). Skipping report."
         )
         diagnostics.event(
-            "final_synthesis_skipped",
+            "story_drafting_skipped",
             recipients=recipient_list,
             reason=skip_reason,
             token_stats=token_stats,
             attempts=synthesis_debug.get("attempts") or [],
-            relaxed_guards=RELAXED_FINAL_SYNTHESIS_GUARDS,
+            relaxed_guards=RELAXED_STORY_DRAFTING_GUARDS,
         )
     else:
         if synthesis_debug.get("fallback_synthesis_used"):
             diagnostics.event(
-                "final_synthesis_fallback_used",
+                "story_drafting_fallback_used",
                 recipients=recipient_list,
                 attempts=synthesis_debug.get("attempts") or [],
             )

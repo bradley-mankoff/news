@@ -1,0 +1,4 @@
+# Saved model tuning presets for the daily news pipeline.
+#
+# Presets are explicit overlays for one model or one model-task pair.
+presets: {}

@@ -1,6 +1,6 @@
-# Saved runtime presets for the daily news pipeline.
+# Saved run presets for the daily news pipeline.
 #
-# Presets are env-style defaults. Shell/UI overrides still win.
+# Run Presets are env-style defaults. Shell/UI overrides still win.
 presets:
   default:
     name: Default
@@ -21,7 +21,7 @@ presets:
       NEWS_IMAGE_ENABLED: '0'
       NEWS_MODEL: gemma-e2b-tiny
       NEWS_MIN_ARTICLES_PER_STORY: '2'
-      NEWS_RELAX_FINAL_SYNTHESIS_GUARDS: '1'
+      NEWS_RELAX_STORY_DRAFTING_GUARDS: '1'
   local-prod:
     name: Local production review
     description: Full source-pool review sent only to Bradley without blocking URL
