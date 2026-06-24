@@ -313,6 +313,9 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
                         task: article_summary
                         tuning:
                           temperature: 0.1
+                      blank-default:
+                        tuning:
+                          max_tokens: ""
                     """
                 ),
                 encoding="utf-8",
@@ -353,6 +356,18 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
                     r"wrong-task.*article_summary.*story_drafting",
                 ):
                     load_runtime_config(materialize_outputs=False)
+
+            with patch.dict(
+                os.environ,
+                {
+                    "NEWS_MODEL": CODEX_TEST_MODEL_ALIAS,
+                    "NEWS_MODEL_TUNING_PRESET": "blank-default",
+                },
+                clear=True,
+            ), patch.object(config_module, "MODEL_TUNING_PRESETS_PATH", preset_path):
+                config = load_runtime_config(materialize_outputs=False)
+                self.assertEqual(config.model_max_input_tokens, 6000)
+                self.assertEqual(config.model_tuning.model_max_input_tokens, 6000)
 
     def test_sampling_fields_remain_unset_without_override(self) -> None:
         with patch.dict(

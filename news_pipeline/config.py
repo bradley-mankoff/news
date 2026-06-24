@@ -634,7 +634,9 @@ def _apply_model_tuning_preset(
             raise ValueError(
                 f"Unsupported tuning field {key!r} in model tuning preset {preset_id!r}."
             )
-        updates[field_name] = _coerce_optional_int_value(value)
+        coerced_value = _coerce_optional_int_value(value)
+        if coerced_value is not None:
+            updates[field_name] = coerced_value
 
     task_sampling[assignment_task] = target_sampling
     updates["task_sampling"] = task_sampling
@@ -646,26 +648,15 @@ def _override_sampling_from_env(
     *,
     prefix: str,
 ) -> ModelSamplingSettings:
-    temperature = _optional_float_env(f"{prefix}_TEMPERATURE")
-    top_p = _optional_float_env(f"{prefix}_TOP_P")
-    top_k = _optional_int_env(f"{prefix}_TOP_K")
-    min_p = _optional_float_env(f"{prefix}_MIN_P")
-    presence_penalty = _optional_float_env(f"{prefix}_PRESENCE_PENALTY")
-    repetition_penalty = _optional_float_env(f"{prefix}_REPETITION_PENALTY")
-    return ModelSamplingSettings(
-        temperature=settings.temperature if temperature is None else temperature,
-        top_p=settings.top_p if top_p is None else top_p,
-        top_k=settings.top_k if top_k is None else top_k,
-        min_p=settings.min_p if min_p is None else min_p,
-        presence_penalty=(
-            settings.presence_penalty
-            if presence_penalty is None
-            else presence_penalty
-        ),
-        repetition_penalty=(
-            settings.repetition_penalty
-            if repetition_penalty is None
-            else repetition_penalty
+    return _merge_model_sampling_settings(
+        settings,
+        ModelSamplingSettings(
+            temperature=_optional_float_env(f"{prefix}_TEMPERATURE"),
+            top_p=_optional_float_env(f"{prefix}_TOP_P"),
+            top_k=_optional_int_env(f"{prefix}_TOP_K"),
+            min_p=_optional_float_env(f"{prefix}_MIN_P"),
+            presence_penalty=_optional_float_env(f"{prefix}_PRESENCE_PENALTY"),
+            repetition_penalty=_optional_float_env(f"{prefix}_REPETITION_PENALTY"),
         ),
     )
 
@@ -1709,6 +1700,7 @@ def _build_runtime_config(
         presets=tuning_presets,
     )
     default_model_assignment = model_assignments["default"]
+    default_tuning = default_model_assignment.tuning
     model_reference = default_model_assignment.reference
     model_name = default_model_assignment.name
     model_backend = default_model_assignment.backend
