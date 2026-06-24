@@ -3566,31 +3566,6 @@ def _fallback_synthesis_paragraph_from_summaries(summaries: list[str]) -> str:
     return _first_sentences(paragraph, max_sentences=8, max_chars=1800)
 
 
-def build_fallback_story_drafting_preview(
-    final_reports: List[article_summary_records_stage.ArticleSummaryRecord | str],
-) -> str:
-    """Create grouped prose when final synthesis repeatedly returns empty."""
-    grouped: dict[str, list[str]] = {}
-
-    for report in final_reports:
-        summary_text = _report_summary_text(report)
-        if not summary_text:
-            continue
-        story_label = _report_story_label(report)
-        story_label = story_label or "General update"
-        grouped.setdefault(story_label, []).append(summary_text)
-
-    sections: list[str] = []
-    for story_label, summaries in grouped.items():
-        if len(summaries) < MIN_ARTICLES_PER_STORY:
-            continue
-        paragraph = _fallback_synthesis_paragraph_from_summaries(summaries)
-        if paragraph:
-            sections.append(f"### {story_label}\n\n{paragraph}")
-
-    return "\n\n".join(sections)
-
-
 def _truncate_for_art_prompt(text: str, max_chars: int = 3800) -> str:
     compact_text = re.sub(r"\s+", " ", _strip_prompt_echo_lines(text or "")).strip()
     if len(compact_text) <= max_chars:
