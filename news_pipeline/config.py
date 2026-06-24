@@ -1811,7 +1811,8 @@ def _build_runtime_config(
         image_base_model="flux2-klein-4b",
         min_articles_per_story=pipeline_budget.min_articles_per_story,
         story_cluster_similarity_threshold=pipeline_budget.story_cluster_similarity_threshold,
-        total_article_summary_cap_gemma_4_derived=False,
+        total_article_summary_cap_gemma_4_derived=is_gemma_4_model_reference(model_reference)
+        and "NEWS_TOTAL_ARTICLE_SUMMARY_CAP" not in _active_env(),
         story_scale_screening_enabled=_bool_env("NEWS_STORY_SCALE_SCREENING_ENABLED", True),
         max_stories=pipeline_budget.max_stories,
         story_selection_overlap_threshold=pipeline_budget.story_selection_overlap_threshold,

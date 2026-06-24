@@ -153,10 +153,24 @@ class Gemma4ArticleBudgetTests(unittest.TestCase):
             config = load_runtime_config(materialize_outputs=False)
 
         self.assertEqual(config.pipeline_budget.total_article_summary_cap, 55)
+        self.assertFalse(config.total_article_summary_cap_gemma_4_derived)
         self.assertEqual(
             config.pipeline_budget.article_text_token_limit,
             DEFAULT_ARTICLE_TEXT_TOKEN_LIMIT,
         )
+
+    def test_gemma_4_default_summary_cap_is_marked_derived(self) -> None:
+        with patch.dict(os.environ, {}, clear=True):
+            config = load_runtime_config(
+                materialize_outputs=False,
+                environ={"NEWS_MODEL": GEMMA_12B_OPTIQ_MODEL_ALIAS},
+            )
+
+        self.assertEqual(
+            config.pipeline_budget.total_article_summary_cap,
+            DEFAULT_TOTAL_ARTICLE_SUMMARY_CAP,
+        )
+        self.assertTrue(config.total_article_summary_cap_gemma_4_derived)
 
     def test_budget_keeps_all_articles_below_cap(self) -> None:
         article_ids = _article_ids(4)
