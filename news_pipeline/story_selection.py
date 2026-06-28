@@ -19,7 +19,6 @@ from .article_summary_records import (
 )
 from .story_records import (
     ensure_story_record,
-    story_article_id_set,
     story_article_overlap,
     story_debug_record,
     story_rank_key,
@@ -332,10 +331,6 @@ def _global_scale_screening_eligible(story: dict[str, Any]) -> bool:
     )
 
 
-def _selected_global_story_debug_record(story: dict[str, Any]) -> dict[str, Any]:
-    return story_debug_record(story)
-
-
 def apply_global_story_scale_screening(
     story_drafts: list[dict[str, Any]],
     runtime: StorySelectionRuntime,
@@ -375,7 +370,7 @@ def apply_global_story_scale_screening(
         stats["dropped_count"] = len(dropped)
         stats["ineligible_count"] = len(dropped)
         stats["scale_counts"] = {STORY_SCALE_DEFAULT_VERDICT: len(story_drafts)}
-        stats["dropped"] = [_selected_global_story_debug_record(story) for story in dropped]
+        stats["dropped"] = [story_debug_record(story) for story in dropped]
         return [], stats
     if not story_drafts:
         stats["skipped_reason"] = "no_candidates"
@@ -491,23 +486,8 @@ def apply_global_story_scale_screening(
     if model_errors:
         stats["model_error"] = "; ".join(model_errors[:3])
     stats["scale_counts"] = dict(scale_counts)
-    stats["dropped"] = [_selected_global_story_debug_record(story) for story in dropped]
+    stats["dropped"] = [story_debug_record(story) for story in dropped]
     return kept, stats
-
-
-def _story_article_id_set(story: dict[str, Any]) -> set[str]:
-    return story_article_id_set(story)
-
-
-def _story_article_overlap(
-    left: dict[str, Any],
-    right: dict[str, Any],
-) -> tuple[float, set[str]]:
-    return story_article_overlap(left, right)
-
-
-def _global_story_rank(story: dict[str, Any]) -> tuple:
-    return story_rank_key(story)
 
 
 def select_global_story_drafts(
@@ -528,7 +508,7 @@ def select_global_story_drafts(
     ranked_drafts = sorted(
         ranked_drafts,
         key=lambda story: (
-            _global_story_rank(story),
+            story_rank_key(story),
             int(story.get("story_index") or 0),
         ),
     )
@@ -540,7 +520,7 @@ def select_global_story_drafts(
         if len(selected) >= max_stories:
             rejected.append(
                 {
-                    **_selected_global_story_debug_record(candidate),
+                    **story_debug_record(candidate),
                     "reason": "global_story_limit_reached",
                 }
             )
@@ -548,7 +528,7 @@ def select_global_story_drafts(
 
         conflicts: list[dict[str, Any]] = []
         for selected_story in selected:
-            overlap_ratio, shared_ids = _story_article_overlap(candidate, selected_story)
+            overlap_ratio, shared_ids = story_article_overlap(candidate, selected_story)
             if overlap_ratio > overlap_threshold:
                 conflicts.append(
                     {
@@ -570,7 +550,7 @@ def select_global_story_drafts(
             overlap_events.append(event)
             rejected.append(
                 {
-                    **_selected_global_story_debug_record(candidate),
+                    **story_debug_record(candidate),
                     "reason": event["reason"],
                     "overlap_conflicts": conflicts,
                 }
@@ -590,7 +570,7 @@ def select_global_story_drafts(
         "selected_story_count": len(selected),
         "max_stories": max_stories,
         "overlap_threshold": overlap_threshold,
-        "selected": [_selected_global_story_debug_record(story) for story in selected],
+        "selected": [story_debug_record(story) for story in selected],
         "rejected": rejected,
         "article_overlap_dedup": {
             "enabled": True,

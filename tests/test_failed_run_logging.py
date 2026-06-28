@@ -49,7 +49,7 @@ class FailedRunLoggingTests(unittest.TestCase):
 
             with redirect_stdout(StringIO()):
                 pipeline.RunSession(test_config).run(
-                    lambda: pipeline.progress_tracker.detail("synthetic progress detail")
+                    lambda session: session.progress.detail("synthetic progress detail")
                 )
 
             self.assertTrue(run_log.exists())
@@ -85,10 +85,9 @@ class FailedRunLoggingTests(unittest.TestCase):
                 run_used_urls_path=run_output_dir / "tracked_urls.txt",
             )
 
-            def fail_after_diagnostics() -> None:
-                diagnostics = pipeline._new_run_diagnostics(1)
-                pipeline.ACTIVE_RUN_DIAGNOSTICS = diagnostics
-                pipeline.progress_tracker.detail("synthetic detail before failure")
+            def fail_after_diagnostics(session: pipeline.RunSession) -> None:
+                session.diagnostics = pipeline._new_run_diagnostics(1, config=session.config)
+                session.progress.detail("synthetic detail before failure")
                 raise RuntimeError("synthetic failure")
 
             with patch.object(pipeline, "timestamp", "wrong-module-timestamp"):
@@ -113,7 +112,7 @@ class FailedRunLoggingTests(unittest.TestCase):
                 self.assertEqual(run_id, timestamp)
                 self.assertEqual(status, "failed")
 
-    def test_session_finalizer_survives_compat_global_drift(self) -> None:
+    def test_session_finalizer_survives_global_drift(self) -> None:
         timestamp = "2026-06-06_11-00-00"
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
@@ -136,15 +135,15 @@ class FailedRunLoggingTests(unittest.TestCase):
                 history_db_path=history_db_path,
             )
 
-            def finish_after_candidate_collection() -> None:
-                diagnostics = pipeline._new_run_diagnostics(1)
-                finalizer = pipeline._active_run_finalizer(diagnostics, test_config)
+            def finish_after_candidate_collection(session: pipeline.RunSession) -> None:
+                session.diagnostics = pipeline._new_run_diagnostics(1, config=session.config)
+                finalizer = session.finalizer_for(session.diagnostics)
                 finalizer.record_candidate_articles(
                     [{"url": "https://example.com/a", "title": "A", "source": "Example"}]
                 )
-                pipeline.ACTIVE_RUN_FINALIZER = None
-                diagnostics.event("aborted", reason="no_article_candidates")
-                pipeline._finish_run_diagnostics(diagnostics, test_config)
+                pipeline.ACTIVE_RUN_DIAGNOSTICS = None
+                session.diagnostics.event("aborted", reason="no_article_candidates")
+                pipeline._finish_run_diagnostics(session.diagnostics, finalizer=finalizer)
 
             with redirect_stdout(StringIO()):
                 pipeline.RunSession(test_config).run(finish_after_candidate_collection)

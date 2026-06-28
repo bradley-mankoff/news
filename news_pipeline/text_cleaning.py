@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import html
 import re
+from html.parser import HTMLParser
 from urllib.parse import urlparse
-
-from bs4 import BeautifulSoup
+from xml.etree import ElementTree
 
 
 XML_DOCUMENT_RE = re.compile(
@@ -98,8 +98,31 @@ def strip_model_artifacts(text: str) -> str:
     return text.strip()
 
 
-def _markup_parser_for_text(text: str) -> str:
-    return "xml" if XML_DOCUMENT_RE.search(text) else "html.parser"
+class _MarkupTextExtractor(HTMLParser):
+    def __init__(self, separator: str) -> None:
+        super().__init__()
+        self._separator = separator
+        self._parts: list[str] = []
+
+    def handle_data(self, data: str) -> None:
+        chunk = data.strip()
+        if chunk:
+            self._parts.append(chunk)
+
+    def get_text(self) -> str:
+        return self._separator.join(self._parts)
+
+
+def _extract_html_text(text: str, *, html_separator: str) -> str:
+    parser = _MarkupTextExtractor(html_separator)
+    parser.feed(text)
+    parser.close()
+    return parser.get_text()
+
+
+def _extract_xml_text(text: str, *, html_separator: str) -> str:
+    root = ElementTree.fromstring(text)
+    return html_separator.join(part.strip() for part in root.itertext() if part.strip())
 
 
 def _strip_markup_and_web_noise(text: str | None, *, html_separator: str) -> str:
@@ -114,11 +137,10 @@ def _strip_markup_and_web_noise(text: str | None, *, html_separator: str) -> str
     )
     if "<" in clean_text and ">" in clean_text:
         try:
-            soup = BeautifulSoup(clean_text, _markup_parser_for_text(clean_text))
-            clean_text = soup.get_text(
-                html_separator,
-                strip=True,
-            )
+            if XML_DOCUMENT_RE.search(clean_text):
+                clean_text = _extract_xml_text(clean_text, html_separator=html_separator)
+            else:
+                clean_text = _extract_html_text(clean_text, html_separator=html_separator)
         except Exception:
             clean_text = re.sub(r"(?s)<[^>]+>", " ", clean_text)
     else:

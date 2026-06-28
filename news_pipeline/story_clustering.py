@@ -60,6 +60,10 @@ STORY_SIMILARITY_TEXT_WEIGHT = 4
 STORY_MIN_SOURCE_COUNT = 2
 STORY_PAIR_DEBUG_LIMIT = 250
 STORY_MEMBER_EDGE_DEGREE_FLOOR = 1
+STORY_MAX_ARTICLES_PER_SOURCE_PER_STORY = max(
+    1,
+    _int_env("NEWS_MAX_ARTICLES_PER_SOURCE_PER_STORY", 6),
+)
 ProgressCallback = Callable[[str, dict[str, Any]], None]
 
 
@@ -816,6 +820,48 @@ def _select_story_article_indexes(
     return selected
 
 
+def _cap_story_component_articles_per_source(
+    component: list[int],
+    articles: list[dict],
+    similarities: dict[tuple[int, int], float],
+    *,
+    max_articles_per_source: int | None = None,
+) -> tuple[list[int], list[int]]:
+    cleaned_component = sorted(set(component))
+    if not cleaned_component:
+        return [], []
+    if max_articles_per_source is None:
+        max_articles_per_source = STORY_MAX_ARTICLES_PER_SOURCE_PER_STORY
+    max_articles_per_source = int(max_articles_per_source)
+    if max_articles_per_source <= 0:
+        return cleaned_component, []
+
+    medoid_index = _story_component_medoid_index(
+        cleaned_component,
+        articles,
+        similarities,
+    )
+    preferred_indexes = _select_story_article_indexes(
+        cleaned_component,
+        medoid_index,
+        articles,
+        similarities,
+    )
+
+    source_counts: Counter[str] = Counter()
+    kept_indexes: list[int] = []
+    dropped_indexes: list[int] = []
+    for index in preferred_indexes:
+        source = _article_source_identity(articles[index])
+        if source_counts[source] >= max_articles_per_source:
+            dropped_indexes.append(index)
+            continue
+        kept_indexes.append(index)
+        source_counts[source] += 1
+
+    return sorted(kept_indexes), sorted(dropped_indexes)
+
+
 def _story_component_overlap_ratio(left: set[int], right: set[int]) -> float:
     if not left or not right:
         return 0.0
@@ -943,23 +989,41 @@ def cluster_global_stories_by_similarity(
 
     def add_candidate(component_record: dict[str, Any]) -> None:
         clean_component = sorted(set(component_record.get("component") or []))
-        if len(clean_component) < min_articles_per_story:
+        capped_component, cap_dropped_indexes = _cap_story_component_articles_per_source(
+            clean_component,
+            articles,
+            similarities,
+        )
+        if len(capped_component) < min_articles_per_story:
             return
         if not _story_component_meets_connectedness_floor(
-            clean_component,
+            capped_component,
             source_identities,
             similarities,
             similarity_threshold,
             min_articles_per_story=min_articles_per_story,
         ):
             return
-        signature = tuple(clean_component)
+        pruned_indexes = sorted(
+            set(component_record.get("pruned_indexes") or []) | set(cap_dropped_indexes)
+        )
+        prune_reason = str(component_record.get("prune_reason") or "")
+        if cap_dropped_indexes:
+            prune_reason = "+".join(
+                reason
+                for reason in (prune_reason, "source_article_cap")
+                if reason
+            )
+        signature = tuple(capped_component)
         candidate_components.setdefault(
             signature,
             {
                 **component_record,
-                "component": clean_component,
-                "pruned_indexes": sorted(set(component_record.get("pruned_indexes") or [])),
+                "component": capped_component,
+                "pruned_indexes": pruned_indexes,
+                "prune_reason": prune_reason,
+                "source_article_cap_dropped_count": len(cap_dropped_indexes),
+                "max_articles_per_source_per_story": STORY_MAX_ARTICLES_PER_SOURCE_PER_STORY,
             },
         )
 
@@ -1103,6 +1167,10 @@ def cluster_global_stories_by_similarity(
                 ],
                 "article_count": len(component),
                 "selected_article_count": len(component),
+                "source_article_cap_dropped_count": int(
+                    component_record.get("source_article_cap_dropped_count") or 0
+                ),
+                "max_articles_per_source_per_story": STORY_MAX_ARTICLES_PER_SOURCE_PER_STORY,
                 "average_similarity": round(float(metrics["average_similarity"]), 4),
                 "connectedness_score": round(float(metrics["connectedness_score"]), 4),
                 "story_strength_score": round(float(metrics["story_strength_score"]), 4),
@@ -1183,6 +1251,7 @@ def organize_article_targets_into_global_stories(
             "similarity_threshold": similarity_threshold,
             "component_overlap_suppress_threshold": STORY_COMPONENT_OVERLAP_SUPPRESS_THRESHOLD,
             "clustering_method": "global_singletons",
+            "max_articles_per_source_per_story": STORY_MAX_ARTICLES_PER_SOURCE_PER_STORY,
         }
 
     story_groups = cluster_global_stories_by_similarity(
@@ -1237,6 +1306,15 @@ def organize_article_targets_into_global_stories(
                 pruned_article_ids=tuple(story.get("pruned_article_ids") or []),
                 prune_reason=str(story.get("prune_reason") or ""),
                 source_count=story.get("source_count"),
+                extras={
+                    key: story.get(key)
+                    for key in (
+                        "source_article_cap_dropped_count",
+                        "max_articles_per_source_per_story",
+                    )
+                    if key in story
+                }
+                or None,
             )
         )
         story_records.append(story_record)
@@ -1301,6 +1379,7 @@ def organize_article_targets_into_global_stories(
         "similarity_threshold": similarity_threshold,
         "component_overlap_suppress_threshold": STORY_COMPONENT_OVERLAP_SUPPRESS_THRESHOLD,
         "clustering_method": "global_overlapping_cleaned_body_weighted_tfidf_similarity_graph",
+        "max_articles_per_source_per_story": STORY_MAX_ARTICLES_PER_SOURCE_PER_STORY,
         "story_count": len(story_records),
         "stories": story_debug_records,
         "article_story_memberships": {
@@ -1311,50 +1390,3 @@ def organize_article_targets_into_global_stories(
         "pair_debug": pair_debug,
     }
     return selected_targets, story_records, stats
-
-
-def filter_budgeted_targets_by_story_floor(
-    article_targets: list[dict],
-    *,
-    min_articles_per_story: int = MIN_ARTICLES_PER_STORY,
-) -> tuple[list[dict], dict[str, Any]]:
-    if min_articles_per_story <= 1:
-        return article_targets, {
-            "enabled": False,
-            "candidate_count": len(article_targets),
-            "included_count": len(article_targets),
-            "dropped_count": 0,
-            "min_articles_per_story": min_articles_per_story,
-        }
-
-    grouped: dict[str, list[dict]] = {}
-    for article in article_targets:
-        story_key = str(article.get("story_key") or "").strip()
-        if not story_key:
-            continue
-        grouped.setdefault(story_key, []).append(article)
-
-    eligible_story_keys = {
-        story_key
-        for story_key, story_articles in grouped.items()
-        if len(story_articles) >= min_articles_per_story
-    }
-    selected = [
-        article
-        for article in article_targets
-        if str(article.get("story_key") or "").strip() in eligible_story_keys
-    ]
-    dropped = [
-        article
-        for article in article_targets
-        if str(article.get("story_key") or "").strip() not in eligible_story_keys
-    ]
-    return selected, {
-        "enabled": True,
-        "candidate_count": len(article_targets),
-        "included_count": len(selected),
-        "dropped_count": len(dropped),
-        "min_articles_per_story": min_articles_per_story,
-        "eligible_story_count": len(eligible_story_keys),
-        "dropped_article_ids": [article.get("article_id") for article in dropped],
-    }

@@ -276,7 +276,6 @@ def schema_payload() -> dict[str, Any]:
             "run",
             "check-sources",
             "prune-sources",
-            "source-languages",
             "model-server-command",
             "codex-model-server-command",
             "serve-unsubscribe",
@@ -546,7 +545,7 @@ def build_command(body: dict[str, Any]) -> tuple[list[str], dict[str, str]]:
         if preset_id:
             env.setdefault("NEWS_PRESET", preset_id)
         command.append(action)
-    elif action in {"check-sources", "prune-sources", "source-languages"}:
+    elif action in {"check-sources", "prune-sources"}:
         command.append(action)
         _add_option(command, "--sources-yaml", options.get("sources_yaml"))
         _add_option(command, "--timeout", options.get("timeout"))
@@ -555,11 +554,6 @@ def build_command(body: dict[str, Any]) -> tuple[list[str], dict[str, str]]:
         _add_bool_option(command, "--probe-articles", options.get("probe_articles"))
         _add_bool_option(command, "--prune-unscrapable", options.get("prune_unscrapable"))
         _add_bool_option(command, "--only-failures", options.get("only_failures"))
-        _add_bool_option(command, "--write-languages", options.get("write_languages"))
-        _add_bool_option(command, "--overwrite-languages", options.get("overwrite_languages"))
-        _add_option(command, "--language-model", options.get("language_model"))
-        _add_option(command, "--language-samples", options.get("language_samples"))
-        _add_option(command, "--min-language-confidence", options.get("min_language_confidence"))
         _add_option(command, "--limit", options.get("limit"))
         _add_option(command, "--section", options.get("section"))
         _add_bool_option(command, "--json", options.get("json"))
@@ -848,118 +842,106 @@ HTML = r"""<!doctype html>
   <style>
     :root {
       color-scheme: light;
-      --bg: #f7f8fa;
-      --surface: #ffffff;
-      --line: #d9dee7;
-      --ink: #1f2430;
-      --muted: #657083;
-      --blue: #255f99;
-      --green: #19735a;
-      --gold: #9c6b16;
-      --red: #b33a3a;
-      --focus: #0f7a9f;
+      --bg: #f4f1ec; --surface: #fffdf8; --panel: #f9f6ef; --line: #d8d0c3;
+      --ink: #24211d; --muted: #70685e; --accent: #315f5a; --good: #2c7152;
+      --warn: #946018; --bad: #a13f37; --focus: #9b5f2f;
     }
     * { box-sizing: border-box; }
     body {
       margin: 0;
-      min-height: 100vh;
-      background: var(--bg);
+      min-height: 100dvh;
+      background: radial-gradient(circle at 18% 0%, rgba(49,95,90,.10), transparent 32rem), linear-gradient(135deg, rgba(255,255,255,.36) 25%, transparent 25%) 0 0/18px 18px, var(--bg);
       color: var(--ink);
-      font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font: 14px/1.45 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font-variant-numeric: tabular-nums;
     }
     header {
       display: flex;
       align-items: center;
       justify-content: space-between;
       gap: 16px;
-      padding: 14px 18px;
+      padding: 16px clamp(16px, 3vw, 32px);
       border-bottom: 1px solid var(--line);
-      background: var(--surface);
+      background: rgba(255,253,248,.86);
+      backdrop-filter: blur(12px);
       position: sticky;
       top: 0;
       z-index: 2;
     }
-    h1 { font-size: 18px; margin: 0; letter-spacing: 0; }
-    h2 { font-size: 15px; margin: 0 0 12px; letter-spacing: 0; }
-    h3 { font-size: 13px; margin: 18px 0 8px; color: var(--muted); letter-spacing: 0; }
+    h1 { font-size: 19px; margin: 0; font-weight: 720; }
+    h2 { font-size: 15px; margin: 0 0 12px; font-weight: 680; }
+    h3 { font-size: 13px; margin: 18px 0 8px; color: var(--muted); font-weight: 620; }
     button, select, input, textarea {
       font: inherit;
       border: 1px solid var(--line);
-      background: #fff;
+      background: var(--surface);
       color: var(--ink);
-      border-radius: 6px;
+      border-radius: 5px;
     }
     button {
       min-height: 34px;
       padding: 6px 10px;
       cursor: pointer;
-      background: #fdfdfd;
+      transition: background .18s ease, border-color .18s ease, color .18s ease, transform .18s ease;
     }
-    button.primary { background: var(--blue); color: white; border-color: var(--blue); }
-    button.danger { color: var(--red); border-color: #e5b4b4; }
+    button:hover { background: #efe9df; border-color: #c7baa8; }
+    button:active { transform: translateY(1px); }
+    button.primary { background: var(--accent); color: white; border-color: var(--accent); }
+    button.danger { color: var(--bad); border-color: #d7afa9; }
     button:focus, input:focus, select:focus, textarea:focus { outline: 2px solid var(--focus); outline-offset: 1px; }
     input, select, textarea { width: 100%; min-height: 34px; padding: 6px 8px; }
     textarea { min-height: 76px; resize: vertical; }
-    main { display: grid; grid-template-columns: 220px 1fr; min-height: calc(100vh - 63px); }
+    main { display: grid; grid-template-columns: 190px minmax(0, 1fr); max-width: 1480px; margin: 0 auto; min-height: calc(100dvh - 67px); }
     nav {
       border-right: 1px solid var(--line);
-      background: #eef1f5;
-      padding: 12px;
+      padding: 16px 12px;
     }
-    nav button {
-      width: 100%;
-      text-align: left;
-      margin-bottom: 6px;
-      background: transparent;
-      border-color: transparent;
-    }
-    nav button.active { background: #fff; border-color: var(--line); color: var(--blue); }
+    nav button { width: 100%; text-align: left; margin-bottom: 6px; background: transparent; border-color: transparent; }
+    nav button.active { background: var(--surface); border-color: var(--line); color: var(--accent); }
     section.view { display: none; padding: 18px; }
     section.view.active { display: block; }
     .grid { display: grid; gap: 12px; }
-    .cols { grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
-    .panel {
-      background: var(--surface);
-      border: 1px solid var(--line);
-      border-radius: 8px;
-      padding: 14px;
-    }
+    .cols { grid-template-columns: minmax(300px, .85fr) minmax(360px, 1.15fr); align-items: start; }
+    .panel { background: var(--surface); border: 1px solid var(--line); border-radius: 7px; padding: 14px; box-shadow: 0 18px 44px rgba(78, 64, 45, .08); }
+    .stack { margin-top: 12px; }
     .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
-    .stat { border-left: 4px solid var(--blue); padding: 8px 10px; background: #fff; border-radius: 6px; }
+    .stat { border-left: 3px solid var(--accent); padding: 8px 10px; background: var(--panel); border-radius: 5px; }
     .stat strong { display: block; font-size: 20px; }
     .row { display: grid; grid-template-columns: minmax(120px, 190px) 1fr; gap: 10px; align-items: center; margin-bottom: 10px; }
     .row label { color: var(--muted); }
     .toolbar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 12px; }
+    .toolbar.flush { margin-top: 12px; }
     .toolbar > * { width: auto; }
-    .table-wrap { overflow: auto; border: 1px solid var(--line); border-radius: 8px; background: #fff; }
+    .table-wrap { overflow: auto; border: 1px solid var(--line); border-radius: 7px; background: var(--surface); }
     table { border-collapse: collapse; width: 100%; min-width: 760px; }
     th, td { border-bottom: 1px solid var(--line); padding: 8px; text-align: left; vertical-align: top; }
-    th { position: sticky; top: 0; background: #f3f5f8; z-index: 1; }
-    tr:hover td { background: #fafcff; }
+    th { position: sticky; top: 0; background: #eee7db; z-index: 1; font-weight: 650; }
+    tr:hover td { background: #f7f0e5; }
     .muted { color: var(--muted); }
-    .warn { color: var(--gold); }
-    .bad { color: var(--red); }
-    .good { color: var(--green); }
+    .warn { color: var(--warn); }
+    .bad { color: var(--bad); }
+    .good { color: var(--good); }
     .hidden { display: none !important; }
     pre {
       margin: 0;
       padding: 12px;
       overflow: auto;
       min-height: 72px;
-      background: #111827;
-      color: #e8edf7;
-      border-radius: 8px;
+      background: #1d2523;
+      color: #edf4ed;
+      border-radius: 6px;
       white-space: pre-wrap;
     }
     #logPane { min-height: 280px; max-height: 52vh; }
     .knob-group { margin-bottom: 18px; }
     .knobs { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 10px; }
-    .knob { border: 1px solid var(--line); border-radius: 8px; padding: 10px; background: #fff; }
+    .knob { border: 1px solid var(--line); border-radius: 7px; padding: 10px; background: var(--surface); }
     .knob label { display: block; font-weight: 600; margin-bottom: 4px; }
     .knob code { color: var(--muted); font-size: 12px; }
     .knob-details { margin-top: 12px; }
     .knob-details > summary { cursor: pointer; color: var(--muted); font-weight: 600; }
     .form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 10px; }
+    @media (max-width: 1000px) { .cols { grid-template-columns: 1fr; } }
     @media (max-width: 780px) {
       main { grid-template-columns: 1fr; }
       nav { display: flex; overflow-x: auto; border-right: 0; border-bottom: 1px solid var(--line); }
@@ -990,16 +972,11 @@ HTML = r"""<!doctype html>
               <label>Timeout<input id="opt_timeout" type="number" min="1"></label>
               <label>Concurrency<input id="opt_concurrency" type="number" min="1"></label>
               <label>Section<select id="opt_section"><option value=""></option><option>sources</option><option>all</option></select></label>
-              <label>Language model<input id="opt_language_model"></label>
-              <label>Language samples<input id="opt_language_samples" type="number" min="1"></label>
-              <label>Min language confidence<input id="opt_min_language_confidence" type="number" step="0.01" min="0" max="1"></label>
             </div>
             <div class="toolbar">
               <label><input id="opt_probe_articles" type="checkbox"> Probe articles</label>
               <label><input id="opt_prune_unscrapable" type="checkbox"> Prune unscrapable</label>
               <label><input id="opt_only_failures" type="checkbox"> Only failures</label>
-              <label><input id="opt_write_languages" type="checkbox"> Write languages</label>
-              <label><input id="opt_overwrite_languages" type="checkbox"> Overwrite languages</label>
               <label><input id="opt_json" type="checkbox"> JSON</label>
             </div>
           </div>
@@ -1014,12 +991,12 @@ HTML = r"""<!doctype html>
           <div id="stats" class="stats"></div>
         </div>
       </div>
-      <div class="panel" style="margin-top:12px">
+      <div class="panel stack">
         <h2>Command Preview</h2>
         <pre id="previewPane"></pre>
       </div>
-      <div class="panel" style="margin-top:12px">
-        <div class="toolbar"><h2 style="margin-right:auto">Run Log</h2><button id="stopBtn" class="danger">Stop</button></div>
+      <div class="panel stack">
+        <div class="toolbar"><h2>Run log</h2><button id="stopBtn" class="danger">Stop</button></div>
         <pre id="logPane"></pre>
       </div>
     </section>
@@ -1049,7 +1026,7 @@ HTML = r"""<!doctype html>
           </div>
           <label>Description<textarea id="preset_description"></textarea></label>
           <label>Environment<textarea id="preset_env" spellcheck="false"></textarea></label>
-          <div class="toolbar" style="margin-top:12px">
+          <div class="toolbar flush">
             <button id="savePresetEditorBtn" class="primary">Save run preset</button>
             <button id="deletePresetBtn" class="danger">Delete run preset</button>
             <button id="loadPresetIntoKnobsBtn">Load into settings</button>
@@ -1089,7 +1066,7 @@ HTML = r"""<!doctype html>
             <label>Name<input id="recipient_name"></label>
             <label>Paused<select id="recipient_pause"><option value="false">false</option><option value="true">true</option></select></label>
           </div>
-          <div class="toolbar" style="margin-top:12px">
+          <div class="toolbar flush">
             <button id="saveRecipientBtn" class="primary">Save recipient</button>
             <button id="deleteRecipientBtn" class="danger">Delete recipient</button>
           </div>
@@ -1141,14 +1118,9 @@ HTML = r"""<!doctype html>
         timeout: value("opt_timeout"),
         concurrency: value("opt_concurrency"),
         section: value("opt_section"),
-        language_model: value("opt_language_model"),
-        language_samples: value("opt_language_samples"),
-        min_language_confidence: value("opt_min_language_confidence"),
         probe_articles: checked("opt_probe_articles"),
         prune_unscrapable: checked("opt_prune_unscrapable"),
         only_failures: checked("opt_only_failures"),
-        write_languages: checked("opt_write_languages"),
-        overwrite_languages: checked("opt_overwrite_languages"),
         json: checked("opt_json")
       };
     }
@@ -1280,6 +1252,11 @@ HTML = r"""<!doctype html>
     function escapeHtml(text) {
       return String(text ?? "").replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;").replaceAll('"',"&quot;");
     }
+    function table(id, columns, rows, attrs) {
+      const head = columns.map(([key, label]) => `<th>${escapeHtml(label || key)}</th>`).join("");
+      const body = rows.map(row => `<tr ${attrs(row)}>` + columns.map(([key]) => `<td>${escapeHtml(row[key] ?? "")}</td>`).join("") + `</tr>`).join("");
+      $(id).innerHTML = `<thead><tr>${head}</tr></thead><tbody>${body}</tbody>`;
+    }
     function currentPreset() {
       return state.presets.find(preset => preset.id === value("presetSelect")) || null;
     }
@@ -1318,9 +1295,7 @@ HTML = r"""<!doctype html>
     function renderPresets() {
       const rows = state.presets || [];
       if (!$("presetTable")) return;
-      $("presetTable").innerHTML = `<thead><tr><th>ID</th><th>Name</th><th>Description</th></tr></thead><tbody>` +
-        rows.map(preset => `<tr data-id="${escapeHtml(preset.id || "")}"><td>${escapeHtml(preset.id || "")}</td><td>${escapeHtml(preset.name || "")}</td><td>${escapeHtml(preset.description || "")}</td></tr>`).join("") +
-        `</tbody>`;
+      table("presetTable", [["id", "ID"], ["name", "Name"], ["description", "Description"]], rows, preset => `data-id="${escapeHtml(preset.id || "")}"`);
       document.querySelectorAll("#presetTable tr[data-id]").forEach(row => row.onclick = () => editPreset(row.dataset.id));
     }
     function editPreset(id) {
@@ -1389,9 +1364,7 @@ HTML = r"""<!doctype html>
     function renderSources() {
       const q = value("sourceSearch").toLowerCase();
       const rows = state.sources.filter(src => JSON.stringify(src).toLowerCase().includes(q));
-      $("sourceTable").innerHTML = `<thead><tr><th>Key</th><th>Name</th><th>Tier</th><th>Language</th><th>Region</th><th>URL</th></tr></thead><tbody>` +
-        rows.map(src => `<tr data-key="${src.key || ""}"><td>${src.key || ""}</td><td>${src.name || ""}</td><td>${src.tier || ""}</td><td>${src.language || ""}</td><td>${src.region || ""}</td><td>${src.url || ""}</td></tr>`).join("") +
-        `</tbody>`;
+      table("sourceTable", [["key", "Key"], ["name", "Name"], ["tier", "Tier"], ["language", "Language"], ["region", "Region"], ["url", "URL"]], rows, src => `data-key="${escapeHtml(src.key || "")}"`);
       document.querySelectorAll("#sourceTable tr[data-key]").forEach(row => row.onclick = () => editSource(row.dataset.key));
     }
     function sourceInput(field, src) {
@@ -1436,9 +1409,8 @@ HTML = r"""<!doctype html>
       renderRecipients();
     }
     function renderRecipients() {
-      $("recipientTable").innerHTML = `<thead><tr><th>Email</th><th>Name</th><th>Paused</th></tr></thead><tbody>` +
-        state.recipients.map(rec => `<tr data-email="${rec.email || ""}"><td>${rec.email || ""}</td><td>${rec.name || ""}</td><td>${rec.pause ? "true" : "false"}</td></tr>`).join("") +
-        `</tbody>`;
+      const rows = state.recipients.map(rec => ({...rec, pause: rec.pause ? "true" : "false"}));
+      table("recipientTable", [["email", "Email"], ["name", "Name"], ["pause", "Paused"]], rows, rec => `data-email="${escapeHtml(rec.email || "")}"`);
       document.querySelectorAll("#recipientTable tr[data-email]").forEach(row => row.onclick = () => editRecipient(row.dataset.email));
     }
     function editRecipient(email) {
@@ -1493,7 +1465,7 @@ HTML = r"""<!doctype html>
       $("newRecipientBtn").onclick = () => editRecipient("");
       $("saveRecipientBtn").onclick = () => saveRecipient().catch(err => setStatus(err.message, "bad"));
       $("deleteRecipientBtn").onclick = () => deleteSelectedRecipient().catch(err => setStatus(err.message, "bad"));
-      $("actionSelect").onchange = () => $("sourceOptions").classList.toggle("hidden", !["check-sources","prune-sources","source-languages"].includes(value("actionSelect")));
+      $("actionSelect").onchange = () => $("sourceOptions").classList.toggle("hidden", !["check-sources","prune-sources"].includes(value("actionSelect")));
     }
     async function init() {
       state.schema = await api("/api/schema");

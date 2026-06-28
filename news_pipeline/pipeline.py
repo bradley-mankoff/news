@@ -75,8 +75,8 @@ from collections import Counter
 from contextlib import contextmanager
 from threading import Lock, RLock, current_thread, main_thread
 from typing import Any, Callable, TextIO, List
+from xml.etree import ElementTree
 import requests
-from bs4 import BeautifulSoup
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage, SystemMessage, BaseMessage, AIMessage
 from datetime import datetime, timezone, timedelta
@@ -1004,104 +1004,8 @@ LOW_COVERAGE_SYNTHESIS_PATTERNS = [
 
 RUN_LOG_FILE: TextIO | None = None
 RUN_LOG_FILES: list[TextIO] = []
-ACTIVE_RUN_SESSION: "RunSession | None" = None
+_RUN_SESSION_ACTIVE = False
 _RUN_SESSION_LOCK = RLock()
-
-
-def _compat_runtime_values(config: RuntimeConfig) -> dict[str, Any]:
-    return {
-        "CONFIG": config,
-        "MODEL_NAME": config.model_name,
-        "MODEL_REFERENCE": config.model_reference,
-        "MODEL_ASSIGNMENTS": config.model_assignments,
-        "MODEL_TUNING": config.model_tuning,
-        "PIPELINE_BUDGET": config.pipeline_budget,
-        "MODEL_SERVER_SETTINGS": config.model_server_settings,
-        "MODEL_BASE_URL": config.model_base_url,
-        "MODEL_BACKEND": config.model_backend,
-        "MODEL_SERVER_COMMAND": config.model_server_command,
-        "TRANSLATION_MODEL_REFERENCE": config.translation_model_reference,
-        "TRANSLATION_MODEL_NAME": config.translation_model_name,
-        "TRANSLATION_MODEL_BASE_URL": config.translation_model_base_url,
-        "TRANSLATION_MODEL_BACKEND": config.translation_model_backend,
-        "TRANSLATION_MODEL_SERVER_COMMAND": config.translation_model_server_command,
-        "TRANSLATION_TARGET_LANGUAGE": config.translation_target_language,
-        "TRANSLATION_ENABLED": config.translation_enabled,
-        "BRADLEY_RECIPIENT": config.bradley_recipient,
-        "RECENT_WINDOW_HOURS": config.recent_window_hours,
-        "MAX_ARTICLES_PER_SOURCE": config.max_articles_per_source,
-        "RUN_STARTED_AT": config.run_started_at,
-        "RUN_DATE": config.run_date,
-        "timestamp": config.timestamp,
-        "OUTPUT_DIR": str(config.output_dir),
-        "RUN_OUTPUT_DIR": str(config.run_output_dir),
-        "RUN_STAGING_DIR": str(config.run_staging_dir),
-        "LATEST_RUN_MARKDOWN_PATH": str(config.latest_run_markdown_path),
-        "LATEST_RUN_LOG_PATH": str(config.latest_run_log_path),
-        "LATEST_RUN_DETAILS_PATH": str(config.latest_run_details_path),
-        "HISTORY_DB_PATH": str(config.history_db_path),
-        "HISTORY_EXPORT_CSV": config.history_export_csv,
-        "WRITE_LEGACY_DIAGNOSTICS": config.write_legacy_diagnostics,
-        "PRESET_ID": config.preset_id,
-        "SOURCE_SCOPE": config.source_scope,
-        "RECIPIENT_SCOPE": config.recipient_scope,
-        "URL_REUSE_BLOCKING_ENABLED": config.url_reuse_blocking_enabled,
-        "RELAXED_STORY_DRAFTING_GUARDS": config.relaxed_story_drafting_guards,
-        "RUN_USED_URLS_PATH": str(config.run_used_urls_path),
-        "RUN_LOG_PATH": os.path.join(str(config.run_output_dir), f"run_log_{config.timestamp}.log"),
-        "EMAIL_RECIPIENTS_FALLBACK": config.email_recipients_fallback,
-        "EMAIL_FROM": config.email_from,
-        "SMTP_HOST": config.smtp_host,
-        "SMTP_PORT": config.smtp_port,
-        "SMTP_USERNAME": config.smtp_username,
-        "SMTP_USE_SSL": config.smtp_use_ssl,
-        "SMTP_PASSWORD": config.smtp_password,
-        "UNSUBSCRIBE_BASE_URL": config.unsubscribe_base_url,
-        "UNSUBSCRIBE_HOST": config.unsubscribe_host,
-        "UNSUBSCRIBE_PORT": config.unsubscribe_port,
-        "UNSUBSCRIBE_SECRET": config.unsubscribe_secret,
-        "MODEL_MAX_INPUT_TOKENS": config.model_max_input_tokens,
-        "TOKEN_ENCODING_NAME": config.token_encoding_name,
-        "MODEL_CONCURRENCY": max(1, config.model_concurrency),
-        "ARTICLE_SUMMARY_CONCURRENCY": max(1, config.article_summary_concurrency),
-        "STORY_SYNTHESIS_CONCURRENCY": max(1, config.story_synthesis_concurrency),
-        "SOURCE_COLLECTION_CONCURRENCY": max(1, config.source_collection_concurrency),
-        "ARTICLE_TEXT_TOKEN_LIMIT": max(500, config.article_text_token_limit),
-        "TOTAL_ARTICLE_SUMMARY_CAP": max(0, config.total_article_summary_cap),
-        "MODEL_IS_GEMMA_4": is_gemma_4_model_reference(config.model_reference),
-        "TOTAL_ARTICLE_SUMMARY_CAP_GEMMA_4_DERIVED": config.total_article_summary_cap_gemma_4_derived,
-        "TRANSLATION_MAX_TOKENS": max(100, config.translation_max_tokens),
-        "ARTICLE_SUMMARY_MAX_TOKENS": max(100, config.article_summary_max_tokens),
-        "STORY_DRAFTING_MAX_TOKENS": max(100, config.story_drafting_max_tokens),
-        "TITLE_GENERATION_MAX_TOKENS": max(20, config.title_generation_max_tokens),
-        "MIN_ARTICLES_PER_STORY": max(2, config.min_articles_per_story),
-        "STORY_SCALE_SCREENING_ENABLED": config.story_scale_screening_enabled,
-        "MAX_STORIES": max(1, config.max_stories),
-        "STORY_CLUSTER_SIMILARITY_THRESHOLD": min(
-            1.0,
-            max(0.0, config.story_cluster_similarity_threshold),
-        ),
-        "STORY_SELECTION_OVERLAP_THRESHOLD": config.story_selection_overlap_threshold,
-        "STORY_EMBEDDING_DEDUP_THRESHOLD": config.story_embedding_dedup_threshold,
-        "STORY_BACKFILL_BATCH_MULTIPLIER": max(1, config.story_backfill_batch_multiplier),
-        "IMAGE_GENERATION_ENABLED": config.image_generation_enabled,
-        "IMAGE_GENERATION_FAIL_ON_ERROR": config.image_generation_fail_on_error,
-        "IMAGE_WIDTH": max(256, config.image_width),
-        "IMAGE_HEIGHT": max(256, config.image_height),
-        "IMAGE_STEPS": max(1, config.image_steps),
-        "IMAGE_CROP_BOTTOM_RATIO": min(max(config.image_crop_bottom_ratio, 0.0), 0.35),
-        "IMAGE_MODEL_ID": config.image_model_id,
-        "IMAGE_BASE_MODEL": config.image_base_model,
-        "IMAGE_MODEL_LABEL": (
-            config.image_model_id.split("/")[-1]
-            if "/" in config.image_model_id
-            else config.image_model_id
-        ),
-        "MODEL_DEFAULT_SAMPLING": config.model_tuning.task_sampling.get("default", ModelSamplingSettings()),
-        "MODEL_REASONING_SAMPLING": config.model_tuning.task_sampling.get("reasoning", ModelSamplingSettings()),
-        "MODEL_TASK_SAMPLING": config.model_tuning.task_sampling,
-        "SOURCE_FEEDS": load_sources(config.sources_path, source_scope=config.source_scope),
-    }
 
 
 class RunSession:
@@ -1134,94 +1038,48 @@ class RunSession:
         self.managed_model_server_log_file: TextIO | None = None
         self.managed_model_server_exit_recorded = False
 
-    def run(self, run_impl: Callable[[], None] | None = None) -> None:
+    def run(self, run_impl: Callable[["RunSession"], None] | None = None) -> None:
         implementation = run_impl or _run_pipeline
         with self._activate():
-            with run_logging():
+            with run_logging(self.config):
                 try:
                     with managed_model_server():
-                        implementation()
+                        implementation(self)
                 except Exception as error:
                     traceback_text = "".join(
                         traceback.format_exception(type(error), error, error.__traceback__)
                     )
-                    progress_tracker.step("finalize", "Daily news run failed. See the run log for details.")
-                    progress_tracker.detail(f"Run failed: {type(error).__name__}: {error}")
+                    self.progress.step("finalize", "Daily news run failed. See the run log for details.")
+                    self.progress.detail(f"Run failed: {type(error).__name__}: {error}")
                     _write_run_log(traceback_text)
-                    _finalize_failed_run(error, traceback_text, self.config)
+                    _finalize_failed_run(error, traceback_text, self)
                     raise
                 else:
-                    progress_tracker.finish("done")
+                    self.progress.finish("done")
+
+    def finalizer_for(self, diagnostics: RunDiagnostics) -> RunFinalizer:
+        finalizer = self.finalizer
+        if finalizer is None or finalizer.diagnostics is not diagnostics:
+            finalizer = _new_run_finalizer(
+                diagnostics,
+                self.config,
+                self.progress,
+                model_call_stats_snapshot=lambda: json.loads(json.dumps(self.model_call_stats)),
+            )
+            self.finalizer = finalizer
+        return finalizer
 
     @contextmanager
     def _activate(self):
-        global ACTIVE_RUN_SESSION
-        global progress_tracker
+        global _RUN_SESSION_ACTIVE
         with _RUN_SESSION_LOCK:
-            if ACTIVE_RUN_SESSION is not None:
+            if _RUN_SESSION_ACTIVE:
                 raise RuntimeError("Another daily news run session is already active in this process.")
-            runtime_values = _compat_runtime_values(self.config)
-            names = {
-                *list(runtime_values),
-                "ACTIVE_RUN_DIAGNOSTICS",
-                "ACTIVE_RUN_FINALIZER",
-                "MODEL_CALL_STATS",
-                "RUN_ACTIVITY_SNAPSHOTS",
-                "RUN_LOG_FILE",
-                "RUN_LOG_FILES",
-                "MANAGED_MODEL_SERVER_ACTIVE",
-                "MANAGED_MODEL_SERVER_READY",
-                "MANAGED_MODEL_SERVER_EXTERNAL",
-                "MANAGED_MODEL_SERVER_PROCESS",
-                "MANAGED_MODEL_SERVER_LOG_FILE",
-                "MANAGED_MODEL_SERVER_EXIT_RECORDED",
-                "progress_tracker",
-            }
-            previous = {name: globals().get(name) for name in names}
-            globals().update(runtime_values)
-            progress_tracker = self.progress
-            self._sync_to_legacy_globals()
-            ACTIVE_RUN_SESSION = self
+            _RUN_SESSION_ACTIVE = True
             try:
                 yield
             finally:
-                self._capture_from_legacy_globals()
-                ACTIVE_RUN_SESSION = None
-                globals().update(previous)
-
-    def _sync_to_legacy_globals(self) -> None:
-        # ADR 0002 keeps run state on the session; ACTIVE_RUN_FINALIZER is the
-        # compatibility handle used by normal and failed-run finalization helpers.
-        globals().update(
-            {
-                "ACTIVE_RUN_DIAGNOSTICS": self.diagnostics,
-                "ACTIVE_RUN_FINALIZER": self.finalizer,
-                "MODEL_CALL_STATS": self.model_call_stats,
-                "RUN_ACTIVITY_SNAPSHOTS": self.activity_snapshots,
-                "RUN_LOG_FILE": self.run_log_file,
-                "RUN_LOG_FILES": self.run_log_files,
-                "MANAGED_MODEL_SERVER_ACTIVE": self.managed_model_server_active,
-                "MANAGED_MODEL_SERVER_READY": self.managed_model_server_ready,
-                "MANAGED_MODEL_SERVER_EXTERNAL": self.managed_model_server_external,
-                "MANAGED_MODEL_SERVER_PROCESS": self.managed_model_server_process,
-                "MANAGED_MODEL_SERVER_LOG_FILE": self.managed_model_server_log_file,
-                "MANAGED_MODEL_SERVER_EXIT_RECORDED": self.managed_model_server_exit_recorded,
-            }
-        )
-
-    def _capture_from_legacy_globals(self) -> None:
-        self.diagnostics = ACTIVE_RUN_DIAGNOSTICS
-        self.finalizer = ACTIVE_RUN_FINALIZER
-        self.model_call_stats = MODEL_CALL_STATS
-        self.activity_snapshots = RUN_ACTIVITY_SNAPSHOTS
-        self.run_log_file = RUN_LOG_FILE
-        self.run_log_files = RUN_LOG_FILES
-        self.managed_model_server_active = MANAGED_MODEL_SERVER_ACTIVE
-        self.managed_model_server_ready = MANAGED_MODEL_SERVER_READY
-        self.managed_model_server_external = MANAGED_MODEL_SERVER_EXTERNAL
-        self.managed_model_server_process = MANAGED_MODEL_SERVER_PROCESS
-        self.managed_model_server_log_file = MANAGED_MODEL_SERVER_LOG_FILE
-        self.managed_model_server_exit_recorded = MANAGED_MODEL_SERVER_EXIT_RECORDED
+                _RUN_SESSION_ACTIVE = False
 
 
 def _clean_progress_message(message: str) -> str:
@@ -1612,12 +1470,18 @@ class ProgressTracker:
 progress_tracker = ProgressTracker()
 
 
-def _article_summarization_runtime() -> article_summarization_stage.ArticleSummarizationRuntime:
+def _article_summarization_runtime(
+    *,
+    config: RuntimeConfig = CONFIG,
+    source_feeds: dict[str, dict[str, Any]] | None = None,
+    progress: ProgressTracker = progress_tracker,
+) -> article_summarization_stage.ArticleSummarizationRuntime:
+    feeds = source_feeds if source_feeds is not None else SOURCE_FEEDS
     return article_summarization_stage.ArticleSummarizationRuntime(
-        source_feeds=SOURCE_FEEDS,
-        recent_window_hours=RECENT_WINDOW_HOURS,
-        article_summary_concurrency=ARTICLE_SUMMARY_CONCURRENCY,
-        article_summary_max_tokens=ARTICLE_SUMMARY_MAX_TOKENS,
+        source_feeds=feeds,
+        recent_window_hours=config.recent_window_hours,
+        article_summary_concurrency=max(1, config.article_summary_concurrency),
+        article_summary_max_tokens=max(100, config.article_summary_max_tokens),
         build_article_heading=_build_article_heading,
         format_article_metadata=_format_article_metadata,
         build_article_fallback_entry=build_article_fallback_entry,
@@ -1625,27 +1489,34 @@ def _article_summarization_runtime() -> article_summarization_stage.ArticleSumma
         invoke_with_retries=invoke_with_retries,
         has_structured_entry=has_structured_entry,
         normalize_report_entry=normalize_report_entry,
-        article_completed=progress_tracker.article_completed,
+        article_completed=progress.article_completed,
     )
 
 
-def _story_drafting_progress(event: str, payload: dict[str, Any]) -> None:
+def _story_drafting_progress(progress: ProgressTracker, event: str, payload: dict[str, Any]) -> None:
     if event == "story_drafting_started":
-        progress_tracker.start_story_drafting(int(payload.get("total") or 0))
+        progress.start_story_drafting(int(payload.get("total") or 0))
     elif event == "story_draft_completed":
-        progress_tracker.story_draft_completed(dict(payload.get("story") or {}))
+        progress.story_draft_completed(dict(payload.get("story") or {}))
 
 
 def _story_drafting_runtime(
-    *, min_articles_per_story: int | None = None
+    *,
+    config: RuntimeConfig = CONFIG,
+    progress: ProgressTracker = progress_tracker,
+    min_articles_per_story: int | None = None,
 ) -> story_drafting_stage.StoryDraftingRuntime:
     return story_drafting_stage.StoryDraftingRuntime(
-        story_synthesis_concurrency=STORY_SYNTHESIS_CONCURRENCY,
-        story_drafting_max_tokens=STORY_DRAFTING_MAX_TOKENS,
-        model_reference=MODEL_REFERENCE,
-        model_name=MODEL_NAME,
-        model_backend=MODEL_BACKEND,
-        min_articles_per_story=min_articles_per_story if min_articles_per_story is not None else MIN_ARTICLES_PER_STORY,
+        story_synthesis_concurrency=max(1, config.story_synthesis_concurrency),
+        story_drafting_max_tokens=max(100, config.story_drafting_max_tokens),
+        model_reference=config.model_reference,
+        model_name=config.model_name,
+        model_backend=config.model_backend,
+        min_articles_per_story=(
+            min_articles_per_story
+            if min_articles_per_story is not None
+            else max(2, config.min_articles_per_story)
+        ),
         build_chat_model=build_chat_model,
         invoke_with_retries=invoke_with_retries,
         estimate_message_token_count=estimate_message_token_count,
@@ -1655,19 +1526,23 @@ def _story_drafting_runtime(
         is_low_coverage_synthesis_section=_is_low_coverage_synthesis_section,
         fallback_synthesis_paragraph_from_summaries=_fallback_synthesis_paragraph_from_summaries,
         story_drafting_word_count=_story_drafting_word_count,
-        progress_callback=_story_drafting_progress,
+        progress_callback=lambda event, payload: _story_drafting_progress(progress, event, payload),
     )
 
 
-def _story_selection_runtime() -> story_selection_stage.StorySelectionRuntime:
+def _story_selection_runtime(
+    *,
+    config: RuntimeConfig = CONFIG,
+    progress: ProgressTracker = progress_tracker,
+) -> story_selection_stage.StorySelectionRuntime:
     return story_selection_stage.StorySelectionRuntime(
-        story_scale_screening_enabled=STORY_SCALE_SCREENING_ENABLED,
-        model_max_input_tokens=MODEL_MAX_INPUT_TOKENS,
-        model_label=MODEL_REPORT_LABEL,
-        model_reference=MODEL_REFERENCE,
-        model_name=MODEL_NAME,
-        model_backend=MODEL_BACKEND,
-        relaxed_story_drafting_guards=RELAXED_STORY_DRAFTING_GUARDS,
+        story_scale_screening_enabled=config.story_scale_screening_enabled,
+        model_max_input_tokens=config.model_max_input_tokens,
+        model_label=_filesystem_safe_model_label(config.model_reference),
+        model_reference=config.model_reference,
+        model_name=config.model_name,
+        model_backend=config.model_backend,
+        relaxed_story_drafting_guards=config.relaxed_story_drafting_guards,
         build_chat_model=build_chat_model,
         invoke_with_retries=invoke_with_retries,
         build_article_heading=_build_article_heading,
@@ -1675,7 +1550,7 @@ def _story_selection_runtime() -> story_selection_stage.StorySelectionRuntime:
         story_drafting_word_count=_story_drafting_word_count,
         is_low_confidence_report_entry=is_low_confidence_report_entry,
         report_reference_key=_report_reference_key,
-        progress_callback=progress_tracker.story_selection_progress,
+        progress_callback=progress.story_selection_progress,
     )
 
 
@@ -1712,15 +1587,17 @@ def run_per_story_synthesis(
 
 
 @contextmanager
-def run_logging():
+def run_logging(config: RuntimeConfig):
     global RUN_LOG_FILE
     global RUN_LOG_FILES
-    for log_path in (RUN_LOG_PATH, LATEST_RUN_LOG_PATH):
+    run_log_path = os.path.join(str(config.run_output_dir), f"run_log_{config.timestamp}.log")
+    latest_run_log_path = str(config.latest_run_log_path)
+    for log_path in (run_log_path, latest_run_log_path):
         log_dir = os.path.dirname(log_path)
         if log_dir:
             os.makedirs(log_dir, exist_ok=True)
-    with open(RUN_LOG_PATH, "w", encoding="utf-8") as run_log_file, open(
-        LATEST_RUN_LOG_PATH,
+    with open(run_log_path, "w", encoding="utf-8") as run_log_file, open(
+        latest_run_log_path,
         "w",
         encoding="utf-8",
     ) as latest_log_file:
@@ -1728,10 +1605,10 @@ def run_logging():
         RUN_LOG_FILES = [run_log_file, latest_log_file]
         header = (
             "# Daily news run log\n"
-            f"# Started: {RUN_STARTED_AT.isoformat(timespec='seconds')}\n"
-            f"# Preset: {PRESET_ID or 'custom'}\n"
-            f"# Timestamped log: {RUN_LOG_PATH}\n"
-            f"# Rolling log: {LATEST_RUN_LOG_PATH}\n\n"
+            f"# Started: {config.run_started_at.isoformat(timespec='seconds')}\n"
+            f"# Preset: {config.preset_id or 'custom'}\n"
+            f"# Timestamped log: {run_log_path}\n"
+            f"# Rolling log: {latest_run_log_path}\n\n"
         )
         for log_file in RUN_LOG_FILES:
             log_file.write(header)
@@ -1739,19 +1616,19 @@ def run_logging():
         try:
             yield
         finally:
-            _write_run_log(f"Run log saved: {RUN_LOG_PATH}")
-            _write_run_log(f"Rolling run log saved: {LATEST_RUN_LOG_PATH}")
+            _write_run_log(f"Run log saved: {run_log_path}")
+            _write_run_log(f"Rolling run log saved: {latest_run_log_path}")
             RUN_LOG_FILES = []
             RUN_LOG_FILE = None
 
 
-def load_recipient_config() -> dict[str, dict]:
+def load_recipient_config(config: RuntimeConfig = CONFIG) -> dict[str, dict]:
     """Load active recipient metadata from config/recipients.yaml."""
-    recipient_config = load_recipients(CONFIG.recipients_path)
+    recipient_config = load_recipients(config.recipients_path)
     if not recipient_config:
         return {
             email: {"name": email, "pause": False}
-            for email in EMAIL_RECIPIENTS_FALLBACK
+            for email in config.email_recipients_fallback
         }
     return recipient_config
 
@@ -1876,14 +1753,18 @@ def serve_unsubscribe_endpoint() -> None:
     server.serve_forever()
 
 
-def get_active_recipient_config(recipient_config: dict[str, dict]) -> dict[str, dict]:
-    if RECIPIENT_SCOPE == "bradley":
-        preferred_config = recipient_config.get(BRADLEY_RECIPIENT)
+def get_active_recipient_config(
+    recipient_config: dict[str, dict],
+    *,
+    config: RuntimeConfig = CONFIG,
+) -> dict[str, dict]:
+    if config.recipient_scope == "bradley":
+        preferred_config = recipient_config.get(config.bradley_recipient)
         if preferred_config:
-            return {BRADLEY_RECIPIENT: preferred_config}
+            return {config.bradley_recipient: preferred_config}
         return {
-            BRADLEY_RECIPIENT: {
-                "name": BRADLEY_RECIPIENT,
+            config.bradley_recipient: {
+                "name": config.bradley_recipient,
                 "pause": False,
             }
         }
@@ -1897,7 +1778,7 @@ def get_active_recipient_config(recipient_config: dict[str, dict]) -> dict[str, 
 
     return {
         email: {"name": email, "pause": False}
-        for email in EMAIL_RECIPIENTS_FALLBACK
+        for email in config.email_recipients_fallback
     }
 
 
@@ -2153,15 +2034,18 @@ def _article_translation_decision(
     *,
     title: str,
     text: str,
+    source_feeds: dict[str, dict[str, Any]] | None = None,
+    config: RuntimeConfig = CONFIG,
 ) -> dict[str, Any]:
-    if not TRANSLATION_ENABLED:
+    if not config.translation_enabled:
         return {
             "needed": False,
             "reason": "translation_disabled",
             "source_language": None,
         }
 
-    source_config = SOURCE_FEEDS.get(source_name) or {}
+    source_map = source_feeds if source_feeds is not None else SOURCE_FEEDS
+    source_config = source_map.get(source_name) or {}
     source_language = _normalize_translation_language(source_config.get("language"))
     translation_source_language = _normalize_translation_language(
         source_config.get("translation_source_language") or source_language
@@ -2202,8 +2086,16 @@ def _with_translation_metadata(
     source_name: str,
     title: str,
     text: str,
+    source_feeds: dict[str, dict[str, Any]] | None = None,
+    config: RuntimeConfig = CONFIG,
 ) -> dict[str, Any]:
-    decision = _article_translation_decision(source_name, title=title, text=text)
+    decision = _article_translation_decision(
+        source_name,
+        title=title,
+        text=text,
+        source_feeds=source_feeds,
+        config=config,
+    )
     status = "pending" if decision.get("needed") else "not_needed"
     return {
         **record,
@@ -2211,8 +2103,8 @@ def _with_translation_metadata(
         "translation_status": status,
         "translation_reason": decision.get("reason"),
         "translation_source_language": decision.get("source_language"),
-        "translation_target_language": TRANSLATION_TARGET_LANGUAGE,
-        "translation_model": TRANSLATION_MODEL_NAME,
+        "translation_target_language": config.translation_target_language,
+        "translation_model": config.translation_model_name,
         "translation_retag_source": bool(decision.get("retag_source")),
     }
 
@@ -2512,30 +2404,54 @@ def _parse_feed_datetime(raw_value: str | None) -> datetime | None:
     return parsed.astimezone(timezone.utc).replace(tzinfo=None)
 
 
+def _xml_local_name(node: ElementTree.Element) -> str:
+    tag = node.tag.rsplit("}", 1)[-1]
+    return tag.rsplit(":", 1)[-1]
+
+
+def _xml_child(node: ElementTree.Element, *names: str) -> ElementTree.Element | None:
+    wanted = set(names)
+    for child in node:
+        if _xml_local_name(child) in wanted:
+            return child
+    return None
+
+
+def _xml_text(node: ElementTree.Element | None) -> str:
+    if node is None:
+        return ""
+    return " ".join(part.strip() for part in node.itertext() if part.strip())
+
+
 def _extract_feed_items(feed_xml: str) -> List[dict]:
-    soup = BeautifulSoup(feed_xml, "xml")
+    try:
+        root = ElementTree.fromstring(feed_xml)
+    except ElementTree.ParseError:
+        return []
+
     items: List[dict] = []
 
-    for item in soup.find_all(["item", "entry"]):
-        title = _clean_feed_text(item.title.get_text(" ", strip=True) if item.title else "")
-        if item.link and item.link.get("href"):
-            link = _clean_feed_url(item.link.get("href", ""))
-        elif item.link:
-            link = _clean_feed_url(item.link.get_text(" ", strip=True))
+    for item in root.iter():
+        if _xml_local_name(item) not in {"item", "entry"}:
+            continue
+
+        title = _clean_feed_text(_xml_text(_xml_child(item, "title")))
+        link_node = _xml_child(item, "link")
+        if link_node is not None and link_node.get("href"):
+            link = _clean_feed_url(link_node.get("href", ""))
         else:
-            link = ""
-        description_node = item.description or item.summary
-        description = ""
-        if description_node:
-            description = _clean_feed_text(description_node.get_text(" ", strip=True))
-        pub_date = ""
-        if item.pubDate:
-            pub_date = _clean_feed_text(item.pubDate.get_text(" ", strip=True))
-        elif item.published:
-            pub_date = _clean_feed_text(item.published.get_text(" ", strip=True))
-        source = ""
-        if item.source:
-            source = _clean_feed_text(item.source.get_text(" ", strip=True))
+            link = _clean_feed_url(_xml_text(link_node))
+
+        description_node = _xml_child(item, "description")
+        if description_node is None:
+            description_node = _xml_child(item, "summary")
+        description = _clean_feed_text(_xml_text(description_node))
+
+        pub_date_node = _xml_child(item, "pubDate")
+        if pub_date_node is None:
+            pub_date_node = _xml_child(item, "published")
+        pub_date = _clean_feed_text(_xml_text(pub_date_node))
+        source = _clean_feed_text(_xml_text(_xml_child(item, "source")))
 
         if _is_excluded_feed_item(title, source, link):
             continue
@@ -2563,8 +2479,14 @@ def _is_within_recent_window(published_at: datetime | None, now_utc: datetime) -
 
 # --- PER-SOURCE FETCH ---
 
-def get_direct_source_article_context(source_name: str) -> dict:
-    source_config = SOURCE_FEEDS.get(source_name)
+def get_direct_source_article_context(
+    source_name: str,
+    *,
+    source_feeds: dict[str, dict[str, Any]] | None = None,
+    config: RuntimeConfig = CONFIG,
+) -> dict:
+    source_map = source_feeds if source_feeds is not None else SOURCE_FEEDS
+    source_config = source_map.get(source_name)
     if not source_config or not isinstance(source_config, dict):
         return {
             "articles": [],
@@ -2805,6 +2727,8 @@ def get_direct_source_article_context(source_name: str) -> dict:
             source_name=source_name,
             title=str(item.get("title") or ""),
             text=summary_text,
+            source_feeds=source_feeds,
+            config=config,
         )
         articles.append(article_record)
         selected_items.append(
@@ -2860,13 +2784,23 @@ def get_direct_source_article_context(source_name: str) -> dict:
     }
 
 
-def _fetch_source_context_for_collection(source_index: int, source_name: str) -> dict[str, Any]:
+def _fetch_source_context_for_collection(
+    source_index: int,
+    source_name: str,
+    *,
+    source_feeds: dict[str, dict[str, Any]] | None = None,
+    config: RuntimeConfig = CONFIG,
+) -> dict[str, Any]:
     started_at = datetime.now(timezone.utc)
     started_perf = time.perf_counter()
     direct_context: dict[str, Any] | None = None
     error_reason = ""
     try:
-        direct_context = get_direct_source_article_context(source_name)
+        direct_context = get_direct_source_article_context(
+            source_name,
+            source_feeds=source_feeds,
+            config=config,
+        )
     except Exception as error:
         error_reason = f"{type(error).__name__}: {error}"
     return {
@@ -2963,10 +2897,13 @@ def _model_sampling_kwargs(settings: ModelSamplingSettings) -> dict[str, Any]:
     return kwargs
 
 
-def _task_sampling_to_dict() -> dict[str, dict[str, float | int]]:
+def _task_sampling_to_dict(
+    task_sampling: dict[str, ModelSamplingSettings] | None = None,
+) -> dict[str, dict[str, float | int]]:
+    selected_sampling = task_sampling or MODEL_TASK_SAMPLING
     return {
         task: _sampling_to_dict(settings)
-        for task, settings in MODEL_TASK_SAMPLING.items()
+        for task, settings in selected_sampling.items()
     }
 
 
@@ -3317,7 +3254,6 @@ def extract_prompt_tokens_from_response(message: AIMessage) -> int | None:
                 if isinstance(value, int):
                     return value
     return None
-
 
 def _contains_disallowed_final_markup(text: str) -> bool:
     return False
@@ -3945,13 +3881,16 @@ def _format_plain_text_synthesis(synthesis_body: str) -> str:
 
 def _collect_grouped_headlines(
     final_reports: List[article_summary_records_stage.ArticleSummaryRecord | str],
+    *,
+    source_feeds: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, List[tuple[str, str | None, str | None, str | None]]]:
+    source_map = source_feeds if source_feeds is not None else SOURCE_FEEDS
     grouped_headlines: dict[str, List[tuple[str, str | None, str | None, str | None]]] = {}
     seen_pairs: set[tuple[str, str, str]] = set()
     for entry in final_reports:
         record = article_summary_records_stage.ensure_record(entry)
         source_name = record.source or "Unknown source"
-        source_config = SOURCE_FEEDS.get(source_name)
+        source_config = source_map.get(source_name)
         display_name = (
             source_config.get("name", source_name)
             if isinstance(source_config, dict)
@@ -3978,8 +3917,12 @@ def _collect_grouped_headlines(
     return grouped_headlines
 
 
-def _build_plain_text_article_listing(final_reports: List[article_summary_records_stage.ArticleSummaryRecord | str]) -> str:
-    grouped_headlines = _collect_grouped_headlines(final_reports)
+def _build_plain_text_article_listing(
+    final_reports: List[article_summary_records_stage.ArticleSummaryRecord | str],
+    *,
+    source_feeds: dict[str, dict[str, Any]] | None = None,
+) -> str:
+    grouped_headlines = _collect_grouped_headlines(final_reports, source_feeds=source_feeds)
     grouped_sections: list[str] = []
 
     for display_name, source_entries in grouped_headlines.items():
@@ -4120,11 +4063,13 @@ def build_report_body(
     image_art: dict[str, Any] | None = None,
     citation_sources: list[dict[str, Any]] | None = None,
     citation_groups: list[dict[str, Any]] | None = None,
+    *,
+    source_feeds: dict[str, dict[str, Any]] | None = None,
 ) -> str:
     cleaned_synthesis_body = _format_plain_text_synthesis(synthesis_body)
     clean_citation_sources = citation_sources or []
     clean_citation_groups = citation_groups or []
-    article_listing = _build_plain_text_article_listing(final_reports)
+    article_listing = _build_plain_text_article_listing(final_reports, source_feeds=source_feeds)
     citation_listing = citations_stage.render_plain_text_sources(
         clean_citation_sources,
         clean_citation_groups,
@@ -4351,81 +4296,85 @@ def _persist_grouped_synthesis_dataset_debug(
         return {}
 
 
-def _new_run_diagnostics(source_count: int) -> RunDiagnostics:
+def _new_run_diagnostics(source_count: int, *, config: RuntimeConfig = CONFIG) -> RunDiagnostics:
     diagnostics = RunDiagnostics(
-        run_started_at=RUN_STARTED_AT.isoformat(timespec="seconds"),
+        run_started_at=config.run_started_at.isoformat(timespec="seconds"),
         settings={
-            "preset_id": PRESET_ID or "custom",
-            "source_scope": SOURCE_SCOPE,
-            "recipient_scope": RECIPIENT_SCOPE,
-            "url_reuse_blocking_enabled": URL_REUSE_BLOCKING_ENABLED,
-            "relaxed_story_drafting_guards": RELAXED_STORY_DRAFTING_GUARDS,
+            "preset_id": config.preset_id or "custom",
+            "source_scope": config.source_scope,
+            "recipient_scope": config.recipient_scope,
+            "url_reuse_blocking_enabled": config.url_reuse_blocking_enabled,
+            "relaxed_story_drafting_guards": config.relaxed_story_drafting_guards,
             "source_count": source_count,
-            "sources_path": str(CONFIG.sources_path),
-            "recipients_path": str(CONFIG.recipients_path),
-            "output_dir": OUTPUT_DIR,
-            "run_staging_dir": RUN_STAGING_DIR,
-            "latest_run_markdown_path": LATEST_RUN_MARKDOWN_PATH,
-            "latest_run_log_path": LATEST_RUN_LOG_PATH,
-            "latest_run_details_path": LATEST_RUN_DETAILS_PATH,
-            "history_db_path": HISTORY_DB_PATH,
-            "history_export_csv": HISTORY_EXPORT_CSV,
-            "write_legacy_diagnostics": WRITE_LEGACY_DIAGNOSTICS,
-            "run_used_urls_path": RUN_USED_URLS_PATH,
-            "run_log_path": RUN_LOG_PATH,
-            "recent_window_hours": RECENT_WINDOW_HOURS,
+            "sources_path": str(config.sources_path),
+            "recipients_path": str(config.recipients_path),
+            "output_dir": str(config.output_dir),
+            "run_staging_dir": str(config.run_staging_dir),
+            "latest_run_markdown_path": str(config.latest_run_markdown_path),
+            "latest_run_log_path": str(config.latest_run_log_path),
+            "latest_run_details_path": str(config.latest_run_details_path),
+            "history_db_path": str(config.history_db_path),
+            "history_export_csv": config.history_export_csv,
+            "write_legacy_diagnostics": config.write_legacy_diagnostics,
+            "run_used_urls_path": str(config.run_used_urls_path),
+            "run_log_path": os.path.join(str(config.run_output_dir), f"run_log_{config.timestamp}.log"),
+            "recent_window_hours": config.recent_window_hours,
             "article_download_timeout_seconds": ARTICLE_DOWNLOAD_TIMEOUT_SECONDS,
             "article_scrape_total_timeout_seconds": ARTICLE_SCRAPE_TOTAL_TIMEOUT_SECONDS,
             "slow_source_warning_seconds": SLOW_SOURCE_WARNING_SECONDS,
-            "source_collection_concurrency": SOURCE_COLLECTION_CONCURRENCY,
-            "max_articles_per_source": MAX_ARTICLES_PER_SOURCE,
-            "max_stories": MAX_STORIES,
-            "story_selection_overlap_threshold": STORY_SELECTION_OVERLAP_THRESHOLD,
-            "story_embedding_dedup_threshold": STORY_EMBEDDING_DEDUP_THRESHOLD,
-            "story_scale_screening_enabled": STORY_SCALE_SCREENING_ENABLED,
-            "model": MODEL_REFERENCE,
-            "model_name": MODEL_NAME,
-            "model_is_gemma_4": MODEL_IS_GEMMA_4,
-            "model_base_url": MODEL_BASE_URL,
-            "model_backend": MODEL_BACKEND,
-            "model_concurrency": MODEL_CONCURRENCY,
+            "source_collection_concurrency": config.source_collection_concurrency,
+            "max_articles_per_source": config.max_articles_per_source,
+            "max_stories": config.max_stories,
+            "story_selection_overlap_threshold": config.story_selection_overlap_threshold,
+            "story_embedding_dedup_threshold": config.story_embedding_dedup_threshold,
+            "story_scale_screening_enabled": config.story_scale_screening_enabled,
+            "model": config.model_reference,
+            "model_name": config.model_name,
+            "model_is_gemma_4": is_gemma_4_model_reference(config.model_reference),
+            "model_base_url": config.model_base_url,
+            "model_backend": config.model_backend,
+            "model_concurrency": config.model_concurrency,
             "model_concurrency_source": "derived_from_model_stage_concurrency",
-            "model_server_command": MODEL_SERVER_COMMAND,
-            "model_assignments": _json_ready(MODEL_ASSIGNMENTS),
-            "model_tuning": _json_ready(MODEL_TUNING),
-            "pipeline_budget": _json_ready(PIPELINE_BUDGET),
-            "model_server_settings": _json_ready(MODEL_SERVER_SETTINGS),
-            "translation_model": TRANSLATION_MODEL_REFERENCE,
-            "translation_model_name": TRANSLATION_MODEL_NAME,
-            "translation_model_base_url": TRANSLATION_MODEL_BASE_URL,
-            "translation_model_backend": TRANSLATION_MODEL_BACKEND,
-            "translation_model_server_command": TRANSLATION_MODEL_SERVER_COMMAND,
-            "translation_target_language": TRANSLATION_TARGET_LANGUAGE,
-            "model_max_input_tokens": MODEL_MAX_INPUT_TOKENS,
-            "model_default_sampling": _sampling_to_dict(MODEL_DEFAULT_SAMPLING),
-            "model_reasoning_sampling": _sampling_to_dict(MODEL_REASONING_SAMPLING),
-            "model_task_sampling": _task_sampling_to_dict(),
-            "pipeline_concurrency": MODEL_CONCURRENCY,
-            "article_summary_concurrency": ARTICLE_SUMMARY_CONCURRENCY,
-            "story_synthesis_concurrency": STORY_SYNTHESIS_CONCURRENCY,
-            "article_text_token_limit": ARTICLE_TEXT_TOKEN_LIMIT,
-            "total_article_summary_cap": TOTAL_ARTICLE_SUMMARY_CAP,
-            "total_article_summary_cap_gemma_4_derived": TOTAL_ARTICLE_SUMMARY_CAP_GEMMA_4_DERIVED,
-            "min_articles_per_story": MIN_ARTICLES_PER_STORY,
-            "story_backfill_batch_multiplier": STORY_BACKFILL_BATCH_MULTIPLIER,
-            "story_cluster_similarity_threshold": STORY_CLUSTER_SIMILARITY_THRESHOLD,
-            "translation_max_tokens": TRANSLATION_MAX_TOKENS,
-            "article_summary_max_tokens": ARTICLE_SUMMARY_MAX_TOKENS,
-            "story_drafting_max_tokens": STORY_DRAFTING_MAX_TOKENS,
-            "title_generation_max_tokens": TITLE_GENERATION_MAX_TOKENS,
-            "image_generation_enabled": IMAGE_GENERATION_ENABLED,
-            "image_generation_fail_on_error": IMAGE_GENERATION_FAIL_ON_ERROR,
-            "image_model": IMAGE_MODEL_ID,
-            "image_base_model": IMAGE_BASE_MODEL,
-            "image_width": IMAGE_WIDTH,
-            "image_height": IMAGE_HEIGHT,
-            "image_steps": IMAGE_STEPS,
-            "image_crop_bottom_ratio": IMAGE_CROP_BOTTOM_RATIO,
+            "model_server_command": config.model_server_command,
+            "model_assignments": _json_ready(config.model_assignments),
+            "model_tuning": _json_ready(config.model_tuning),
+            "pipeline_budget": _json_ready(config.pipeline_budget),
+            "model_server_settings": _json_ready(config.model_server_settings),
+            "translation_model": config.translation_model_reference,
+            "translation_model_name": config.translation_model_name,
+            "translation_model_base_url": config.translation_model_base_url,
+            "translation_model_backend": config.translation_model_backend,
+            "translation_model_server_command": config.translation_model_server_command,
+            "translation_target_language": config.translation_target_language,
+            "model_max_input_tokens": config.model_max_input_tokens,
+            "model_default_sampling": _sampling_to_dict(
+                config.model_tuning.task_sampling.get("default", ModelSamplingSettings())
+            ),
+            "model_reasoning_sampling": _sampling_to_dict(
+                config.model_tuning.task_sampling.get("reasoning", ModelSamplingSettings())
+            ),
+            "model_task_sampling": _task_sampling_to_dict(config.model_tuning.task_sampling),
+            "pipeline_concurrency": config.model_concurrency,
+            "article_summary_concurrency": config.article_summary_concurrency,
+            "story_synthesis_concurrency": config.story_synthesis_concurrency,
+            "article_text_token_limit": config.article_text_token_limit,
+            "total_article_summary_cap": config.total_article_summary_cap,
+            "total_article_summary_cap_gemma_4_derived": config.total_article_summary_cap_gemma_4_derived,
+            "min_articles_per_story": config.min_articles_per_story,
+            "story_backfill_batch_multiplier": config.story_backfill_batch_multiplier,
+            "story_cluster_similarity_threshold": config.story_cluster_similarity_threshold,
+            "translation_max_tokens": config.translation_max_tokens,
+            "article_summary_max_tokens": config.article_summary_max_tokens,
+            "story_drafting_max_tokens": config.story_drafting_max_tokens,
+            "title_generation_max_tokens": config.title_generation_max_tokens,
+            "image_generation_enabled": config.image_generation_enabled,
+            "image_generation_fail_on_error": config.image_generation_fail_on_error,
+            "image_model": config.image_model_id,
+            "image_base_model": config.image_base_model,
+            "image_width": config.image_width,
+            "image_height": config.image_height,
+            "image_steps": config.image_steps,
+            "image_crop_bottom_ratio": config.image_crop_bottom_ratio,
         },
     )
     _attach_pending_activity_snapshots(diagnostics)
@@ -4437,7 +4386,13 @@ def _model_call_stats_snapshot() -> dict[str, Any]:
         return json.loads(json.dumps(MODEL_CALL_STATS))
 
 
-def _new_run_finalizer(diagnostics: RunDiagnostics, config: RuntimeConfig) -> RunFinalizer:
+def _new_run_finalizer(
+    diagnostics: RunDiagnostics,
+    config: RuntimeConfig,
+    progress: ProgressTracker,
+    model_call_stats_snapshot: Callable[[], dict[str, Any]] | None = None,
+) -> RunFinalizer:
+    snapshot = model_call_stats_snapshot or _model_call_stats_snapshot
     return RunFinalizer(
         diagnostics=diagnostics,
         config=RunFinalizerConfig(
@@ -4452,32 +4407,24 @@ def _new_run_finalizer(diagnostics: RunDiagnostics, config: RuntimeConfig) -> Ru
         ),
         adapters=RunFinalizerAdapters(
             attach_pending_activity_snapshots=_attach_pending_activity_snapshots,
-            model_call_stats_snapshot=_model_call_stats_snapshot,
-            progress=progress_tracker,
+            model_call_stats_snapshot=snapshot,
+            progress=progress,
         ),
     )
 
 
-def _active_run_finalizer(diagnostics: RunDiagnostics, config: RuntimeConfig) -> RunFinalizer:
-    global ACTIVE_RUN_FINALIZER
-    global ACTIVE_RUN_DIAGNOSTICS
-    if ACTIVE_RUN_SESSION is not None:
-        ACTIVE_RUN_DIAGNOSTICS = diagnostics
-        ACTIVE_RUN_SESSION.diagnostics = diagnostics
-        if (
-            ACTIVE_RUN_SESSION.finalizer is None
-            or ACTIVE_RUN_SESSION.finalizer.diagnostics is not diagnostics
-        ):
-            ACTIVE_RUN_SESSION.finalizer = _new_run_finalizer(diagnostics, config)
-        ACTIVE_RUN_FINALIZER = ACTIVE_RUN_SESSION.finalizer
-        return ACTIVE_RUN_SESSION.finalizer
-    if ACTIVE_RUN_FINALIZER is None or ACTIVE_RUN_FINALIZER.diagnostics is not diagnostics:
-        ACTIVE_RUN_FINALIZER = _new_run_finalizer(diagnostics, config)
-    return ACTIVE_RUN_FINALIZER
-
-
-def _finish_run_diagnostics(diagnostics: RunDiagnostics, config: RuntimeConfig) -> None:
-    _active_run_finalizer(diagnostics, config).finish()
+def _finish_run_diagnostics(
+    diagnostics: RunDiagnostics,
+    *,
+    finalizer: RunFinalizer | None = None,
+    session: RunSession | None = None,
+) -> None:
+    active_finalizer = finalizer
+    if active_finalizer is None:
+        if session is None:
+            raise ValueError("finalizer or session is required")
+        active_finalizer = session.finalizer_for(diagnostics)
+    active_finalizer.finish()
 
 
 def _preflight_openai_model_server(
@@ -4675,16 +4622,16 @@ def _stop_managed_server_process(process: subprocess.Popen, *, server_label: str
         process.wait(timeout=10)
 
 
-def _finalize_failed_run(error: Exception, traceback_text: str, config: RuntimeConfig) -> None:
-    global ACTIVE_RUN_DIAGNOSTICS
-    diagnostics = ACTIVE_RUN_DIAGNOSTICS
+def _finalize_failed_run(error: Exception, traceback_text: str, session: RunSession) -> None:
+    diagnostics = session.diagnostics
     if diagnostics is None:
-        diagnostics = _new_run_diagnostics(len(SOURCE_FEEDS))
-        ACTIVE_RUN_DIAGNOSTICS = diagnostics
+        source_feeds = load_sources(session.config.sources_path, source_scope=session.config.source_scope)
+        diagnostics = _new_run_diagnostics(len(source_feeds), config=session.config)
+        session.diagnostics = diagnostics
     try:
-        _active_run_finalizer(diagnostics, config).finish_failed(error, traceback_text)
+        session.finalizer_for(diagnostics).finish_failed(error, traceback_text)
     except Exception as finalizer_error:
-        progress_tracker.warning(f"Failed-run diagnostics finalization failed: {finalizer_error}")
+        session.progress.warning(f"Failed-run diagnostics finalization failed: {finalizer_error}")
 
 
 def run_pipeline() -> None:
@@ -4905,16 +4852,79 @@ def run_translation_model_smoke_test() -> int:
     return 1
 
 
-def _run_pipeline() -> None:
+def _run_pipeline(session: "RunSession") -> None:
     global ACTIVE_RUN_DIAGNOSTICS
-    global ACTIVE_RUN_FINALIZER
+    config = session.config
+    progress = session.progress
+    source_feeds = load_sources(config.sources_path, source_scope=config.source_scope)
+
+    CONFIG = config
+    SOURCE_FEEDS = source_feeds
+    progress_tracker = progress
+    RUN_STARTED_AT = config.run_started_at
+    timestamp = config.timestamp
+    RUN_OUTPUT_DIR = str(config.run_output_dir)
+    RUN_STAGING_DIR = str(config.run_staging_dir)
+    LATEST_RUN_MARKDOWN_PATH = str(config.latest_run_markdown_path)
+    LATEST_RUN_LOG_PATH = str(config.latest_run_log_path)
+    LATEST_RUN_DETAILS_PATH = str(config.latest_run_details_path)
+    HISTORY_DB_PATH = str(config.history_db_path)
+    HISTORY_EXPORT_CSV = config.history_export_csv
+    WRITE_LEGACY_DIAGNOSTICS = config.write_legacy_diagnostics
+    PRESET_ID = config.preset_id
+    SOURCE_SCOPE = config.source_scope
+    RECIPIENT_SCOPE = config.recipient_scope
+    BRADLEY_RECIPIENT = config.bradley_recipient
+    URL_REUSE_BLOCKING_ENABLED = config.url_reuse_blocking_enabled
+    RELAXED_STORY_DRAFTING_GUARDS = config.relaxed_story_drafting_guards
+    RUN_USED_URLS_PATH = str(config.run_used_urls_path)
+    RUN_LOG_PATH = os.path.join(RUN_OUTPUT_DIR, f"run_log_{timestamp}.log")
+    MODEL_REFERENCE = config.model_reference
+    MODEL_NAME = config.model_name
+    MODEL_BACKEND = config.model_backend
+    MODEL_REPORT_LABEL = _filesystem_safe_model_label(config.model_reference)
+    MODEL_MAX_INPUT_TOKENS = config.model_max_input_tokens
+    MODEL_CONCURRENCY = max(1, config.model_concurrency)
+    ARTICLE_SUMMARY_CONCURRENCY = max(1, config.article_summary_concurrency)
+    STORY_SYNTHESIS_CONCURRENCY = max(1, config.story_synthesis_concurrency)
+    ARTICLE_TEXT_TOKEN_LIMIT = max(500, config.article_text_token_limit)
+    TOTAL_ARTICLE_SUMMARY_CAP = max(0, config.total_article_summary_cap)
+    TOTAL_ARTICLE_SUMMARY_CAP_GEMMA_4_DERIVED = config.total_article_summary_cap_gemma_4_derived
+    MODEL_IS_GEMMA_4 = is_gemma_4_model_reference(config.model_reference)
+    TRANSLATION_MODEL_REFERENCE = config.translation_model_reference
+    TRANSLATION_MODEL_NAME = config.translation_model_name
+    TRANSLATION_MODEL_BACKEND = config.translation_model_backend
+    TRANSLATION_TARGET_LANGUAGE = config.translation_target_language
+    TRANSLATION_ENABLED = config.translation_enabled
+    TRANSLATION_MAX_TOKENS = max(100, config.translation_max_tokens)
+    ARTICLE_SUMMARY_MAX_TOKENS = max(100, config.article_summary_max_tokens)
+    STORY_DRAFTING_MAX_TOKENS = max(100, config.story_drafting_max_tokens)
+    TITLE_GENERATION_MAX_TOKENS = max(20, config.title_generation_max_tokens)
+    MIN_ARTICLES_PER_STORY = max(2, config.min_articles_per_story)
+    STORY_SCALE_SCREENING_ENABLED = config.story_scale_screening_enabled
+    MAX_STORIES = max(1, config.max_stories)
+    STORY_CLUSTER_SIMILARITY_THRESHOLD = min(1.0, max(0.0, config.story_cluster_similarity_threshold))
+    STORY_SELECTION_OVERLAP_THRESHOLD = config.story_selection_overlap_threshold
+    STORY_EMBEDDING_DEDUP_THRESHOLD = config.story_embedding_dedup_threshold
+    STORY_BACKFILL_BATCH_MULTIPLIER = max(1, config.story_backfill_batch_multiplier)
+    SOURCE_COLLECTION_CONCURRENCY = max(1, config.source_collection_concurrency)
+    IMAGE_GENERATION_ENABLED = config.image_generation_enabled
+    IMAGE_GENERATION_FAIL_ON_ERROR = config.image_generation_fail_on_error
+    IMAGE_WIDTH = max(256, config.image_width)
+    IMAGE_HEIGHT = max(256, config.image_height)
+    IMAGE_STEPS = max(1, config.image_steps)
+    IMAGE_CROP_BOTTOM_RATIO = min(max(config.image_crop_bottom_ratio, 0.0), 0.35)
+    IMAGE_MODEL_ID = config.image_model_id
+    IMAGE_BASE_MODEL = config.image_base_model
+
     all_sources = list(SOURCE_FEEDS.keys())
     sources = all_sources
     effective_total_article_summary_cap = TOTAL_ARTICLE_SUMMARY_CAP
 
-    diagnostics = _new_run_diagnostics(len(sources))
+    diagnostics = _new_run_diagnostics(len(sources), config=session.config)
     ACTIVE_RUN_DIAGNOSTICS = diagnostics
-    ACTIVE_RUN_FINALIZER = _active_run_finalizer(diagnostics, CONFIG)
+    session.diagnostics = diagnostics
+    finalizer = session.finalizer_for(diagnostics)
     image_status = "image on" if IMAGE_GENERATION_ENABLED else "image off"
     send_target = "Bradley only" if RECIPIENT_SCOPE == "bradley" else "active recipients"
     preset_label = PRESET_ID or "custom"
@@ -5001,10 +5011,15 @@ def _run_pipeline() -> None:
             write_legacy_diagnostics=WRITE_LEGACY_DIAGNOSTICS,
         ),
         diagnostics,
-        _active_run_finalizer(diagnostics, CONFIG),
+        finalizer,
         progress_tracker,
         ArticleCollectionAdapters(
-            fetch_source_context=_fetch_source_context_for_collection,
+            fetch_source_context=lambda source_index, source_name: _fetch_source_context_for_collection(
+                source_index,
+                source_name,
+                source_feeds=SOURCE_FEEDS,
+                config=CONFIG,
+            ),
             persist_url_list_debug=_persist_url_list_debug,
             append_unique_urls=_append_unique_urls,
         ),
@@ -5013,7 +5028,7 @@ def _run_pipeline() -> None:
     if not article_candidates:
         progress_tracker.step("finalize", "No recent article candidates available; stopping run.")
         diagnostics.event("aborted", reason="no_article_candidates")
-        _finish_run_diagnostics(diagnostics, CONFIG)
+        _finish_run_diagnostics(diagnostics, finalizer=finalizer)
         return
 
     diagnostics.event(
@@ -5088,7 +5103,7 @@ def _run_pipeline() -> None:
     if not clustered_article_targets:
         progress_tracker.step("finalize", "No multi-article story clusters available; stopping run.")
         diagnostics.event("aborted", reason="no_supported_story_clusters")
-        _finish_run_diagnostics(diagnostics, CONFIG)
+        _finish_run_diagnostics(diagnostics, finalizer=finalizer)
         return
 
     if MANAGED_MODEL_SERVER_ACTIVE and not MANAGED_MODEL_SERVER_READY:
@@ -5099,15 +5114,19 @@ def _run_pipeline() -> None:
     article_summary_reports.extend(
         article_summarization_stage.run_article_summary_pass(
             clustered_article_targets,
-            _article_summarization_runtime(),
+            _article_summarization_runtime(
+                config=CONFIG,
+                source_feeds=SOURCE_FEEDS,
+                progress=progress,
+            ),
         )
     )
 
     progress_tracker.finish_meter(detail=f"{len(article_summary_reports)} article summaries")
     diagnostics.article_summary_count = len(article_summary_reports)
     article_summary_records = _report_entry_debug_records(article_summary_reports)
-    _active_run_finalizer(diagnostics, CONFIG).record_summarized_articles(clustered_article_targets)
-    _active_run_finalizer(diagnostics, CONFIG).record_article_summary_records(article_summary_records)
+    finalizer.record_summarized_articles(clustered_article_targets)
+    finalizer.record_article_summary_records(article_summary_records)
     article_summaries_path = _persist_article_summaries_debug(article_summary_reports)
     if article_summaries_path:
         diagnostics.record_artifact(
@@ -5122,7 +5141,7 @@ def _run_pipeline() -> None:
     story_drafts, story_draft_stats = story_drafting_stage.draft_story_clusters_from_article_summaries(
         story_records,
         article_summary_reports,
-        _story_drafting_runtime(),
+        _story_drafting_runtime(config=CONFIG, progress=progress),
         article_targets=clustered_article_targets,
     )
     progress_tracker.finish_meter(
@@ -5162,7 +5181,7 @@ def _run_pipeline() -> None:
         story_drafts, global_scale_stats = (
             story_selection_stage.apply_global_story_scale_screening(
                 story_drafts,
-                _story_selection_runtime(),
+                _story_selection_runtime(config=CONFIG, progress=progress),
             )
         )
         progress_tracker.finish_meter(
@@ -5261,13 +5280,12 @@ def _run_pipeline() -> None:
         progress_tracker.detail(
             f"Story coverage deficit: selected {selected_story_count} of {MAX_STORIES} target story slot(s)."
         )
-
     final_reports, story_assignment_stats = (
         story_selection_stage.build_story_assigned_article_reports(
             selected_story_matches,
             article_summary_reports,
             clustered_article_targets,
-            _story_selection_runtime(),
+            _story_selection_runtime(config=CONFIG, progress=progress),
         )
     )
     diagnostics.event("story_report_assignment", **story_assignment_stats)
@@ -5301,11 +5319,11 @@ def _run_pipeline() -> None:
     if not final_reports:
         progress_tracker.step("finalize", "No global stories selected; stopping run.")
         diagnostics.event("aborted", reason="no_global_story_matches")
-        _finish_run_diagnostics(diagnostics, CONFIG)
+        _finish_run_diagnostics(diagnostics, finalizer=finalizer)
         return
     story_summary_records = _report_entry_debug_records(final_reports)
-    _active_run_finalizer(diagnostics, CONFIG).record_selected_articles(selected_articles)
-    _active_run_finalizer(diagnostics, CONFIG).record_story_summary_records(story_summary_records)
+    finalizer.record_selected_articles(selected_articles)
+    finalizer.record_story_summary_records(story_summary_records)
     story_assigned_summaries_path = _persist_article_summaries_debug(
         final_reports,
         label="story_assigned_article_summaries",
@@ -5317,7 +5335,10 @@ def _run_pipeline() -> None:
             count=len(final_reports),
         )
 
-    recipient_config = get_active_recipient_config(load_recipient_config())
+    recipient_config = get_active_recipient_config(
+        load_recipient_config(CONFIG),
+        config=CONFIG,
+    )
     recipient_list = list(recipient_config.keys())
     recipient_names = [
         recipient_config[email].get("name") or email
@@ -5327,7 +5348,7 @@ def _run_pipeline() -> None:
     if not recipient_list:
         progress_tracker.step("finalize", "No recipients configured; stopping after summaries.")
         diagnostics.event("completed_without_recipients")
-        _finish_run_diagnostics(diagnostics, CONFIG)
+        _finish_run_diagnostics(diagnostics, finalizer=finalizer)
         return
 
     prompt_label = "default prompt"
@@ -5351,7 +5372,7 @@ def _run_pipeline() -> None:
         story_selection_stage.build_precomputed_global_story_synthesis(
             selected_story_matches,
             final_reports,
-            _story_selection_runtime(),
+            _story_selection_runtime(config=CONFIG, progress=progress),
         )
     )
     synthesis_dataset_artifacts = _persist_grouped_synthesis_dataset_debug(report_asset_path, token_stats)
@@ -5416,6 +5437,7 @@ def _run_pipeline() -> None:
             image_art,
             citation_sources,
             citation_groups,
+            source_feeds=SOURCE_FEEDS,
         )
         image_art_diagnostics = None
         if image_art:
@@ -5455,6 +5477,6 @@ def _run_pipeline() -> None:
         progress_tracker.detail("Finished report. Final prose will be embedded in latest_run.md.")
 
     diagnostics.event("completed")
-    _active_run_finalizer(diagnostics, CONFIG).record_report_body(report_body)
-    _finish_run_diagnostics(diagnostics, CONFIG)
-    sync_assistant_context_latest_output(CONFIG)
+    finalizer.record_report_body(report_body)
+    _finish_run_diagnostics(diagnostics, finalizer=finalizer)
+    sync_assistant_context_latest_output(config)

@@ -195,12 +195,6 @@ BOILERPLATE_CONTENT_STOPWORDS = {
     "www",
 }
 
-
-def normalize_text_key(label: str) -> str:
-    slug = re.sub(r"[^a-zA-Z0-9]+", "_", (label or "").strip().lower()).strip("_")
-    return slug or "story"
-
-
 def clean_source_title(title: str) -> str:
     """Remove common aggregator source suffixes without rewriting the headline."""
     clean_title = re.sub(r"\s+", " ", (title or "").strip())

@@ -76,9 +76,10 @@ Useful utility commands:
 
 ```bash
 uv run news model-server-command
+uv run news codex-model-server-command
+uv run news test-translation-model
 uv run news check-sources --only-failures
 uv run news prune-sources --recent-days 7
-uv run news source-languages --sources-yaml config/sources.yaml --json
 uv run news serve-unsubscribe
 ```
 
@@ -188,6 +189,13 @@ Pipeline Budget settings are separate from model selection and tuning. They
 cover article text caps, article summary caps, recency windows, article/story
 limits, and story thresholds.
 
+Common budget knobs include `NEWS_TOTAL_ARTICLE_SUMMARY_CAP`,
+`NEWS_ARTICLE_TEXT_TOKEN_LIMIT`, `NEWS_MAX_ARTICLES_PER_SOURCE`,
+`NEWS_MAX_ARTICLES_PER_SOURCE_PER_STORY`, `NEWS_MIN_ARTICLES_PER_STORY`,
+`NEWS_MAX_STORIES`, `NEWS_STORY_CLUSTER_SIMILARITY_THRESHOLD`,
+`NEWS_STORY_SELECTION_OVERLAP_THRESHOLD`, `NEWS_STORY_DEDUP_THRESHOLD`, and
+`NEWS_STORY_BACKFILL_BATCH_MULTIPLIER`.
+
 ### Model Server Settings
 
 Model Server Settings control the local MLX/OpenAI-compatible server
@@ -220,7 +228,9 @@ hard-coded defaults rather than normal Run Settings.
 
 ## Configuration
 
-- `config/sources.yaml`: single source list. Normal runs select active English
+- `config/sources.yaml`: single source list. Each source entry includes a
+  manually maintained `language` field, and adding or editing sources means
+  setting that field directly in the YAML. Normal runs select active English
   sources using `NEWS_SOURCE_SCOPE`.
 - `config/recipients.yaml`: active and paused recipients. `NEWS_RECIPIENT_SCOPE`
   chooses Bradley-only or all active recipients.

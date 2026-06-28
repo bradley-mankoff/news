@@ -363,13 +363,6 @@ def _citation_precedence_dependency_records_from_annotated(
         )
     return records
 
-
-def citation_precedence_dependency_records(citation_sources: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    return _citation_precedence_dependency_records_from_annotated(
-        annotate_citation_precedence(citation_sources)
-    )
-
-
 def parse_article_report_entry(entry: str) -> dict[str, Any]:
     """Extract stable citation metadata from a normalized article summary."""
 

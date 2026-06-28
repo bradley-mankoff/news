@@ -8,13 +8,12 @@ import yaml
 from news_pipeline.config import CONFIG_DIR, load_sources, write_source_translation_flags
 from news_pipeline.source_catalog import (
     DeleteSources,
-    SetSourceLanguages,
     UpsertSource,
     apply_source_catalog_patch,
     load_source_records,
     load_source_rows,
 )
-from news_pipeline.source_checks import remove_source_blocks, write_source_languages
+from news_pipeline.source_checks import remove_source_blocks
 from news_pipeline.ui import delete_source, upsert_source
 
 
@@ -192,36 +191,6 @@ class SourceCatalogTests(unittest.TestCase):
             text = path.read_text(encoding="utf-8")
             self.assertNotIn("key: Alpha", text)
             self.assertIn("key: Beta", text)
-
-    def test_language_write_inserts_after_url_and_respects_overwrite_false(self) -> None:
-        with TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir) / "sources.yaml"
-            _write_sources(path)
-
-            written = write_source_languages(
-                path,
-                [
-                    {"key": "Alpha", "ok": True, "language": "fr"},
-                    {"key": "Beta", "ok": True, "language": "de"},
-                ],
-                overwrite=False,
-            )
-
-            self.assertEqual(written, 1)
-            text = path.read_text(encoding="utf-8")
-            self.assertIn("    url: https://example.com/alpha.xml\n    language: fr\n", text)
-            self.assertIn("    language: es\n", text)
-            self.assertNotIn("    language: de\n", text)
-
-    def test_language_write_overwrites_existing_when_requested(self) -> None:
-        with TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir) / "sources.yaml"
-            _write_sources(path)
-
-            result = apply_source_catalog_patch(path, [SetSourceLanguages({"Beta": "de"}, overwrite=True)])
-
-            self.assertEqual(result.edit_count, 1)
-            self.assertIn("    language: de\n", path.read_text(encoding="utf-8"))
 
     def test_translation_flags_write_requires_translation_and_source_language(self) -> None:
         with TemporaryDirectory() as tmpdir:

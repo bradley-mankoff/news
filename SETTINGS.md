@@ -30,9 +30,13 @@ Pipeline Budget, and Model Server Settings.
 | `NEWS_IMAGE_ENABLED` | `0` | `1` enables report image generation. Image model, size, crop, steps, and fail-open behavior are fixed defaults. |
 | `NEWS_RECENT_WINDOW_HOURS` | `24` | Only articles published within this window are considered. |
 | `NEWS_MAX_ARTICLES_PER_SOURCE` | `6` | Maximum feed items selected per source before article fetch/summarization. |
-| `NEWS_TOP_OF_FUNNEL_PER_PROVIDER` | `10` | Initial source-level candidate funnel size. |
+| `NEWS_MAX_ARTICLES_PER_SOURCE_PER_STORY` | `6` | Maximum articles from one source retained in an individual story cluster. |
 | `NEWS_MIN_ARTICLES_PER_STORY` | `4` | Minimum articles required for a retained story cluster. |
+| `NEWS_MAX_STORIES` | `4` | Target maximum story slots selected for the final report. |
 | `NEWS_STORY_CLUSTER_SIMILARITY_THRESHOLD` | `0.27` | Full-text similarity threshold for clustering articles into stories. |
+| `NEWS_STORY_SELECTION_OVERLAP_THRESHOLD` | `0.25` | Article-overlap threshold used when selecting final stories. |
+| `NEWS_STORY_DEDUP_THRESHOLD` | `0.85` | Embedding similarity threshold used to deduplicate story candidates. |
+| `NEWS_STORY_BACKFILL_BATCH_MULTIPLIER` | `2` | Backfill candidate batch multiplier when selected story count is short. |
 | `NEWS_TOTAL_ARTICLE_SUMMARY_CAP` | `40` | Pipeline Budget cap on articles sent to article summarization. |
 | `NEWS_ARTICLE_SUMMARY_MAX_TOKENS` | `1000` | Model Tuning token limit for each article summary. |
 | `NEWS_STORY_DRAFTING_MAX_TOKENS` | `1800` | Model Tuning token limit for story/newsletter synthesis. |
@@ -44,7 +48,10 @@ Pipeline Budget, and Model Server Settings.
 |---|---|
 | `NEWS_MODEL_MAX_INPUT_TOKENS` | Model Tuning synthesis prompt ceiling; older article context is trimmed if exceeded. |
 | `NEWS_ARTICLE_TEXT_TOKEN_LIMIT` | Pipeline Budget truncation for scraped article text before summarization. |
+| `NEWS_STORY_SCALE_SCREENING_ENABLED` | Enables story-scale screening when explicitly set. |
+| `NEWS_STORY_COMPONENT_OVERLAP_SUPPRESS_THRESHOLD` | Advanced component-overlap suppression threshold for story clustering. |
 | `NEWS_RELAX_STORY_DRAFTING_GUARDS` | Allows short/degraded fallback story drafting output when explicitly enabled. |
+| `NEWS_EMBEDDING_MODEL` | Embedding model used for story deduplication. |
 | `NEWS_MODEL_TEMPERATURE`, `NEWS_MODEL_TOP_P`, `NEWS_MODEL_TOP_K`, `NEWS_MODEL_MIN_P` | Default sampling settings. |
 | `NEWS_MODEL_PRESENCE_PENALTY`, `NEWS_MODEL_REPETITION_PENALTY` | Default repetition controls. |
 | `NEWS_MODEL_REASONING_TEMPERATURE`, `NEWS_MODEL_REASONING_TOP_P`, `NEWS_MODEL_REASONING_TOP_K`, `NEWS_MODEL_REASONING_MIN_P` | Sampling settings for reasoning-heavy tasks. |
@@ -67,6 +74,8 @@ Built-in model aliases:
 | `NEWS_TRANSLATION_MODEL` | fixed default | Translation model selection for non-English translation workflows. |
 | `NEWS_TRANSLATION_MODEL_BASE_URL` | `NEWS_MODEL_BASE_URL` | Translation endpoint. |
 | `NEWS_TRANSLATION_TARGET_LANGUAGE` | `en` | Translation target language. Normal runs leave translation paused. |
+| `NEWS_TRANSLATION_ENABLED` | `0` | Enables translation workflows when explicitly set. |
+| `NEWS_TRANSLATION_MAX_TOKENS` | `1800` | Translation model token limit. |
 | `NEWS_CODEX_TESTING` | `0` | `1` forces Codex-safe model references for model-related verification. |
 
 Print the fully resolved local server command without running the pipeline:
@@ -133,7 +142,9 @@ bundles.
 | `uv run news run` | Run with defaults and explicit environment overrides. |
 | `uv run news ui` | Start the local runtime drafting UI. |
 | `uv run news model-server-command` | Print the resolved local model server command and exit. |
+| `uv run news codex-model-server-command` | Print a Codex-safe local model server command and exit. |
+| `uv run news test-translation-model` | Run the translation model smoke test. |
 | `uv run news check-sources` | Check configured source connectivity. |
-| `uv run news source-languages` | Detect or verify source language tags. |
+| `uv run news prune-sources` | Mark recently stale sources inactive. |
 | `uv run news serve-unsubscribe` | Start the local unsubscribe endpoint. |
 | `uv run news history backfill|cleanup|export` | Maintain DuckDB-backed run history and CSV exports. |

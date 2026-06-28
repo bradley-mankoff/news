@@ -18,7 +18,6 @@ Usage:
   uv run news run [--preset NAME]
   uv run news check-sources [--sources-yaml PATH] [--only-failures]
   uv run news prune-sources [--sources-yaml PATH] [--recent-days 7]
-  uv run news source-languages --sources-yaml PATH [--write-languages]
   uv run news model-server-command
   uv run news codex-model-server-command
   uv run news test-translation-model
@@ -47,9 +46,6 @@ ACTION_ALIASES = {
     "sources": "check-sources",
     "prune-sources": "prune-sources",
     "prune-stale-sources": "prune-sources",
-    "source-languages": "source-languages",
-    "detect-source-languages": "source-languages",
-    "source-language": "source-languages",
     "history": "history",
     "ui": "ui",
     "local-ui": "ui",
@@ -203,10 +199,6 @@ def main(argv: list[str] | None = None) -> int:
         from .source_checks import main as source_check_main
 
         return source_check_main(["--prune-inactive", *args])
-    if action == "source-languages":
-        from .source_checks import main as source_check_main
-
-        return source_check_main(["--detect-languages", *args])
 
     print(f"Unknown command: {command}", file=sys.stderr)
     print(USAGE, file=sys.stderr)

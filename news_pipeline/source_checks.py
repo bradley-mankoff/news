@@ -6,7 +6,6 @@ import argparse
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 import gzip
-import html
 import json
 import os
 import re
@@ -23,7 +22,6 @@ from xml.etree import ElementTree
 from .config import ROOT_DIR
 from .source_catalog import (
     DeleteSources,
-    SetSourceLanguages,
     apply_source_catalog_patch,
     load_source_rows,
 )
@@ -35,14 +33,8 @@ from .feed_utils import (
     resolve_google_news_url as _resolve_google_news_url,
 )
 
-
-LANGUAGE_DETECTION_MODEL = "papluca/xlm-roberta-base-language-detection"
-LANGUAGE_MIN_CONFIDENCE = 0.35
-LANGUAGE_SAMPLE_LIMIT = 12
 RECENT_SOURCE_WINDOW_DAYS = 7
 ARTICLE_PROBE_SAMPLE_SIZE = 5
-TEXT_TAG_RE = re.compile(r"<[^>]+>")
-WHITESPACE_RE = re.compile(r"\s+")
 
 HEADERS = {
     "User-Agent": (
@@ -267,11 +259,6 @@ def _item_datetimes(content: bytes, fetcher: str) -> tuple[list[datetime | None]
         return _json_item_datetimes(content), "json"
 
 
-def _count_items(content: bytes, fetcher: str) -> tuple[int, str]:
-    item_datetimes, feed_format = _item_datetimes(content, fetcher)
-    return len(item_datetimes), feed_format
-
-
 def _summarize_items(
     content: bytes,
     fetcher: str,
@@ -291,7 +278,6 @@ def _summarize_items(
         "undated_item_count": len(item_datetimes) - len(dated_items),
         "newest_item_at": _format_feed_datetime(newest_item),
     }
-
 
 def probe_source(
     source: dict[str, Any],
@@ -378,11 +364,6 @@ def probe_source(
     return result
 
 
-def _clean_sample_text(value: str) -> str:
-    text = TEXT_TAG_RE.sub(" ", html.unescape(value or ""))
-    return WHITESPACE_RE.sub(" ", text).strip()
-
-
 def _local_xml_name(tag: str) -> str:
     return str(tag).rsplit("}", 1)[-1].lower()
 
@@ -397,206 +378,6 @@ def _xml_root_from_content(content: bytes) -> ElementTree.Element:
             except (ElementTree.ParseError, UnicodeDecodeError):
                 continue
         raise first_error
-
-
-def _direct_child_text(node: ElementTree.Element, field_names: set[str]) -> str:
-    parts: list[str] = []
-    for child in list(node):
-        if _local_xml_name(child.tag) in field_names:
-            parts.append(" ".join(child.itertext()))
-    return _clean_sample_text(" ".join(parts))
-
-
-def _json_language_samples(content: bytes, max_items: int) -> list[str]:
-    data = json.loads(content)
-    samples: list[str] = []
-
-    if isinstance(data, dict):
-        children = data.get("data", {}).get("children", [])
-        if isinstance(children, list):
-            for child in children:
-                record = child.get("data") if isinstance(child, dict) else None
-                if not isinstance(record, dict):
-                    continue
-                sample = _clean_sample_text(
-                    " ".join(
-                        str(record.get(field) or "")
-                        for field in ("title", "description", "selftext")
-                    )
-                )
-                if sample:
-                    samples.append(sample)
-                if len(samples) >= max_items:
-                    return samples
-
-        items = data.get("items", [])
-        if isinstance(items, list):
-            for item in items:
-                if not isinstance(item, dict):
-                    continue
-                sample = _clean_sample_text(
-                    " ".join(
-                        str(item.get(field) or "")
-                        for field in ("title", "summary", "content_text", "content_html")
-                    )
-                )
-                if sample:
-                    samples.append(sample)
-                if len(samples) >= max_items:
-                    return samples
-
-    return samples
-
-
-def _xml_language_samples(content: bytes, max_items: int) -> list[str]:
-    root = _xml_root_from_content(content)
-    samples: list[str] = []
-    text_fields = {"title", "description", "summary", "content", "encoded"}
-
-    for node in root.iter():
-        if _local_xml_name(node.tag) not in {"item", "entry"}:
-            continue
-        sample = _direct_child_text(node, text_fields)
-        if sample:
-            samples.append(sample)
-        if len(samples) >= max_items:
-            return samples
-
-    fallback = _direct_child_text(root, {"title", "description", "subtitle"})
-    if fallback:
-        samples.append(fallback)
-    return samples[:max_items]
-
-
-def extract_language_samples(content: bytes, fetcher: str, max_items: int) -> list[str]:
-    if fetcher in {"reddit", "reddit_top", "reddit_top_json"}:
-        return _json_language_samples(content, max_items)
-
-    try:
-        return _xml_language_samples(content, max_items)
-    except ElementTree.ParseError:
-        return _json_language_samples(content, max_items)
-
-
-def _load_language_detector(model_name: str) -> Any:
-    try:
-        from transformers import pipeline
-    except ImportError as error:
-        raise RuntimeError(
-            "Language detection requires the transformers package. "
-            "Install it in the uv environment or use the existing Darwin lock dependencies."
-        ) from error
-
-    try:
-        return pipeline("text-classification", model=model_name, tokenizer=model_name)
-    except Exception as error:
-        raise RuntimeError(
-            f"Could not load language detection model {model_name!r}. "
-            "If this is the first run, the model may need to be downloaded."
-        ) from error
-
-
-def _best_language_label(output: Any) -> tuple[str, float]:
-    if isinstance(output, list):
-        candidates = [item for item in output if isinstance(item, dict)]
-        if not candidates:
-            return "", 0.0
-        output = max(candidates, key=lambda item: float(item.get("score") or 0.0))
-    if not isinstance(output, dict):
-        return "", 0.0
-    label = str(output.get("label") or "").strip().lower()
-    try:
-        score = float(output.get("score") or 0.0)
-    except (TypeError, ValueError):
-        score = 0.0
-    return label, score
-
-
-def detect_language_from_samples(
-    samples: list[str],
-    detector: Any,
-    *,
-    min_confidence: float = LANGUAGE_MIN_CONFIDENCE,
-) -> dict[str, Any]:
-    if not samples:
-        return {"language": None, "confidence": None, "scores": {}}
-
-    try:
-        raw_outputs = detector(samples, truncation=True, max_length=256)
-    except TypeError:
-        raw_outputs = detector(samples)
-
-    outputs = raw_outputs if isinstance(raw_outputs, list) else [raw_outputs]
-    scores: dict[str, float] = {}
-    for output in outputs:
-        label, score = _best_language_label(output)
-        if not label:
-            continue
-        scores[label] = scores.get(label, 0.0) + score
-
-    if not scores:
-        return {"language": None, "confidence": None, "scores": {}}
-
-    language = max(scores, key=scores.get)
-    confidence = scores[language] / max(1, len(outputs))
-    if confidence < min_confidence:
-        return {"language": None, "confidence": confidence, "scores": scores}
-    return {"language": language, "confidence": confidence, "scores": scores}
-
-
-def detect_source_language(
-    source: dict[str, Any],
-    timeout: int,
-    detector: Any,
-    *,
-    max_items: int = LANGUAGE_SAMPLE_LIMIT,
-    min_confidence: float = LANGUAGE_MIN_CONFIDENCE,
-) -> dict[str, Any]:
-    started_at = time.monotonic()
-    result: dict[str, Any] = {
-        "key": source["key"],
-        "name": source["name"],
-        "section": source["section"],
-        "url": source["url"],
-        "ok": False,
-        "skipped": False,
-        "language": None,
-        "confidence": None,
-        "sample_count": 0,
-        "latency_ms": None,
-        "error": None,
-    }
-
-    try:
-        content, _status_code = _fetch_url(source["url"], timeout)
-        samples = extract_language_samples(content, source["fetcher"], max_items)
-        result["sample_count"] = len(samples)
-        if not samples:
-            result["error"] = "No feed item text found."
-            return result
-        detection = detect_language_from_samples(samples, detector, min_confidence=min_confidence)
-        result["language"] = detection["language"]
-        result["confidence"] = detection["confidence"]
-        if result["language"]:
-            result["ok"] = True
-        else:
-            confidence = result["confidence"]
-            if confidence is None:
-                result["error"] = "Detector returned no language labels."
-            else:
-                result["error"] = f"Language confidence below {min_confidence:.2f}."
-    except urllib.error.HTTPError as error:
-        result["error"] = f"HTTP {error.code} {error.reason}"
-    except urllib.error.URLError as error:
-        result["error"] = f"URLError: {error.reason}"
-    except TimeoutError:
-        result["error"] = f"Timed out after {timeout}s"
-    except Exception as error:
-        result["error"] = str(error)
-    finally:
-        result["latency_ms"] = int((time.monotonic() - started_at) * 1000)
-
-    return result
 
 
 def _xml_feed_article_urls(content: bytes, max_urls: int) -> list[str]:
@@ -682,16 +463,6 @@ def _probe_article_body(url: str, timeout: int) -> tuple[bool, str]:
         return False, f"error: {exc!s}"
 
 
-def write_source_languages(path: Path, results: list[dict[str, Any]], *, overwrite: bool = False) -> int:
-    detected = {
-        str(result["key"]): str(result["language"])
-        for result in results
-        if result.get("ok") and result.get("language") and not result.get("skipped")
-    }
-    result = apply_source_catalog_patch(path, [SetSourceLanguages(detected, overwrite=overwrite)])
-    return result.edit_count
-
-
 def remove_source_blocks(path: Path, keys: set[str]) -> int:
     result = apply_source_catalog_patch(path, [DeleteSources(keys)])
     return result.edit_count
@@ -741,32 +512,6 @@ def print_table(results: list[dict[str, Any]]) -> None:
             f"{name:<{widths['name']}}  {latency:>8}  {items:>5}  "
             f"{recent:>6}  {newest:<20}  "
             f"{row['format'] or '-':<6}{scrape_col}  {row['error'] or ''}"
-        )
-
-
-def print_language_table(results: list[dict[str, Any]]) -> None:
-    if not results:
-        return
-    widths = {
-        "key": min(max(len(row["key"]) for row in results), 28),
-        "name": min(max(len(row["name"]) for row in results), 30),
-    }
-    print()
-    print(
-        f"  {'STATUS':<8}  {'KEY':<{widths['key']}}  {'NAME':<{widths['name']}}  "
-        f"{'LANG':<5}  {'CONF':>5}  {'SAMPLES':>7}  ERROR"
-    )
-    print("  " + "-" * 92)
-    for row in results:
-        status = "SKIP" if row.get("skipped") else ("OK" if row.get("ok") else "FAIL")
-        confidence = row.get("confidence")
-        confidence_text = f"{confidence:.2f}" if isinstance(confidence, float) else "-"
-        name = row["name"][: widths["name"]]
-        key = row["key"][: widths["key"]]
-        print(
-            f"  {status:<8}  {key:<{widths['key']}}  {name:<{widths['name']}}  "
-            f"{row.get('language') or '-':<5}  {confidence_text:>5}  "
-            f"{row.get('sample_count') or 0:>7}  {row.get('error') or ''}"
         )
 
 
@@ -825,38 +570,6 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--only-failures", action="store_true", help="Print only failed sources.")
     parser.add_argument("--no-color", action="store_true", help=argparse.SUPPRESS)
-    parser.add_argument(
-        "--detect-languages",
-        action="store_true",
-        help="Detect feed languages instead of running connectivity checks.",
-    )
-    parser.add_argument(
-        "--write-languages",
-        action="store_true",
-        help="Write detected language values back to the source YAML.",
-    )
-    parser.add_argument(
-        "--overwrite-languages",
-        action="store_true",
-        help="Re-detect sources that already have a language field and replace it when writing.",
-    )
-    parser.add_argument(
-        "--language-model",
-        default=LANGUAGE_DETECTION_MODEL,
-        help=f"Hugging Face text-classification model for language detection. Defaults to {LANGUAGE_DETECTION_MODEL}.",
-    )
-    parser.add_argument(
-        "--language-samples",
-        type=int,
-        default=LANGUAGE_SAMPLE_LIMIT,
-        help="Maximum feed items to sample per source when detecting language.",
-    )
-    parser.add_argument(
-        "--min-language-confidence",
-        type=float,
-        default=LANGUAGE_MIN_CONFIDENCE,
-        help="Minimum aggregate confidence required before writing a language.",
-    )
     parser.add_argument("--limit", type=int, default=None, help="Limit the number of sources checked.")
     parser.add_argument(
         "--section",
@@ -866,88 +579,6 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--json", action="store_true", dest="json_output", help="Print JSON.")
     return parser
-
-
-def _run_language_detection(args: argparse.Namespace, sources: list[dict[str, Any]]) -> int:
-    if args.limit is not None:
-        sources = sources[: max(0, args.limit)]
-    if not sources:
-        print("No sources to check.", file=sys.stderr)
-        return 2
-
-    pending = [
-        source
-        for source in sources
-        if args.overwrite_languages or not str(source.get("language") or "").strip()
-    ]
-    detector = None
-    if pending:
-        if not args.json_output:
-            print(f"Loading language detector {args.language_model}...")
-        try:
-            detector = _load_language_detector(args.language_model)
-        except RuntimeError as error:
-            print(f"ERROR: {error}", file=sys.stderr)
-            return 2
-
-    if not args.json_output:
-        print(
-            f"Detecting languages for {len(sources)} source(s) from {args.sources_yaml} "
-            f"(timeout={args.timeout}s, samples={args.language_samples})..."
-        )
-
-    results: list[dict[str, Any]] = []
-    for source in sources:
-        existing_language = str(source.get("language") or "").strip()
-        if existing_language and not args.overwrite_languages:
-            results.append(
-                {
-                    "key": source["key"],
-                    "name": source["name"],
-                    "section": source["section"],
-                    "url": source["url"],
-                    "ok": True,
-                    "skipped": True,
-                    "language": existing_language,
-                    "confidence": None,
-                    "sample_count": 0,
-                    "latency_ms": 0,
-                    "error": "language already set",
-                }
-            )
-            continue
-        results.append(
-            detect_source_language(
-                source,
-                args.timeout,
-                detector,
-                max_items=max(1, args.language_samples),
-                min_confidence=args.min_language_confidence,
-            )
-        )
-
-    written = 0
-    if args.write_languages:
-        written = write_source_languages(args.sources_yaml, results, overwrite=args.overwrite_languages)
-
-    if args.json_output:
-        print(json.dumps({"results": results, "written": written}, indent=2))
-    else:
-        print_language_table(results)
-        detected = sum(1 for result in results if result.get("ok") and not result.get("skipped"))
-        skipped = sum(1 for result in results if result.get("skipped"))
-        failed = sum(1 for result in results if not result.get("ok"))
-        print()
-        summary = f"  {detected} detected"
-        if skipped:
-            summary += f", {skipped} skipped"
-        if failed:
-            summary += f", {failed} failed"
-        if args.write_languages:
-            summary += f", {written} YAML update(s) written"
-        print(summary)
-
-    return 1 if any(not result.get("ok") for result in results) else 0
 
 
 def _probe_sources(
@@ -985,9 +616,6 @@ def main(argv: list[str] | None = None) -> int:
     if args.recent_days < 1:
         print("ERROR: --recent-days must be at least 1.", file=sys.stderr)
         return 2
-    if args.detect_languages and args.prune_inactive:
-        print("ERROR: --prune-inactive cannot be combined with --detect-languages.", file=sys.stderr)
-        return 2
 
     sources = _source_rows(args.sources_yaml)
     section = args.section.replace("-", "_")
@@ -996,9 +624,6 @@ def main(argv: list[str] | None = None) -> int:
     if not sources:
         print("No sources to check.", file=sys.stderr)
         return 2
-
-    if args.detect_languages:
-        return _run_language_detection(args, sources)
 
     if args.limit is not None:
         sources = sources[: max(0, args.limit)]

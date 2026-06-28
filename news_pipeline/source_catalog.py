@@ -54,12 +54,6 @@ class DeleteSources:
 
 
 @dataclass(frozen=True)
-class SetSourceLanguages:
-    languages: Mapping[str, str]
-    overwrite: bool = False
-
-
-@dataclass(frozen=True)
 class MarkTranslationRequired:
     source_languages: Mapping[str, str | None]
 
@@ -67,7 +61,6 @@ class MarkTranslationRequired:
 SourceCatalogEdit = (
     UpsertSource
     | DeleteSources
-    | SetSourceLanguages
     | MarkTranslationRequired
 )
 
@@ -328,41 +321,6 @@ def _apply_delete(
     return lines, records, len(ranges_to_remove)
 
 
-def _apply_languages(
-    lines: list[str],
-    records: list[dict[str, Any]],
-    edit: SetSourceLanguages,
-) -> tuple[list[str], list[dict[str, Any]], int]:
-    detected = {
-        str(key).strip(): str(language).strip()
-        for key, language in edit.languages.items()
-        if str(key).strip() and str(language).strip()
-    }
-    if not detected:
-        return lines, records, 0
-    newline = _newline_for(lines)
-    edits: list[tuple[str, int, str]] = []
-    for start, end in _source_block_ranges(lines):
-        key = _source_block_key(lines, start, end)
-        if key not in detected:
-            continue
-        language_line = f"    language: {detected[key]}{newline}"
-        existing_line = _direct_source_field_line(lines, start, end, "language")
-        record = _source_record_for_key(records, key)
-        if existing_line is not None:
-            if edit.overwrite:
-                edits.append(("replace", existing_line, language_line))
-                if record is not None:
-                    record["language"] = detected[key]
-            continue
-        insert_at = _preferred_field_insert_line(lines, start, end, ("url", "region", "name"))
-        edits.append(("insert", insert_at, language_line))
-        if record is not None:
-            record["language"] = detected[key]
-    _apply_line_edits(lines, edits)
-    return lines, records, len(edits)
-
-
 def _apply_translation(
     lines: list[str],
     records: list[dict[str, Any]],
@@ -444,8 +402,6 @@ def apply_source_catalog_patch(path: Path, edits: Iterable[SourceCatalogEdit]) -
             lines, records, count = _apply_upsert(lines, records, edit)
         elif isinstance(edit, DeleteSources):
             lines, records, count = _apply_delete(lines, records, edit)
-        elif isinstance(edit, SetSourceLanguages):
-            lines, records, count = _apply_languages(lines, records, edit)
         elif isinstance(edit, MarkTranslationRequired):
             lines, records, count = _apply_translation(lines, records, edit)
         else:
