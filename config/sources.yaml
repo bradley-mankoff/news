@@ -3,9 +3,7 @@
 # Source entries are deduped across the former current, larger, and Plenary pools.
 # Runtime source selection is global and story-first:
 # - NEWS_SOURCE_SCOPE=core uses tier: core; NEWS_SOURCE_SCOPE=peripheral uses
-#   tier: core plus tier: peripheral.
-# - language controls normal selection: English sources are selected; translation
-#   metadata is retained for later review but translation is disabled by default.
+# - language controls normal selection: English sources are selected.
 # No story-category metadata participates in source selection on this branch.
 #
 sources:
@@ -247,15 +245,6 @@ sources:
     language: en
     tier: core
     url: https://www.newscientist.com/feed/home
-    homepage: https://www.newscientist.com/
-  - key: NHK World Japan
-    name: NHK World Japan
-    language: en
-    tier: peripheral
-    requires_translation: true
-    translation_source_language: ja
-    url: https://www3.nhk.or.jp/rss/news/cat0.xml
-    homepage: https://www3.nhk.or.jp/
   - key: ProPublica
     name: ProPublica
     language: en

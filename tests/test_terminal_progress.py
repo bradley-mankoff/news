@@ -238,6 +238,68 @@ class TerminalProgressTests(unittest.TestCase):
         self.assertEqual(events[-1][0], "components_ranked")
         self.assertEqual(events[-1][1]["done"], events[-1][1]["total"])
 
+    def test_progress_tracker_helper_branches(self) -> None:
+        stream = FakePipe()
+        tracker = ProgressTracker(stream=stream, show_meter_detail=True)
+
+        tracker.step("custom", "message", log_detail="detail message")
+        tracker.log("--- [EMAIL]: sent ---", terminal=True)
+        tracker.log("--- [UNSUBSCRIBE]: done ---", terminal=False)
+        tracker.start_meter("zero", total=0, unit="steps", detail="ignored")
+        tracker.advance_meter()
+        tracker.finish_meter()
+        tracker.start_meter("report", total=3, unit="steps", detail="long detail that should show", done=1)
+        tracker._render_meter(force=True)
+        tracker.update_meter(done=2, detail="updated detail", force=True)
+        tracker.advance_meter(detail="advanced detail")
+        tracker._finish_active_line()
+        tracker.finish_meter(detail="complete detail")
+        tracker.reset(total_sources=2)
+        tracker.start_source(1, "Reuters")
+        tracker.set_source_article_total(5)
+        tracker.source_completed("Reuters", candidate_articles=2, worker_count=4)
+        tracker.update_source_fresh_articles(7, latest_source="Reuters")
+        tracker.start_article_summary(1)
+        tracker.article_completed({"source_display_name": "Reuters", "title": "Headline"})
+        tracker.start_story_clustering(4, detail="cluster")
+        tracker.story_clustering_progress(
+            "similarity_pair",
+            {
+                "phase": "phase",
+                "done": 1,
+                "total": 4,
+                "linked_pairs": 2,
+                "candidate_components": 3,
+            },
+        )
+        tracker.start_story_drafting(2)
+        tracker.story_draft_completed({"story_title": "Story A", "valid": True})
+        tracker.story_selection_progress("scale_screening_started", {"total": 2, "candidate_count": 2})
+        tracker.story_selection_progress(
+            "scale_screening_batch_completed",
+            {"done": 1, "total": 2, "kept_count": 1, "fallback_count": 0},
+        )
+        tracker.retrying("task", 1, 3, 2, ValueError("bad"))
+        tracker.retry("task", 2, 3, 4)
+        tracker.warning("label")
+        tracker.set_final_step("unknown", 9)
+        self.assertEqual(tracker._step_prefix("custom"), "[custom]")
+        self.assertEqual(tracker._compact_detail("x" * 200), ("x" * 120).rsplit(" ", 1)[0].rstrip(" |") + "...")
+        tracker.finish("done")
+
+        output = stream.getvalue()
+        self.assertIn("[email] sent", output)
+        self.assertIn("No steps selected.", output)
+        self.assertIn("long detail that should show", output)
+        self.assertIn("updated detail", output)
+        self.assertIn("advanced detail", output)
+        self.assertIn("complete detail", output)
+        self.assertIn("5 fresh articles", output)
+        self.assertIn("phase | 2 linked pairs | 3 candidate components", output)
+        self.assertIn("latest: Story A | valid 1 | rejected 0", output)
+        self.assertIn("scale screening", output)
+        self.assertIn("Running unknown.", output)
+
 
 if __name__ == "__main__":
     unittest.main()

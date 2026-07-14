@@ -1,9 +1,9 @@
 from __future__ import annotations
 
+from types import ModuleType
 import unittest
 from datetime import timezone
-
-import base64
+from unittest.mock import patch
 
 from news_pipeline.feed_utils import (
     decode_google_news_article_path,
@@ -29,28 +29,33 @@ class FeedUtilsTests(unittest.TestCase):
             "",
         )
 
+    def test_google_news_url_helpers_handle_parse_failures(self) -> None:
+        with patch("news_pipeline.feed_utils.urlparse", side_effect=ValueError("boom")):
+            self.assertFalse(is_google_news_url("https://news.google.com/rss/articles/CBMi"))
+            self.assertEqual(google_news_query_target("https://news.google.com/rss/articles/CBMi"), "")
+
     def test_decode_google_news_article_path_extracts_encoded_article_url(self) -> None:
         target = "https://example.com/decoded"
-        article_id = base64.urlsafe_b64encode(bytes([len(target)]) + target.encode("latin1")).decode(
-            "ascii"
-        ).rstrip("=")
 
         self.assertEqual(
-            decode_google_news_article_path(f"https://news.google.com/rss/articles/{article_id}"),
+            decode_google_news_article_path(
+                "https://news.google.com/rss/articles/G2h0dHBzOi8vZXhhbXBsZS5jb20vZGVjb2RlZA"
+            ),
             target,
         )
 
     def test_decode_google_news_article_path_strips_google_news_wrappers(self) -> None:
         target = "https://example.com/wrapped"
-        payload = b"\x08\x13\x22" + bytes([len(target)]) + target.encode("latin1") + b"\xd2\x01\x00"
-        article_id = base64.urlsafe_b64encode(payload).decode("ascii").rstrip("=")
 
         self.assertEqual(
-            decode_google_news_article_path(f"https://news.google.com/rss/articles/{article_id}"),
+            decode_google_news_article_path(
+                "https://news.google.com/rss/articles/CBMiG2h0dHBzOi8vZXhhbXBsZS5jb20vd3JhcHBlZNIBAA"
+            ),
             target,
         )
 
     def test_decode_google_news_article_path_returns_empty_for_bad_path(self) -> None:
+        self.assertEqual(decode_google_news_article_path("https://news.google.com"), "")
         self.assertEqual(decode_google_news_article_path("https://news.google.com/rss/articles/"), "")
         self.assertEqual(decode_google_news_article_path("not-base64"), "")
         self.assertEqual(decode_google_news_article_path(None), "")  # type: ignore[arg-type]
@@ -58,6 +63,32 @@ class FeedUtilsTests(unittest.TestCase):
             decode_google_news_article_path("https://news.google.com/rss/articles/AA"),
             "",
         )
+
+    def test_decode_google_news_article_path_handles_decoder_fallback_and_empty_payloads(self) -> None:
+        fake_module = ModuleType("googlenewsdecoder")
+        fake_module.gnewsdecoder = lambda url: {"status": True, "decoded_url": "https://example.com/decoded"}  # type: ignore[attr-defined]
+
+        with patch.dict("sys.modules", {"googlenewsdecoder": fake_module}):
+            with patch("news_pipeline.feed_utils.base64.urlsafe_b64decode", return_value=b"\x06AU_yqLx"):
+                self.assertEqual(
+                decode_google_news_article_path("https://news.google.com/rss/articles/AU_yqLtest"),
+                "https://example.com/decoded",
+            )
+
+        failing_module = ModuleType("googlenewsdecoder")
+        failing_module.gnewsdecoder = lambda _url: (_ for _ in ()).throw(RuntimeError("boom"))  # type: ignore[attr-defined]
+        with patch.dict("sys.modules", {"googlenewsdecoder": failing_module}):
+            with patch("news_pipeline.feed_utils.base64.urlsafe_b64decode", return_value=b"\x06AU_yqLx"):
+                self.assertEqual(
+                    decode_google_news_article_path("https://news.google.com/rss/articles/AU_yqLtest"),
+                    "",
+                )
+
+        with patch("news_pipeline.feed_utils.base64.urlsafe_b64decode", return_value=b""):
+            self.assertEqual(
+                decode_google_news_article_path("https://news.google.com/rss/articles/AA"),
+                "",
+            )
 
     def test_resolve_google_news_url_leaves_non_google_urls_alone(self) -> None:
         self.assertEqual(resolve_google_news_url(" https://example.com/story "), "https://example.com/story")

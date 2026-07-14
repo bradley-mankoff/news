@@ -37,7 +37,7 @@ starts one review pass. Draft PRs are skipped until they are marked ready.
 
 ## UI
 
-Start the local control panel from the repo root:
+Start the guided local control panel from the repo root:
 
 ```bash
 uv run news ui --open
@@ -47,8 +47,7 @@ By default it listens at `http://127.0.0.1:8766`. If you do not want the
 browser opened automatically, omit `--open`:
 
 ```bash
-uv run news ui
-```
+uv run news ui```
 
 Use another port or host when needed:
 
@@ -59,9 +58,10 @@ uv run news ui --host 0.0.0.0 --port 8766
 
 The UI runs until you stop it with `Ctrl-C` in the terminal. It can preview the
 exact command and resolved Runtime Config Snapshot, launch and stop pipeline
-runs, set `NEWS_` overrides for UI-launched commands, save/load Run Presets, run
-source utilities, and edit `config/sources.yaml` or `config/recipients.yaml`.
-Source and recipient edits write those YAML files directly.
+runs, set `NEWS_` overrides for UI-launched commands, save/load Run Presets and
+Model Tuning Presets, run source utilities, and edit `config/sources.yaml` or
+`config/recipients.yaml`. Source and recipient edits write those YAML files
+directly.
 
 ## CLI
 
@@ -105,7 +105,7 @@ applies any explicit shell/UI overrides on top.
 
 ```bash
 uv run news run --preset NAME
-NEWS_MODEL=gemma-26b-moe NEWS_IMAGE_ENABLED=1 uv run news run
+NEWS_MODEL=qwythos-9b-8bit NEWS_IMAGE_ENABLED=1 uv run news run
 ```
 
 Key Run Settings:
@@ -124,34 +124,29 @@ Key Run Settings:
 
 ### Model Selection
 
-`NEWS_MODEL` selects the default model only:
-
 ```bash
 NEWS_MODEL=gemma-e2b-tiny uv run news run
-NEWS_MODEL=gemma-26b-moe uv run news run --preset NAME
-NEWS_MODEL=https://huggingface.co/EgorKodin/Huihui-gemma-4-12B-it-abliterated-mlx-4bit uv run news run --preset NAME
+NEWS_MODEL=qwythos-9b-8bit uv run news run --preset NAME
+NEWS_MODEL=qwythos-9b-4bit uv run news run --preset NAME
 ```
 
 Task-specific model assignments inherit from `NEWS_MODEL` unless you set them
-explicitly:
-
 ```bash
 NEWS_MODEL_ARTICLE_SUMMARY=gemma-e2b-tiny uv run news run
-NEWS_MODEL_STORY_DRAFTING=gemma-26b-moe uv run news run --preset NAME
+NEWS_MODEL_STORY_DRAFTING=qwythos-9b-8bit uv run news run --preset NAME
 ```
-
 Built-in aliases:
 
-- `gemma-e2b-tiny`: `deadbydawn101/gemma-4-E2B-Heretic-Uncensored-mlx-4bit`
-- `gemma-26b-moe`: `mlx-community/gemma-4-26B-A4B-it-heretic-4bit`
-- `https://huggingface.co/EgorKodin/Huihui-gemma-4-12B-it-abliterated-mlx-4bit`: `EgorKodin/Huihui-gemma-4-12B-it-abliterated-mlx-4bit`
+- `gemma-e2b-tiny`: `deadbydawn101/gemma-4-E2B-Heretic-Uncensored-mlx-4bit` (Codex-safe test model)
+- `qwythos-9b-4bit`: `huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-Q4_K.gguf`
+- `qwythos-9b-8bit`: `huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-Q8_0.gguf` (default)
 
 Normal report runs start the matching local MLX server, wait until it is ready,
 run the pipeline, and stop the managed server when the run exits. To keep a
 server warm manually, print the matching command and run it in another terminal:
 
 ```bash
-NEWS_MODEL=https://huggingface.co/EgorKodin/Huihui-gemma-4-12B-it-abliterated-mlx-4bit uv run news model-server-command
+NEWS_MODEL=qwythos-9b-8bit uv run news model-server-command
 ```
 
 If Article Summarization or Story Drafting uses a different model, give that
@@ -239,7 +234,10 @@ Current run review files are written under `output/daily_outputs/`:
 
 Durable run history is written to `output/history/news_history.duckdb`, with CSV
 exports in `output/history/` for quick review. Final report and image artifacts
-also live under `output/daily_outputs/`.
+
+Every run also writes a paste-ready Markdown copy of the newsletter body to
+`output/beehiiv/YYYY-MM-DD.md` for manual paste into the beehiiv Post
+Builder during the free trial. See `beehiiv/README.md`.
 
 History maintenance:
 
@@ -249,4 +247,37 @@ uv run news history backfill --apply
 uv run news history cleanup --dry-run
 uv run news history cleanup --apply
 uv run news history export
+```
+
+## Fast Test Run
+
+For a quick local test that minimizes runtime and sends to a single
+recipient, use the `dev` preset:
+
+```bash
+uv run news run --preset dev
+```
+
+The `dev` preset:
+
+- Uses `gemma-e2b-tiny` (the smallest model — the only one we keep for
+  local testing now that the 12b/26b gemma slots are filled by Qwythos).
+- Sets `NEWS_SOURCE_SCOPE=core` (the narrowest source pool).
+- Sets `NEWS_RECIPIENT_SCOPE=bradley` (sends to the single `bradley@…`
+  recipient only).
+- Disables image generation and URL reuse blocking.
+- Sets `NEWS_MIN_ARTICLES_PER_STORY=2` and relaxes story drafting guards.
+
+For even faster runs, override the model explicitly and tighten the
+recency window:
+
+```bash
+NEWS_MODEL=gemma-e2b-tiny NEWS_RECENT_WINDOW_HOURS=6 uv run news run
+```
+
+To preview the resolved config before launching a run, use the UI or
+the model-server command:
+
+```bash
+uv run news model-server-command
 ```

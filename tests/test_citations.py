@@ -4,6 +4,7 @@ import unittest
 
 from news_pipeline import citations as citations_stage
 from news_pipeline.pipeline import build_report_body, build_report_html
+from unittest.mock import patch
 
 
 def _source(local_id: str, **overrides):
@@ -62,6 +63,9 @@ class CitationHelperTests(unittest.TestCase):
         self.assertEqual(result["diagnostics"]["unknown_source_ids"], ["S9"])
         self.assertEqual(result["diagnostics"]["uncited_sentence_count"], 2)
         self.assertNotIn("[[", result["paragraph"])
+
+        skipped = citations_stage.validate_cited_story_text("Alpha[[S1]]. [[S2]]", sources)
+        self.assertEqual(len(skipped["cited_sentences"]), 1)
 
     def test_derivative_wire_citation_uses_primary_for_overlapping_fact(self) -> None:
         sources = [
@@ -323,6 +327,403 @@ class CitationHelperTests(unittest.TestCase):
         )
 
         self.assertIn('[<a href="#source-1"', inline_html)
+
+
+class CitationPrivateHelperTests(unittest.TestCase):
+    def test_org_and_precedence_helpers_cover_edge_branches(self) -> None:
+        self.assertEqual(citations_stage._fold_label("  Plenary AP & Co  "), "ap and co")
+        self.assertEqual(citations_stage._normalize_org_label(""), "")
+        self.assertEqual(citations_stage._normalize_org_label("AP News wire"), "associated press")
+        self.assertEqual(citations_stage._normalize_org_label("Yahoo News flash"), "yahoo news")
+        self.assertEqual(citations_stage._normalize_org_label("Yahoo Finance desk"), "yahoo finance")
+        self.assertTrue(
+            citations_stage._contains_attribution_to_org(
+                citations_stage._fold_label("According to the Associated Press, officials said"),
+                "associated press",
+            )
+        )
+        self.assertFalse(citations_stage._contains_attribution_to_org("Officials said", ""))
+        self.assertEqual(
+            citations_stage._attributed_wire_orgs(
+                {
+                    "title": "Wire digest",
+                    "source": "Yahoo News",
+                    "summary": "According to the Associated Press, officials approved repairs.",
+                    "body_evidence": "By Reuters. Officials approved repairs.",
+                }
+            ),
+            ["associated press", "reuters"],
+        )
+        self.assertTrue(
+            citations_stage._has_same_org_reference(
+                {"source": "Fixture Wire", "summary": "As Fixture Wire previously reported, officials said"}
+            )
+        )
+        self.assertEqual(citations_stage._source_match_score("", "shared text"), 0.0)
+        self.assertEqual(citations_stage._source_order({"citation_precedence_order": "bad"}, fallback=7), 7)
+        self.assertEqual(citations_stage._source_rank({"citation_precedence_rank": "bad"}), citations_stage.NEUTRAL_CITATION_RANK)
+        self.assertEqual(
+            citations_stage._same_org_primary_id(
+                {
+                    "local_id": "S1",
+                    "title": "Fixture story",
+                    "source": "Fixture Wire",
+                    "published": "Mon, 01 Jun 2026 12:00:00 GMT",
+                },
+                [
+                    {
+                        "local_id": "S1",
+                        "title": "Fixture story",
+                        "source": "Fixture Wire",
+                        "published": "Mon, 01 Jun 2026 12:00:00 GMT",
+                    }
+                ],
+            ),
+            "",
+        )
+        self.assertEqual(
+            citations_stage._same_org_primary_id(
+                {
+                    "local_id": "S2",
+                    "title": "Fixture story",
+                    "source": "Fixture Wire",
+                    "published": "Mon, 01 Jun 2026 12:00:00 GMT",
+                },
+                [
+                    {
+                        "local_id": "S2",
+                        "title": "Fixture story",
+                        "source": "Fixture Wire",
+                        "published": "Mon, 01 Jun 2026 12:00:00 GMT",
+                    },
+                    {
+                        "local_id": "S1",
+                        "title": "Fixture story",
+                        "source": "Fixture Wire",
+                        "published": "Sun, 31 May 2026 12:00:00 GMT",
+                    },
+                ],
+            ),
+            "S1",
+        )
+        annotated = citations_stage.annotate_citation_precedence([{"title": "No local id"}])
+        self.assertEqual(annotated[0]["citation_precedence_role"], "neutral")
+        with patch(
+            "news_pipeline.citations.annotate_citation_precedence",
+            return_value=[
+                {
+                    "local_id": "S1",
+                    "citation_precedence_derives_from": ["S2"],
+                    "citation_precedence_reason": "wire_attribution",
+                }
+            ],
+        ):
+            self.assertEqual(
+                citations_stage.citation_precedence_dependency_records([{"local_id": "S1"}]),
+                [
+                    {
+                        "source_id": "S1",
+                        "derives_from": ["S2"],
+                        "reason": "wire_attribution",
+                    }
+                ],
+            )
+        self.assertEqual(
+            citations_stage._citation_dependency_map(
+                [
+                    {"title": "No local id"},
+                    {
+                        "local_id": "S1",
+                        "citation_precedence_derives_from": ["S2", "S2", "S3"],
+                    },
+                    {"local_id": "S2"},
+                ]
+            ),
+            {"S1": ["S2"]},
+        )
+        self.assertEqual(citations_stage._citation_group_title({"title": " My Story "}, 0), "My Story")
+        self.assertEqual(
+            citations_stage.split_cited_sentences("Trailing fragment without punctuation"),
+            ["Trailing fragment without punctuation"],
+        )
+        self.assertEqual(
+            citations_stage.format_source_published_timestamp("2026-01-01T12:00:00"),
+            "01/01/26, 07:00 AM EST",
+        )
+        with patch("news_pipeline.citations.split_cited_sentences", return_value=["[[S2]]"]):
+            validated = citations_stage.validate_cited_story_text(
+                "ignored",
+                [{"local_id": "S2", "title": "Fixture", "source": "Wire", "published": ""}],
+            )
+        self.assertEqual(validated["cited_sentences"], [])
+        self.assertEqual(citations_stage.render_html_text_with_citations("See [99].", []), "See [99].")
+
+        citation_sources = [
+            {
+                "number": 1,
+                "title": "One",
+                "source": "Wire",
+                "published": "Sat, 16 May 2026 15:30:00 GMT",
+                "url": "https://example.com/1",
+            },
+            {
+                "number": 2,
+                "title": "Two",
+                "source": "Wire",
+                "published": "Sat, 16 May 2026 15:30:00 GMT",
+                "url": "",
+            },
+            {
+                "number": 3,
+                "title": "Three",
+                "source": "Wire",
+                "published": "Sat, 16 May 2026 15:30:00 GMT",
+                "url": "",
+            },
+        ]
+        citation_groups = [{"title": " Group One ", "citation_numbers": [1, 2]}]
+        plain_sources = citations_stage.render_plain_text_sources(citation_sources, citation_groups)
+        self.assertIn("Group One", plain_sources)
+        self.assertIn("Additional Sources", plain_sources)
+        html_sources = citations_stage.render_html_sources(citation_sources, citation_groups)
+        self.assertIn("Group One", html_sources)
+        self.assertIn("Additional Sources", html_sources)
+        self.assertIn('id="source-1"', html_sources)
+
+    def test_marker_sentence_and_fallback_helpers_cover_edge_branches(self) -> None:
+        with patch("news_pipeline.citations.re.findall", return_value=[]):
+            self.assertEqual(
+                citations_stage.normalize_temporary_citation_markers("[[S1], [S2]]"),
+                "[[S1], [S2]]",
+            )
+        self.assertEqual(
+            citations_stage.normalize_temporary_citation_markers("[[s1], [S2]]"),
+            "[[S1,S2]]",
+        )
+        self.assertEqual(
+            citations_stage.normalize_temporary_citation_markers("[[1], [2]]"),
+            "[[1], [2]]",
+        )
+        self.assertEqual(
+            citations_stage._marker_source_ids("First [[s1, s2]] second [[s1]]"),
+            ["S1", "S2"],
+        )
+        self.assertEqual(citations_stage._remove_temporary_markers("Alpha [[S1]] beta"), "Alpha beta")
+        self.assertTrue(citations_stage._looks_like_abbreviation("U.S."))
+        self.assertEqual(citations_stage.split_cited_sentences(""), [])
+        self.assertEqual(
+            citations_stage.split_cited_sentences("Dr. Smith went home. Then left."),
+            ["Dr. Smith went home.", "Then left."],
+        )
+        self.assertEqual(citations_stage._fallback_source_ids("shared fact", []), [])
+        self.assertEqual(
+            citations_stage._fallback_source_ids(
+                "",
+                [
+                    {
+                        "local_id": "A",
+                        "title": "Alpha",
+                        "source": "Example",
+                        "published": "",
+                        "summary": "shared fact",
+                    }
+                ],
+            ),
+            ["A"],
+        )
+        self.assertEqual(
+            citations_stage._fallback_source_ids(
+                "shared fact",
+                [
+                    {
+                        "local_id": "A",
+                        "title": "Alpha",
+                        "source": "Example",
+                        "published": "",
+                        "summary": "shared fact",
+                    }
+                ],
+            ),
+            ["A"],
+        )
+        self.assertEqual(
+            citations_stage._fallback_source_ids(
+                "shared fact",
+                [
+                    {
+                        "title": "Missing local id",
+                        "source": "Example",
+                        "published": "",
+                        "summary": "shared fact",
+                    }
+                ],
+            ),
+            [],
+        )
+        self.assertFalse(
+            citations_stage._sentence_overlaps_source(
+                "",
+                {"title": "Alpha", "source": "Example", "summary": "Shared"},
+            )
+        )
+
+    def test_apply_and_render_story_paths_cover_missing_and_duplicate_ids(self) -> None:
+        sources = [
+            _source(
+                "S1",
+                title="Levee repairs approved",
+                source="Associated Press",
+                summary="Officials approved levee repairs and backup pumps.",
+            ),
+            _source(
+                "S2",
+                title="Yahoo market reaction",
+                source="Yahoo Finance",
+                summary=(
+                    "According to AP, officials approved levee repairs. "
+                    "Analysts expected a small share-price move."
+                ),
+                body_evidence=(
+                    "According to AP, officials approved levee repairs. "
+                    "Analysts expected a small share-price move."
+                ),
+            ),
+        ]
+        with patch(
+            "news_pipeline.citations._citation_dependency_map",
+            return_value={"S2": ["MISSING"]},
+        ):
+            precedence = citations_stage.apply_citation_precedence(
+                [{"text": "Officials approved levee repairs and backup pumps.", "source_ids": ["S2"]}],
+                sources,
+            )
+        self.assertEqual(precedence["cited_sentences"][0]["source_ids"], ["S2"])
+
+        call_count = {"value": 0}
+
+        def ordered_ids(source_ids, source_by_local_id, *, first_seen_order=None):
+            del source_by_local_id, first_seen_order
+            call_count["value"] += 1
+            if call_count["value"] == 1:
+                return ["MISSING", "S1", "S1"]
+            if call_count["value"] == 2:
+                return ["S1", "S2"]
+            return list(source_ids)
+
+        registry = citations_stage.CitationRegistry()
+        with patch("news_pipeline.citations._precedence_ordered_source_ids", side_effect=ordered_ids):
+            rendered = citations_stage.render_cited_story(
+                [
+                    {
+                        "text": "Officials approved levee repairs and backup pumps.",
+                        "source_ids": ["S1", "S2", "S3"],
+                    }
+                ],
+                sources,
+                registry,
+                story_level_citation_sentence_threshold=0,
+                apply_precedence=False,
+            )
+
+        self.assertIn("Officials approved levee repairs and backup pumps.[2]", rendered["paragraph"])
+        self.assertEqual(rendered["story_level_source_ids"], ["MISSING", "S1", "S1"])
+        self.assertEqual([source["number"] for source in registry.sources()], [1, 2])
+
+    def test_html_and_plain_text_helpers_cover_fallback_branches(self) -> None:
+        registry = citations_stage.CitationRegistry()
+        self.assertEqual(
+            registry.register(
+                {
+                    "url": "https://example.com/story?a=1#frag",
+                    "title": "URL story",
+                }
+            ),
+            1,
+        )
+        self.assertEqual(
+            registry.register(
+                {
+                    "article_id": "Article-1",
+                    "title": "ID story",
+                }
+            ),
+            2,
+        )
+        self.assertEqual(
+            registry.register(
+                {
+                    "source": "Wire",
+                    "title": "Meta story",
+                    "published": "Mon, 01 Jun 2026 12:00:00 GMT",
+                }
+            ),
+            3,
+        )
+        self.assertEqual(
+            [source["number"] for source in registry.sources()],
+            [1, 2, 3],
+        )
+        self.assertEqual(citations_stage._citation_source_number({"number": "bad"}), 0)
+        self.assertEqual(citations_stage._citation_group_title({}, 0), "Story 1")
+        self.assertEqual(
+            citations_stage._citation_group_numbers(
+                {"numbers": [{"number": "2"}, {"citation_number": "3"}, "bad", 0, 2]}
+            ),
+            [2, 3],
+        )
+        self.assertEqual(citations_stage._render_plain_text_source({"number": "bad"}), "")
+        self.assertEqual(citations_stage._render_plain_text_source_section("Title", [{"number": 0}]), "")
+        grouped_sections, additional_sources = citations_stage._grouped_citation_sources(
+            [
+                {"number": 1, "title": "One"},
+                {"number": 2, "title": "Two"},
+            ],
+            [{"citation_numbers": [1, 9]}],
+        )
+        self.assertEqual(len(grouped_sections), 1)
+        self.assertEqual(len(additional_sources), 1)
+        self.assertEqual(
+            citations_stage._valid_citation_numbers(
+                [{"number": "bad"}, {"number": 0}, {"number": 3}]
+            ),
+            {3},
+        )
+        self.assertEqual(
+            citations_stage._citation_source_url_by_number(
+                [
+                    {"number": "bad"},
+                    {"number": 0},
+                    {"number": 3, "url": ""},
+                    {"number": 4, "url": "https://example.com"},
+                ]
+            ),
+            {4: "https://example.com"},
+        )
+        self.assertIn(
+            "[99]",
+            citations_stage.render_html_text_with_citations(
+                "See [99].",
+                [{"number": 1, "url": "https://example.com"}],
+            ),
+        )
+        self.assertIn(
+            "No URL",
+            citations_stage._render_html_source_item(
+                {"number": 1, "title": "No URL", "source": "Wire", "published": "bad", "url": ""}
+            ),
+        )
+        self.assertEqual(
+            citations_stage._render_html_source_section("Sources", [{"number": 0}], set()),
+            "",
+        )
+        self.assertIn(
+            "No citation sources available.",
+            citations_stage.render_html_sources([{"number": 0}], []),
+        )
+        self.assertIsNone(citations_stage._parse_published_datetime(""))
+        self.assertIsNotNone(citations_stage._parse_published_datetime("2026-06-01T12:00:00Z"))
+        self.assertIsNone(citations_stage._parse_published_datetime("not-a-date"))
+        self.assertEqual(citations_stage.format_source_published_timestamp("not-a-date"), "not-a-date")
 
 
 class CitationIntegrationTests(unittest.TestCase):

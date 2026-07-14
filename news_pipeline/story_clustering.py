@@ -46,6 +46,10 @@ try:
     MIN_ARTICLES_PER_STORY = max(2, int(os.getenv("NEWS_MIN_ARTICLES_PER_STORY", "4")))
 except ValueError:
     MIN_ARTICLES_PER_STORY = 2
+try:
+    MAX_ARTICLES_PER_SOURCE_PER_STORY = max(1, int(os.getenv("NEWS_MAX_ARTICLES_PER_SOURCE", "4")))
+except ValueError:
+    MAX_ARTICLES_PER_SOURCE_PER_STORY = 4
 STORY_CLUSTER_SIMILARITY_THRESHOLD = _bounded_env_float(
     "NEWS_STORY_CLUSTER_SIMILARITY_THRESHOLD",
     0.30,
@@ -854,6 +858,7 @@ def cluster_global_stories_by_similarity(
     *,
     min_articles_per_story: int = MIN_ARTICLES_PER_STORY,
     similarity_threshold: float = STORY_CLUSTER_SIMILARITY_THRESHOLD,
+    max_articles_per_source: int = MAX_ARTICLES_PER_SOURCE_PER_STORY,
     progress_callback: ProgressCallback | None = None,
 ) -> list[dict]:
     if len(articles) < min_articles_per_story:
@@ -1082,8 +1087,16 @@ def cluster_global_stories_by_similarity(
                 str(article.get("source") or ""),
                 index,
             )
-
         ordered_indexes = sorted(component, key=article_rank)
+        per_source_seen: dict[str, int] = {}
+        capped_indexes: list[int] = []
+        for index in ordered_indexes:
+            source = _article_source_identity(articles[index])
+            if per_source_seen.get(source, 0) >= max_articles_per_source:
+                continue
+            capped_indexes.append(index)
+            per_source_seen[source] = per_source_seen.get(source, 0) + 1
+        capped_count = len(capped_indexes)
         story_groups.append(
             {
                 "title": _clean_story_title(
@@ -1093,16 +1106,17 @@ def cluster_global_stories_by_similarity(
                 ),
                 "article_ids": [
                     article_id_by_index[index]
-                    for index in ordered_indexes
+                    for index in capped_indexes
                     if article_id_by_index[index]
                 ],
                 "cluster_article_ids": [
                     article_id_by_index[index]
-                    for index in component
+                    for index in capped_indexes
                     if article_id_by_index[index]
                 ],
-                "article_count": len(component),
-                "selected_article_count": len(component),
+                "article_count": capped_count,
+                "selected_article_count": capped_count,
+                "cluster_article_count": capped_count,
                 "average_similarity": round(float(metrics["average_similarity"]), 4),
                 "connectedness_score": round(float(metrics["connectedness_score"]), 4),
                 "story_strength_score": round(float(metrics["story_strength_score"]), 4),
@@ -1146,8 +1160,10 @@ def organize_article_targets_into_global_stories(
     *,
     min_articles_per_story: int = MIN_ARTICLES_PER_STORY,
     similarity_threshold: float = STORY_CLUSTER_SIMILARITY_THRESHOLD,
+    max_articles_per_source: int = MAX_ARTICLES_PER_SOURCE_PER_STORY,
     progress_callback: ProgressCallback | None = None,
 ) -> tuple[list[dict], list[dict], dict[str, Any]]:
+
     if min_articles_per_story <= 1:
         if progress_callback:
             progress_callback(
@@ -1189,6 +1205,7 @@ def organize_article_targets_into_global_stories(
         article_targets,
         min_articles_per_story=min_articles_per_story,
         similarity_threshold=similarity_threshold,
+        max_articles_per_source=max_articles_per_source,
         progress_callback=progress_callback,
     )
     article_lookup = {

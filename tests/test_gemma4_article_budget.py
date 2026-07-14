@@ -10,7 +10,7 @@ from news_pipeline.config import (
     DEFAULT_MODEL_ALIAS,
     DEFAULT_ARTICLE_TEXT_TOKEN_LIMIT,
     DEFAULT_TOTAL_ARTICLE_SUMMARY_CAP,
-    GEMMA_12B_OPTIQ_MODEL_ALIAS,
+    QWWYTHOS_9B_4BIT_MODEL_ALIAS,
     is_gemma_4_model_reference,
     load_runtime_config,
 )
@@ -43,16 +43,16 @@ def _article_ids(count: int, *, prefix: str = "a") -> list[str]:
 
 
 class Gemma4ArticleBudgetTests(unittest.TestCase):
-    def test_gemma_4_detection_uses_alias_and_resolved_name(self) -> None:
-        self.assertTrue(is_gemma_4_model_reference(DEFAULT_MODEL_ALIAS))
+    def test_gemma_4_and_qwythos_detection(self) -> None:
+        self.assertTrue(is_gemma_4_model_reference(CODEX_TEST_MODEL_ALIAS))
+        self.assertTrue(is_gemma_4_model_reference(CODEX_TEST_MODEL_NAME))
         self.assertTrue(
             is_gemma_4_model_reference(
                 "mlx-community/gemma-4-26B-A4B-it-heretic-4bit"
             )
         )
-        self.assertTrue(is_gemma_4_model_reference(CODEX_TEST_MODEL_ALIAS))
-        self.assertTrue(is_gemma_4_model_reference(CODEX_TEST_MODEL_NAME))
-        self.assertTrue(is_gemma_4_model_reference(GEMMA_12B_OPTIQ_MODEL_ALIAS))
+        self.assertFalse(is_gemma_4_model_reference(QWWYTHOS_9B_4BIT_MODEL_ALIAS))
+        self.assertFalse(is_gemma_4_model_reference(DEFAULT_MODEL_ALIAS))
 
     def test_pipeline_budget_defaults_are_model_independent(self) -> None:
         with patch.dict(os.environ, {}, clear=True):
@@ -63,7 +63,7 @@ class Gemma4ArticleBudgetTests(unittest.TestCase):
         with patch.dict(os.environ, {}, clear=True):
             optiq_config = load_runtime_config(
                 materialize_outputs=False,
-                environ={"NEWS_MODEL": GEMMA_12B_OPTIQ_MODEL_ALIAS},
+                environ={"NEWS_MODEL": QWWYTHOS_9B_4BIT_MODEL_ALIAS},
             )
 
         self.assertEqual(
@@ -115,7 +115,7 @@ class Gemma4ArticleBudgetTests(unittest.TestCase):
         with patch.dict(
             os.environ,
             {
-                "NEWS_MODEL": GEMMA_12B_OPTIQ_MODEL_ALIAS,
+                "NEWS_MODEL": QWWYTHOS_9B_4BIT_MODEL_ALIAS,
             },
             clear=True,
         ):
@@ -125,11 +125,11 @@ class Gemma4ArticleBudgetTests(unittest.TestCase):
         self.assertEqual(config.story_synthesis_concurrency, 1)
         self.assertEqual(config.model_concurrency, 4)
 
-    def test_stage_concurrency_env_vars_do_not_override_model_selection(self) -> None:
+    def test_stage_concurrency_env_vars_are_honored(self) -> None:
         with patch.dict(
             os.environ,
             {
-                "NEWS_MODEL": GEMMA_12B_OPTIQ_MODEL_ALIAS,
+                "NEWS_MODEL": QWWYTHOS_9B_4BIT_MODEL_ALIAS,
                 "NEWS_ARTICLE_SUMMARY_CONCURRENCY": "3",
                 "NEWS_STORY_SYNTHESIS_CONCURRENCY": "6",
             },
@@ -137,15 +137,15 @@ class Gemma4ArticleBudgetTests(unittest.TestCase):
         ):
             config = load_runtime_config(materialize_outputs=False)
 
-        self.assertEqual(config.article_summary_concurrency, 4)
-        self.assertEqual(config.story_synthesis_concurrency, 1)
-        self.assertEqual(config.model_concurrency, 4)
+        self.assertEqual(config.article_summary_concurrency, 3)
+        self.assertEqual(config.story_synthesis_concurrency, 6)
+        self.assertEqual(config.model_concurrency, 6)
 
     def test_explicit_pipeline_budget_override_wins(self) -> None:
         with patch.dict(
             os.environ,
             {
-                "NEWS_MODEL": GEMMA_12B_OPTIQ_MODEL_ALIAS,
+                "NEWS_MODEL": QWWYTHOS_9B_4BIT_MODEL_ALIAS,
                 "NEWS_TOTAL_ARTICLE_SUMMARY_CAP": "55",
             },
             clear=True,
@@ -163,7 +163,7 @@ class Gemma4ArticleBudgetTests(unittest.TestCase):
         with patch.dict(os.environ, {}, clear=True):
             config = load_runtime_config(
                 materialize_outputs=False,
-                environ={"NEWS_MODEL": GEMMA_12B_OPTIQ_MODEL_ALIAS},
+                environ={"NEWS_MODEL": CODEX_TEST_MODEL_ALIAS},
             )
 
         self.assertEqual(

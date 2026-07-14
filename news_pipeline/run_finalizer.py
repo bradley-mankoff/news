@@ -17,6 +17,7 @@ class RunFinalizerConfig:
     latest_run_markdown_path: Path
     latest_run_log_path: Path
     history_db_path: Path
+    beehiiv_paste_dir: Path
     output_dir: Path
     run_log_path: str
     history_export_csv: bool = True
@@ -85,6 +86,7 @@ class RunFinalizer:
         self._write_details()
         self._write_history()
         self._write_review()
+        self._write_beehiiv_paste()
         self._cleanup_visible_outputs()
 
     def _write_details(self) -> None:
@@ -122,6 +124,19 @@ class RunFinalizer:
             self._detail(f"Latest readable run review saved: {review_path}")
         except Exception as error:
             self._warning(f"Latest readable run review write failed: {error}")
+
+    def _write_beehiiv_paste(self) -> None:
+        if not self.report_body:
+            return
+        try:
+            target_dir = self.config.beehiiv_paste_dir
+            target_dir.mkdir(parents=True, exist_ok=True)
+            date_label = (self.config.run_id or "")[:10] or "latest"
+            target_path = target_dir / f"{date_label}.md"
+            target_path.write_text(self.report_body, encoding="utf-8")
+            self._detail(f"Beehiiv paste file saved: {target_path}")
+        except Exception as error:
+            self._warning(f"Beehiiv paste file write failed: {error}")
 
     def _cleanup_visible_outputs(self) -> None:
         try:

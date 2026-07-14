@@ -26,9 +26,6 @@ SOURCE_FIELD_ORDER = (
     "weight",
     "can_enrich_coverage",
     "strict_source_match",
-    "source_match_mode",
-    "requires_translation",
-    "translation_source_language",
     "source_match_aliases",
     "notes",
 )
@@ -36,7 +33,6 @@ SOURCE_LIST_FIELDS = {"nations", "source_match_aliases"}
 SOURCE_BOOL_FIELDS = {
     "can_enrich_coverage",
     "strict_source_match",
-    "requires_translation",
 }
 SOURCE_FLOAT_FIELDS = {"weight"}
 
@@ -59,16 +55,11 @@ class SetSourceLanguages:
     overwrite: bool = False
 
 
-@dataclass(frozen=True)
-class MarkTranslationRequired:
-    source_languages: Mapping[str, str | None]
-
 
 SourceCatalogEdit = (
     UpsertSource
     | DeleteSources
     | SetSourceLanguages
-    | MarkTranslationRequired
 )
 
 
@@ -363,54 +354,6 @@ def _apply_languages(
     return lines, records, len(edits)
 
 
-def _apply_translation(
-    lines: list[str],
-    records: list[dict[str, Any]],
-    edit: MarkTranslationRequired,
-) -> tuple[list[str], list[dict[str, Any]], int]:
-    updates = {
-        str(key).strip(): str(language or "").strip().lower()
-        for key, language in edit.source_languages.items()
-        if str(key).strip()
-    }
-    if not updates:
-        return lines, records, 0
-    newline = _newline_for(lines)
-    edits: list[tuple[str, int, str]] = []
-    for start, end in _source_block_ranges(lines):
-        key = _source_block_key(lines, start, end)
-        if key not in updates:
-            continue
-        language = updates[key]
-        requires_line = _direct_source_field_line(lines, start, end, "requires_translation")
-        record = _source_record_for_key(records, key)
-        if requires_line is not None:
-            if lines[requires_line].strip().lower() != "requires_translation: true":
-                edits.append(("replace", requires_line, f"    requires_translation: true{newline}"))
-            if record is not None:
-                record["requires_translation"] = True
-        else:
-            insert_at = _preferred_field_insert_line(lines, start, end, ("language", "url", "region", "name"))
-            edits.append(("insert", insert_at, f"    requires_translation: true{newline}"))
-            if record is not None:
-                record["requires_translation"] = True
-
-        if language:
-            language_line = _direct_source_field_line(lines, start, end, "translation_source_language")
-            if language_line is None:
-                insert_at = _preferred_field_insert_line(
-                    lines,
-                    start,
-                    end,
-                    ("requires_translation", "language", "url", "region", "name"),
-                )
-                edits.append(("insert", insert_at, f"    translation_source_language: {language}{newline}"))
-                if record is not None:
-                    record["translation_source_language"] = language
-    _apply_line_edits(lines, edits)
-    return lines, records, len(edits)
-
-
 def _apply_line_edits(lines: list[str], edits: list[tuple[str, int, str]]) -> None:
     for action, index, line in reversed(edits):
         if action == "replace":
@@ -446,8 +389,6 @@ def apply_source_catalog_patch(path: Path, edits: Iterable[SourceCatalogEdit]) -
             lines, records, count = _apply_delete(lines, records, edit)
         elif isinstance(edit, SetSourceLanguages):
             lines, records, count = _apply_languages(lines, records, edit)
-        elif isinstance(edit, MarkTranslationRequired):
-            lines, records, count = _apply_translation(lines, records, edit)
         else:
             raise TypeError(f"Unsupported source catalog edit: {edit!r}")
         edit_count += count

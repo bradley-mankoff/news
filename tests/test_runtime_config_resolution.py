@@ -8,12 +8,13 @@ from pathlib import Path
 import textwrap
 from unittest.mock import patch
 
+from news_pipeline import ui as ui_module
 from news_pipeline import config as config_module
 from news_pipeline.config import (
     ACTIVE_PRESET_ENV_VAR,
     CODEX_TEST_MODEL_ALIAS,
-    GEMMA_12B_OPTIQ_MODEL_ALIAS,
-    GEMMA_12B_OPTIQ_MODEL_NAME,
+    QWWYTHOS_9B_4BIT_MODEL_ALIAS,
+    QWWYTHOS_9B_4BIT_MODEL_REFERENCE,
     MODEL_TASK_ARTICLE_SUMMARY,
     MODEL_TASK_STORY_DRAFTING,
     ModelSamplingSettings,
@@ -35,7 +36,7 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
             RuntimeConfigRequest(
                 base_env={},
                 preset_id="dev",
-                overrides={"NEWS_MODEL": GEMMA_12B_OPTIQ_MODEL_ALIAS},
+                overrides={"NEWS_MODEL": QWWYTHOS_9B_4BIT_MODEL_ALIAS},
                 materialize_outputs=False,
                 run_started_at=datetime(2026, 6, 14, 12, 0, 0),
             )
@@ -46,7 +47,7 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
     def test_preset_base_env_and_overrides_have_documented_precedence(self) -> None:
         resolution = resolve_runtime_config(
             RuntimeConfigRequest(
-                base_env={"NEWS_MODEL": GEMMA_12B_OPTIQ_MODEL_ALIAS},
+                base_env={"NEWS_MODEL": QWWYTHOS_9B_4BIT_MODEL_ALIAS},
                 preset_id="dev",
                 overrides={"NEWS_SOURCE_SCOPE": "peripheral"},
                 materialize_outputs=False,
@@ -55,10 +56,10 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
         )
 
         self.assertEqual(resolution.config.preset_id, "dev")
-        self.assertEqual(resolution.config.model_reference, GEMMA_12B_OPTIQ_MODEL_ALIAS)
-        self.assertEqual(resolution.config.model_name, GEMMA_12B_OPTIQ_MODEL_NAME)
-        self.assertEqual(resolution.config.model_backend, "mlx-lm")
-        self.assertIn("python -m mlx_lm server", resolution.config.model_server_command)
+        self.assertEqual(resolution.config.model_reference, QWWYTHOS_9B_4BIT_MODEL_ALIAS)
+        self.assertEqual(resolution.config.model_name, QWWYTHOS_9B_4BIT_MODEL_REFERENCE)
+        self.assertEqual(resolution.config.model_backend, "mlx-vlm")
+        self.assertIn("python -m mlx_vlm.server", resolution.config.model_server_command)
         self.assertEqual(resolution.config.source_scope, "peripheral")
         self.assertEqual(resolution.config.recipient_scope, "bradley")
         self.assertEqual(resolution.command_env_delta["NEWS_PRESET"], "dev")
@@ -91,7 +92,7 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
     def test_context_env_drives_runtime_config_derivations(self) -> None:
         config = load_runtime_config(
             environ={"NEWS_TOTAL_ARTICLE_SUMMARY_CAP": "55"},
-            overrides={"NEWS_MODEL": "gemma-26b-moe"},
+            overrides={"NEWS_MODEL": "qwythos-9b-8bit"},
             materialize_outputs=False,
             run_started_at=datetime(2026, 6, 14, 12, 0, 0),
         )
@@ -149,8 +150,8 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
             environ={},
             overrides={
                 "NEWS_MODEL": CODEX_TEST_MODEL_ALIAS,
-                "NEWS_MODEL_ARTICLE_SUMMARY": GEMMA_12B_OPTIQ_MODEL_ALIAS,
-                "NEWS_MODEL_STORY_DRAFTING": "gemma-26b-moe",
+                "NEWS_MODEL_ARTICLE_SUMMARY": QWWYTHOS_9B_4BIT_MODEL_ALIAS,
+                "NEWS_MODEL_STORY_DRAFTING": "qwythos-9b-8bit",
             },
             materialize_outputs=False,
         )
@@ -158,15 +159,15 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
         self.assertEqual(config.model_assignments["default"].reference, CODEX_TEST_MODEL_ALIAS)
         self.assertEqual(
             config.model_assignments[MODEL_TASK_ARTICLE_SUMMARY].reference,
-            GEMMA_12B_OPTIQ_MODEL_ALIAS,
+            QWWYTHOS_9B_4BIT_MODEL_ALIAS,
         )
         self.assertEqual(
             config.model_assignments[MODEL_TASK_ARTICLE_SUMMARY].name,
-            GEMMA_12B_OPTIQ_MODEL_NAME,
+            QWWYTHOS_9B_4BIT_MODEL_REFERENCE,
         )
         self.assertEqual(
             config.model_assignments[MODEL_TASK_STORY_DRAFTING].reference,
-            "gemma-26b-moe",
+            "qwythos-9b-8bit",
         )
         self.assertNotEqual(
             config.model_assignments["default"].reference,
@@ -177,16 +178,6 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
             config.model_assignments[MODEL_TASK_STORY_DRAFTING].reference,
         )
 
-    def test_translation_config_is_dormant_by_default(self) -> None:
-        config = load_runtime_config(
-            environ={},
-            overrides={"NEWS_MODEL": CODEX_TEST_MODEL_ALIAS},
-            materialize_outputs=False,
-        )
-
-        self.assertFalse(config.translation_enabled)
-        self.assertEqual(config.translation_model_reference, "google/translategemma-4b-it")
-        self.assertEqual(config.translation_model_server_command, "")
 
     def test_ui_command_env_delta_matches_preview_overrides(self) -> None:
         body = {
@@ -235,6 +226,19 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
         self.assertNotIn("Image", groups)
         self.assertNotIn("Story", groups)
         self.assertNotIn("Infrastructure", groups)
+
+        knobs = {knob["env"]: knob for knob in schema["knobs"]}
+        for env in (
+            "NEWS_SOURCE_COLLECTION_CONCURRENCY",
+            "NEWS_ARTICLE_SUMMARY_CONCURRENCY",
+            "NEWS_STORY_SYNTHESIS_CONCURRENCY",
+            "NEWS_MODEL_CONCURRENCY",
+        ):
+            self.assertIn(env, knobs)
+            self.assertEqual(knobs[env]["type"], "number")
+            self.assertIsNotNone(knobs[env]["default"])
+        self.assertIn("model_tuning_presets", schema)
+        self.assertIn("presets", schema["model_tuning_presets"])
 
         model = schema["runtime"]["model"]
         self.assertNotIn("profile", model)
@@ -373,7 +377,7 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
         with patch.dict(
             os.environ,
             {
-                "NEWS_MODEL": GEMMA_12B_OPTIQ_MODEL_ALIAS,
+                "NEWS_MODEL": QWWYTHOS_9B_4BIT_MODEL_ALIAS,
             },
             clear=True,
         ):
@@ -395,7 +399,7 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
         )
         config_two = load_runtime_config(
             materialize_outputs=False,
-            environ={**shared_env, "NEWS_MODEL": GEMMA_12B_OPTIQ_MODEL_ALIAS},
+            environ={**shared_env, "NEWS_MODEL": QWWYTHOS_9B_4BIT_MODEL_ALIAS},
         )
 
         self.assertEqual(config_one.model_server_settings, config_two.model_server_settings)
@@ -413,8 +417,88 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
         self.assertIn("--max-tokens 777", config_one.model_server_command)
         self.assertNotIn("--prompt-cache-size", config_one.model_server_command)
         self.assertNotIn("--prompt-cache-bytes", config_one.model_server_command)
-        self.assertIn("--prompt-cache-size", config_two.model_server_command)
-        self.assertIn("--prompt-cache-bytes", config_two.model_server_command)
+        self.assertNotIn("--prompt-cache-size", config_two.model_server_command)
+        self.assertNotIn("--prompt-cache-bytes", config_two.model_server_command)
+
+    def test_run_and_model_tuning_preset_round_trip_modified_at(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmpdir_path = Path(tmpdir)
+            run_path = tmpdir_path / "run_presets.yaml"
+            run_path.write_text(
+                textwrap.dedent(
+                    """\
+                    presets:
+                      demo:
+                        name: Demo
+                        description: Example run preset.
+                        env:
+                          NEWS_IMAGE_ENABLED: '1'
+                    """
+                ),
+                encoding="utf-8",
+            )
+            tuning_path = tmpdir_path / "model_tuning_presets.yaml"
+            tuning_path.write_text(
+                textwrap.dedent(
+                    """\
+                    presets:
+                      concise-story-drafting:
+                        model: mlx-community/example-model
+                        task: story_drafting
+                        tuning:
+                          temperature: 0.2
+                    """
+                ),
+                encoding="utf-8",
+            )
+
+            with patch.object(ui_module, "RUN_PRESETS_PATH", run_path), patch.object(
+                ui_module, "MODEL_TUNING_PRESETS_PATH", tuning_path
+            ), patch.object(config_module, "MODEL_TUNING_PRESETS_PATH", tuning_path):
+                run_listing = ui_module.list_presets()
+                self.assertEqual(run_listing["presets"][0]["id"], "demo")
+                self.assertNotIn("modified_at", run_listing["presets"][0])
+
+                saved_run = ui_module.upsert_preset(
+                    {
+                        "id": "demo",
+                        "name": "Demo",
+                        "description": "Example run preset.",
+                        "env": {"NEWS_IMAGE_ENABLED": "1"},
+                    }
+                )
+                self.assertIn("modified_at", saved_run["preset"])
+                self.assertEqual(ui_module.list_presets()["presets"][0]["id"], "demo")
+                self.assertIn("modified_at", ui_module.list_presets()["presets"][0])
+
+                model_listing = ui_module.list_model_tuning_presets()
+                self.assertEqual(model_listing["presets"][0]["id"], "concise-story-drafting")
+                self.assertNotIn("modified_at", model_listing["presets"][0])
+
+                saved_model = ui_module.upsert_model_tuning_preset(
+                    {
+                        "id": "concise-story-drafting",
+                        "name": "Concise Story Drafting",
+                        "model": "mlx-community/example-model",
+                        "task": "story_drafting",
+                        "tuning": {
+                            "temperature": 0.2,
+                        },
+                    }
+                )
+                self.assertIn("modified_at", saved_model["preset"])
+                self.assertEqual(
+                    ui_module.list_model_tuning_presets()["presets"][0]["name"],
+                    "Concise Story Drafting",
+                )
+
+                deleted_run = ui_module.delete_preset("demo")
+                self.assertEqual(deleted_run["deleted"], "demo")
+                self.assertEqual(ui_module.list_presets()["presets"], [])
+
+                deleted_model = ui_module.delete_model_tuning_preset("concise-story-drafting")
+                self.assertEqual(deleted_model["deleted"], "concise-story-drafting")
+                self.assertEqual(ui_module.list_model_tuning_presets()["presets"], [])
 
 
 if __name__ == "__main__":

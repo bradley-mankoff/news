@@ -80,6 +80,7 @@ def decode_google_news_article_path(url: str) -> str:
         if not bytes_array:
             return ""
         length = bytes_array[0]
+        # Short lengths use a one-byte length prefix, so the URL starts at offset 1.
         candidate = decoded_str[2 : length + 1] if length >= 0x80 else decoded_str[1 : length + 1]
 
         if candidate.startswith(("http://", "https://")) and not is_google_news_url(candidate):

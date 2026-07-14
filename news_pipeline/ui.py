@@ -14,6 +14,7 @@ import uuid
 import webbrowser
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse
@@ -22,6 +23,7 @@ import yaml
 
 from .config import (
     CONFIG_DIR,
+    MODEL_TUNING_PRESETS_PATH,
     REMOVED_TOPIC_ENV_VARS,
     ROOT_DIR,
     RUN_PRESETS_PATH,
@@ -30,6 +32,7 @@ from .config import (
     VALID_SOURCE_MATCH_MODES,
     configured_removed_topic_env_vars,
     load_run_presets,
+    load_model_tuning_presets,
     load_recipients,
     load_sources,
     normalize_preset_id,
@@ -59,6 +62,10 @@ RUN_PRESET_HEADER = """# Saved run presets for the daily news pipeline.
 #
 # Run Presets are env-style defaults. Shell/UI overrides still win.
 """
+MODEL_TUNING_PRESET_HEADER = """# Saved model tuning presets for the daily news pipeline.
+#
+# Model Tuning Presets are explicit overlays for a model or model-task pair.
+"""
 
 
 def build_knob_registry() -> list[dict[str, Any]]:
@@ -73,6 +80,10 @@ def _config_path_from_env(name: str, default: str) -> Path:
 
 def _mask_secret(value: str | None) -> str:
     return "********" if value else ""
+
+
+def _now_iso_local() -> str:
+    return datetime.now().astimezone().isoformat(timespec="seconds")
 
 
 def _json_ready(value: Any) -> Any:
@@ -168,15 +179,6 @@ def _runtime_snapshot(
                 "tuning": _json_ready(config.model_tuning),
                 "pipeline_budget": _json_ready(config.pipeline_budget),
                 "server_settings": _json_ready(config.model_server_settings),
-            },
-            "translation": {
-                "enabled": config.translation_enabled,
-                "reference": config.translation_model_reference,
-                "name": config.translation_model_name,
-                "backend": config.translation_model_backend,
-                "base_url": config.translation_model_base_url,
-                "target_language": config.translation_target_language,
-                "server_command": config.translation_model_server_command,
             },
             "funnel": {
                 "recent_window_hours": config.recent_window_hours,
@@ -287,6 +289,7 @@ def schema_payload() -> dict[str, Any]:
         "runtime": runtime,
         "runtime_error": runtime_error,
         "presets": list_presets(),
+        "model_tuning_presets": list_model_tuning_presets(),
         "sources": _source_summary(),
         "recipients": _recipient_summary(),
         "source_match_modes": sorted(VALID_SOURCE_MATCH_MODES),
@@ -316,11 +319,15 @@ def _write_presets(records: dict[str, dict[str, Any]]) -> None:
     payload = {"presets": {}}
     for preset_id in sorted(records):
         record = records[preset_id]
-        payload["presets"][preset_id] = {
+        payload_record: dict[str, Any] = {
             "name": record.get("name") or preset_id,
             "description": record.get("description") or "",
             "env": dict(record.get("env") or {}),
         }
+        modified_at = str(record.get("modified_at") or "").strip()
+        if modified_at:
+            payload_record["modified_at"] = modified_at
+        payload["presets"][preset_id] = payload_record
     _write_yaml_mapping(RUN_PRESETS_PATH, payload, header=RUN_PRESET_HEADER)
 
 
@@ -354,15 +361,15 @@ def upsert_preset(body: dict[str, Any], *, append_only: bool = False) -> dict[st
     if append_only and preset_id in records:
         raise ValueError(f"Preset {preset_id!r} already exists.")
     existing = records.get(preset_id, {"id": preset_id, "name": preset_id, "description": "", "env": {}})
-    env = _coerce_preset_env(body.get("env"))
-    if not env and isinstance(body.get("updates"), dict):
-        env = _coerce_preset_env(body["updates"].get("env"))
     updates = body.get("updates") if isinstance(body.get("updates"), dict) else body
+    env_source = body if "env" in body else updates if isinstance(updates, dict) and "env" in updates else None
+    env = _coerce_preset_env(env_source.get("env")) if env_source is not None else dict(existing.get("env") or {})
     record = {
         "id": preset_id,
         "name": str(updates.get("name") or existing.get("name") or preset_id).strip(),
         "description": str(updates.get("description") or existing.get("description") or "").strip(),
-        "env": env or dict(existing.get("env") or {}),
+        "env": env,
+        "modified_at": _now_iso_local(),
     }
     records[preset_id] = record
     _write_presets(records)
@@ -395,9 +402,91 @@ def duplicate_preset(body: dict[str, Any]) -> dict[str, Any]:
         "name": str(body.get("name") or f"{source.get('name') or source_id} copy").strip(),
         "description": str(source.get("description") or "").strip(),
         "env": dict(source.get("env") or {}),
+        "modified_at": _now_iso_local(),
     }
     _write_presets(records)
     return {"path": str(RUN_PRESETS_PATH), "preset": records[target_id]}
+
+
+def _model_tuning_preset_records() -> dict[str, dict[str, Any]]:
+    return load_model_tuning_presets(MODEL_TUNING_PRESETS_PATH)
+
+
+def _write_model_tuning_presets(records: dict[str, dict[str, Any]]) -> None:
+    payload = {"presets": {}}
+    for preset_id in sorted(records):
+        record = records[preset_id]
+        payload_record: dict[str, Any] = {
+            "name": record.get("name") or preset_id,
+            "description": record.get("description") or "",
+            "tuning": dict(record.get("tuning") or {}),
+        }
+        model = str(record.get("model") or "").strip()
+        task = str(record.get("task") or "").strip()
+        if model:
+            payload_record["model"] = model
+        if task:
+            payload_record["task"] = task
+        modified_at = str(record.get("modified_at") or "").strip()
+        if modified_at:
+            payload_record["modified_at"] = modified_at
+        payload["presets"][preset_id] = payload_record
+    _write_yaml_mapping(MODEL_TUNING_PRESETS_PATH, payload, header=MODEL_TUNING_PRESET_HEADER)
+
+
+def list_model_tuning_presets() -> dict[str, Any]:
+    records = _model_tuning_preset_records()
+    return {
+        "path": str(MODEL_TUNING_PRESETS_PATH),
+        "presets": [records[preset_id] for preset_id in sorted(records)],
+    }
+
+
+def _coerce_optional_mapping(body: dict[str, Any], field_name: str) -> dict[str, Any] | None:
+    if field_name in body:
+        raw = body.get(field_name)
+        if raw in (None, ""):
+            return {}
+        if isinstance(raw, dict):
+            return dict(raw)
+        return {}
+    return None
+
+
+def upsert_model_tuning_preset(body: dict[str, Any], *, append_only: bool = False) -> dict[str, Any]:
+    preset_id = normalize_preset_id(str(body.get("id") or body.get("preset_id") or ""))
+    if not preset_id:
+        raise ValueError("Preset id is required.")
+    records = _model_tuning_preset_records()
+    if append_only and preset_id in records:
+        raise ValueError(f"Preset {preset_id!r} already exists.")
+    existing = records.get(preset_id, {"id": preset_id, "name": preset_id, "description": "", "tuning": {}})
+    updates = body.get("updates") if isinstance(body.get("updates"), dict) else body
+    tuning = _coerce_optional_mapping(body, "tuning")
+    if tuning is None and isinstance(updates, dict):
+        tuning = _coerce_optional_mapping(updates, "tuning")
+    record = {
+        "id": preset_id,
+        "name": str(updates.get("name") or existing.get("name") or preset_id).strip(),
+        "description": str(updates.get("description") or existing.get("description") or "").strip(),
+        "model": str(updates.get("model") or existing.get("model") or "").strip(),
+        "task": str(updates.get("task") or existing.get("task") or "").strip(),
+        "tuning": tuning if tuning is not None else dict(existing.get("tuning") or {}),
+        "modified_at": _now_iso_local(),
+    }
+    records[preset_id] = record
+    _write_model_tuning_presets(records)
+    return {"path": str(MODEL_TUNING_PRESETS_PATH), "preset": record}
+
+
+def delete_model_tuning_preset(preset_id: str) -> dict[str, Any]:
+    clean_id = normalize_preset_id(preset_id)
+    records = _model_tuning_preset_records()
+    if clean_id not in records:
+        raise ValueError(f"Preset {preset_id!r} not found.")
+    del records[clean_id]
+    _write_model_tuning_presets(records)
+    return {"path": str(MODEL_TUNING_PRESETS_PATH), "deleted": clean_id}
 
 
 def _coerce_bool(value: Any) -> bool:
@@ -728,6 +817,8 @@ class NewsUIHandler(BaseHTTPRequestHandler):
                 self._send_json(schema_payload())
             elif parsed.path == "/api/presets":
                 self._send_json(list_presets())
+            elif parsed.path == "/api/model-tuning-presets":
+                self._send_json(list_model_tuning_presets())
             elif parsed.path == "/api/sources":
                 self._send_json(list_sources())
             elif parsed.path == "/api/recipients":
@@ -760,6 +851,8 @@ class NewsUIHandler(BaseHTTPRequestHandler):
                 self._send_json(record.snapshot(), status=HTTPStatus.ACCEPTED)
             elif parsed.path == "/api/presets":
                 self._send_json(upsert_preset(body, append_only=True), status=HTTPStatus.CREATED)
+            elif parsed.path == "/api/model-tuning-presets":
+                self._send_json(upsert_model_tuning_preset(body, append_only=True), status=HTTPStatus.CREATED)
             elif parsed.path == "/api/presets/duplicate":
                 self._send_json(duplicate_preset(body), status=HTTPStatus.CREATED)
             elif parsed.path.startswith("/api/runs/") and parsed.path.endswith("/stop"):
@@ -782,6 +875,8 @@ class NewsUIHandler(BaseHTTPRequestHandler):
                 self._send_json(upsert_source(body))
             elif parsed.path == "/api/presets":
                 self._send_json(upsert_preset(body))
+            elif parsed.path == "/api/model-tuning-presets":
+                self._send_json(upsert_model_tuning_preset(body))
             elif parsed.path == "/api/recipients":
                 self._send_json(upsert_recipient(body))
             else:
@@ -797,6 +892,8 @@ class NewsUIHandler(BaseHTTPRequestHandler):
                 self._send_json(delete_source((params.get("key") or [""])[0]))
             elif parsed.path == "/api/presets":
                 self._send_json(delete_preset((params.get("id") or [""])[0]))
+            elif parsed.path == "/api/model-tuning-presets":
+                self._send_json(delete_model_tuning_preset((params.get("id") or [""])[0]))
             elif parsed.path == "/api/recipients":
                 self._send_json(delete_recipient((params.get("email") or [""])[0]))
             else:
@@ -848,24 +945,28 @@ HTML = r"""<!doctype html>
   <style>
     :root {
       color-scheme: light;
-      --bg: #f7f8fa;
-      --surface: #ffffff;
-      --line: #d9dee7;
-      --ink: #1f2430;
-      --muted: #657083;
-      --blue: #255f99;
-      --green: #19735a;
-      --gold: #9c6b16;
-      --red: #b33a3a;
+      --bg: #f1ebe1;
+      --surface: #fffdf8;
+      --line: #d8cfc0;
+      --ink: #1d2430;
+      --muted: #6d7480;
+      --blue: #285c94;
+      --green: #17735f;
+      --gold: #9a6715;
+      --red: #b33f3f;
       --focus: #0f7a9f;
+      --shadow: 0 18px 50px rgba(36, 44, 60, 0.08);
     }
     * { box-sizing: border-box; }
     body {
       margin: 0;
       min-height: 100vh;
-      background: var(--bg);
+      background:
+        radial-gradient(circle at top left, rgba(255, 255, 255, 0.7), transparent 28%),
+        radial-gradient(circle at top right, rgba(208, 184, 141, 0.18), transparent 24%),
+        linear-gradient(180deg, #f7f1e6 0%, var(--bg) 42%, #ece4d8 100%);
       color: var(--ink);
-      font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font: 14px/1.45 "Avenir Next", "Segoe UI", -apple-system, BlinkMacSystemFont, sans-serif;
     }
     header {
       display: flex;
@@ -874,10 +975,12 @@ HTML = r"""<!doctype html>
       gap: 16px;
       padding: 14px 18px;
       border-bottom: 1px solid var(--line);
-      background: var(--surface);
+      background: rgba(255, 253, 248, 0.88);
+      backdrop-filter: blur(12px);
       position: sticky;
       top: 0;
-      z-index: 2;
+      z-index: 4;
+      box-shadow: 0 1px 0 rgba(255, 255, 255, 0.8) inset;
     }
     h1 { font-size: 18px; margin: 0; letter-spacing: 0; }
     h2 { font-size: 15px; margin: 0 0 12px; letter-spacing: 0; }
@@ -893,27 +996,67 @@ HTML = r"""<!doctype html>
       min-height: 34px;
       padding: 6px 10px;
       cursor: pointer;
-      background: #fdfdfd;
+      background: linear-gradient(180deg, #fff, #f5f0e7);
+      transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
     }
+    button:hover { transform: translateY(-1px); box-shadow: 0 8px 18px rgba(36, 44, 60, 0.08); }
     button.primary { background: var(--blue); color: white; border-color: var(--blue); }
     button.danger { color: var(--red); border-color: #e5b4b4; }
     button:focus, input:focus, select:focus, textarea:focus { outline: 2px solid var(--focus); outline-offset: 1px; }
-    input, select, textarea { width: 100%; min-height: 34px; padding: 6px 8px; }
+    input, select, textarea {
+      width: 100%;
+      min-height: 34px;
+      padding: 7px 9px;
+      border-radius: 10px;
+      background: #fff;
+      border: 1px solid var(--line);
+    }
     textarea { min-height: 76px; resize: vertical; }
     main { display: grid; grid-template-columns: 220px 1fr; min-height: calc(100vh - 63px); }
+    body.nav-collapsed main { grid-template-columns: 58px 1fr; }
     nav {
       border-right: 1px solid var(--line);
-      background: #eef1f5;
+      background: rgba(236, 240, 245, 0.92);
       padding: 12px;
+      position: sticky;
+      top: 63px;
+      align-self: start;
+      min-height: calc(100vh - 63px);
     }
     nav button {
       width: 100%;
+      display: flex;
+      align-items: center;
+      gap: 8px;
       text-align: left;
       margin-bottom: 6px;
       background: transparent;
       border-color: transparent;
+      overflow: hidden;
+      text-overflow: ellipsis;
     }
     nav button.active { background: #fff; border-color: var(--line); color: var(--blue); }
+    nav svg { width: 18px; height: 18px; flex: 0 0 18px; stroke: currentColor; }
+    .nav-toggle {
+      justify-content: center;
+      width: 34px;
+      margin-left: auto;
+      margin-bottom: 12px;
+      border-color: var(--line);
+      background: rgba(255, 255, 255, 0.62);
+      color: var(--muted);
+      border-radius: 999px;
+    }
+    .nav-toggle:hover { color: var(--blue); }
+    body:not(.nav-collapsed) .expand-icon { display: none; }
+    body.nav-collapsed .collapse-icon { display: none; }
+    body.nav-collapsed nav { padding: 12px 8px; }
+    body.nav-collapsed nav button:not(#navToggle) {
+      justify-content: center;
+      padding-left: 0;
+      padding-right: 0;
+    }
+    body.nav-collapsed nav button:not(#navToggle) .tab-text { display: none; }
     section.view { display: none; padding: 18px; }
     section.view.active { display: block; }
     .grid { display: grid; gap: 12px; }
@@ -921,11 +1064,12 @@ HTML = r"""<!doctype html>
     .panel {
       background: var(--surface);
       border: 1px solid var(--line);
-      border-radius: 8px;
-      padding: 14px;
+      border-radius: 18px;
+      padding: 16px;
+      box-shadow: var(--shadow);
     }
     .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
-    .stat { border-left: 4px solid var(--blue); padding: 8px 10px; background: #fff; border-radius: 6px; }
+    .stat { border-left: 4px solid var(--blue); padding: 8px 10px; background: #fff; border-radius: 12px; box-shadow: 0 6px 18px rgba(36, 44, 60, 0.06); }
     .stat strong { display: block; font-size: 20px; }
     .row { display: grid; grid-template-columns: minmax(120px, 190px) 1fr; gap: 10px; align-items: center; margin-bottom: 10px; }
     .row label { color: var(--muted); }
@@ -940,6 +1084,7 @@ HTML = r"""<!doctype html>
     .warn { color: var(--gold); }
     .bad { color: var(--red); }
     .good { color: var(--green); }
+    #status:empty { display: none; }
     .hidden { display: none !important; }
     pre {
       margin: 0;
@@ -954,18 +1099,93 @@ HTML = r"""<!doctype html>
     #logPane { min-height: 280px; max-height: 52vh; }
     .knob-group { margin-bottom: 18px; }
     .knobs { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 10px; }
-    .knob { border: 1px solid var(--line); border-radius: 8px; padding: 10px; background: #fff; }
-    .knob label { display: block; font-weight: 600; margin-bottom: 4px; }
-    .knob code { color: var(--muted); font-size: 12px; }
+    .knob { border: 1px solid var(--line); border-radius: 14px; padding: 10px; background: #fff; box-shadow: 0 6px 16px rgba(36, 44, 60, 0.05); }
+    .knob label { display: flex; gap: 6px; align-items: center; font-weight: 600; margin-bottom: 4px; }
+    .knob code { display: none; }
     .knob-details { margin-top: 12px; }
     .knob-details > summary { cursor: pointer; color: var(--muted); font-weight: 600; }
     .form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 10px; }
+    .field { display: grid; gap: 6px; align-content: start; }
+    .field > span { display: flex; gap: 6px; align-items: center; font-weight: 600; min-width: 0; }
+    .field code { display: none; }
+    .env-info {
+      display: inline-grid;
+      place-items: center;
+      width: 16px;
+      height: 16px;
+      flex: 0 0 16px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1;
+      cursor: help;
+      background: #fff;
+    }
+    .stack { display: grid; gap: 14px; }
+    .eyebrow { margin: 0 0 4px; text-transform: uppercase; letter-spacing: 0.12em; font-size: 11px; color: var(--muted); }
+    .banner {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 16px;
+      position: sticky;
+      top: 66px;
+      z-index: 3;
+      background: linear-gradient(135deg, rgba(255,255,255,0.95), rgba(248,240,224,0.96));
+      border-color: rgba(216, 207, 192, 0.9);
+    }
+    .banner-copy h2 { margin-bottom: 6px; font-size: 20px; }
+    .banner-copy p { margin: 0; }
+    .banner-actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+    .banner-actions button { white-space: nowrap; }
+    .model-card h2 { margin-bottom: 6px; }
+    .details {
+      margin-top: 12px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 10px 12px;
+      background: #fcfbf7;
+    }
+    .details > summary { cursor: pointer; font-weight: 700; color: var(--blue); }
+    .details[open] > summary { margin-bottom: 12px; }
+    dialog {
+      border: none;
+      padding: 0;
+      background: transparent;
+      max-width: min(1180px, calc(100vw - 24px));
+    }
+    dialog::backdrop { background: rgba(23, 28, 39, 0.42); backdrop-filter: blur(2px); }
+    .dialog-shell {
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      box-shadow: 0 28px 80px rgba(20, 26, 38, 0.28);
+      padding: 16px;
+      min-width: min(1120px, calc(100vw - 24px));
+    }
+    .dialog-head { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; margin-bottom: 14px; }
+    .dialog-grid { display: grid; grid-template-columns: 1.1fr 0.9fr; gap: 14px; }
+    .selected td { background: #f3f7fb; }
+    .selected td:first-child { box-shadow: inset 3px 0 0 var(--blue); }
     @media (max-width: 780px) {
       main { grid-template-columns: 1fr; }
       nav { display: flex; overflow-x: auto; border-right: 0; border-bottom: 1px solid var(--line); }
       nav button { width: auto; white-space: nowrap; }
       .row { grid-template-columns: 1fr; gap: 4px; }
       header { align-items: flex-start; flex-direction: column; }
+      .banner, .dialog-head { flex-direction: column; }
+      .banner-actions {
+        width: 100%;
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        justify-content: stretch;
+      }
+      .banner-actions button { width: 100%; white-space: normal; }
+      #runBtn { grid-column: 1 / -1; }
+      .dialog-shell { min-width: auto; }
+      .dialog-grid { grid-template-columns: 1fr; }
+      .banner { top: 88px; }
     }
   </style>
 </head>
@@ -976,86 +1196,15 @@ HTML = r"""<!doctype html>
   </header>
   <main>
     <nav id="tabs"></nav>
-    <section id="dashboard" class="view active">
-      <div class="grid cols">
-        <div class="panel">
-          <h2>Run</h2>
-          <div class="row"><label for="presetSelect">Run preset</label><select id="presetSelect"></select></div>
-          <div class="row"><label for="actionSelect">Action</label><select id="actionSelect"></select></div>
-          <div id="sourceOptions">
-            <h3>Source Tool Options</h3>
-            <div class="form-grid">
-              <label>Limit<input id="opt_limit" type="number" min="1"></label>
-              <label>Recent days<input id="opt_recent_days" type="number" min="1" value="7"></label>
-              <label>Timeout<input id="opt_timeout" type="number" min="1"></label>
-              <label>Concurrency<input id="opt_concurrency" type="number" min="1"></label>
-              <label>Section<select id="opt_section"><option value=""></option><option>sources</option><option>all</option></select></label>
-              <label>Language model<input id="opt_language_model"></label>
-              <label>Language samples<input id="opt_language_samples" type="number" min="1"></label>
-              <label>Min language confidence<input id="opt_min_language_confidence" type="number" step="0.01" min="0" max="1"></label>
-            </div>
-            <div class="toolbar">
-              <label><input id="opt_probe_articles" type="checkbox"> Probe articles</label>
-              <label><input id="opt_prune_unscrapable" type="checkbox"> Prune unscrapable</label>
-              <label><input id="opt_only_failures" type="checkbox"> Only failures</label>
-              <label><input id="opt_write_languages" type="checkbox"> Write languages</label>
-              <label><input id="opt_overwrite_languages" type="checkbox"> Overwrite languages</label>
-              <label><input id="opt_json" type="checkbox"> JSON</label>
-            </div>
-          </div>
-          <div class="toolbar">
-            <button id="previewBtn">Preview</button>
-            <button id="runBtn" class="primary">Run</button>
-            <button id="refreshBtn">Refresh</button>
-          </div>
-        </div>
-        <div class="panel">
-          <h2>Effective Snapshot</h2>
-          <div id="stats" class="stats"></div>
-        </div>
-      </div>
-      <div class="panel" style="margin-top:12px">
-        <h2>Command Preview</h2>
-        <pre id="previewPane"></pre>
-      </div>
-      <div class="panel" style="margin-top:12px">
-        <div class="toolbar"><h2 style="margin-right:auto">Run Log</h2><button id="stopBtn" class="danger">Stop</button></div>
-        <pre id="logPane"></pre>
-      </div>
+    <section id="runSetup" class="view active">
+      <div id="runSetupMount"></div>
     </section>
-    <section id="knobs" class="view">
+    <section id="advanced" class="view">
       <div class="toolbar">
-        <input id="knobSearch" placeholder="Filter settings">
-        <label><input id="showAdvanced" type="checkbox"> Advanced</label>
-        <button id="savePresetBtn">Save run preset</button>
-        <button id="loadPresetBtn">Load run preset</button>
+        <input id="knobSearch" placeholder="Filter raw settings">
         <button id="clearKnobsBtn">Clear overrides</button>
       </div>
       <div id="knobContainer"></div>
-    </section>
-    <section id="presets" class="view">
-      <div class="toolbar">
-        <button id="newPresetBtn">New preset</button>
-        <button id="duplicatePresetBtn">Duplicate</button>
-        <button id="reloadPresetsBtn">Reload</button>
-      </div>
-      <div class="grid cols">
-        <div class="table-wrap"><table id="presetTable"></table></div>
-        <div class="panel">
-          <h2>Run Preset Editor</h2>
-          <div class="form-grid">
-            <label>ID<input id="preset_id"></label>
-            <label>Name<input id="preset_name"></label>
-          </div>
-          <label>Description<textarea id="preset_description"></textarea></label>
-          <label>Environment<textarea id="preset_env" spellcheck="false"></textarea></label>
-          <div class="toolbar" style="margin-top:12px">
-            <button id="savePresetEditorBtn" class="primary">Save run preset</button>
-            <button id="deletePresetBtn" class="danger">Delete run preset</button>
-            <button id="loadPresetIntoKnobsBtn">Load into settings</button>
-          </div>
-        </div>
-      </div>
     </section>
     <section id="sources" class="view">
       <div class="toolbar">
@@ -1097,16 +1246,184 @@ HTML = r"""<!doctype html>
       </div>
     </section>
   </main>
+  <dialog id="runPresetDialog">
+    <div class="dialog-shell">
+      <div class="dialog-head">
+        <div>
+          <p class="eyebrow">Run presets</p>
+          <h2>Saved run presets</h2>
+        </div>
+        <div class="toolbar">
+          <button id="newPresetBtn">New preset</button>
+          <button id="reloadPresetsBtn">Reload</button>
+          <button id="closeRunPresetDialogBtn" class="danger">Close</button>
+        </div>
+      </div>
+      <div class="dialog-grid">
+        <div class="table-wrap"><table id="presetTable"></table></div>
+        <div class="panel">
+          <h3>Run preset editor</h3>
+          <div class="form-grid">
+            <label>ID<input id="preset_id"></label>
+            <label>Name<input id="preset_name"></label>
+          </div>
+          <label>Description<textarea id="preset_description"></textarea></label>
+          <label>Environment<textarea id="preset_env" spellcheck="false"></textarea></label>
+          <div class="toolbar" style="margin-top:12px">
+            <button id="applyPresetBtn">Apply</button>
+            <button id="renamePresetBtn">Rename display name</button>
+            <button id="savePresetEditorBtn" class="primary">Save/Edit</button>
+            <button id="deletePresetBtn" class="danger">Delete</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </dialog>
   <script>
-    const state = { schema: null, presets: [], sources: [], recipients: [], activeRun: null };
+    const SURFACED_ENVS = new Set([
+      "NEWS_SOURCE_SCOPE",
+      "NEWS_RECIPIENT_SCOPE",
+      "NEWS_MODEL_ARTICLE_SUMMARY",
+      "NEWS_MODEL_STORY_DRAFTING",
+      "NEWS_MODEL_ARTICLE_SUMMARY_TUNING_PRESET",
+      "NEWS_MODEL_STORY_DRAFTING_TUNING_PRESET",
+      "NEWS_MODEL_MAX_INPUT_TOKENS",
+      "NEWS_ARTICLE_SUMMARY_MAX_TOKENS",
+      "NEWS_STORY_DRAFTING_MAX_TOKENS",
+      "NEWS_MODEL_ARTICLE_SUMMARY_BASE_URL",
+      "NEWS_MODEL_STORY_DRAFTING_BASE_URL",
+      "NEWS_SOURCE_COLLECTION_CONCURRENCY",
+      "NEWS_ARTICLE_SUMMARY_CONCURRENCY",
+      "NEWS_STORY_SYNTHESIS_CONCURRENCY",
+      "NEWS_MAX_STORIES",
+      "NEWS_MIN_ARTICLES_PER_STORY",
+      "NEWS_STORY_CLUSTER_SIMILARITY_THRESHOLD",
+      "NEWS_STORY_SELECTION_OVERLAP_THRESHOLD",
+      "NEWS_STORY_DEDUP_THRESHOLD",
+      "NEWS_STORY_BACKFILL_BATCH_MULTIPLIER",
+      "NEWS_BLOCK_REUSED_URLS",
+      "NEWS_IMAGE_ENABLED",
+      "NEWS_STORY_SCALE_SCREENING_ENABLED",
+      "NEWS_RELAX_STORY_DRAFTING_GUARDS"
+    ]);
+    const TASK_CONFIG = {
+      article_summary: {
+        label: "Article Summarization",
+        prefix: "article",
+        modelEnv: "NEWS_MODEL_ARTICLE_SUMMARY",
+        presetEnv: "NEWS_MODEL_ARTICLE_SUMMARY_TUNING_PRESET",
+        baseUrlEnv: "NEWS_MODEL_ARTICLE_SUMMARY_BASE_URL",
+        presetSelectId: "article_tuning_preset",
+        idInputId: "article_tuning_id",
+        nameInputId: "article_tuning_name",
+        descriptionInputId: "article_tuning_description",
+        modelSelectId: "article_model",
+        baseUrlId: "article_base_url",
+        saveButtonId: "article_tuning_save",
+        renameButtonId: "article_tuning_rename",
+        deleteButtonId: "article_tuning_delete",
+        modelMaxTokensId: "article_model_max_input_tokens",
+        taskMaxTokensEnv: "NEWS_ARTICLE_SUMMARY_MAX_TOKENS",
+        taskSamplingPrefix: "NEWS_MODEL_ARTICLE_SUMMARY",
+        runtimeKey: "article_summary"
+      },
+      story_drafting: {
+        label: "Story Writing",
+        prefix: "story",
+        modelEnv: "NEWS_MODEL_STORY_DRAFTING",
+        presetEnv: "NEWS_MODEL_STORY_DRAFTING_TUNING_PRESET",
+        baseUrlEnv: "NEWS_MODEL_STORY_DRAFTING_BASE_URL",
+        presetSelectId: "story_tuning_preset",
+        idInputId: "story_tuning_id",
+        nameInputId: "story_tuning_name",
+        descriptionInputId: "story_tuning_description",
+        modelSelectId: "story_model",
+        baseUrlId: "story_base_url",
+        saveButtonId: "story_tuning_save",
+        renameButtonId: "story_tuning_rename",
+        deleteButtonId: "story_tuning_delete",
+        modelMaxTokensId: null,
+        taskMaxTokensEnv: "NEWS_STORY_DRAFTING_MAX_TOKENS",
+        taskSamplingPrefix: "NEWS_MODEL_STORY_DRAFTING",
+        runtimeKey: "story_drafting"
+      }
+    };
+    const state = {
+      schema: null,
+      presets: [],
+      modelTuningPresets: [],
+      sources: [],
+      recipients: [],
+      activeRun: null,
+      selectedRunPresetId: ""
+    };
+    const icons = {
+      chevronLeft: `<svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg>`,
+      chevronRight: `<svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>`,
+      gear: `<svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.05.05a2 2 0 1 1-2.83 2.83l-.05-.05A1.7 1.7 0 0 0 15 19.4a1.7 1.7 0 0 0-1 .6 1.7 1.7 0 0 0-.4 1.1V21a2 2 0 1 1-4 0v-.08A1.7 1.7 0 0 0 8.6 19.4a1.7 1.7 0 0 0-1.88.34l-.05.05a2 2 0 1 1-2.83-2.83l.05-.05A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-.6-1 1.7 1.7 0 0 0-1.1-.4H3a2 2 0 1 1 0-4h.08A1.7 1.7 0 0 0 4.6 8.6a1.7 1.7 0 0 0-.34-1.88l-.05-.05a2 2 0 1 1 2.83-2.83l.05.05A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-.6 1.7 1.7 0 0 0 .4-1.1V3a2 2 0 1 1 4 0v.08A1.7 1.7 0 0 0 15 4.6a1.7 1.7 0 0 0 1.88-.34l.05-.05a2 2 0 1 1 2.83 2.83l-.05.05A1.7 1.7 0 0 0 19.4 9c.36.24.72.47 1 .6.34.16.72.2 1.1.2h.5a2 2 0 1 1 0 4h-.08A1.7 1.7 0 0 0 20.4 14c-.28.13-.64.36-1 .6Z"/></svg>`,
+      microscope: `<svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 18h8"/><path d="M3 22h18"/><path d="M14 22a7 7 0 0 0 7-7"/><path d="M9 14h2"/><path d="M8 6h4"/><path d="m9 6 6 6"/><path d="m11 4 6 6"/><path d="M12 6 9 9"/><path d="m17 10-3 3"/></svg>`,
+      newspaper: `<svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 1.5 17V5.5H18A2.5 2.5 0 0 1 20.5 8v11.5Z"/><path d="M20.5 8H23v9a2.5 2.5 0 0 1-2.5 2.5"/><path d="M5 9h8"/><path d="M5 13h10"/><path d="M5 17h6"/></svg>`,
+      person: `<svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21a8 8 0 0 0-16 0"/><circle cx="12" cy="7" r="4"/></svg>`
+    };
     const tabs = [
-      ["dashboard", "Dashboard"],
-      ["knobs", "Run Settings"],
-      ["presets", "Run Presets"],
-      ["sources", "Sources"],
-      ["recipients", "Recipients"]
+      ["runSetup", "Run Setup", "gear"],
+      ["advanced", "Advanced Settings", "microscope"],
+      ["sources", "Sources", "newspaper"],
+      ["recipients", "Recipients", "person"]
     ];
-    const sourceFields = ["key","name","language","tier","region","nations","url","homepage","provider_type","intended_role","weight","can_enrich_coverage","strict_source_match","source_match_mode","requires_translation","translation_source_language","source_match_aliases","notes"];
+    const KNOB_HINTS = {
+      NEWS_RECIPIENT_SCOPE: "Chooses whether this run targets only Bradley or all active recipients.",
+      NEWS_SOURCE_SCOPE: "Chooses the source pool: core sources only, or the full source list.",
+      NEWS_MODEL: "Default local model alias used when a task-specific model is not set.",
+      NEWS_MODEL_ARTICLE_SUMMARY: "Model used for article summarization before story drafting.",
+      NEWS_MODEL_STORY_DRAFTING: "Model used for writing the final story drafts.",
+      NEWS_MODEL_TUNING_PRESET: "Default saved tuning overlay applied before direct tuning overrides.",
+      NEWS_MODEL_ARTICLE_SUMMARY_TUNING_PRESET: "Saved tuning overlay for the article summarization model.",
+      NEWS_MODEL_STORY_DRAFTING_TUNING_PRESET: "Saved tuning overlay for the story writing model.",
+      NEWS_MODEL_MAX_INPUT_TOKENS: "Shared input token cap sent to model calls.",
+      NEWS_ARTICLE_SUMMARY_MAX_TOKENS: "Maximum generated tokens for each article summary.",
+      NEWS_STORY_DRAFTING_MAX_TOKENS: "Maximum generated tokens for each final story draft.",
+      NEWS_ARTICLE_TEXT_TOKEN_LIMIT: "Article text trimmed to this token budget before summarization.",
+      NEWS_TOTAL_ARTICLE_SUMMARY_CAP: "Upper bound on article summaries kept for story synthesis.",
+      NEWS_RECENT_WINDOW_HOURS: "How far back source collection looks for recent articles.",
+      NEWS_MAX_ARTICLES_PER_SOURCE: "Maximum articles retained from each source in one run.",
+      NEWS_MIN_ARTICLES_PER_STORY: "Minimum article count required before a story cluster is kept.",
+      NEWS_MAX_STORIES: "Maximum number of final stories selected for the report.",
+      NEWS_STORY_CLUSTER_SIMILARITY_THRESHOLD: "Embedding similarity needed to group articles into a story cluster.",
+      NEWS_STORY_SELECTION_OVERLAP_THRESHOLD: "Overlap limit used to avoid selecting near-duplicate story candidates.",
+      NEWS_STORY_DEDUP_THRESHOLD: "Embedding similarity threshold for dropping duplicate story drafts.",
+      NEWS_STORY_BACKFILL_BATCH_MULTIPLIER: "How many extra candidate clusters to inspect when backfilling weak story slots.",
+      NEWS_SOURCE_COLLECTION_CONCURRENCY: "Parallelism for source fetching during collection.",
+      NEWS_ARTICLE_SUMMARY_CONCURRENCY: "Parallelism for article summarization model calls.",
+      NEWS_STORY_SYNTHESIS_CONCURRENCY: "Parallelism for story synthesis and drafting work.",
+      NEWS_MODEL_CONCURRENCY: "Concurrency passed to the local model server command.",
+      NEWS_BLOCK_REUSED_URLS: "Blocks URLs already seen in history from appearing in later runs.",
+      NEWS_IMAGE_ENABLED: "Turns report image generation on or off.",
+      NEWS_STORY_SCALE_SCREENING_ENABLED: "Runs an extra screen to reject story clusters that are too small or narrow.",
+      NEWS_RELAX_STORY_DRAFTING_GUARDS: "Loosens story drafting guardrails for debugging or recovery runs.",
+      NEWS_EMBEDDING_MODEL: "Sentence embedding model used for clustering and deduplication.",
+      NEWS_TOKEN_ENCODING: "Tokenizer name used for local token counting.",
+      NEWS_MODEL_BASE_URL: "Default OpenAI-compatible model server endpoint.",
+      NEWS_MODEL_ARTICLE_SUMMARY_BASE_URL: "Model server endpoint for article summarization calls.",
+      NEWS_MODEL_STORY_DRAFTING_BASE_URL: "Model server endpoint for story writing calls.",
+      NEWS_MODEL_SERVER_PREFILL_STEP_SIZE: "Prefill step size passed to the local MLX model server.",
+      NEWS_MODEL_SERVER_PROMPT_CACHE_SIZE: "Prompt cache item count passed to the local model server.",
+      NEWS_MODEL_SERVER_PROMPT_CACHE_BYTES: "Prompt cache memory budget passed to the local model server.",
+      NEWS_MODEL_SERVER_MAX_TOKENS: "Server-side maximum token setting for the local model process.",
+      id: "YAML key for this saved preset.",
+      name: "Human-facing display name stored with this preset.",
+      description: "Optional note stored with this preset.",
+      "command action": "Command the utility buttons should preview or run.",
+      "--limit": "Maximum number of sources or records processed by a source utility.",
+      "--recent-days": "Recent-day window for source pruning utilities.",
+      "--timeout": "Per-source timeout for source utility checks.",
+      "--concurrency": "Parallelism used by source utility commands.",
+      "--section": "Source YAML section that the utility should target.",
+      "--language-model": "Model used by source language detection.",
+      "--language-samples": "Sample count used by source language detection.",
+      "--min-language-confidence": "Minimum confidence accepted for source language detection."
+    };
+    const sourceFields = ["key","name","language","tier","region","nations","url","homepage","provider_type","intended_role","weight","can_enrich_coverage","strict_source_match","source_match_mode","source_match_aliases","notes"];
 
     function $(id) { return document.getElementById(id); }
     function value(id) { const el = $(id); return el ? el.value : ""; }
@@ -1124,6 +1441,121 @@ HTML = r"""<!doctype html>
     function showTab(id) {
       document.querySelectorAll("section.view").forEach(el => el.classList.toggle("active", el.id === id));
       document.querySelectorAll("nav button").forEach(el => el.classList.toggle("active", el.dataset.tab === id));
+    }
+    function escapeHtml(text) {
+      return String(text ?? "").replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;").replaceAll('"',"&quot;");
+    }
+    function formatDefault(value, fallback="none") {
+      if (value === true) return "on";
+      if (value === false) return "off";
+      if (value === null || value === undefined || value === "") return fallback;
+      return String(value);
+    }
+    function currentControlValue(env) {
+      const el = document.querySelector(`[data-env="${env}"]`);
+      if (!el) return (state.schema && state.schema.current_env && state.schema.current_env[env]) || "";
+      if (el.type === "checkbox") return el.checked ? "1" : "";
+      return el.value;
+    }
+    function setControlValue(env, next) {
+      const el = document.querySelector(`[data-env="${env}"]`);
+      if (!el) return;
+      const valueText = next === null || next === undefined ? "" : String(next);
+      if (el.type === "checkbox") {
+        el.checked = ["1", "true", "yes", "on"].includes(valueText.toLowerCase());
+        return;
+      }
+      if (el.tagName === "SELECT" && valueText && !Array.from(el.options).some(option => option.value === valueText)) {
+        el.insertAdjacentHTML("afterbegin", `<option value="${escapeHtml(valueText)}">${escapeHtml(valueText)}</option>`);
+      }
+      el.value = valueText;
+    }
+    function knobByEnv(env) {
+      return (state.schema && state.schema.knobs || []).find(knob => knob.env === env) || null;
+    }
+    function inputForKnob(knob, { emptyLabel, optionLabels = {}, id = "" } = {}) {
+      const current = currentControlValue(knob.env);
+      const idAttr = id ? ` id="${escapeHtml(id)}"` : "";
+      if (knob.type === "select") {
+        const options = [...new Set(knob.options || [])];
+        if (current && !options.includes(current)) options.unshift(current);
+        const opts = [
+          `<option value="">${escapeHtml(emptyLabel || `default: ${formatDefault(knob.default)}`)}</option>`,
+          ...options.map(opt => `<option value="${escapeHtml(opt)}"${current === opt ? " selected" : ""}>${escapeHtml(optionLabels[opt] || opt)}</option>`)
+        ].join("");
+        return `<select${idAttr} data-env="${escapeHtml(knob.env)}">${opts}</select>`;
+      }
+      if (knob.type === "bool") {
+        const normalized = String(current || "").toLowerCase();
+        const truthy = ["1","true","yes","on"].includes(normalized);
+        const falsey = ["0","false","no","off"].includes(normalized);
+        return `<select${idAttr} data-env="${escapeHtml(knob.env)}">
+          <option value="">default: ${escapeHtml(formatDefault(knob.default, "off"))}</option>
+          <option value="1"${truthy ? " selected" : ""}>on</option>
+          <option value="0"${falsey ? " selected" : ""}>off</option>
+        </select>`;
+      }
+      const type = knob.type === "password" ? "password" : knob.type === "number" ? "number" : "text";
+      const attrs = [
+        `data-env="${escapeHtml(knob.env)}"`,
+        `type="${type}"`
+      ];
+      if (id) attrs.unshift(`id="${escapeHtml(id)}"`);
+      const min = knob.min !== null && knob.min !== undefined ? ` min="${knob.min}"` : "";
+      const max = knob.max !== null && knob.max !== undefined ? ` max="${knob.max}"` : "";
+      const step = knob.step !== null && knob.step !== undefined ? ` step="${knob.step}"` : "";
+      const placeholder = knob.default !== null && knob.default !== undefined ? ` placeholder="${escapeHtml(String(knob.default))}"` : "";
+      return `<input ${attrs.join(" ")} value="${escapeHtml(current)}"${placeholder}${min}${max}${step}>`;
+    }
+    function knobField(env, label, options={}) {
+      const knob = knobByEnv(env);
+      if (!knob) return "";
+      return `<label class="field"><span>${escapeHtml(label)}</span>${inputForKnob(knob, options)}<code>${escapeHtml(env)}</code></label>`;
+    }
+    function knobHint(name) {
+      if (KNOB_HINTS[name]) return KNOB_HINTS[name];
+      if (name.endsWith("_TEMPERATURE")) return "Sampling temperature. Higher values make model output more varied.";
+      if (name.endsWith("_TOP_P")) return "Nucleus sampling cutoff. Lower values narrow the token pool.";
+      if (name.endsWith("_TOP_K")) return "Top-k sampling cutoff. Lower values restrict candidate tokens.";
+      if (name.endsWith("_MIN_P")) return "Minimum probability sampling cutoff for filtering very unlikely tokens.";
+      if (name.endsWith("_PRESENCE_PENALTY")) return "Penalty for repeating already mentioned concepts.";
+      if (name.endsWith("_REPETITION_PENALTY")) return "Penalty for repeated token patterns in model output.";
+      return "Runtime setting passed through to the pipeline or local utility command.";
+    }
+    function decorateEnvHints(root=document) {
+      root.querySelectorAll(".field code, .knob code").forEach(code => {
+        const name = code.textContent.trim();
+        const label = code.closest("label") || code.closest(".field") || code.closest(".knob");
+        const titleTarget = label && (label.querySelector("span") || label);
+        if (!name || !titleTarget || titleTarget.querySelector(".env-info")) return;
+        const tip = `${name}: ${knobHint(name)}`;
+        titleTarget.insertAdjacentHTML("beforeend", `<span class="env-info" title="${escapeHtml(tip)}" aria-label="${escapeHtml(tip)}">i</span>`);
+      });
+    }
+    function renderTabs() {
+      $("tabs").innerHTML = `<button id="navToggle" class="nav-toggle" title="Collapse navigation" aria-label="Collapse navigation"><span class="collapse-icon">${icons.chevronLeft}</span><span class="expand-icon">${icons.chevronRight}</span></button>` +
+        tabs.map(([id, label, icon]) => `<button class="tab-button" data-tab="${id}" title="${escapeHtml(label)}">${icons[icon]}<span class="tab-text">${escapeHtml(label)}</span></button>`).join("");
+      $("navToggle").onclick = () => {
+        document.body.classList.toggle("nav-collapsed");
+        const collapsed = document.body.classList.contains("nav-collapsed");
+        $("navToggle").title = collapsed ? "Expand navigation" : "Collapse navigation";
+        $("navToggle").setAttribute("aria-label", collapsed ? "Expand navigation" : "Collapse navigation");
+      };
+      document.querySelectorAll("nav button[data-tab]").forEach(btn => btn.onclick = () => showTab(btn.dataset.tab));
+      showTab("runSetup");
+    }
+    function selectedRunPreset() {
+      return state.presets.find(preset => preset.id === state.selectedRunPresetId) || null;
+    }
+    function renderPresetSummary() {
+      const preset = selectedRunPreset();
+      const runtime = (state.schema && state.schema.runtime) || {};
+      const pieces = [
+        preset ? `${preset.name || preset.id}` : "Custom run",
+        `Sources ${runtime.source_scope || "core"}`,
+        `Recipients ${runtime.recipient_scope || "bradley"}`
+      ];
+      $("presetSummary").textContent = pieces.join(" · ");
     }
     function collectEnv() {
       const env = {};
@@ -1152,136 +1584,8 @@ HTML = r"""<!doctype html>
         json: checked("opt_json")
       };
     }
-    function requestBody() {
-      return { action: value("actionSelect"), preset: value("presetSelect"), env: collectEnv(), options: collectOptions() };
-    }
-    function renderTabs() {
-      $("tabs").innerHTML = tabs.map(([id, label]) => `<button data-tab="${id}">${label}</button>`).join("");
-      document.querySelectorAll("nav button").forEach(btn => btn.onclick = () => showTab(btn.dataset.tab));
-      showTab("dashboard");
-    }
-    function renderSchema() {
-      const schema = state.schema;
-      $("actionSelect").innerHTML = schema.actions.map(action => `<option value="${action}">${action}</option>`).join("");
-      state.presets = (schema.presets && schema.presets.presets) || [];
-      renderPresetSelect();
-      if (schema.runtime && schema.runtime.preset_id && schema.runtime.preset_id !== "custom") {
-        $("presetSelect").value = schema.runtime.preset_id;
-      }
-      if (schema.removed_topic_env_vars.length) {
-        setStatus(`Removed topic env vars set: ${schema.removed_topic_env_vars.join(", ")}`, "warn");
-      } else {
-        setStatus("Ready", "good");
-      }
-      renderStats();
-      renderKnobs();
-      applySelectedPresetToKnobs();
-      renderPresets();
-    }
-    function renderPresetSelect() {
-      const options = [`<option value="">Custom</option>`].concat(
-        state.presets.map(preset => `<option value="${preset.id}">${preset.name || preset.id}</option>`)
-      );
-      $("presetSelect").innerHTML = options.join("");
-    }
-    function renderStats() {
-      const s = state.schema;
-      const runtime = s.runtime || {};
-      const source = s.sources || {};
-      const recipients = s.recipients || {};
-      const model = runtime.model || {};
-      const assignments = model.assignments || {};
-      const articleSummary = model.article_summary || assignments.article_summary || {};
-      const storyDrafting = model.story_drafting || assignments.story_drafting || {};
-      const items = [
-        ["Run preset", runtime.preset_id || "custom"],
-        ["Source scope", runtime.source_scope || "-"],
-        ["Sources", source.total ?? 0],
-        ["Core selected", source.selected ? source.selected.core : "-"],
-        ["Peripheral selected", source.selected ? source.selected.peripheral : "-"],
-        ["Recipients", `${recipients.total ?? 0} total`],
-        ["Recipient scope", runtime.recipient_scope || "-"],
-        ["Model", model.reference || "-"],
-        ["Article Summarization", articleSummary.reference || "-"],
-        ["Story Drafting", storyDrafting.reference || "-"],
-        ["Images", runtime.image && runtime.image.enabled ? "on" : "off"]
-      ];
-      $("stats").innerHTML = items.map(([label, val]) => `<div class="stat"><span class="muted">${escapeHtml(label)}</span><strong>${escapeHtml(String(val ?? ""))}</strong></div>`).join("");
-    }
-    function inputForKnob(knob) {
-      const current = state.schema.current_env[knob.env] || "";
-      if (knob.type === "select") {
-        const options = current && !knob.options.includes(current) ? [current, ...knob.options] : knob.options;
-        const opts = ["", ...options].map(opt => `<option value="${escapeHtml(opt)}" ${current === opt ? "selected" : ""}>${escapeHtml(opt)}</option>`).join("");
-        return `<select data-env="${knob.env}">${opts}</select>`;
-      }
-      if (knob.type === "bool") {
-        const normalized = String(current).toLowerCase();
-        const truthy = ["1","true","yes","on"].includes(normalized);
-        const falsey = ["0","false","no","off"].includes(normalized);
-        return `<select data-env="${knob.env}">
-          <option value="">inherit</option>
-          <option value="1" ${truthy ? "selected" : ""}>on</option>
-          <option value="0" ${falsey ? "selected" : ""}>off</option>
-        </select>`;
-      }
-      const type = knob.type === "password" ? "password" : (knob.type === "number" ? "number" : "text");
-      const min = knob.min !== null && knob.min !== undefined ? ` min="${knob.min}"` : "";
-      const max = knob.max !== null && knob.max !== undefined ? ` max="${knob.max}"` : "";
-      const step = knob.step !== null && knob.step !== undefined ? ` step="${knob.step}"` : "";
-      return `<input data-env="${knob.env}" type="${type}" value="${current}" placeholder="${knob.default ?? ""}"${min}${max}${step}>`;
-    }
-    function renderKnobs() {
-      const search = value("knobSearch").toLowerCase();
-      const showAdv = checked("showAdvanced");
-      const groups = {};
-      state.schema.knobs.forEach(knob => {
-        const hay = `${knob.label} ${knob.env} ${knob.group}`.toLowerCase();
-        if (search && !hay.includes(search)) return;
-        if (knob.advanced && !showAdv && knob.group !== "Model Tuning") return;
-        (groups[knob.group] ||= []).push(knob);
-      });
-      const orderedGroups = ["Run Settings", "Model Selection", "Model Tuning", "Pipeline Budget", "Model Server Settings"];
-      const renderKnobCards = list => list.map(knob => `
-            <div class="knob">
-              <label>${escapeHtml(knob.label)}</label>
-              ${inputForKnob(knob)}
-              <code>${escapeHtml(knob.env)}</code>
-            </div>
-          `).join("");
-      $("knobContainer").innerHTML = [...orderedGroups, ...Object.keys(groups).filter(group => !orderedGroups.includes(group)).sort()].map(group => {
-        const knobs = groups[group];
-        if (!knobs || !knobs.length) return "";
-        if (group === "Model Tuning") {
-          const basicKnobs = knobs.filter(knob => !knob.advanced);
-          const advancedKnobs = knobs.filter(knob => knob.advanced);
-          const advancedOpen = showAdv || (search && advancedKnobs.some(knob => `${knob.label} ${knob.env}`.toLowerCase().includes(search)));
-          return `
-            <div class="knob-group">
-              <h2>${escapeHtml(group)}</h2>
-              ${basicKnobs.length ? `<div class="knobs">${renderKnobCards(basicKnobs)}</div>` : ""}
-              ${advancedKnobs.length ? `
-                <details class="knob-details"${advancedOpen ? " open" : ""}>
-                  <summary>Advanced tuning</summary>
-                  <div class="knobs">${renderKnobCards(advancedKnobs)}</div>
-                </details>
-              ` : ""}
-            </div>
-          `;
-        }
-        return `
-          <div class="knob-group">
-            <h2>${escapeHtml(group)}</h2>
-            <div class="knobs">${renderKnobCards(knobs)}</div>
-          </div>
-        `;
-      }).join("");
-    }
-    function escapeHtml(text) {
-      return String(text ?? "").replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;").replaceAll('"',"&quot;");
-    }
-    function currentPreset() {
-      return state.presets.find(preset => preset.id === value("presetSelect")) || null;
+    function requestBody(action="run") {
+      return { action, preset: state.selectedRunPresetId, env: collectEnv(), options: collectOptions() };
     }
     function envToText(env) {
       return Object.entries(env || {}).map(([key, val]) => `${key}=${val}`).join("\n");
@@ -1299,74 +1603,559 @@ HTML = r"""<!doctype html>
       });
       return env;
     }
+    function renderStats() {
+      const s = state.schema || {};
+      const runtime = s.runtime || {};
+      const source = s.sources || {};
+      const recipients = s.recipients || {};
+      const model = runtime.model || {};
+      const assignments = model.assignments || {};
+      const articleSummary = model.article_summary || assignments.article_summary || {};
+      const storyDrafting = model.story_drafting || assignments.story_drafting || {};
+      const items = [
+        ["Run preset", state.selectedRunPresetId || runtime.preset_id || "custom"],
+        ["Source scope", runtime.source_scope || "-"],
+        ["Recipient scope", runtime.recipient_scope || "-"],
+        ["Sources", source.total ?? 0],
+        ["Core selected", source.selected ? source.selected.core : "-"],
+        ["Peripheral selected", source.selected ? source.selected.peripheral : "-"],
+        ["Recipients", `${recipients.total ?? 0} total`],
+        ["Model", model.reference || "-"],
+        ["Article Summarization", articleSummary.reference || "-"],
+        ["Story Writing", storyDrafting.reference || "-"],
+        ["Article concurrency", model.article_summary_concurrency ?? "-"],
+        ["Story concurrency", model.story_synthesis_concurrency ?? "-"],
+        ["Images", runtime.image && runtime.image.enabled ? "on" : "off"]
+      ];
+      $("stats").innerHTML = items.map(([label, val]) => `<div class="stat"><span class="muted">${escapeHtml(label)}</span><strong>${escapeHtml(String(val ?? ""))}</strong></div>`).join("");
+    }
+    function renderRunSetup() {
+      const schema = state.schema || {};
+      const runtime = schema.runtime || {};
+      const articleRuntime = runtime.model && runtime.model.article_summary ? runtime.model.article_summary : {};
+      const storyRuntime = runtime.model && runtime.model.story_drafting ? runtime.model.story_drafting : {};
+      const actionOptions = (schema.actions || []).map(action => `<option value="${escapeHtml(action)}"${action === "run" ? " selected" : ""}>${escapeHtml(action)}</option>`).join("");
+      const sourceToolHidden = !["check-sources", "prune-sources", "source-languages"].includes(value("actionSelect"));
+      const sourceScopes = {
+        core: "Core",
+        peripheral: "All"
+      };
+      const recipientScopes = {
+        bradley: "Bradley-only",
+        all: "All"
+      };
+      const articleModel = knobField("NEWS_MODEL_ARTICLE_SUMMARY", "Article model", { emptyLabel: "default: qwythos-9b-8bit" });
+      const storyModel = knobField("NEWS_MODEL_STORY_DRAFTING", "Story model", { emptyLabel: "default: qwythos-9b-8bit" });
+      const sharedModelTokens = knobField("NEWS_MODEL_MAX_INPUT_TOKENS", "Shared model input cap");
+      const articleTokenCap = knobField("NEWS_ARTICLE_SUMMARY_MAX_TOKENS", "Article summary max tokens");
+      const storyTokenCap = knobField("NEWS_STORY_DRAFTING_MAX_TOKENS", "Story drafting max tokens");
+      const articleBaseUrl = knobField("NEWS_MODEL_ARTICLE_SUMMARY_BASE_URL", "Base URL");
+      const storyBaseUrl = knobField("NEWS_MODEL_STORY_DRAFTING_BASE_URL", "Base URL");
+      const articleSampling = [
+        knobField("NEWS_MODEL_ARTICLE_SUMMARY_TEMPERATURE", "Temperature"),
+        knobField("NEWS_MODEL_ARTICLE_SUMMARY_TOP_P", "Top P"),
+        knobField("NEWS_MODEL_ARTICLE_SUMMARY_TOP_K", "Top K"),
+        knobField("NEWS_MODEL_ARTICLE_SUMMARY_MIN_P", "Min P"),
+        knobField("NEWS_MODEL_ARTICLE_SUMMARY_PRESENCE_PENALTY", "Presence penalty"),
+        knobField("NEWS_MODEL_ARTICLE_SUMMARY_REPETITION_PENALTY", "Repetition penalty")
+      ].join("");
+      const storySampling = [
+        knobField("NEWS_MODEL_STORY_DRAFTING_TEMPERATURE", "Temperature"),
+        knobField("NEWS_MODEL_STORY_DRAFTING_TOP_P", "Top P"),
+        knobField("NEWS_MODEL_STORY_DRAFTING_TOP_K", "Top K"),
+        knobField("NEWS_MODEL_STORY_DRAFTING_MIN_P", "Min P"),
+        knobField("NEWS_MODEL_STORY_DRAFTING_PRESENCE_PENALTY", "Presence penalty"),
+        knobField("NEWS_MODEL_STORY_DRAFTING_REPETITION_PENALTY", "Repetition penalty")
+      ].join("");
+      $("runSetupMount").innerHTML = `
+        <div class="banner panel">
+          <div class="banner-copy">
+            <p class="eyebrow">Guided run setup</p>
+            <h2>Plan the run top to bottom</h2>
+            <p id="presetSummary" class="muted"></p>
+          </div>
+          <div class="banner-actions">
+            <button id="resetDefaultsBtn">Reset defaults</button>
+            <button id="openRunPresetDrawerBtn">Preset drawer</button>
+            <button id="savePresetBtn">Save preset</button>
+            <button id="previewBtn">Preview</button>
+            <button id="runBtn" class="primary">Run</button>
+          </div>
+        </div>
+        <div class="stack">
+          <section class="panel">
+            <p class="eyebrow">Routing</p>
+            <h2>Recipients and sources</h2>
+            <div class="form-grid">
+              <label class="field"><span>Recipients</span>
+                <select id="recipientScope" data-env="NEWS_RECIPIENT_SCOPE">
+                  <option value="">default: Bradley-only</option>
+                  <option value="bradley"${currentControlValue("NEWS_RECIPIENT_SCOPE") === "bradley" ? " selected" : ""}>Bradley-only</option>
+                  <option value="all"${currentControlValue("NEWS_RECIPIENT_SCOPE") === "all" ? " selected" : ""}>All</option>
+                </select>
+                <code>NEWS_RECIPIENT_SCOPE</code>
+              </label>
+              <label class="field"><span>Source list</span>
+                <select id="sourceScope" data-env="NEWS_SOURCE_SCOPE">
+                  <option value="">default: Core</option>
+                  <option value="core"${currentControlValue("NEWS_SOURCE_SCOPE") === "core" ? " selected" : ""}>Core</option>
+                  <option value="peripheral"${currentControlValue("NEWS_SOURCE_SCOPE") === "peripheral" ? " selected" : ""}>All</option>
+                </select>
+                <code>NEWS_SOURCE_SCOPE</code>
+              </label>
+            </div>
+          </section>
+          <section class="panel">
+            <p class="eyebrow">Snapshot</p>
+            <h2>Effective runtime snapshot</h2>
+            <div id="stats" class="stats"></div>
+          </section>
+          <section class="panel model-card">
+            <p class="eyebrow">Model</p>
+            <h2>${escapeHtml(TASK_CONFIG.article_summary.label)}</h2>
+            <p class="muted">Resolved: ${escapeHtml(articleRuntime.name || articleRuntime.reference || "-")}</p>
+            <div class="form-grid">
+              ${articleModel}
+            </div>
+            <details class="details">
+              <summary>Model tuning</summary>
+              <div class="form-grid">
+                <label class="field"><span>Tuning preset</span><select id="article_tuning_preset" data-task="article_summary" data-env="NEWS_MODEL_ARTICLE_SUMMARY_TUNING_PRESET"></select><code>NEWS_MODEL_ARTICLE_SUMMARY_TUNING_PRESET</code></label>
+                <label class="field"><span>Preset id</span><input id="article_tuning_id"><code>id</code></label>
+                <label class="field"><span>Display name</span><input id="article_tuning_name"><code>name</code></label>
+                <label class="field"><span>Description</span><textarea id="article_tuning_description"></textarea><code>description</code></label>
+                ${sharedModelTokens}
+                ${articleTokenCap}
+                ${articleBaseUrl}
+                ${articleSampling}
+              </div>
+              <div class="toolbar">
+                <button id="article_tuning_save" class="primary">Save current settings</button>
+                <button id="article_tuning_rename">Rename display name</button>
+                <button id="article_tuning_delete" class="danger">Delete preset</button>
+              </div>
+            </details>
+          </section>
+          <section class="panel model-card">
+            <p class="eyebrow">Model</p>
+            <h2>${escapeHtml(TASK_CONFIG.story_drafting.label)}</h2>
+            <p class="muted">Resolved: ${escapeHtml(storyRuntime.name || storyRuntime.reference || "-")}</p>
+            <div class="form-grid">
+              ${storyModel}
+            </div>
+            <details class="details">
+              <summary>Model tuning</summary>
+              <div class="form-grid">
+                <label class="field"><span>Tuning preset</span><select id="story_tuning_preset" data-task="story_drafting" data-env="NEWS_MODEL_STORY_DRAFTING_TUNING_PRESET"></select><code>NEWS_MODEL_STORY_DRAFTING_TUNING_PRESET</code></label>
+                <label class="field"><span>Preset id</span><input id="story_tuning_id"><code>id</code></label>
+                <label class="field"><span>Display name</span><input id="story_tuning_name"><code>name</code></label>
+                <label class="field"><span>Description</span><textarea id="story_tuning_description"></textarea><code>description</code></label>
+                ${storyTokenCap}
+                ${storyBaseUrl}
+                ${storySampling}
+              </div>
+              <div class="toolbar">
+                <button id="story_tuning_save" class="primary">Save current settings</button>
+                <button id="story_tuning_rename">Rename display name</button>
+                <button id="story_tuning_delete" class="danger">Delete preset</button>
+              </div>
+            </details>
+          </section>
+          <section class="panel">
+            <p class="eyebrow">Budgets</p>
+            <h2>Run budgets and quotas</h2>
+            <div class="form-grid">
+              ${knobField("NEWS_SOURCE_COLLECTION_CONCURRENCY", "Source collection concurrency")}
+              ${knobField("NEWS_ARTICLE_SUMMARY_CONCURRENCY", "Article summary concurrency")}
+              ${knobField("NEWS_STORY_SYNTHESIS_CONCURRENCY", "Story synthesis concurrency")}
+              ${knobField("NEWS_ARTICLE_TEXT_TOKEN_LIMIT", "Article text token limit")}
+              ${knobField("NEWS_MAX_STORIES", "Max stories")}
+              ${knobField("NEWS_MIN_ARTICLES_PER_STORY", "Min articles per story")}
+              ${knobField("NEWS_STORY_CLUSTER_SIMILARITY_THRESHOLD", "Story cluster similarity")}
+              ${knobField("NEWS_STORY_SELECTION_OVERLAP_THRESHOLD", "Story selection overlap")}
+              ${knobField("NEWS_STORY_DEDUP_THRESHOLD", "Story dedup threshold")}
+              ${knobField("NEWS_STORY_BACKFILL_BATCH_MULTIPLIER", "Backfill batch multiplier")}
+            </div>
+          </section>
+          <section class="panel">
+            <p class="eyebrow">Peripheral</p>
+            <h2>Optional run settings</h2>
+            <div class="form-grid">
+              ${knobField("NEWS_IMAGE_ENABLED", "Image generation")}
+              ${knobField("NEWS_BLOCK_REUSED_URLS", "Block reused URLs")}
+              ${knobField("NEWS_STORY_SCALE_SCREENING_ENABLED", "Story scale screening")}
+              ${knobField("NEWS_RELAX_STORY_DRAFTING_GUARDS", "Relax story drafting guards")}
+            </div>
+          </section>
+          <section class="panel">
+            <details class="details">
+              <summary>Utilities</summary>
+              <div class="form-grid">
+                <label class="field"><span>Action</span><select id="actionSelect">${actionOptions}</select><code>command action</code></label>
+              </div>
+              <div id="sourceOptions">
+                <div class="form-grid">
+                  <label class="field"><span>Limit</span><input id="opt_limit" type="number" min="1"><code>--limit</code></label>
+                  <label class="field"><span>Recent days</span><input id="opt_recent_days" type="number" min="1" value="7"><code>--recent-days</code></label>
+                  <label class="field"><span>Timeout</span><input id="opt_timeout" type="number" min="1"><code>--timeout</code></label>
+                  <label class="field"><span>Concurrency</span><input id="opt_concurrency" type="number" min="1"><code>--concurrency</code></label>
+                  <label class="field"><span>Section</span><select id="opt_section"><option value=""></option><option>sources</option><option>all</option></select><code>--section</code></label>
+                  <label class="field"><span>Language model</span><input id="opt_language_model"><code>--language-model</code></label>
+                  <label class="field"><span>Language samples</span><input id="opt_language_samples" type="number" min="1"><code>--language-samples</code></label>
+                  <label class="field"><span>Min language confidence</span><input id="opt_min_language_confidence" type="number" step="0.01" min="0" max="1"><code>--min-language-confidence</code></label>
+                </div>
+                <div class="toolbar">
+                  <label><input id="opt_probe_articles" type="checkbox"> Probe articles</label>
+                  <label><input id="opt_prune_unscrapable" type="checkbox"> Prune unscrapable</label>
+                  <label><input id="opt_only_failures" type="checkbox"> Only failures</label>
+                  <label><input id="opt_write_languages" type="checkbox"> Write languages</label>
+                  <label><input id="opt_overwrite_languages" type="checkbox"> Overwrite languages</label>
+                  <label><input id="opt_json" type="checkbox"> JSON</label>
+                </div>
+                <div class="toolbar">
+                  <button id="utilityPreviewBtn">Preview utility</button>
+                  <button id="utilityRunBtn" class="primary">Run utility</button>
+                </div>
+              </div>
+            </details>
+          </section>
+          <section class="panel">
+            <h2>Command preview</h2>
+            <pre id="previewPane"></pre>
+          </section>
+          <section class="panel">
+            <div class="toolbar"><h2 style="margin-right:auto">Run log</h2><button id="stopBtn" class="danger">Stop</button></div>
+            <pre id="logPane"></pre>
+          </section>
+        </div>
+      `;
+      renderPresetSummary();
+      renderModelTuningControls("article_summary");
+      renderModelTuningControls("story_drafting");
+      decorateEnvHints($("runSetupMount"));
+      $("actionSelect").value = "run";
+      $("sourceOptions").classList.add("hidden");
+      $("actionSelect").onchange = () => {
+        $("sourceOptions").classList.toggle("hidden", !["check-sources","prune-sources","source-languages"].includes(value("actionSelect")));
+      };
+    }
+    function renderModelTuningControls(task, { preserveEditor = false } = {}) {
+      const meta = TASK_CONFIG[task];
+      if (!meta) return;
+      const select = $(meta.presetSelectId);
+      if (!select) return;
+      const selectedModel = currentControlValue(meta.modelEnv) || (state.schema && state.schema.runtime && state.schema.runtime.model && state.schema.runtime.model[meta.runtimeKey] && state.schema.runtime.model[meta.runtimeKey].reference) || "";
+      const resolvedName = state.schema && state.schema.runtime && state.schema.runtime.model && state.schema.runtime.model[meta.runtimeKey] && state.schema.runtime.model[meta.runtimeKey].name || "";
+      const presets = filteredModelTuningPresets(task, selectedModel, resolvedName);
+      const currentPresetId = currentControlValue(meta.presetEnv);
+      if (currentPresetId && !presets.some(preset => preset.id === currentPresetId)) {
+        const existing = state.modelTuningPresets.find(preset => preset.id === currentPresetId);
+        presets.unshift(existing || {
+          id: currentPresetId,
+          name: currentPresetId,
+          description: "",
+          modified_at: "",
+          model: "",
+          task: task,
+          tuning: {}
+        });
+      }
+      const currentValue = select.value || currentPresetId || "";
+      select.innerHTML = [
+        `<option value="">custom values</option>`,
+        ...presets.map(preset => {
+          const labelParts = [preset.name || preset.id, preset.id];
+          if (preset.model && preset.model !== selectedModel) labelParts.push(`model: ${preset.model}`);
+          if (preset.task && preset.task !== task) labelParts.push(`task: ${preset.task}`);
+          if (preset.modified_at) labelParts.push(`updated ${preset.modified_at}`);
+          return `<option value="${escapeHtml(preset.id)}"${currentValue === preset.id ? " selected" : ""}>${escapeHtml(labelParts.join(" · "))}</option>`;
+        })
+      ].join("");
+      if (currentValue) select.value = currentValue;
+      const preset = state.modelTuningPresets.find(item => item.id === currentValue) || null;
+      if (preset && !preserveEditor) {
+        loadModelTuningEditor(task, preset, { refresh: false });
+      }
+    }
+    function filteredModelTuningPresets(task, selectedModel, resolvedName) {
+      const matches = state.modelTuningPresets.filter(preset => {
+        const modelOk = !preset.model || preset.model === selectedModel || preset.model === resolvedName;
+        const taskOk = !preset.task || preset.task === task;
+        return modelOk && taskOk;
+      });
+      return matches.length ? matches : state.modelTuningPresets.slice();
+    }
+    function modelTuningPayload(task) {
+      const meta = TASK_CONFIG[task];
+      const tuning = {};
+      const sharedMax = valueByEnv("NEWS_MODEL_MAX_INPUT_TOKENS");
+      if (sharedMax) tuning.model_max_input_tokens = sharedMax;
+      const taskMax = valueByEnv(meta.taskMaxTokensEnv);
+      if (taskMax) {
+        if (task === "article_summary") tuning.article_summary_max_tokens = taskMax;
+        if (task === "story_drafting") tuning.story_drafting_max_tokens = taskMax;
+      }
+      const samplingFields = [
+        ["temperature", `${meta.taskSamplingPrefix}_TEMPERATURE`],
+        ["top_p", `${meta.taskSamplingPrefix}_TOP_P`],
+        ["top_k", `${meta.taskSamplingPrefix}_TOP_K`],
+        ["min_p", `${meta.taskSamplingPrefix}_MIN_P`],
+        ["presence_penalty", `${meta.taskSamplingPrefix}_PRESENCE_PENALTY`],
+        ["repetition_penalty", `${meta.taskSamplingPrefix}_REPETITION_PENALTY`]
+      ];
+      samplingFields.forEach(([key, env]) => {
+        const raw = valueByEnv(env);
+        if (raw) tuning[key] = raw;
+      });
+      return {
+        id: value(meta.idInputId).trim(),
+        name: value(meta.nameInputId).trim(),
+        description: value(meta.descriptionInputId).trim(),
+        model: value(meta.modelSelectId).trim(),
+        task,
+        tuning
+      };
+    }
+    function valueByEnv(env) {
+      const el = document.querySelector(`[data-env="${env}"]`);
+      return el ? el.value.trim() : "";
+    }
+    function loadModelTuningEditor(task, preset, { refresh = true } = {}) {
+      const meta = TASK_CONFIG[task];
+      if (!meta) return;
+      setControlValue(meta.presetEnv, preset ? preset.id || "" : "");
+      $(meta.idInputId).value = preset ? preset.id || "" : "";
+      $(meta.nameInputId).value = preset ? preset.name || preset.id || "" : "";
+      $(meta.descriptionInputId).value = preset ? preset.description || "" : "";
+      if (preset && preset.model) {
+        setControlValue(meta.modelEnv, preset.model);
+      }
+      if (preset) {
+        const tuning = preset.tuning || {};
+        if (tuning.model_max_input_tokens) setControlValue("NEWS_MODEL_MAX_INPUT_TOKENS", tuning.model_max_input_tokens);
+        if (task === "article_summary" && tuning.article_summary_max_tokens) setControlValue("NEWS_ARTICLE_SUMMARY_MAX_TOKENS", tuning.article_summary_max_tokens);
+        if (task === "story_drafting" && tuning.story_drafting_max_tokens) setControlValue("NEWS_STORY_DRAFTING_MAX_TOKENS", tuning.story_drafting_max_tokens);
+        [["temperature","TEMPERATURE"],["top_p","TOP_P"],["top_k","TOP_K"],["min_p","MIN_P"],["presence_penalty","PRESENCE_PENALTY"],["repetition_penalty","REPETITION_PENALTY"]].forEach(([field, suffix]) => {
+          if (tuning[field] !== undefined && tuning[field] !== null && tuning[field] !== "") {
+            setControlValue(`${meta.taskSamplingPrefix}_${suffix}`, tuning[field]);
+          }
+        });
+      }
+      if (refresh) renderModelTuningControls(task, { preserveEditor: true });
+    }
+    function openRunPresetDialog() {
+      const dialog = $("runPresetDialog");
+      if (!dialog.open) dialog.showModal();
+    }
+    function closeRunPresetDialog() {
+      const dialog = $("runPresetDialog");
+      if (dialog.open) dialog.close();
+    }
+    function renderRunPresetDrawer() {
+      const rows = state.presets || [];
+      const selected = state.selectedRunPresetId;
+      $("presetTable").innerHTML = `
+        <thead><tr><th>Name</th><th>ID</th><th>Modified</th><th>Actions</th></tr></thead>
+        <tbody>
+          ${rows.map(preset => `
+            <tr data-id="${escapeHtml(preset.id || "")}" class="${preset.id === selected ? "selected" : ""}">
+              <td><strong>${escapeHtml(preset.name || preset.id || "")}</strong></td>
+              <td><code>${escapeHtml(preset.id || "")}</code></td>
+              <td>${escapeHtml(preset.modified_at || "Last modified: unknown")}</td>
+              <td>
+                <div class="toolbar">
+                  <button data-action="apply" data-id="${escapeHtml(preset.id || "")}">Apply</button>
+                  <button data-action="edit" data-id="${escapeHtml(preset.id || "")}">Edit</button>
+                  <button data-action="rename" data-id="${escapeHtml(preset.id || "")}">Rename</button>
+                  <button data-action="delete" class="danger" data-id="${escapeHtml(preset.id || "")}">Delete</button>
+                </div>
+              </td>
+            </tr>
+          `).join("")}
+        </tbody>
+      `;
+      document.querySelectorAll("#presetTable [data-action]").forEach(btn => {
+        btn.onclick = event => {
+          event.stopPropagation();
+          const id = btn.dataset.id || "";
+          const preset = state.presets.find(item => item.id === id) || null;
+          if (!preset) return;
+          if (btn.dataset.action === "apply") {
+            applyRunPreset(preset);
+            closeRunPresetDialog();
+          } else if (btn.dataset.action === "edit") {
+            editRunPreset(id);
+          } else if (btn.dataset.action === "rename") {
+            editRunPreset(id);
+            $("preset_name").focus();
+          } else if (btn.dataset.action === "delete") {
+            editRunPreset(id);
+            deleteSelectedPreset();
+          }
+        };
+      });
+      document.querySelectorAll("#presetTable tr[data-id]").forEach(row => {
+        row.onclick = () => editRunPreset(row.dataset.id);
+      });
+    }
+    function editRunPreset(id) {
+      const preset = state.presets.find(item => item.id === id) || { id: "", name: "", description: "", env: {} };
+      $("preset_id").value = preset.id || "";
+      $("preset_name").value = preset.name || preset.id || "";
+      $("preset_description").value = preset.description || "";
+      $("preset_env").value = envToText(preset.env || {});
+    }
+    function collectRunPresetEditor() {
+      return {
+        id: value("preset_id").trim(),
+        name: value("preset_name").trim(),
+        description: value("preset_description").trim(),
+        env: textToEnv(value("preset_env"))
+      };
+    }
+    function prepRunPresetEditorFromCurrent() {
+      const preset = selectedRunPreset();
+      $("preset_id").value = preset ? preset.id || "" : "";
+      $("preset_name").value = preset ? preset.name || preset.id || "" : "";
+      $("preset_description").value = preset ? preset.description || "" : "";
+      $("preset_env").value = envToText(collectEnv());
+    }
+    function applyRunPreset(preset) {
+      state.selectedRunPresetId = preset.id || "";
+      setKnobEnv(preset.env || {});
+      renderPresetSummary();
+      renderModelTuningControls("article_summary");
+      renderModelTuningControls("story_drafting");
+      preview("run").catch(() => {});
+    }
     function setKnobEnv(env) {
       document.querySelectorAll("[data-env]").forEach(el => {
         const val = env[el.dataset.env] || "";
+        if (el.type === "checkbox") {
+          el.checked = ["1", "true", "yes", "on"].includes(String(val).toLowerCase());
+          return;
+        }
+        if (el.tagName === "SELECT" && val && !Array.from(el.options).some(option => option.value === val)) {
+          el.insertAdjacentHTML("afterbegin", `<option value="${escapeHtml(val)}">${escapeHtml(val)}</option>`);
+        }
         el.value = val;
       });
     }
-    function applySelectedPresetToKnobs() {
-      const preset = currentPreset();
-      setKnobEnv(preset ? preset.env || {} : {});
+    async function savePresetEditor() {
+      const body = collectRunPresetEditor();
+      if (!body.id) throw new Error("Preset id is required.");
+      const exists = state.presets.some(preset => preset.id === body.id);
+      await api("/api/presets", { method: exists ? "PATCH" : "POST", body: JSON.stringify(body) });
+      await loadPresets();
+      state.selectedRunPresetId = body.id;
+      renderPresetSummary();
+      renderRunPresetDrawer();
+    }
+    async function renamePresetDisplayName() {
+      const id = value("preset_id").trim();
+      if (!id) return;
+      await api("/api/presets", { method: "PATCH", body: JSON.stringify({ id, name: value("preset_name").trim() }) });
+      await loadPresets();
+      renderPresetSummary();
+      renderRunPresetDrawer();
+    }
+    async function deleteSelectedPreset() {
+      const id = value("preset_id").trim();
+      if (!id) return;
+      const ok = await confirmAction(`Delete run preset ${id}? This cannot be undone.`);
+      if (!ok) return;
+      await api(`/api/presets?id=${encodeURIComponent(id)}`, { method: "DELETE" });
+      await loadPresets();
+      if (state.selectedRunPresetId === id) {
+        state.selectedRunPresetId = "";
+      }
+      editRunPreset("");
+      renderPresetSummary();
+      renderRunPresetDrawer();
     }
     async function loadPresets() {
       const data = await api("/api/presets");
       state.presets = data.presets || [];
-      renderPresetSelect();
-      renderPresets();
+      renderRunPresetDrawer();
     }
-    function renderPresets() {
-      const rows = state.presets || [];
-      if (!$("presetTable")) return;
-      $("presetTable").innerHTML = `<thead><tr><th>ID</th><th>Name</th><th>Description</th></tr></thead><tbody>` +
-        rows.map(preset => `<tr data-id="${escapeHtml(preset.id || "")}"><td>${escapeHtml(preset.id || "")}</td><td>${escapeHtml(preset.name || "")}</td><td>${escapeHtml(preset.description || "")}</td></tr>`).join("") +
-        `</tbody>`;
-      document.querySelectorAll("#presetTable tr[data-id]").forEach(row => row.onclick = () => editPreset(row.dataset.id));
+    async function loadModelTuningPresets() {
+      const data = await api("/api/model-tuning-presets");
+      state.modelTuningPresets = data.presets || [];
+      renderModelTuningControls("article_summary");
+      renderModelTuningControls("story_drafting");
     }
-    function editPreset(id) {
-      const preset = state.presets.find(item => item.id === id) || { id: "", name: "", description: "", env: {} };
-      $("preset_id").value = preset.id || "";
-      $("preset_name").value = preset.name || "";
-      $("preset_description").value = preset.description || "";
-      $("preset_env").value = envToText(preset.env || {});
+    function renderAdvancedKnobs() {
+      const search = value("knobSearch").toLowerCase();
+      const groups = {};
+      (state.schema.knobs || []).forEach(knob => {
+        if (SURFACED_ENVS.has(knob.env)) return;
+        const hay = `${knob.label} ${knob.env} ${knob.group}`.toLowerCase();
+        if (search && !hay.includes(search)) return;
+        (groups[knob.group] ||= []).push(knob);
+      });
+      const orderedGroups = ["Run Settings", "Model Selection", "Model Tuning", "Pipeline Budget", "Model Server Settings"];
+      const renderCards = list => list.map(knob => `
+        <div class="knob">
+          <label>${escapeHtml(knob.label)}</label>
+          ${inputForKnob(knob)}
+          <code>${escapeHtml(knob.env)}</code>
+        </div>
+      `).join("");
+      $("knobContainer").innerHTML = [...orderedGroups, ...Object.keys(groups).filter(group => !orderedGroups.includes(group)).sort()].map(group => {
+        const knobs = groups[group];
+        if (!knobs || !knobs.length) return "";
+        return `
+          <div class="knob-group">
+            <h2>${escapeHtml(group)}</h2>
+            <div class="knobs">${renderCards(knobs)}</div>
+          </div>
+        `;
+      }).join("");
+      decorateEnvHints($("knobContainer"));
     }
-    function collectPreset() {
-      return {
-        id: value("preset_id"),
-        name: value("preset_name"),
-        description: value("preset_description"),
-        env: textToEnv(value("preset_env"))
-      };
+    function collectModelTuningPresetBody(task) {
+      return modelTuningPayload(task);
     }
-    async function savePresetEditor() {
-      const body = collectPreset();
-      const exists = state.presets.some(preset => preset.id === body.id);
-      await api("/api/presets", { method: exists ? "PATCH" : "POST", body: JSON.stringify(body) });
-      await loadPresets();
-      $("presetSelect").value = body.id;
+    async function saveModelTuningPreset(task) {
+      const body = collectModelTuningPresetBody(task);
+      if (!body.id) throw new Error("Model tuning preset id is required.");
+      const exists = state.modelTuningPresets.some(preset => preset.id === body.id);
+      await api("/api/model-tuning-presets", { method: exists ? "PATCH" : "POST", body: JSON.stringify(body) });
+      await loadModelTuningPresets();
+      renderModelTuningControls(task);
     }
-    async function deleteSelectedPreset() {
-      const id = value("preset_id");
+    async function renameModelTuningPreset(task) {
+      const meta = TASK_CONFIG[task];
+      const id = value(meta.idInputId).trim();
       if (!id) return;
-      await api(`/api/presets?id=${encodeURIComponent(id)}`, { method: "DELETE" });
-      await loadPresets();
-      editPreset("");
+      await api("/api/model-tuning-presets", { method: "PATCH", body: JSON.stringify({ id, name: value(meta.nameInputId).trim() }) });
+      await loadModelTuningPresets();
+      renderModelTuningControls(task);
     }
-    async function duplicateSelectedPreset() {
-      const source = value("preset_id") || value("presetSelect");
-      if (!source) return;
-      const target = `${source}-copy`;
-      const data = await api("/api/presets/duplicate", { method: "POST", body: JSON.stringify({ source_id: source, target_id: target }) });
-      await loadPresets();
-      editPreset(data.preset.id);
+    async function deleteModelTuningPreset(task) {
+      const meta = TASK_CONFIG[task];
+      const id = value(meta.idInputId).trim();
+      if (!id) return;
+      const ok = await confirmAction(`Delete model tuning preset ${id}? This cannot be undone.`);
+      if (!ok) return;
+      await api(`/api/model-tuning-presets?id=${encodeURIComponent(id)}`, { method: "DELETE" });
+      await loadModelTuningPresets();
+      $(meta.presetSelectId).value = "";
+      $(meta.idInputId).value = "";
+      $(meta.nameInputId).value = "";
+      $(meta.descriptionInputId).value = "";
+      renderModelTuningControls(task);
     }
-    async function preview() {
-      const data = await api("/api/preview", { method: "POST", body: JSON.stringify(requestBody()) });
+    function confirmAction(message) {
+      return Promise.resolve(window.confirm(message));
+    }
+    async function preview(action="run") {
+      const data = await api("/api/preview", { method: "POST", body: JSON.stringify(requestBody(action)) });
       $("previewPane").textContent = data.command_text + (data.runtime_error ? `\n\nPreview error: ${data.runtime_error}` : "");
       return data;
     }
-    async function runAction() {
-      const data = await api("/api/run", { method: "POST", body: JSON.stringify(requestBody()) });
+    async function runAction(action="run") {
+      const data = await api("/api/run", { method: "POST", body: JSON.stringify(requestBody(action)) });
       state.activeRun = data.run_id;
       $("logPane").textContent = "";
       const events = new EventSource(`/api/runs/${data.run_id}/events`);
@@ -1395,8 +2184,7 @@ HTML = r"""<!doctype html>
       document.querySelectorAll("#sourceTable tr[data-key]").forEach(row => row.onclick = () => editSource(row.dataset.key));
     }
     function sourceInput(field, src) {
-      const val = Array.isArray(src[field]) ? src[field].join("\n") : (src[field] ?? "");
-      if (["can_enrich_coverage","strict_source_match","requires_translation"].includes(field)) {
+      if (["can_enrich_coverage","strict_source_match"].includes(field)) {
         return `<label>${field}<select id="source_${field}"><option value=""></option><option value="false" ${val === false ? "selected" : ""}>false</option><option value="true" ${val === true ? "selected" : ""}>true</option></select></label>`;
       }
       if (field === "tier") return `<label>${field}<select id="source_${field}"><option></option><option ${val === "core" ? "selected" : ""}>core</option><option ${val === "peripheral" ? "selected" : ""}>peripheral</option></select></label>`;
@@ -1461,29 +2249,49 @@ HTML = r"""<!doctype html>
       editRecipient("");
     }
     function wireEvents() {
-      $("refreshBtn").onclick = init;
-      $("previewBtn").onclick = () => preview().catch(err => setStatus(err.message, "bad"));
-      $("runBtn").onclick = () => runAction().catch(err => setStatus(err.message, "bad"));
+      $("previewBtn").onclick = () => preview("run").catch(err => setStatus(err.message, "bad"));
+      $("runBtn").onclick = () => runAction("run").catch(err => setStatus(err.message, "bad"));
+      $("utilityPreviewBtn").onclick = () => preview(value("actionSelect") || "run").catch(err => setStatus(err.message, "bad"));
+      $("utilityRunBtn").onclick = () => runAction(value("actionSelect") || "run").catch(err => setStatus(err.message, "bad"));
       $("stopBtn").onclick = () => state.activeRun && api(`/api/runs/${state.activeRun}/stop`, { method: "POST", body: "{}" });
-      $("presetSelect").onchange = () => { applySelectedPresetToKnobs(); preview().catch(() => {}); };
-      $("knobSearch").oninput = () => { renderKnobs(); applySelectedPresetToKnobs(); };
-      $("showAdvanced").onchange = () => { renderKnobs(); applySelectedPresetToKnobs(); };
-      $("clearKnobsBtn").onclick = () => { document.querySelectorAll("[data-env]").forEach(el => { if (el.type === "checkbox") el.checked = false; else el.value = ""; }); };
-      $("savePresetBtn").onclick = () => {
-        const preset = currentPreset() || { id: "", name: "", description: "" };
-        $("preset_id").value = preset.id || "";
-        $("preset_name").value = preset.name || preset.id || "";
-        $("preset_description").value = preset.description || "";
-        $("preset_env").value = envToText(collectEnv());
-        showTab("presets");
-      };
-      $("loadPresetBtn").onclick = () => applySelectedPresetToKnobs();
+      $("openRunPresetDrawerBtn").onclick = () => { renderRunPresetDrawer(); openRunPresetDialog(); };
+      $("savePresetBtn").onclick = () => { prepRunPresetEditorFromCurrent(); renderRunPresetDrawer(); openRunPresetDialog(); };
+      $("closeRunPresetDialogBtn").onclick = closeRunPresetDialog;
+      $("newPresetBtn").onclick = () => { editRunPreset(""); $("preset_env").value = envToText(collectEnv()); };
       $("reloadPresetsBtn").onclick = loadPresets;
-      $("newPresetBtn").onclick = () => editPreset("");
-      $("duplicatePresetBtn").onclick = () => duplicateSelectedPreset().catch(err => setStatus(err.message, "bad"));
+      $("applyPresetBtn").onclick = () => {
+        const id = value("preset_id").trim();
+        const preset = state.presets.find(item => item.id === id);
+        if (!preset) return;
+        applyRunPreset(preset);
+        closeRunPresetDialog();
+      };
+      $("renamePresetBtn").onclick = () => renamePresetDisplayName().catch(err => setStatus(err.message, "bad"));
       $("savePresetEditorBtn").onclick = () => savePresetEditor().catch(err => setStatus(err.message, "bad"));
       $("deletePresetBtn").onclick = () => deleteSelectedPreset().catch(err => setStatus(err.message, "bad"));
-      $("loadPresetIntoKnobsBtn").onclick = () => { $("presetSelect").value = value("preset_id"); applySelectedPresetToKnobs(); showTab("knobs"); };
+      $("knobSearch").oninput = renderAdvancedKnobs;
+      $("clearKnobsBtn").onclick = () => {
+        document.querySelectorAll("[data-env]").forEach(el => {
+          if (el.type === "checkbox") el.checked = false;
+          else el.value = "";
+        });
+        state.selectedRunPresetId = "";
+        renderPresetSummary();
+        renderModelTuningControls("article_summary");
+        renderModelTuningControls("story_drafting");
+        preview("run").catch(() => {});
+      };
+      $("resetDefaultsBtn").onclick = () => {
+        document.querySelectorAll("[data-env]").forEach(el => {
+          if (el.type === "checkbox") el.checked = false;
+          else el.value = "";
+        });
+        state.selectedRunPresetId = "";
+        renderPresetSummary();
+        renderModelTuningControls("article_summary");
+        renderModelTuningControls("story_drafting");
+        preview("run").catch(() => {});
+      };
       $("sourceSearch").oninput = renderSources;
       $("reloadSourcesBtn").onclick = loadSources;
       $("newSourceBtn").onclick = () => editSource("");
@@ -1494,17 +2302,59 @@ HTML = r"""<!doctype html>
       $("saveRecipientBtn").onclick = () => saveRecipient().catch(err => setStatus(err.message, "bad"));
       $("deleteRecipientBtn").onclick = () => deleteSelectedRecipient().catch(err => setStatus(err.message, "bad"));
       $("actionSelect").onchange = () => $("sourceOptions").classList.toggle("hidden", !["check-sources","prune-sources","source-languages"].includes(value("actionSelect")));
+      Object.values(TASK_CONFIG).forEach(meta => {
+        const modelSelect = $(meta.modelSelectId);
+        if (modelSelect) modelSelect.onchange = () => {
+          renderModelTuningControls(meta.runtimeKey);
+          preview("run").catch(() => {});
+        };
+        const tuningSelect = $(meta.presetSelectId);
+        if (tuningSelect) tuningSelect.onchange = () => {
+          const preset = state.modelTuningPresets.find(item => item.id === tuningSelect.value) || null;
+          if (preset) loadModelTuningEditor(meta.runtimeKey, preset);
+          preview("run").catch(() => {});
+        };
+        $(meta.saveButtonId).onclick = () => saveModelTuningPreset(meta.runtimeKey).catch(err => setStatus(err.message, "bad"));
+        $(meta.renameButtonId).onclick = () => renameModelTuningPreset(meta.runtimeKey).catch(err => setStatus(err.message, "bad"));
+        $(meta.deleteButtonId).onclick = () => deleteModelTuningPreset(meta.runtimeKey).catch(err => setStatus(err.message, "bad"));
+      });
+    }
+    function applySelectedPresetFromState() {
+      const preset = selectedRunPreset();
+      if (!preset) return;
+      applyRunPreset(preset);
+      renderRunPresetDrawer();
     }
     async function init() {
       state.schema = await api("/api/schema");
-      renderSchema();
+      renderTabs();
+      renderRunSetup();
+      renderAdvancedKnobs();
+      renderStats();
+      renderRunPresetDrawer();
+      renderPresetSummary();
+      renderModelTuningControls("article_summary");
+      renderModelTuningControls("story_drafting");
+      wireEvents();
       await loadSources();
       await loadRecipients();
+      state.presets = (state.schema.presets && state.schema.presets.presets) || [];
+      state.modelTuningPresets = (state.schema.model_tuning_presets && state.schema.model_tuning_presets.presets) || [];
+      if (state.schema.runtime && state.schema.runtime.preset_id && state.schema.runtime.preset_id !== "custom") {
+        state.selectedRunPresetId = state.schema.runtime.preset_id;
+        applySelectedPresetFromState();
+      }
+      renderRunPresetDrawer();
+      renderPresetSummary();
+      if (state.schema.removed_topic_env_vars && state.schema.removed_topic_env_vars.length) {
+        setStatus(`Removed topic env vars set: ${state.schema.removed_topic_env_vars.join(", ")}`, "warn");
+      } else {
+        setStatus("");
+      }
       $("sourceOptions").classList.add("hidden");
-      await preview().catch(() => {});
+      $("actionSelect").onchange();
+      await preview("run").catch(() => {});
     }
-    renderTabs();
-    wireEvents();
     init().catch(err => setStatus(err.message, "bad"));
   </script>
 </body>

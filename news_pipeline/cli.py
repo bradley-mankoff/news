@@ -21,7 +21,6 @@ Usage:
   uv run news source-languages --sources-yaml PATH [--write-languages]
   uv run news model-server-command
   uv run news codex-model-server-command
-  uv run news test-translation-model
   uv run news serve-unsubscribe
   uv run news ui [--host 127.0.0.1] [--port 8766] [--open]
   uv run news history backfill [--dry-run|--apply]
@@ -34,11 +33,6 @@ ACTION_ALIASES = {
     "server-command": "model-server-command",
     "--model-server-command": "model-server-command",
     "codex-model-server-command": "codex-model-server-command",
-    "codex-server-command": "codex-model-server-command",
-    "test-translation-model": "test-translation-model",
-    "translation-model-test": "test-translation-model",
-    "probe-translation-model": "test-translation-model",
-    "--test-translation-model": "test-translation-model",
     "serve-unsubscribe": "serve-unsubscribe",
     "unsubscribe-server": "serve-unsubscribe",
     "--serve-unsubscribe": "serve-unsubscribe",
@@ -181,14 +175,6 @@ def main(argv: list[str] | None = None) -> int:
             print(USAGE, file=sys.stderr)
             return 2
         return _print_codex_model_server_command()
-    if action == "test-translation-model":
-        if args:
-            print(f"Unexpected arguments for {command}: {' '.join(args)}", file=sys.stderr)
-            print(USAGE, file=sys.stderr)
-            return 2
-        from .pipeline import run_translation_model_smoke_test
-
-        return run_translation_model_smoke_test()
     if action == "serve-unsubscribe":
         if args:
             print(f"Unexpected arguments for {command}: {' '.join(args)}", file=sys.stderr)

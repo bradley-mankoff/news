@@ -356,14 +356,6 @@ def _article_candidates_from_source_context(
                 "wire_source": article.get("wire_source", ""),
                 "source_display_name": article.get("source_display_name", ""),
                 "description": article.get("description", ""),
-                "text": article.get("text", ""),
-                "translation_needed": article.get("translation_needed", False),
-                "translation_status": article.get("translation_status"),
-                "translation_reason": article.get("translation_reason"),
-                "translation_source_language": article.get("translation_source_language"),
-                "translation_target_language": article.get("translation_target_language"),
-                "translation_model": article.get("translation_model"),
-                "translation_retag_source": article.get("translation_retag_source", False),
                 "relevance_score": 0,
             }
         )
@@ -378,13 +370,8 @@ def _article_candidates_from_source_context(
             "relevance_score": 0,
             "feed_source": article.get("feed_source", ""),
             "title_source_suffix": article.get("title_source_suffix", ""),
-            "source_match_status": article.get("source_match_status", ""),
-            "publisher_source": article.get("publisher_source", ""),
-            "wire_source": article.get("wire_source", ""),
-            "source_display_name": article.get("source_display_name", ""),
+
             "scrape_status": article.get("scrape_status"),
-            "translation_needed": article.get("translation_needed", False),
-            "translation_status": article.get("translation_status"),
         }
         for article in article_targets
     ]

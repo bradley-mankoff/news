@@ -23,7 +23,7 @@ from urllib.parse import urlparse
 
 import yaml
 
-from .source_catalog import MarkTranslationRequired, apply_source_catalog_patch
+from .source_catalog import apply_source_catalog_patch
 
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
@@ -61,14 +61,20 @@ ASSISTANT_CONTEXT_CORE_PATTERNS = (
     "**/.DS_Store",
 )
 RUN_OUTPUT_TIMESTAMP_RE = re.compile(r"\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}")
-DEFAULT_MODEL_ALIAS = "gemma-26b-moe"
-GEMMA_12B_OPTIQ_MODEL_ALIAS = "https://huggingface.co/EgorKodin/Huihui-gemma-4-12B-it-abliterated-mlx-4bit"
-GEMMA_12B_OPTIQ_MODEL_NAME = "EgorKodin/Huihui-gemma-4-12B-it-abliterated-mlx-4bit"
+QWWYTHOS_REPO = "huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF"
+QWWYTHOS_Q4K_FILENAME = "Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-Q4_K.gguf"
+QWWYTHOS_Q8_FILENAME = "Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-Q8_0.gguf"
+QWWYTHOS_MMPROJ_FILENAME = "mmproj-model-bf16.gguf"
+QWWYTHOS_9B_4BIT_MODEL_ALIAS = "qwythos-9b-4bit"
+QWWYTHOS_9B_4BIT_MODEL_REFERENCE = f"{QWWYTHOS_REPO}/{QWWYTHOS_Q4K_FILENAME}"
+QWWYTHOS_9B_8BIT_MODEL_ALIAS = "qwythos-9b-8bit"
+QWWYTHOS_9B_8BIT_MODEL_REFERENCE = f"{QWWYTHOS_REPO}/{QWWYTHOS_Q8_FILENAME}"
+QWWYTHOS_MODEL_BACKEND = "mlx-vlm"
+DEFAULT_MODEL_ALIAS = QWWYTHOS_9B_8BIT_MODEL_ALIAS
 CODEX_TEST_MODEL_ALIAS = "gemma-e2b-tiny"
 CODEX_TEST_MODEL_NAME = "deadbydawn101/gemma-4-E2B-Heretic-Uncensored-mlx-4bit"
 MODEL_TASK_ARTICLE_SUMMARY = "article_summary"
 MODEL_TASK_STORY_DRAFTING = "story_drafting"
-DEFAULT_TRANSLATION_MODEL = "google/translategemma-4b-it"
 GEMMA_4_ARTICLE_SUMMARY_CAP = 40
 CORE_SOURCE_TIER = "core"
 PERIPHERAL_SOURCE_TIER = "peripheral"
@@ -92,10 +98,12 @@ VALID_SOURCE_MATCH_MODES = {
     SOURCE_MATCH_MODE_WIRE_ATTRIBUTION,
 }
 MODEL_ALIASES = {
-    GEMMA_12B_OPTIQ_MODEL_ALIAS: GEMMA_12B_OPTIQ_MODEL_NAME,
-    "gemma-26b-moe": "mlx-community/gemma-4-26B-A4B-it-heretic-4bit",
-    f"https://huggingface.co/{DEFAULT_TRANSLATION_MODEL}": DEFAULT_TRANSLATION_MODEL,
-    f"https://hf.co/{DEFAULT_TRANSLATION_MODEL}": DEFAULT_TRANSLATION_MODEL,
+    QWWYTHOS_9B_4BIT_MODEL_ALIAS: QWWYTHOS_9B_4BIT_MODEL_REFERENCE,
+    QWWYTHOS_9B_8BIT_MODEL_ALIAS: QWWYTHOS_9B_8BIT_MODEL_REFERENCE,
+    f"https://huggingface.co/{QWWYTHOS_9B_4BIT_MODEL_REFERENCE}": QWWYTHOS_9B_4BIT_MODEL_REFERENCE,
+    f"https://hf.co/{QWWYTHOS_9B_4BIT_MODEL_REFERENCE}": QWWYTHOS_9B_4BIT_MODEL_REFERENCE,
+    f"https://huggingface.co/{QWWYTHOS_9B_8BIT_MODEL_REFERENCE}": QWWYTHOS_9B_8BIT_MODEL_REFERENCE,
+    f"https://hf.co/{QWWYTHOS_9B_8BIT_MODEL_REFERENCE}": QWWYTHOS_9B_8BIT_MODEL_REFERENCE,
     CODEX_TEST_MODEL_ALIAS: CODEX_TEST_MODEL_NAME,
     f"https://huggingface.co/{CODEX_TEST_MODEL_NAME}": CODEX_TEST_MODEL_NAME,
     f"https://hf.co/{CODEX_TEST_MODEL_NAME}": CODEX_TEST_MODEL_NAME,
@@ -224,7 +232,6 @@ class RuntimeConfig:
     model_max_input_tokens: int
     article_text_token_limit: int
     total_article_summary_cap: int
-    translation_max_tokens: int
     article_summary_max_tokens: int
     story_drafting_max_tokens: int
     title_generation_max_tokens: int
@@ -233,13 +240,6 @@ class RuntimeConfig:
     pipeline_budget: PipelineBudget
     model_server_settings: ModelServerSettings
     model_server_command: str
-    translation_model_reference: str
-    translation_model_name: str
-    translation_model_base_url: str
-    translation_model_backend: str
-    translation_model_server_command: str
-    translation_target_language: str
-    translation_enabled: bool
     recent_window_hours: int
     max_articles_per_source: int
     bradley_recipient: str
@@ -305,14 +305,12 @@ DEFAULT_MODEL_MAX_INPUT_TOKENS = 6000
 DEFAULT_ARTICLE_SUMMARY_MAX_TOKENS = 1000
 DEFAULT_STORY_DRAFTING_MAX_TOKENS = 1800
 DEFAULT_TITLE_GENERATION_MAX_TOKENS = 50
-DEFAULT_TRANSLATION_MAX_TOKENS = 1800
 DEFAULT_MODEL_SERVER_PREFILL_STEP_SIZE = 512
 DEFAULT_MODEL_SERVER_PROMPT_CACHE_SIZE = 2
 DEFAULT_MODEL_SERVER_PROMPT_CACHE_BYTES = "512MB"
 DEFAULT_MODEL_SERVER_MAX_TOKENS = 1800
 MODEL_TASK_SAMPLING_ENV_PREFIXES = {
     "default": "NEWS_MODEL",
-    "translation": "NEWS_MODEL_TRANSLATION",
     "story_discovery": "NEWS_MODEL_STORY_DISCOVERY",
     "story_scale_screening": "NEWS_MODEL_STORY_SCALE_SCREENING",
     MODEL_TASK_ARTICLE_SUMMARY: "NEWS_MODEL_ARTICLE_SUMMARY",
@@ -330,7 +328,6 @@ MODEL_REASONING_SAMPLING_ENV_PREFIX = "NEWS_MODEL_REASONING"
 def _empty_model_sampling_map() -> dict[str, ModelSamplingSettings]:
     return {
         "default": ModelSamplingSettings(),
-        "translation": ModelSamplingSettings(),
         "story_discovery": ModelSamplingSettings(),
         "story_scale_screening": ModelSamplingSettings(),
         MODEL_TASK_ARTICLE_SUMMARY: ModelSamplingSettings(),
@@ -362,7 +359,7 @@ def _configured_pipeline_budget() -> PipelineBudget:
             _int_env("NEWS_TOTAL_ARTICLE_SUMMARY_CAP", DEFAULT_TOTAL_ARTICLE_SUMMARY_CAP),
         ),
         recent_window_hours=_int_env("NEWS_RECENT_WINDOW_HOURS", 24),
-        max_articles_per_source=_int_env("NEWS_MAX_ARTICLES_PER_SOURCE", 6),
+        max_articles_per_source=_int_env("NEWS_MAX_ARTICLES_PER_SOURCE", 4),
         min_articles_per_story=configured_min_articles_per_story(),
         max_stories=max(1, _int_env("NEWS_MAX_STORIES", 4)),
         story_cluster_similarity_threshold=configured_story_cluster_similarity_threshold(),
@@ -830,6 +827,9 @@ def load_run_presets(path: Path | None = None) -> dict[str, dict[str, Any]]:
             "description": str(raw_preset.get("description") or "").strip(),
             "env": env,
         }
+        modified_at = str(raw_preset.get("modified_at") or "").strip()
+        if modified_at:
+            presets[preset_id]["modified_at"] = modified_at
     return presets
 
 
@@ -864,6 +864,10 @@ def load_model_tuning_presets(path: Path | None = None) -> dict[str, dict[str, A
         if not isinstance(raw_tuning, dict):
             raise ValueError(f"Model tuning preset {preset_id!r} tuning must be a mapping.")
         preset: dict[str, Any] = {"id": preset_id, "tuning": dict(raw_tuning)}
+        for field_name in ("name", "description", "modified_at"):
+            field_value = str(raw_preset.get(field_name) or "").strip()
+            if field_value:
+                preset[field_name] = field_value
         raw_model = str(raw_preset.get("model") or "").strip()
         raw_task = str(raw_preset.get("task") or "").strip()
         if raw_model:
@@ -998,8 +1002,8 @@ def _configured_model_name() -> str:
 
 def infer_model_backend(model_reference: str) -> str:
     resolved_name = resolve_model_name(model_reference).lower()
-    if resolved_name == GEMMA_12B_OPTIQ_MODEL_NAME.lower():
-        return "mlx-lm"
+    if "qwythos" in resolved_name:
+        return QWWYTHOS_MODEL_BACKEND
     if "gemma-4" in resolved_name or "gemma4" in resolved_name:
         return "mlx-vlm"
     return "mlx-lm"
@@ -1009,30 +1013,20 @@ def _configured_model_backend(model_reference: str) -> str:
     return infer_model_backend(model_reference)
 
 
+def _default_story_synthesis_concurrency(model_reference: str) -> int:
+    if is_codex_test_model_reference(model_reference):
+        return 2
+    resolved_name = resolve_model_name(model_reference).lower()
+    if "qwythos" in resolved_name or is_gemma_4_model_reference(model_reference):
+        return 1
+    return DEFAULT_STORY_SYNTHESIS_CONCURRENCY
+
+
 def _default_article_summary_concurrency(model_reference: str) -> int:
     if is_codex_test_model_reference(model_reference):
         return 8
     return DEFAULT_ARTICLE_SUMMARY_CONCURRENCY
 
-
-def _default_story_synthesis_concurrency(model_reference: str) -> int:
-    if is_codex_test_model_reference(model_reference):
-        return 2
-    if is_gemma_4_model_reference(model_reference):
-        return 1
-    return DEFAULT_STORY_SYNTHESIS_CONCURRENCY
-
-
-def _configured_translation_model_reference() -> str:
-    return _str_env("NEWS_TRANSLATION_MODEL", DEFAULT_TRANSLATION_MODEL) or DEFAULT_TRANSLATION_MODEL
-
-
-def _configured_translation_enabled() -> bool:
-    return _bool_env("NEWS_TRANSLATION_ENABLED", False)
-
-
-def _configured_translation_model_backend(model_reference: str) -> str:
-    return infer_model_backend(model_reference)
 
 
 def _runtime_knob(
@@ -1096,7 +1090,11 @@ def runtime_knob_registry() -> list[dict[str, Any]]:
         _runtime_knob("Pipeline Budget", "Story selection overlap", "NEWS_STORY_SELECTION_OVERLAP_THRESHOLD", "number", minimum=0, maximum=1, step=0.01),
         _runtime_knob("Pipeline Budget", "Story dedup threshold", "NEWS_STORY_DEDUP_THRESHOLD", "number", minimum=0, maximum=1, step=0.01),
         _runtime_knob("Pipeline Budget", "Backfill batch multiplier", "NEWS_STORY_BACKFILL_BATCH_MULTIPLIER", "number", minimum=1, step=1),
+        _runtime_knob("Pipeline Budget", "Source collection concurrency", "NEWS_SOURCE_COLLECTION_CONCURRENCY", "number", default=DEFAULT_SOURCE_COLLECTION_CONCURRENCY, minimum=1, step=1),
+        _runtime_knob("Pipeline Budget", "Article summary concurrency", "NEWS_ARTICLE_SUMMARY_CONCURRENCY", "number", default=DEFAULT_ARTICLE_SUMMARY_CONCURRENCY, minimum=1, step=1),
+        _runtime_knob("Pipeline Budget", "Story synthesis concurrency", "NEWS_STORY_SYNTHESIS_CONCURRENCY", "number", default=DEFAULT_STORY_SYNTHESIS_CONCURRENCY, minimum=1, step=1),
         _runtime_knob("Pipeline Budget", "Component overlap suppress", "NEWS_STORY_COMPONENT_OVERLAP_SUPPRESS_THRESHOLD", "number", minimum=0, maximum=1, step=0.01, advanced=True),
+        _runtime_knob("Model Server Settings", "Model concurrency", "NEWS_MODEL_CONCURRENCY", "number", default=DEFAULT_PIPELINE_CONCURRENCY, minimum=1, step=1, advanced=True),
         _runtime_knob("Model Server Settings", "Model base URL", "NEWS_MODEL_BASE_URL", default="http://127.0.0.1:8080/v1"),
         _runtime_knob("Model Server Settings", "Article Summarization base URL", "NEWS_MODEL_ARTICLE_SUMMARY_BASE_URL", default="http://127.0.0.1:8080/v1"),
         _runtime_knob("Model Server Settings", "Story Drafting base URL", "NEWS_MODEL_STORY_DRAFTING_BASE_URL", default="http://127.0.0.1:8080/v1"),
@@ -1336,13 +1334,6 @@ def _coerce_source_text_list(value: Any) -> list[str]:
     return clean_items
 
 
-def _source_requires_translation(raw_source: dict[str, Any]) -> bool:
-    explicit = raw_source.get("requires_translation", raw_source.get("translate"))
-    if explicit is not None:
-        return _coerce_bool_value(explicit, False)
-    return False
-
-
 def _normalize_source_tier(value: Any, *, source_key: str | None = None) -> str:
     tier = str(value or "").strip().lower()
     if not tier:
@@ -1396,7 +1387,7 @@ def _source_enabled_for_scope(
     source_key: str | None = None,
 ) -> bool:
     language = str(raw_source.get("language") or "").strip().lower()
-    if language != "en" or _source_requires_translation(raw_source):
+    if language != "en":
         return False
     selected_tiers = SOURCE_SCOPE_TIERS[_normalize_source_scope(source_scope)]
     return (
@@ -1463,14 +1454,8 @@ def load_sources(
         elif not isinstance(raw_source_match_aliases, list):
             raw_source_match_aliases = []
         language = str(raw_source.get("language") or "").strip().lower()
-        requires_translation_explicit = (
-            raw_source.get("requires_translation", raw_source.get("translate")) is not None
-        )
-        requires_translation = _source_requires_translation(raw_source)
-        translation_source_language = str(
-            raw_source.get("translation_source_language") or language
-        ).strip().lower()
         tier = _normalize_source_tier(raw_source.get("tier"), source_key=key)
+
         sources[key] = {
             "name": str(raw_source.get("name") or key).strip(),
             "url": url,
@@ -1492,9 +1477,6 @@ def load_sources(
                 raw_source.get("source_match_mode"),
                 source_key=key,
             ),
-            "requires_translation": requires_translation,
-            "requires_translation_explicit": requires_translation_explicit,
-            "translation_source_language": translation_source_language or None,
             "source_match_aliases": [
                 str(alias).strip()
                 for alias in raw_source_match_aliases
@@ -1505,14 +1487,6 @@ def load_sources(
     if not sources:
         raise ValueError(f"No valid source entries found in {sources_path}.")
     return sources
-
-
-def write_source_translation_flags(
-    path: Path,
-    source_languages: dict[str, str | None],
-) -> int:
-    result = apply_source_catalog_patch(path, [MarkTranslationRequired(source_languages)])
-    return result.edit_count
 
 
 def load_recipients(path: Path | None = None) -> dict[str, dict[str, Any]]:
@@ -1687,16 +1661,44 @@ def _build_runtime_config(
     default_tuning = _configured_model_tuning(default_reference, task="default")
     model_base_url = _str_env("NEWS_MODEL_BASE_URL", "http://127.0.0.1:8080/v1")
     model_server_settings = _configured_model_server_settings(model_base_url)
+    article_summary_concurrency = max(
+        1,
+        _int_env(
+            "NEWS_ARTICLE_SUMMARY_CONCURRENCY",
+            _default_article_summary_concurrency(default_reference),
+        ),
+    )
+    story_synthesis_concurrency = max(
+        1,
+        _int_env(
+            "NEWS_STORY_SYNTHESIS_CONCURRENCY",
+            _default_story_synthesis_concurrency(default_reference),
+        ),
+    )
+    source_collection_concurrency = max(
+        1,
+        _int_env("NEWS_SOURCE_COLLECTION_CONCURRENCY", DEFAULT_SOURCE_COLLECTION_CONCURRENCY),
+    )
+    model_concurrency = max(
+        1,
+        _int_env(
+            "NEWS_MODEL_CONCURRENCY",
+            max(
+                _default_article_summary_concurrency(default_reference),
+                _default_story_synthesis_concurrency(default_reference),
+                article_summary_concurrency,
+                story_synthesis_concurrency,
+            ),
+        ),
+        article_summary_concurrency,
+        story_synthesis_concurrency,
+    )
     tuning_presets = load_model_tuning_presets()
     model_assignments = _configured_model_assignments(
         default_reference=default_reference,
         default_tuning=default_tuning,
         default_server_settings=model_server_settings,
-        model_concurrency=max(
-            1,
-            _default_article_summary_concurrency(default_reference),
-            _default_story_synthesis_concurrency(default_reference),
-        ),
+        model_concurrency=model_concurrency,
         presets=tuning_presets,
     )
     default_model_assignment = model_assignments["default"]
@@ -1704,32 +1706,6 @@ def _build_runtime_config(
     model_reference = default_model_assignment.reference
     model_name = default_model_assignment.name
     model_backend = default_model_assignment.backend
-    model_concurrency = max(
-        1,
-        _default_article_summary_concurrency(model_reference),
-        _default_story_synthesis_concurrency(model_reference),
-    )
-    article_summary_concurrency = max(1, _default_article_summary_concurrency(model_reference))
-    story_synthesis_concurrency = max(1, _default_story_synthesis_concurrency(model_reference))
-    source_collection_concurrency = DEFAULT_SOURCE_COLLECTION_CONCURRENCY
-    translation_enabled = _configured_translation_enabled()
-    translation_model_reference = _configured_translation_model_reference()
-    translation_model_name = resolve_model_name(translation_model_reference)
-    translation_model_base_url = _str_env("NEWS_TRANSLATION_MODEL_BASE_URL", model_base_url)
-    translation_model_backend = _configured_translation_model_backend(translation_model_reference)
-    translation_model_server_settings = _configured_model_server_settings(translation_model_base_url)
-    translation_max_tokens = _int_env(
-        "NEWS_TRANSLATION_MAX_TOKENS",
-        DEFAULT_TRANSLATION_MAX_TOKENS,
-    )
-    translation_model_server_command = ""
-    if translation_enabled:
-        translation_model_server_command = build_model_server_command(
-            translation_model_name,
-            translation_model_server_settings,
-            backend=translation_model_backend,
-            model_concurrency=model_concurrency,
-        )
     return RuntimeConfig(
         root_dir=ROOT_DIR,
         sources_path=sources_path,
@@ -1764,7 +1740,6 @@ def _build_runtime_config(
         model_max_input_tokens=default_tuning.model_max_input_tokens or DEFAULT_MODEL_MAX_INPUT_TOKENS,
         article_text_token_limit=pipeline_budget.article_text_token_limit,
         total_article_summary_cap=pipeline_budget.total_article_summary_cap,
-        translation_max_tokens=translation_max_tokens,
         article_summary_max_tokens=default_tuning.article_summary_max_tokens
         or DEFAULT_ARTICLE_SUMMARY_MAX_TOKENS,
         story_drafting_max_tokens=default_tuning.story_drafting_max_tokens
@@ -1776,13 +1751,6 @@ def _build_runtime_config(
         pipeline_budget=pipeline_budget,
         model_server_settings=model_server_settings,
         model_server_command=default_model_assignment.server_command,
-        translation_model_reference=translation_model_reference,
-        translation_model_name=translation_model_name,
-        translation_model_base_url=translation_model_base_url,
-        translation_model_backend=translation_model_backend,
-        translation_model_server_command=translation_model_server_command,
-        translation_target_language=_str_env("NEWS_TRANSLATION_TARGET_LANGUAGE", "en") or "en",
-        translation_enabled=translation_enabled,
         recent_window_hours=pipeline_budget.recent_window_hours,
         max_articles_per_source=pipeline_budget.max_articles_per_source,
         bradley_recipient=bradley_recipient,

@@ -7,10 +7,22 @@ import unittest
 from news_pipeline.story_drafting import (
     StoryDraftingRuntime,
     article_summary_lookup_by_id,
+    clean_story_synthesis_contradictions,
+    clean_story_synthesis_headline,
+    clean_story_synthesis_paragraph,
+    contradiction_presence_diagnostics,
+    draft_story_clusters_from_article_summaries,
+    report_article_id,
+    report_summary_text,
+    run_story_synthesis_blocks,
     build_story_synthesis_prompt_messages,
     parse_story_synthesis_output,
     run_story_synthesis_block,
     story_summary_blocks_from_clusters,
+    summarize_contradiction_analytics,
+    _article_body_evidence,
+    _article_lookup_by_id,
+    _distinct_cited_source_ids,
 )
 
 
@@ -70,6 +82,13 @@ def _source(local_id: str, **overrides):
 
 
 class StoryDraftingTests(unittest.TestCase):
+    def test_basic_report_and_lookup_helpers_cover_empty_branches(self) -> None:
+        self.assertEqual(report_summary_text("### Title\nSummary:\nBody"), "Body")
+        self.assertEqual(report_article_id("### Title\nMetadata:\n- Article ID: a1\nSummary:\nBody"), "a1")
+        self.assertEqual(_article_lookup_by_id(None), {})
+        self.assertEqual(_article_lookup_by_id([{"title": "Missing id"}]), {})
+        self.assertEqual(_article_body_evidence(None), "")
+
     def test_story_prompt_requests_paraphrased_clean_evidence_with_source_markers(self) -> None:
         messages = build_story_synthesis_prompt_messages(
             {
@@ -193,6 +212,223 @@ class StoryDraftingTests(unittest.TestCase):
         self.assertLessEqual(len(first_evidence), 2000)
         self.assertIn("First article body evidence.", first_evidence)
         self.assertNotIn("<p>", first_evidence)
+
+    def test_story_summary_blocks_skip_missing_entries_and_minimums(self) -> None:
+        summary_lookup = article_summary_lookup_by_id(
+            [
+                _summary_entry("a1", "Storm report one", "Officials reported 10 damaged homes."),
+                _summary_entry("a2", "Storm report two", ""),
+            ]
+        )
+
+        self.assertEqual(
+            story_summary_blocks_from_clusters(
+                [
+                    {
+                        "story_title": "Storm damage",
+                        "article_ids": ["a1", "a2", "missing"],
+                    }
+                ],
+                summary_lookup,
+                min_articles_per_story=2,
+            ),
+            [],
+        )
+
+    def test_clean_story_synthesis_helpers_cover_fallback_and_no_contradiction_branches(self) -> None:
+        runtime = replace(_story_drafting_runtime(), is_low_coverage_synthesis_section=lambda _text: True)
+        long_fallback = " ".join(f"word{i}" for i in range(1, 16))
+        headline = clean_story_synthesis_headline("", long_fallback, runtime)
+        self.assertLessEqual(len(headline.split()), 12)
+        self.assertEqual(
+            clean_story_synthesis_paragraph("   ", ["Fallback source summary."], runtime),
+            "Fallback source summary.",
+        )
+        self.assertEqual(clean_story_synthesis_contradictions("None reported", runtime), "")
+        self.assertEqual(clean_story_synthesis_contradictions("Potential contradiction", runtime), "")
+        self.assertEqual(
+            clean_story_synthesis_contradictions("A real contradiction", _story_drafting_runtime()),
+            "A real contradiction",
+        )
+
+    def test_contradiction_diagnostics_helpers_cover_analytics_branches(self) -> None:
+        self.assertEqual(
+            _distinct_cited_source_ids(
+                [
+                    {"source_ids": ["s1", "S2", "s1"]},
+                    {"source_ids": ["s3"]},
+                ]
+            ),
+            ["S1", "S2", "S3"],
+        )
+        presence = contradiction_presence_diagnostics(
+            {
+                "story_key": "story-1",
+                "story_title": "Storm damage",
+                "article_count": 2,
+                "source_count": 2,
+                "marked_contradictions": "Contradiction text",
+                "contradictions_paragraph": "Validated contradiction text",
+                "contradiction_cited_sentences": [{"source_ids": ["s1", "S2"]}],
+                "contradiction_citation_diagnostics": {"foo": 1},
+            }
+        )
+        self.assertTrue(presence["render_eligible"])
+        analytics = summarize_contradiction_analytics(
+            [
+                {
+                    "marked_contradictions": "Raw contradiction",
+                    "contradictions_paragraph": "",
+                    "contradiction_cited_sentences": [],
+                },
+                {
+                    "marked_contradictions": "Raw contradiction",
+                    "contradictions_paragraph": "Validated contradiction",
+                    "contradiction_cited_sentences": [{"source_ids": ["s1"]}],
+                },
+            ]
+        )
+        self.assertEqual(analytics["raw_contradiction_count"], 2)
+        self.assertEqual(analytics["validated_contradiction_count"], 1)
+        self.assertEqual(analytics["render_eligible_contradiction_count"], 0)
+        self.assertEqual(analytics["validated_contradictions_not_render_eligible"], 1)
+
+    def test_run_story_synthesis_blocks_and_draft_story_clusters_cover_sequential_and_rejection_paths(self) -> None:
+        runtime = _story_drafting_runtime_with_response(
+            "Headline: Storm Cleanup Advances\n"
+            "Main story: County logs showed ten homes were damaged after the storm.[[S1]]\n"
+            "Contradictions: NONE"
+        )
+        story_block = {
+            "story_title": "Storm damage",
+            "summaries": ["County officials reported ten damaged homes."],
+            "citation_sources": [
+                _source(
+                    "S1",
+                    summary="County officials reported ten damaged homes.",
+                    body_evidence="County logs listed ten damaged homes after the storm.",
+                )
+            ],
+        }
+        callbacks: list[tuple[str, dict[str, Any]]] = []
+        runtime = replace(runtime, progress_callback=lambda label, payload: callbacks.append((label, payload)))
+        results = run_story_synthesis_blocks([story_block], "May 30, 2026", runtime)
+        self.assertEqual(len(results), 1)
+        self.assertTrue(callbacks)
+
+        short_runtime = replace(
+            runtime,
+            story_synthesis_concurrency=1,
+            invoke_with_retries=lambda *_args, **_kwargs: SimpleNamespace(
+                content="Headline: Storm Cleanup Advances\nMain story: short paragraph[[S1]]\nContradictions: NONE"
+            ),
+            story_drafting_word_count=lambda text: len(str(text or "").split()),
+        )
+        drafts, metadata = draft_story_clusters_from_article_summaries(
+            [
+                {
+                    "story_title": "Storm damage",
+                    "article_ids": ["a1", "a2"],
+                }
+            ],
+            [
+                _summary_entry("a1", "Storm report one", "Officials reported 10 damaged homes."),
+                _summary_entry("a2", "Storm report two", "Officials reported 12 damaged homes."),
+            ],
+            short_runtime,
+            article_targets=[
+                {
+                    "article_id": "a1",
+                    "source": "Fixture Wire",
+                    "url": "https://example.com/a1",
+                    "title": "Storm report one",
+                    "text": "County logs listed ten damaged homes after the storm.",
+                }
+                ,
+                {
+                    "article_id": "a2",
+                    "source": "Fixture Wire",
+                    "url": "https://example.com/a2",
+                    "title": "Storm report two",
+                    "text": "County logs listed twelve damaged homes after the storm.",
+                },
+            ],
+        )
+        self.assertEqual(drafts, [])
+        self.assertEqual(metadata["story_blocks_requested"], 1)
+        self.assertEqual(metadata["story_drafts_generated"], 0)
+        self.assertEqual(metadata["story_draft_rejections"][0]["reason"], "below_story_word_count_floor")
+
+        empty_drafts, empty_metadata = draft_story_clusters_from_article_summaries(
+            [
+                {
+                    "story_title": "Singleton story",
+                    "article_ids": ["a1"],
+                }
+            ],
+            [
+                _summary_entry("a1", "Solo report", "Officials reported 10 damaged homes."),
+            ],
+            short_runtime,
+            article_targets=[
+                {
+                    "article_id": "a1",
+                    "source": "Fixture Wire",
+                    "url": "https://example.com/a1",
+                    "title": "Solo report",
+                    "text": "County logs listed ten damaged homes after the storm.",
+                }
+            ],
+        )
+        self.assertEqual(empty_drafts, [])
+        self.assertEqual(empty_metadata["story_blocks_requested"], 0)
+        self.assertEqual(empty_metadata["missing_or_singleton_story_count"], 1)
+
+        valid_runtime = replace(
+            runtime,
+            invoke_with_retries=lambda *_args, **_kwargs: SimpleNamespace(
+                content=(
+                    "Headline: Storm Cleanup Advances\n"
+                    "Main story: "
+                    + " ".join(f"word{i}" for i in range(60))
+                    + " [[S1]]\n"
+                    "Contradictions: NONE"
+                )
+            ),
+            story_drafting_word_count=lambda text: len(str(text or "").split()),
+        )
+        valid_drafts, valid_metadata = draft_story_clusters_from_article_summaries(
+            [
+                {
+                    "story_title": "Storm damage",
+                    "article_ids": ["a1", "a2"],
+                }
+            ],
+            [
+                _summary_entry("a1", "Storm report one", "Officials reported 10 damaged homes."),
+                _summary_entry("a2", "Storm report two", "Officials reported 12 damaged homes."),
+            ],
+            valid_runtime,
+            article_targets=[
+                {
+                    "article_id": "a1",
+                    "source": "Fixture Wire",
+                    "url": "https://example.com/a1",
+                    "title": "Storm report one",
+                    "text": "County logs listed ten damaged homes after the storm.",
+                },
+                {
+                    "article_id": "a2",
+                    "source": "Fixture Wire",
+                    "url": "https://example.com/a2",
+                    "title": "Storm report two",
+                    "text": "County logs listed twelve damaged homes after the storm.",
+                },
+            ],
+        )
+        self.assertEqual(len(valid_drafts), 1)
+        self.assertEqual(valid_drafts[0]["story_text"], valid_drafts[0]["paragraph"].strip())
+        self.assertEqual(valid_metadata["story_drafts_generated"], 1)
 
     def test_run_story_synthesis_block_preserves_validated_evidence_citations(self) -> None:
         result = run_story_synthesis_block(

@@ -8,6 +8,7 @@ from dataclasses import replace
 from datetime import datetime
 from io import StringIO
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import news_pipeline.pipeline as pipeline
@@ -25,6 +26,15 @@ class FailedRunLoggingTests(unittest.TestCase):
         pipeline.RUN_LOG_FILE = None
         pipeline.ACTIVE_RUN_DIAGNOSTICS = None
         pipeline.ACTIVE_RUN_FINALIZER = None
+        pipeline.ACTIVE_RUN_SESSION = None
+        pipeline.RUN_ACTIVITY_SNAPSHOTS = []
+        pipeline.MODEL_CALL_STATS = {
+            "calls": {},
+            "token_usage": {},
+            "retries": 0,
+            "fallbacks": 0,
+            "failures": {},
+        }
         pipeline.MANAGED_MODEL_SERVER_ACTIVE = False
         pipeline.MANAGED_MODEL_SERVER_READY = False
         pipeline.MANAGED_MODEL_SERVER_EXTERNAL = False
@@ -157,6 +167,68 @@ class FailedRunLoggingTests(unittest.TestCase):
             pipeline.run_pipeline()
 
         run.assert_called_once_with()
+
+    def test_session_and_diagnostics_wrappers_cover_compatibility_branches(self) -> None:
+        timestamp = "2026-06-06_12-00-00"
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            run_started_at = datetime(2026, 6, 6, 12, 0, 0)
+            test_config = replace(
+                pipeline.CONFIG,
+                run_started_at=run_started_at,
+                run_date="2026-06-06",
+                timestamp=timestamp,
+                output_dir=root / "daily_outputs",
+                run_output_dir=root / "daily_outputs" / ".staging" / timestamp,
+                run_staging_dir=root / "daily_outputs" / ".staging" / timestamp,
+                latest_run_markdown_path=root / "daily_outputs" / "latest_run.md",
+                latest_run_log_path=root / "daily_outputs" / "latest_run.log",
+                latest_run_details_path=root / "daily_outputs" / "latest_run_details.json",
+                history_db_path=root / "history" / "news_history.duckdb",
+            )
+
+            pipeline.ACTIVE_RUN_SESSION = object()
+            with self.assertRaisesRegex(RuntimeError, "Another daily news run session is already active in this process."):
+                with pipeline.RunSession(test_config)._activate():
+                    pass
+
+            pipeline.ACTIVE_RUN_SESSION = None
+            run_log = root / "run.log"
+            with run_log.open("w", encoding="utf-8") as handle:
+                pipeline.RUN_LOG_FILES = [handle]
+                pipeline._write_run_log("   ")
+                pipeline._write_run_log("visible message")
+
+            self.assertEqual(run_log.read_text(encoding="utf-8").count("visible message"), 1)
+
+            pipeline.RUN_ACTIVITY_SNAPSHOTS = [{"at": "2026-06-06T12:00:00", "label": "existing"}]
+            diagnostics = pipeline._new_run_diagnostics(3)
+            self.assertEqual(diagnostics.settings["source_count"], 3)
+            self.assertEqual(len(diagnostics.activity_snapshots), 1)
+
+            pipeline.MODEL_CALL_STATS["calls"]["demo"] = 2
+            snapshot = pipeline._model_call_stats_snapshot()
+            pipeline.MODEL_CALL_STATS["calls"]["demo"] = 99
+            self.assertEqual(snapshot["calls"]["demo"], 2)
+
+            finalizer = pipeline._new_run_finalizer(diagnostics, test_config)
+            self.assertIs(finalizer.diagnostics, diagnostics)
+
+            pipeline.ACTIVE_RUN_SESSION = SimpleNamespace(diagnostics=None, finalizer=None)
+            active_finalizer = pipeline._active_run_finalizer(diagnostics, test_config)
+            self.assertIs(pipeline.ACTIVE_RUN_SESSION.finalizer, active_finalizer)
+            pipeline.ACTIVE_RUN_SESSION = None
+            self.assertIs(pipeline._active_run_finalizer(diagnostics, test_config), active_finalizer)
+
+            with patch.object(active_finalizer, "finish") as finish, patch.object(
+                pipeline,
+                "_active_run_finalizer",
+                return_value=active_finalizer,
+            ) as active_finalizer_factory:
+                pipeline._finish_run_diagnostics(diagnostics, test_config)
+
+            finish.assert_called_once_with()
+            active_finalizer_factory.assert_called_once_with(diagnostics, test_config)
 
 
 if __name__ == "__main__":

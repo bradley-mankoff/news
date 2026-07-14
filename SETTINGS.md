@@ -29,7 +29,7 @@ Pipeline Budget, and Model Server Settings.
 | `NEWS_BLOCK_REUSED_URLS` | `0` | Every run records URL history. `1` makes recorded URLs block future reuse. |
 | `NEWS_IMAGE_ENABLED` | `0` | `1` enables report image generation. Image model, size, crop, steps, and fail-open behavior are fixed defaults. |
 | `NEWS_RECENT_WINDOW_HOURS` | `24` | Only articles published within this window are considered. |
-| `NEWS_MAX_ARTICLES_PER_SOURCE` | `6` | Maximum feed items selected per source before article fetch/summarization. |
+| `NEWS_MAX_ARTICLES_PER_SOURCE` | `4` | Maximum articles retained per source within a single story. |
 | `NEWS_TOP_OF_FUNNEL_PER_PROVIDER` | `10` | Initial source-level candidate funnel size. |
 | `NEWS_MIN_ARTICLES_PER_STORY` | `4` | Minimum articles required for a retained story cluster. |
 | `NEWS_STORY_CLUSTER_SIMILARITY_THRESHOLD` | `0.27` | Full-text similarity threshold for clustering articles into stories. |
@@ -57,22 +57,19 @@ Built-in model aliases:
 
 | Alias | Resolved model |
 |---|---|
-| `gemma-e2b-tiny` | `deadbydawn101/gemma-4-E2B-Heretic-Uncensored-mlx-4bit` |
-| `gemma-26b-moe` | `mlx-community/gemma-4-26B-A4B-it-heretic-4bit` |
-| `https://huggingface.co/EgorKodin/Huihui-gemma-4-12B-it-abliterated-mlx-4bit` | `EgorKodin/Huihui-gemma-4-12B-it-abliterated-mlx-4bit` |
+| `gemma-e2b-tiny` | `deadbydawn101/gemma-4-E2B-Heretic-Uncensored-mlx-4bit` (kept as the Codex-safe test model) |
+| `qwythos-9b-4bit` | `huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-Q4_K.gguf` |
+| `qwythos-9b-8bit` | `huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-Q8_0.gguf` (default) |
 
 | Variable | Default | Description |
 |---|---|---|
 | `NEWS_MODEL_BASE_URL` | `http://127.0.0.1:8080/v1` | OpenAI-compatible local model endpoint. |
-| `NEWS_TRANSLATION_MODEL` | fixed default | Translation model selection for non-English translation workflows. |
-| `NEWS_TRANSLATION_MODEL_BASE_URL` | `NEWS_MODEL_BASE_URL` | Translation endpoint. |
-| `NEWS_TRANSLATION_TARGET_LANGUAGE` | `en` | Translation target language. Normal runs leave translation paused. |
 | `NEWS_CODEX_TESTING` | `0` | `1` forces Codex-safe model references for model-related verification. |
 
 Print the fully resolved local server command without running the pipeline:
 
 ```bash
-NEWS_MODEL=https://huggingface.co/EgorKodin/Huihui-gemma-4-12B-it-abliterated-mlx-4bit uv run news model-server-command
+NEWS_MODEL=qwythos-9b-8bit uv run news model-server-command
 ```
 
 ## Infrastructure
@@ -131,7 +128,7 @@ bundles.
 |---|---|
 | `uv run news run --preset NAME` | Run with a saved preset. |
 | `uv run news run` | Run with defaults and explicit environment overrides. |
-| `uv run news ui` | Start the local runtime drafting UI. |
+| `uv run news ui` | Start the guided local control panel. |
 | `uv run news model-server-command` | Print the resolved local model server command and exit. |
 | `uv run news check-sources` | Check configured source connectivity. |
 | `uv run news source-languages` | Detect or verify source language tags. |

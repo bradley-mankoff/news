@@ -31,4 +31,13 @@ include = ["news_pipeline*"]
 [dependency-groups]
 dev = [
     "pytest>=9.0.3",
+    "coverage>=7.0",
 ]
+
+[tool.coverage.run]
+source = ["news_pipeline"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false
+fail_under = 100

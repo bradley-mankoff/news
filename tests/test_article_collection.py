@@ -2,13 +2,20 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
+from datetime import datetime
 from types import SimpleNamespace
 from typing import Any
 
 from news_pipeline.article_collection import (
     ArticleCollectionAdapters,
     ArticleCollectionRequest,
+    _article_candidates_from_source_context,
+    _collect_source_contexts,
+    _load_seen_urls,
+    _normalize_url_for_dedupe,
+    _record_run_urls,
     collect_article_candidates,
 )
 from news_pipeline.diagnostics import RunDiagnostics
@@ -58,6 +65,119 @@ class _Finalizer:
 
 
 class ArticleCollectionTests(unittest.TestCase):
+    def test_collect_source_contexts_handles_empty_and_failed_sources(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            progress = _Progress()
+            request = self._request(root, sources=[])
+            adapters = ArticleCollectionAdapters(fetch_source_context=lambda *_args: {})
+
+            self.assertEqual(_collect_source_contexts(request, progress, adapters), [])
+            self.assertEqual(progress.details, [])
+
+            request = self._request(root, sources=["alpha"])
+
+            def fail_fetch(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
+                raise RuntimeError("boom")
+
+            adapters = ArticleCollectionAdapters(
+                fetch_source_context=fail_fetch,
+                now=lambda: datetime(2026, 6, 1, 10, 0, 0),
+            )
+            results = _collect_source_contexts(request, progress, adapters)
+
+            self.assertEqual(results[0]["error_reason"], "RuntimeError: boom")
+            self.assertEqual(progress.completed[-1], ("alpha", 0, 1))
+
+    def test_source_context_helpers_handle_missing_articles_and_exhausted_dedupe(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            request = self._request(root, sources=["alpha"])
+            seen_urls = {
+                "https://www.example.com/a",
+                "https://example.com/a",
+                "example.com/a",
+            }
+            run_seen_urls: set[str] = set()
+            adapters = ArticleCollectionAdapters(fetch_source_context=lambda *_args: {})
+            progress = _Progress()
+            diagnostics = self._diagnostics(root)
+
+            empty_targets, empty_urls, empty_run = _article_candidates_from_source_context(
+                request,
+                "alpha",
+                None,
+                seen_urls,
+                run_seen_urls,
+                adapters,
+            )
+            self.assertEqual(empty_targets, [])
+            self.assertEqual(empty_urls, [])
+            self.assertEqual(empty_run["status"], "missing_source_config")
+
+            duplicate_targets, duplicate_urls, duplicate_run = _article_candidates_from_source_context(
+                request,
+                "alpha",
+                {
+                    "articles": [
+                        {"url": "https://example.com/fresh", "title": "Fresh"},
+                        {"url": "https://www.example.com/fresh", "title": "Duplicate"},
+                    ]
+                },
+                set(),
+                run_seen_urls,
+                adapters,
+            )
+            self.assertEqual(len(duplicate_targets), 1)
+            self.assertEqual(duplicate_urls, ["https://example.com/fresh"])
+            self.assertEqual(duplicate_run["rejected_counts"]["duplicate_this_run"], 1)
+
+            exhausted_targets, exhausted_urls, exhausted_run = _article_candidates_from_source_context(
+                request,
+                "alpha",
+                {
+                    "articles": [
+                        {"url": "https://www.example.com/a", "title": "History duplicate"},
+                        {"url": "", "title": "Missing"},
+                    ],
+                    "feed_rejected_counts": {"wrong_feed_source": 1},
+                },
+                seen_urls,
+                run_seen_urls,
+                adapters,
+            )
+            self.assertEqual(exhausted_targets, [])
+            self.assertEqual(exhausted_urls, [])
+            self.assertEqual(exhausted_run["rejected_counts"]["seen_in_history"], 1)
+            self.assertEqual(exhausted_run["rejected_counts"]["missing_url"], 1)
+            self.assertEqual(exhausted_run["rejected_counts"]["wrong_feed_source"], 1)
+
+            self.assertEqual(_normalize_url_for_dedupe("https://www.example.com/a?utm_source=x#frag"), "example.com/a")
+            self.assertEqual(_load_seen_urls(replace(request, url_reuse_blocking_enabled=False), adapters), set())
+            self.assertEqual(
+                _load_seen_urls(
+                    request,
+                    ArticleCollectionAdapters(
+                        fetch_source_context=lambda *_args: {},
+                        blocking_urls=lambda _path: (_ for _ in ()).throw(RuntimeError("history down")),
+                    ),
+                ),
+                set(),
+            )
+
+            appended: list[tuple[str, list[str]]] = []
+            _record_run_urls(
+                replace(request, write_legacy_diagnostics=True),
+                ["https://example.com/c"],
+                [{"url": "https://example.com/c"}],
+                ArticleCollectionAdapters(
+                    fetch_source_context=lambda *_args: {},
+                    upsert_url_history=lambda *_args, **_kwargs: None,
+                    append_unique_urls=lambda path, urls: appended.append((path, urls)),
+                ),
+            )
+            self.assertEqual(appended, [(request.run_used_urls_path, ["https://example.com/c"])])
+
     def test_collect_records_candidates_diagnostics_history_and_artifact(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)

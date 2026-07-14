@@ -12,8 +12,8 @@ Common Run Settings:
 
 Model selection:
     NEWS_MODEL=gemma-e2b-tiny uv run news run --preset NAME
-    NEWS_MODEL=gemma-26b-moe uv run news run --preset NAME
-    NEWS_MODEL=https://huggingface.co/EgorKodin/Huihui-gemma-4-12B-it-abliterated-mlx-4bit uv run news run --preset NAME
+    NEWS_MODEL=qwythos-9b-8bit uv run news run --preset NAME
+    NEWS_MODEL=qwythos-9b-4bit uv run news run --preset NAME
 
     NEWS_MODEL accepts either a friendly alias above or a full model repo/name.
     Task-specific model assignments inherit it unless overridden.
@@ -99,7 +99,7 @@ from .config import (
     load_sources,
     sync_assistant_context_latest_output,
     update_recipient_pause_setting,
-    write_source_translation_flags,
+
 )
 from .diagnostics import RunDiagnostics
 from .run_finalizer import RunFinalizer, RunFinalizerAdapters, RunFinalizerConfig
@@ -176,13 +176,7 @@ MODEL_BASE_URL = CONFIG.model_base_url
 MODEL_BACKEND = CONFIG.model_backend
 MODEL_SERVER_COMMAND = CONFIG.model_server_command
 MODEL_REPORT_LABEL = _filesystem_safe_model_label(MODEL_REFERENCE)
-TRANSLATION_MODEL_REFERENCE = CONFIG.translation_model_reference
-TRANSLATION_MODEL_NAME = CONFIG.translation_model_name
-TRANSLATION_MODEL_BASE_URL = CONFIG.translation_model_base_url
-TRANSLATION_MODEL_BACKEND = CONFIG.translation_model_backend
-TRANSLATION_MODEL_SERVER_COMMAND = CONFIG.translation_model_server_command
-TRANSLATION_TARGET_LANGUAGE = CONFIG.translation_target_language
-TRANSLATION_ENABLED = CONFIG.translation_enabled
+
 BRADLEY_RECIPIENT = CONFIG.bradley_recipient
 USER_AGENT = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -280,7 +274,6 @@ ARTICLE_TEXT_TOKEN_LIMIT = max(500, CONFIG.article_text_token_limit)
 TOTAL_ARTICLE_SUMMARY_CAP = max(0, CONFIG.total_article_summary_cap)
 MODEL_IS_GEMMA_4 = is_gemma_4_model_reference(MODEL_REFERENCE)
 TOTAL_ARTICLE_SUMMARY_CAP_GEMMA_4_DERIVED = CONFIG.total_article_summary_cap_gemma_4_derived
-TRANSLATION_MAX_TOKENS = max(100, CONFIG.translation_max_tokens)
 ARTICLE_SUMMARY_MAX_TOKENS = max(100, CONFIG.article_summary_max_tokens)
 STORY_DRAFTING_MAX_TOKENS = max(100, CONFIG.story_drafting_max_tokens)
 TITLE_GENERATION_MAX_TOKENS = max(20, CONFIG.title_generation_max_tokens)
@@ -325,7 +318,6 @@ MANAGED_MODEL_SERVER_EXTERNAL = False
 MANAGED_MODEL_SERVER_PROCESS: subprocess.Popen | None = None
 MANAGED_MODEL_SERVER_LOG_FILE: TextIO | None = None
 MANAGED_MODEL_SERVER_EXIT_RECORDED = False
-TRANSLATION_MODEL_RESOURCES: tuple[Any, Any, Any] | None = None
 
 
 class ManagedModelServerExited(RuntimeError):
@@ -1020,13 +1012,6 @@ def _compat_runtime_values(config: RuntimeConfig) -> dict[str, Any]:
         "MODEL_BASE_URL": config.model_base_url,
         "MODEL_BACKEND": config.model_backend,
         "MODEL_SERVER_COMMAND": config.model_server_command,
-        "TRANSLATION_MODEL_REFERENCE": config.translation_model_reference,
-        "TRANSLATION_MODEL_NAME": config.translation_model_name,
-        "TRANSLATION_MODEL_BASE_URL": config.translation_model_base_url,
-        "TRANSLATION_MODEL_BACKEND": config.translation_model_backend,
-        "TRANSLATION_MODEL_SERVER_COMMAND": config.translation_model_server_command,
-        "TRANSLATION_TARGET_LANGUAGE": config.translation_target_language,
-        "TRANSLATION_ENABLED": config.translation_enabled,
         "BRADLEY_RECIPIENT": config.bradley_recipient,
         "RECENT_WINDOW_HOURS": config.recent_window_hours,
         "MAX_ARTICLES_PER_SOURCE": config.max_articles_per_source,
@@ -1070,7 +1055,6 @@ def _compat_runtime_values(config: RuntimeConfig) -> dict[str, Any]:
         "TOTAL_ARTICLE_SUMMARY_CAP": max(0, config.total_article_summary_cap),
         "MODEL_IS_GEMMA_4": is_gemma_4_model_reference(config.model_reference),
         "TOTAL_ARTICLE_SUMMARY_CAP_GEMMA_4_DERIVED": config.total_article_summary_cap_gemma_4_derived,
-        "TRANSLATION_MAX_TOKENS": max(100, config.translation_max_tokens),
         "ARTICLE_SUMMARY_MAX_TOKENS": max(100, config.article_summary_max_tokens),
         "STORY_DRAFTING_MAX_TOKENS": max(100, config.story_drafting_max_tokens),
         "TITLE_GENERATION_MAX_TOKENS": max(20, config.title_generation_max_tokens),
@@ -1247,7 +1231,6 @@ class ProgressTracker:
     STEP_ORDER = [
         "setup",
         "sources",
-        "translation",
         "clustering",
         "model",
         "summaries",
@@ -1260,7 +1243,6 @@ class ProgressTracker:
         "model": "model",
         "setup": "setup",
         "sources": "sources",
-        "translation": "translation",
         "stories": "stories",
         "clustering": "clustering",
         "summaries": "article summaries",
@@ -2122,377 +2104,6 @@ def _resolve_and_scrape_feed_article(
         "scrape_seconds": scrape_seconds,
     }
 
-def _text_looks_non_english(text: str, title: str = "") -> bool:
-    sample = (title + " " + text)[:300].strip()
-    if not sample:
-        return False
-    ascii_letters = sum(1 for c in sample if c.isascii() and c.isalpha())
-    total_letters = sum(1 for c in sample if c.isalpha())
-    return bool(total_letters and ascii_letters / total_letters <= 0.7)
-
-
-def _normalize_translation_language(value: str | None) -> str:
-    return str(value or "").strip().replace("_", "-").lower()
-
-
-def _infer_script_translation_language(text: str, title: str = "") -> str:
-    sample = (title + " " + text)[:1000]
-    if re.search(r"[\u0400-\u04ff]", sample):
-        return "ru"
-    if re.search(r"[\u0600-\u06ff]", sample):
-        return "fa"
-    if re.search(r"[\u0900-\u097f]", sample):
-        return "hi"
-    if re.search(r"[\u3040-\u30ff\u3400-\u9fff]", sample):
-        return "ja"
-    return ""
-
-
-def _article_translation_decision(
-    source_name: str,
-    *,
-    title: str,
-    text: str,
-) -> dict[str, Any]:
-    if not TRANSLATION_ENABLED:
-        return {
-            "needed": False,
-            "reason": "translation_disabled",
-            "source_language": None,
-        }
-
-    source_config = SOURCE_FEEDS.get(source_name) or {}
-    source_language = _normalize_translation_language(source_config.get("language"))
-    translation_source_language = _normalize_translation_language(
-        source_config.get("translation_source_language") or source_language
-    )
-    source_requires_translation = bool(source_config.get("requires_translation"))
-
-    if source_requires_translation and translation_source_language and translation_source_language != "en":
-        return {
-            "needed": True,
-            "reason": "source_requires_translation",
-            "source_language": translation_source_language,
-            "retag_source": not bool(source_config.get("requires_translation_explicit")),
-        }
-
-    if _text_looks_non_english(text, title):
-        inferred_language = (
-            translation_source_language
-            if translation_source_language and translation_source_language != "en"
-            else _infer_script_translation_language(text, title)
-        )
-        return {
-            "needed": bool(inferred_language),
-            "reason": "detected_non_english_text",
-            "source_language": inferred_language or None,
-            "retag_source": True,
-        }
-
-    return {
-        "needed": False,
-        "reason": "looks_english",
-        "source_language": translation_source_language or None,
-    }
-
-
-def _with_translation_metadata(
-    record: dict[str, Any],
-    *,
-    source_name: str,
-    title: str,
-    text: str,
-) -> dict[str, Any]:
-    decision = _article_translation_decision(source_name, title=title, text=text)
-    status = "pending" if decision.get("needed") else "not_needed"
-    return {
-        **record,
-        "translation_needed": bool(decision.get("needed")),
-        "translation_status": status,
-        "translation_reason": decision.get("reason"),
-        "translation_source_language": decision.get("source_language"),
-        "translation_target_language": TRANSLATION_TARGET_LANGUAGE,
-        "translation_model": TRANSLATION_MODEL_NAME,
-        "translation_retag_source": bool(decision.get("retag_source")),
-    }
-
-
-def _translation_response_content(payload: dict[str, Any]) -> str:
-    choices = payload.get("choices") if isinstance(payload, dict) else None
-    if not choices:
-        return ""
-    message = choices[0].get("message") if isinstance(choices[0], dict) else None
-    if not isinstance(message, dict):
-        return ""
-    content = message.get("content")
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        parts: list[str] = []
-        for item in content:
-            if isinstance(item, dict):
-                value = item.get("text") or item.get("content")
-                if value:
-                    parts.append(str(value))
-            elif item:
-                parts.append(str(item))
-        return "\n".join(parts)
-    return str(content or "")
-
-
-def _translation_messages(text: str, source_language: str) -> list[dict[str, Any]]:
-    return [
-        {
-            "role": "user",
-            "content": [
-                {
-                    "type": "text",
-                    "source_lang_code": source_language,
-                    "target_lang_code": TRANSLATION_TARGET_LANGUAGE,
-                    "text": text[:5000],
-                }
-            ],
-        }
-    ]
-
-
-def _translation_payload(text: str, source_language: str) -> dict[str, Any]:
-    return {
-        "model": TRANSLATION_MODEL_NAME,
-        "messages": _translation_messages(text, source_language),
-        "max_tokens": TRANSLATION_MAX_TOKENS,
-        "temperature": 0,
-        "stream": False,
-    }
-
-
-def _format_translation_prompt(processor: Any, text: str, source_language: str) -> str:
-    messages = _translation_messages(text, source_language)
-    try:
-        prompt = processor.apply_chat_template(
-            messages,
-            add_generation_prompt=True,
-            tokenize=False,
-        )
-    except TypeError:
-        prompt = processor.apply_chat_template(
-            messages,
-            add_generation_prompt=True,
-        )
-    return str(prompt)
-
-
-def _load_translation_model_resources() -> tuple[Any, Any, Any]:
-    global TRANSLATION_MODEL_RESOURCES
-    ensure_codex_safe_model_reference(TRANSLATION_MODEL_REFERENCE)
-    if TRANSLATION_MODEL_RESOURCES is not None:
-        return TRANSLATION_MODEL_RESOURCES
-    if TRANSLATION_MODEL_BACKEND != "mlx-vlm":
-        raise RuntimeError(
-            "TranslateGemma must use the mlx-vlm backend for direct structured prompting. "
-            f"Configured backend: {TRANSLATION_MODEL_BACKEND}"
-        )
-
-    try:
-        from mlx_vlm import generate as mlx_vlm_generate
-        from mlx_vlm import load as mlx_vlm_load
-    except Exception as error:
-        raise RuntimeError(f"Could not import mlx-vlm for translation: {error}") from error
-
-    started_load_meter = not (
-        progress_tracker.current_step == "translation" and progress_tracker.meter_total > 0
-    )
-    if started_load_meter:
-        progress_tracker.start_meter("translation", total=1, unit="steps", detail="Loading translation model.")
-    else:
-        progress_tracker.detail("Loading translation model.")
-    progress_tracker.detail(f"Translation model: {TRANSLATION_MODEL_REFERENCE} -> {TRANSLATION_MODEL_NAME}")
-    model, processor = mlx_vlm_load(TRANSLATION_MODEL_NAME)
-    TRANSLATION_MODEL_RESOURCES = (model, processor, mlx_vlm_generate)
-    if started_load_meter:
-        progress_tracker.finish_meter(detail="Translation model loaded.")
-    return TRANSLATION_MODEL_RESOURCES
-
-
-def _unload_translation_model_resources() -> None:
-    global TRANSLATION_MODEL_RESOURCES
-    if TRANSLATION_MODEL_RESOURCES is None:
-        return
-    TRANSLATION_MODEL_RESOURCES = None
-    gc.collect()
-    try:
-        import mlx.core as mx
-
-        mx.clear_cache()
-    except Exception:
-        pass
-
-
-def _generate_translation_text(
-    text: str,
-    source_language: str,
-    *,
-    max_tokens: int | None = None,
-) -> str:
-    model, processor, generate_fn = _load_translation_model_resources()
-    prompt = _format_translation_prompt(processor, text, source_language)
-    result = generate_fn(
-        model,
-        processor,
-        prompt,
-        max_tokens=max_tokens or TRANSLATION_MAX_TOKENS,
-        temperature=0,
-        verbose=False,
-        skip_special_tokens=True,
-    )
-    return strip_model_artifacts(str(getattr(result, "text", result))).strip()
-
-
-def _translate_text_with_translation_model(text: str, source_language: str, title: str) -> str:
-    source_language = _normalize_translation_language(source_language)
-    if not text.strip() or not source_language:
-        return text
-
-    with MODEL_CALL_STATS_LOCK:
-        calls = MODEL_CALL_STATS.setdefault("calls", {})
-        calls["translation"] = int(calls.get("translation", 0)) + 1
-
-    last_error: Exception | None = None
-    for attempt in range(1, MODEL_RETRY_ATTEMPTS + 1):
-        try:
-            translated = _generate_translation_text(text, source_language)
-            return translated if translated else text
-        except Exception as error:
-            last_error = error
-            if attempt >= MODEL_RETRY_ATTEMPTS:
-                break
-            delay = MODEL_RETRY_BASE_DELAY_SECONDS * attempt
-            progress_tracker.retry(
-                "translation",
-                attempt,
-                MODEL_RETRY_ATTEMPTS,
-                delay,
-                error,
-            )
-            time.sleep(delay)
-
-    with MODEL_CALL_STATS_LOCK:
-        MODEL_CALL_STATS["fallbacks"] = int(MODEL_CALL_STATS.get("fallbacks", 0)) + 1
-        failures = MODEL_CALL_STATS.setdefault("failures", {})
-        failures["translation"] = str(last_error or "unknown translation error")
-    progress_tracker.warning(f"Translation failed; using original text: {title[:56]}")
-    return text
-
-
-def translate_article_candidates(
-    articles: list[dict],
-    diagnostics: RunDiagnostics | None = None,
-) -> list[dict]:
-    if not TRANSLATION_ENABLED:
-        if diagnostics is not None:
-            diagnostics.event(
-                "translation",
-                candidate_count=len(articles),
-                translated_count=0,
-                skipped=True,
-                reason="translation_disabled",
-            )
-        return articles
-
-    translation_targets = [
-        article
-        for article in articles
-        if article.get("translation_needed") and article.get("translation_source_language")
-    ]
-    skipped_unknown_language = [
-        article
-        for article in articles
-        if article.get("translation_needed") and not article.get("translation_source_language")
-    ]
-    if skipped_unknown_language:
-        progress_tracker.warning(
-            f"Skipping {len(skipped_unknown_language)} translation candidate(s) with unknown source language."
-        )
-
-    if not translation_targets:
-        if diagnostics is not None:
-            diagnostics.event(
-                "translation",
-                candidate_count=len(articles),
-                translated_count=0,
-                skipped_unknown_language=len(skipped_unknown_language),
-            )
-        return articles
-
-    progress_tracker.start_meter(
-        "translation",
-        total=len(translation_targets),
-        unit="articles",
-        detail="Translating article candidates.",
-    )
-    progress_tracker.detail(
-        f"Translation model: {TRANSLATION_MODEL_REFERENCE} -> {TRANSLATION_MODEL_NAME}; "
-        f"target language: {TRANSLATION_TARGET_LANGUAGE}"
-    )
-
-    translated_by_id: dict[int, dict[str, Any]] = {}
-    retag_sources: dict[str, str | None] = {}
-    try:
-        for index, article in enumerate(translation_targets, start=1):
-            title = str(article.get("title") or "")
-            source_language = str(article.get("translation_source_language") or "")
-            progress_tracker.detail(
-                f"  [{index}/{len(translation_targets)}] Translating {title[:80] or article.get('url')}"
-            )
-            translated_text = _translate_text_with_translation_model(
-                str(article.get("text") or ""),
-                source_language,
-                title,
-            )
-            translated_article = {
-                **article,
-                "translation_original_text_preview": str(article.get("text") or "")[:300],
-                "text": translated_text,
-                "translation_status": "translated" if translated_text != article.get("text") else "unchanged",
-            }
-            translated_by_id[id(article)] = translated_article
-            if article.get("translation_retag_source"):
-                retag_sources[str(article.get("source") or "")] = source_language
-            progress_tracker.advance_meter(detail=title or str(article.get("url") or "article"))
-    finally:
-        _unload_translation_model_resources()
-
-    progress_tracker.finish_meter(detail=f"{len(translated_by_id)} translated article(s).")
-
-    if retag_sources:
-        try:
-            written = write_source_translation_flags(CONFIG.sources_path, retag_sources)
-            if written:
-                progress_tracker.detail(
-                    f"Retagged {len(retag_sources)} source(s) in {_display_config_path(CONFIG.sources_path)} "
-                    "as requiring translation."
-                )
-        except Exception as error:
-            progress_tracker.warning(f"Could not retag translation sources: {error}")
-
-    translated_articles = [
-        translated_by_id.get(id(article), article)
-        for article in articles
-    ]
-    if diagnostics is not None:
-        diagnostics.event(
-            "translation",
-            candidate_count=len(articles),
-            translated_count=len(translated_by_id),
-            skipped_unknown_language=len(skipped_unknown_language),
-            retagged_sources=sorted(retag_sources),
-            model=TRANSLATION_MODEL_REFERENCE,
-            model_name=TRANSLATION_MODEL_NAME,
-            target_language=TRANSLATION_TARGET_LANGUAGE,
-        )
-    return translated_articles
-
-
 def _build_article_heading(article: dict) -> str:
     return article_summary_records_stage.build_article_heading(article)
 
@@ -2784,9 +2395,7 @@ def get_direct_source_article_context(source_name: str) -> dict:
             attempt.update(_source_match_public_metadata(source_match_result))
 
         summary_text = truncate_text_to_token_limit(clean_article_text, ARTICLE_TEXT_TOKEN_LIMIT)
-        article_record = _with_translation_metadata(
-            {
-                **item,
+        article_record = {
                 "url": selected_url,
                 "original_rss_url": original_rss_url,
                 "resolved_url": selected_url,
@@ -2801,11 +2410,7 @@ def get_direct_source_article_context(source_name: str) -> dict:
                 "title": item.get("title", ""),
                 "pub_date": item.get("pub_date", ""),
                 "description": item.get("description", ""),
-            },
-            source_name=source_name,
-            title=str(item.get("title") or ""),
-            text=summary_text,
-        )
+        },
         articles.append(article_record)
         selected_items.append(
             {
@@ -4395,12 +4000,6 @@ def _new_run_diagnostics(source_count: int) -> RunDiagnostics:
             "model_tuning": _json_ready(MODEL_TUNING),
             "pipeline_budget": _json_ready(PIPELINE_BUDGET),
             "model_server_settings": _json_ready(MODEL_SERVER_SETTINGS),
-            "translation_model": TRANSLATION_MODEL_REFERENCE,
-            "translation_model_name": TRANSLATION_MODEL_NAME,
-            "translation_model_base_url": TRANSLATION_MODEL_BASE_URL,
-            "translation_model_backend": TRANSLATION_MODEL_BACKEND,
-            "translation_model_server_command": TRANSLATION_MODEL_SERVER_COMMAND,
-            "translation_target_language": TRANSLATION_TARGET_LANGUAGE,
             "model_max_input_tokens": MODEL_MAX_INPUT_TOKENS,
             "model_default_sampling": _sampling_to_dict(MODEL_DEFAULT_SAMPLING),
             "model_reasoning_sampling": _sampling_to_dict(MODEL_REASONING_SAMPLING),
@@ -4414,7 +4013,6 @@ def _new_run_diagnostics(source_count: int) -> RunDiagnostics:
             "min_articles_per_story": MIN_ARTICLES_PER_STORY,
             "story_backfill_batch_multiplier": STORY_BACKFILL_BATCH_MULTIPLIER,
             "story_cluster_similarity_threshold": STORY_CLUSTER_SIMILARITY_THRESHOLD,
-            "translation_max_tokens": TRANSLATION_MAX_TOKENS,
             "article_summary_max_tokens": ARTICLE_SUMMARY_MAX_TOKENS,
             "story_drafting_max_tokens": STORY_DRAFTING_MAX_TOKENS,
             "title_generation_max_tokens": TITLE_GENERATION_MAX_TOKENS,
@@ -4446,6 +4044,7 @@ def _new_run_finalizer(diagnostics: RunDiagnostics, config: RuntimeConfig) -> Ru
             latest_run_markdown_path=config.latest_run_markdown_path,
             latest_run_log_path=config.latest_run_log_path,
             history_db_path=config.history_db_path,
+            beehiiv_paste_dir=config.output_dir.parent / "beehiiv",
             output_dir=config.output_dir,
             run_log_path=os.path.join(str(config.run_output_dir), f"run_log_{config.timestamp}.log"),
             history_export_csv=config.history_export_csv,
@@ -4524,13 +4123,6 @@ def preflight_model_server() -> dict[str, Any]:
     )
 
 
-def preflight_translation_model_server() -> dict[str, Any]:
-    return _preflight_openai_model_server(
-        base_url=TRANSLATION_MODEL_BASE_URL,
-        model_name=TRANSLATION_MODEL_NAME,
-        model_reference=TRANSLATION_MODEL_REFERENCE,
-    )
-
 
 def _probe_chat_completion(
     *,
@@ -4550,7 +4142,7 @@ def _probe_chat_completion(
         result["status_code"] = response.status_code
         response.raise_for_status()
         response_payload = response.json()
-        result["content_preview"] = _translation_response_content(response_payload)[:80]
+        result["content_preview"] = str(response_payload)[:80]
         result["ok"] = True
     except Exception as error:
         result["error"] = str(error)
@@ -4574,26 +4166,6 @@ def probe_model_generation(timeout_seconds: int = MODEL_LOAD_PROBE_TIMEOUT_SECON
         payload=payload,
         timeout_seconds=timeout_seconds,
     )
-
-
-def probe_translation_model_generation(
-    timeout_seconds: int = MODEL_LOAD_PROBE_TIMEOUT_SECONDS,
-) -> dict[str, Any]:
-    payload = _translation_payload("Hola.", "es")
-    payload["max_tokens"] = 8
-    return _probe_chat_completion(
-        base_url=TRANSLATION_MODEL_BASE_URL,
-        payload=payload,
-        timeout_seconds=timeout_seconds,
-    )
-
-
-def _managed_model_server_log_path() -> str:
-    return os.path.join(RUN_OUTPUT_DIR, "model_server.log")
-
-
-def _managed_translation_model_server_log_path() -> str:
-    return os.path.join(RUN_OUTPUT_DIR, "translation_model_server.log")
 
 
 def _wait_for_managed_model_server(
@@ -4806,103 +4378,8 @@ def _ensure_main_model_server_ready() -> None:
 
 
 @contextmanager
-def managed_translation_model_server():
-    ensure_codex_safe_model_reference(TRANSLATION_MODEL_REFERENCE)
-    progress_tracker.start_meter("translation", total=3, unit="steps", detail="Checking translation model server.")
-    record_activity_snapshot("before_translation_model_server_preflight", ACTIVE_RUN_DIAGNOSTICS)
-    existing_preflight = preflight_translation_model_server()
-    if existing_preflight.get("ok") and existing_preflight.get("model_match"):
-        generation_probe = probe_translation_model_generation()
-        if not generation_probe.get("ok"):
-            raise RuntimeError(
-                "Translation model server endpoint answered /models but failed a tiny generation probe. "
-                f"{generation_probe.get('error') or generation_probe}. "
-                f"See {_managed_translation_model_server_log_path()}."
-            )
-        progress_tracker.detail(
-            "Translation model server already running for the selected translation model; "
-            "using it without managing its lifecycle."
-        )
-        progress_tracker.finish_meter(detail="Translation model server ready.")
-        record_activity_snapshot("existing_translation_model_server_ready", ACTIVE_RUN_DIAGNOSTICS)
-        try:
-            yield
-        finally:
-            record_activity_snapshot("after_existing_translation_model_server_run", ACTIVE_RUN_DIAGNOSTICS)
-        return
-
-    if existing_preflight.get("ok"):
-        raise RuntimeError(
-            "Translation model endpoint is already in use, but it did not report the expected model. "
-            f"Expected {TRANSLATION_MODEL_REFERENCE} / {TRANSLATION_MODEL_NAME}; served "
-            f"{existing_preflight.get('served_models')}. Stop that server or change "
-            "NEWS_TRANSLATION_MODEL_BASE_URL."
-        )
-
-    log_path = _managed_translation_model_server_log_path()
-    command = shlex.split(TRANSLATION_MODEL_SERVER_COMMAND)
-    record_activity_snapshot("before_translation_model_server_start", ACTIVE_RUN_DIAGNOSTICS)
-    progress_tracker.update_meter(done=1, detail="Starting translation model server.")
-    progress_tracker.detail(f"Managed translation model server command: {TRANSLATION_MODEL_SERVER_COMMAND}")
-    progress_tracker.detail(f"Managed translation model server log: {log_path}")
-    os.makedirs(os.path.dirname(log_path), exist_ok=True)
-    log_file = open(log_path, "w", encoding="utf-8")
-    try:
-        process = subprocess.Popen(
-            command,
-            cwd=str(CONFIG.root_dir),
-            stdout=log_file,
-            stderr=subprocess.STDOUT,
-            start_new_session=True,
-            text=True,
-        )
-    except Exception:
-        log_file.close()
-        raise
-    try:
-        ready_preflight = _wait_for_managed_translation_model_server(process)
-        record_activity_snapshot("after_translation_model_server_ready", ACTIVE_RUN_DIAGNOSTICS)
-        progress_tracker.detail(
-            "Managed translation model server answered /models. "
-            f"Served models: {ready_preflight.get('served_models') or ['n/a']}"
-        )
-        progress_tracker.update_meter(done=2, detail="Checking translation model generation.")
-        generation_probe = probe_translation_model_generation()
-        if not generation_probe.get("ok"):
-            raise RuntimeError(
-                "Managed translation model server answered /models but failed a tiny generation probe. "
-                f"{generation_probe.get('error') or generation_probe}. "
-                f"See {_managed_translation_model_server_log_path()}."
-            )
-        progress_tracker.detail("Managed translation model server passed a tiny generation probe.")
-        progress_tracker.finish_meter(detail="Translation model server ready.")
-        yield
-    finally:
-        _stop_managed_server_process(process, server_label="translation model server")
-        record_activity_snapshot("after_translation_model_server_stop", ACTIVE_RUN_DIAGNOSTICS)
-        log_file.close()
-
-
-def run_translation_model_smoke_test() -> int:
-    print("Translation model smoke test")
-    print(f"Reference: {TRANSLATION_MODEL_REFERENCE}")
-    print(f"Resolved model: {TRANSLATION_MODEL_NAME}")
-    print(f"Backend: {TRANSLATION_MODEL_BACKEND}")
-    try:
-        translated = _generate_translation_text("Hola.", "es", max_tokens=16)
-    except Exception as error:
-        print(f"FAILED: {type(error).__name__}: {error}", file=sys.stderr)
-        return 1
-    finally:
-        _unload_translation_model_resources()
-
-    if translated:
-        print("OK: translated a tiny Spanish probe with TranslateGemma.")
-        print(f"Preview: {translated}")
-        return 0
-
-    print("FAILED: translation returned an empty response.", file=sys.stderr)
-    return 1
+def _managed_model_server_log_path() -> str:
+    return os.path.join(RUN_OUTPUT_DIR, "model_server.log")
 
 
 def _run_pipeline() -> None:
@@ -4930,22 +4407,14 @@ def _run_pipeline() -> None:
         f"model: {MODEL_REFERENCE} -> {MODEL_NAME}"
     )
     progress_tracker.detail(
-        (
-            f"Translation model: {TRANSLATION_MODEL_REFERENCE} -> {TRANSLATION_MODEL_NAME} "
-            f"({TRANSLATION_MODEL_BACKEND}, target={TRANSLATION_TARGET_LANGUAGE})."
-            if TRANSLATION_ENABLED
-            else "Translation disabled; source selection is English-only."
-        )
-    )
-    progress_tracker.detail(
-        f"Model caps: input {MODEL_MAX_INPUT_TOKENS} tokens, "
-        f"article text {ARTICLE_TEXT_TOKEN_LIMIT} tokens, "
-        f"summaries {TOTAL_ARTICLE_SUMMARY_CAP} total, "
-        f"{MAX_STORIES} stories overall, "
-        f"story overlap threshold {STORY_SELECTION_OVERLAP_THRESHOLD:.2f}, "
-        f"article summary concurrency {ARTICLE_SUMMARY_CONCURRENCY}, "
-        f"story synthesis concurrency {STORY_SYNTHESIS_CONCURRENCY}, "
-        f"derived model concurrency {MODEL_CONCURRENCY}."
+    f"Model caps: input {MODEL_MAX_INPUT_TOKENS} tokens, "
+    f"article text {ARTICLE_TEXT_TOKEN_LIMIT} tokens, "
+    f"summaries {TOTAL_ARTICLE_SUMMARY_CAP} total, "
+    f"{MAX_STORIES} stories overall, "
+    f"story overlap threshold {STORY_SELECTION_OVERLAP_THRESHOLD:.2f}, "
+    f"article summary concurrency {ARTICLE_SUMMARY_CONCURRENCY}, "
+    f"story synthesis concurrency {STORY_SYNTHESIS_CONCURRENCY}, "
+    f"derived model concurrency {MODEL_CONCURRENCY}."
     )
     progress_tracker.detail(
         f"Source scrape guardrails: article download timeout {ARTICLE_DOWNLOAD_TIMEOUT_SECONDS}s, "
@@ -5016,18 +4485,6 @@ def _run_pipeline() -> None:
         _finish_run_diagnostics(diagnostics, CONFIG)
         return
 
-    diagnostics.event(
-        "translation",
-        candidate_count=len(article_candidates),
-        translated_count=0,
-        skipped=True,
-        reason=(
-            "translation_disabled"
-            if not TRANSLATION_ENABLED
-            else "pre_clustering_translation_pass_disabled"
-        ),
-    )
-    progress_tracker.detail("Translation pass skipped before global story clustering.")
 
     story_cluster_work = max(
         1,
@@ -5044,6 +4501,7 @@ def _run_pipeline() -> None:
             article_candidates,
             min_articles_per_story=MIN_ARTICLES_PER_STORY,
             similarity_threshold=STORY_CLUSTER_SIMILARITY_THRESHOLD,
+            max_articles_per_source=MAX_ARTICLES_PER_SOURCE,
             progress_callback=progress_tracker.story_clustering_progress,
         )
     )
@@ -5456,5 +4914,4 @@ def _run_pipeline() -> None:
 
     diagnostics.event("completed")
     _active_run_finalizer(diagnostics, CONFIG).record_report_body(report_body)
-    _finish_run_diagnostics(diagnostics, CONFIG)
     sync_assistant_context_latest_output(CONFIG)

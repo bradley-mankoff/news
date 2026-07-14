@@ -5,6 +5,7 @@ import tempfile
 import unittest
 from datetime import datetime
 from pathlib import Path
+from unittest.mock import patch
 
 from news_pipeline.diagnostics import RunDiagnostics
 from news_pipeline.history_store import connect
@@ -43,6 +44,77 @@ class RunFinalizerTests(unittest.TestCase):
                 self.assertEqual(con.execute("SELECT status FROM runs").fetchone()[0], "completed")
                 self.assertEqual(con.execute("SELECT COUNT(*) FROM run_articles").fetchone()[0], 3)
                 self.assertEqual(con.execute("SELECT COUNT(*) FROM article_summaries").fetchone()[0], 2)
+
+    def test_finish_writes_beehiiv_paste_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            finalizer, paths, _progress = self._finalizer(tmpdir)
+            finalizer.record_report_body("Daily News Summary\n\nA useful report.")
+            finalizer.diagnostics.event("completed")
+
+            finalizer.finish()
+
+            paste_dir = paths["beehiiv_paste_dir"]
+            self.assertTrue(paste_dir.is_dir())
+            paste_file = paste_dir / "2026-06-01.md"
+            self.assertTrue(paste_file.exists())
+            self.assertEqual(
+                paste_file.read_text(encoding="utf-8"),
+                "Daily News Summary\n\nA useful report.",
+            )
+            self.assertEqual(list((paste_dir.parent / "daily_outputs").rglob("2026-06-01.md")), [])
+
+    def test_beehiiv_paste_skipped_when_report_body_empty(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            finalizer, paths, _progress = self._finalizer(tmpdir)
+            finalizer.diagnostics.event("completed")
+
+            finalizer.finish()
+
+            paste_dir = paths["beehiiv_paste_dir"]
+            self.assertFalse(paste_dir.exists())
+
+    def test_beehiiv_paste_write_failure_does_not_block_other_writes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            finalizer, paths, progress = self._finalizer(tmpdir)
+            finalizer.record_report_body("Daily News Summary\n\nA useful report.")
+            finalizer.diagnostics.event("completed")
+
+            with patch("pathlib.Path.write_text", side_effect=RuntimeError("disk down")):
+                finalizer.finish()
+
+            self.assertTrue(paths["latest_details"].exists())
+            self.assertIn("Beehiiv paste file write failed: disk down", progress.warnings)
+
+    def test_individual_write_steps_report_failures_without_stopping_progress(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            finalizer, _paths, progress = self._finalizer(tmpdir)
+
+            with patch.object(
+                finalizer.diagnostics,
+                "write_details_json",
+                side_effect=RuntimeError("details down"),
+            ):
+                finalizer._write_details()
+            self.assertIn("Latest run details write failed: details down", progress.warnings)
+
+            with patch.object(
+                finalizer.diagnostics,
+                "write_run_review_markdown",
+                side_effect=RuntimeError("review down"),
+            ):
+                finalizer._write_review()
+            self.assertIn("Latest readable run review write failed: review down", progress.warnings)
+
+            def fail_cleanup(*_args, **_kwargs) -> tuple[int, int]:
+                raise RuntimeError("cleanup down")
+
+            finalizer.adapters = RunFinalizerAdapters(
+                model_call_stats_snapshot=lambda: {"calls": {"summary": 1}},
+                cleanup_visible_outputs=fail_cleanup,
+                progress=progress,
+            )
+            finalizer._cleanup_visible_outputs()
+            self.assertIn("Visible daily output cleanup failed: cleanup down", progress.warnings)
 
     def test_finish_failed_records_failed_status_and_traceback(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -107,6 +179,7 @@ class RunFinalizerTests(unittest.TestCase):
                 latest_run_markdown_path=latest_markdown,
                 latest_run_log_path=latest_log,
                 history_db_path=history_db,
+                beehiiv_paste_dir=root / "beehiiv",
                 output_dir=output_dir,
                 run_log_path=str(latest_log),
             ),
@@ -121,6 +194,7 @@ class RunFinalizerTests(unittest.TestCase):
                 "latest_details": latest_details,
                 "latest_markdown": latest_markdown,
                 "history_db": history_db,
+                "beehiiv_paste_dir": root / "beehiiv",
             },
             progress,
         )
