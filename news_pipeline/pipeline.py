@@ -2410,7 +2410,7 @@ def get_direct_source_article_context(source_name: str) -> dict:
                 "title": item.get("title", ""),
                 "pub_date": item.get("pub_date", ""),
                 "description": item.get("description", ""),
-        },
+        }
         articles.append(article_record)
         selected_items.append(
             {
@@ -4377,7 +4377,6 @@ def _ensure_main_model_server_ready() -> None:
             raise
 
 
-@contextmanager
 def _managed_model_server_log_path() -> str:
     return os.path.join(RUN_OUTPUT_DIR, "model_server.log")
 
@@ -4527,6 +4526,8 @@ def _run_pipeline() -> None:
         f"the {MIN_ARTICLES_PER_STORY}-article story floor "
         f"(TF-IDF threshold {STORY_CLUSTER_SIMILARITY_THRESHOLD:.2f}, global)."
     )
+    all_clustered_article_targets = list(clustered_article_targets)
+    all_story_records = list(story_records)
     clustered_article_targets, story_records, article_budget_stats = (
         _budget_article_targets_for_summary(
             clustered_article_targets,
@@ -4690,11 +4691,10 @@ def _run_pipeline() -> None:
         )
 
     story_backfill_stats = {
-        "enabled": False,
-        "reason": "global_story_selection_does_not_use_story_backfill",
+        "enabled": True,
         "iterations": 0,
-        "initial_selected_story_count": story_selection_stats.get("selected_story_count", 0),
-        "final_selected_story_count": story_selection_stats.get("selected_story_count", 0),
+        "initial_selected_story_count": 0,
+        "final_selected_story_count": 0,
         "deficits_before": {},
         "deficits_after": {},
         "attempted_story_count_by_story": {},
@@ -4705,10 +4705,137 @@ def _run_pipeline() -> None:
         "reserve_story_count": 0,
         "batch_multiplier": max(1, STORY_BACKFILL_BATCH_MULTIPLIER),
     }
-    diagnostics.event("story_backfill", **story_backfill_stats)
     diagnostics.article_summary_count = len(article_summary_reports)
+    # Accumulate backfill contributions into first-pass stats
+    accumulated_draft_stats = dict(story_draft_stats)
+    accumulated_scale_stats = dict(global_scale_stats) if story_drafts else {"kept_count": 0, "dropped_count": 0, "enabled": False}
+    accumulated_selection_stats = dict(story_selection_stats)
 
     selected_story_count = int(story_selection_stats.get("selected_story_count") or 0)
+    story_backfill_stats["initial_selected_story_count"] = selected_story_count
+    summarized_article_ids: set[str] = {
+        str(a.get("article_id") or "") for a in clustered_article_targets
+    }
+    attempted_story_keys: set[str] = set()
+    all_selected_stories: list[dict] = list(selected_story_matches)
+    backfill_budgeted_stories: list[dict] = []
+    backfill_iteration = 0
+    max_backfill_iterations = 3
+    backfill_batch_cap = max(
+        effective_total_article_summary_cap,
+        STORY_BACKFILL_BATCH_MULTIPLIER * MAX_STORIES * MIN_ARTICLES_PER_STORY,
+    )
+
+    while (
+        len(all_selected_stories) < MAX_STORIES
+        and backfill_iteration < max_backfill_iterations
+    ):
+        # Find stories not yet attempted
+        unbudgeted_stories = [
+            s for s in all_story_records
+            if s.get("story_key") not in attempted_story_keys
+        ]
+        if not unbudgeted_stories:
+            break
+        # Find articles not yet summarized
+        unsummarized_articles = [
+            a for a in all_clustered_article_targets
+            if str(a.get("article_id") or "") not in summarized_article_ids
+        ]
+        backfill_iteration += 1
+        backfill_budgeted, backfill_filtered_stories, backfill_budget_stats = (
+            _budget_article_targets_for_summary(
+                unsummarized_articles,
+                unbudgeted_stories,
+                total_cap=backfill_batch_cap,
+                gemma_4_derived=False,
+            )
+        )
+        # Track story keys that were actually budgeted this round
+        for s in backfill_filtered_stories:
+            attempted_story_keys.add(str(s.get("story_key") or ""))
+
+        if not backfill_budgeted:
+            break
+
+        progress_tracker.detail(
+            f"Story backfill #{backfill_iteration}: "
+            f"summarizing {len(backfill_budgeted)} more article(s) "
+            f"from {len(backfill_filtered_stories)} reserve story group(s)."
+        )
+        backfill_summaries = list(
+            article_summarization_stage.run_article_summary_pass(
+                backfill_budgeted,
+                _article_summarization_runtime(),
+            )
+        )
+        if not backfill_summaries:
+            break
+
+        article_summary_reports.extend(backfill_summaries)
+        for a in backfill_budgeted:
+            summarized_article_ids.add(str(a.get("article_id") or ""))
+
+        backfill_drafts, backfill_draft_stats = (
+            story_drafting_stage.draft_story_clusters_from_article_summaries(
+                backfill_filtered_stories,
+                article_summary_reports,
+                _story_drafting_runtime(),
+                article_targets=all_clustered_article_targets,
+            )
+        )
+        if not backfill_drafts:
+            continue
+        backfill_drafts, backfill_scale_stats = (
+            story_selection_stage.apply_global_story_scale_screening(
+                backfill_drafts,
+                _story_selection_runtime(),
+            )
+        )
+        backfill_selected, backfill_selection_stats = (
+            story_selection_stage.select_global_story_drafts(
+                backfill_drafts,
+                max_stories=MAX_STORIES - len(all_selected_stories),
+                overlap_threshold=STORY_SELECTION_OVERLAP_THRESHOLD,
+            )
+        )
+        all_selected_stories.extend(backfill_selected)
+        story_backfill_stats["new_article_summary_count"] += len(backfill_summaries)
+        story_backfill_stats["new_story_draft_count"] += len(backfill_drafts)
+        # Accumulate into first-pass stats
+        for key in ("story_drafts_generated", "story_drafts_rejected", "story_blocks_requested"):
+            accumulated_draft_stats[key] = accumulated_draft_stats.get(key, 0) + backfill_draft_stats.get(key, 0)
+        accumulated_scale_stats["kept_count"] = accumulated_scale_stats.get("kept_count", 0) + backfill_scale_stats.get("kept_count", 0)
+        accumulated_scale_stats["dropped_count"] = accumulated_scale_stats.get("dropped_count", 0) + backfill_scale_stats.get("dropped_count", 0)
+    # Merge backfill results into first-pass stats
+    if backfill_iteration > 0:
+        selected_story_matches = all_selected_stories
+        selected_story_count = len(all_selected_stories)
+        # Merge accumulated into original dicts
+        for key in ("story_drafts_generated", "story_drafts_rejected", "story_blocks_requested"):
+            story_draft_stats[key] = accumulated_draft_stats.get(key, story_draft_stats.get(key, 0))
+        for key in ("kept_count", "dropped_count", "enabled"):
+            if key in accumulated_scale_stats:
+                global_scale_stats[key] = accumulated_scale_stats[key]
+        for key in ("story_count", "selected_story_count"):
+            story_selection_stats[key] = accumulated_selection_stats.get(key, story_selection_stats.get(key, 0))
+        story_selection_stats["selected_story_count"] = selected_story_count
+        # Re-emit diagnostics with accumulated values
+        diagnostics.event("story_drafting", **story_draft_stats)
+        diagnostics.event("global_story_scale_screening", **global_scale_stats)
+        diagnostics.event("global_story_selection", **story_selection_stats)
+        progress_tracker.detail(
+            f"Story backfill: {backfill_iteration} iteration(s), "
+            f"+{story_backfill_stats['new_article_summary_count']} article summaries, "
+            f"final tally {selected_story_count} story candidate(s)."
+        )
+
+    story_backfill_stats.update({
+        "iterations": backfill_iteration,
+        "final_selected_story_count": selected_story_count,
+        "attempted_article_count": story_backfill_stats["new_article_summary_count"],
+        "reserve_story_count": len(backfill_budgeted_stories),
+    })
     if selected_story_count < MAX_STORIES:
         diagnostics.event(
             "story_coverage_deficit",
@@ -4914,4 +5041,5 @@ def _run_pipeline() -> None:
 
     diagnostics.event("completed")
     _active_run_finalizer(diagnostics, CONFIG).record_report_body(report_body)
+    _finish_run_diagnostics(diagnostics, CONFIG)
     sync_assistant_context_latest_output(CONFIG)
