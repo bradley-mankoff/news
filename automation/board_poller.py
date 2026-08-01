@@ -196,7 +196,7 @@ def find_or_create_ship_pr(cfg: dict, env: dict, head: str, title: str,
         for pr in json.loads(r.stdout):
             if pr.get("baseRefName") == base:
                 return pr
-    body = (f"Fixes #{issue_number}\n\nShipped from develop after human testing. "
+    body = (f"Issue #{issue_number}. Shipped from develop after human testing. "
             "Reviewed by archon-smart-pr-review before merge.")
     r = gh(["pr", "create", "-R", cfg["repo"], "--base", base, "--head", head,
             "--title", title, "--body", body], env)
@@ -270,6 +270,14 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
         if repo != cfg["repo"]:
             continue
         status_val = (item.get("fieldValueByName") or {}).get("name") or "No status"
+        # Convention: items on the board without a status land in the default lane.
+        default_lane = cfg.get("default_lane", "Backlog")
+        if status_val == "No status":
+            option_id = status_options.get(default_lane)
+            if option_id and move_to_lane(
+                    cfg, env, project_id, item_id, field_id, option_id):
+                status_val = default_lane
+                log(f"NORMALIZED item={item_id} -> {default_lane}")
         rec = state.get(item_id, {})
         prev = rec.get("status")
         dispatched_msg = None
@@ -347,6 +355,7 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
         if review_msg:
             rec["review_msg"] = review_msg
             rec["ship_pr"] = ship_pr_num
+            rec["issue_number"] = content["number"]
         state[item_id] = rec
 
     # Completion reconciliation: when a dispatched run finishes, merge the
@@ -426,6 +435,11 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
                              "--merge"], env)
                     if rr.returncode == 0:
                         log(f"SHIPPED PR #{ship_num} -> {ship_to} (review completed)")
+                        issue_number = rec.get("issue_number")
+                        if issue_number:
+                            gh(["issue", "close", str(issue_number), "-R", cfg["repo"]],
+                               env)
+                            log(f"CLOSED issue #{issue_number} (shipped)")
                     else:
                         log(f"SHIP MERGE FAILED PR #{ship_num}: {rr.stderr.strip()[:300]}")
                         continue
