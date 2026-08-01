@@ -139,24 +139,6 @@ def fetch_project(cfg: dict, env: dict) -> tuple[str, str, dict, list[dict]]:
     return project["id"], field["id"], options, items
 
 
-def find_linked_pr(cfg: dict, env: dict, issue_number: int) -> int | None:
-    r = gh(["pr", "list", "-R", cfg["repo"], "--state", "open",
-            "--json", "number,title,body"], env)
-    if r.returncode != 0:
-        return None
-    prs = json.loads(r.stdout)
-    pat = re.compile(
-        rf"\b(?:fix(?:es)?|clos(?:es|e)|resolv(?:es|e))\s+#{issue_number}\b", re.I
-    )
-    for pr in prs:
-        if pat.search(pr.get("body") or ""):
-            return pr["number"]
-    for pr in prs:
-        if f"#{issue_number}" in (pr.get("title") or ""):
-            return pr["number"]
-    return None
-
-
 def find_issue_pr(cfg: dict, env: dict, issue_number: int,
                   state: str = "all") -> dict | None:
     """Find the PR linked to an issue (any state) by body/title reference."""
@@ -166,7 +148,8 @@ def find_issue_pr(cfg: dict, env: dict, issue_number: int,
         return None
     prs = json.loads(r.stdout)
     pat = re.compile(
-        rf"\b(?:fix(?:es)?|clos(?:es|e)|resolv(?:es|e))\s+#{issue_number}\b", re.I
+        rf"(?:\b(?:fix(?:es)?|clos(?:es|e)|resolv(?:es|e))\s+#{issue_number}\b)"
+        rf"|(?:\bissue\s*:?\s*#{issue_number}\b)", re.I
     )
     for pr in prs:
         if pat.search(pr.get("body") or ""):
@@ -177,8 +160,13 @@ def find_issue_pr(cfg: dict, env: dict, issue_number: int,
     return None
 
 
-def merge_pr_to_base(cfg: dict, env: dict, pr: dict, base: str) -> tuple[bool, str]:
-    """Retarget a PR to `base`, mark it ready, merge with a merge commit."""
+def merge_pr_to_base(cfg: dict, env: dict, pr: dict, base: str,
+                     issue_number: int | None = None) -> tuple[bool, str]:
+    """Retarget a PR to `base`, mark it ready, merge with a merge commit.
+
+    If the merge auto-closes the issue (a `Fixes #N` keyword in the PR body),
+    reopen it: the issue must stay open until the ship PR merges into main.
+    """
     num = pr["number"]
     if pr.get("state") == "MERGED":
         return True, "already merged"
@@ -190,6 +178,12 @@ def merge_pr_to_base(cfg: dict, env: dict, pr: dict, base: str) -> tuple[bool, s
     r = gh(["pr", "merge", str(num), "-R", cfg["repo"], "--merge"], env)
     if r.returncode != 0:
         return False, r.stderr.strip()[:300]
+    if issue_number:
+        q = gh(["issue", "view", str(issue_number), "-R", cfg["repo"],
+                "--json", "state"], env)
+        if q.returncode == 0 and json.loads(q.stdout).get("state") == "CLOSED":
+            gh(["issue", "reopen", str(issue_number), "-R", cfg["repo"]], env)
+            return True, f"merged into {base} (issue #{issue_number} reopened)"
     return True, f"merged into {base}"
 
 
@@ -202,7 +196,7 @@ def find_or_create_ship_pr(cfg: dict, env: dict, head: str, title: str,
         for pr in json.loads(r.stdout):
             if pr.get("baseRefName") == base:
                 return pr
-    body = (f"Shipped from develop after human testing. Issue #{issue_number}. "
+    body = (f"Fixes #{issue_number}\n\nShipped from develop after human testing. "
             "Reviewed by archon-smart-pr-review before merge.")
     r = gh(["pr", "create", "-R", cfg["repo"], "--base", base, "--head", head,
             "--title", title, "--body", body], env)
@@ -324,7 +318,8 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
                     if pr:
                         merge_base = cfg["dispatch"]["todo"].get(
                             "merge_develop_base", "develop")
-                        ok, note = merge_pr_to_base(cfg, env, pr, merge_base)
+                        ok, note = merge_pr_to_base(cfg, env, pr, merge_base,
+                                                    content["number"])
                         log(f"DEVELOP MERGE issue={content['number']} PR=#{pr['number']}: {note}"
                             if ok else
                             f"DEVELOP MERGE FAILED issue={content['number']}: {note}")
@@ -377,7 +372,8 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
                 if issue_number and merge_base:
                     pr = find_issue_pr(cfg, env, issue_number)
                     if pr:
-                        merge_ok, note = merge_pr_to_base(cfg, env, pr, merge_base)
+                        merge_ok, note = merge_pr_to_base(cfg, env, pr, merge_base,
+                                                          issue_number)
                         log(f"DEVELOP MERGE issue={issue_number} PR=#{pr['number']}: {note}"
                             if merge_ok else
                             f"DEVELOP MERGE FAILED issue={issue_number}: {note}")

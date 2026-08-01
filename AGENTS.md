@@ -41,6 +41,7 @@ Project goal: build, review, and send a daily news report from configured source
 - When the human judges it working, move the issue to `In Review` with:
   `python3 automation/move_item.py <issue-number> "In Review"`
   The poller opens the ship PR (feature -> `main`), runs `archon-smart-pr-review` on it, and when the review run completes it **merges the ship PR into `main`** and moves the issue to `Done` automatically. (Failed reviews are logged and left in `In Review`.)
+- Issue lifecycle: issues stay OPEN until the ship PR merges into `main` (its body carries `Fixes #N`, so GitHub closes the issue exactly when it ships). If a develop PR's auto-close keyword closes one early, the poller reopens it after the develop merge.
 - After the PR merges, the issue is moved to `Done` by the poller; manual move also works:
   `python3 automation/move_item.py <issue-number> Done`
 - Workflow dispatch is label-aware: `bug` -> `archon-fix-github-issue`; `feature`/`enhancement` -> `archon-idea-to-pr`; default -> `archon-fix-github-issue`. Overrides live in `automation/config.json`.
