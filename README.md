@@ -4,7 +4,7 @@ Python 3.12 `uv` project for building and sending the daily news report. Run
 commands from the repo root so `uv` uses this project environment.
 
 ```bash
-cd /Users/home/personal_code/news
+cd /Users/bradley_mankoff/personal_code/news
 /opt/homebrew/bin/uv sync --python /opt/homebrew/bin/python3.12
 uv run python -c 'import platform; print(platform.machine())'
 ```
