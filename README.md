@@ -27,6 +27,25 @@ The repo runs a fully automated agentic loop driven by the GitHub project board
   linked PR.
 - Agents move issues with `python3 automation/move_item.py <issue> <lane>`.
 
+### Two review stages (by design)
+
+1. **Readiness review** — inside the implementation workflows, before the human
+   sees anything: `archon-fix-github-issue` runs a smart review (code review +
+   conditional error-handling/test/comment/docs) then self-fixes and simplifies;
+   `archon-idea-to-pr` runs a 5-agent review block and fixes findings. The bar:
+   “the human should not have to check whether it works, is complete, or
+   matches the issue intent.” Implementation PRs are left **draft** so you can
+   test the branch locally first.
+2. **Quality review** — the `In Review` lane trigger (`archon-smart-pr-review`):
+   after you judge the feature working and move the ticket, the review targets
+   code quality, conventions, and subtle/peripheral breakage, and auto-fixes
+   CRITICAL/HIGH findings. It runs on the final diff — including anything you
+   changed during testing.
+
+The workflows are the stock Archon 0.6.0 pi-usable set, curated in the archon
+home (`workflows/`); claude-only workflows are archived, not discovered. Full
+inventory: `docs/archon-workflows.md`.
+
 ### Components
 
 - `automation/board_poller.py` — polls the board every 45s, dispatches Archon

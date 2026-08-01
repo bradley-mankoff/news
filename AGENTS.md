@@ -11,6 +11,7 @@ Project goal: build, review, and send a daily news report from configured source
 - Need run presets -> `config/run_presets.yaml`.
 - Need model tuning presets -> `config/model_tuning_presets.yaml`.
 - Need board automation details -> `automation/` (`board_poller.py`, `config.json`).
+- Need the Archon workflow inventory (usable vs archived) -> `docs/archon-workflows.md`.
 
 ## Always-on behavior
 - Always-on communication: **caveman full** (pi-caveman extension). Always-on code discipline: **ponytail full** (@dietrichgebert/ponytail extension+skills). Do not disable these unless the user explicitly asks.
@@ -26,3 +27,10 @@ Project goal: build, review, and send a daily news report from configured source
   `python3 automation/move_item.py <issue-number> Done`
 - Workflow dispatch is label-aware: `bug` -> `archon-fix-github-issue`; `feature`/`enhancement` -> `archon-idea-to-pr`; default -> `archon-fix-github-issue`. Overrides live in `automation/config.json`.
 - The poller runs as a launchd agent (`com.bradley-mankoff.news-board-poller`); state in `automation/state.json` (gitignored). First poll after restart is a snapshot and dispatches nothing.
+
+## Review stages (two, by design)
+
+- **Readiness review — inside the implementation workflows, before the human sees anything** (`archon-fix-github-issue` runs smart review + self-fix + simplify; `archon-idea-to-pr` runs the 5-agent review block + fixes): the bar is “the human should not have to check whether it works, is complete, or matches the issue’s intent.” PRs are left draft so the human can test the branch locally.
+- **Quality review — the In Review lane trigger** (`archon-smart-pr-review`): after the human judges the feature working and moves the ticket to In Review, the review targets code quality, conventions, and subtle/peripheral breakage, auto-fixing CRITICAL/HIGH findings.
+- Not redundant by design: the second review runs on the diff *after* human testing and feedback; the first one guarantees the diff is worth the human's time. (Human changes between the two make the second review see a different diff.)
+- Only the pi-usable Archon workflows are installed; claude-only ones are archived (see `docs/archon-workflows.md`).
