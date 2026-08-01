@@ -18,6 +18,7 @@
       "default": "archon-fix-github-issue",
       "move_to": "In Progress",
       "complete_move_to": "Ready for Review",
+      "merge_develop_base": "develop",
       "label_overrides": {
         "bug": "archon-fix-github-issue",
         "feature": "archon-idea-to-pr",
@@ -25,7 +26,10 @@
       }
     },
     "review": {
-      "workflow": "archon-smart-pr-review"
+      "workflow": "archon-smart-pr-review",
+      "ship_to": "main",
+      "merge_ship_on_review_complete": true,
+      "done_lane": "Done"
     }
   }
 }
