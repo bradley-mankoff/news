@@ -104,7 +104,7 @@ The handoff should be saved as `HANDOFF.md` at the repository root: `/Users/home
 - [ ] Move all tuning, budgets, clustering thresholds, server controls, and raw environment overrides behind Advanced Settings.
 - [ ] Add task-specific model assignments for every actual LLM stage or explicitly document inheritance.
 - [ ] Add a curated Model Catalog plus Hugging Face search/model metadata integration.
-- [ ] Add `huggingface-hub` as a direct dependency when its API is imported.
+- [x] Add `huggingface-hub` as a direct dependency (declared in `pyproject.toml`; API usage is tracked under the Model Catalog item above).
 - [ ] Add direct links from model choices to Hugging Face model pages and native hardware compatibility.
 - [ ] Reintroduce explicit translation without content-based language detection.
 - [ ] Record exact prompt/model/translation snapshots in Run Session history.
