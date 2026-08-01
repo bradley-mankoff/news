@@ -9,7 +9,9 @@ cd /Users/bradley_mankoff/personal_code/news
 uv run python -c 'import platform; print(platform.machine())'
 ```
 
-On Apple Silicon, the platform check should print `arm64`.
+On Apple Silicon, the platform check should print `arm64`. These paths are
+machine-specific (single-user repo) — adjust them when running on another
+machine.
 
 ## Project Automation
 
