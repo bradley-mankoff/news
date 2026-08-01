@@ -4,14 +4,15 @@ Python 3.12 `uv` project for building and sending the daily news report. Run
 commands from the repo root so `uv` uses this project environment.
 
 ```bash
-cd /Users/bradley_mankoff/personal_code/news
+git clone https://github.com/bradley-mankoff/news.git
+cd news
 /opt/homebrew/bin/uv sync --python /opt/homebrew/bin/python3.12
 uv run python -c 'import platform; print(platform.machine())'
 ```
 
-On Apple Silicon, the platform check should print `arm64`. These paths are
-machine-specific (single-user repo) — adjust them when running on another
-machine.
+On Apple Silicon, the platform check should print `arm64`. The
+`/opt/homebrew/bin` uv/python paths are machine-specific — adjust them when
+running on another machine.
 
 ## Project Automation
 
