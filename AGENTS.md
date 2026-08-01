@@ -10,3 +10,19 @@ Project goal: build, review, and send a daily news report from configured source
 - Need recipient definitions -> `config/recipients.yaml`.
 - Need run presets -> `config/run_presets.yaml`.
 - Need model tuning presets -> `config/model_tuning_presets.yaml`.
+- Need board automation details -> `automation/` (`board_poller.py`, `config.json`).
+
+## Always-on behavior
+- Always-on communication: **caveman full** (pi-caveman extension). Always-on code discipline: **ponytail full** (@dietrichgebert/ponytail extension+skills). Do not disable these unless the user explicitly asks.
+
+## Project board protocol
+- The GitHub project board (Daily News, project #1 on `bradley-mankoff`) is the work queue. Lanes: `Backlog` -> `Todo` -> `In Progress` -> `In Review` -> `Done`.
+- New issues land in `Backlog`. Work never starts from creation or from `Backlog`: implementation begins only when an issue is moved into `Todo` (the board poller dispatches an Archon workflow; moving out and back in restarts).
+- While implementing an issue: work on a branch, keep the PR draft until ready.
+- When the work is done and the PR is ready, move the issue to `In Review` with:
+  `python3 automation/move_item.py <issue-number> "In Review"`
+  and post a summary comment on the PR. The review loop takes over from there (poller -> `archon-smart-pr-review`).
+- After the PR merges, move the issue to `Done`:
+  `python3 automation/move_item.py <issue-number> Done`
+- Workflow dispatch is label-aware: `bug` -> `archon-fix-github-issue`; `feature`/`enhancement` -> `archon-idea-to-pr`; default -> `archon-fix-github-issue`. Overrides live in `automation/config.json`.
+- The poller runs as a launchd agent (`com.bradley-mankoff.news-board-poller`); state in `automation/state.json` (gitignored). First poll after restart is a snapshot and dispatches nothing.

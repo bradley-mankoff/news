@@ -59,3 +59,8 @@ Thumbs.db
 REVIEW.md
 TO_DO_LIST.txt
 git_cheat_sheet.txt
+
+# Automation runtime state
+automation/state.json
+automation/board_poller.log
+automation/archon-runs.log

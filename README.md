@@ -11,29 +11,49 @@ uv run python -c 'import platform; print(platform.machine())'
 
 On Apple Silicon, the platform check should print `arm64`.
 
-## PR Review Flow
+## Project Automation
 
-The Claude PR reviewer is intentionally not push-triggered. Normal pushes to an
-open PR should run regular checks, but should not start a fresh AI review loop.
+The repo runs a fully automated agentic loop driven by the GitHub project board
+(Projects v2, “Daily News”, owner `bradley-mankoff`).
 
-Use this flow:
+### Board flow
 
-1. Push your feature branch as often as needed.
-2. Open the PR as a draft while the branch is still being shaped.
-3. Mark the PR ready for review when you want one Claude review pass.
-4. Fix the review comments and push the fixes to the same branch.
-5. Do not expect Claude to rerun on that fix push.
-6. To request another review manually, open GitHub Actions, choose
-   `Claude PR Review`, click `Run workflow`, and enter the PR number.
+- Lanes: `Backlog` → `Todo` → `In Progress` → `In Review` → `Done`.
+- Creating an issue lands it in `Backlog`; nothing starts from `Backlog`.
+- Moving an issue into `Todo` triggers an Archon workflow (label-aware: `bug`
+  → `archon-fix-github-issue`, `feature`/`enhancement` → `archon-idea-to-pr`,
+  default → `archon-fix-github-issue`).
+- Moving an issue into `In Review` triggers `archon-smart-pr-review` on the
+  linked PR.
+- Agents move issues with `python3 automation/move_item.py <issue> <lane>`.
 
-Manual CLI trigger:
+### Components
+
+- `automation/board_poller.py` — polls the board every 45s, dispatches Archon
+  runs on lane transitions. First poll after (re)start is a snapshot: state is
+  recorded, nothing is dispatched (prevents backlog bursts after downtime).
+- `automation/config.json` — repo, project, lanes, and workflow mapping.
+- `automation/move_item.py` — move an issue to a lane from the CLI.
+- The poller runs as a launchd agent (`com.bradley-mankoff.news-board-poller`,
+  plist in `~/Library/LaunchAgents/`). Logs: `automation/board_poller.log`;
+  state: `automation/state.json` (gitignored).
+- Archon executes all workflows on DeepSeek (`deepseek/deepseek-v4-flash`,
+  max effort → xhigh thinking) via the Pi provider; tiers are configured in
+  the archon-pi home `config.yaml`.
+
+### Manual review
+
+Review a PR by hand:
 
 ```bash
-gh workflow run "Claude PR Review" -f pr_number=123
+archon workflow run archon-smart-pr-review "Review PR #123"
 ```
 
-Opening a non-draft PR also starts one review pass. Reopening a non-draft PR
-starts one review pass. Draft PRs are skipped until they are marked ready.
+### Monitoring
+
+- Archon runs: `archon workflow runs` (run from the repo root).
+- Poller: `launchctl list | grep news-board-poller`, or
+  `tail -f automation/board_poller.log`.
 
 ## UI
 

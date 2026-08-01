@@ -1,0 +1,28 @@
+{
+  "repo": "bradley-mankoff/news",
+  "project_owner": "bradley-mankoff",
+  "project_number": 1,
+  "status_field": "Status",
+  "poll_interval_seconds": 45,
+  "state_file": "automation/state.json",
+  "lanes": {
+    "Backlog": "backlog",
+    "Todo": "todo",
+    "In Progress": "in_progress",
+    "In Review": "review",
+    "Done": "done"
+  },
+  "dispatch": {
+    "todo": {
+      "default": "archon-fix-github-issue",
+      "label_overrides": {
+        "bug": "archon-fix-github-issue",
+        "feature": "archon-idea-to-pr",
+        "enhancement": "archon-idea-to-pr"
+      }
+    },
+    "review": {
+      "workflow": "archon-smart-pr-review"
+    }
+  }
+}
