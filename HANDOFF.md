@@ -224,15 +224,14 @@ source.language == target_language
 - No partial edits or working-tree mutations were made.
 
 ## Next Steps
-1. Create or overwrite `/Users/home/news/HANDOFF.md` with this handoff so it is visible at the repository root.
-2. Ask the user only for the materially necessary product decisions that tools cannot determine:
+1. Ask the user only for the materially necessary product decisions that tools cannot determine:
    - Apache-2.0 versus AGPL-3.0
    - Initial supported runtimes/platforms
-3. Before any public release, sanitize personal paths, recipient data, email defaults, package metadata, and repository history.
-4. Produce one implementation plan covering Prompt Catalog extraction, UI simplification, Model Catalog/Hugging Face integration, deterministic translation, run-history snapshots, tests, and browser smoke verification.
-5. Implement the Prompt Catalog first because the UI, model recommendations, and reproducibility records all depend on stable task identifiers and prompt interfaces.
-6. Refactor one prompt stage at a time while preserving existing output contracts and focused tests.
-7. Add the simplified normal UI after prompt interfaces are stable; keep existing advanced controls available but gated.
-8. Add Hugging Face search and curated recommendations only after supported runtime validation is explicit.
-9. Reintroduce translation last, using declared source language only and verifying that non-English sources remain excluded unless translation is explicitly enabled.
-10. Run focused contract tests followed by `uv run news ui --open` and exercise prompt selection, model selection, translation gating, preview, and an end-to-end local run.
+2. Before any public release, sanitize personal paths, recipient data, email defaults, package metadata, and repository history.
+3. Produce one implementation plan covering Prompt Catalog extraction, UI simplification, Model Catalog/Hugging Face integration, deterministic translation, run-history snapshots, tests, and browser smoke verification.
+4. Implement the Prompt Catalog first because the UI, model recommendations, and reproducibility records all depend on stable task identifiers and prompt interfaces.
+5. Refactor one prompt stage at a time while preserving existing output contracts and focused tests.
+6. Add the simplified normal UI after prompt interfaces are stable; keep existing advanced controls available but gated.
+7. Add Hugging Face search and curated recommendations only after supported runtime validation is explicit.
+8. Reintroduce translation last, using declared source language only and verifying that non-English sources remain excluded unless translation is explicitly enabled.
+9. Run focused contract tests followed by `uv run news ui --open` and exercise prompt selection, model selection, translation gating, preview, and an end-to-end local run.

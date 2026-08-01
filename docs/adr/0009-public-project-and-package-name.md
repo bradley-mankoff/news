@@ -21,9 +21,9 @@ form of the existing `news_pipeline` import package. The import package stays
 `news_pipeline`, the CLI stays `news`, the env prefix stays `NEWS_`, and the
 GitHub repo stays `bradley-mankoff/news` (renaming it would break the automation
 surface for zero benefit). The private name is removed from all tracked files.
-Rejected candidates: `news` (taken), `daily-news-pipeline` / `news-pipeline-cli`
-(free but deviate from the existing `news_pipeline` naming identity — recorded
-as fallbacks if `news-pipeline` is ever contested).
+Rejected candidates: `daily-news-pipeline` / `news-pipeline-cli` (free but
+deviate from the existing `news_pipeline` naming identity — recorded as
+fallbacks if `news-pipeline` is ever contested).
 
 ## Consequences
 
