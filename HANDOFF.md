@@ -1,7 +1,7 @@
 ## Goal
 Reframe the Daily News Pipeline as a local-first open-source project where users control editorial prompts, Hugging Face models, sources, translation, and delivery. Replace the current knob-heavy primary UI with a prompt-first guided interface while moving model tuning, pipeline budgets, server settings, and raw runtime controls behind an Advanced Settings gate.
 
-The handoff should be saved as `HANDOFF.md` at the repository root: `/Users/home/personal_code/news/HANDOFF.md`. Do not place it in a hidden directory.
+The handoff should be saved as `HANDOFF.md` at the repository root: `/Users/home/news/HANDOFF.md`. Do not place it in a hidden directory.
 
 ## Constraints & Preferences
 - The normal UI must prioritize user-customizable prompts.
@@ -26,7 +26,7 @@ The handoff should be saved as `HANDOFF.md` at the repository root: `/Users/home
 ### Done
 - [x] Mapped current project semantics from `CONTEXT.md`, operational behavior from `README.md`, settings from `SETTINGS.md`, and architecture decisions from `docs/adr/`.
 - [x] Confirmed GitNexus index state:
-  - Repository: `/Users/home/personal_code/news`
+  - Repository: `/Users/home/news`
   - Branch: `main`
   - Indexed/current commit: `06ef7b0`
   - Status: up to date
@@ -75,8 +75,8 @@ The handoff should be saved as `HANDOFF.md` at the repository root: `/Users/home
 - [x] Confirmed `huggingface-hub` appears transitively in `uv.lock` but is not a direct dependency in `pyproject.toml`.
 - [x] Audited immediate open-source blockers:
   - No `LICENSE`, `LICENSE.md`, `LICENSE.txt`, or `COPYING` was found.
-  - `pyproject.toml:2` uses package name `personal_code`.
-  - `README.md:7` contains `/Users/home/personal_code/news`.
+  - `pyproject.toml:2` previously used the private folder name; renamed to `news-pipeline` (ADR 0009).
+  - `README.md` quickstart previously referenced the private path; now clone-based (ADR 0009).
   - `config/recipients.yaml` contains real names and email addresses.
   - `news_pipeline/config.py:1637` defaults to `bradley@mankoff.com`.
   - `news_pipeline/config.py:1648` defaults to `bradley.mankoff@gmail.com`.
@@ -90,7 +90,7 @@ The handoff should be saved as `HANDOFF.md` at the repository root: `/Users/home
 - [ ] None.
 
 ### Pending
-- [ ] Decide the public project and package name.
+- [x] Decide the public project and package name (`news-pipeline`, ADR 0009).
 - [ ] Choose a project license. Prior recommendation: Apache-2.0 for permissive use with a patent grant; AGPL-3.0 only if hosted modifications must remain open.
 - [ ] Audit repository history for secrets and personal data before making the repository public.
 - [ ] Replace real recipients, personal email defaults, and personal filesystem paths with safe examples.
@@ -131,8 +131,8 @@ The handoff should be saved as `HANDOFF.md` at the repository root: `/Users/home
 - **Initial runtime scope should be honest**: A practical first release can support Apple Silicon managed models plus external OpenAI-compatible endpoints; managed cross-platform GGUF can follow through a real `llama.cpp` adapter.
 
 ## Critical Context
-- Repository root: `/Users/home/personal_code/news`
-- Intended visible handoff path: `/Users/home/personal_code/news/HANDOFF.md`
+- Repository root: `/Users/home/news`
+- Intended visible handoff path: `/Users/home/news/HANDOFF.md`
 - Current branch/commit observed: `main` at `06ef7b0`
 - GitNexus index was current at `06ef7b0`.
 - Commands executed during discovery:
@@ -224,16 +224,14 @@ source.language == target_language
 - No partial edits or working-tree mutations were made.
 
 ## Next Steps
-1. Create or overwrite `/Users/home/personal_code/news/HANDOFF.md` with this handoff so it is visible at the repository root.
-2. Ask the user only for the materially necessary product decisions that tools cannot determine:
-   - Public project/package name
+1. Ask the user only for the materially necessary product decisions that tools cannot determine:
    - Apache-2.0 versus AGPL-3.0
    - Initial supported runtimes/platforms
-3. Before any public release, sanitize personal paths, recipient data, email defaults, package metadata, and repository history.
-4. Produce one implementation plan covering Prompt Catalog extraction, UI simplification, Model Catalog/Hugging Face integration, deterministic translation, run-history snapshots, tests, and browser smoke verification.
-5. Implement the Prompt Catalog first because the UI, model recommendations, and reproducibility records all depend on stable task identifiers and prompt interfaces.
-6. Refactor one prompt stage at a time while preserving existing output contracts and focused tests.
-7. Add the simplified normal UI after prompt interfaces are stable; keep existing advanced controls available but gated.
-8. Add Hugging Face search and curated recommendations only after supported runtime validation is explicit.
-9. Reintroduce translation last, using declared source language only and verifying that non-English sources remain excluded unless translation is explicitly enabled.
-10. Run focused contract tests followed by `uv run news ui --open` and exercise prompt selection, model selection, translation gating, preview, and an end-to-end local run.
+2. Before any public release, sanitize personal paths, recipient data, email defaults, package metadata, and repository history.
+3. Produce one implementation plan covering Prompt Catalog extraction, UI simplification, Model Catalog/Hugging Face integration, deterministic translation, run-history snapshots, tests, and browser smoke verification.
+4. Implement the Prompt Catalog first because the UI, model recommendations, and reproducibility records all depend on stable task identifiers and prompt interfaces.
+5. Refactor one prompt stage at a time while preserving existing output contracts and focused tests.
+6. Add the simplified normal UI after prompt interfaces are stable; keep existing advanced controls available but gated.
+7. Add Hugging Face search and curated recommendations only after supported runtime validation is explicit.
+8. Reintroduce translation last, using declared source language only and verifying that non-English sources remain excluded unless translation is explicitly enabled.
+9. Run focused contract tests followed by `uv run news ui --open` and exercise prompt selection, model selection, translation gating, preview, and an end-to-end local run.

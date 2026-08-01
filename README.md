@@ -4,14 +4,18 @@ Python 3.12 `uv` project for building and sending the daily news report. Run
 commands from the repo root so `uv` uses this project environment.
 
 ```bash
-cd /Users/bradley_mankoff/personal_code/news
-/opt/homebrew/bin/uv sync --python /opt/homebrew/bin/python3.12
+git clone https://github.com/bradley-mankoff/news.git
+cd news
+uv sync
 uv run python -c 'import platform; print(platform.machine())'
 ```
 
-On Apple Silicon, the platform check should print `arm64`. These paths are
-machine-specific (single-user repo) — adjust them when running on another
-machine.
+On Apple Silicon, the platform check should print `arm64`. `uv` picks the
+Python version from `.python-version` (3.12) automatically.
+
+> **Package status**: `news-pipeline` (ADR 0009) is the public distribution
+> name, but the package is not published to PyPI yet — install instructions
+> will be added here at release time.
 
 ## Project Automation
 
