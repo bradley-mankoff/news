@@ -105,7 +105,7 @@ class UITests(unittest.TestCase):
                 {
                     "NEWS_SOURCES_YAML": str(sources_path),
                     "NEWS_RECIPIENTS_YAML": str(recipients_path),
-                    "NEWS_TEST_SECRET": "swordfish",
+                    "NEWS_TEST_SECRET": "swordfish",  # pragma: allowlist secret
                 },
                 clear=False,
             ):
@@ -199,11 +199,11 @@ class UITests(unittest.TestCase):
                     smtp_port=587,
                     smtp_username="news",
                     smtp_use_ssl=True,
-                    smtp_password="secret",
+                    smtp_password="secret",  # pragma: allowlist secret
                     unsubscribe_base_url="https://example.com",
                     unsubscribe_host="0.0.0.0",
                     unsubscribe_port=9000,
-                    unsubscribe_secret="token",
+                    unsubscribe_secret="token",  # pragma: allowlist secret
                 )
                 runtime = SimpleNamespace(
                     config=runtime_config,
@@ -264,7 +264,7 @@ class UITests(unittest.TestCase):
                     self.assertEqual(_recipient_summary()["error"], "broken")
 
             with patch.object(ui_module, "build_knob_registry", return_value=[{"env": "NEWS_TEST_SECRET", "label": "Secret", "type": "password", "secret": True}]), patch.object(ui_module, "_runtime_snapshot", return_value=({"runtime": "ok"}, None)), patch.object(ui_module, "configured_removed_topic_env_vars", return_value={"NEWS_TOPIC_IDS"}), patch.object(ui_module, "list_presets", return_value={"path": "presets.yaml", "presets": [{"id": "daily"}]}), patch.object(ui_module, "list_model_tuning_presets", return_value={"path": "model.yaml", "presets": [{"id": "tiny"}]}), patch.object(ui_module, "_source_summary", return_value={"path": str(sources_path), "total": 1, "selected": {}, "tiers": {}, "languages": {}, "error": None}), patch.object(ui_module, "_recipient_summary", return_value={"path": str(recipients_path), "total": 1, "paused": 0, "error": None}):
-                with patch.dict(os.environ, {"NEWS_TEST_SECRET": "swordfish"}, clear=False):
+                with patch.dict(os.environ, {"NEWS_TEST_SECRET": "swordfish"}, clear=False):  # pragma: allowlist secret
                     payload = schema_payload()
 
             self.assertEqual(payload["actions"][0], "run")

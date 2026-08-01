@@ -47,7 +47,8 @@ By default it listens at `http://127.0.0.1:8766`. If you do not want the
 browser opened automatically, omit `--open`:
 
 ```bash
-uv run news ui```
+uv run news ui
+```
 
 Use another port or host when needed:
 
@@ -221,8 +222,8 @@ hard-coded defaults rather than normal Run Settings.
   chooses Bradley-only or all active recipients.
 - `config/model_tuning_presets.yaml`: saved Model Tuning Presets keyed by id.
 
-Translation is paused by default. The old topic-scoped runtime variables and
-source topic fields have been removed from this branch and are rejected if set.
+Normal collection accepts active English sources. Removed topic-scoped runtime
+variables and source topic fields are rejected when present.
 
 ## Outputs
 
@@ -233,11 +234,18 @@ Current run review files are written under `output/daily_outputs/`:
 - `latest_run_details.json`: latest backend audit details.
 
 Durable run history is written to `output/history/news_history.duckdb`, with CSV
-exports in `output/history/` for quick review. Final report and image artifacts
+exports in `output/history/` for quick review. A run with a non-empty newsletter
+body also writes paste-ready Markdown to `output/beehiiv/YYYY-MM-DD.md` for
+manual publication.
 
-Every run also writes a paste-ready Markdown copy of the newsletter body to
-`output/beehiiv/YYYY-MM-DD.md` for manual paste into the beehiiv Post
-Builder during the free trial. See `beehiiv/README.md`.
+### Open Knowledge Format projections
+
+The pipeline also writes two portable OKF v0.2 bundle forms:
+
+- `knowledge/` is the checked-in system/domain knowledge bundle. It documents current concepts and links back to `CONTEXT.md`, accepted ADRs, `news_pipeline/`, `config/`, and runtime stores; it contains no generated run output.
+- `output/history/okf/<run_id>/` is the generated **OKF Run Bundle** for one run, derived from structured Article Summary Record and Story Record data plus the rendered report body. It contains `report.md`, `articles/`, `stories/`, progressive-disclosure indexes, and `log.md`.
+
+These are portable projections, not a second source of truth. Runtime behavior remains in `news_pipeline/`, vocabulary and accepted decisions remain in `CONTEXT.md` and `docs/adr/`, editable inputs remain in `config/`, the report remains the rendered output, and DuckDB/CSV remain canonical run history. A completed diagnostic run is `stable`; failed, aborted, or unknown runs are `draft`.
 
 History maintenance:
 

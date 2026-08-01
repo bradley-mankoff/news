@@ -254,7 +254,6 @@ SYNTHESIS_BODY = (
 IMAGE_ART = {
     "final_image_path": "/tmp/news_pipeline_fixture_image.png",
     "overlay_headline": "Cities Prepare for Climate Strain",
-    "prompt_path": "/tmp/news_pipeline_fixture_image_prompt.txt",
     "data_uri": "data:image/png;base64,ZmFrZQ==",
 }
 

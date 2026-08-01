@@ -39,7 +39,6 @@ class ConfigHelperTests(unittest.TestCase):
                 model_max_input_tokens=1,
                 article_summary_max_tokens=2,
                 story_drafting_max_tokens=3,
-                title_generation_max_tokens=4,
                 task_sampling={"default": base_sampling},
             ),
             ModelTuningSettings(
@@ -68,7 +67,6 @@ class ConfigHelperTests(unittest.TestCase):
             config_module._task_max_tokens_field(config_module.MODEL_TASK_STORY_DRAFTING),
             "story_drafting_max_tokens",
         )
-        self.assertEqual(config_module._task_max_tokens_field("title_generation"), "title_generation_max_tokens")
         with self.assertRaises(ValueError):
             config_module._task_max_tokens_field("bogus")
 
@@ -290,10 +288,7 @@ class ConfigHelperTests(unittest.TestCase):
             config_module.ensure_codex_safe_model_reference(config_module.CODEX_TEST_MODEL_ALIAS)
             with self.assertRaises(RuntimeError):
                 config_module.ensure_codex_safe_model_reference("bad-model")
-        with patch.object(config_module, "_configured_model_reference", return_value=config_module.CODEX_TEST_MODEL_ALIAS):
-            self.assertEqual(config_module._configured_model_name(), config_module.CODEX_TEST_MODEL_NAME)
         self.assertEqual(config_module.infer_model_backend("gemma-4-vision"), "mlx-vlm")
-        self.assertEqual(config_module._configured_model_backend(config_module.CODEX_TEST_MODEL_ALIAS), "mlx-vlm")
         self.assertEqual(config_module._default_article_summary_concurrency(config_module.CODEX_TEST_MODEL_ALIAS), 8)
         self.assertEqual(config_module._default_story_synthesis_concurrency(config_module.CODEX_TEST_MODEL_ALIAS), 2)
         self.assertEqual(config_module._default_story_synthesis_concurrency("gemma-4-vision"), 1)
@@ -497,7 +492,6 @@ class ConfigHelperTests(unittest.TestCase):
             self.assertEqual(config_module._coerce_bool_value(True), True)
             self.assertEqual(config_module._coerce_bool_value(0), False)
             self.assertEqual(config_module._coerce_float_value("bad", 1.25), 1.25)
-            self.assertEqual(config_module._coerce_int_value("bad", 7), 7)
             self.assertEqual(config_module._coerce_pause_value("yes"), True)
             self.assertEqual(config_module._clean_env({"A": "1", "B": None}), {"A": "1"})
 

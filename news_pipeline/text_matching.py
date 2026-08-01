@@ -196,9 +196,6 @@ BOILERPLATE_CONTENT_STOPWORDS = {
 }
 
 
-def normalize_text_key(label: str) -> str:
-    slug = re.sub(r"[^a-zA-Z0-9]+", "_", (label or "").strip().lower()).strip("_")
-    return slug or "story"
 
 
 def clean_source_title(title: str) -> str:
@@ -266,15 +263,3 @@ def ordered_match_terms(
     return terms
 
 
-def match_terms(
-    *values: Any,
-    allowed_short_terms: set[str] | None = None,
-    collect_short_terms: bool = False,
-) -> set[str]:
-    return set(
-        ordered_match_terms(
-            *values,
-            allowed_short_terms=allowed_short_terms,
-            collect_short_terms=collect_short_terms,
-        )
-    )

@@ -367,8 +367,6 @@ class HistoryStoreHelperTests(unittest.TestCase):
             self.assertEqual(history_module._artifact_family("news_report_2026-06-01_10-00-00_primary_dataset.txt"), "primary_dataset")
             self.assertEqual(history_module._artifact_family("news_report_2026-06-01_10-00-00_raw.png"), "raw_image")
             self.assertEqual(history_module._artifact_family("news_report_2026-06-01_10-00-00_image.png"), "final_image")
-            self.assertTrue(history_module._is_replaceable_file(Path("run_log_2026-06-01_10-00-00.log")))
-            self.assertTrue(history_module._is_raw_image_with_final(run_dir / "news_report_2026-06-01_10-00-00_raw.png"))
             self.assertEqual(history_module._insert_backfill_file_artifacts(object(), output_dir / "missing", run_id), None)
             mismatch_path = run_dir / "run_details_2026-06-02_10-00-00.json"
             mismatch_path.write_text("{}", encoding="utf-8")
@@ -390,7 +388,6 @@ class HistoryStoreHelperTests(unittest.TestCase):
                 self.assertGreater(con.execute("SELECT COUNT(*) FROM article_summaries").fetchone()[0], 0)
                 self.assertGreater(con.execute("SELECT COUNT(*) FROM artifacts").fetchone()[0], 0)
 
-            self.assertTrue(history_module._imported_artifact_paths(db_path))
 
             with patch.object(
                 history_module,
@@ -448,7 +445,6 @@ class HistoryStoreHelperTests(unittest.TestCase):
                 history_module._visible_output_cleanup_candidates(root / "missing", keep_paths=[keep]),
                 [],
             )
-            self.assertEqual(history_module._cleanup_candidates(root / "missing", imported_paths=set()), [])
 
             with self.assertRaisesRegex(ValueError, "Usage:"):
                 history_module.parse_history_args(["-h"], output_dir=output_dir, db_path=root / "history.duckdb", export_csv=False)
@@ -474,7 +470,6 @@ class HistoryStoreHelperTests(unittest.TestCase):
             root = Path(tmpdir)
             missing_dir = root / "missing"
             self.assertEqual(history_module._discover_run_ids(missing_dir), set())
-            self.assertEqual(history_module._cleanup_candidates(missing_dir, imported_paths=set()), [])
             self.assertEqual(history_module._visible_output_cleanup_candidates(missing_dir, keep_paths=[]), [])
             history_module._remove_empty_output_dirs(missing_dir)
             self.assertEqual(history_module._run_started_at_from_id("not-a-run"), "")
@@ -482,20 +477,7 @@ class HistoryStoreHelperTests(unittest.TestCase):
             self.assertEqual(history_module._artifact_family("topics_2026-06-01_10-00-00.json"), "topics")
             self.assertEqual(history_module._artifact_family("news_report_2026-06-01_10-00-00.txt"), "final_report")
             self.assertEqual(history_module._artifact_family("plain.txt"), "other")
-            self.assertFalse(history_module._is_raw_image_with_final(root / "plain.png"))
 
-            cleanup_dir = root / "cleanup"
-            cleanup_dir.mkdir()
-            imported_log = cleanup_dir / "run_log_2026-06-01_10-00-00.log"
-            imported_log.write_text("log", encoding="utf-8")
-            raw_image = cleanup_dir / "news_report_2026-06-01_10-00-00_raw.png"
-            raw_image.write_bytes(b"raw")
-            (cleanup_dir / "news_report_2026-06-01_10-00-00_image.png").write_bytes(b"final")
-            (cleanup_dir / "notes.txt").write_text("ignore", encoding="utf-8")
-            (cleanup_dir / ".DS_Store").write_text("ignore", encoding="utf-8")
-            (cleanup_dir / "nested_dir").mkdir()
-            cleanup_candidates = history_module._cleanup_candidates(cleanup_dir, imported_paths={imported_log})
-            self.assertEqual(set(cleanup_candidates), {imported_log, raw_image})
 
             visible_dir = root / "visible"
             visible_dir.mkdir()
@@ -640,15 +622,6 @@ class HistoryStoreHelperTests(unittest.TestCase):
                 def fetchall(self):
                     return [("",), ("/tmp/imported",)]
 
-            with patch.object(history_module, "ensure_schema", return_value=None), patch.object(
-                history_module,
-                "connect",
-                return_value=FakeConnection(),
-            ):
-                self.assertEqual(
-                    history_module._imported_artifact_paths(root / "history.duckdb"),
-                    {Path("/tmp/imported")},
-                )
 
 
 if __name__ == "__main__":

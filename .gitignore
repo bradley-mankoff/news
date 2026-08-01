@@ -2,6 +2,10 @@
 env.json
 .env
 .env.*
+!.env.example
+*.pem
+*.key
+*.p12
 
 # Python
 .venv/
@@ -13,20 +17,39 @@ __pycache__/
 .mypy_cache/
 .ruff_cache/
 *.egg-info/
+.coverage*
+htmlcov/
+build/
+dist/
 
 # Output / generated files
 output/
 graphify-out/
 .rtk/
+.gitnexus/
+.uv-cache/
+*.db
+*.sqlite
+*.sqlite3
+*.profraw
+*.log
+*.bak
+*.backup
 
 # MacOS
 .DS_Store
+Thumbs.db
 
 # VS Code
 .vscode/
+*.swp
+~$*
 
 # Cursor
 .cursor/
+
+# R
+.Rhistory
 
 # Local notes
 .agent-daily-logs/

@@ -243,7 +243,9 @@ class TopiclessGlobalPipelineTests(unittest.TestCase):
         rendered_reports = "\n".join(render_markdown_entry(report) for report in reports)
         self.assertNotIn("- Topic:", rendered_reports)
         self.assertIn("- Story: Story ports", rendered_reports)
-        self.assertNotIn("Topic:", token_stats["primary_dataset"])
+        self.assertEqual(token_stats["reports_included_in_synthesis"], 2)
+        self.assertEqual(token_stats["eligible_story_block_count"], 1)
+        self.assertEqual(token_stats["required_story_headlines"], ["Port Talks Resume"])
         self.assertNotRegex(synthesis, r"(?m)^##\s+")
         self.assertIn("### Port Talks Resume", synthesis)
 

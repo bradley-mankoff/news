@@ -36,7 +36,6 @@ Pipeline Budget, and Model Server Settings.
 | `NEWS_TOTAL_ARTICLE_SUMMARY_CAP` | `40` | Pipeline Budget cap on articles sent to article summarization. |
 | `NEWS_ARTICLE_SUMMARY_MAX_TOKENS` | `1000` | Model Tuning token limit for each article summary. |
 | `NEWS_STORY_DRAFTING_MAX_TOKENS` | `1800` | Model Tuning token limit for story/newsletter synthesis. |
-| `NEWS_TITLE_GENERATION_MAX_TOKENS` | `50` | Model Tuning token limit for report title generation. |
 
 ## Advanced Run Settings
 
@@ -51,7 +50,7 @@ Pipeline Budget, and Model Server Settings.
 | `NEWS_MODEL_REASONING_PRESENCE_PENALTY`, `NEWS_MODEL_REASONING_REPETITION_PENALTY` | Reasoning-task repetition controls. |
 | `NEWS_MODEL_STORY_DISCOVERY_*`, `NEWS_MODEL_STORY_SCALE_SCREENING_*`, `NEWS_MODEL_ARTICLE_SUMMARY_*`, `NEWS_MODEL_STORY_DRAFTING_*`, `NEWS_MODEL_TITLE_GENERATION_*` | Per-task sampling overrides using the same suffixes as the default sampling group. |
 
-## Model And Translation
+## Models
 
 Built-in model aliases:
 
@@ -83,7 +82,6 @@ These settings are intentionally not part of the normal Run Settings surface.
 | `NEWS_OUTPUT_DIR` | `output/daily_outputs` | Dated run-output directory. |
 | `NEWS_HISTORY_DB` | `output/history/news_history.duckdb` | DuckDB run and URL history path. |
 | `NEWS_HISTORY_EXPORT_CSV` | `1` | Export readable history CSVs after writes. |
-| `NEWS_WRITE_LEGACY_DIAGNOSTICS` | `0` | Also write older per-run diagnostic artifacts. |
 | `NEWS_ENV_JSON` | `env.json` | JSON file with SMTP password fallback. |
 | `NEWS_EMAIL_FROM` | `bradley.mankoff@gmail.com` | Sender address and SMTP username default. |
 | `NEWS_EMAIL_RECIPIENTS` | `NEWS_BRADLEY_RECIPIENT` | Fallback recipient list if recipient YAML has no active entries. |

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import builtins
+import base64
 import contextlib
 import copy
 import importlib.util
@@ -85,31 +86,6 @@ class PipelineHelperTests(unittest.TestCase):
                 ],
             )
 
-            self.assertEqual(
-                pipeline._ordered_unique_urls(["", " https://example.com/a ", "https://example.com/a", "b"]),
-                ["https://example.com/a", "b"],
-            )
-
-            with patch.object(pipeline, "WRITE_LEGACY_DIAGNOSTICS", True), patch.object(
-                pipeline, "RUN_OUTPUT_DIR", str(root)
-            ), patch.object(pipeline, "timestamp", "2026-06-28_05-00-00"):
-                persisted = pipeline._persist_url_list_debug(
-                    [
-                        " https://example.com/a ",
-                        "",
-                        "https://example.com/b",
-                        "https://example.com/a",
-                    ],
-                    "My urls",
-                )
-
-            self.assertIsNotNone(persisted)
-            debug_path, count = persisted or ("", 0)
-            self.assertEqual(count, 2)
-            self.assertEqual(
-                Path(debug_path).read_text(encoding="utf-8").splitlines(),
-                ["https://example.com/a", "https://example.com/b"],
-            )
 
     def test_source_matching_and_rejection_helpers(self) -> None:
         source_config = {
@@ -121,11 +97,6 @@ class PipelineHelperTests(unittest.TestCase):
         matching_item = {
             "title": "Global markets steady - Reuters",
             "source": "Reuters",
-            "link": "https://example.com/story",
-        }
-        wrong_item = {
-            "title": "Global markets steady",
-            "source": "AP",
             "link": "https://example.com/story",
         }
 
@@ -192,30 +163,6 @@ class PipelineHelperTests(unittest.TestCase):
             },
         )
 
-        accepted, rejection = pipeline._feed_item_matches_configured_source(
-            "Reuters",
-            {"name": "Reuters", "strict_source_match": False},
-            matching_item,
-        )
-        self.assertTrue(accepted)
-        self.assertIsNone(rejection)
-
-        accepted, rejection = pipeline._feed_item_matches_configured_source(
-            "Reuters",
-            source_config,
-            matching_item,
-        )
-        self.assertTrue(accepted)
-        self.assertIsNone(rejection)
-
-        accepted, rejection = pipeline._feed_item_matches_configured_source(
-            "Reuters",
-            source_config,
-            wrong_item,
-        )
-        self.assertFalse(accepted)
-        self.assertIsNotNone(rejection)
-        self.assertEqual(rejection["source_match_status"], "wire_attribution_pending")
 
         aliases = pipeline._wire_attribution_aliases("The Reuters", source_config)
         self.assertIn("Reuters", aliases)
@@ -596,15 +543,6 @@ class PipelineHelperTests(unittest.TestCase):
                 pipeline.truncate_text_to_token_limit("one two", 1),
                 "one ...",
             )
-            with patch.object(pipeline, "_clean_article_text", return_value="one two"), patch.object(
-                pipeline,
-                "ARTICLE_TEXT_TOKEN_LIMIT",
-                1,
-            ):
-                self.assertEqual(
-                    pipeline.prepare_article_text_for_summary("raw text", source="Reuters", url="https://example.com", title="Headline"),
-                    "one ...",
-                )
 
         self.assertEqual(pipeline.extract_prompt_tokens_from_response(message), 4)
         self.assertFalse(pipeline._contains_disallowed_final_markup("plain text"))
@@ -641,8 +579,6 @@ class PipelineHelperTests(unittest.TestCase):
         )
         self.assertIn("Useful summary", normalized_record.summary)
         self.assertFalse(pipeline.is_low_confidence_report_entry(record))
-        self.assertEqual(pipeline._report_story_label(record), "Story A")
-        self.assertEqual(pipeline._report_summary_text(record), "A helpful summary.")
         reference_key = pipeline._report_reference_key(record)
         self.assertTrue(reference_key)
         self.assertEqual(
@@ -655,14 +591,12 @@ class PipelineHelperTests(unittest.TestCase):
         self.assertEqual(pipeline._extract_first_name("bradley@example.com"), "bradley")
         self.assertEqual(pipeline.build_email_subject(datetime(2026, 6, 6, 10, 0, 0)), "Daily LLM News, 06/06/26")
 
-    def test_report_rendering_and_persistence_helpers(self) -> None:
+    def test_report_rendering_and_story_dedup_helpers(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
-            report_path = root / "latest_run.md"
             image_art = {
                 "final_image_path": str(root / "image.png"),
                 "overlay_headline": "Headline",
-                "prompt_path": str(root / "prompt.txt"),
                 "error": "image failed",
             }
             citation_sources = [
@@ -727,6 +661,9 @@ class PipelineHelperTests(unittest.TestCase):
 
             self.assertIn("Daily Brief", body)
             self.assertIn("IMAGE", body)
+            self.assertIn(f"Generated image: {image_art['final_image_path']}", body)
+            self.assertIn("Overlay headline: Headline", body)
+            self.assertIn("Image generation warning: image failed", body)
             self.assertIn("SOURCES", body)
             self.assertIn("Headline One", plain_listing)
             self.assertIn("Headline One", html_listing)
@@ -740,9 +677,7 @@ class PipelineHelperTests(unittest.TestCase):
             self.assertEqual(debug_record["index"], 1)
             self.assertEqual(pipeline._report_entry_debug_records(final_reports)[0]["index"], 1)
 
-            with patch.object(pipeline, "WRITE_LEGACY_DIAGNOSTICS", True), patch.object(
-                pipeline, "RUN_OUTPUT_DIR", str(root)
-            ), patch.object(pipeline, "timestamp", "2026-06-28_05-00-00"), patch.object(
+            with patch.object(
                 pipeline.embeddings_stage,
                 "dedup_story_drafts",
                 return_value=[{"story_title": "A", "summary": "x"}],
@@ -753,39 +688,10 @@ class PipelineHelperTests(unittest.TestCase):
                         {"story_title": "A", "summary": "x"},
                     ]
                 )
-                persisted_summaries = pipeline._persist_article_summaries_debug(final_reports)
-                persisted_dataset = pipeline._persist_grouped_synthesis_dataset_debug(
-                    str(report_path),
-                    {
-                        "primary_dataset": "dataset text",
-                        "required_story_headlines": ["Headline One"],
-                        "eligible_story_block_count": 1,
-                        "reports_included_in_synthesis": 1,
-                        "reports_omitted_from_synthesis": 0,
-                        "high_confidence_reports": 1,
-                        "low_confidence_reports": 0,
-                    },
-                )
 
             self.assertEqual(len(deduped), 1)
             self.assertEqual(stats["before"], 2)
             self.assertEqual(stats["after"], 1)
-            self.assertTrue(persisted_summaries)
-            self.assertTrue(Path(persisted_summaries or "").exists())
-            self.assertEqual(persisted_dataset["primary_dataset_path"], str(report_path.with_name("latest_run_primary_dataset.txt")))
-
-            self.assertEqual(pipeline._build_plain_text_article_listing([]), "No article headlines available.")
-            self.assertIn("No article headlines available.", pipeline._build_html_article_listing([]))
-
-            with patch.object(pipeline, "WRITE_LEGACY_DIAGNOSTICS", False):
-                self.assertIsNone(pipeline._persist_article_summaries_debug([]))
-                self.assertEqual(
-                    pipeline._persist_grouped_synthesis_dataset_debug(
-                        str(report_path),
-                        {"primary_dataset": "dataset text"},
-                    ),
-                    {},
-                )
 
     def test_budget_and_session_compatibility_branches(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -863,9 +769,6 @@ class PipelineHelperTests(unittest.TestCase):
             "### Headline\nMetadata:\n- Source: Reuters\nSummary:\nUseful summary.",
         )
         self.assertIn("Useful summary", normalized.summary)
-        self.assertFalse(pipeline.has_structured_entry(normalized.raw_entry or normalized.summary, "Headline"))
-        self.assertEqual(pipeline._report_story_label(normalized), "")
-        self.assertEqual(pipeline._report_summary_text(record), "A helpful summary.")
         self.assertTrue(pipeline._report_reference_key(record))
         self.assertEqual(
             pipeline.filter_reports_for_references([record, "other"], {"included_report_keys": [pipeline._report_reference_key(record)]}),
@@ -874,7 +777,6 @@ class PipelineHelperTests(unittest.TestCase):
         self.assertEqual(pipeline.build_email_subject(datetime(2026, 6, 6, 10, 0, 0)), "Daily LLM News, 06/06/26")
         self.assertEqual(pipeline._extract_first_name("bradley@example.com"), "bradley")
         self.assertEqual(pipeline._fallback_synthesis_paragraph_from_summaries(["One. Two.", "Three."]), "One. Two. Three.")
-        self.assertEqual(pipeline.generate_report_title("Short report", "2026-06-06"), "Daily News Summary - 2026-06-06")
         self.assertIn("Heading", pipeline._format_plain_text_synthesis("## Heading\nBody"))
         self.assertIn("<h2", pipeline._build_html_synthesis("## Heading\nBody", []))
         self.assertIn("<div", pipeline._build_html_article_listing([record]))
@@ -1143,13 +1045,6 @@ class PipelineHelperTests(unittest.TestCase):
             self.assertEqual(urls_path.read_text(encoding="utf-8"), "https://example.com/a\n")
             pipeline._append_unique_urls(str(urls_path), ["https://example.com/a"])
             self.assertEqual(urls_path.read_text(encoding="utf-8"), "https://example.com/a\n")
-            self.assertIsNone(pipeline._persist_url_list_debug([], "label"))
-            with patch.object(pipeline, "WRITE_LEGACY_DIAGNOSTICS", False):
-                self.assertIsNone(pipeline._persist_url_list_debug(["https://example.com/b"], "label"))
-            with patch.object(pipeline, "WRITE_LEGACY_DIAGNOSTICS", True), patch.object(
-                pipeline, "RUN_OUTPUT_DIR", str(root)
-            ), patch("builtins.open", side_effect=OSError("boom")):
-                self.assertIsNone(pipeline._persist_url_list_debug(["https://example.com/b"], "label"))
 
             pending = {"at": "2026-06-06T12:01:00", "label": "new"}
             deduped_diagnostics = SimpleNamespace(
@@ -1244,7 +1139,6 @@ class PipelineHelperTests(unittest.TestCase):
                 {"fallback@example.com": {"name": "fallback@example.com", "pause": False}},
             )
 
-        self.assertEqual(pipeline._slugify_report_suffix("  "), "report")
         self.assertEqual(
             pipeline._resolve_google_news_url_details(
                 "https://news.google.com/rss/articles/G2h0dHBzOi8vZXhhbXBsZS5jb20vZGVjb2RlZA"
@@ -1624,56 +1518,8 @@ class PipelineHelperTests(unittest.TestCase):
             self.assertEqual(pipeline._story_selection_runtime(), "selection-runtime")
         selection_runtime_ctor.assert_called_once()
 
-        with patch.object(pipeline.article_summarization_stage, "run_article_summary_pass", return_value=["summary"]) as run_summary_pass:
-            self.assertEqual(pipeline.run_article_summary_pass([{"article_id": "a1"}]), ["summary"])
-        run_summary_pass.assert_called_once()
 
-        with patch.object(
-            pipeline.story_drafting_stage,
-            "draft_story_clusters_from_article_summaries",
-            return_value=([], {}),
-        ):
-            self.assertEqual(pipeline.run_per_story_synthesis(["summary"], [{"story_key": "k"}]), "")
-
-        with patch.object(
-            pipeline.story_drafting_stage,
-            "draft_story_clusters_from_article_summaries",
-            return_value=([{"story_title": "A", "story_key": "A"}], {"story_drafts_generated": 1}),
-        ), patch.object(
-            pipeline.story_selection_stage,
-            "apply_global_story_scale_screening",
-            return_value=([{"story_title": "A", "story_key": "A"}], {"enabled": True}),
-        ), patch.object(
-            pipeline.story_selection_stage,
-            "select_global_story_drafts",
-            return_value=(
-                [{"story_title": "A", "story_key": "A"}],
-                {
-                    "enabled": True,
-                    "story_count": 1,
-                    "selected_story_count": 1,
-                    "max_stories": pipeline.MAX_STORIES,
-                    "overlap_threshold": pipeline.STORY_SELECTION_OVERLAP_THRESHOLD,
-                    "selected": [],
-                    "rejected": [],
-                    "article_overlap_dedup": {"conflicts_resolved": 0},
-                },
-            ),
-        ), patch.object(
-            pipeline.story_selection_stage,
-            "build_precomputed_global_story_synthesis",
-            return_value=("SYNTH", {"citation_sources": [], "citation_groups": []}, {"attempts": []}),
-        ), patch.object(
-            pipeline,
-            "clean_synthesis_for_publication",
-            return_value="cleaned",
-        ):
-            self.assertEqual(
-                pipeline.run_per_story_synthesis(["summary"], [{"story_key": "A"}]),
-                "cleaned",
-            )
-
-    def test_image_rendering_and_persistence_helpers(self) -> None:
+    def test_image_rendering_and_image_art_helpers(self) -> None:
         with patch("PIL.ImageFont.truetype", return_value="truetype-font"), patch(
             "os.path.exists",
             return_value=True,
@@ -1782,12 +1628,20 @@ class PipelineHelperTests(unittest.TestCase):
                         report_title="Report title",
                     )
                 )
+            raw_paths: list[str] = []
+
+            def fake_generate_image(*_args, output_path: str, **_kwargs):
+                raw_paths.append(output_path)
+                return base_image
+
             with patch.object(pipeline, "IMAGE_GENERATION_ENABLED", True), patch.object(
-                pipeline, "WRITE_LEGACY_DIAGNOSTICS", False
-            ), patch.object(pipeline, "generate_image_art_brief", return_value={"image_prompt": "Prompt", "overlay_headline": "Headline"}), patch.object(
+                pipeline,
+                "generate_image_art_brief",
+                return_value={"image_prompt": "Prompt", "overlay_headline": "Headline"},
+            ), patch.object(
                 pipeline,
                 "generate_image_with_mflux",
-                return_value=base_image,
+                side_effect=fake_generate_image,
             ), patch.object(
                 pipeline,
                 "add_headline_overlay",
@@ -1804,94 +1658,79 @@ class PipelineHelperTests(unittest.TestCase):
                     synthesis_body="Summary body",
                     report_title="Report title",
                 )
-            self.assertTrue((root / "report_image.png").exists())
-            self.assertIn("data_uri", art)
+            final_path = root / "report_image.png"
+            self.assertEqual(art["final_image_path"], str(final_path))
+            self.assertEqual(art["overlay_headline"], "Headline")
+            self.assertEqual(art["image_prompt"], "Prompt")
+            self.assertTrue(final_path.exists())
+            with Image.open(final_path) as saved_image:
+                self.assertEqual(saved_image.size, (5, 6))
+                self.assertEqual(saved_image.getpixel((0, 0)), (0, 0, 0))
+            self.assertTrue(art["data_uri"].startswith("data:image/png;base64,"))
+            self.assertEqual(
+                base64.b64decode(art["data_uri"].split(",", 1)[1]),
+                final_path.read_bytes(),
+            )
+            self.assertEqual(len(raw_paths), 1)
+            self.assertNotEqual(raw_paths[0], str(final_path))
+            self.assertFalse(Path(raw_paths[0]).exists())
+            self.assertEqual(
+                sorted(path.name for path in root.iterdir()),
+                ["report_image.png"],
+            )
 
+            fail_open_report = root / "fail_open_report.md"
             with patch.object(pipeline, "IMAGE_GENERATION_ENABLED", True), patch.object(
-                pipeline, "WRITE_LEGACY_DIAGNOSTICS", True
-            ), patch.object(pipeline, "generate_image_art_brief", return_value={"image_prompt": "Prompt", "overlay_headline": "Headline"}), patch.object(
                 pipeline,
-                "generate_image_with_mflux",
-                return_value=base_image,
+                "IMAGE_GENERATION_FAIL_ON_ERROR",
+                False,
             ), patch.object(
                 pipeline,
-                "add_headline_overlay",
-                return_value=overlay_image,
+                "generate_image_art_brief",
+                return_value={"image_prompt": "Prompt", "overlay_headline": "Headline"},
             ), patch.object(
-                pipeline.progress_tracker,
-                "detail",
-            ), patch.object(
-                pipeline.progress_tracker,
-                "warning",
-            ):
-                art_with_diagnostics = pipeline.generate_report_image_art(
-                    report_path=str(report_path),
-                    synthesis_body="Summary body",
-                    report_title="Report title",
-                )
-            self.assertTrue((root / "report_image_prompt.txt").exists())
-            self.assertTrue((root / "report_image_stats.json").exists())
-            self.assertIn("data_uri", art_with_diagnostics)
-
-            with patch.object(pipeline, "IMAGE_GENERATION_ENABLED", True), patch.object(
-                pipeline, "WRITE_LEGACY_DIAGNOSTICS", True
-            ), patch.object(pipeline, "generate_image_art_brief", return_value={"image_prompt": "Prompt", "overlay_headline": "Headline"}), patch.object(
                 pipeline,
                 "generate_image_with_mflux",
                 side_effect=RuntimeError("boom"),
             ), patch.object(
                 pipeline.progress_tracker,
-                "detail",
-            ), patch.object(
-                pipeline.progress_tracker,
                 "warning",
-            ), patch("builtins.open", side_effect=OSError("open failed")):
+            ):
                 error_art = pipeline.generate_report_image_art(
-                    report_path=str(report_path),
+                    report_path=str(fail_open_report),
                     synthesis_body="Summary body",
                     report_title="Report title",
                 )
-            self.assertIn("error", error_art)
+            self.assertEqual(error_art["error"], "Image generation failed: boom")
+            self.assertEqual(error_art["overlay_headline"], "Headline")
+            self.assertEqual(error_art["image_prompt"], "Prompt")
+            self.assertNotIn("final_image_path", error_art)
+            self.assertFalse((root / "fail_open_report_image.png").exists())
 
+            fail_closed_report = root / "fail_closed_report.md"
             with patch.object(pipeline, "IMAGE_GENERATION_ENABLED", True), patch.object(
-                pipeline, "WRITE_LEGACY_DIAGNOSTICS", True
-            ), patch.object(pipeline, "generate_image_art_brief", return_value={"image_prompt": "Prompt", "overlay_headline": "Headline"}), patch.object(
+                pipeline,
+                "IMAGE_GENERATION_FAIL_ON_ERROR",
+                True,
+            ), patch.object(
+                pipeline,
+                "generate_image_art_brief",
+                return_value={"image_prompt": "Prompt", "overlay_headline": "Headline"},
+            ), patch.object(
                 pipeline,
                 "generate_image_with_mflux",
                 side_effect=RuntimeError("boom"),
             ), patch.object(
                 pipeline.progress_tracker,
-                "detail",
-            ), patch.object(
-                pipeline.progress_tracker,
                 "warning",
             ):
-                error_art_with_prompt = pipeline.generate_report_image_art(
-                    report_path=str(report_path),
-                    synthesis_body="Summary body",
-                    report_title="Report title",
-                )
-            self.assertIn("error", error_art_with_prompt)
-
-            with patch.object(pipeline, "IMAGE_GENERATION_ENABLED", True), patch.object(
-                pipeline, "IMAGE_GENERATION_FAIL_ON_ERROR", True
-            ), patch.object(pipeline, "generate_image_art_brief", return_value={"image_prompt": "Prompt", "overlay_headline": "Headline"}), patch.object(
-                pipeline,
-                "generate_image_with_mflux",
-                side_effect=RuntimeError("boom"),
-            ), patch.object(
-                pipeline.progress_tracker,
-                "detail",
-            ), patch.object(
-                pipeline.progress_tracker,
-                "warning",
-            ):
-                with self.assertRaises(RuntimeError):
+                with self.assertRaisesRegex(RuntimeError, "boom"):
                     pipeline.generate_report_image_art(
-                        report_path=str(report_path),
+                        report_path=str(fail_closed_report),
                         synthesis_body="Summary body",
                         report_title="Report title",
                     )
+            self.assertFalse((root / "fail_closed_report_image.png").exists())
 
         self.assertEqual(
             pipeline._format_plain_text_synthesis("Paragraph\n## Heading\nBody"),
@@ -1921,64 +1760,6 @@ class PipelineHelperTests(unittest.TestCase):
         self.assertEqual(deduped_story_drafts, [{"story_title": "A"}])
         self.assertEqual(dedup_stats["fallback"], "no_dedup")
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            root = Path(tmpdir)
-            final_reports = [
-                ArticleSummaryRecord(
-                    title="Headline",
-                    source="Reuters",
-                    published="2026-06-06",
-                    url="https://example.com/story",
-                    article_id="a1",
-                    story="Story A",
-                    summary="Summary",
-                )
-            ]
-            with patch.object(pipeline, "WRITE_LEGACY_DIAGNOSTICS", True), patch.object(
-                pipeline, "RUN_OUTPUT_DIR", str(root)
-            ), patch.object(pipeline, "timestamp", "2026-06-28_05-00-00"), patch(
-                "builtins.open",
-                side_effect=OSError("boom"),
-            ):
-                self.assertIsNone(pipeline._persist_article_summaries_debug(final_reports))
-            with patch.object(pipeline, "WRITE_LEGACY_DIAGNOSTICS", False):
-                self.assertIsNone(pipeline._persist_article_summaries_debug(final_reports))
-            with patch.object(pipeline, "WRITE_LEGACY_DIAGNOSTICS", False):
-                self.assertEqual(
-                    pipeline._persist_grouped_synthesis_dataset_debug(
-                        str(root / "report.md"),
-                        {"primary_dataset": "dataset text"},
-                    ),
-                    {},
-                )
-            with patch.object(pipeline, "WRITE_LEGACY_DIAGNOSTICS", True):
-                self.assertEqual(
-                    pipeline._persist_grouped_synthesis_dataset_debug(
-                        str(root / "report.md"),
-                        {"primary_dataset": ""},
-                    ),
-                    {},
-                )
-            with patch.object(pipeline, "WRITE_LEGACY_DIAGNOSTICS", True), patch.object(
-                pipeline,
-                "RUN_OUTPUT_DIR",
-                str(root),
-            ), patch("builtins.open", side_effect=OSError("boom")):
-                self.assertEqual(
-                    pipeline._persist_grouped_synthesis_dataset_debug(
-                        str(root / "report.md"),
-                        {
-                            "primary_dataset": "dataset text",
-                            "required_story_headlines": ["Headline"],
-                            "eligible_story_block_count": 1,
-                            "reports_included_in_synthesis": 1,
-                            "reports_omitted_from_synthesis": 0,
-                            "high_confidence_reports": 1,
-                            "low_confidence_reports": 0,
-                        },
-                    ),
-                    {},
-                )
     def test_text_token_and_synthesis_helpers(self) -> None:
         self.assertEqual(
             pipeline._strip_prompt_echo_lines(

@@ -50,10 +50,8 @@ under ``output/history/`` by default; the human-readable review is published to
 
 import importlib.util
 import dataclasses
-import gc
 import json
 import logging
-import math
 import re
 import os
 import shlex
@@ -83,7 +81,7 @@ from datetime import datetime, timezone, timedelta
 from email.message import EmailMessage
 from email.utils import make_msgid
 from http.server import BaseHTTPRequestHandler, HTTPServer
-from urllib.parse import parse_qs, unquote, urlencode, urlparse
+from urllib.parse import parse_qs, urlencode, urlparse
 import httpx
 from openai import APIConnectionError, APITimeoutError, InternalServerError, RateLimitError
 
@@ -124,7 +122,6 @@ from .feed_utils import (
 )
 from .text_cleaning import (
     clean_article_text as _clean_article_text,
-    clean_content_text as _clean_content_text,
     clean_feed_text as _clean_feed_text,
     clean_feed_url as _clean_feed_url,
     strip_model_artifacts,
@@ -245,7 +242,6 @@ LATEST_RUN_LOG_PATH = str(CONFIG.latest_run_log_path)
 LATEST_RUN_DETAILS_PATH = str(CONFIG.latest_run_details_path)
 HISTORY_DB_PATH = str(CONFIG.history_db_path)
 HISTORY_EXPORT_CSV = CONFIG.history_export_csv
-WRITE_LEGACY_DIAGNOSTICS = CONFIG.write_legacy_diagnostics
 PRESET_ID = CONFIG.preset_id
 SOURCE_SCOPE = CONFIG.source_scope
 RECIPIENT_SCOPE = CONFIG.recipient_scope
@@ -276,7 +272,6 @@ MODEL_IS_GEMMA_4 = is_gemma_4_model_reference(MODEL_REFERENCE)
 TOTAL_ARTICLE_SUMMARY_CAP_GEMMA_4_DERIVED = CONFIG.total_article_summary_cap_gemma_4_derived
 ARTICLE_SUMMARY_MAX_TOKENS = max(100, CONFIG.article_summary_max_tokens)
 STORY_DRAFTING_MAX_TOKENS = max(100, CONFIG.story_drafting_max_tokens)
-TITLE_GENERATION_MAX_TOKENS = max(20, CONFIG.title_generation_max_tokens)
 
 MIN_ARTICLES_PER_STORY = max(2, CONFIG.min_articles_per_story)
 STORY_SCALE_SCREENING_ENABLED = CONFIG.story_scale_screening_enabled
@@ -405,16 +400,6 @@ def _append_unique_urls(path: str, urls: list[str]) -> None:
             f.write(url + "\n")
 
 
-def _ordered_unique_urls(urls: list[str]) -> list[str]:
-    seen_urls: set[str] = set()
-    unique_urls: list[str] = []
-    for url in urls:
-        clean_url = str(url or "").strip()
-        if not clean_url or clean_url in seen_urls:
-            continue
-        seen_urls.add(clean_url)
-        unique_urls.append(clean_url)
-    return unique_urls
 
 
 def _budget_article_targets_for_summary(
@@ -533,22 +518,6 @@ def _budget_article_targets_for_summary(
     return budgeted_targets, budgeted_story_records or story_records, stats
 
 
-def _persist_url_list_debug(urls: list[str], label: str) -> tuple[str, int] | None:
-    unique_urls = _ordered_unique_urls(urls)
-    if not unique_urls:
-        return None
-    if not WRITE_LEGACY_DIAGNOSTICS:
-        return None
-
-    safe_label = re.sub(r"[^a-zA-Z0-9_]+", "_", label).strip("_") or "urls"
-    debug_path = os.path.join(RUN_OUTPUT_DIR, f"{safe_label}_{timestamp}.txt")
-    try:
-        with open(debug_path, "w", encoding="utf-8") as debug_file:
-            for url in unique_urls:
-                debug_file.write(url + "\n")
-        return debug_path, len(unique_urls)
-    except Exception:
-        return None
 
 
 def _parse_activity_command_output(output: str) -> dict[str, Any]:
@@ -815,15 +784,6 @@ def _source_match_result_for_feed_item(
     }
 
 
-def _feed_item_matches_configured_source(
-    source_name: str,
-    source_config: dict[str, Any],
-    item: dict[str, Any],
-) -> tuple[bool, dict[str, Any] | None]:
-    match_result = _source_match_result_for_feed_item(source_name, source_config, item)
-    if match_result.get("accepted"):
-        return True, None
-    return False, match_result
 
 
 def _wire_attribution_aliases(source_name: str, source_config: dict[str, Any]) -> list[str]:
@@ -1026,7 +986,6 @@ def _compat_runtime_values(config: RuntimeConfig) -> dict[str, Any]:
         "LATEST_RUN_DETAILS_PATH": str(config.latest_run_details_path),
         "HISTORY_DB_PATH": str(config.history_db_path),
         "HISTORY_EXPORT_CSV": config.history_export_csv,
-        "WRITE_LEGACY_DIAGNOSTICS": config.write_legacy_diagnostics,
         "PRESET_ID": config.preset_id,
         "SOURCE_SCOPE": config.source_scope,
         "RECIPIENT_SCOPE": config.recipient_scope,
@@ -1057,7 +1016,6 @@ def _compat_runtime_values(config: RuntimeConfig) -> dict[str, Any]:
         "TOTAL_ARTICLE_SUMMARY_CAP_GEMMA_4_DERIVED": config.total_article_summary_cap_gemma_4_derived,
         "ARTICLE_SUMMARY_MAX_TOKENS": max(100, config.article_summary_max_tokens),
         "STORY_DRAFTING_MAX_TOKENS": max(100, config.story_drafting_max_tokens),
-        "TITLE_GENERATION_MAX_TOKENS": max(20, config.title_generation_max_tokens),
         "MIN_ARTICLES_PER_STORY": max(2, config.min_articles_per_story),
         "STORY_SCALE_SCREENING_ENABLED": config.story_scale_screening_enabled,
         "MAX_STORIES": max(1, config.max_stories),
@@ -1661,36 +1619,8 @@ def _story_selection_runtime() -> story_selection_stage.StorySelectionRuntime:
     )
 
 
-def run_article_summary_pass(article_targets: list[dict]) -> list[article_summary_records_stage.ArticleSummaryRecord]:
-    return article_summarization_stage.run_article_summary_pass(article_targets, _article_summarization_runtime())
 
 
-def run_per_story_synthesis(
-    article_summaries: list[article_summary_records_stage.ArticleSummaryRecord | str],
-    story_records: list[dict],
-    *,
-    min_articles_per_story: int | None = None,
-) -> str:
-    story_drafts, _ = story_drafting_stage.draft_story_clusters_from_article_summaries(
-        story_records, article_summaries, _story_drafting_runtime(min_articles_per_story=min_articles_per_story)
-    )
-    if not story_drafts:
-        return ""
-    story_drafts, _ = story_selection_stage.apply_global_story_scale_screening(
-        story_drafts,
-        _story_selection_runtime(),
-    )
-    selected_matches, _ = story_selection_stage.select_global_story_drafts(
-        story_drafts,
-        max_stories=MAX_STORIES,
-        overlap_threshold=STORY_SELECTION_OVERLAP_THRESHOLD,
-    )
-    story_drafting, _, _ = story_selection_stage.build_precomputed_global_story_synthesis(
-        selected_matches,
-        article_summaries,
-        _story_selection_runtime(),
-    )
-    return clean_synthesis_for_publication(story_drafting, relaxed=RELAXED_STORY_DRAFTING_GUARDS)
 
 
 @contextmanager
@@ -1883,9 +1813,6 @@ def get_active_recipient_config(recipient_config: dict[str, dict]) -> dict[str, 
     }
 
 
-def _slugify_report_suffix(value: str) -> str:
-    clean_value = re.sub(r"[^a-zA-Z0-9]+", "_", (value or "").strip().lower()).strip("_")
-    return clean_value or "report"
 
 
 def _resolve_google_news_url_details(url: str) -> dict[str, str]:
@@ -2483,38 +2410,8 @@ def _fetch_source_context_for_collection(source_index: int, source_name: str) ->
         "direct_context": direct_context,
         "error_reason": error_reason,
     }
-# --- TITLE GEN / SYNTHESIS ---
+# --- SYNTHESIS ---
 
-def generate_report_title(summary_text: str, fallback_timestamp: str) -> str:
-    """Generate a concise markdown title from final synthesis without tools/internet calls."""
-    try:
-        clean_summary_text = _strip_prompt_echo_lines(summary_text)
-        llm = build_chat_model(
-            max_tokens=TITLE_GENERATION_MAX_TOKENS,
-            task="title_generation",
-        )
-        title_prompt = [
-            SystemMessage(content=(
-                "You generate concise report titles. "
-                "Return ONLY one title line, no markdown, no quotes, max 12 words. "
-                "Base the title on the dominant theme across today's selected global stories, "
-                "not on media coverage language."
-            )),
-            HumanMessage(content=f"Create a title based on this final summary:\n\n{clean_summary_text}")
-        ]
-        response = invoke_with_retries(
-            llm,
-            title_prompt,
-            task_name="title generation",
-            fallback_content=f"Daily News Summary - {fallback_timestamp}",
-        )
-        title = strip_model_artifacts(response.content or "").strip()
-        title = re.sub(r"^#+\s*", "", title).strip()
-        title = title.splitlines()[0].strip() if title else ""
-        title = title[:120].strip()
-        return title if title else f"Daily News Summary - {fallback_timestamp}"
-    except Exception:
-        return f"Daily News Summary - {fallback_timestamp}"
 
 
 def _strip_prompt_echo_lines(text: str) -> str:
@@ -2618,7 +2515,7 @@ def build_chat_model(max_tokens: int, *, task: str = "default") -> ChatOpenAI:
     )
     return ChatOpenAI(
         base_url=assignment.base_url,
-        api_key="not-needed",
+        api_key="not-needed",  # pragma: allowlist secret
         model=assignment.name,
         max_tokens=max_tokens,
         max_retries=0,
@@ -2881,17 +2778,6 @@ def truncate_text_to_token_limit(text: str, token_limit: int) -> str:
     return truncated + " ..."
 
 
-def prepare_article_text_for_summary(
-    text: str,
-    *,
-    source: str | None = None,
-    url: str | None = None,
-    title: str | None = None,
-) -> str:
-    return truncate_text_to_token_limit(
-        _clean_article_text(text, source=source, url=url, title=title),
-        ARTICLE_TEXT_TOKEN_LIMIT,
-    )
 
 
 def extract_prompt_tokens_from_response(message: AIMessage) -> int | None:
@@ -3008,12 +2894,8 @@ def is_low_confidence_report_entry(entry: str) -> bool:
     return article_summary_records_stage.is_low_confidence(entry)
 
 
-def _report_story_label(entry: str) -> str:
-    return article_summary_records_stage.story_label(entry)
 
 
-def _report_summary_text(entry: str) -> str:
-    return article_summary_records_stage.summary_text(entry)
 
 
 def _report_reference_key(entry: str) -> str:
@@ -3423,15 +3305,9 @@ def generate_report_image_art(
     image_prompt = art_brief["image_prompt"]
     overlay_headline = art_brief["overlay_headline"]
     base_path = os.path.splitext(report_path)[0]
-    raw_temp_dir: tempfile.TemporaryDirectory[str] | None = None
-    if WRITE_LEGACY_DIAGNOSTICS:
-        raw_image_path = f"{base_path}_raw.png"
-    else:
-        raw_temp_dir = tempfile.TemporaryDirectory(prefix="news-raw-image-")
-        raw_image_path = os.path.join(raw_temp_dir.name, "raw.png")
+    raw_temp_dir = tempfile.TemporaryDirectory(prefix="news-raw-image-")
+    raw_image_path = os.path.join(raw_temp_dir.name, "raw.png")
     final_image_path = f"{base_path}_image.png"
-    prompt_path = f"{base_path}_image_prompt.txt"
-    stats_path = f"{base_path}_image_stats.json"
     seed = random.randint(1, 2**31 - 1)
 
     started_at = time.perf_counter()
@@ -3467,19 +3343,10 @@ def generate_report_image_art(
             "generation_seconds": round(generation_seconds, 2),
             "overlay_headline": overlay_headline,
             "crop_bottom_ratio": IMAGE_CROP_BOTTOM_RATIO,
-            "raw_image_path": raw_image_path if WRITE_LEGACY_DIAGNOSTICS else "",
             "final_image_path": final_image_path,
         }
-        if WRITE_LEGACY_DIAGNOSTICS:
-            with open(prompt_path, "w", encoding="utf-8") as prompt_file:
-                prompt_file.write(image_prompt + "\n")
-            with open(stats_path, "w", encoding="utf-8") as stats_file:
-                json.dump(stats, stats_file, indent=2)
-                stats_file.write("\n")
         return {
             **stats,
-            "prompt_path": prompt_path if WRITE_LEGACY_DIAGNOSTICS else "",
-            "stats_path": stats_path if WRITE_LEGACY_DIAGNOSTICS else "",
             "image_prompt": image_prompt,
             "data_uri": f"data:image/png;base64,{encoded_image}",
             "art_prompt_error": art_brief.get("error"),
@@ -3489,12 +3356,6 @@ def generate_report_image_art(
         progress_tracker.warning(message)
         if IMAGE_GENERATION_FAIL_ON_ERROR:
             raise
-        if WRITE_LEGACY_DIAGNOSTICS:
-            try:
-                with open(prompt_path, "w", encoding="utf-8") as prompt_file:
-                    prompt_file.write(image_prompt + "\n")
-            except Exception:
-                pass
         return {
             "error": message,
             "backend": "mflux",
@@ -3502,12 +3363,10 @@ def generate_report_image_art(
             "model_id": IMAGE_MODEL_ID,
             "base_model": IMAGE_BASE_MODEL,
             "overlay_headline": overlay_headline,
-            "prompt_path": prompt_path if WRITE_LEGACY_DIAGNOSTICS else "",
             "image_prompt": image_prompt,
         }
     finally:
-        if raw_temp_dir is not None:
-            raw_temp_dir.cleanup()
+        raw_temp_dir.cleanup()
 
 
 def _strip_inline_markdown(text: str) -> str:
@@ -3741,8 +3600,6 @@ def build_report_body(
             image_lines.append(f"Generated image: {image_art.get('final_image_path')}")
         if image_art.get("overlay_headline"):
             image_lines.append(f"Overlay headline: {image_art.get('overlay_headline')}")
-        if image_art.get("prompt_path"):
-            image_lines.append(f"Image prompt: {image_art.get('prompt_path')}")
         if image_art.get("error"):
             image_lines.append(f"Image generation warning: {image_art.get('error')}")
         image_section = "\n".join(image_lines).strip() + "\n\n"
@@ -3888,72 +3745,8 @@ def _dedupe_story_drafts_for_global_selection(
         }
 
 
-def _persist_article_summaries_debug(
-    final_reports: List[article_summary_records_stage.ArticleSummaryRecord | str],
-    *,
-    label: str = "article_summaries",
-) -> str | None:
-    if not final_reports:
-        return None
-    if not WRITE_LEGACY_DIAGNOSTICS:
-        return None
-    safe_label = re.sub(r"[^a-zA-Z0-9_]+", "_", label).strip("_") or "article_summaries"
-    debug_path = os.path.join(RUN_OUTPUT_DIR, f"{safe_label}_{timestamp}.json")
-    payload = {
-        "generated_at": datetime.now().isoformat(timespec="seconds"),
-        "count": len(final_reports),
-        "summaries": [
-            _report_entry_debug_record(entry, index)
-            for index, entry in enumerate(final_reports, start=1)
-        ],
-    }
-    try:
-        with open(debug_path, "w", encoding="utf-8") as debug_file:
-            json.dump(payload, debug_file, indent=2)
-            debug_file.write("\n")
-        return debug_path
-    except Exception:
-        return None
 
 
-def _persist_grouped_synthesis_dataset_debug(
-    report_path: str,
-    token_stats: dict[str, Any],
-) -> dict[str, str]:
-    primary_dataset = str((token_stats or {}).get("primary_dataset") or "").strip()
-    if not primary_dataset:
-        return {}
-    if not WRITE_LEGACY_DIAGNOSTICS:
-        token_stats.pop("primary_dataset", None)
-        return {}
-    base_path = os.path.splitext(report_path)[0]
-    dataset_path = f"{base_path}_primary_dataset.txt"
-    metadata_path = f"{base_path}_primary_dataset.json"
-    metadata = {
-        "generated_at": datetime.now().isoformat(timespec="seconds"),
-        "required_story_headlines": token_stats.get("required_story_headlines", []),
-        "eligible_story_block_count": token_stats.get("eligible_story_block_count", 0),
-        "reports_included_in_synthesis": token_stats.get("reports_included_in_synthesis", 0),
-        "reports_omitted_from_synthesis": token_stats.get("reports_omitted_from_synthesis", 0),
-        "high_confidence_reports": token_stats.get("high_confidence_reports", 0),
-        "low_confidence_reports": token_stats.get("low_confidence_reports", 0),
-    }
-    try:
-        with open(dataset_path, "w", encoding="utf-8") as dataset_file:
-            dataset_file.write(primary_dataset)
-            dataset_file.write("\n")
-        with open(metadata_path, "w", encoding="utf-8") as metadata_file:
-            json.dump(metadata, metadata_file, indent=2)
-            metadata_file.write("\n")
-        token_stats["primary_dataset_path"] = dataset_path
-        token_stats["primary_dataset_metadata_path"] = metadata_path
-        token_stats.pop("primary_dataset", None)
-        return {
-            "primary_dataset_path": dataset_path,
-            "primary_dataset_metadata_path": metadata_path,
-        }
-    except Exception:
-        return {}
 
 
 def _new_run_diagnostics(source_count: int) -> RunDiagnostics:
@@ -3975,7 +3768,6 @@ def _new_run_diagnostics(source_count: int) -> RunDiagnostics:
             "latest_run_details_path": LATEST_RUN_DETAILS_PATH,
             "history_db_path": HISTORY_DB_PATH,
             "history_export_csv": HISTORY_EXPORT_CSV,
-            "write_legacy_diagnostics": WRITE_LEGACY_DIAGNOSTICS,
             "run_used_urls_path": RUN_USED_URLS_PATH,
             "run_log_path": RUN_LOG_PATH,
             "recent_window_hours": RECENT_WINDOW_HOURS,
@@ -4015,7 +3807,6 @@ def _new_run_diagnostics(source_count: int) -> RunDiagnostics:
             "story_cluster_similarity_threshold": STORY_CLUSTER_SIMILARITY_THRESHOLD,
             "article_summary_max_tokens": ARTICLE_SUMMARY_MAX_TOKENS,
             "story_drafting_max_tokens": STORY_DRAFTING_MAX_TOKENS,
-            "title_generation_max_tokens": TITLE_GENERATION_MAX_TOKENS,
             "image_generation_enabled": IMAGE_GENERATION_ENABLED,
             "image_generation_fail_on_error": IMAGE_GENERATION_FAIL_ON_ERROR,
             "image_model": IMAGE_MODEL_ID,
@@ -4194,30 +3985,6 @@ def _wait_for_managed_model_server(
     )
 
 
-def _wait_for_managed_translation_model_server(
-    process: subprocess.Popen,
-    *,
-    timeout_seconds: int = 300,
-) -> dict[str, Any]:
-    deadline = time.monotonic() + timeout_seconds
-    last_preflight: dict[str, Any] = {}
-    while time.monotonic() < deadline:
-        exit_code = process.poll()
-        if exit_code is not None:
-            raise RuntimeError(
-                f"Managed translation model server exited before it was ready "
-                f"(exit code {exit_code}). See {_managed_translation_model_server_log_path()}."
-            )
-        last_preflight = preflight_translation_model_server()
-        if last_preflight.get("ok") and last_preflight.get("model_match"):
-            return last_preflight
-        time.sleep(2)
-
-    detail = last_preflight.get("error") or last_preflight.get("served_models") or "no response"
-    raise TimeoutError(
-        f"Managed translation model server did not become ready within {timeout_seconds} seconds "
-        f"at {TRANSLATION_MODEL_BASE_URL}: {detail}. See {_managed_translation_model_server_log_path()}."
-    )
 
 
 def _stop_managed_server_process(process: subprocess.Popen, *, server_label: str) -> None:
@@ -4466,14 +4233,12 @@ def _run_pipeline() -> None:
             slow_source_warning_seconds=SLOW_SOURCE_WARNING_SECONDS,
             source_collection_concurrency=SOURCE_COLLECTION_CONCURRENCY,
             url_reuse_blocking_enabled=URL_REUSE_BLOCKING_ENABLED,
-            write_legacy_diagnostics=WRITE_LEGACY_DIAGNOSTICS,
         ),
         diagnostics,
         _active_run_finalizer(diagnostics, CONFIG),
         progress_tracker,
         ArticleCollectionAdapters(
             fetch_source_context=_fetch_source_context_for_collection,
-            persist_url_list_debug=_persist_url_list_debug,
             append_unique_urls=_append_unique_urls,
         ),
     )
@@ -4504,6 +4269,7 @@ def _run_pipeline() -> None:
             progress_callback=progress_tracker.story_clustering_progress,
         )
     )
+    _active_run_finalizer(diagnostics, CONFIG).record_story_records(story_records)
     progress_tracker.finish_meter(
         detail=(
             f"{story_cluster_stats.get('story_count', 0)} story groups | "
@@ -4567,13 +4333,6 @@ def _run_pipeline() -> None:
     article_summary_records = _report_entry_debug_records(article_summary_reports)
     _active_run_finalizer(diagnostics, CONFIG).record_summarized_articles(clustered_article_targets)
     _active_run_finalizer(diagnostics, CONFIG).record_article_summary_records(article_summary_records)
-    article_summaries_path = _persist_article_summaries_debug(article_summary_reports)
-    if article_summaries_path:
-        diagnostics.record_artifact(
-            "final_article_summaries",
-            article_summaries_path,
-            count=len(article_summary_reports),
-        )
     record_activity_snapshot("after_article_summaries", diagnostics)
     progress_tracker.detail(f"Saved {len(article_summary_reports)} article summary record(s).")
 
@@ -4677,6 +4436,7 @@ def _run_pipeline() -> None:
         progress_tracker.detail(
             "No story drafts generated from viable clusters."
         )
+    _active_run_finalizer(diagnostics, CONFIG).record_story_records(selected_story_matches)
     progress_tracker.detail(
         f"Global story selection: {story_selection_stats.get('selected_story_count', 0)} "
         f"of {story_selection_stats.get('story_count', 0)} drafted story candidate(s) selected "
@@ -4861,24 +4621,11 @@ def _run_pipeline() -> None:
         for entry in final_reports
         if story_drafting_stage.report_article_id(entry)
     }
-    selected_urls = [
-        str(article.get("url") or "").strip()
-        for article in clustered_article_targets
-        if str(article.get("article_id") or "") in selected_article_ids and article.get("url")
-    ]
     selected_articles = [
         article
         for article in clustered_article_targets
         if str(article.get("article_id") or "") in selected_article_ids
     ]
-    selected_url_artifact = _persist_url_list_debug(selected_urls, "selected_article_urls")
-    if selected_url_artifact:
-        selected_url_path, selected_url_count = selected_url_artifact
-        diagnostics.record_artifact(
-            "selected_article_urls",
-            selected_url_path,
-            count=selected_url_count,
-        )
     progress_tracker.detail(
         f"Story assignment: {len(final_reports)} story article summary record(s) "
         f"from {story_assignment_stats.get('selected_unique_article_count', 0)} unique article(s)."
@@ -4891,16 +4638,6 @@ def _run_pipeline() -> None:
     story_summary_records = _report_entry_debug_records(final_reports)
     _active_run_finalizer(diagnostics, CONFIG).record_selected_articles(selected_articles)
     _active_run_finalizer(diagnostics, CONFIG).record_story_summary_records(story_summary_records)
-    story_assigned_summaries_path = _persist_article_summaries_debug(
-        final_reports,
-        label="story_assigned_article_summaries",
-    )
-    if story_assigned_summaries_path:
-        diagnostics.record_artifact(
-            "story_assigned_article_summaries",
-            story_assigned_summaries_path,
-            count=len(final_reports),
-        )
 
     recipient_config = get_active_recipient_config(load_recipient_config())
     recipient_list = list(recipient_config.keys())
@@ -4939,14 +4676,6 @@ def _run_pipeline() -> None:
             _story_selection_runtime(),
         )
     )
-    synthesis_dataset_artifacts = _persist_grouped_synthesis_dataset_debug(report_asset_path, token_stats)
-    artifact_prefix = _slugify_report_suffix(os.path.splitext(os.path.basename(report_asset_path))[0])
-    for artifact_name, artifact_path in synthesis_dataset_artifacts.items():
-        diagnostics.record_artifact(
-            f"{artifact_prefix}_{artifact_name}",
-            artifact_path,
-            recipients=recipient_list,
-        )
     synthesis_body = clean_synthesis_for_publication(
         story_drafting,
         relaxed=RELAXED_STORY_DRAFTING_GUARDS,

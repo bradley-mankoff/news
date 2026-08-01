@@ -13,7 +13,6 @@ from news_pipeline.article_summary_records import (
     records_by_article_id,
     render_markdown_entry,
     to_citation_source,
-    to_history_records,
     with_story,
 )
 
@@ -182,13 +181,11 @@ class ArticleSummaryRecordTests(unittest.TestCase):
         parsed = parse_markdown_entry(rendered)
         story_record = with_story(parsed, "Story ports")
         lookup = records_by_article_id([story_record])
-        history_row = to_history_records([story_record])[0]
         citation_source = to_citation_source(story_record)
 
         self.assertEqual(parsed.article_id, "ports-1")
         self.assertEqual(story_record.story, "Story ports")
         self.assertIs(lookup["ports-1"], story_record)
-        self.assertEqual(history_row["summary"], "Negotiators resumed talks.")
         self.assertEqual(citation_source["raw_entry"], render_markdown_entry(story_record))
 
     def test_parse_markdown_entry_tolerates_na_url_and_string_low_confidence_fallback(self) -> None:

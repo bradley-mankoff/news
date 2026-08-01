@@ -326,7 +326,6 @@ class StorySelectionTests(unittest.TestCase):
         self.assertEqual(stats["article_overlap_dedup"]["conflicts_resolved"], 1)
         self.assertEqual(stats["rejected"][0]["reason"], "article_overlap_above_global_threshold")
         self.assertEqual(stats["rejected"][1]["reason"], "global_story_limit_reached")
-        self.assertEqual(ss._story_article_id_set(draft_a), {"a1", "a2"})
 
         duplicate_story = StoryRecord(
             story_key="ports",
@@ -457,8 +456,6 @@ class StorySelectionTests(unittest.TestCase):
         self.assertIn("Contradictions: Counterpoint paragraph [3].", synthesis)
         self.assertEqual(token_stats["citation_source_count"], 3)
         self.assertEqual(token_stats["citation_group_count"], 1)
-        self.assertIn("Story: Port Talks Resume", token_stats["primary_dataset"])
-        self.assertNotIn("Topic", token_stats["primary_dataset"])
         self.assertEqual(token_stats["high_confidence_reports"], 1)
         self.assertEqual(token_stats["low_confidence_reports"], 1)
         self.assertEqual(len(token_stats["required_story_headlines"]), 1)

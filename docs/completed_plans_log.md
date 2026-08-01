@@ -1,4 +1,0 @@
-# Completed Plans Log
-
-- 2026-06-28: `Guided UI Run Setup Precise Plan` - Premise: redesign the internal News Control Panel so the first screen guides a run top-to-bottom with presets, model tuning, budgets, and a sticky Run action. Outcome: completed the guided UI, preset CRUD, responsive layout fixes, focused tests, and browser/manual QA; temporary test presets were created and deleted.
-- 2026-06-28: `Get To 100% Test Coverage Precise Plan` - Premise: bring line test coverage for `news_pipeline` to 100% with deterministic tests, minimal coverage tooling, and a 100% fail-under guard. Outcome: completed the coverage triage, added the remaining focused tests, verified `news_pipeline` at 100% with `243` tests and `21` subtests, and kept the final worktree limited to intended coverage and documentation updates.

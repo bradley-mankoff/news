@@ -22,7 +22,6 @@ from urllib.parse import parse_qs, urlparse
 import yaml
 
 from .config import (
-    CONFIG_DIR,
     MODEL_TUNING_PRESETS_PATH,
     REMOVED_TOPIC_ENV_VARS,
     ROOT_DIR,

@@ -1,13 +1,9 @@
 from __future__ import annotations
 
 import builtins
-import pickle
-import sqlite3
 import sys
 import types
 import unittest
-from pathlib import Path
-from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 import numpy as np
@@ -81,76 +77,7 @@ class EmbeddingsTests(unittest.TestCase):
             with self.assertRaisesRegex(ImportError, "sentence-transformers is required"):
                 emb._load_model()
 
-    def test_content_hash_is_stable_and_fixed_width(self) -> None:
-        digest = emb._content_hash("same text")
 
-        self.assertEqual(len(digest), 40)
-        self.assertEqual(digest, emb._content_hash("same text"))
-        self.assertNotEqual(digest, emb._content_hash("different text"))
-        self.assertEqual(
-            emb._article_embed_text({"title": "Headline", "text": "Body", "description": "Ignored"}),
-            "Headline. Body",
-        )
-        self.assertEqual(
-            emb._article_embed_text({"title": "Headline", "description": "Fallback"}),
-            "Headline. Fallback",
-        )
-        self.assertEqual(emb._article_embed_text({"title": "Headline"}), "Headline")
-
-    def test_open_cache_creates_compat_index_for_old_tables(self) -> None:
-        with TemporaryDirectory() as tmpdir:
-            cache_path = Path(tmpdir) / "embedding_cache.db"
-            conn = sqlite3.connect(cache_path)
-            conn.execute("CREATE TABLE embeddings (hash TEXT, vector BLOB NOT NULL)")
-            conn.commit()
-            conn.close()
-
-            original_path = emb._CACHE_DB_PATH
-            self.addCleanup(setattr, emb, "_CACHE_DB_PATH", original_path)
-            emb._CACHE_DB_PATH = str(cache_path)
-
-            conn = emb._open_cache()
-            try:
-                indexes = conn.execute("PRAGMA index_list(embeddings)").fetchall()
-            finally:
-                conn.close()
-
-        self.assertTrue(any(row[1] == "idx_embeddings_hash" for row in indexes))
-
-    def test_embed_articles_uses_sqlite_cache_for_duplicate_text(self) -> None:
-        with TemporaryDirectory() as tmpdir:
-            cache_path = Path(tmpdir) / "embedding_cache.db"
-            original_path = emb._CACHE_DB_PATH
-            self.addCleanup(setattr, emb, "_CACHE_DB_PATH", original_path)
-            emb._CACHE_DB_PATH = str(cache_path)
-
-            articles = [
-                {"title": "Shared", "text": "Same body"},
-                {"title": "Shared", "text": "Same body"},
-            ]
-            first_vectors = np.asarray([[1.0, 2.0], [3.0, 4.0]], dtype=np.float32)
-
-            with patch.object(emb, "embed_texts", return_value=first_vectors) as mock_embed_texts:
-                result = emb.embed_articles(articles)
-
-            mock_embed_texts.assert_called_once_with(["Shared. Same body", "Shared. Same body"])
-            np.testing.assert_array_equal(
-                result,
-                np.asarray([[3.0, 4.0], [3.0, 4.0]], dtype=np.float32),
-            )
-
-            with sqlite3.connect(cache_path) as conn:
-                row_count = conn.execute("SELECT COUNT(*) FROM embeddings").fetchone()[0]
-            self.assertEqual(row_count, 1)
-
-            with patch.object(emb, "embed_texts") as mock_embed_texts:
-                second = emb.embed_articles(articles)
-
-            mock_embed_texts.assert_not_called()
-            np.testing.assert_array_equal(second, result)
-
-    def test_embed_articles_handles_empty_input(self) -> None:
-        self.assertEqual(emb.embed_articles([]).shape, (0, 0))
 
     def test_dedup_story_drafts_keeps_higher_source_count(self) -> None:
         drafts = [

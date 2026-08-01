@@ -19,7 +19,6 @@ from .article_summary_records import (
 )
 from .story_records import (
     ensure_story_record,
-    story_article_id_set,
     story_article_overlap,
     story_debug_record,
     story_rank_key,
@@ -495,8 +494,6 @@ def apply_global_story_scale_screening(
     return kept, stats
 
 
-def _story_article_id_set(story: dict[str, Any]) -> set[str]:
-    return story_article_id_set(story)
 
 
 def _story_article_overlap(
@@ -688,18 +685,6 @@ def _distinct_cited_source_ids(cited_sentences: list[dict[str, Any]]) -> list[st
     return source_ids
 
 
-def _global_story_primary_dataset(selected_story_matches: list[dict[str, Any]]) -> str:
-    sections: list[str] = []
-    for story in selected_story_matches:
-        lines = [
-            f"Story: {story.get('story_title')}",
-            f"Story headline: {_story_section_headline(story)}",
-            f"Article IDs: {', '.join(str(article_id) for article_id in story.get('article_ids', []))}",
-            "Story draft:",
-            str(story.get("paragraph") or story.get("story_text") or "").strip(),
-        ]
-        sections.append("\n".join(lines))
-    return "\n\n---\n\n".join(sections)
 
 
 def build_precomputed_global_story_synthesis(
@@ -860,7 +845,6 @@ def build_precomputed_global_story_synthesis(
         "required_story_headlines": story_headlines,
         "eligible_story_block_count": len(story_blocks),
         "explicit_story_mode": True,
-        "primary_dataset": _global_story_primary_dataset(selected_story_matches),
         "included_report_keys": [runtime.report_reference_key(entry) for entry in reference_reports],
         "citation_sources": citation_sources,
         "citation_source_count": len(citation_sources),

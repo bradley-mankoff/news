@@ -28,9 +28,6 @@ from .source_catalog import (
     load_source_rows,
 )
 from .feed_utils import (
-    decode_google_news_article_path as _decode_google_news_article_path,
-    google_news_query_target as _google_news_query_target,
-    is_google_news_url as _is_google_news_url,
     parse_feed_datetime as _parse_feed_datetime,
     resolve_google_news_url as _resolve_google_news_url,
 )
@@ -267,9 +264,6 @@ def _item_datetimes(content: bytes, fetcher: str) -> tuple[list[datetime | None]
         return _json_item_datetimes(content), "json"
 
 
-def _count_items(content: bytes, fetcher: str) -> tuple[int, str]:
-    item_datetimes, feed_format = _item_datetimes(content, fetcher)
-    return len(item_datetimes), feed_format
 
 
 def _summarize_items(

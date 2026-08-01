@@ -11,7 +11,6 @@ from typing import Any
 from urllib.parse import urldefrag
 from zoneinfo import ZoneInfo
 
-from .article_summary_records import parse_markdown_entry, to_citation_source
 
 
 TEMPORARY_CITATION_RE = re.compile(r"\[\[([A-Za-z0-9_,;\s-]+)\]\]")
@@ -364,16 +363,8 @@ def _citation_precedence_dependency_records_from_annotated(
     return records
 
 
-def citation_precedence_dependency_records(citation_sources: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    return _citation_precedence_dependency_records_from_annotated(
-        annotate_citation_precedence(citation_sources)
-    )
 
 
-def parse_article_report_entry(entry: str) -> dict[str, Any]:
-    """Extract stable citation metadata from a normalized article summary."""
-
-    return to_citation_source(parse_markdown_entry(entry))
 
 
 def strip_citation_markers(text: str) -> str:
@@ -498,32 +489,6 @@ def _tokenize_for_matching(text: str) -> set[str]:
     return tokens
 
 
-def _fallback_source_ids(sentence: str, citation_sources: list[dict[str, Any]]) -> list[str]:
-    if not citation_sources:
-        return []
-
-    sentence_tokens = _tokenize_for_matching(sentence)
-    ranked: list[tuple[float, int, str]] = []
-    for index, source in enumerate(citation_sources):
-        local_id = _normalize_source_id(str(source.get("local_id") or ""))
-        if not local_id:
-            continue
-        source_text = " ".join(
-            str(source.get(key) or "")
-            for key in ("title", "source", "published", "summary")
-        )
-        source_tokens = _tokenize_for_matching(source_text)
-        if sentence_tokens and source_tokens:
-            overlap = len(sentence_tokens & source_tokens)
-            score = overlap / math.sqrt(len(sentence_tokens) * len(source_tokens))
-        else:
-            score = 0.0
-        ranked.append((score, -index, local_id))
-
-    if not ranked:
-        return []
-    ranked.sort(reverse=True)
-    return [ranked[0][2]]
 
 
 def _citation_dependency_map(citation_sources: list[dict[str, Any]]) -> dict[str, list[str]]:
@@ -867,20 +832,6 @@ class CitationRegistry:
         return [dict(source) for source in self._sources]
 
 
-def render_cited_story_text(
-    cited_sentences: list[dict[str, Any]],
-    citation_sources: list[dict[str, Any]],
-    registry: CitationRegistry,
-) -> str:
-    return str(
-        render_cited_story(
-            cited_sentences,
-            citation_sources,
-            registry,
-            story_level_citation_sentence_threshold=None,
-        ).get("paragraph")
-        or ""
-    )
 
 
 def _normalized_sentence_source_ids(sentence: dict[str, Any]) -> list[str]:

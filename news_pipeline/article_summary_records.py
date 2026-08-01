@@ -247,8 +247,6 @@ def article_id(value: ArticleSummaryRecord | str) -> str:
     return ensure_record(value).article_id
 
 
-def story_label(value: ArticleSummaryRecord | str) -> str:
-    return ensure_record(value).story
 
 
 def reference_key(value: ArticleSummaryRecord | str) -> str:
@@ -271,11 +269,6 @@ def to_history_record(record: ArticleSummaryRecord, index: int) -> dict[str, Any
     }
 
 
-def to_history_records(records: list[ArticleSummaryRecord | str]) -> list[dict[str, Any]]:
-    return [
-        to_history_record(ensure_record(record), index)
-        for index, record in enumerate(records, start=1)
-    ]
 
 
 def to_citation_source(record: ArticleSummaryRecord) -> dict[str, Any]:

@@ -13,7 +13,6 @@ from news_pipeline.story_drafting import (
     contradiction_presence_diagnostics,
     draft_story_clusters_from_article_summaries,
     report_article_id,
-    report_summary_text,
     run_story_synthesis_blocks,
     build_story_synthesis_prompt_messages,
     parse_story_synthesis_output,
@@ -83,7 +82,6 @@ def _source(local_id: str, **overrides):
 
 class StoryDraftingTests(unittest.TestCase):
     def test_basic_report_and_lookup_helpers_cover_empty_branches(self) -> None:
-        self.assertEqual(report_summary_text("### Title\nSummary:\nBody"), "Body")
         self.assertEqual(report_article_id("### Title\nMetadata:\n- Article ID: a1\nSummary:\nBody"), "a1")
         self.assertEqual(_article_lookup_by_id(None), {})
         self.assertEqual(_article_lookup_by_id([{"title": "Missing id"}]), {})

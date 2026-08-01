@@ -18,9 +18,7 @@ from news_pipeline.text_cleaning import (
 from news_pipeline.text_matching import (
     clean_source_title,
     compact_dotted_acronyms,
-    match_terms,
     normalize_match_token,
-    normalize_text_key,
     ordered_match_terms,
 )
 
@@ -93,9 +91,7 @@ class TextCleaningTests(unittest.TestCase):
 
 
 class TextMatchingTests(unittest.TestCase):
-    def test_title_key_acronym_and_token_normalization(self) -> None:
-        self.assertEqual(normalize_text_key("  Big Story!  "), "big_story")
-        self.assertEqual(normalize_text_key("!!!"), "story")
+    def test_title_acronym_and_token_normalization(self) -> None:
         self.assertEqual(clean_source_title("Headline - Reuters"), "Headline")
         self.assertEqual(compact_dotted_acronyms("U.S. and E.U."), "US and EU")
         self.assertEqual(normalize_match_token("company's"), "company")
@@ -110,7 +106,6 @@ class TextMatchingTests(unittest.TestCase):
         )
         self.assertEqual(ordered_match_terms("go ai", allowed_short_terms={"ai"}), ["ai"])
         self.assertEqual(ordered_match_terms("AI", collect_short_terms=True), ["ai"])
-        self.assertEqual(match_terms("Markets markets 123"), {"market"})
 
 
 if __name__ == "__main__":

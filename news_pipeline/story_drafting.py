@@ -16,7 +16,6 @@ from .article_summary_records import (
     ArticleSummaryRecord,
     article_id as record_article_id,
     records_by_article_id,
-    summary_text as record_summary_text,
     to_citation_source,
 )
 from .story_records import ensure_story_record
@@ -47,8 +46,6 @@ class StoryDraftingRuntime:
     progress_callback: Callable[[str, dict[str, Any]], None] | None = None
 
 
-def report_summary_text(entry: ArticleSummaryRecord | str) -> str:
-    return record_summary_text(entry)
 
 
 def report_article_id(entry: ArticleSummaryRecord | str) -> str:

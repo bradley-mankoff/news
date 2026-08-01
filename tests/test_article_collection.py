@@ -167,7 +167,7 @@ class ArticleCollectionTests(unittest.TestCase):
 
             appended: list[tuple[str, list[str]]] = []
             _record_run_urls(
-                replace(request, write_legacy_diagnostics=True),
+                request,
                 ["https://example.com/c"],
                 [{"url": "https://example.com/c"}],
                 ArticleCollectionAdapters(
@@ -176,9 +176,9 @@ class ArticleCollectionTests(unittest.TestCase):
                     append_unique_urls=lambda path, urls: appended.append((path, urls)),
                 ),
             )
-            self.assertEqual(appended, [(request.run_used_urls_path, ["https://example.com/c"])])
+            self.assertEqual(appended, [])
 
-    def test_collect_records_candidates_diagnostics_history_and_artifact(self) -> None:
+    def test_collect_records_candidates_diagnostics_history(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
             diagnostics = self._diagnostics(root)
@@ -238,7 +238,6 @@ class ArticleCollectionTests(unittest.TestCase):
                 upsert_url_history=lambda *args, **kwargs: upsert_calls.append(
                     {"args": args, "kwargs": kwargs}
                 ),
-                persist_url_list_debug=lambda urls, _label: (str(root / "candidate_urls.txt"), len(urls)),
                 append_unique_urls=lambda path, urls: appended.append((path, urls)),
             )
 
@@ -258,7 +257,6 @@ class ArticleCollectionTests(unittest.TestCase):
             self.assertEqual(result.stats.rejected_counts["missing_url"], 1)
             self.assertEqual(result.stats.rejected_counts["wrong_feed_source"], 2)
             self.assertEqual(finalizer.candidate_articles, result.article_candidates)
-            self.assertEqual(diagnostics.artifacts["candidate_urls"]["count"], 2)
             self.assertEqual(len(upsert_calls), 1)
             self.assertEqual(
                 upsert_calls[0]["kwargs"]["urls"],
@@ -355,7 +353,6 @@ class ArticleCollectionTests(unittest.TestCase):
             slow_source_warning_seconds=2.0,
             source_collection_concurrency=3,
             url_reuse_blocking_enabled=True,
-            write_legacy_diagnostics=False,
         )
 
     def _diagnostics(self, root: Path) -> RunDiagnostics:

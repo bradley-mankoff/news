@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import csv
 import json
-import os
 import re
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -35,17 +34,6 @@ URL_STAGE_BY_PREFIX = {
     "candidate_urls": "candidate",
     "selected_article_urls": "selected",
 }
-REPLACEABLE_FILE_PATTERNS = (
-    re.compile(r"^run_details_.*\.(json|md)$"),
-    re.compile(r"^run_summary_.*\.md$"),
-    re.compile(r"^run_log_.*\.log$"),
-    re.compile(r"^topics_.*\.json$"),
-    re.compile(r"^(article_summaries|topic_assigned_article_summaries|story_assigned_article_summaries|final_article_summaries_after_backfill)_.*\.json$"),
-    re.compile(r"^(candidate_urls|selected_article_urls)_.*\.txt$"),
-    re.compile(r"^news_report_.*_primary_dataset\.(txt|json)$"),
-    re.compile(r"^news_report_.*_image_prompt\.txt$"),
-    re.compile(r"^news_report_.*_image_stats\.json$"),
-)
 ROLLING_REVIEW_FILENAME = "latest_run.md"
 ROLLING_RUN_FILENAMES = {
     ROLLING_REVIEW_FILENAME,
@@ -1063,20 +1051,6 @@ def _find_run_file(output_dir: Path, run_id: str, filename: str) -> Path | None:
     return path if path.exists() else None
 
 
-def _cleanup_candidates(output_dir: Path, *, imported_paths: set[Path]) -> list[Path]:
-    candidates: list[Path] = []
-    if not output_dir.exists():
-        return candidates
-    for path in sorted(output_dir.rglob("*")):
-        if not path.is_file():
-            continue
-        if path.name in {"embedding_cache.db", ".DS_Store"}:
-            continue
-        if path not in imported_paths and not _is_raw_image_with_final(path):
-            continue
-        if _is_replaceable_file(path) or _is_raw_image_with_final(path):
-            candidates.append(path)
-    return candidates
 
 
 def _visible_output_cleanup_candidates(
@@ -1113,22 +1087,10 @@ def _remove_empty_output_dirs(output_dir: Path) -> None:
             continue
 
 
-def _imported_artifact_paths(db_path: Path) -> set[Path]:
-    ensure_schema(db_path)
-    with connect(db_path) as con:
-        rows = con.execute("SELECT path FROM artifacts WHERE imported = TRUE").fetchall()
-    return {Path(str(row[0])) for row in rows if row and row[0]}
 
 
-def _is_replaceable_file(path: Path) -> bool:
-    return any(pattern.match(path.name) for pattern in REPLACEABLE_FILE_PATTERNS)
 
 
-def _is_raw_image_with_final(path: Path) -> bool:
-    if not path.name.endswith("_raw.png"):
-        return False
-    final_path = path.with_name(path.name.replace("_raw.png", "_image.png"))
-    return final_path.exists()
 
 
 def _artifact_family(filename: str) -> str:

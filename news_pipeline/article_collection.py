@@ -55,7 +55,6 @@ class ArticleCollectionRequest:
     slow_source_warning_seconds: float
     source_collection_concurrency: int
     url_reuse_blocking_enabled: bool
-    write_legacy_diagnostics: bool
 
 
 @dataclass(frozen=True)
@@ -78,7 +77,6 @@ class ArticleCollectionAdapters:
     blocking_urls: Callable[[Path], set[str]] = history_store.blocking_urls
     normalize_history_url: Callable[[str], str] = history_store.normalize_url_for_history
     upsert_url_history: Callable[..., None] = history_store.upsert_url_history
-    persist_url_list_debug: Callable[[list[str], str], tuple[str, int] | None] = lambda _urls, _label: None
     append_unique_urls: Callable[[str, list[str]], None] = lambda _path, _urls: None
     now: Callable[[], datetime] = lambda: datetime.now(timezone.utc)
 
@@ -135,7 +133,6 @@ def collect_article_candidates(
         fresh_article_count=fresh_article_count,
         rejected_counts=dict(source_rejection_counts),
     )
-    _record_candidate_url_artifact(request, diagnostics, candidate_urls, adapters)
     finalizer.record_candidate_articles(article_candidates)
     _record_run_urls(request, candidate_urls, article_candidates, adapters)
     return ArticleCollectionResult(article_candidates=article_candidates, stats=stats)
@@ -413,21 +410,6 @@ def _record_collection_summary(progress: ProgressLike, stats: ArticleCollectionS
         )
 
 
-def _record_candidate_url_artifact(
-    request: ArticleCollectionRequest,
-    diagnostics: RunDiagnostics,
-    candidate_urls: list[str],
-    adapters: ArticleCollectionAdapters,
-) -> None:
-    candidate_url_artifact = adapters.persist_url_list_debug(candidate_urls, "candidate_urls")
-    if candidate_url_artifact:
-        candidate_url_path, candidate_url_count = candidate_url_artifact
-        diagnostics.record_artifact(
-            "candidate_urls",
-            candidate_url_path,
-            count=candidate_url_count,
-            run_used_urls_path=request.run_used_urls_path,
-        )
 
 
 def _load_seen_urls(request: ArticleCollectionRequest, adapters: ArticleCollectionAdapters) -> set[str]:
@@ -467,8 +449,6 @@ def _record_run_urls(
         adapters.append_unique_urls(request.run_used_urls_path, urls)
         return
 
-    if request.write_legacy_diagnostics:
-        adapters.append_unique_urls(request.run_used_urls_path, urls)
 
 
 def _normalize_url_for_dedupe(url: str) -> str:

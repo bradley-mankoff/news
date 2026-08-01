@@ -45,6 +45,79 @@ class RunFinalizerTests(unittest.TestCase):
                 self.assertEqual(con.execute("SELECT COUNT(*) FROM run_articles").fetchone()[0], 3)
                 self.assertEqual(con.execute("SELECT COUNT(*) FROM article_summaries").fetchone()[0], 2)
 
+    def test_finish_writes_okf_bundle_from_recorded_story_records(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            finalizer, paths, _progress = self._finalizer(tmpdir)
+            finalizer.record_article_summary_records(
+                [
+                    {
+                        "title": "A daily article",
+                        "source": "Example",
+                        "published": "2026-06-01T09:00:00Z",
+                        "url": "https://example.com/daily",
+                        "article_id": "article-daily",
+                        "story": "Daily update",
+                        "summary": "A concise summary.",
+                    }
+                ]
+            )
+            finalizer.record_story_records(
+                [
+                    {
+                        "story_key": "story-daily",
+                        "story_title": "Daily update",
+                        "article_ids": ["article-daily"],
+                        "cluster_article_ids": ["article-daily"],
+                        "article_count": 1,
+                        "cluster_article_count": 1,
+                        "selected_article_count": 1,
+                    }
+                ]
+            )
+            finalizer.record_report_body("Daily News Summary\n\nA useful report.")
+            finalizer.diagnostics.event("completed")
+
+            finalizer.finish()
+
+            bundle = paths["history_db"].parent / "okf" / "2026-06-01_10-00-00"
+            self.assertTrue((bundle / "report.md").is_file())
+            self.assertTrue((bundle / "index.md").is_file())
+            self.assertTrue((bundle / "stories" / "daily-update.md").is_file())
+            self.assertIn(
+                "A useful report.",
+                (bundle / "report.md").read_text(encoding="utf-8"),
+            )
+
+    def test_okf_failure_warns_without_blocking_details_history_or_review(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            finalizer, paths, progress = self._finalizer(tmpdir)
+
+            def fail_okf(*_args, **_kwargs) -> Path:
+                raise RuntimeError("okf down")
+
+            finalizer.adapters = RunFinalizerAdapters(
+                model_call_stats_snapshot=lambda: {"calls": {"summary": 1}},
+                write_okf_run_bundle=fail_okf,
+                progress=progress,
+            )
+            finalizer.record_report_body("Daily News Summary\n\nA useful report.")
+            finalizer.diagnostics.event("completed")
+
+            finalizer.finish()
+
+            self.assertTrue(paths["latest_details"].is_file())
+            self.assertIn(
+                "A useful report.",
+                paths["latest_markdown"].read_text(encoding="utf-8"),
+            )
+            with connect(paths["history_db"]) as con:
+                self.assertEqual(
+                    con.execute("SELECT status FROM runs").fetchone()[0],
+                    "completed",
+                )
+            self.assertIn("OKF Run Bundle write failed: okf down", progress.warnings)
+
+
     def test_finish_writes_beehiiv_paste_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             finalizer, paths, _progress = self._finalizer(tmpdir)

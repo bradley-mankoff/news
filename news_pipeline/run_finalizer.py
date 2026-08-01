@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, Callable, Iterable, Protocol
 
 from . import history_store
+from .okf import write_okf_run_bundle
 from .diagnostics import RunDiagnostics
 
 
@@ -37,9 +38,9 @@ class RunFinalizerAdapters:
     attach_pending_activity_snapshots: Callable[[RunDiagnostics], None] = lambda diagnostics: None
     model_call_stats_snapshot: Callable[[], dict[str, Any]] = dict
     write_run_history: Callable[..., None] = history_store.write_run_history
+    write_okf_run_bundle: Callable[..., Path] = write_okf_run_bundle
     cleanup_visible_outputs: CleanupVisibleOutputs = history_store.cleanup_visible_outputs
     progress: Any | None = None
-
 
 @dataclass
 class RunFinalizer:
@@ -52,6 +53,7 @@ class RunFinalizer:
     selected_articles: list[dict[str, Any]] | None = None
     article_summary_records: list[dict[str, Any]] | None = None
     story_summary_records: list[dict[str, Any]] | None = None
+    story_records: list[dict[str, Any]] | None = None
 
     def record_candidate_articles(self, articles: list[dict[str, Any]]) -> None:
         self.candidate_articles = articles
@@ -67,6 +69,9 @@ class RunFinalizer:
 
     def record_story_summary_records(self, records: list[dict[str, Any]]) -> None:
         self.story_summary_records = records
+
+    def record_story_records(self, records: list[dict[str, Any]]) -> None:
+        self.story_records = records
 
     def record_report_body(self, report_body: str) -> None:
         self.report_body = report_body
@@ -85,6 +90,7 @@ class RunFinalizer:
         self.diagnostics.record_model_call_stats(self.adapters.model_call_stats_snapshot())
         self._write_details()
         self._write_history()
+        self._write_okf_run_bundle()
         self._write_review()
         self._write_beehiiv_paste()
         self._cleanup_visible_outputs()
@@ -114,6 +120,24 @@ class RunFinalizer:
             self._detail(f"Run history saved: {self.config.history_db_path}")
         except Exception as error:
             self._warning(f"Run history write failed: {error}")
+
+    def _write_okf_run_bundle(self) -> None:
+        try:
+            bundle_path = self.adapters.write_okf_run_bundle(
+                self.config.history_db_path,
+                run_id=self.config.run_id,
+                diagnostics=self.diagnostics,
+                report_body=self.report_body,
+                article_summary_records=self.article_summary_records,
+                story_summary_records=self.story_summary_records,
+                story_records=self.story_records,
+                candidate_articles=self.candidate_articles,
+                summarized_articles=self.summarized_articles,
+                selected_articles=self.selected_articles,
+            )
+            self._detail(f"OKF Run Bundle saved: {bundle_path}")
+        except Exception as error:
+            self._warning(f"OKF Run Bundle write failed: {error}")
 
     def _write_review(self) -> None:
         try:

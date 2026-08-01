@@ -185,7 +185,6 @@ class SourceChecksHelpersTests(unittest.TestCase):
         fallback_datetimes, fallback_format = sc._item_datetimes(b"{\"items\": []}", "rss")
         self.assertEqual(fallback_format, "json")
         self.assertEqual(fallback_datetimes, [])
-        self.assertEqual(sc._count_items(rss_bytes, "rss"), (2, "rss"))
         self.assertEqual(sc._xml_feed_format(ElementTree.fromstring(b"<root />")), "xml")
 
         summary = sc._summarize_items(

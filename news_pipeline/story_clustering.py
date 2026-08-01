@@ -784,40 +784,6 @@ def _article_source_identity(article: dict) -> str:
     return "unknown"
 
 
-def _select_story_article_indexes(
-    component: list[int],
-    medoid_index: int,
-    articles: list[dict],
-    similarities: dict[tuple[int, int], float],
-) -> list[int]:
-    def article_rank(index: int) -> tuple:
-        article = articles[index]
-        return (
-            0 if index == medoid_index else 1,
-            -_story_index_average_similarity(index, component, similarities),
-            -int(article.get("relevance_score") or 0),
-            tuple(-value for value in _article_time_rank(article)),
-            str(article.get("source") or ""),
-            index,
-        )
-
-    ranked_indexes = sorted(component, key=article_rank)
-    source_count = len({_article_source_identity(articles[index]) for index in component})
-    selected: list[int] = []
-    selected_sources: set[str] = set()
-
-    for index in ranked_indexes:
-        source = _article_source_identity(articles[index])
-        if source in selected_sources and len(selected_sources) < source_count:
-            continue
-        selected.append(index)
-        selected_sources.add(source)
-
-    for index in ranked_indexes:
-        if index not in selected:
-            selected.append(index)
-
-    return selected
 
 
 def _story_component_overlap_ratio(left: set[int], right: set[int]) -> float:
@@ -1330,48 +1296,3 @@ def organize_article_targets_into_global_stories(
     return selected_targets, story_records, stats
 
 
-def filter_budgeted_targets_by_story_floor(
-    article_targets: list[dict],
-    *,
-    min_articles_per_story: int = MIN_ARTICLES_PER_STORY,
-) -> tuple[list[dict], dict[str, Any]]:
-    if min_articles_per_story <= 1:
-        return article_targets, {
-            "enabled": False,
-            "candidate_count": len(article_targets),
-            "included_count": len(article_targets),
-            "dropped_count": 0,
-            "min_articles_per_story": min_articles_per_story,
-        }
-
-    grouped: dict[str, list[dict]] = {}
-    for article in article_targets:
-        story_key = str(article.get("story_key") or "").strip()
-        if not story_key:
-            continue
-        grouped.setdefault(story_key, []).append(article)
-
-    eligible_story_keys = {
-        story_key
-        for story_key, story_articles in grouped.items()
-        if len(story_articles) >= min_articles_per_story
-    }
-    selected = [
-        article
-        for article in article_targets
-        if str(article.get("story_key") or "").strip() in eligible_story_keys
-    ]
-    dropped = [
-        article
-        for article in article_targets
-        if str(article.get("story_key") or "").strip() not in eligible_story_keys
-    ]
-    return selected, {
-        "enabled": True,
-        "candidate_count": len(article_targets),
-        "included_count": len(selected),
-        "dropped_count": len(dropped),
-        "min_articles_per_story": min_articles_per_story,
-        "eligible_story_count": len(eligible_story_keys),
-        "dropped_article_ids": [article.get("article_id") for article in dropped],
-    }

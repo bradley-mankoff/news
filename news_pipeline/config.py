@@ -23,7 +23,6 @@ from urllib.parse import urlparse
 
 import yaml
 
-from .source_catalog import apply_source_catalog_patch
 
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
@@ -159,7 +158,6 @@ class ModelTuningSettings:
     model_max_input_tokens: int | None = None
     article_summary_max_tokens: int | None = None
     story_drafting_max_tokens: int | None = None
-    title_generation_max_tokens: int | None = None
     task_sampling: dict[str, ModelSamplingSettings] = field(default_factory=dict)
 
 
@@ -214,7 +212,6 @@ class RuntimeConfig:
     run_staging_dir: Path
     history_db_path: Path
     history_export_csv: bool
-    write_legacy_diagnostics: bool
     run_used_urls_path: Path
     preset_id: str
     source_scope: str
@@ -234,7 +231,6 @@ class RuntimeConfig:
     total_article_summary_cap: int
     article_summary_max_tokens: int
     story_drafting_max_tokens: int
-    title_generation_max_tokens: int
     model_assignments: dict[str, TaskModelAssignment]
     model_tuning: ModelTuningSettings
     pipeline_budget: PipelineBudget
@@ -304,7 +300,6 @@ DEFAULT_ARTICLE_TEXT_TOKEN_LIMIT = 4500
 DEFAULT_MODEL_MAX_INPUT_TOKENS = 6000
 DEFAULT_ARTICLE_SUMMARY_MAX_TOKENS = 1000
 DEFAULT_STORY_DRAFTING_MAX_TOKENS = 1800
-DEFAULT_TITLE_GENERATION_MAX_TOKENS = 50
 DEFAULT_MODEL_SERVER_PREFILL_STEP_SIZE = 512
 DEFAULT_MODEL_SERVER_PROMPT_CACHE_SIZE = 2
 DEFAULT_MODEL_SERVER_PROMPT_CACHE_BYTES = "512MB"
@@ -524,11 +519,6 @@ def _merge_model_tuning_settings(
             if overlay.story_drafting_max_tokens is not None
             else base.story_drafting_max_tokens
         ),
-        title_generation_max_tokens=(
-            overlay.title_generation_max_tokens
-            if overlay.title_generation_max_tokens is not None
-            else base.title_generation_max_tokens
-        ),
         task_sampling=task_sampling,
     )
 
@@ -539,7 +529,6 @@ def _base_model_tuning(model_reference: str) -> ModelTuningSettings:
         model_max_input_tokens=DEFAULT_MODEL_MAX_INPUT_TOKENS,
         article_summary_max_tokens=DEFAULT_ARTICLE_SUMMARY_MAX_TOKENS,
         story_drafting_max_tokens=DEFAULT_STORY_DRAFTING_MAX_TOKENS,
-        title_generation_max_tokens=DEFAULT_TITLE_GENERATION_MAX_TOKENS,
         task_sampling=_empty_model_sampling_map(),
     )
     model_default_tuning = MODEL_SPECIFIC_TUNING_DEFAULTS.get(resolved_name)
@@ -555,8 +544,6 @@ def _task_max_tokens_field(task: str) -> str:
         return "article_summary_max_tokens"
     if task == MODEL_TASK_STORY_DRAFTING:
         return "story_drafting_max_tokens"
-    if task == "title_generation":
-        return "title_generation_max_tokens"
     raise ValueError(f"Unsupported model tuning task {task!r}.")
 
 
@@ -626,7 +613,6 @@ def _apply_model_tuning_preset(
             "model_max_input_tokens",
             "article_summary_max_tokens",
             "story_drafting_max_tokens",
-            "title_generation_max_tokens",
         }:
             raise ValueError(
                 f"Unsupported tuning field {key!r} in model tuning preset {preset_id!r}."
@@ -703,7 +689,6 @@ def _apply_model_tuning_env_overrides(tuning: ModelTuningSettings) -> ModelTunin
     model_max_input_tokens = _optional_int_env("NEWS_MODEL_MAX_INPUT_TOKENS")
     article_summary_max_tokens = _optional_int_env("NEWS_ARTICLE_SUMMARY_MAX_TOKENS")
     story_drafting_max_tokens = _optional_int_env("NEWS_STORY_DRAFTING_MAX_TOKENS")
-    title_generation_max_tokens = _optional_int_env("NEWS_TITLE_GENERATION_MAX_TOKENS")
     return ModelTuningSettings(
         model_max_input_tokens=(
             tuning.model_max_input_tokens
@@ -719,11 +704,6 @@ def _apply_model_tuning_env_overrides(tuning: ModelTuningSettings) -> ModelTunin
             tuning.story_drafting_max_tokens
             if story_drafting_max_tokens is None
             else story_drafting_max_tokens
-        ),
-        title_generation_max_tokens=(
-            tuning.title_generation_max_tokens
-            if title_generation_max_tokens is None
-            else title_generation_max_tokens
         ),
         task_sampling=task_sampling,
     )
@@ -996,8 +976,6 @@ def _configured_model_reference() -> str:
     return selected_model or DEFAULT_MODEL_ALIAS
 
 
-def _configured_model_name() -> str:
-    return resolve_model_name(_configured_model_reference())
 
 
 def infer_model_backend(model_reference: str) -> str:
@@ -1009,8 +987,6 @@ def infer_model_backend(model_reference: str) -> str:
     return "mlx-lm"
 
 
-def _configured_model_backend(model_reference: str) -> str:
-    return infer_model_backend(model_reference)
 
 
 def _default_story_synthesis_concurrency(model_reference: str) -> int:
@@ -1079,7 +1055,6 @@ def runtime_knob_registry() -> list[dict[str, Any]]:
         _runtime_knob("Model Tuning", "Model input cap", "NEWS_MODEL_MAX_INPUT_TOKENS", "number", minimum=1, step=1),
         _runtime_knob("Model Tuning", "Article summary max tokens", "NEWS_ARTICLE_SUMMARY_MAX_TOKENS", "number", minimum=1, step=1),
         _runtime_knob("Model Tuning", "Story drafting max tokens", "NEWS_STORY_DRAFTING_MAX_TOKENS", "number", minimum=1, step=1),
-        _runtime_knob("Model Tuning", "Title max tokens", "NEWS_TITLE_GENERATION_MAX_TOKENS", "number", minimum=1, step=1),
         _runtime_knob("Pipeline Budget", "Article text token limit", "NEWS_ARTICLE_TEXT_TOKEN_LIMIT", "number", minimum=1, step=1),
         _runtime_knob("Pipeline Budget", "Total article summary cap", "NEWS_TOTAL_ARTICLE_SUMMARY_CAP", "number", minimum=0, step=1),
         _runtime_knob("Pipeline Budget", "Recent window hours", "NEWS_RECENT_WINDOW_HOURS", "number", minimum=1, step=1),
@@ -1194,11 +1169,6 @@ def _coerce_float_value(value: Any, default: float = 1.0) -> float:
         return default
 
 
-def _coerce_int_value(value: Any, default: int) -> int:
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return default
 
 
 def _load_yaml_mapping(path: Path) -> dict[str, Any]:
@@ -1622,7 +1592,6 @@ def _build_runtime_config(
     output_dir = ROOT_DIR / _str_env("NEWS_OUTPUT_DIR", "output/daily_outputs")
     history_db_path = ROOT_DIR / _str_env("NEWS_HISTORY_DB", "output/history/news_history.duckdb")
     history_export_csv = _bool_env("NEWS_HISTORY_EXPORT_CSV", True)
-    write_legacy_diagnostics = _bool_env("NEWS_WRITE_LEGACY_DIAGNOSTICS", False)
     run_staging_dir = output_dir / ".staging" / timestamp
     run_output_dir = run_staging_dir
     latest_run_markdown_path = output_dir / "latest_run.md"
@@ -1722,7 +1691,6 @@ def _build_runtime_config(
         run_staging_dir=run_staging_dir,
         history_db_path=history_db_path,
         history_export_csv=history_export_csv,
-        write_legacy_diagnostics=write_legacy_diagnostics,
         run_used_urls_path=run_output_dir / run_used_urls_filename,
         preset_id=preset_id,
         source_scope=source_scope,
@@ -1744,8 +1712,6 @@ def _build_runtime_config(
         or DEFAULT_ARTICLE_SUMMARY_MAX_TOKENS,
         story_drafting_max_tokens=default_tuning.story_drafting_max_tokens
         or DEFAULT_STORY_DRAFTING_MAX_TOKENS,
-        title_generation_max_tokens=default_tuning.title_generation_max_tokens
-        or DEFAULT_TITLE_GENERATION_MAX_TOKENS,
         model_assignments=model_assignments,
         model_tuning=default_tuning,
         pipeline_budget=pipeline_budget,

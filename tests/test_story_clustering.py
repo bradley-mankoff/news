@@ -507,19 +507,6 @@ class StoryClusteringTests(unittest.TestCase):
             sc._article_source_identity({"url": "https://www.example.com/path"}),
             "example.com",
         )
-        self.assertEqual(
-            sc._select_story_article_indexes(
-                [0, 1, 2],
-                1,
-                [
-                    {"source": "Fixture Wire", "relevance_score": 3, "pub_date": "Mon, 01 Jun 2026 12:00:00 GMT"},
-                    {"source": "Fixture Wire", "relevance_score": 2, "pub_date": "Mon, 01 Jun 2026 13:00:00 GMT"},
-                    {"source": "Second Source", "relevance_score": 1, "pub_date": "Mon, 01 Jun 2026 11:00:00 GMT"},
-                ],
-                similarities,
-            ),
-            [1, 2, 0],
-        )
         self.assertEqual(sc._story_component_overlap_ratio(set(), {1, 2}), 0.0)
         self.assertAlmostEqual(sc._story_component_overlap_ratio({0, 1}, {1, 2}), 0.5)
         rank_tuple = sc._story_component_rank_tuple(
@@ -762,36 +749,6 @@ class StoryClusteringTests(unittest.TestCase):
         self.assertEqual([article["article_id"] for article in falsey_selected], ["ghost", "keep"])
         self.assertEqual(len(falsey_stories), 1)
         self.assertEqual(falsey_stats["dropped_count"], 0)
-
-        budgeted, budget_stats = sc.filter_budgeted_targets_by_story_floor(
-            [
-                {"article_id": "a1", "story_key": "alpha"},
-                {"article_id": "a2", "story_key": "alpha"},
-                {"article_id": "a3", "story_key": "beta"},
-            ],
-            min_articles_per_story=2,
-        )
-        self.assertEqual([article["article_id"] for article in budgeted], ["a1", "a2"])
-        self.assertEqual(budget_stats["eligible_story_count"], 1)
-        self.assertEqual(budget_stats["dropped_article_ids"], ["a3"])
-
-        singleton_budgeted, singleton_budget_stats = sc.filter_budgeted_targets_by_story_floor(
-            articles[:2],
-            min_articles_per_story=1,
-        )
-        self.assertEqual(singleton_budgeted, articles[:2])
-        self.assertFalse(singleton_budget_stats["enabled"])
-
-        budgeted_with_blank_key, blank_key_stats = sc.filter_budgeted_targets_by_story_floor(
-            [
-                {"article_id": "skip", "story_key": ""},
-                {"article_id": "keep1", "story_key": "alpha"},
-                {"article_id": "keep2", "story_key": "alpha"},
-            ],
-            min_articles_per_story=2,
-        )
-        self.assertEqual([article["article_id"] for article in budgeted_with_blank_key], ["keep1", "keep2"])
-        self.assertEqual(blank_key_stats["candidate_count"], 3)
 
 
 if __name__ == "__main__":

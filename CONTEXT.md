@@ -10,6 +10,7 @@ This project builds and sends a daily news report from configured sources. It ow
 - `config/run_presets.yaml` stores saved Run Settings overlays.
 - `config/model_tuning_presets.yaml` stores explicit model/task tuning overlays.
 - `output/history/` contains durable run history artifacts.
+- `knowledge/` is the checked-in OKF v0.2 system/domain bundle; generated run projections live at `output/history/okf/<run_id>/`.
 
 ## Run Session
 A Run Session is one execution of the daily news run. It owns the run's config snapshot, output paths, progress, diagnostics, run logs, and managed model server lifecycle.
@@ -18,7 +19,7 @@ A Run Session is one execution of the daily news run. It owns the run's config s
 The Article Collection Funnel fetches configured sources, scrapes articles, rejects source mismatches, dedupes URLs, records Source Run diagnostics, persists candidate URL history, and yields fresh article candidates.
 
 ## Source Catalog
-The Source Catalog is `config/sources.yaml`. It owns source records, YAML layout, source-language tags, translation retagging, and source removal.
+The Source Catalog is `config/sources.yaml`. It owns source records, YAML layout, source-language tags, language retagging, and source removal.
 
 ## Runtime Config Resolution
 Runtime Config Resolution turns base environment values, saved run presets, and explicit overrides into one Runtime Config snapshot before a Run Session starts. It owns setting metadata, Run Preset overlay rules, command environment deltas, and removed-setting validation.
@@ -30,4 +31,9 @@ Run Settings are the whole set of user-controllable values for one Run Session. 
 An Article Summary Record is the normalized result of summarizing one retained article. It owns article title, source, published time, URL, Article ID, story assignment, summary prose, and Markdown compatibility rendering for downstream report and history adapters.
 
 ## Story Record
+
 A Story Record is the normalized story-level record produced by global story clustering and consumed by story drafting, story selection, budget trimming, and debug reporting. It owns story key, story title, selected Article IDs, cluster Article IDs, ranking metrics, overlap comparison, and story debug projection.
+
+## OKF Run Bundle
+
+An **OKF Run Bundle** is the portable Open Knowledge Format v0.2 projection of one Daily News run at `output/history/okf/<run_id>/`, derived from structured Article Summary Record, Story Record, diagnostics, and the rendered report body. It contains `report.md`, `articles/`, `stories/`, progressive-disclosure indexes, and a conformant log. `knowledge/` is the checked-in system/domain projection. `CONTEXT.md`, ADRs, `config/`, `news_pipeline/`, report output, and DuckDB/CSV history remain canonical; OKF never becomes the runtime source of truth.

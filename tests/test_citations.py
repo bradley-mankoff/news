@@ -22,26 +22,6 @@ def _source(local_id: str, **overrides):
 
 
 class CitationHelperTests(unittest.TestCase):
-    def test_parse_article_report_entry_extracts_metadata(self) -> None:
-        entry = (
-            "### Flood plan expands\n"
-            "Metadata:\n"
-            "- Source: Fixture Wire\n"
-            "- Published: Sat, 16 May 2026 15:30:00 GMT\n"
-            "- URL: https://example.com/flood\n"
-            "- Article ID: fixture-1\n"
-            "- Topic: Climate Resilience\n\n"
-            "Summary:\n"
-            "Officials approved repairs."
-        )
-
-        parsed = citations_stage.parse_article_report_entry(entry)
-
-        self.assertEqual(parsed["title"], "Flood plan expands")
-        self.assertEqual(parsed["source"], "Fixture Wire")
-        self.assertEqual(parsed["url"], "https://example.com/flood")
-        self.assertEqual(parsed["article_id"], "fixture-1")
-        self.assertEqual(parsed["summary"], "Officials approved repairs.")
 
     def test_validate_cited_story_text_flags_unknown_markers_and_leaves_uncited_sentences(self) -> None:
         sources = [
@@ -235,63 +215,6 @@ class CitationHelperTests(unittest.TestCase):
             "same_org_previous_report",
         )
 
-    def test_render_cited_story_numbers_primary_before_derivative(self) -> None:
-        registry = citations_stage.CitationRegistry()
-        sources = [
-            _source(
-                "S1",
-                title="AP levee plan",
-                source="Associated Press",
-                summary="Officials approved levee repairs and backup pumps.",
-            ),
-            _source(
-                "S2",
-                title="Yahoo market reaction",
-                source="Yahoo Finance",
-                summary=(
-                    "According to AP, officials approved levee repairs. Yahoo Finance "
-                    "said analysts expected a small share-price move."
-                ),
-                body_evidence=(
-                    "According to AP, officials approved levee repairs. Analysts expected "
-                    "a small share-price move."
-                ),
-            ),
-        ]
-        cited_sentences = [
-            {"text": "Analysts expected a small share-price move.", "source_ids": ["S2"]},
-            {"text": "Officials approved levee repairs and backup pumps.", "source_ids": ["S1"]},
-        ]
-
-        rendered = citations_stage.render_cited_story_text(cited_sentences, sources, registry)
-
-        self.assertIn("Analysts expected a small share-price move.[2]", rendered)
-        self.assertIn("Officials approved levee repairs and backup pumps.[1]", rendered)
-        self.assertEqual(
-            [source["title"] for source in registry.sources()],
-            ["AP levee plan", "Yahoo market reaction"],
-        )
-
-    def test_render_cited_story_reuses_duplicate_url_numbers(self) -> None:
-        registry = citations_stage.CitationRegistry()
-        sources = [
-            _source("S1", url="https://example.com/shared"),
-            _source("S2", url="https://example.com/other"),
-            _source("S3", url="https://example.com/shared"),
-        ]
-        cited_sentences = [
-            {"text": "The first sentence cites two distinct stories.", "source_ids": ["S1", "S2"]},
-            {"text": "The repeated source keeps the same number.", "source_ids": ["S3"]},
-        ]
-
-        rendered = citations_stage.render_cited_story_text(cited_sentences, sources, registry)
-
-        self.assertEqual(
-            rendered,
-            "The first sentence cites two distinct stories.[1][2] "
-            "The repeated source keeps the same number.[1]",
-        )
-        self.assertEqual([source["number"] for source in registry.sources()], [1, 2])
 
     def test_html_citation_rendering_links_to_escaped_bottom_sources(self) -> None:
         citation_sources = [
@@ -408,26 +331,6 @@ class CitationPrivateHelperTests(unittest.TestCase):
         )
         annotated = citations_stage.annotate_citation_precedence([{"title": "No local id"}])
         self.assertEqual(annotated[0]["citation_precedence_role"], "neutral")
-        with patch(
-            "news_pipeline.citations.annotate_citation_precedence",
-            return_value=[
-                {
-                    "local_id": "S1",
-                    "citation_precedence_derives_from": ["S2"],
-                    "citation_precedence_reason": "wire_attribution",
-                }
-            ],
-        ):
-            self.assertEqual(
-                citations_stage.citation_precedence_dependency_records([{"local_id": "S1"}]),
-                [
-                    {
-                        "source_id": "S1",
-                        "derives_from": ["S2"],
-                        "reason": "wire_attribution",
-                    }
-                ],
-            )
         self.assertEqual(
             citations_stage._citation_dependency_map(
                 [
@@ -490,7 +393,7 @@ class CitationPrivateHelperTests(unittest.TestCase):
         self.assertIn("Additional Sources", html_sources)
         self.assertIn('id="source-1"', html_sources)
 
-    def test_marker_sentence_and_fallback_helpers_cover_edge_branches(self) -> None:
+    def test_marker_and_sentence_helpers_cover_edge_branches(self) -> None:
         with patch("news_pipeline.citations.re.findall", return_value=[]):
             self.assertEqual(
                 citations_stage.normalize_temporary_citation_markers("[[S1], [S2]]"),
@@ -514,51 +417,6 @@ class CitationPrivateHelperTests(unittest.TestCase):
         self.assertEqual(
             citations_stage.split_cited_sentences("Dr. Smith went home. Then left."),
             ["Dr. Smith went home.", "Then left."],
-        )
-        self.assertEqual(citations_stage._fallback_source_ids("shared fact", []), [])
-        self.assertEqual(
-            citations_stage._fallback_source_ids(
-                "",
-                [
-                    {
-                        "local_id": "A",
-                        "title": "Alpha",
-                        "source": "Example",
-                        "published": "",
-                        "summary": "shared fact",
-                    }
-                ],
-            ),
-            ["A"],
-        )
-        self.assertEqual(
-            citations_stage._fallback_source_ids(
-                "shared fact",
-                [
-                    {
-                        "local_id": "A",
-                        "title": "Alpha",
-                        "source": "Example",
-                        "published": "",
-                        "summary": "shared fact",
-                    }
-                ],
-            ),
-            ["A"],
-        )
-        self.assertEqual(
-            citations_stage._fallback_source_ids(
-                "shared fact",
-                [
-                    {
-                        "title": "Missing local id",
-                        "source": "Example",
-                        "published": "",
-                        "summary": "shared fact",
-                    }
-                ],
-            ),
-            [],
         )
         self.assertFalse(
             citations_stage._sentence_overlaps_source(
