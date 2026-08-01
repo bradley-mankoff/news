@@ -18,11 +18,14 @@ The repo runs a fully automated agentic loop driven by the GitHub project board
 
 ### Board flow
 
-- Lanes: `Backlog` → `Todo` → `In Progress` → `In Review` → `Done`.
+- Lanes: `Backlog` → `Todo` → `In Progress` → `Ready for Review` → `In Review` → `Done`.
 - Creating an issue lands it in `Backlog`; nothing starts from `Backlog`.
 - Moving an issue into `Todo` triggers an Archon workflow (label-aware: `bug`
   → `archon-fix-github-issue`, `feature`/`enhancement` → `archon-idea-to-pr`,
-  default → `archon-fix-github-issue`).
+  default → `archon-fix-github-issue`), and the poller moves the issue to
+  `In Progress`.
+- When the dispatched run completes, the poller moves the issue to
+  `Ready for Review` — the human tests the draft PR locally from there.
 - Moving an issue into `In Review` triggers `archon-smart-pr-review` on the
   linked PR.
 - Agents move issues with `python3 automation/move_item.py <issue> <lane>`.
@@ -49,8 +52,10 @@ inventory: `docs/archon-workflows.md`.
 ### Components
 
 - `automation/board_poller.py` — polls the board every 45s, dispatches Archon
-  runs on lane transitions. First poll after (re)start is a snapshot: state is
-  recorded, nothing is dispatched (prevents backlog bursts after downtime).
+  runs on lane transitions (moves the item to `In Progress` on dispatch, to
+  `Ready for Review` when the run completes). First poll after (re)start is a
+  snapshot: state is recorded, nothing is dispatched (prevents backlog bursts
+  after downtime).
 - `automation/config.json` — repo, project, lanes, and workflow mapping.
 - `automation/move_item.py` — move an issue to a lane from the CLI.
 - The poller runs as a launchd agent (`com.bradley-mankoff.news-board-poller`,

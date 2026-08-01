@@ -222,6 +222,7 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
         status_val = (item.get("fieldValueByName") or {}).get("name") or "No status"
         rec = state.get(item_id, {})
         prev = rec.get("status")
+        dispatched_msg = None
 
         if not first_run and prev != status_val:
             lane = cfg["lanes"].get(status_val)
@@ -239,6 +240,8 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
                     )
                 ok = dispatch(cfg, env, wf, f"issue-{content['number']}", msg,
                               item_id, content["number"])
+                if ok:
+                    dispatched_msg = msg
                 target = cfg["dispatch"]["todo"].get("move_to")
                 if ok and target:
                     option_id = status_options.get(target)
@@ -267,7 +270,43 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
                 dispatch(cfg, env, cfg["dispatch"]["review"]["workflow"], branch,
                          msg, item_id, content["number"])
 
-        state[item_id] = {"status": status_val}
+        rec = state.get(item_id, {})
+        rec["status"] = status_val
+        if dispatched_msg:
+            rec["dispatch_msg"] = dispatched_msg
+        state[item_id] = rec
+
+    # Completion reconciliation: when a dispatched run finishes, move the item
+    # out of In Progress (default: "Ready for Review") so the human knows the
+    # draft PR is waiting. Failed/cancelled runs are logged and left for the
+    # human to drag back to Todo.
+    complete_move_to = cfg["dispatch"]["todo"].get("complete_move_to")
+    in_progress_name = next(
+        (k for k, v in cfg["lanes"].items() if v == "in_progress"), None)
+    runs_by_msg = None
+    if complete_move_to and in_progress_name:
+        for item_id, rec in list(state.items()):
+            if item_id == "_meta":
+                continue
+            msg = rec.get("dispatch_msg")
+            if not msg or rec.get("status") != in_progress_name:
+                continue
+            if runs_by_msg is None:
+                runs_by_msg = fetch_runs_by_message(env)
+            run_status = runs_by_msg.get(msg)
+            if run_status == "completed":
+                option_id = status_options.get(complete_move_to)
+                if option_id and move_to_lane(
+                        cfg, env, project_id, item_id, field_id, option_id):
+                    rec.pop("dispatch_msg", None)
+                    log(f"MOVED item={item_id} -> {complete_move_to} (run completed)")
+                elif option_id is None:
+                    log(f"MOVE SKIPPED item={item_id}: lane '{complete_move_to}' not on board")
+                else:
+                    log(f"MOVE FAILED item={item_id} -> {complete_move_to}")
+            elif run_status in ("failed", "cancelled"):
+                log(f"RUN {run_status.upper()} item={item_id}; left in {in_progress_name}")
+                rec.pop("dispatch_msg", None)
 
     # Prune items that left the board.
     for item_id in list(state):
@@ -279,6 +318,30 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
                           "snapshot_at": datetime.now(timezone.utc).isoformat()}
         log(f"snapshot taken: {len(seen)} items on board, dispatch armed")
     save_state(cfg, state)
+
+
+def fetch_runs_by_message(env: dict) -> dict[str, str]:
+    """Map exact run user_message -> status of the NEWEST matching run.
+
+    Re-dispatches reuse the same message for the same issue, so multiple runs
+    can share it; the newest run's status is the one that counts.
+    """
+    r = subprocess.run(["archon", "workflow", "runs", "--json"],
+                       capture_output=True, text=True, timeout=60, env=env,
+                       cwd=str(ROOT))
+    if r.returncode != 0:
+        return {}
+    data = json.loads(r.stdout)
+    runs = data.get("runs") if isinstance(data, dict) else data
+    best: dict[str, tuple[str, str]] = {}
+    for run in runs:
+        msg = run.get("user_message")
+        if not msg:
+            continue
+        started = run.get("started_at") or ""
+        if started > best.get(msg, ("", ""))[1]:
+            best[msg] = (run.get("status") or "", started)
+    return {msg: status for msg, (status, _) in best.items()}
 
 
 def save_state(cfg: dict, state: dict) -> None:

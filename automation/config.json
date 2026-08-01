@@ -9,6 +9,7 @@
     "Backlog": "backlog",
     "Todo": "todo",
     "In Progress": "in_progress",
+    "Ready for Review": "ready",
     "In Review": "review",
     "Done": "done"
   },
@@ -16,6 +17,7 @@
     "todo": {
       "default": "archon-fix-github-issue",
       "move_to": "In Progress",
+      "complete_move_to": "Ready for Review",
       "label_overrides": {
         "bug": "archon-fix-github-issue",
         "feature": "archon-idea-to-pr",

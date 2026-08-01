@@ -23,10 +23,11 @@ Project goal: build, review, and send a daily news report from configured source
 - If the surface is closed, the session exits with SIGHUP (stdin ends) — normal terminal behavior, not a crash. Start a fresh session; history persists under `~/.omp/agent/sessions/`.
 
 ## Project board protocol
-- The GitHub project board (project #1, “Build public UI”, on `bradley-mankoff`) is the work queue. Lanes: `Backlog` -> `Todo` -> `In Progress` -> `In Review` -> `Done`.
+- The GitHub project board (project #1, “Build public UI”, on `bradley-mankoff`) is the work queue. Lanes: `Backlog` -> `Todo` -> `In Progress` -> `Ready for Review` -> `In Review` -> `Done`.
 - New issues land in `Backlog`. Work never starts from creation or from `Backlog`: implementation begins only when an issue is moved into `Todo` (the board poller dispatches an Archon workflow; moving out and back in restarts).
 - While implementing an issue: work on a branch, keep the PR draft until ready.
-- When the work is done and the PR is ready, move the issue to `In Review` with:
+- When the dispatched run completes, the poller moves the issue to `Ready for Review` automatically — that is the signal that a draft PR is waiting for the human. Test the branch locally.
+- When the human judges it working, move the issue to `In Review` with:
   `python3 automation/move_item.py <issue-number> "In Review"`
   and post a summary comment on the PR. The review loop takes over from there (poller -> `archon-smart-pr-review`).
 - After the PR merges, move the issue to `Done`:
@@ -36,7 +37,7 @@ Project goal: build, review, and send a daily news report from configured source
 
 ## Review stages (two, by design)
 
-- **Readiness review — inside the implementation workflows, before the human sees anything** (`archon-fix-github-issue` runs smart review + self-fix + simplify; `archon-idea-to-pr` runs the 5-agent review block + fixes): the bar is “the human should not have to check whether it works, is complete, or matches the issue’s intent.” PRs are left draft so the human can test the branch locally.
+- **Readiness review — inside the implementation workflows, before the human sees anything** (`archon-fix-github-issue` runs smart review + self-fix + simplify; `archon-idea-to-pr` runs the 5-agent review block + fixes): the bar is “the human should not have to check whether it works, is complete, or matches the issue’s intent.” PRs are left draft; the poller moves the issue to `Ready for Review` when the run completes, and the human tests the branch locally from there.
 - **Quality review — the In Review lane trigger** (`archon-smart-pr-review`): after the human judges the feature working and moves the ticket to In Review, the review targets code quality, conventions, and subtle/peripheral breakage, auto-fixing CRITICAL/HIGH findings.
 - Not redundant by design: the second review runs on the diff *after* human testing and feedback; the first one guarantees the diff is worth the human's time. (Human changes between the two make the second review see a different diff.)
 - Only the pi-usable Archon workflows are installed; claude-only ones are archived (see `docs/archon-workflows.md`).
