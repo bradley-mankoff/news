@@ -226,7 +226,6 @@ source.language == target_language
 ## Next Steps
 1. Create or overwrite `/Users/home/news/HANDOFF.md` with this handoff so it is visible at the repository root.
 2. Ask the user only for the materially necessary product decisions that tools cannot determine:
-   - Public project/package name
    - Apache-2.0 versus AGPL-3.0
    - Initial supported runtimes/platforms
 3. Before any public release, sanitize personal paths, recipient data, email defaults, package metadata, and repository history.
