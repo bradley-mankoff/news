@@ -45,8 +45,11 @@ Thumbs.db
 *.swp
 ~$*
 
-# Cursor
+# Agents
 .cursor/
+.agents/
+.archon/
+.claude/
 
 # R
 .Rhistory
