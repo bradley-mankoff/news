@@ -15,6 +15,7 @@
   "dispatch": {
     "todo": {
       "default": "archon-fix-github-issue",
+      "move_to": "In Progress",
       "label_overrides": {
         "bug": "archon-fix-github-issue",
         "feature": "archon-idea-to-pr",

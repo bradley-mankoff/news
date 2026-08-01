@@ -73,6 +73,17 @@ query($login: String!, $number: Int!, $statusField: String!, $cursor: String) {
 }
 """
 
+MOVE_MUTATION = """
+mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $optionId: String!) {
+  updateProjectV2ItemFieldValue(input: {
+    projectId: $projectId
+    itemId: $itemId
+    fieldId: $fieldId
+    value: { singleSelectOptionId: $optionId }
+  }) { projectV2Item { id } }
+}
+"""
+
 
 def log(msg: str) -> None:
     ts = datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -104,14 +115,20 @@ def graphql(cfg: dict, env: dict, cursor: str | None) -> dict:
     return json.loads(r.stdout)
 
 
-def fetch_project(cfg: dict, env: dict) -> tuple[str, list[dict]]:
-    """Returns (project_id, item nodes)."""
+def fetch_project(cfg: dict, env: dict) -> tuple[str, str, dict, list[dict]]:
+    """Returns (project_id, status_field_id, status_options: name->id, items)."""
     data = graphql(cfg, env, None)
     project = data["data"]["user"]["projectV2"]
     if project is None:
         raise RuntimeError(
             f"project {cfg['project_number']} not found for owner {cfg['project_owner']}"
         )
+    field = next(
+        (f for f in project["fields"]["nodes"]
+         if f.get("name") == cfg["status_field"]), None)
+    if field is None:
+        raise RuntimeError(f"status field '{cfg['status_field']}' not found on project")
+    options = {o["name"]: o["id"] for o in field["options"]}
     items: list[dict] = []
     page = project["items"]
     items.extend(page["nodes"])
@@ -119,7 +136,7 @@ def fetch_project(cfg: dict, env: dict) -> tuple[str, list[dict]]:
         data = graphql(cfg, env, page["pageInfo"]["endCursor"])
         page = data["data"]["user"]["projectV2"]["items"]
         items.extend(page["nodes"])
-    return project["id"], items
+    return project["id"], field["id"], options, items
 
 
 def find_linked_pr(cfg: dict, env: dict, issue_number: int) -> int | None:
@@ -149,27 +166,47 @@ def pick_workflow(cfg: dict, labels: list[str]) -> str:
     return todo_cfg["default"]
 
 
+def move_to_lane(cfg: dict, env: dict, project_id: str, item_id: str,
+                 field_id: str, option_id: str) -> bool:
+    r = subprocess.run(
+        ["gh", "api", "graphql",
+         "-f", f"query={MOVE_MUTATION}",
+         "-F", f"projectId={project_id}",
+         "-F", f"itemId={item_id}",
+         "-F", f"fieldId={field_id}",
+         "-F", f"optionId={option_id}"],
+        capture_output=True, text=True, timeout=60, env=env,
+    )
+    return r.returncode == 0
+
+
 def dispatch(cfg: dict, env: dict, wf: str, branch: str, message: str,
-             item_id: str, number: int) -> None:
+             item_id: str, number: int) -> bool:
     """Start an Archon workflow run in a detached child process.
 
     Deliberately does NOT use `archon ... --detach`: the archon-pi build's
     detached-child spawn is broken (it passes the binary path as the command).
     The child is put in its own session so it survives the poller (and
     launchd restarts of it). Output appends to automation/archon-runs.log.
+    Returns True when the process spawned.
     """
     log_path = ROOT / "automation" / "archon-runs.log"
-    with open(log_path, "a") as out:
-        proc = subprocess.Popen(
-            ["archon", "workflow", "run", wf, "--branch", branch, message],
-            cwd=str(ROOT), env=env, stdout=out, stderr=subprocess.STDOUT,
-            start_new_session=True,
-        )
+    try:
+        with open(log_path, "a") as out:
+            proc = subprocess.Popen(
+                ["archon", "workflow", "run", wf, "--branch", branch, message],
+                cwd=str(ROOT), env=env, stdout=out, stderr=subprocess.STDOUT,
+                start_new_session=True,
+            )
+    except OSError as exc:
+        log(f"DISPATCH FAILED item={item_id} wf={wf}: {exc}")
+        return False
     log(f"DISPATCHED item={item_id} issue={number} wf={wf} branch={branch} pid={proc.pid}")
+    return True
 
 
 def poll(cfg: dict, env: dict, state: dict) -> None:
-    project_id, items = fetch_project(cfg, env)
+    project_id, field_id, status_options, items = fetch_project(cfg, env)
     first_run = not state.get("_meta", {}).get("snapshot_done")
 
     seen: set[str] = set()
@@ -200,8 +237,18 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
                         f"Build feature from issue #{content['number']}: {content['title']} "
                         f"({repo}). Full issue: {content['url']}"
                     )
-                dispatch(cfg, env, wf, f"issue-{content['number']}", msg,
-                         item_id, content["number"])
+                ok = dispatch(cfg, env, wf, f"issue-{content['number']}", msg,
+                              item_id, content["number"])
+                target = cfg["dispatch"]["todo"].get("move_to")
+                if ok and target:
+                    option_id = status_options.get(target)
+                    if option_id and move_to_lane(
+                            cfg, env, project_id, item_id, field_id, option_id):
+                        log(f"MOVED item={item_id} issue={content['number']} -> {target}")
+                    elif option_id is None:
+                        log(f"MOVE SKIPPED item={item_id}: lane '{target}' not on board")
+                    else:
+                        log(f"MOVE FAILED item={item_id} -> {target}")
             elif lane == "review":
                 if content["__typename"] == "PullRequest":
                     pr_number = content["number"]

@@ -16,6 +16,12 @@ Project goal: build, review, and send a daily news report from configured source
 ## Always-on behavior
 - Always-on communication: **caveman full** (pi-caveman extension). Always-on code discipline: **ponytail full** (@dietrichgebert/ponytail extension+skills). Do not disable these unless the user explicitly asks.
 
+## cmux pane safety
+- The agent session runs inside a cmux terminal surface. Before any cmux automation, identify it: `cmux identify` (caller `pane_ref`/`surface_ref`).
+- NEVER close, reparent, or restructure your own pane/surface, and never target it with `close-surface`, `new-surface`, `open --pane`, or tab actions.
+- Do not create or destroy panes/surfaces in the user's workspace unless asked. The user owns the layout (status quo: agent upper-left, blank lower-left, GitHub board upper-right, archon console bottom-right).
+- If the surface is closed, the session exits with SIGHUP (stdin ends) — normal terminal behavior, not a crash. Start a fresh session; history persists under `~/.omp/agent/sessions/`.
+
 ## Project board protocol
 - The GitHub project board (project #1, “Build public UI”, on `bradley-mankoff`) is the work queue. Lanes: `Backlog` -> `Todo` -> `In Progress` -> `In Review` -> `Done`.
 - New issues land in `Backlog`. Work never starts from creation or from `Backlog`: implementation begins only when an issue is moved into `Todo` (the board poller dispatches an Archon workflow; moving out and back in restarts).
