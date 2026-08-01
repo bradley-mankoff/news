@@ -6,13 +6,16 @@ commands from the repo root so `uv` uses this project environment.
 ```bash
 git clone https://github.com/bradley-mankoff/news.git
 cd news
-/opt/homebrew/bin/uv sync --python /opt/homebrew/bin/python3.12
+uv sync
 uv run python -c 'import platform; print(platform.machine())'
 ```
 
-On Apple Silicon, the platform check should print `arm64`. The
-`/opt/homebrew/bin` uv/python paths are machine-specific — adjust them when
-running on another machine.
+On Apple Silicon, the platform check should print `arm64`. `uv` picks the
+Python version from `.python-version` (3.12) automatically.
+
+> **Package status**: `news-pipeline` (ADR 0009) is the public distribution
+> name, but the package is not published to PyPI yet — install instructions
+> will be added here at release time.
 
 ## Project Automation
 
