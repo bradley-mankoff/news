@@ -157,6 +157,62 @@ def find_linked_pr(cfg: dict, env: dict, issue_number: int) -> int | None:
     return None
 
 
+def find_issue_pr(cfg: dict, env: dict, issue_number: int,
+                  state: str = "all") -> dict | None:
+    """Find the PR linked to an issue (any state) by body/title reference."""
+    r = gh(["pr", "list", "-R", cfg["repo"], "--state", state,
+            "--json", "number,title,body,headRefName,baseRefName,state"], env)
+    if r.returncode != 0:
+        return None
+    prs = json.loads(r.stdout)
+    pat = re.compile(
+        rf"\b(?:fix(?:es)?|clos(?:es|e)|resolv(?:es|e))\s+#{issue_number}\b", re.I
+    )
+    for pr in prs:
+        if pat.search(pr.get("body") or ""):
+            return pr
+    for pr in prs:
+        if f"#{issue_number}" in (pr.get("title") or ""):
+            return pr
+    return None
+
+
+def merge_pr_to_base(cfg: dict, env: dict, pr: dict, base: str) -> tuple[bool, str]:
+    """Retarget a PR to `base`, mark it ready, merge with a merge commit."""
+    num = pr["number"]
+    if pr.get("state") == "MERGED":
+        return True, "already merged"
+    if pr.get("baseRefName") != base:
+        r = gh(["pr", "edit", str(num), "-R", cfg["repo"], "--base", base], env)
+        if r.returncode != 0:
+            return False, f"retarget failed: {r.stderr.strip()[:200]}"
+    gh(["pr", "ready", str(num), "-R", cfg["repo"]], env)  # no-op if already ready
+    r = gh(["pr", "merge", str(num), "-R", cfg["repo"], "--merge"], env)
+    if r.returncode != 0:
+        return False, r.stderr.strip()[:300]
+    return True, f"merged into {base}"
+
+
+def find_or_create_ship_pr(cfg: dict, env: dict, head: str, title: str,
+                           issue_number: int, base: str) -> dict | None:
+    """Reuse the open ship PR for this head/base, or create one."""
+    r = gh(["pr", "list", "-R", cfg["repo"], "--head", head, "--state", "open",
+            "--json", "number,headRefName,baseRefName,state"], env)
+    if r.returncode == 0:
+        for pr in json.loads(r.stdout):
+            if pr.get("baseRefName") == base:
+                return pr
+    body = (f"Shipped from develop after human testing. Issue #{issue_number}. "
+            "Reviewed by archon-smart-pr-review before merge.")
+    r = gh(["pr", "create", "-R", cfg["repo"], "--base", base, "--head", head,
+            "--title", title, "--body", body], env)
+    if r.returncode != 0:
+        log(f"SHIP PR CREATE FAILED head={head}: {r.stderr.strip()[:300]}")
+        return None
+    return {"number": int(r.stdout.strip().rstrip("/").split("/")[-1]),
+            "headRefName": head, "baseRefName": base, "state": "OPEN"}
+
+
 def pick_workflow(cfg: dict, labels: list[str]) -> str:
     todo_cfg = cfg["dispatch"]["todo"]
     for label in labels:
@@ -223,6 +279,8 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
         rec = state.get(item_id, {})
         prev = rec.get("status")
         dispatched_msg = None
+        review_msg = None
+        ship_pr_num = None
 
         if not first_run and prev != status_val:
             lane = cfg["lanes"].get(status_val)
@@ -257,29 +315,47 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
                     pr_number = content["number"]
                     msg = f"Review PR #{pr_number} ({content['title']})"
                     branch = f"review/pr-{pr_number}"
+                    dispatch(cfg, env, cfg["dispatch"]["review"]["workflow"], branch,
+                             msg, item_id, content["number"])
                 else:
-                    pr_number = find_linked_pr(cfg, env, content["number"])
-                    msg = (
-                        f"Review the pull request for issue #{content['number']}: "
-                        f"{content['title']} ({repo})."
-                        + (f" Linked PR: #{pr_number}." if pr_number else "")
-                        + " If no PR is linked, find it with: gh pr list --search"
-                        f" '#{content['number']}'"
-                    )
-                    branch = f"review/issue-{content['number']}"
-                dispatch(cfg, env, cfg["dispatch"]["review"]["workflow"], branch,
-                         msg, item_id, content["number"])
+                    # Ensure the feature is in develop, then review the ship PR
+                    # (feature -> main); on review completion the poller merges it.
+                    pr = find_issue_pr(cfg, env, content["number"])
+                    if pr:
+                        merge_base = cfg["dispatch"]["todo"].get(
+                            "merge_develop_base", "develop")
+                        ok, note = merge_pr_to_base(cfg, env, pr, merge_base)
+                        log(f"DEVELOP MERGE issue={content['number']} PR=#{pr['number']}: {note}"
+                            if ok else
+                            f"DEVELOP MERGE FAILED issue={content['number']}: {note}")
+                    head = ((pr or {}).get("headRefName")
+                            or f"archon/task-issue-{content['number']}")
+                    ship_to = cfg["dispatch"]["review"].get("ship_to", "main")
+                    ship = find_or_create_ship_pr(
+                        cfg, env, head,
+                        f"Ship: {content['title']} (#{content['number']})",
+                        content["number"], ship_to)
+                    if ship:
+                        msg = (f"Review PR #{ship['number']} (ship to {ship_to} for issue "
+                               f"#{content['number']}: {content['title']}).")
+                        branch = f"review/issue-{content['number']}"
+                        if dispatch(cfg, env, cfg["dispatch"]["review"]["workflow"],
+                                    branch, msg, item_id, content["number"]):
+                            review_msg = msg
+                            ship_pr_num = ship["number"]
 
         rec = state.get(item_id, {})
         rec["status"] = status_val
         if dispatched_msg:
             rec["dispatch_msg"] = dispatched_msg
+            rec["issue_number"] = content["number"]
+        if review_msg:
+            rec["review_msg"] = review_msg
+            rec["ship_pr"] = ship_pr_num
         state[item_id] = rec
 
-    # Completion reconciliation: when a dispatched run finishes, move the item
-    # out of In Progress (default: "Ready for Review") so the human knows the
-    # draft PR is waiting. Failed/cancelled runs are logged and left for the
-    # human to drag back to Todo.
+    # Completion reconciliation: when a dispatched run finishes, merge the
+    # feature PR into develop and move the item to Ready for Review.
     complete_move_to = cfg["dispatch"]["todo"].get("complete_move_to")
     in_progress_name = next(
         (k for k, v in cfg["lanes"].items() if v == "in_progress"), None)
@@ -295,6 +371,22 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
                 runs_by_msg = fetch_runs_by_message(env)
             run_status = runs_by_msg.get(msg)
             if run_status == "completed":
+                issue_number = rec.get("issue_number")
+                merge_base = cfg["dispatch"]["todo"].get("merge_develop_base")
+                merge_ok = True
+                if issue_number and merge_base:
+                    pr = find_issue_pr(cfg, env, issue_number)
+                    if pr:
+                        merge_ok, note = merge_pr_to_base(cfg, env, pr, merge_base)
+                        log(f"DEVELOP MERGE issue={issue_number} PR=#{pr['number']}: {note}"
+                            if merge_ok else
+                            f"DEVELOP MERGE FAILED issue={issue_number}: {note}")
+                    else:
+                        log(f"no PR found for issue #{issue_number}; skipping develop merge")
+                if not merge_ok:
+                    log(f"left item={item_id} in {in_progress_name} (develop merge failed)")
+                    rec.pop("dispatch_msg", None)
+                    continue
                 option_id = status_options.get(complete_move_to)
                 if option_id and move_to_lane(
                         cfg, env, project_id, item_id, field_id, option_id):
@@ -307,6 +399,52 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
             elif run_status in ("failed", "cancelled"):
                 log(f"RUN {run_status.upper()} item={item_id}; left in {in_progress_name}")
                 rec.pop("dispatch_msg", None)
+
+    # Review completion: merge the ship PR to its base (main) and move the
+    # item to Done when the review run finishes.
+    ship_to = cfg["dispatch"]["review"].get("ship_to", "main")
+    review_lane_name = next(
+        (k for k, v in cfg["lanes"].items() if v == "review"), None)
+    done_name = cfg["dispatch"]["review"].get("done_lane", "Done")
+    if (review_lane_name and done_name
+            and cfg["dispatch"]["review"].get("merge_ship_on_review_complete")):
+        for item_id, rec in list(state.items()):
+            if item_id == "_meta":
+                continue
+            rmsg = rec.get("review_msg")
+            if not rmsg or rec.get("status") != review_lane_name:
+                continue
+            if runs_by_msg is None:
+                runs_by_msg = fetch_runs_by_message(env)
+            rstatus = runs_by_msg.get(rmsg)
+            if rstatus == "completed":
+                ship_num = rec.get("ship_pr")
+                ship = None
+                if ship_num:
+                    r = gh(["pr", "view", str(ship_num), "-R", cfg["repo"],
+                            "--json", "number,state,baseRefName"], env)
+                    if r.returncode == 0:
+                        ship = json.loads(r.stdout)
+                if ship and ship.get("state") != "MERGED":
+                    rr = gh(["pr", "merge", str(ship_num), "-R", cfg["repo"],
+                             "--merge"], env)
+                    if rr.returncode == 0:
+                        log(f"SHIPPED PR #{ship_num} -> {ship_to} (review completed)")
+                    else:
+                        log(f"SHIP MERGE FAILED PR #{ship_num}: {rr.stderr.strip()[:300]}")
+                        continue
+                elif not ship:
+                    log(f"SHIP PR #{ship_num} not found for item={item_id}")
+                    continue
+                option_id = status_options.get(done_name)
+                if option_id and move_to_lane(
+                        cfg, env, project_id, item_id, field_id, option_id):
+                    log(f"MOVED item={item_id} -> {done_name} (shipped)")
+                rec.pop("review_msg", None)
+                rec.pop("ship_pr", None)
+            elif rstatus in ("failed", "cancelled"):
+                log(f"REVIEW {rstatus.upper()} item={item_id}; left in {review_lane_name}")
+                rec.pop("review_msg", None)
 
     # Prune items that left the board.
     for item_id in list(state):
