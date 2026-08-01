@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Move a GitHub issue to a lane on the Daily News project board.
+"""Move a GitHub issue to a lane on the project board (project #1, "Build public UI").
 
 Usage: move_item.py <issue-number> <lane>
 

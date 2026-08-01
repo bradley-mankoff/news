@@ -14,7 +14,7 @@ On Apple Silicon, the platform check should print `arm64`.
 ## Project Automation
 
 The repo runs a fully automated agentic loop driven by the GitHub project board
-(Projects v2, “Daily News”, owner `bradley-mankoff`).
+(Projects v2, project #1 “Build public UI”, owner `bradley-mankoff`).
 
 ### Board flow
 
