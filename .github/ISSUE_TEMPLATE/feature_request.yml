@@ -1,0 +1,36 @@
+name: Feature request
+description: New capability or enhancement. Small enough to ship in one pass, or split into dependency-ordered sub-issues.
+title: "[Feature]: "
+labels: ["feature"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What and why
+      description: What this ships and why it matters now, in 2-4 sentences.
+    validations:
+      required: true
+  - type: textarea
+    id: criteria
+    attributes:
+      label: Acceptance criteria
+      description: One per line, each binary — a reviewer answers YES or NO without judgement (e.g. "The CLI prints the source count with --verbose"). The implementation workflow reports evidence for each.
+      placeholder: |
+        - The ... 
+        - ...
+      render: markdown
+    validations:
+      required: true
+  - type: input
+    id: depends_on
+    attributes:
+      label: Depends on
+      description: Issue refs that must be in the Done lane before this starts. Leave empty if none.
+      placeholder: "#42, #57"
+  - type: textarea
+    id: notes
+    attributes:
+      label: Notes
+      description: Anything else worth knowing (context, references, prior attempts).
+    validations:
+      required: false

@@ -64,3 +64,6 @@ git_cheat_sheet.txt
 automation/state.json
 automation/board_poller.log
 automation/archon-runs.log
+
+# pi CLI project-local state
+.pi/

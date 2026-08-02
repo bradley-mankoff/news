@@ -85,7 +85,7 @@ inventory: `docs/archon-workflows.md`.
 - The poller runs as a launchd agent (`com.bradley-mankoff.news-board-poller`,
   plist in `~/Library/LaunchAgents/`). Logs: `automation/board_poller.log`;
   state: `automation/state.json` (gitignored).
-- Archon executes all workflows on DeepSeek (`deepseek/deepseek-v4-flash`,
+- Archon executes all workflows on OpenCode Zen Go (`opencode-go/deepseek-v4-flash`,
   max effort → xhigh thinking) via the Pi provider; tiers are configured in
   the archon-pi home `config.yaml`.
 
