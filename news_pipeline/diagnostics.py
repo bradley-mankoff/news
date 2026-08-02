@@ -423,6 +423,8 @@ class RunDiagnostics:
             f"| Default model | {_table_value(str(settings.get('model')) + ' -> ' + str(settings.get('model_name')))} |",
             f"| Article Summarization model | {_table_value(_model_assignment_value(settings, 'article_summary'))} |",
             f"| Story Drafting model | {_table_value(_model_assignment_value(settings, 'story_drafting'))} |",
+            f"| Story Scale Screening model | {_table_value(_model_assignment_value(settings, 'story_scale_screening'))} |",
+            f"| Title Generation model | {_table_value(_model_assignment_value(settings, 'title_generation'))} |",
             f"| Model backend(s) | {_table_value(_model_backend_value(settings))} |",
             f"| Model input cap | {_table_value(settings.get('model_max_input_tokens'))} |",
             f"| Article summary cap | {_table_value(settings.get('article_summary_max_tokens'))} |",
@@ -541,6 +543,9 @@ class RunDiagnostics:
             f"- Default model: {self.settings.get('model')} -> {self.settings.get('model_name')}",
             f"- Article Summarization model: {_model_assignment_value(self.settings, 'article_summary')}",
             f"- Story Drafting model: {_model_assignment_value(self.settings, 'story_drafting')}",
+            f"- Story Scale Screening model: {_model_assignment_value(self.settings, 'story_scale_screening')}",
+            f"- Title Generation model: {_model_assignment_value(self.settings, 'title_generation')}",
+            f"- Image art direction uses the Title Generation model; Story Discovery has no LLM stage (inherits default).",
             f"- Model backends: {_model_backend_value(self.settings)}",
             f"- Model input cap: {self.settings.get('model_max_input_tokens')}",
             f"- Article summary cap: {self.settings.get('article_summary_max_tokens')}",
@@ -805,7 +810,7 @@ def _model_backend_value(settings: dict[str, Any]) -> str:
     if not isinstance(assignments, dict):
         return default_backend
     parts = [f"default={default_backend}"]
-    for task in ("article_summary", "story_drafting"):
+    for task in ("article_summary", "story_drafting", "story_scale_screening", "title_generation"):
         record = assignments.get(task)
         if not isinstance(record, dict):
             continue

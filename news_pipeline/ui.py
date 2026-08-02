@@ -187,6 +187,8 @@ def _runtime_snapshot(
                 "assignments": _json_ready(config.model_assignments),
                 "article_summary": _json_ready(config.model_assignments["article_summary"]),
                 "story_drafting": _json_ready(config.model_assignments["story_drafting"]),
+                "story_scale_screening": _json_ready(config.model_assignments["story_scale_screening"]),
+                "title_generation": _json_ready(config.model_assignments["title_generation"]),
                 "tuning": _json_ready(config.model_tuning),
                 "pipeline_budget": _json_ready(config.pipeline_budget),
                 "server_settings": _json_ready(config.model_server_settings),
@@ -1413,6 +1415,46 @@ HTML = r"""<!doctype html>
         taskMaxTokensEnv: "NEWS_STORY_DRAFTING_MAX_TOKENS",
         taskSamplingPrefix: "NEWS_MODEL_STORY_DRAFTING",
         runtimeKey: "story_drafting"
+      },
+      story_scale_screening: {
+        label: "Story Scale Screening",
+        prefix: "scale",
+        modelEnv: "NEWS_MODEL_STORY_SCALE_SCREENING",
+        presetEnv: "NEWS_MODEL_STORY_SCALE_SCREENING_TUNING_PRESET",
+        baseUrlEnv: "NEWS_MODEL_STORY_SCALE_SCREENING_BASE_URL",
+        presetSelectId: "scale_tuning_preset",
+        idInputId: "scale_tuning_id",
+        nameInputId: "scale_tuning_name",
+        descriptionInputId: "scale_tuning_description",
+        modelSelectId: "scale_model",
+        baseUrlId: "scale_base_url",
+        saveButtonId: "scale_tuning_save",
+        renameButtonId: "scale_tuning_rename",
+        deleteButtonId: "scale_tuning_delete",
+        modelMaxTokensId: null,
+        taskMaxTokensEnv: "NEWS_STORY_SCALE_SCREENING_MAX_TOKENS",
+        taskSamplingPrefix: "NEWS_MODEL_STORY_SCALE_SCREENING",
+        runtimeKey: "story_scale_screening"
+      },
+      title_generation: {
+        label: "Title Generation",
+        prefix: "title",
+        modelEnv: "NEWS_MODEL_TITLE_GENERATION",
+        presetEnv: "NEWS_MODEL_TITLE_GENERATION_TUNING_PRESET",
+        baseUrlEnv: "NEWS_MODEL_TITLE_GENERATION_BASE_URL",
+        presetSelectId: "title_tuning_preset",
+        idInputId: "title_tuning_id",
+        nameInputId: "title_tuning_name",
+        descriptionInputId: "title_tuning_description",
+        modelSelectId: "title_model",
+        baseUrlId: "title_base_url",
+        saveButtonId: "title_tuning_save",
+        renameButtonId: "title_tuning_rename",
+        deleteButtonId: "title_tuning_delete",
+        modelMaxTokensId: null,
+        taskMaxTokensEnv: "NEWS_TITLE_GENERATION_MAX_TOKENS",
+        taskSamplingPrefix: "NEWS_MODEL_TITLE_GENERATION",
+        runtimeKey: "title_generation"
       }
     };
     const state = {
@@ -1444,12 +1486,18 @@ HTML = r"""<!doctype html>
       NEWS_MODEL: "Default local model alias used when a task-specific model is not set.",
       NEWS_MODEL_ARTICLE_SUMMARY: "Model used for article summarization before story drafting.",
       NEWS_MODEL_STORY_DRAFTING: "Model used for writing the final story drafts.",
+      NEWS_MODEL_STORY_SCALE_SCREENING: "Model used for global story scale screening before story selection.",
+      NEWS_MODEL_TITLE_GENERATION: "Model used for the title generation / image art direction call.",
       NEWS_MODEL_TUNING_PRESET: "Default saved tuning overlay applied before direct tuning overrides.",
       NEWS_MODEL_ARTICLE_SUMMARY_TUNING_PRESET: "Saved tuning overlay for the article summarization model.",
       NEWS_MODEL_STORY_DRAFTING_TUNING_PRESET: "Saved tuning overlay for the story writing model.",
+      NEWS_MODEL_STORY_SCALE_SCREENING_TUNING_PRESET: "Saved tuning overlay for the story scale screening model.",
+      NEWS_MODEL_TITLE_GENERATION_TUNING_PRESET: "Saved tuning overlay for the title generation model.",
       NEWS_MODEL_MAX_INPUT_TOKENS: "Shared input token cap sent to model calls.",
       NEWS_ARTICLE_SUMMARY_MAX_TOKENS: "Maximum generated tokens for each article summary.",
       NEWS_STORY_DRAFTING_MAX_TOKENS: "Maximum generated tokens for each final story draft.",
+      NEWS_STORY_SCALE_SCREENING_MAX_TOKENS: "Maximum generated tokens for each story scale screening call.",
+      NEWS_TITLE_GENERATION_MAX_TOKENS: "Maximum generated tokens for the title generation / image art call.",
       NEWS_ARTICLE_TEXT_TOKEN_LIMIT: "Article text trimmed to this token budget before summarization.",
       NEWS_TOTAL_ARTICLE_SUMMARY_CAP: "Upper bound on article summaries kept for story synthesis.",
       NEWS_RECENT_WINDOW_HOURS: "How far back source collection looks for recent articles.",
@@ -1473,6 +1521,8 @@ HTML = r"""<!doctype html>
       NEWS_MODEL_BASE_URL: "Default OpenAI-compatible model server endpoint.",
       NEWS_MODEL_ARTICLE_SUMMARY_BASE_URL: "Model server endpoint for article summarization calls.",
       NEWS_MODEL_STORY_DRAFTING_BASE_URL: "Model server endpoint for story writing calls.",
+      NEWS_MODEL_STORY_SCALE_SCREENING_BASE_URL: "Model server endpoint for story scale screening calls.",
+      NEWS_MODEL_TITLE_GENERATION_BASE_URL: "Model server endpoint for title generation calls.",
       NEWS_MODEL_SERVER_PREFILL_STEP_SIZE: "Prefill step size passed to the local MLX model server.",
       NEWS_MODEL_SERVER_PROMPT_CACHE_SIZE: "Prompt cache item count passed to the local model server.",
       NEWS_MODEL_SERVER_PROMPT_CACHE_BYTES: "Prompt cache memory budget passed to the local model server.",
@@ -1724,6 +1774,8 @@ HTML = r"""<!doctype html>
       const assignments = model.assignments || {};
       const articleSummary = model.article_summary || assignments.article_summary || {};
       const storyDrafting = model.story_drafting || assignments.story_drafting || {};
+      const scaleScreening = model.story_scale_screening || assignments.story_scale_screening || {};
+      const titleGeneration = model.title_generation || assignments.title_generation || {};
       const items = [
         ["Run preset", state.selectedRunPresetId || runtime.preset_id || "custom"],
         ["Source scope", runtime.source_scope || "-"],
@@ -1735,6 +1787,8 @@ HTML = r"""<!doctype html>
         ["Model", model.reference || "-"],
         ["Article Summarization", articleSummary.reference || "-"],
         ["Story Writing", storyDrafting.reference || "-"],
+        ["Story Scale Screening", scaleScreening.reference || "-"],
+        ["Title Generation", titleGeneration.reference || "-"],
         ["Article concurrency", model.article_summary_concurrency ?? "-"],
         ["Story concurrency", model.story_synthesis_concurrency ?? "-"],
         ["Images", runtime.image && runtime.image.enabled ? "on" : "off"]
@@ -1746,6 +1800,8 @@ HTML = r"""<!doctype html>
       const runtime = schema.runtime || {};
       const articleRuntime = runtime.model && runtime.model.article_summary ? runtime.model.article_summary : {};
       const storyRuntime = runtime.model && runtime.model.story_drafting ? runtime.model.story_drafting : {};
+      const scaleRuntime = runtime.model && runtime.model.story_scale_screening ? runtime.model.story_scale_screening : {};
+      const titleRuntime = runtime.model && runtime.model.title_generation ? runtime.model.title_generation : {};
       const actionOptions = (schema.actions || []).map(action => `<option value="${escapeHtml(action)}"${action === "run" ? " selected" : ""}>${escapeHtml(action)}</option>`).join("");
       const promptProfileOptions = (schema.prompt_profiles || []).map(p => `<option value="${escapeHtml(p.id)}"${currentControlValue("NEWS_PROMPT_PROFILE") === p.id ? " selected" : ""}>${escapeHtml(p.name)}</option>`).join("");
       const sourceToolHidden = !["check-sources", "prune-sources", "source-languages"].includes(value("actionSelect"));
@@ -1759,11 +1815,17 @@ HTML = r"""<!doctype html>
       };
       const articleModel = knobField("NEWS_MODEL_ARTICLE_SUMMARY", "Article model", { emptyLabel: "default: qwythos-9b-8bit" });
       const storyModel = knobField("NEWS_MODEL_STORY_DRAFTING", "Story model", { emptyLabel: "default: qwythos-9b-8bit" });
+      const scaleModel = knobField("NEWS_MODEL_STORY_SCALE_SCREENING", "Scale screening model", { emptyLabel: "default: qwythos-9b-8bit" });
+      const titleModel = knobField("NEWS_MODEL_TITLE_GENERATION", "Title generation model", { emptyLabel: "default: qwythos-9b-8bit" });
       const sharedModelTokens = knobField("NEWS_MODEL_MAX_INPUT_TOKENS", "Shared model input cap");
       const articleTokenCap = knobField("NEWS_ARTICLE_SUMMARY_MAX_TOKENS", "Article summary max tokens");
       const storyTokenCap = knobField("NEWS_STORY_DRAFTING_MAX_TOKENS", "Story drafting max tokens");
+      const scaleTokenCap = knobField("NEWS_STORY_SCALE_SCREENING_MAX_TOKENS", "Scale screening max tokens");
+      const titleTokenCap = knobField("NEWS_TITLE_GENERATION_MAX_TOKENS", "Title generation max tokens");
       const articleBaseUrl = knobField("NEWS_MODEL_ARTICLE_SUMMARY_BASE_URL", "Base URL");
       const storyBaseUrl = knobField("NEWS_MODEL_STORY_DRAFTING_BASE_URL", "Base URL");
+      const scaleBaseUrl = knobField("NEWS_MODEL_STORY_SCALE_SCREENING_BASE_URL", "Base URL");
+      const titleBaseUrl = knobField("NEWS_MODEL_TITLE_GENERATION_BASE_URL", "Base URL");
       const articleSampling = [
         knobField("NEWS_MODEL_ARTICLE_SUMMARY_TEMPERATURE", "Temperature"),
         knobField("NEWS_MODEL_ARTICLE_SUMMARY_TOP_P", "Top P"),
@@ -1779,6 +1841,22 @@ HTML = r"""<!doctype html>
         knobField("NEWS_MODEL_STORY_DRAFTING_MIN_P", "Min P"),
         knobField("NEWS_MODEL_STORY_DRAFTING_PRESENCE_PENALTY", "Presence penalty"),
         knobField("NEWS_MODEL_STORY_DRAFTING_REPETITION_PENALTY", "Repetition penalty")
+      ].join("");
+      const scaleSampling = [
+        knobField("NEWS_MODEL_STORY_SCALE_SCREENING_TEMPERATURE", "Temperature"),
+        knobField("NEWS_MODEL_STORY_SCALE_SCREENING_TOP_P", "Top P"),
+        knobField("NEWS_MODEL_STORY_SCALE_SCREENING_TOP_K", "Top K"),
+        knobField("NEWS_MODEL_STORY_SCALE_SCREENING_MIN_P", "Min P"),
+        knobField("NEWS_MODEL_STORY_SCALE_SCREENING_PRESENCE_PENALTY", "Presence penalty"),
+        knobField("NEWS_MODEL_STORY_SCALE_SCREENING_REPETITION_PENALTY", "Repetition penalty")
+      ].join("");
+      const titleSampling = [
+        knobField("NEWS_MODEL_TITLE_GENERATION_TEMPERATURE", "Temperature"),
+        knobField("NEWS_MODEL_TITLE_GENERATION_TOP_P", "Top P"),
+        knobField("NEWS_MODEL_TITLE_GENERATION_TOP_K", "Top K"),
+        knobField("NEWS_MODEL_TITLE_GENERATION_MIN_P", "Min P"),
+        knobField("NEWS_MODEL_TITLE_GENERATION_PRESENCE_PENALTY", "Presence penalty"),
+        knobField("NEWS_MODEL_TITLE_GENERATION_REPETITION_PENALTY", "Repetition penalty")
       ].join("");
       $("runSetupMount").innerHTML = `
         <div class="banner panel">
@@ -1897,6 +1975,56 @@ HTML = r"""<!doctype html>
               </div>
             </details>
           </section>
+          <section class="panel model-card">
+            <p class="eyebrow">Model</p>
+            <h2>${escapeHtml(TASK_CONFIG.story_scale_screening.label)}</h2>
+            <p class="muted">Resolved: ${escapeHtml(scaleRuntime.name || scaleRuntime.reference || "-")}</p>
+            <div class="form-grid">
+              ${scaleModel}
+            </div>
+            <details class="details">
+              <summary>Model tuning</summary>
+              <div class="form-grid">
+                <label class="field"><span>Tuning preset</span><select id="scale_tuning_preset" data-task="story_scale_screening" data-env="NEWS_MODEL_STORY_SCALE_SCREENING_TUNING_PRESET"></select><code>NEWS_MODEL_STORY_SCALE_SCREENING_TUNING_PRESET</code></label>
+                <label class="field"><span>Preset id</span><input id="scale_tuning_id"><code>id</code></label>
+                <label class="field"><span>Display name</span><input id="scale_tuning_name"><code>name</code></label>
+                <label class="field"><span>Description</span><textarea id="scale_tuning_description"></textarea><code>description</code></label>
+                ${scaleTokenCap}
+                ${scaleBaseUrl}
+                ${scaleSampling}
+              </div>
+              <div class="toolbar">
+                <button id="scale_tuning_save" class="primary">Save current settings</button>
+                <button id="scale_tuning_rename">Rename display name</button>
+                <button id="scale_tuning_delete" class="danger">Delete preset</button>
+              </div>
+            </details>
+          </section>
+          <section class="panel model-card">
+            <p class="eyebrow">Model</p>
+            <h2>${escapeHtml(TASK_CONFIG.title_generation.label)}</h2>
+            <p class="muted">Resolved: ${escapeHtml(titleRuntime.name || titleRuntime.reference || "-")}</p>
+            <div class="form-grid">
+              ${titleModel}
+            </div>
+            <details class="details">
+              <summary>Model tuning</summary>
+              <div class="form-grid">
+                <label class="field"><span>Tuning preset</span><select id="title_tuning_preset" data-task="title_generation" data-env="NEWS_MODEL_TITLE_GENERATION_TUNING_PRESET"></select><code>NEWS_MODEL_TITLE_GENERATION_TUNING_PRESET</code></label>
+                <label class="field"><span>Preset id</span><input id="title_tuning_id"><code>id</code></label>
+                <label class="field"><span>Display name</span><input id="title_tuning_name"><code>name</code></label>
+                <label class="field"><span>Description</span><textarea id="title_tuning_description"></textarea><code>description</code></label>
+                ${titleTokenCap}
+                ${titleBaseUrl}
+                ${titleSampling}
+              </div>
+              <div class="toolbar">
+                <button id="title_tuning_save" class="primary">Save current settings</button>
+                <button id="title_tuning_rename">Rename display name</button>
+                <button id="title_tuning_delete" class="danger">Delete preset</button>
+              </div>
+            </details>
+          </section>
           <section class="panel">
             <p class="eyebrow">Model catalog</p>
             <h2>Curated models and Hugging Face search</h2>
@@ -2003,6 +2131,8 @@ HTML = r"""<!doctype html>
       renderPresetSummary();
       renderModelTuningControls("article_summary");
       renderModelTuningControls("story_drafting");
+      renderModelTuningControls("story_scale_screening");
+      renderModelTuningControls("title_generation");
       decorateEnvHints($("runSetupMount"));
       renderKnobLinks("NEWS_MODEL_ARTICLE_SUMMARY");
       renderKnobLinks("NEWS_MODEL_STORY_DRAFTING");
@@ -2077,6 +2207,8 @@ HTML = r"""<!doctype html>
       if (taskMax) {
         if (task === "article_summary") tuning.article_summary_max_tokens = taskMax;
         if (task === "story_drafting") tuning.story_drafting_max_tokens = taskMax;
+        if (task === "story_scale_screening") tuning.story_scale_screening_max_tokens = taskMax;
+        if (task === "title_generation") tuning.title_generation_max_tokens = taskMax;
       }
       const samplingFields = [
         ["temperature", `${meta.taskSamplingPrefix}_TEMPERATURE`],
@@ -2118,6 +2250,8 @@ HTML = r"""<!doctype html>
         if (tuning.model_max_input_tokens) setControlValue("NEWS_MODEL_MAX_INPUT_TOKENS", tuning.model_max_input_tokens);
         if (task === "article_summary" && tuning.article_summary_max_tokens) setControlValue("NEWS_ARTICLE_SUMMARY_MAX_TOKENS", tuning.article_summary_max_tokens);
         if (task === "story_drafting" && tuning.story_drafting_max_tokens) setControlValue("NEWS_STORY_DRAFTING_MAX_TOKENS", tuning.story_drafting_max_tokens);
+        if (task === "story_scale_screening" && tuning.story_scale_screening_max_tokens) setControlValue("NEWS_STORY_SCALE_SCREENING_MAX_TOKENS", tuning.story_scale_screening_max_tokens);
+        if (task === "title_generation" && tuning.title_generation_max_tokens) setControlValue("NEWS_TITLE_GENERATION_MAX_TOKENS", tuning.title_generation_max_tokens);
         [["temperature","TEMPERATURE"],["top_p","TOP_P"],["top_k","TOP_K"],["min_p","MIN_P"],["presence_penalty","PRESENCE_PENALTY"],["repetition_penalty","REPETITION_PENALTY"]].forEach(([field, suffix]) => {
           if (tuning[field] !== undefined && tuning[field] !== null && tuning[field] !== "") {
             setControlValue(`${meta.taskSamplingPrefix}_${suffix}`, tuning[field]);
@@ -2209,6 +2343,8 @@ HTML = r"""<!doctype html>
       renderPresetSummary();
       renderModelTuningControls("article_summary");
       renderModelTuningControls("story_drafting");
+      renderModelTuningControls("story_scale_screening");
+      renderModelTuningControls("title_generation");
       refreshModelKnobLinks();
       preview("run").catch(() => {});
     }
@@ -2267,6 +2403,8 @@ HTML = r"""<!doctype html>
       state.modelTuningPresets = data.presets || [];
       renderModelTuningControls("article_summary");
       renderModelTuningControls("story_drafting");
+      renderModelTuningControls("story_scale_screening");
+      renderModelTuningControls("title_generation");
     }
     function renderAdvancedKnobs() {
       const search = value("knobSearch").toLowerCase();
@@ -2616,6 +2754,8 @@ HTML = r"""<!doctype html>
         renderPresetSummary();
         renderModelTuningControls("article_summary");
         renderModelTuningControls("story_drafting");
+        renderModelTuningControls("story_scale_screening");
+        renderModelTuningControls("title_generation");
         refreshModelKnobLinks();
         preview("run").catch(() => {});
       };
@@ -2628,6 +2768,8 @@ HTML = r"""<!doctype html>
         renderPresetSummary();
         renderModelTuningControls("article_summary");
         renderModelTuningControls("story_drafting");
+        renderModelTuningControls("story_scale_screening");
+        renderModelTuningControls("title_generation");
         refreshModelKnobLinks();
         preview("run").catch(() => {});
       };
@@ -2685,6 +2827,8 @@ HTML = r"""<!doctype html>
       renderPresetSummary();
       renderModelTuningControls("article_summary");
       renderModelTuningControls("story_drafting");
+      renderModelTuningControls("story_scale_screening");
+      renderModelTuningControls("title_generation");
       wireEvents();
       document.addEventListener("change", (event) => {
         const el = event.target;

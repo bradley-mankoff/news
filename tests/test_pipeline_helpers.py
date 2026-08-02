@@ -1497,6 +1497,47 @@ class PipelineHelperTests(unittest.TestCase):
         )
 
 
+    def test_task_model_assignment_resolves_all_stages_and_inheritance(self) -> None:
+        fake_assignments = {
+            "default": object(),
+            "article_summary": object(),
+            "story_drafting": object(),
+            "story_scale_screening": object(),
+            "title_generation": object(),
+        }
+        with patch.object(pipeline, "MODEL_ASSIGNMENTS", fake_assignments):
+            self.assertIs(
+                pipeline._task_model_assignment("article_summary"),
+                fake_assignments["article_summary"],
+            )
+            self.assertIs(
+                pipeline._task_model_assignment("story_drafting"),
+                fake_assignments["story_drafting"],
+            )
+            self.assertIs(
+                pipeline._task_model_assignment("story_scale_screening"),
+                fake_assignments["story_scale_screening"],
+            )
+            self.assertIs(
+                pipeline._task_model_assignment("title_generation"),
+                fake_assignments["title_generation"],
+            )
+            # image_art_direction shares the title_generation LLM call.
+            self.assertIs(
+                pipeline._task_model_assignment("image_art_direction"),
+                fake_assignments["title_generation"],
+            )
+            # story_discovery has no LLM stage; it inherits default.
+            self.assertIs(
+                pipeline._task_model_assignment("story_discovery"),
+                fake_assignments["default"],
+            )
+            # Unknown tasks also fall back to default (never a KeyError).
+            self.assertIs(
+                pipeline._task_model_assignment("analysis"),
+                fake_assignments["default"],
+            )
+
     def test_model_email_and_art_helpers(self) -> None:
         fake_assignment = SimpleNamespace(
             base_url=pipeline.MODEL_BASE_URL,
