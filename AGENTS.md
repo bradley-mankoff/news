@@ -33,7 +33,7 @@ Project goal: build, review, and send a daily news report from configured source
 - Archon execution: archon-pi build, home at `~/.local/share/archon-pi/archon-home/`; all workflows run pi/deepseek at max effort (curated set + quirks in `docs/archon-workflows.md`).
 
 ## Project board protocol
-- The GitHub project board (project #1, “Build public UI”, on `bradley-mankoff`) is the work queue. Lanes: `Backlog` -> `Todo` -> `In Progress` -> `Ready for Review` -> `In Review` -> `Done`.
+- The GitHub project board (project #1, “Build public UI”, on `bradley-mankoff`) is the work queue. Lanes: `Backlog` -> `Todo` -> `In Progress` -> `Blocked` -> `Ready for Review` -> `In Review` -> `Done`.
 - Branch model: `main` is production (only via reviewed ship PRs); `develop` is the integration branch (repo default; workflow PRs and worktrees base on it); each issue works on its own branch (`archon/task-issue-<N>`) in an isolated worktree — issues in `Todo` run in parallel.
 - New issues land in `Backlog`. Work never starts from creation or from `Backlog`: implementation begins only when an issue is moved into `Todo` (the board poller dispatches an Archon workflow; moving out and back in restarts). The poller also normalizes any board item without a status into the default lane (`Backlog`).
 - While implementing an issue: work on a branch, keep the PR draft until ready.
@@ -42,6 +42,13 @@ Project goal: build, review, and send a daily news report from configured source
   `python3 automation/move_item.py <issue-number> "In Review"`
   The poller opens the ship PR (feature -> `main`), runs `archon-smart-pr-review` on it, and when the review run completes it **merges the ship PR into `main`** and moves the issue to `Done` automatically. (Failed reviews are logged and left in `In Review`.)
 - Issue lifecycle: issues stay OPEN until the ship PR merges into `main`, when the poller closes them explicitly (GitHub's `Fixes` keyword auto-close only fires on default-branch merges, so it cannot close at `main`). If a develop PR's auto-close keyword closes one early, the poller reopens it after the develop merge.
+
+## Asking the human (NEEDS INPUT)
+- When you hit a decision only the human should make (license, naming, scope, real tradeoffs), STOP. Do not guess and do not create a PR.
+- Post a comment starting with `NEEDS INPUT:` — the question, 2-3 concrete options, and the tradeoffs — and @mention `bradley-mankoff` (they get a GitHub email).
+- Add the label: `gh issue edit <N> --add-label needs-input`
+- Make no further changes. The run ends; the poller moves the issue to `Blocked` (no develop merge).
+- The human answers on the issue and drags it back to `Todo`; the poller resumes the workflow in the same worktree with their answer in the comments. Continue from where you stopped.
 - After the PR merges, the issue is moved to `Done` by the poller; manual move also works:
   `python3 automation/move_item.py <issue-number> Done`
 - Workflow dispatch is label-aware: `bug` -> `archon-fix-github-issue`; `feature`/`enhancement` -> `archon-idea-to-pr`; default -> `archon-fix-github-issue`. Overrides live in `automation/config.json`.
