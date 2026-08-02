@@ -187,6 +187,8 @@ def _runtime_snapshot(
                 "assignments": _json_ready(config.model_assignments),
                 "article_summary": _json_ready(config.model_assignments["article_summary"]),
                 "story_drafting": _json_ready(config.model_assignments["story_drafting"]),
+                "story_scale_screening": _json_ready(config.model_assignments["story_scale_screening"]),
+                "title_generation": _json_ready(config.model_assignments["title_generation"]),
                 "tuning": _json_ready(config.model_tuning),
                 "pipeline_budget": _json_ready(config.pipeline_budget),
                 "server_settings": _json_ready(config.model_server_settings),
@@ -1413,6 +1415,46 @@ HTML = r"""<!doctype html>
         taskMaxTokensEnv: "NEWS_STORY_DRAFTING_MAX_TOKENS",
         taskSamplingPrefix: "NEWS_MODEL_STORY_DRAFTING",
         runtimeKey: "story_drafting"
+      },
+      story_scale_screening: {
+        label: "Story Scale Screening",
+        prefix: "scale",
+        modelEnv: "NEWS_MODEL_STORY_SCALE_SCREENING",
+        presetEnv: "NEWS_MODEL_STORY_SCALE_SCREENING_TUNING_PRESET",
+        baseUrlEnv: "NEWS_MODEL_STORY_SCALE_SCREENING_BASE_URL",
+        presetSelectId: "scale_tuning_preset",
+        idInputId: "scale_tuning_id",
+        nameInputId: "scale_tuning_name",
+        descriptionInputId: "scale_tuning_description",
+        modelSelectId: "scale_model",
+        baseUrlId: "scale_base_url",
+        saveButtonId: "scale_tuning_save",
+        renameButtonId: "scale_tuning_rename",
+        deleteButtonId: "scale_tuning_delete",
+        modelMaxTokensId: null,
+        taskMaxTokensEnv: "NEWS_STORY_SCALE_SCREENING_MAX_TOKENS",
+        taskSamplingPrefix: "NEWS_MODEL_STORY_SCALE_SCREENING",
+        runtimeKey: "story_scale_screening"
+      },
+      title_generation: {
+        label: "Title Generation",
+        prefix: "title",
+        modelEnv: "NEWS_MODEL_TITLE_GENERATION",
+        presetEnv: "NEWS_MODEL_TITLE_GENERATION_TUNING_PRESET",
+        baseUrlEnv: "NEWS_MODEL_TITLE_GENERATION_BASE_URL",
+        presetSelectId: "title_tuning_preset",
+        idInputId: "title_tuning_id",
+        nameInputId: "title_tuning_name",
+        descriptionInputId: "title_tuning_description",
+        modelSelectId: "title_model",
+        baseUrlId: "title_base_url",
+        saveButtonId: "title_tuning_save",
+        renameButtonId: "title_tuning_rename",
+        deleteButtonId: "title_tuning_delete",
+        modelMaxTokensId: null,
+        taskMaxTokensEnv: "NEWS_TITLE_GENERATION_MAX_TOKENS",
+        taskSamplingPrefix: "NEWS_MODEL_TITLE_GENERATION",
+        runtimeKey: "title_generation"
       }
     };
     const state = {
@@ -1444,12 +1486,18 @@ HTML = r"""<!doctype html>
       NEWS_MODEL: "Default local model alias used when a task-specific model is not set.",
       NEWS_MODEL_ARTICLE_SUMMARY: "Model used for article summarization before story drafting.",
       NEWS_MODEL_STORY_DRAFTING: "Model used for writing the final story drafts.",
+      NEWS_MODEL_STORY_SCALE_SCREENING: "Model used for global story scale screening before story selection.",
+      NEWS_MODEL_TITLE_GENERATION: "Model used for the title generation / image art direction call.",
       NEWS_MODEL_TUNING_PRESET: "Default saved tuning overlay applied before direct tuning overrides.",
       NEWS_MODEL_ARTICLE_SUMMARY_TUNING_PRESET: "Saved tuning overlay for the article summarization model.",
       NEWS_MODEL_STORY_DRAFTING_TUNING_PRESET: "Saved tuning overlay for the story writing model.",
+      NEWS_MODEL_STORY_SCALE_SCREENING_TUNING_PRESET: "Saved tuning overlay for the story scale screening model.",
+      NEWS_MODEL_TITLE_GENERATION_TUNING_PRESET: "Saved tuning overlay for the title generation model.",
       NEWS_MODEL_MAX_INPUT_TOKENS: "Shared input token cap sent to model calls.",
       NEWS_ARTICLE_SUMMARY_MAX_TOKENS: "Maximum generated tokens for each article summary.",
       NEWS_STORY_DRAFTING_MAX_TOKENS: "Maximum generated tokens for each final story draft.",
+      NEWS_STORY_SCALE_SCREENING_MAX_TOKENS: "Maximum generated tokens for each story scale screening call.",
+      NEWS_TITLE_GENERATION_MAX_TOKENS: "Maximum generated tokens for the title generation / image art call.",
       NEWS_ARTICLE_TEXT_TOKEN_LIMIT: "Article text trimmed to this token budget before summarization.",
       NEWS_TOTAL_ARTICLE_SUMMARY_CAP: "Upper bound on article summaries kept for story synthesis.",
       NEWS_RECENT_WINDOW_HOURS: "How far back source collection looks for recent articles.",
@@ -1473,6 +1521,8 @@ HTML = r"""<!doctype html>
       NEWS_MODEL_BASE_URL: "Default OpenAI-compatible model server endpoint.",
       NEWS_MODEL_ARTICLE_SUMMARY_BASE_URL: "Model server endpoint for article summarization calls.",
       NEWS_MODEL_STORY_DRAFTING_BASE_URL: "Model server endpoint for story writing calls.",
+      NEWS_MODEL_STORY_SCALE_SCREENING_BASE_URL: "Model server endpoint for story scale screening calls.",
+      NEWS_MODEL_TITLE_GENERATION_BASE_URL: "Model server endpoint for title generation calls.",
       NEWS_MODEL_SERVER_PREFILL_STEP_SIZE: "Prefill step size passed to the local MLX model server.",
       NEWS_MODEL_SERVER_PROMPT_CACHE_SIZE: "Prompt cache item count passed to the local model server.",
       NEWS_MODEL_SERVER_PROMPT_CACHE_BYTES: "Prompt cache memory budget passed to the local model server.",
@@ -1724,6 +1774,8 @@ HTML = r"""<!doctype html>
       const assignments = model.assignments || {};
       const articleSummary = model.article_summary || assignments.article_summary || {};
       const storyDrafting = model.story_drafting || assignments.story_drafting || {};
+      const scaleScreening = model.story_scale_screening || assignments.story_scale_screening || {};
+      const titleGeneration = model.title_generation || assignments.title_generation || {};
       const items = [
         ["Run preset", state.selectedRunPresetId || runtime.preset_id || "custom"],
         ["Source scope", runtime.source_scope || "-"],
@@ -1735,6 +1787,8 @@ HTML = r"""<!doctype html>
         ["Model", model.reference || "-"],
         ["Article Summarization", articleSummary.reference || "-"],
         ["Story Writing", storyDrafting.reference || "-"],
+        ["Story Scale Screening", scaleScreening.reference || "-"],
+        ["Title Generation", titleGeneration.reference || "-"],
         ["Article concurrency", model.article_summary_concurrency ?? "-"],
         ["Story concurrency", model.story_synthesis_concurrency ?? "-"],
         ["Images", runtime.image && runtime.image.enabled ? "on" : "off"]
@@ -1746,6 +1800,8 @@ HTML = r"""<!doctype html>
       const runtime = schema.runtime || {};
       const articleRuntime = runtime.model && runtime.model.article_summary ? runtime.model.article_summary : {};
       const storyRuntime = runtime.model && runtime.model.story_drafting ? runtime.model.story_drafting : {};
+      const scaleRuntime = runtime.model && runtime.model.story_scale_screening ? runtime.model.story_scale_screening : {};
+      const titleRuntime = runtime.model && runtime.model.title_generation ? runtime.model.title_generation : {};
       const actionOptions = (schema.actions || []).map(action => `<option value="${escapeHtml(action)}"${action === "run" ? " selected" : ""}>${escapeHtml(action)}</option>`).join("");
       const promptProfileOptions = (schema.prompt_profiles || []).map(p => `<option value="${escapeHtml(p.id)}"${currentControlValue("NEWS_PROMPT_PROFILE") === p.id ? " selected" : ""}>${escapeHtml(p.name)}</option>`).join("");
       const sourceToolHidden = !["check-sources", "prune-sources", "source-languages"].includes(value("actionSelect"));
@@ -1759,11 +1815,17 @@ HTML = r"""<!doctype html>
       };
       const articleModel = knobField("NEWS_MODEL_ARTICLE_SUMMARY", "Article model", { emptyLabel: "default: qwythos-9b-8bit" });
       const storyModel = knobField("NEWS_MODEL_STORY_DRAFTING", "Story model", { emptyLabel: "default: qwythos-9b-8bit" });
+      const scaleModel = knobField("NEWS_MODEL_STORY_SCALE_SCREENING", "Scale screening model", { emptyLabel: "default: qwythos-9b-8bit" });
+      const titleModel = knobField("NEWS_MODEL_TITLE_GENERATION", "Title generation model", { emptyLabel: "default: qwythos-9b-8bit" });
       const sharedModelTokens = knobField("NEWS_MODEL_MAX_INPUT_TOKENS", "Shared model input cap");
       const articleTokenCap = knobField("NEWS_ARTICLE_SUMMARY_MAX_TOKENS", "Article summary max tokens");
       const storyTokenCap = knobField("NEWS_STORY_DRAFTING_MAX_TOKENS", "Story drafting max tokens");
+      const scaleTokenCap = knobField("NEWS_STORY_SCALE_SCREENING_MAX_TOKENS", "Scale screening max tokens");
+      const titleTokenCap = knobField("NEWS_TITLE_GENERATION_MAX_TOKENS", "Title generation max tokens");
       const articleBaseUrl = knobField("NEWS_MODEL_ARTICLE_SUMMARY_BASE_URL", "Base URL");
       const storyBaseUrl = knobField("NEWS_MODEL_STORY_DRAFTING_BASE_URL", "Base URL");
+      const scaleBaseUrl = knobField("NEWS_MODEL_STORY_SCALE_SCREENING_BASE_URL", "Base URL");
+      const titleBaseUrl = knobField("NEWS_MODEL_TITLE_GENERATION_BASE_URL", "Base URL");
       const articleSampling = [
         knobField("NEWS_MODEL_ARTICLE_SUMMARY_TEMPERATURE", "Temperature"),
         knobField("NEWS_MODEL_ARTICLE_SUMMARY_TOP_P", "Top P"),
@@ -1779,6 +1841,22 @@ HTML = r"""<!doctype html>
         knobField("NEWS_MODEL_STORY_DRAFTING_MIN_P", "Min P"),
         knobField("NEWS_MODEL_STORY_DRAFTING_PRESENCE_PENALTY", "Presence penalty"),
         knobField("NEWS_MODEL_STORY_DRAFTING_REPETITION_PENALTY", "Repetition penalty")
+      ].join("");
+      const scaleSampling = [
+        knobField("NEWS_MODEL_STORY_SCALE_SCREENING_TEMPERATURE", "Temperature"),
+        knobField("NEWS_MODEL_STORY_SCALE_SCREENING_TOP_P", "Top P"),
+        knobField("NEWS_MODEL_STORY_SCALE_SCREENING_TOP_K", "Top K"),
+        knobField("NEWS_MODEL_STORY_SCALE_SCREENING_MIN_P", "Min P"),
+        knobField("NEWS_MODEL_STORY_SCALE_SCREENING_PRESENCE_PENALTY", "Presence penalty"),
+        knobField("NEWS_MODEL_STORY_SCALE_SCREENING_REPETITION_PENALTY", "Repetition penalty")
+      ].join("");
+      const titleSampling = [
+        knobField("NEWS_MODEL_TITLE_GENERATION_TEMPERATURE", "Temperature"),
+        knobField("NEWS_MODEL_TITLE_GENERATION_TOP_P", "Top P"),
+        knobField("NEWS_MODEL_TITLE_GENERATION_TOP_K", "Top K"),
+        knobField("NEWS_MODEL_TITLE_GENERATION_MIN_P", "Min P"),
+        knobField("NEWS_MODEL_TITLE_GENERATION_PRESENCE_PENALTY", "Presence penalty"),
+        knobField("NEWS_MODEL_TITLE_GENERATION_REPETITION_PENALTY", "Repetition penalty")
       ].join("");
       $("runSetupMount").innerHTML = `
         <div class="banner panel">
@@ -1897,6 +1975,56 @@ HTML = r"""<!doctype html>
               </div>
             </details>
           </section>
+          <section class="panel model-card">
+            <p class="eyebrow">Model</p>
+            <h2>${escapeHtml(TASK_CONFIG.story_scale_screening.label)}</h2>
+            <p class="muted">Resolved: ${escapeHtml(scaleRuntime.name || scaleRuntime.reference || "-")}</p>
+            <div class="form-grid">
+              ${scaleModel}
+            </div>
+            <details class="details">
+              <summary>Model tuning</summary>
+              <div class="form-grid">
+                <label class="field"><span>Tuning preset</span><select id="scale_tuning_preset" data-task="story_scale_screening" data-env="NEWS_MODEL_STORY_SCALE_SCREENING_TUNING_PRESET"></select><code>NEWS_MODEL_STORY_SCALE_SCREENING_TUNING_PRESET</code></label>
+                <label class="field"><span>Preset id</span><input id="scale_tuning_id"><code>id</code></label>
+                <label class="field"><span>Display name</span><input id="scale_tuning_name"><code>name</code></label>
+                <label class="field"><span>Description</span><textarea id="scale_tuning_description"></textarea><code>description</code></label>
+                ${scaleTokenCap}
+                ${scaleBaseUrl}
+                ${scaleSampling}
+              </div>
+              <div class="toolbar">
+                <button id="scale_tuning_save" class="primary">Save current settings</button>
+                <button id="scale_tuning_rename">Rename display name</button>
+                <button id="scale_tuning_delete" class="danger">Delete preset</button>
+              </div>
+            </details>
+          </section>
+          <section class="panel model-card">
+            <p class="eyebrow">Model</p>
+            <h2>${escapeHtml(TASK_CONFIG.title_generation.label)}</h2>
+            <p class="muted">Resolved: ${escapeHtml(titleRuntime.name || titleRuntime.reference || "-")}</p>
+            <div class="form-grid">
+              ${titleModel}
+            </div>
+            <details class="details">
+              <summary>Model tuning</summary>
+              <div class="form-grid">
+                <label class="field"><span>Tuning preset</span><select id="title_tuning_preset" data-task="title_generation" data-env="NEWS_MODEL_TITLE_GENERATION_TUNING_PRESET"></select><code>NEWS_MODEL_TITLE_GENERATION_TUNING_PRESET</code></label>
+                <label class="field"><span>Preset id</span><input id="title_tuning_id"><code>id</code></label>
+                <label class="field"><span>Display name</span><input id="title_tuning_name"><code>name</code></label>
+                <label class="field"><span>Description</span><textarea id="title_tuning_description"></textarea><code>description</code></label>
+                ${titleTokenCap}
+                ${titleBaseUrl}
+                ${titleSampling}
+              </div>
+              <div class="toolbar">
+                <button id="title_tuning_save" class="primary">Save current settings</button>
+                <button id="title_tuning_rename">Rename display name</button>
+                <button id="title_tuning_delete" class="danger">Delete preset</button>
+              </div>
+            </details>
+          </section>
           <section class="panel">
             <p class="eyebrow">Model catalog</p>
             <h2>Curated models and Hugging Face search</h2>
@@ -2003,6 +2131,8 @@ HTML = r"""<!doctype html>
       renderPresetSummary();
       renderModelTuningControls("article_summary");
       renderModelTuningControls("story_drafting");
+      renderModelTuningControls("story_scale_screening");
+      renderModelTuningControls("title_generation");
       decorateEnvHints($("runSetupMount"));
       renderKnobLinks("NEWS_MODEL_ARTICLE_SUMMARY");
       renderKnobLinks("NEWS_MODEL_STORY_DRAFTING");
@@ -2077,6 +2207,8 @@ HTML = r"""<!doctype html>
       if (taskMax) {
         if (task === "article_summary") tuning.article_summary_max_tokens = taskMax;
         if (task === "story_drafting") tuning.story_drafting_max_tokens = taskMax;
+        if (task === "story_scale_screening") tuning.story_scale_screening_max_tokens = taskMax;
+        if (task === "title_generation") tuning.title_generation_max_tokens = taskMax;
       }
       const samplingFields = [
         ["temperature", `${meta.taskSamplingPrefix}_TEMPERATURE`],
@@ -2118,6 +2250,8 @@ HTML = r"""<!doctype html>
         if (tuning.model_max_input_tokens) setControlValue("NEWS_MODEL_MAX_INPUT_TOKENS", tuning.model_max_input_tokens);
         if (task === "article_summary" && tuning.article_summary_max_tokens) setControlValue("NEWS_ARTICLE_SUMMARY_MAX_TOKENS", tuning.article_summary_max_tokens);
         if (task === "story_drafting" && tuning.story_drafting_max_tokens) setControlValue("NEWS_STORY_DRAFTING_MAX_TOKENS", tuning.story_drafting_max_tokens);
+        if (task === "story_scale_screening" && tuning.story_scale_screening_max_tokens) setControlValue("NEWS_STORY_SCALE_SCREENING_MAX_TOKENS", tuning.story_scale_screening_max_tokens);
+        if (task === "title_generation" && tuning.title_generation_max_tokens) setControlValue("NEWS_TITLE_GENERATION_MAX_TOKENS", tuning.title_generation_max_tokens);
         [["temperature","TEMPERATURE"],["top_p","TOP_P"],["top_k","TOP_K"],["min_p","MIN_P"],["presence_penalty","PRESENCE_PENALTY"],["repetition_penalty","REPETITION_PENALTY"]].forEach(([field, suffix]) => {
           if (tuning[field] !== undefined && tuning[field] !== null && tuning[field] !== "") {
             setControlValue(`${meta.taskSamplingPrefix}_${suffix}`, tuning[field]);
@@ -2210,6 +2344,8 @@ HTML = r"""<!doctype html>
       renderModelTuningControls("article_summary");
       renderModelTuningControls("story_drafting");
       refreshModelKnobLinks();
+      renderModelTuningControls("story_scale_screening");
+      renderModelTuningControls("title_generation");
       preview("run").catch(() => {});
     }
     function setKnobEnv(env) {
@@ -2267,6 +2403,8 @@ HTML = r"""<!doctype html>
       state.modelTuningPresets = data.presets || [];
       renderModelTuningControls("article_summary");
       renderModelTuningControls("story_drafting");
+      renderModelTuningControls("story_scale_screening");
+      renderModelTuningControls("title_generation");
     }
     function renderAdvancedKnobs() {
       const search = value("knobSearch").toLowerCase();
@@ -2617,6 +2755,1235 @@ HTML = r"""<!doctype html>
         renderModelTuningControls("article_summary");
         renderModelTuningControls("story_drafting");
         refreshModelKnobLinks();
+     preview("run").catch(() => {});
+    }
+    function setKnobEnv(env) {
+      document.querySelectorAll("[data-env]").forEach(el => {
+        const val = env[el.dataset.env] || "";
+        if (el.type === "checkbox") {
+          el.checked = ["1", "true", "yes", "on"].includes(String(val).toLowerCase());
+          return;
+        }
+        if (el.tagName === "SELECT" && val && !Array.from(el.options).some(option => option.value === val)) {
+          el.insertAdjacentHTML("afterbegin", `<option value="${escapeHtml(val)}">${escapeHtml(val)}</option>`);
+        }
+        el.value = val;
+      });
+    }
+    async function savePresetEditor() {
+      const body = collectRunPresetEditor();
+      if (!body.id) throw new Error("Preset id is required.");
+      const exists = state.presets.some(preset => preset.id === body.id);
+      await api("/api/presets", { method: exists ? "PATCH" : "POST", body: JSON.stringify(body) });
+      await loadPresets();
+      state.selectedRunPresetId = body.id;
+      renderPresetSummary();
+      renderRunPresetDrawer();
+    }
+    async function renamePresetDisplayName() {
+      const id = value("preset_id").trim();
+      if (!id) return;
+      await api("/api/presets", { method: "PATCH", body: JSON.stringify({ id, name: value("preset_name").trim() }) });
+      await loadPresets();
+      renderPresetSummary();
+      renderRunPresetDrawer();
+    }
+    async function deleteSelectedPreset() {
+      const id = value("preset_id").trim();
+      if (!id) return;
+      const ok = await confirmAction(`Delete run preset ${id}? This cannot be undone.`);
+      if (!ok) return;
+      await api(`/api/presets?id=${encodeURIComponent(id)}`, { method: "DELETE" });
+      await loadPresets();
+      if (state.selectedRunPresetId === id) {
+        state.selectedRunPresetId = "";
+      }
+      editRunPreset("");
+      renderPresetSummary();
+      renderRunPresetDrawer();
+    }
+    async function loadPresets() {
+      const data = await api("/api/presets");
+      state.presets = data.presets || [];
+      renderRunPresetDrawer();
+    }
+    async function loadModelTuningPresets() {
+      const data = await api("/api/model-tuning-presets");
+      state.modelTuningPresets = data.presets || [];
+      renderModelTuningControls("article_summary");
+      renderModelTuningControls("story_drafting");
+      renderModelTuningControls("story_scale_screening");
+      renderModelTuningControls("title_generation");
+    }
+    function renderAdvancedKnobs() {
+      const search = value("knobSearch").toLowerCase();
+      const groups = {};
+      (state.schema.knobs || []).forEach(knob => {
+        if (SURFACED_ENVS.has(knob.env)) return;
+        const hay = `${knob.label} ${knob.env} ${knob.group}`.toLowerCase();
+        if (search && !hay.includes(search)) return;
+        (groups[knob.group] ||= []).push(knob);
+      });
+      const orderedGroups = ["Run Settings", "Model Selection", "Model Tuning", "Pipeline Budget", "Model Server Settings"];
+      const renderCards = list => list.map(knob => `
+        <div class="knob">
+          <label>${escapeHtml(knob.label)}</label>
+          ${inputForKnob(knob)}
+          <code>${escapeHtml(knob.env)}</code>
+        </div>
+      `).join("");
+      $("knobContainer").innerHTML = [...orderedGroups, ...Object.keys(groups).filter(group => !orderedGroups.includes(group)).sort()].map(group => {
+        const knobs = groups[group];
+        if (!knobs || !knobs.length) return "";
+        return `
+          <div class="knob-group">
+            <h2>${escapeHtml(group)}</h2>
+            <div class="knobs">${renderCards(knobs)}</div>
+          </div>
+        `;
+      }).join("");
+      decorateEnvHints($("knobContainer"));
+      renderKnobLinks("NEWS_MODEL");
+    }
+    function collectModelTuningPresetBody(task) {
+      return modelTuningPayload(task);
+    }
+    async function saveModelTuningPreset(task) {
+      const body = collectModelTuningPresetBody(task);
+      if (!body.id) throw new Error("Model tuning preset id is required.");
+      const exists = state.modelTuningPresets.some(preset => preset.id === body.id);
+      await api("/api/model-tuning-presets", { method: exists ? "PATCH" : "POST", body: JSON.stringify(body) });
+      await loadModelTuningPresets();
+      renderModelTuningControls(task);
+    }
+    async function renameModelTuningPreset(task) {
+      const meta = TASK_CONFIG[task];
+      const id = value(meta.idInputId).trim();
+      if (!id) return;
+      await api("/api/model-tuning-presets", { method: "PATCH", body: JSON.stringify({ id, name: value(meta.nameInputId).trim() }) });
+      await loadModelTuningPresets();
+      renderModelTuningControls(task);
+    }
+    async function deleteModelTuningPreset(task) {
+      const meta = TASK_CONFIG[task];
+      const id = value(meta.idInputId).trim();
+      if (!id) return;
+      const ok = await confirmAction(`Delete model tuning preset ${id}? This cannot be undone.`);
+      if (!ok) return;
+      await api(`/api/model-tuning-presets?id=${encodeURIComponent(id)}`, { method: "DELETE" });
+      await loadModelTuningPresets();
+      $(meta.presetSelectId).value = "";
+      $(meta.idInputId).value = "";
+      $(meta.nameInputId).value = "";
+      $(meta.descriptionInputId).value = "";
+      renderModelTuningControls(task);
+    }
+    function confirmAction(message) {
+      return Promise.resolve(window.confirm(message));
+    }
+    async function preview(action="run") {
+      const data = await api("/api/preview", { method: "POST", body: JSON.stringify(requestBody(action)) });
+      $("previewPane").textContent = data.command_text + (data.runtime_error ? `\n\nPreview error: ${data.runtime_error}` : "");
+      return data;
+    }
+    async function runAction(action="run") {
+      const data = await api("/api/run", { method: "POST", body: JSON.stringify(requestBody(action)) });
+      state.activeRun = data.run_id;
+      $("logPane").textContent = "";
+      const events = new EventSource(`/api/runs/${data.run_id}/events`);
+      events.onmessage = event => {
+        const payload = JSON.parse(event.data);
+        $("logPane").textContent += payload.line;
+        $("logPane").scrollTop = $("logPane").scrollHeight;
+      };
+      events.addEventListener("status", event => {
+        const payload = JSON.parse(event.data);
+        $("logPane").textContent += `\n[ui] ${payload.status}\n`;
+        events.close();
+      });
+    }
+    async function loadSources() {
+      const data = await api("/api/sources");
+      state.sources = data.sources || [];
+      renderSources();
+    }
+    function renderSources() {
+      const q = value("sourceSearch").toLowerCase();
+      const rows = state.sources.filter(src => JSON.stringify(src).toLowerCase().includes(q));
+      $("sourceTable").innerHTML = `<thead><tr><th>Key</th><th>Name</th><th>Tier</th><th>Language</th><th>Region</th><th>URL</th></tr></thead><tbody>` +
+        rows.map(src => `<tr data-key="${src.key || ""}"><td>${src.key || ""}</td><td>${src.name || ""}</td><td>${src.tier || ""}</td><td>${src.language || ""}</td><td>${src.region || ""}</td><td>${src.url || ""}</td></tr>`).join("") +
+        `</tbody>`;
+      document.querySelectorAll("#sourceTable tr[data-key]").forEach(row => row.onclick = () => editSource(row.dataset.key));
+    }
+    function sourceInput(field, src) {
+      if (["can_enrich_coverage","strict_source_match"].includes(field)) {
+        return `<label>${field}<select id="source_${field}"><option value=""></option><option value="false" ${val === false ? "selected" : ""}>false</option><option value="true" ${val === true ? "selected" : ""}>true</option></select></label>`;
+      }
+      if (field === "tier") return `<label>${field}<select id="source_${field}"><option></option><option ${val === "core" ? "selected" : ""}>core</option><option ${val === "peripheral" ? "selected" : ""}>peripheral</option></select></label>`;
+      if (field === "source_match_mode") return `<label>${field}<select id="source_${field}"><option></option><option ${val === "feed_label" ? "selected" : ""}>feed_label</option><option ${val === "wire_attribution" ? "selected" : ""}>wire_attribution</option></select></label>`;
+      if (["nations","source_match_aliases","notes"].includes(field)) return `<label>${field}<textarea id="source_${field}">${val}</textarea></label>`;
+      return `<label>${field}<input id="source_${field}" value="${String(val).replaceAll("&","&amp;").replaceAll('"',"&quot;")}"></label>`;
+    }
+    function editSource(key) {
+      const src = state.sources.find(item => item.key === key) || {};
+      $("sourceForm").innerHTML = sourceFields.map(field => sourceInput(field, src)).join("");
+    }
+    function collectSource() {
+      const updates = {};
+      sourceFields.forEach(field => {
+        const el = $(`source_${field}`);
+        if (!el) return;
+        updates[field] = el.value;
+      });
+      return updates;
+    }
+    async function saveSource() {
+      const updates = collectSource();
+      const exists = state.sources.some(src => src.key === updates.key);
+      await api("/api/sources", { method: exists ? "PATCH" : "POST", body: JSON.stringify({ key: updates.key, updates }) });
+      await loadSources();
+    }
+    async function deleteSelectedSource() {
+      const key = value("source_key");
+      if (!key) return;
+      await api(`/api/sources?key=${encodeURIComponent(key)}`, { method: "DELETE" });
+      await loadSources();
+      editSource("");
+    }
+    async function loadRecipients() {
+      const data = await api("/api/recipients");
+      state.recipients = data.recipients || [];
+      renderRecipients();
+    }
+    function renderRecipients() {
+      $("recipientTable").innerHTML = `<thead><tr><th>Email</th><th>Name</th><th>Paused</th></tr></thead><tbody>` +
+        state.recipients.map(rec => `<tr data-email="${rec.email || ""}"><td>${rec.email || ""}</td><td>${rec.name || ""}</td><td>${rec.pause ? "true" : "false"}</td></tr>`).join("") +
+        `</tbody>`;
+      document.querySelectorAll("#recipientTable tr[data-email]").forEach(row => row.onclick = () => editRecipient(row.dataset.email));
+    }
+    function editRecipient(email) {
+      const rec = state.recipients.find(item => item.email === email) || { email: "", name: "", pause: false };
+      $("recipient_email").value = rec.email || "";
+      $("recipient_name").value = rec.name || "";
+      $("recipient_pause").value = rec.pause ? "true" : "false";
+    }
+    async function saveRecipient() {
+      const updates = { email: value("recipient_email"), name: value("recipient_name"), pause: value("recipient_pause") };
+      const exists = state.recipients.some(rec => rec.email === updates.email);
+      await api("/api/recipients", { method: exists ? "PATCH" : "POST", body: JSON.stringify({ email: updates.email, updates }) });
+      await loadRecipients();
+    }
+    async function deleteSelectedRecipient() {
+      const email = value("recipient_email");
+      if (!email) return;
+      await api(`/api/recipients?email=${encodeURIComponent(email)}`, { method: "DELETE" });
+      await loadRecipients();
+      editRecipient("");
+    }
+    const PROMPT_TASK_LABELS = {
+      article_summary: "Article Summarization",
+      story_scale_screening: "Story Scale Screening",
+      story_drafting: "Story Drafting",
+      title_generation: "Title Generation",
+      image_art_direction: "Image Art Direction"
+    };
+    function renderPromptProfilePanel() {
+      const schema = state.schema || {};
+      const profiles = schema.prompt_profiles || [];
+      const selectedId = currentControlValue("NEWS_PROMPT_PROFILE") || (schema.runtime && schema.runtime.prompt_profile_id) || "balanced";
+      const profile = profiles.find(item => item.id === selectedId) || null;
+      const descriptionEl = $("promptProfileDescription");
+      if (descriptionEl) descriptionEl.textContent = profile ? profile.description : "";
+      const readoutsEl = $("promptProfileReadouts");
+      if (!readoutsEl) return;
+      if (!profile) {
+        readoutsEl.innerHTML = `<p class="muted">No prompt profile selected.</p>`;
+        return;
+      }
+      readoutsEl.innerHTML = Object.entries(PROMPT_TASK_LABELS).map(([task, label]) => {
+        const text = (profile.prompts && profile.prompts[task]) || "";
+        return `<label class="field"><span>${escapeHtml(label)}</span><textarea readonly rows="3">${escapeHtml(text)}</textarea></label>`;
+      }).join("");
+    }
+    const MODEL_TASK_LABELS = {
+      factual_extraction: "Factual extraction",
+      structured_output: "Structured output",
+      synthesis: "Synthesis",
+      citation_fidelity: "Citation fidelity",
+      speed: "Speed",
+      context_length: "Context length",
+      translation: "Translation"
+    };
+    const RUNTIME_FIT_LABELS = {
+      managed_mlx_lm: "Managed mlx-lm",
+      managed_mlx_vlm: "Managed mlx-vlm",
+      external_only: "External only"
+    };
+    function modelCatalogEntries() {
+      return (state.schema && state.schema.model_catalog) || [];
+    }
+    function useModelReference(reference) {
+      const sel = document.querySelector('[data-env="NEWS_MODEL"]');
+      if (!sel) return;
+      if (!Array.from(sel.options).some(option => option.value === reference)) {
+        sel.insertAdjacentHTML("afterbegin", `<option value="${escapeHtml(reference)}">${escapeHtml(reference)}</option>`);
+      }
+      sel.value = reference;
+      sel.dispatchEvent(new Event("change"));
+    }
+    function renderModelCatalogPanel() {
+      const select = $("recommendationTask");
+      if (!select) return;
+      const tasks = (state.schema && state.schema.model_recommendation_tasks) || [];
+      select.innerHTML = `<option value="">Pick a task…</option>` + tasks.map(task =>
+        `<option value="${escapeHtml(task)}">${escapeHtml(MODEL_TASK_LABELS[task] || task)}</option>`
+      ).join("");
+      const cards = $("catalogCards");
+      cards.innerHTML = modelCatalogEntries().map(entry => `
+        <div class="knob">
+          <label>${escapeHtml(entry.name)} <code>${escapeHtml(entry.alias)}</code></label>
+          <p class="muted">${escapeHtml(entry.description)}</p>
+          <p class="muted">Backend: ${escapeHtml(entry.backend)} · Context: ${entry.context_length != null ? escapeHtml(String(entry.context_length)) : "n/a"} · <a href="${escapeHtml(entry.hf_url)}" target="_blank" rel="noopener">Hugging Face page</a></p>
+          <div class="toolbar"><button data-use-model="${escapeHtml(entry.alias)}">Set as default model</button></div>
+        </div>
+      `).join("");
+      cards.querySelectorAll("[data-use-model]").forEach(btn => {
+        btn.onclick = () => useModelReference(btn.dataset.useModel);
+      });
+      renderRecommendations(select.value);
+    }
+    function renderRecommendations(task) {
+      const container = $("recommendationReadout");
+      if (!container) return;
+      if (!task) {
+        container.innerHTML = `<p class="muted">Pick a task to see curated recommendations.</p>`;
+        return;
+      }
+      const picks = modelCatalogEntries().filter(entry => entry.task_notes && entry.task_notes[task]);
+      if (!picks.length) {
+        container.innerHTML = `<p class="muted">No verified curated model for this task yet — search below for a candidate.</p>`;
+        return;
+      }
+      container.innerHTML = picks.map(entry => `
+        <div class="knob">
+          <label>${escapeHtml(entry.name)} <code>${escapeHtml(entry.alias)}</code></label>
+          <p class="muted">${escapeHtml(entry.task_notes[task])}</p>
+          <div class="toolbar"><button data-use-model="${escapeHtml(entry.alias)}">Use</button></div>
+        </div>
+      `).join("");
+      container.querySelectorAll("[data-use-model]").forEach(btn => {
+        btn.onclick = () => useModelReference(btn.dataset.useModel);
+      });
+    }
+    async function searchHuggingFaceModels() {
+      const container = $("modelSearchResults");
+      if (!container) return;
+      const query = value("modelSearchQuery").trim();
+      if (!query) {
+        container.innerHTML = `<p class="muted">Enter a query to search Hugging Face.</p>`;
+        return;
+      }
+      const pipeline = value("modelSearchPipeline");
+      const limit = parseInt(value("modelSearchLimit") || "10", 10) || 10;
+      container.innerHTML = `<p class="muted">Searching…</p>`;
+      try {
+        const data = await api(`/api/models/search?q=${encodeURIComponent(query)}&pipeline_tag=${encodeURIComponent(pipeline)}&limit=${limit}`);
+        if (data.error) {
+          container.innerHTML = `<p class="muted">${escapeHtml(data.error)}</p>`;
+          return;
+        }
+        const models = data.models || [];
+        if (!models.length) {
+          container.innerHTML = `<p class="muted">No models found.</p>`;
+          return;
+        }
+        const backendExternal = (state.schema && state.schema.current_env && state.schema.current_env.NEWS_MODEL_BACKEND) === "external";
+        container.innerHTML = models.map(item => {
+          const fit = item.runtime_fit || {};
+          const fitLabel = RUNTIME_FIT_LABELS[fit.status] || fit.status || "unknown";
+          const externalOnly = fit.status === "external_only";
+          const useDisabled = externalOnly && !backendExternal;
+          return `
+            <div class="knob">
+              <label><a href="${escapeHtml(item.hf_url)}" target="_blank" rel="noopener">${escapeHtml(item.id)}</a></label>
+              <p class="muted">${escapeHtml(item.pipeline_tag || "-")} · ${escapeHtml(item.library_name || "-")} · downloads ${escapeHtml(String(item.downloads ?? "-"))} · likes ${escapeHtml(String(item.likes ?? "-"))} · context ${item.context_length != null ? escapeHtml(String(item.context_length)) : "-"}</p>
+              <p class="muted">Fit: ${escapeHtml(fitLabel)} — ${escapeHtml(fit.reason || "")}</p>
+              <div class="toolbar">
+                <button data-use-hf-model="${escapeHtml(item.id)}" ${useDisabled ? "disabled" : ""}>${useDisabled ? "External only — set NEWS_MODEL_BACKEND=external to use" : "Use"}</button>
+              </div>
+            </div>
+          `;
+        }).join("");
+        container.querySelectorAll("[data-use-hf-model]").forEach(btn => {
+          btn.onclick = () => useModelReference(btn.dataset.useHfModel);
+        });
+      } catch (err) {
+        container.innerHTML = `<p class="muted">${escapeHtml(err.message)}</p>`;
+      }
+    }
+    async function comparePromptProfiles() {
+      const selectedId = currentControlValue("NEWS_PROMPT_PROFILE") || "balanced";
+      const data = await api(`/api/prompt-profiles/compare?profile=${encodeURIComponent(selectedId)}`);
+      const container = $("promptProfileCompare");
+      if (!container) return;
+      const diffs = data.diffs || {};
+      const entries = Object.entries(diffs);
+      container.innerHTML = entries.length
+        ? entries.map(([task, diff]) => `<div class="knob"><code>${escapeHtml(task)}</code><pre>${escapeHtml(diff)}</pre></div>`).join("")
+        : `<p class="muted">No differences from balanced.</p>`;
+    }
+    function wireEvents() {
+      $("previewBtn").onclick = () => preview("run").catch(err => setStatus(err.message, "bad"));
+      $("runBtn").onclick = () => runAction("run").catch(err => setStatus(err.message, "bad"));
+      $("utilityPreviewBtn").onclick = () => preview(value("actionSelect") || "run").catch(err => setStatus(err.message, "bad"));
+      $("utilityRunBtn").onclick = () => runAction(value("actionSelect") || "run").catch(err => setStatus(err.message, "bad"));
+      $("stopBtn").onclick = () => state.activeRun && api(`/api/runs/${state.activeRun}/stop`, { method: "POST", body: "{}" });
+      $("openRunPresetDrawerBtn").onclick = () => { renderRunPresetDrawer(); openRunPresetDialog(); };
+      $("savePresetBtn").onclick = () => { prepRunPresetEditorFromCurrent(); renderRunPresetDrawer(); openRunPresetDialog(); };
+      $("closeRunPresetDialogBtn").onclick = closeRunPresetDialog;
+      $("newPresetBtn").onclick = () => { editRunPreset(""); $("preset_env").value = envToText(collectEnv()); };
+      $("reloadPresetsBtn").onclick = loadPresets;
+      $("applyPresetBtn").onclick = () => {
+        const id = value("preset_id").trim();
+        const preset = state.presets.find(item => item.id === id);
+        if (!preset) return;
+        applyRunPreset(preset);
+        closeRunPresetDialog();
+      };
+      $("renamePresetBtn").onclick = () => renamePresetDisplayName().catch(err => setStatus(err.message, "bad"));
+      $("savePresetEditorBtn").onclick = () => savePresetEditor().catch(err => setStatus(err.message, "bad"));
+      $("deletePresetBtn").onclick = () => deleteSelectedPreset().catch(err => setStatus(err.message, "bad"));
+      $("knobSearch").oninput = renderAdvancedKnobs;
+      $("clearKnobsBtn").onclick = () => {
+        document.querySelectorAll("[data-env]").forEach(el => {
+          if (el.type === "checkbox") el.checked = false;
+          else el.value = "";
+        });
+        state.selectedRunPresetId = "";
+        renderPresetSummary();
+        renderModelTuningControls("article_summary");
+        renderModelTuningControls("story_drafting");
+        refreshModelKnobLinks();
+     preview("run").catch(() => {});
+    }
+    function setKnobEnv(env) {
+      document.querySelectorAll("[data-env]").forEach(el => {
+        const val = env[el.dataset.env] || "";
+        if (el.type === "checkbox") {
+          el.checked = ["1", "true", "yes", "on"].includes(String(val).toLowerCase());
+          return;
+        }
+        if (el.tagName === "SELECT" && val && !Array.from(el.options).some(option => option.value === val)) {
+          el.insertAdjacentHTML("afterbegin", `<option value="${escapeHtml(val)}">${escapeHtml(val)}</option>`);
+        }
+        el.value = val;
+      });
+    }
+    async function savePresetEditor() {
+      const body = collectRunPresetEditor();
+      if (!body.id) throw new Error("Preset id is required.");
+      const exists = state.presets.some(preset => preset.id === body.id);
+      await api("/api/presets", { method: exists ? "PATCH" : "POST", body: JSON.stringify(body) });
+      await loadPresets();
+      state.selectedRunPresetId = body.id;
+      renderPresetSummary();
+      renderRunPresetDrawer();
+    }
+    async function renamePresetDisplayName() {
+      const id = value("preset_id").trim();
+      if (!id) return;
+      await api("/api/presets", { method: "PATCH", body: JSON.stringify({ id, name: value("preset_name").trim() }) });
+      await loadPresets();
+      renderPresetSummary();
+      renderRunPresetDrawer();
+    }
+    async function deleteSelectedPreset() {
+      const id = value("preset_id").trim();
+      if (!id) return;
+      const ok = await confirmAction(`Delete run preset ${id}? This cannot be undone.`);
+      if (!ok) return;
+      await api(`/api/presets?id=${encodeURIComponent(id)}`, { method: "DELETE" });
+      await loadPresets();
+      if (state.selectedRunPresetId === id) {
+        state.selectedRunPresetId = "";
+      }
+      editRunPreset("");
+      renderPresetSummary();
+      renderRunPresetDrawer();
+    }
+    async function loadPresets() {
+      const data = await api("/api/presets");
+      state.presets = data.presets || [];
+      renderRunPresetDrawer();
+    }
+    async function loadModelTuningPresets() {
+      const data = await api("/api/model-tuning-presets");
+      state.modelTuningPresets = data.presets || [];
+      renderModelTuningControls("article_summary");
+      renderModelTuningControls("story_drafting");
+      renderModelTuningControls("story_scale_screening");
+      renderModelTuningControls("title_generation");
+    }
+    function renderAdvancedKnobs() {
+      const search = value("knobSearch").toLowerCase();
+      const groups = {};
+      (state.schema.knobs || []).forEach(knob => {
+        if (SURFACED_ENVS.has(knob.env)) return;
+        const hay = `${knob.label} ${knob.env} ${knob.group}`.toLowerCase();
+        if (search && !hay.includes(search)) return;
+        (groups[knob.group] ||= []).push(knob);
+      });
+      const orderedGroups = ["Run Settings", "Model Selection", "Model Tuning", "Pipeline Budget", "Model Server Settings"];
+      const renderCards = list => list.map(knob => `
+        <div class="knob">
+          <label>${escapeHtml(knob.label)}</label>
+          ${inputForKnob(knob)}
+          <code>${escapeHtml(knob.env)}</code>
+        </div>
+      `).join("");
+      $("knobContainer").innerHTML = [...orderedGroups, ...Object.keys(groups).filter(group => !orderedGroups.includes(group)).sort()].map(group => {
+        const knobs = groups[group];
+        if (!knobs || !knobs.length) return "";
+        return `
+          <div class="knob-group">
+            <h2>${escapeHtml(group)}</h2>
+            <div class="knobs">${renderCards(knobs)}</div>
+          </div>
+        `;
+      }).join("");
+      decorateEnvHints($("knobContainer"));
+      renderKnobLinks("NEWS_MODEL");
+    }
+    function collectModelTuningPresetBody(task) {
+      return modelTuningPayload(task);
+    }
+    async function saveModelTuningPreset(task) {
+      const body = collectModelTuningPresetBody(task);
+      if (!body.id) throw new Error("Model tuning preset id is required.");
+      const exists = state.modelTuningPresets.some(preset => preset.id === body.id);
+      await api("/api/model-tuning-presets", { method: exists ? "PATCH" : "POST", body: JSON.stringify(body) });
+      await loadModelTuningPresets();
+      renderModelTuningControls(task);
+    }
+    async function renameModelTuningPreset(task) {
+      const meta = TASK_CONFIG[task];
+      const id = value(meta.idInputId).trim();
+      if (!id) return;
+      await api("/api/model-tuning-presets", { method: "PATCH", body: JSON.stringify({ id, name: value(meta.nameInputId).trim() }) });
+      await loadModelTuningPresets();
+      renderModelTuningControls(task);
+    }
+    async function deleteModelTuningPreset(task) {
+      const meta = TASK_CONFIG[task];
+      const id = value(meta.idInputId).trim();
+      if (!id) return;
+      const ok = await confirmAction(`Delete model tuning preset ${id}? This cannot be undone.`);
+      if (!ok) return;
+      await api(`/api/model-tuning-presets?id=${encodeURIComponent(id)}`, { method: "DELETE" });
+      await loadModelTuningPresets();
+      $(meta.presetSelectId).value = "";
+      $(meta.idInputId).value = "";
+      $(meta.nameInputId).value = "";
+      $(meta.descriptionInputId).value = "";
+      renderModelTuningControls(task);
+    }
+    function confirmAction(message) {
+      return Promise.resolve(window.confirm(message));
+    }
+    async function preview(action="run") {
+      const data = await api("/api/preview", { method: "POST", body: JSON.stringify(requestBody(action)) });
+      $("previewPane").textContent = data.command_text + (data.runtime_error ? `\n\nPreview error: ${data.runtime_error}` : "");
+      return data;
+    }
+    async function runAction(action="run") {
+      const data = await api("/api/run", { method: "POST", body: JSON.stringify(requestBody(action)) });
+      state.activeRun = data.run_id;
+      $("logPane").textContent = "";
+      const events = new EventSource(`/api/runs/${data.run_id}/events`);
+      events.onmessage = event => {
+        const payload = JSON.parse(event.data);
+        $("logPane").textContent += payload.line;
+        $("logPane").scrollTop = $("logPane").scrollHeight;
+      };
+      events.addEventListener("status", event => {
+        const payload = JSON.parse(event.data);
+        $("logPane").textContent += `\n[ui] ${payload.status}\n`;
+        events.close();
+      });
+    }
+    async function loadSources() {
+      const data = await api("/api/sources");
+      state.sources = data.sources || [];
+      renderSources();
+    }
+    function renderSources() {
+      const q = value("sourceSearch").toLowerCase();
+      const rows = state.sources.filter(src => JSON.stringify(src).toLowerCase().includes(q));
+      $("sourceTable").innerHTML = `<thead><tr><th>Key</th><th>Name</th><th>Tier</th><th>Language</th><th>Region</th><th>URL</th></tr></thead><tbody>` +
+        rows.map(src => `<tr data-key="${src.key || ""}"><td>${src.key || ""}</td><td>${src.name || ""}</td><td>${src.tier || ""}</td><td>${src.language || ""}</td><td>${src.region || ""}</td><td>${src.url || ""}</td></tr>`).join("") +
+        `</tbody>`;
+      document.querySelectorAll("#sourceTable tr[data-key]").forEach(row => row.onclick = () => editSource(row.dataset.key));
+    }
+    function sourceInput(field, src) {
+      if (["can_enrich_coverage","strict_source_match"].includes(field)) {
+        return `<label>${field}<select id="source_${field}"><option value=""></option><option value="false" ${val === false ? "selected" : ""}>false</option><option value="true" ${val === true ? "selected" : ""}>true</option></select></label>`;
+      }
+      if (field === "tier") return `<label>${field}<select id="source_${field}"><option></option><option ${val === "core" ? "selected" : ""}>core</option><option ${val === "peripheral" ? "selected" : ""}>peripheral</option></select></label>`;
+      if (field === "source_match_mode") return `<label>${field}<select id="source_${field}"><option></option><option ${val === "feed_label" ? "selected" : ""}>feed_label</option><option ${val === "wire_attribution" ? "selected" : ""}>wire_attribution</option></select></label>`;
+      if (["nations","source_match_aliases","notes"].includes(field)) return `<label>${field}<textarea id="source_${field}">${val}</textarea></label>`;
+      return `<label>${field}<input id="source_${field}" value="${String(val).replaceAll("&","&amp;").replaceAll('"',"&quot;")}"></label>`;
+    }
+    function editSource(key) {
+      const src = state.sources.find(item => item.key === key) || {};
+      $("sourceForm").innerHTML = sourceFields.map(field => sourceInput(field, src)).join("");
+    }
+    function collectSource() {
+      const updates = {};
+      sourceFields.forEach(field => {
+        const el = $(`source_${field}`);
+        if (!el) return;
+        updates[field] = el.value;
+      });
+      return updates;
+    }
+    async function saveSource() {
+      const updates = collectSource();
+      const exists = state.sources.some(src => src.key === updates.key);
+      await api("/api/sources", { method: exists ? "PATCH" : "POST", body: JSON.stringify({ key: updates.key, updates }) });
+      await loadSources();
+    }
+    async function deleteSelectedSource() {
+      const key = value("source_key");
+      if (!key) return;
+      await api(`/api/sources?key=${encodeURIComponent(key)}`, { method: "DELETE" });
+      await loadSources();
+      editSource("");
+    }
+    async function loadRecipients() {
+      const data = await api("/api/recipients");
+      state.recipients = data.recipients || [];
+      renderRecipients();
+    }
+    function renderRecipients() {
+      $("recipientTable").innerHTML = `<thead><tr><th>Email</th><th>Name</th><th>Paused</th></tr></thead><tbody>` +
+        state.recipients.map(rec => `<tr data-email="${rec.email || ""}"><td>${rec.email || ""}</td><td>${rec.name || ""}</td><td>${rec.pause ? "true" : "false"}</td></tr>`).join("") +
+        `</tbody>`;
+      document.querySelectorAll("#recipientTable tr[data-email]").forEach(row => row.onclick = () => editRecipient(row.dataset.email));
+    }
+    function editRecipient(email) {
+      const rec = state.recipients.find(item => item.email === email) || { email: "", name: "", pause: false };
+      $("recipient_email").value = rec.email || "";
+      $("recipient_name").value = rec.name || "";
+      $("recipient_pause").value = rec.pause ? "true" : "false";
+    }
+    async function saveRecipient() {
+      const updates = { email: value("recipient_email"), name: value("recipient_name"), pause: value("recipient_pause") };
+      const exists = state.recipients.some(rec => rec.email === updates.email);
+      await api("/api/recipients", { method: exists ? "PATCH" : "POST", body: JSON.stringify({ email: updates.email, updates }) });
+      await loadRecipients();
+    }
+    async function deleteSelectedRecipient() {
+      const email = value("recipient_email");
+      if (!email) return;
+      await api(`/api/recipients?email=${encodeURIComponent(email)}`, { method: "DELETE" });
+      await loadRecipients();
+      editRecipient("");
+    }
+    const PROMPT_TASK_LABELS = {
+      article_summary: "Article Summarization",
+      story_scale_screening: "Story Scale Screening",
+      story_drafting: "Story Drafting",
+      title_generation: "Title Generation",
+      image_art_direction: "Image Art Direction"
+    };
+    function renderPromptProfilePanel() {
+      const schema = state.schema || {};
+      const profiles = schema.prompt_profiles || [];
+      const selectedId = currentControlValue("NEWS_PROMPT_PROFILE") || (schema.runtime && schema.runtime.prompt_profile_id) || "balanced";
+      const profile = profiles.find(item => item.id === selectedId) || null;
+      const descriptionEl = $("promptProfileDescription");
+      if (descriptionEl) descriptionEl.textContent = profile ? profile.description : "";
+      const readoutsEl = $("promptProfileReadouts");
+      if (!readoutsEl) return;
+      if (!profile) {
+        readoutsEl.innerHTML = `<p class="muted">No prompt profile selected.</p>`;
+        return;
+      }
+      readoutsEl.innerHTML = Object.entries(PROMPT_TASK_LABELS).map(([task, label]) => {
+        const text = (profile.prompts && profile.prompts[task]) || "";
+        return `<label class="field"><span>${escapeHtml(label)}</span><textarea readonly rows="3">${escapeHtml(text)}</textarea></label>`;
+      }).join("");
+    }
+    const MODEL_TASK_LABELS = {
+      factual_extraction: "Factual extraction",
+      structured_output: "Structured output",
+      synthesis: "Synthesis",
+      citation_fidelity: "Citation fidelity",
+      speed: "Speed",
+      context_length: "Context length",
+      translation: "Translation"
+    };
+    const RUNTIME_FIT_LABELS = {
+      managed_mlx_lm: "Managed mlx-lm",
+      managed_mlx_vlm: "Managed mlx-vlm",
+      external_only: "External only"
+    };
+    function modelCatalogEntries() {
+      return (state.schema && state.schema.model_catalog) || [];
+    }
+    function useModelReference(reference) {
+      const sel = document.querySelector('[data-env="NEWS_MODEL"]');
+      if (!sel) return;
+      if (!Array.from(sel.options).some(option => option.value === reference)) {
+        sel.insertAdjacentHTML("afterbegin", `<option value="${escapeHtml(reference)}">${escapeHtml(reference)}</option>`);
+      }
+      sel.value = reference;
+      sel.dispatchEvent(new Event("change"));
+    }
+    function renderModelCatalogPanel() {
+      const select = $("recommendationTask");
+      if (!select) return;
+      const tasks = (state.schema && state.schema.model_recommendation_tasks) || [];
+      select.innerHTML = `<option value="">Pick a task…</option>` + tasks.map(task =>
+        `<option value="${escapeHtml(task)}">${escapeHtml(MODEL_TASK_LABELS[task] || task)}</option>`
+      ).join("");
+      const cards = $("catalogCards");
+      cards.innerHTML = modelCatalogEntries().map(entry => `
+        <div class="knob">
+          <label>${escapeHtml(entry.name)} <code>${escapeHtml(entry.alias)}</code></label>
+          <p class="muted">${escapeHtml(entry.description)}</p>
+          <p class="muted">Backend: ${escapeHtml(entry.backend)} · Context: ${entry.context_length != null ? escapeHtml(String(entry.context_length)) : "n/a"} · <a href="${escapeHtml(entry.hf_url)}" target="_blank" rel="noopener">Hugging Face page</a></p>
+          <div class="toolbar"><button data-use-model="${escapeHtml(entry.alias)}">Set as default model</button></div>
+        </div>
+      `).join("");
+      cards.querySelectorAll("[data-use-model]").forEach(btn => {
+        btn.onclick = () => useModelReference(btn.dataset.useModel);
+      });
+      renderRecommendations(select.value);
+    }
+    function renderRecommendations(task) {
+      const container = $("recommendationReadout");
+      if (!container) return;
+      if (!task) {
+        container.innerHTML = `<p class="muted">Pick a task to see curated recommendations.</p>`;
+        return;
+      }
+      const picks = modelCatalogEntries().filter(entry => entry.task_notes && entry.task_notes[task]);
+      if (!picks.length) {
+        container.innerHTML = `<p class="muted">No verified curated model for this task yet — search below for a candidate.</p>`;
+        return;
+      }
+      container.innerHTML = picks.map(entry => `
+        <div class="knob">
+          <label>${escapeHtml(entry.name)} <code>${escapeHtml(entry.alias)}</code></label>
+          <p class="muted">${escapeHtml(entry.task_notes[task])}</p>
+          <div class="toolbar"><button data-use-model="${escapeHtml(entry.alias)}">Use</button></div>
+        </div>
+      `).join("");
+      container.querySelectorAll("[data-use-model]").forEach(btn => {
+        btn.onclick = () => useModelReference(btn.dataset.useModel);
+      });
+    }
+    async function searchHuggingFaceModels() {
+      const container = $("modelSearchResults");
+      if (!container) return;
+      const query = value("modelSearchQuery").trim();
+      if (!query) {
+        container.innerHTML = `<p class="muted">Enter a query to search Hugging Face.</p>`;
+        return;
+      }
+      const pipeline = value("modelSearchPipeline");
+      const limit = parseInt(value("modelSearchLimit") || "10", 10) || 10;
+      container.innerHTML = `<p class="muted">Searching…</p>`;
+      try {
+        const data = await api(`/api/models/search?q=${encodeURIComponent(query)}&pipeline_tag=${encodeURIComponent(pipeline)}&limit=${limit}`);
+        if (data.error) {
+          container.innerHTML = `<p class="muted">${escapeHtml(data.error)}</p>`;
+          return;
+        }
+        const models = data.models || [];
+        if (!models.length) {
+          container.innerHTML = `<p class="muted">No models found.</p>`;
+          return;
+        }
+        const backendExternal = (state.schema && state.schema.current_env && state.schema.current_env.NEWS_MODEL_BACKEND) === "external";
+        container.innerHTML = models.map(item => {
+          const fit = item.runtime_fit || {};
+          const fitLabel = RUNTIME_FIT_LABELS[fit.status] || fit.status || "unknown";
+          const externalOnly = fit.status === "external_only";
+          const useDisabled = externalOnly && !backendExternal;
+          return `
+            <div class="knob">
+              <label><a href="${escapeHtml(item.hf_url)}" target="_blank" rel="noopener">${escapeHtml(item.id)}</a></label>
+              <p class="muted">${escapeHtml(item.pipeline_tag || "-")} · ${escapeHtml(item.library_name || "-")} · downloads ${escapeHtml(String(item.downloads ?? "-"))} · likes ${escapeHtml(String(item.likes ?? "-"))} · context ${item.context_length != null ? escapeHtml(String(item.context_length)) : "-"}</p>
+              <p class="muted">Fit: ${escapeHtml(fitLabel)} — ${escapeHtml(fit.reason || "")}</p>
+              <div class="toolbar">
+                <button data-use-hf-model="${escapeHtml(item.id)}" ${useDisabled ? "disabled" : ""}>${useDisabled ? "External only — set NEWS_MODEL_BACKEND=external to use" : "Use"}</button>
+              </div>
+            </div>
+          `;
+        }).join("");
+        container.querySelectorAll("[data-use-hf-model]").forEach(btn => {
+          btn.onclick = () => useModelReference(btn.dataset.useHfModel);
+        });
+      } catch (err) {
+        container.innerHTML = `<p class="muted">${escapeHtml(err.message)}</p>`;
+      }
+    }
+    async function comparePromptProfiles() {
+      const selectedId = currentControlValue("NEWS_PROMPT_PROFILE") || "balanced";
+      const data = await api(`/api/prompt-profiles/compare?profile=${encodeURIComponent(selectedId)}`);
+      const container = $("promptProfileCompare");
+      if (!container) return;
+      const diffs = data.diffs || {};
+      const entries = Object.entries(diffs);
+      container.innerHTML = entries.length
+        ? entries.map(([task, diff]) => `<div class="knob"><code>${escapeHtml(task)}</code><pre>${escapeHtml(diff)}</pre></div>`).join("")
+        : `<p class="muted">No differences from balanced.</p>`;
+    }
+    function wireEvents() {
+      $("previewBtn").onclick = () => preview("run").catch(err => setStatus(err.message, "bad"));
+      $("runBtn").onclick = () => runAction("run").catch(err => setStatus(err.message, "bad"));
+      $("utilityPreviewBtn").onclick = () => preview(value("actionSelect") || "run").catch(err => setStatus(err.message, "bad"));
+      $("utilityRunBtn").onclick = () => runAction(value("actionSelect") || "run").catch(err => setStatus(err.message, "bad"));
+      $("stopBtn").onclick = () => state.activeRun && api(`/api/runs/${state.activeRun}/stop`, { method: "POST", body: "{}" });
+      $("openRunPresetDrawerBtn").onclick = () => { renderRunPresetDrawer(); openRunPresetDialog(); };
+      $("savePresetBtn").onclick = () => { prepRunPresetEditorFromCurrent(); renderRunPresetDrawer(); openRunPresetDialog(); };
+      $("closeRunPresetDialogBtn").onclick = closeRunPresetDialog;
+      $("newPresetBtn").onclick = () => { editRunPreset(""); $("preset_env").value = envToText(collectEnv()); };
+      $("reloadPresetsBtn").onclick = loadPresets;
+      $("applyPresetBtn").onclick = () => {
+        const id = value("preset_id").trim();
+        const preset = state.presets.find(item => item.id === id);
+        if (!preset) return;
+        applyRunPreset(preset);
+        closeRunPresetDialog();
+      };
+      $("renamePresetBtn").onclick = () => renamePresetDisplayName().catch(err => setStatus(err.message, "bad"));
+      $("savePresetEditorBtn").onclick = () => savePresetEditor().catch(err => setStatus(err.message, "bad"));
+      $("deletePresetBtn").onclick = () => deleteSelectedPreset().catch(err => setStatus(err.message, "bad"));
+      $("knobSearch").oninput = renderAdvancedKnobs;
+      $("clearKnobsBtn").onclick = () => {
+        document.querySelectorAll("[data-env]").forEach(el => {
+          if (el.type === "checkbox") el.checked = false;
+          else el.value = "";
+        });
+        state.selectedRunPresetId = "";
+        renderPresetSummary();
+        renderModelTuningControls("article_summary");
+        renderModelTuningControls("story_drafting");
+        refreshModelKnobLinks();
+     preview("run").catch(() => {});
+    }
+    function setKnobEnv(env) {
+      document.querySelectorAll("[data-env]").forEach(el => {
+        const val = env[el.dataset.env] || "";
+        if (el.type === "checkbox") {
+          el.checked = ["1", "true", "yes", "on"].includes(String(val).toLowerCase());
+          return;
+        }
+        if (el.tagName === "SELECT" && val && !Array.from(el.options).some(option => option.value === val)) {
+          el.insertAdjacentHTML("afterbegin", `<option value="${escapeHtml(val)}">${escapeHtml(val)}</option>`);
+        }
+        el.value = val;
+      });
+    }
+    async function savePresetEditor() {
+      const body = collectRunPresetEditor();
+      if (!body.id) throw new Error("Preset id is required.");
+      const exists = state.presets.some(preset => preset.id === body.id);
+      await api("/api/presets", { method: exists ? "PATCH" : "POST", body: JSON.stringify(body) });
+      await loadPresets();
+      state.selectedRunPresetId = body.id;
+      renderPresetSummary();
+      renderRunPresetDrawer();
+    }
+    async function renamePresetDisplayName() {
+      const id = value("preset_id").trim();
+      if (!id) return;
+      await api("/api/presets", { method: "PATCH", body: JSON.stringify({ id, name: value("preset_name").trim() }) });
+      await loadPresets();
+      renderPresetSummary();
+      renderRunPresetDrawer();
+    }
+    async function deleteSelectedPreset() {
+      const id = value("preset_id").trim();
+      if (!id) return;
+      const ok = await confirmAction(`Delete run preset ${id}? This cannot be undone.`);
+      if (!ok) return;
+      await api(`/api/presets?id=${encodeURIComponent(id)}`, { method: "DELETE" });
+      await loadPresets();
+      if (state.selectedRunPresetId === id) {
+        state.selectedRunPresetId = "";
+      }
+      editRunPreset("");
+      renderPresetSummary();
+      renderRunPresetDrawer();
+    }
+    async function loadPresets() {
+      const data = await api("/api/presets");
+      state.presets = data.presets || [];
+      renderRunPresetDrawer();
+    }
+    async function loadModelTuningPresets() {
+      const data = await api("/api/model-tuning-presets");
+      state.modelTuningPresets = data.presets || [];
+      renderModelTuningControls("article_summary");
+      renderModelTuningControls("story_drafting");
+      renderModelTuningControls("story_scale_screening");
+      renderModelTuningControls("title_generation");
+    }
+    function renderAdvancedKnobs() {
+      const search = value("knobSearch").toLowerCase();
+      const groups = {};
+      (state.schema.knobs || []).forEach(knob => {
+        if (SURFACED_ENVS.has(knob.env)) return;
+        const hay = `${knob.label} ${knob.env} ${knob.group}`.toLowerCase();
+        if (search && !hay.includes(search)) return;
+        (groups[knob.group] ||= []).push(knob);
+      });
+      const orderedGroups = ["Run Settings", "Model Selection", "Model Tuning", "Pipeline Budget", "Model Server Settings"];
+      const renderCards = list => list.map(knob => `
+        <div class="knob">
+          <label>${escapeHtml(knob.label)}</label>
+          ${inputForKnob(knob)}
+          <code>${escapeHtml(knob.env)}</code>
+        </div>
+      `).join("");
+      $("knobContainer").innerHTML = [...orderedGroups, ...Object.keys(groups).filter(group => !orderedGroups.includes(group)).sort()].map(group => {
+        const knobs = groups[group];
+        if (!knobs || !knobs.length) return "";
+        return `
+          <div class="knob-group">
+            <h2>${escapeHtml(group)}</h2>
+            <div class="knobs">${renderCards(knobs)}</div>
+          </div>
+        `;
+      }).join("");
+      decorateEnvHints($("knobContainer"));
+      renderKnobLinks("NEWS_MODEL");
+    }
+    function collectModelTuningPresetBody(task) {
+      return modelTuningPayload(task);
+    }
+    async function saveModelTuningPreset(task) {
+      const body = collectModelTuningPresetBody(task);
+      if (!body.id) throw new Error("Model tuning preset id is required.");
+      const exists = state.modelTuningPresets.some(preset => preset.id === body.id);
+      await api("/api/model-tuning-presets", { method: exists ? "PATCH" : "POST", body: JSON.stringify(body) });
+      await loadModelTuningPresets();
+      renderModelTuningControls(task);
+    }
+    async function renameModelTuningPreset(task) {
+      const meta = TASK_CONFIG[task];
+      const id = value(meta.idInputId).trim();
+      if (!id) return;
+      await api("/api/model-tuning-presets", { method: "PATCH", body: JSON.stringify({ id, name: value(meta.nameInputId).trim() }) });
+      await loadModelTuningPresets();
+      renderModelTuningControls(task);
+    }
+    async function deleteModelTuningPreset(task) {
+      const meta = TASK_CONFIG[task];
+      const id = value(meta.idInputId).trim();
+      if (!id) return;
+      const ok = await confirmAction(`Delete model tuning preset ${id}? This cannot be undone.`);
+      if (!ok) return;
+      await api(`/api/model-tuning-presets?id=${encodeURIComponent(id)}`, { method: "DELETE" });
+      await loadModelTuningPresets();
+      $(meta.presetSelectId).value = "";
+      $(meta.idInputId).value = "";
+      $(meta.nameInputId).value = "";
+      $(meta.descriptionInputId).value = "";
+      renderModelTuningControls(task);
+    }
+    function confirmAction(message) {
+      return Promise.resolve(window.confirm(message));
+    }
+    async function preview(action="run") {
+      const data = await api("/api/preview", { method: "POST", body: JSON.stringify(requestBody(action)) });
+      $("previewPane").textContent = data.command_text + (data.runtime_error ? `\n\nPreview error: ${data.runtime_error}` : "");
+      return data;
+    }
+    async function runAction(action="run") {
+      const data = await api("/api/run", { method: "POST", body: JSON.stringify(requestBody(action)) });
+      state.activeRun = data.run_id;
+      $("logPane").textContent = "";
+      const events = new EventSource(`/api/runs/${data.run_id}/events`);
+      events.onmessage = event => {
+        const payload = JSON.parse(event.data);
+        $("logPane").textContent += payload.line;
+        $("logPane").scrollTop = $("logPane").scrollHeight;
+      };
+      events.addEventListener("status", event => {
+        const payload = JSON.parse(event.data);
+        $("logPane").textContent += `\n[ui] ${payload.status}\n`;
+        events.close();
+      });
+    }
+    async function loadSources() {
+      const data = await api("/api/sources");
+      state.sources = data.sources || [];
+      renderSources();
+    }
+    function renderSources() {
+      const q = value("sourceSearch").toLowerCase();
+      const rows = state.sources.filter(src => JSON.stringify(src).toLowerCase().includes(q));
+      $("sourceTable").innerHTML = `<thead><tr><th>Key</th><th>Name</th><th>Tier</th><th>Language</th><th>Region</th><th>URL</th></tr></thead><tbody>` +
+        rows.map(src => `<tr data-key="${src.key || ""}"><td>${src.key || ""}</td><td>${src.name || ""}</td><td>${src.tier || ""}</td><td>${src.language || ""}</td><td>${src.region || ""}</td><td>${src.url || ""}</td></tr>`).join("") +
+        `</tbody>`;
+      document.querySelectorAll("#sourceTable tr[data-key]").forEach(row => row.onclick = () => editSource(row.dataset.key));
+    }
+    function sourceInput(field, src) {
+      if (["can_enrich_coverage","strict_source_match"].includes(field)) {
+        return `<label>${field}<select id="source_${field}"><option value=""></option><option value="false" ${val === false ? "selected" : ""}>false</option><option value="true" ${val === true ? "selected" : ""}>true</option></select></label>`;
+      }
+      if (field === "tier") return `<label>${field}<select id="source_${field}"><option></option><option ${val === "core" ? "selected" : ""}>core</option><option ${val === "peripheral" ? "selected" : ""}>peripheral</option></select></label>`;
+      if (field === "source_match_mode") return `<label>${field}<select id="source_${field}"><option></option><option ${val === "feed_label" ? "selected" : ""}>feed_label</option><option ${val === "wire_attribution" ? "selected" : ""}>wire_attribution</option></select></label>`;
+      if (["nations","source_match_aliases","notes"].includes(field)) return `<label>${field}<textarea id="source_${field}">${val}</textarea></label>`;
+      return `<label>${field}<input id="source_${field}" value="${String(val).replaceAll("&","&amp;").replaceAll('"',"&quot;")}"></label>`;
+    }
+    function editSource(key) {
+      const src = state.sources.find(item => item.key === key) || {};
+      $("sourceForm").innerHTML = sourceFields.map(field => sourceInput(field, src)).join("");
+    }
+    function collectSource() {
+      const updates = {};
+      sourceFields.forEach(field => {
+        const el = $(`source_${field}`);
+        if (!el) return;
+        updates[field] = el.value;
+      });
+      return updates;
+    }
+    async function saveSource() {
+      const updates = collectSource();
+      const exists = state.sources.some(src => src.key === updates.key);
+      await api("/api/sources", { method: exists ? "PATCH" : "POST", body: JSON.stringify({ key: updates.key, updates }) });
+      await loadSources();
+    }
+    async function deleteSelectedSource() {
+      const key = value("source_key");
+      if (!key) return;
+      await api(`/api/sources?key=${encodeURIComponent(key)}`, { method: "DELETE" });
+      await loadSources();
+      editSource("");
+    }
+    async function loadRecipients() {
+      const data = await api("/api/recipients");
+      state.recipients = data.recipients || [];
+      renderRecipients();
+    }
+    function renderRecipients() {
+      $("recipientTable").innerHTML = `<thead><tr><th>Email</th><th>Name</th><th>Paused</th></tr></thead><tbody>` +
+        state.recipients.map(rec => `<tr data-email="${rec.email || ""}"><td>${rec.email || ""}</td><td>${rec.name || ""}</td><td>${rec.pause ? "true" : "false"}</td></tr>`).join("") +
+        `</tbody>`;
+      document.querySelectorAll("#recipientTable tr[data-email]").forEach(row => row.onclick = () => editRecipient(row.dataset.email));
+    }
+    function editRecipient(email) {
+      const rec = state.recipients.find(item => item.email === email) || { email: "", name: "", pause: false };
+      $("recipient_email").value = rec.email || "";
+      $("recipient_name").value = rec.name || "";
+      $("recipient_pause").value = rec.pause ? "true" : "false";
+    }
+    async function saveRecipient() {
+      const updates = { email: value("recipient_email"), name: value("recipient_name"), pause: value("recipient_pause") };
+      const exists = state.recipients.some(rec => rec.email === updates.email);
+      await api("/api/recipients", { method: exists ? "PATCH" : "POST", body: JSON.stringify({ email: updates.email, updates }) });
+      await loadRecipients();
+    }
+    async function deleteSelectedRecipient() {
+      const email = value("recipient_email");
+      if (!email) return;
+      await api(`/api/recipients?email=${encodeURIComponent(email)}`, { method: "DELETE" });
+      await loadRecipients();
+      editRecipient("");
+    }
+    const PROMPT_TASK_LABELS = {
+      article_summary: "Article Summarization",
+      story_scale_screening: "Story Scale Screening",
+      story_drafting: "Story Drafting",
+      title_generation: "Title Generation",
+      image_art_direction: "Image Art Direction"
+    };
+    function renderPromptProfilePanel() {
+      const schema = state.schema || {};
+      const profiles = schema.prompt_profiles || [];
+      const selectedId = currentControlValue("NEWS_PROMPT_PROFILE") || (schema.runtime && schema.runtime.prompt_profile_id) || "balanced";
+      const profile = profiles.find(item => item.id === selectedId) || null;
+      const descriptionEl = $("promptProfileDescription");
+      if (descriptionEl) descriptionEl.textContent = profile ? profile.description : "";
+      const readoutsEl = $("promptProfileReadouts");
+      if (!readoutsEl) return;
+      if (!profile) {
+        readoutsEl.innerHTML = `<p class="muted">No prompt profile selected.</p>`;
+        return;
+      }
+      readoutsEl.innerHTML = Object.entries(PROMPT_TASK_LABELS).map(([task, label]) => {
+        const text = (profile.prompts && profile.prompts[task]) || "";
+        return `<label class="field"><span>${escapeHtml(label)}</span><textarea readonly rows="3">${escapeHtml(text)}</textarea></label>`;
+      }).join("");
+    }
+    const MODEL_TASK_LABELS = {
+      factual_extraction: "Factual extraction",
+      structured_output: "Structured output",
+      synthesis: "Synthesis",
+      citation_fidelity: "Citation fidelity",
+      speed: "Speed",
+      context_length: "Context length",
+      translation: "Translation"
+    };
+    const RUNTIME_FIT_LABELS = {
+      managed_mlx_lm: "Managed mlx-lm",
+      managed_mlx_vlm: "Managed mlx-vlm",
+      external_only: "External only"
+    };
+    function modelCatalogEntries() {
+      return (state.schema && state.schema.model_catalog) || [];
+    }
+    function useModelReference(reference) {
+      const sel = document.querySelector('[data-env="NEWS_MODEL"]');
+      if (!sel) return;
+      if (!Array.from(sel.options).some(option => option.value === reference)) {
+        sel.insertAdjacentHTML("afterbegin", `<option value="${escapeHtml(reference)}">${escapeHtml(reference)}</option>`);
+      }
+      sel.value = reference;
+      sel.dispatchEvent(new Event("change"));
+    }
+    function renderModelCatalogPanel() {
+      const select = $("recommendationTask");
+      if (!select) return;
+      const tasks = (state.schema && state.schema.model_recommendation_tasks) || [];
+      select.innerHTML = `<option value="">Pick a task…</option>` + tasks.map(task =>
+        `<option value="${escapeHtml(task)}">${escapeHtml(MODEL_TASK_LABELS[task] || task)}</option>`
+      ).join("");
+      const cards = $("catalogCards");
+      cards.innerHTML = modelCatalogEntries().map(entry => `
+        <div class="knob">
+          <label>${escapeHtml(entry.name)} <code>${escapeHtml(entry.alias)}</code></label>
+          <p class="muted">${escapeHtml(entry.description)}</p>
+          <p class="muted">Backend: ${escapeHtml(entry.backend)} · Context: ${entry.context_length != null ? escapeHtml(String(entry.context_length)) : "n/a"} · <a href="${escapeHtml(entry.hf_url)}" target="_blank" rel="noopener">Hugging Face page</a></p>
+          <div class="toolbar"><button data-use-model="${escapeHtml(entry.alias)}">Set as default model</button></div>
+        </div>
+      `).join("");
+      cards.querySelectorAll("[data-use-model]").forEach(btn => {
+        btn.onclick = () => useModelReference(btn.dataset.useModel);
+      });
+      renderRecommendations(select.value);
+    }
+    function renderRecommendations(task) {
+      const container = $("recommendationReadout");
+      if (!container) return;
+      if (!task) {
+        container.innerHTML = `<p class="muted">Pick a task to see curated recommendations.</p>`;
+        return;
+      }
+      const picks = modelCatalogEntries().filter(entry => entry.task_notes && entry.task_notes[task]);
+      if (!picks.length) {
+        container.innerHTML = `<p class="muted">No verified curated model for this task yet — search below for a candidate.</p>`;
+        return;
+      }
+      container.innerHTML = picks.map(entry => `
+        <div class="knob">
+          <label>${escapeHtml(entry.name)} <code>${escapeHtml(entry.alias)}</code></label>
+          <p class="muted">${escapeHtml(entry.task_notes[task])}</p>
+          <div class="toolbar"><button data-use-model="${escapeHtml(entry.alias)}">Use</button></div>
+        </div>
+      `).join("");
+      container.querySelectorAll("[data-use-model]").forEach(btn => {
+        btn.onclick = () => useModelReference(btn.dataset.useModel);
+      });
+    }
+    async function searchHuggingFaceModels() {
+      const container = $("modelSearchResults");
+      if (!container) return;
+      const query = value("modelSearchQuery").trim();
+      if (!query) {
+        container.innerHTML = `<p class="muted">Enter a query to search Hugging Face.</p>`;
+        return;
+      }
+      const pipeline = value("modelSearchPipeline");
+      const limit = parseInt(value("modelSearchLimit") || "10", 10) || 10;
+      container.innerHTML = `<p class="muted">Searching…</p>`;
+      try {
+        const data = await api(`/api/models/search?q=${encodeURIComponent(query)}&pipeline_tag=${encodeURIComponent(pipeline)}&limit=${limit}`);
+        if (data.error) {
+          container.innerHTML = `<p class="muted">${escapeHtml(data.error)}</p>`;
+          return;
+        }
+        const models = data.models || [];
+        if (!models.length) {
+          container.innerHTML = `<p class="muted">No models found.</p>`;
+          return;
+        }
+        const backendExternal = (state.schema && state.schema.current_env && state.schema.current_env.NEWS_MODEL_BACKEND) === "external";
+        container.innerHTML = models.map(item => {
+          const fit = item.runtime_fit || {};
+          const fitLabel = RUNTIME_FIT_LABELS[fit.status] || fit.status || "unknown";
+          const externalOnly = fit.status === "external_only";
+          const useDisabled = externalOnly && !backendExternal;
+          return `
+            <div class="knob">
+              <label><a href="${escapeHtml(item.hf_url)}" target="_blank" rel="noopener">${escapeHtml(item.id)}</a></label>
+              <p class="muted">${escapeHtml(item.pipeline_tag || "-")} · ${escapeHtml(item.library_name || "-")} · downloads ${escapeHtml(String(item.downloads ?? "-"))} · likes ${escapeHtml(String(item.likes ?? "-"))} · context ${item.context_length != null ? escapeHtml(String(item.context_length)) : "-"}</p>
+              <p class="muted">Fit: ${escapeHtml(fitLabel)} — ${escapeHtml(fit.reason || "")}</p>
+              <div class="toolbar">
+                <button data-use-hf-model="${escapeHtml(item.id)}" ${useDisabled ? "disabled" : ""}>${useDisabled ? "External only — set NEWS_MODEL_BACKEND=external to use" : "Use"}</button>
+              </div>
+            </div>
+          `;
+        }).join("");
+        container.querySelectorAll("[data-use-hf-model]").forEach(btn => {
+          btn.onclick = () => useModelReference(btn.dataset.useHfModel);
+        });
+      } catch (err) {
+        container.innerHTML = `<p class="muted">${escapeHtml(err.message)}</p>`;
+      }
+    }
+    async function comparePromptProfiles() {
+      const selectedId = currentControlValue("NEWS_PROMPT_PROFILE") || "balanced";
+      const data = await api(`/api/prompt-profiles/compare?profile=${encodeURIComponent(selectedId)}`);
+      const container = $("promptProfileCompare");
+      if (!container) return;
+      const diffs = data.diffs || {};
+      const entries = Object.entries(diffs);
+      container.innerHTML = entries.length
+        ? entries.map(([task, diff]) => `<div class="knob"><code>${escapeHtml(task)}</code><pre>${escapeHtml(diff)}</pre></div>`).join("")
+        : `<p class="muted">No differences from balanced.</p>`;
+    }
+    function wireEvents() {
+      $("previewBtn").onclick = () => preview("run").catch(err => setStatus(err.message, "bad"));
+      $("runBtn").onclick = () => runAction("run").catch(err => setStatus(err.message, "bad"));
+      $("utilityPreviewBtn").onclick = () => preview(value("actionSelect") || "run").catch(err => setStatus(err.message, "bad"));
+      $("utilityRunBtn").onclick = () => runAction(value("actionSelect") || "run").catch(err => setStatus(err.message, "bad"));
+      $("stopBtn").onclick = () => state.activeRun && api(`/api/runs/${state.activeRun}/stop`, { method: "POST", body: "{}" });
+      $("openRunPresetDrawerBtn").onclick = () => { renderRunPresetDrawer(); openRunPresetDialog(); };
+      $("savePresetBtn").onclick = () => { prepRunPresetEditorFromCurrent(); renderRunPresetDrawer(); openRunPresetDialog(); };
+      $("closeRunPresetDialogBtn").onclick = closeRunPresetDialog;
+      $("newPresetBtn").onclick = () => { editRunPreset(""); $("preset_env").value = envToText(collectEnv()); };
+      $("reloadPresetsBtn").onclick = loadPresets;
+      $("applyPresetBtn").onclick = () => {
+        const id = value("preset_id").trim();
+        const preset = state.presets.find(item => item.id === id);
+        if (!preset) return;
+        applyRunPreset(preset);
+        closeRunPresetDialog();
+      };
+      $("renamePresetBtn").onclick = () => renamePresetDisplayName().catch(err => setStatus(err.message, "bad"));
+      $("savePresetEditorBtn").onclick = () => savePresetEditor().catch(err => setStatus(err.message, "bad"));
+      $("deletePresetBtn").onclick = () => deleteSelectedPreset().catch(err => setStatus(err.message, "bad"));
+      $("knobSearch").oninput = renderAdvancedKnobs;
+      $("clearKnobsBtn").onclick = () => {
+        document.querySelectorAll("[data-env]").forEach(el => {
+          if (el.type === "checkbox") el.checked = false;
+          else el.value = "";
+        });
+        state.selectedRunPresetId = "";
+        renderPresetSummary();
+        renderModelTuningControls("article_summary");
+        renderModelTuningControls("story_drafting");
+        refreshModelKnobLinks();
+        renderModelTuningControls("story_scale_screening");
+        renderModelTuningControls("title_generation");
         preview("run").catch(() => {});
       };
       $("resetDefaultsBtn").onclick = () => {
@@ -2629,6 +3996,8 @@ HTML = r"""<!doctype html>
         renderModelTuningControls("article_summary");
         renderModelTuningControls("story_drafting");
         refreshModelKnobLinks();
+        renderModelTuningControls("story_scale_screening");
+        renderModelTuningControls("title_generation");
         preview("run").catch(() => {});
       };
       $("promptProfileSelect").onchange = () => {
@@ -2685,6 +4054,8 @@ HTML = r"""<!doctype html>
       renderPresetSummary();
       renderModelTuningControls("article_summary");
       renderModelTuningControls("story_drafting");
+      renderModelTuningControls("story_scale_screening");
+      renderModelTuningControls("title_generation");
       wireEvents();
       document.addEventListener("change", (event) => {
         const el = event.target;
