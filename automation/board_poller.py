@@ -179,6 +179,10 @@ def merge_pr_to_base(cfg: dict, env: dict, pr: dict, base: str,
     if r.returncode != 0:
         return False, r.stderr.strip()[:300]
     if issue_number:
+        # GitHub applies keyword-based auto-close asynchronously after the merge
+        # (PR body keywords AND commit-message keywords like "Fix #N"), so wait
+        # for it to land before checking whether we must reopen.
+        time.sleep(6)
         q = gh(["issue", "view", str(issue_number), "-R", cfg["repo"],
                 "--json", "state"], env)
         if q.returncode == 0 and json.loads(q.stdout).get("state") == "CLOSED":
@@ -468,7 +472,7 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
                 continue
             if runs_by_msg is None:
                 runs_by_msg = fetch_runs_by_message(env)
-            run_status = runs_by_msg.get(msg)
+            run_status = run_status_for(runs_by_msg, msg)
             if run_status == "completed":
                 issue_number = rec.get("issue_number")
                 blocked_name = next(
@@ -536,7 +540,7 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
                 continue
             if runs_by_msg is None:
                 runs_by_msg = fetch_runs_by_message(env)
-            rstatus = runs_by_msg.get(rmsg)
+            rstatus = run_status_for(runs_by_msg, rmsg)
             if rstatus == "completed":
                 ship_num = rec.get("ship_pr")
                 ship = None
@@ -584,10 +588,12 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
 
 
 def fetch_runs_by_message(env: dict) -> dict[str, str]:
-    """Map exact run user_message -> status of the NEWEST matching run.
+    """Map exact run user_message -> status of the NEWEST run with it.
 
     Re-dispatches reuse the same message for the same issue, so multiple runs
-    can share it; the newest run's status is the one that counts.
+    can share it; the newest run's status is the one that counts. Callers do
+    substring lookup because `archon continue` prepends a "Prior Context"
+    preamble to the message.
     """
     r = subprocess.run(["archon", "workflow", "runs", "--json"],
                        capture_output=True, text=True, timeout=60, env=env,
@@ -598,13 +604,21 @@ def fetch_runs_by_message(env: dict) -> dict[str, str]:
     runs = data.get("runs") if isinstance(data, dict) else data
     best: dict[str, tuple[str, str]] = {}
     for run in runs:
-        msg = run.get("user_message")
-        if not msg:
+        run_msg = run.get("user_message") or ""
+        if not run_msg:
             continue
         started = run.get("started_at") or ""
-        if started > best.get(msg, ("", ""))[1]:
-            best[msg] = (run.get("status") or "", started)
+        if started > best.get(run_msg, ("", ""))[1]:
+            best[run_msg] = (run.get("status") or "", started)
     return {msg: status for msg, (status, _) in best.items()}
+
+
+def run_status_for(runs_by_msg: dict[str, str], dispatch_msg: str) -> str | None:
+    """Status of the newest run whose message contains the dispatch message."""
+    for msg, status in runs_by_msg.items():
+        if dispatch_msg in msg:
+            return status
+    return None
 
 
 def save_state(cfg: dict, state: dict) -> None:
