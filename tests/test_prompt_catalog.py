@@ -7,10 +7,11 @@ stays byte-identical to the pre-catalog prompts.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from types import SimpleNamespace
 import unittest
 
-from news_pipeline import prompt_catalog
+from news_pipeline import pipeline, prompt_catalog, prompt_contracts
 from news_pipeline.article_summarization import (
     ArticleSummarizationRuntime,
     build_article_summary_prompt_messages,
@@ -184,6 +185,102 @@ class PromptCatalogTests(unittest.TestCase):
             guidance = profile.prompts["story_scale_screening"]
             self.assertNotIn("{", guidance, f"{profile.id} guidance would break .format()")
             self.assertNotIn("}", guidance, f"{profile.id} guidance would break .format()")
+
+    def test_protocol_tasks_match_prompt_tasks(self) -> None:
+        # Drift-guard: the contract registry must cover exactly the same five
+        # stages the Prompt Catalog editorializes; a stage added to only one
+        # side would silently skip contract validation.
+        self.assertEqual(prompt_contracts.PROTOCOL_TASKS, prompt_catalog.PROMPT_TASKS)
+        self.assertEqual(
+            set(prompt_contracts.PROTOCOL_MARKERS),
+            set(prompt_catalog.PROMPT_TASKS),
+        )
+
+    def test_all_profiles_render_all_prompt_contracts(self) -> None:
+        # Every built-in profile must render every stage with its full machine
+        # contract intact; a template edit that drops a protocol marker fails
+        # here regardless of which profile is active.
+        for profile in prompt_catalog.PROMPT_PROFILES.values():
+            summary_messages = build_article_summary_prompt_messages(
+                {"title": "Flood plan expands", "source": "Fixture Wire"},
+                "May 30, 2026",
+                replace(
+                    _article_summarization_runtime(),
+                    prompt_instructions=profile.prompts["article_summary"],
+                ),
+            )
+            prompt_contracts.assert_prompt_contract(
+                "article_summary",
+                "\n\n".join(str(message.content) for message in summary_messages),
+            )
+
+            screening_messages = _global_scale_screening_prompt_messages(
+                [_story_block()],
+                prompt_instructions=profile.prompts["story_scale_screening"],
+            )
+            prompt_contracts.assert_prompt_contract(
+                "story_scale_screening",
+                "\n\n".join(str(message.content) for message in screening_messages),
+            )
+
+            drafting_messages = build_story_synthesis_prompt_messages(
+                _story_block(),
+                "May 30, 2026",
+                prompt_instructions=profile.prompts["story_drafting"],
+            )
+            prompt_contracts.assert_prompt_contract(
+                "story_drafting",
+                "\n\n".join(str(message.content) for message in drafting_messages),
+            )
+
+            art_system_prompt = pipeline._build_image_art_system_prompt(
+                profile.prompts["image_art_direction"],
+                profile.prompts["title_generation"],
+            )
+            prompt_contracts.assert_prompt_contract("image_art_direction", art_system_prompt)
+            prompt_contracts.assert_prompt_contract("title_generation", art_system_prompt)
+
+    def test_validate_prompt_contract_reports_missing_markers(self) -> None:
+        missing = prompt_contracts.validate_prompt_contract("story_drafting", "no markers here")
+        self.assertIn("Headline:", missing)
+        with self.assertRaisesRegex(ValueError, "missing markers:.*Headline"):
+            prompt_contracts.assert_prompt_contract("story_drafting", "no markers here")
+        with self.assertRaisesRegex(ValueError, "Unknown prompt task"):
+            prompt_contracts.validate_prompt_contract("no_such_task", "anything")
+
+    def test_validate_editorial_instructions_accepts_builtin_profiles(self) -> None:
+        # Vocabulary overlap (image_prompt, overlay_headline,
+        # obviously_small_scale) is not a violation; only strong contract
+        # sentences are blocked.
+        for profile in prompt_catalog.PROMPT_PROFILES.values():
+            self.assertEqual(
+                prompt_contracts.validate_editorial_instructions(profile.prompts),
+                [],
+                f"{profile.id} instructions must not violate the output contracts",
+            )
+
+    def test_validate_editorial_instructions_rejects_violations(self) -> None:
+        clean = {
+            "article_summary": "Summarize factually.",
+            "story_scale_screening": "Be conservative.",
+            "story_drafting": "Write a factual story.",
+            "title_generation": "Keep it short.",
+            "image_art_direction": "Depict the event.",
+        }
+        self.assertEqual(prompt_contracts.validate_editorial_instructions(clean), [])
+
+        violating = dict(clean)
+        violating["story_drafting"] = "Do not use [[S1]] markers"
+        violating["story_scale_screening"] = "Return {json} here"
+        del violating["title_generation"]
+        violations = prompt_contracts.validate_editorial_instructions(violating)
+        self.assertTrue(
+            any("missing or empty instructions for title_generation" in item for item in violations)
+        )
+        self.assertTrue(any("brace" in item for item in violations))
+        self.assertTrue(
+            any("story_drafting" in item and "[[S1]]" in item for item in violations)
+        )
 
 
 if __name__ == "__main__":

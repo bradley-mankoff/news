@@ -8,6 +8,7 @@ from pathlib import Path
 import textwrap
 from unittest.mock import patch
 
+from news_pipeline import prompt_catalog
 from news_pipeline import ui as ui_module
 from news_pipeline import config as config_module
 from news_pipeline.config import (
@@ -25,6 +26,7 @@ from news_pipeline.config import (
     load_runtime_config,
     resolve_runtime_config,
 )
+from news_pipeline.prompt_catalog import PromptProfile
 from news_pipeline.ui import build_command, preview_payload, schema_payload
 
 
@@ -206,6 +208,32 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
                 overrides={"NEWS_PROMPT_PROFILE": "bogus"},
                 materialize_outputs=False,
             )
+
+    def test_profile_violating_contracts_fails_config_resolution(self) -> None:
+        # A profile whose editorial instructions contain pipeline-owned
+        # contract language must fail fast at config resolution instead of
+        # silently weakening the parsers/retries/citation renderers mid-run.
+        # All other slots stay valid (balanced strings) so the failure is
+        # specifically the blocklisted drafting sentence.
+        bad_profile = PromptProfile(
+            id="bad",
+            name="Bad",
+            description="Violates the drafting output contract.",
+            prompts={
+                **prompt_catalog.PROMPT_PROFILES["balanced"].prompts,
+                "story_drafting": "Return exactly this format: and nothing else.",
+            },
+        )
+        with patch(
+            "news_pipeline.prompt_catalog.PROMPT_PROFILES",
+            {**prompt_catalog.PROMPT_PROFILES, "bad": bad_profile},
+        ):
+            with self.assertRaisesRegex(ValueError, "violates pipeline-owned output contracts"):
+                load_runtime_config(
+                    environ={},
+                    overrides={"NEWS_PROMPT_PROFILE": "bad"},
+                    materialize_outputs=False,
+                )
 
     def test_removed_topic_env_vars_reported_and_rejected(self) -> None:
         with self.assertRaisesRegex(ValueError, "NEWS_TOPIC_IDS"):

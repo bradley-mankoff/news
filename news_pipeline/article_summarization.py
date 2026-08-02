@@ -13,6 +13,11 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, System
 
 from .article_summary_records import ArticleSummaryRecord
 from .prompt_catalog import DEFAULT_PROMPT_INSTRUCTIONS
+from .prompt_contracts import (
+    ARTICLE_SUMMARY_BLOCK_INTRO,
+    ARTICLE_SUMMARY_FORMAT_ERROR_MESSAGE,
+    ARTICLE_SUMMARY_OUTPUT_CONTRACT,
+)
 
 @dataclass(frozen=True)
 class ArticleSummarizationRuntime:
@@ -29,14 +34,6 @@ class ArticleSummarizationRuntime:
     normalize_report_entry: Callable[[dict, str], ArticleSummaryRecord]
     article_completed: Callable[..., None]
     prompt_instructions: str | None = None
-
-
-ARTICLE_SUMMARY_FORMAT_ERROR_MESSAGE = (
-    "Format Error: respond with exactly one article block only. "
-    "Use 'DATABASE_ENTRY:' followed by '### article title', then 'Metadata:' with Source/Published/URL bullets "
-    "then 'Summary:'. "
-    "Do not add commentary, correction text, code fences, or trailing notes."
-)
 
 
 def _notify_article_completed(runtime: ArticleSummarizationRuntime, article: dict) -> None:
@@ -61,6 +58,8 @@ def build_article_summary_prompt_messages(
     display_name = str(current_article.get("source_display_name") or display_name)
     target = runtime.build_article_heading(current_article)
     selection_guidance = f"7. {runtime.prompt_instructions or DEFAULT_PROMPT_INSTRUCTIONS['article_summary']}"
+    output_contract = ARTICLE_SUMMARY_OUTPUT_CONTRACT
+    block_intro = ARTICLE_SUMMARY_BLOCK_INTRO
     system_prompt = SystemMessage(content=textwrap.dedent(f"""
         Today: {now_label}.
         Current Task: Summarize one preselected article from the last {runtime.recent_window_hours} hours
@@ -73,8 +72,7 @@ def build_article_summary_prompt_messages(
         6. Do not recap the general history of a longstanding subject or conflict; include background only
            when the article reports a new fact about it or one short clause is needed for orientation.
         {selection_guidance}
-        8. Start your response with 'DATABASE_ENTRY:' and then exactly the requested Markdown block.
-        9. Do not include any text before 'DATABASE_ENTRY:' or after the summary.
+        {output_contract}
     """).strip())
     story_line = f"Story: {current_article.get('story_title')}\n" if current_article.get("story_title") else ""
     article_payload = (
@@ -86,7 +84,7 @@ def build_article_summary_prompt_messages(
         f"{story_line}"
         f"Description: {current_article.get('description') or 'N/A'}\n"
         f"Article text:\n{current_article.get('text') or 'N/A'}\n\n"
-        "Return exactly this block, replacing only the summary text:\n\n"
+        f"{block_intro}\n\n"
         "DATABASE_ENTRY:\n"
         f"### {target}\n"
         "Metadata:\n"

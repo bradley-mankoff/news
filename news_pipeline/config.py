@@ -29,6 +29,7 @@ from .prompt_catalog import (
     PROMPT_PROFILE_IDS,
     get_prompt_profile,
 )
+from .prompt_contracts import validate_editorial_instructions
 
 
 
@@ -1670,6 +1671,15 @@ def _build_runtime_config(
     prompt_profile_id = _str_env(PROMPT_PROFILE_ENV_VAR, DEFAULT_PROMPT_PROFILE_ID) or DEFAULT_PROMPT_PROFILE_ID
     # Resolved once at import time in pipeline.py; fails fast on unknown ids.
     get_prompt_profile(prompt_profile_id)
+    # Editorial sentences must never weaken the pipeline-owned output contracts
+    # (parsers, retries, citation renderers, sanitizers depend on them); a
+    # violating profile fails fast at config resolution, not mid-run.
+    profile_violations = validate_editorial_instructions(get_prompt_profile(prompt_profile_id).prompts)
+    if profile_violations:
+        raise ValueError(
+            f"Prompt profile {prompt_profile_id!r} violates pipeline-owned output contracts: "
+            + "; ".join(profile_violations)
+        )
     tracked_urls_filename = "tracked_urls.txt"
     blocking_urls_filename = "blocking_urls.txt"
     run_used_urls_filename = (
