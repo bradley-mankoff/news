@@ -23,10 +23,10 @@ Project goal: build, review, and send a daily news report from configured source
 - If the surface is closed, the session exits with SIGHUP (stdin ends) — normal terminal behavior, not a crash. Start a fresh session; history persists under `~/.omp/agent/sessions/`.
 
 ## Fresh-session quickstart (GitHub project/issue manager)
-- Board: https://github.com/users/bradley-mankoff/projects/1 — lanes `Backlog` -> `Todo` -> `In Progress` -> `Ready for Review` -> `In Review` -> `Done`. The board drives everything; nothing starts from `Backlog`.
+- Board: https://github.com/users/bradley-mankoff/projects/1 — lanes `Backlog` -> `Todo` -> `In Progress` -> `Blocked` -> `Ready for Review` -> `In Review` -> `Done`. The board drives everything; nothing starts from `Backlog`.
 - Status checks: `launchctl list | grep news-board-poller` (poller alive), `tail -f automation/board_poller.log` (poller log), `archon workflow runs` (runs, from repo root), `archon workflow get <id> --json` (one run).
 - Board ops: `python3 automation/move_item.py <issue> <lane>`; issues: `gh issue create -R bradley-mankoff/news`. Automation config: `automation/config.json` (lanes, workflow mapping, merge targets).
-- Who moves what: the human drags to `Todo` (start work) and `In Review` (ship + quality review); the poller moves `In Progress` (on dispatch), `Ready for Review` (run completed + PR merged into develop), `Done` (ship PR merged into main after review).
+- Who moves what: the human drags to `Todo` (start work) and `In Review` (ship + quality review); the poller moves `In Progress` (on dispatch), `Blocked` (run completed with a `needs-input` label — awaiting human answer), `Ready for Review` (run completed + PR merged into develop), `Done` (ship PR merged into main after review).
 - Branch model: `develop` = integration (repo default; workflow base); `main` = production (only via reviewed ship PRs); per-issue branches `archon/task-issue-<N>`.
 - GitHub access convention: gh CLI + the automation scripts (no MCP server).
 - Dev loop (check out develop + run UI): the `news-dev` skill; reply with only the URL.
@@ -56,7 +56,7 @@ Project goal: build, review, and send a daily news report from configured source
 
 ## Review stages (two, by design)
 
-- **Readiness review — inside the implementation workflows, before the human sees anything** (`archon-fix-github-issue` runs smart review + self-fix + simplify; `archon-idea-to-pr` runs the 5-agent review block + fixes): the bar is “the human should not have to check whether it works, is complete, or matches the issue’s intent.” PRs are left draft; the poller merges them into `develop` and moves the issue to `Ready for Review` when the run completes, and the human tests the integration branch from there.
+- **Readiness review — inside the implementation workflows, before the human sees anything** (`archon-fix-github-issue` runs smart review + self-fix + simplify; `archon-idea-to-pr` runs the 5-agent review block + fixes): the bar is “the human should not have to check whether it works, is complete, or matches the issue’s intent.” PRs are left draft; the poller merges them into `develop` and moves the issue to `Ready for Review` when the run completes (unless the run ended with a `NEEDS INPUT` question — then the issue moves to `Blocked`, no develop merge, until the human answers and drags it back to `Todo`), and the human tests the integration branch from there.
 - **Quality review — the In Review lane** (`archon-smart-pr-review`): after the human judges the feature working and moves the ticket to In Review, the poller opens the ship PR (feature -> `main`); the review targets code quality, conventions, and subtle/peripheral breakage, auto-fixing CRITICAL/HIGH findings, then the poller merges the ship PR into `main` and moves the issue to `Done`.
 - Not redundant by design: the second review runs on the diff *after* human testing and feedback; the first one guarantees the diff is worth the human's time. (Human changes between the two make the second review see a different diff.)
 - Only the pi-usable Archon workflows are installed; claude-only ones are archived (see `docs/archon-workflows.md`).

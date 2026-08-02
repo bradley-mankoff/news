@@ -1,4 +1,4 @@
-# ADR 0010: Prompt Catalog owns editorial instructions
+# ADR 0011: Prompt Catalog owns editorial instructions
 
 Status: Accepted
 
