@@ -239,7 +239,7 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
         )
 
 
-    def test_default_recipient_and_sender_are_example_addresses(self) -> None:
+    def test_default_recipient_and_sender_are_clean_example_addresses(self) -> None:
         config = load_runtime_config(
             environ={},
             materialize_outputs=False,
@@ -248,14 +248,8 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
 
         self.assertEqual(config.bradley_recipient, "bradley@example.com")
         self.assertEqual(config.email_from, "news@example.com")
-
-    def test_personal_data_absent_from_defaults(self) -> None:
-        config = load_runtime_config(
-            environ={},
-            materialize_outputs=False,
-            run_started_at=datetime(2026, 6, 14, 12, 0, 0),
-        )
-
+        # Exact-value asserts above already rule out personal data; these
+        # negative asserts document that intent explicitly.
         self.assertNotIn("mankoff", config.bradley_recipient)
         self.assertNotIn("gmail", config.email_from)
 
