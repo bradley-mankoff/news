@@ -234,11 +234,7 @@ Key Run Settings:
 
 - `NEWS_SOURCE_SCOPE=core|peripheral`: `peripheral` includes both core and
   peripheral sources.
-<<<<<<< HEAD
 - `NEWS_RECIPIENT_SCOPE=primary|all`: send to the primary recipient only or all active
-=======
-- `NEWS_RECIPIENT_SCOPE=bradley|all`: send to the primary recipient only or all active
->>>>>>> 10280ff (Fix: Audit repository history for secrets and personal data (#22))
   configured recipients.
 - `NEWS_BLOCK_REUSED_URLS=0|1`: every run records URL history; only `1` makes
   previously recorded URLs block future reuse.
@@ -343,32 +339,6 @@ Authenticated endpoints are supported by setting `NEWS_MODEL_API_KEY`; it is
 sent as a `Bearer` token on `/models` and `/chat/completions` requests (unset
 sends no credentials). An endpoint that rejects the request with HTTP 401/403
 fails fast instead of waiting out the readiness deadline.
-
-`news model-server-command` reports that no managed server command exists for
-the external backend. Per-task models can also use external endpoints by
-giving that task a distinct base URL (`NEWS_MODEL_ARTICLE_SUMMARY_BASE_URL`,
-`NEWS_MODEL_STORY_DRAFTING_BASE_URL`).
-
-### Runtime Matrix
-
-Initially supported runtimes (recorded in
-[`docs/adr/0010-runtime-matrix.md`](docs/adr/0010-runtime-matrix.md)):
-
-- `mlx-lm` — managed local MLX language-model server on Apple Silicon.
-- `mlx-vlm` — managed local MLX vision-language-model server on Apple Silicon.
-- `external` — any OpenAI-compatible endpoint.
-
-Managed cross-platform GGUF via `llama.cpp` is **not** initially supported;
-GGUF files run through `mlx-vlm` on Apple Silicon.
-
-The backend is inferred from the model reference unless `NEWS_MODEL_BACKEND` is
-set to `mlx-lm`, `mlx-vlm`, or `external` (any other value fails fast). To run
-the default model against an external OpenAI-compatible endpoint — no managed
-server is started; the pipeline waits for and probes the endpoint:
-
-```bash
-NEWS_MODEL_BACKEND=external NEWS_MODEL_BASE_URL=https://api.example.com/v1 NEWS_MODEL=<server-model-id> uv run news run
-```
 
 `news model-server-command` reports that no managed server command exists for
 the external backend. Per-task models can also use external endpoints by

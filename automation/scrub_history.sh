@@ -26,7 +26,6 @@ REPO_URL="${REPO_URL:-https://github.com/bradley-mankoff/news}"
 WORKDIR="${WORKDIR:-/tmp/news-scrub}"
 SCRUB_USER="${SCRUB_USER:-home}"
 
-<<<<<<< HEAD
 # The env-controlled destructive path below is `rm -rf "$WORKDIR"`; guard it
 # against typos like WORKDIR=/ or $HOME before anything can reach it.
 # Require an absolute path (kills relative typos like `..` or `.`) and reject
@@ -54,17 +53,10 @@ MAILMAP=""
 
 while [ $# -gt 0 ]; do
   arg="$1"
-=======
-DRY_RUN=1
-MAILMAP=""
-
-for arg in "$@"; do
->>>>>>> 10280ff (Fix: Audit repository history for secrets and personal data (#22))
   case "$arg" in
     --execute) DRY_RUN=0 ;;
     --dry-run) DRY_RUN=1 ;;
     --mailmap)
-<<<<<<< HEAD
       # Space-separated form advertised in usage; consume the next argument.
       if [ $# -lt 2 ]; then
         echo "error: --mailmap requires a PATH argument" >&2
@@ -72,10 +64,6 @@ for arg in "$@"; do
       fi
       MAILMAP="$2"
       shift
-=======
-      echo "error: --mailmap requires a PATH argument" >&2
-      exit 2
->>>>>>> 10280ff (Fix: Audit repository history for secrets and personal data (#22))
       ;;
     --mailmap=*) MAILMAP="${arg#--mailmap=}" ;;
     -h|--help) sed -n '1,20p' "$0"; exit 0 ;;
@@ -85,10 +73,7 @@ for arg in "$@"; do
       exit 2
       ;;
   esac
-<<<<<<< HEAD
   shift
-=======
->>>>>>> 10280ff (Fix: Audit repository history for secrets and personal data (#22))
 done
 
 if [ "$DRY_RUN" -eq 1 ]; then
@@ -111,7 +96,6 @@ git clone --mirror "$REPO_URL" "$WORKDIR"
 # personal data; sed restores them before filter-repo reads the files.
 REPLACEMENTS_TXT="$(mktemp)"
 MESSAGES_TXT="$(mktemp)"
-<<<<<<< HEAD
 
 # VERIFY_PASSED gates the cleanup trap's mirror removal: once the rewritten
 # history has been verified clean, the mirror holds the ONLY copy of it and
@@ -132,9 +116,6 @@ cleanup() {
   fi
 }
 trap 'cleanup $?' EXIT
-=======
-trap 'rm -f "$REPLACEMENTS_TXT" "$MESSAGES_TXT"' EXIT
->>>>>>> 10280ff (Fix: Audit repository history for secrets and personal data (#22))
 
 cat > "$REPLACEMENTS_TXT" <<'EOF'
 bradley[@]mankoff[.]com==>bradley@example.com
@@ -166,7 +147,6 @@ git -C "$WORKDIR" filter-repo "${FILTER_ARGS[@]}" --force
 
 # --- verify ------------------------------------------------------------------
 echo "==> Verifying rewritten history with the audit scanner (history-only)"
-<<<<<<< HEAD
 if python3 "$AUDIT_SCRIPT" --history-only --repo "$WORKDIR"; then
   AUDIT_STATUS=0
 else
@@ -192,16 +172,6 @@ VERIFY_PASSED=1
 echo "==> Re-adding origin remote for the push phase (filter-repo removes it)."
 git -C "$WORKDIR" remote add origin "$REPO_URL"
 
-=======
-if ! python3 "$AUDIT_SCRIPT" --history-only --repo "$WORKDIR"; then
-  echo "error: audit still finds personal data in the rewritten history." >&2
-  echo "       If author emails remain, provide a --mailmap file (see docs/security/history-scrub.md)." >&2
-  exit 1
-fi
-echo "==> Verification passed: rewritten history is clean."
-
-# --- push (dry-run default) --------------------------------------------------
->>>>>>> 10280ff (Fix: Audit repository history for secrets and personal data (#22))
 PUSH_CMDS=(
   "git -C $WORKDIR push --force origin develop"
   "git -C $WORKDIR push --force origin main"
@@ -215,7 +185,6 @@ if [ "$DRY_RUN" -eq 1 ]; then
   echo "    re-init automation/state.json, and contact GitHub Support to purge cached views."
 else
   echo "==> Pushing rewritten history (develop, main, tags)"
-<<<<<<< HEAD
   # No eval: the commands are fixed and known, so execute them directly with
   # a quoted WORKDIR (avoids shell injection via an env-controlled path).
   # Check each push individually: a partial force-push is the one failure
@@ -238,11 +207,5 @@ else
     echo "       checking which refs moved (see the messages above)." >&2
     exit 1
   fi
-=======
-  for cmd in "${PUSH_CMDS[@]}"; do
-    echo "    $cmd"
-    eval "$cmd"
-  done
->>>>>>> 10280ff (Fix: Audit repository history for secrets and personal data (#22))
   echo "==> Done. Re-clone all local checkouts; old clones retain the pre-scrub history."
 fi
