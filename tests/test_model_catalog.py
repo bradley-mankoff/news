@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+import httpx
 from huggingface_hub import errors
 
 from news_pipeline import config, model_catalog
@@ -225,12 +226,25 @@ class ModelCatalogTests(unittest.TestCase):
                 model_catalog.search_huggingface_models("qwythos")
 
     def test_fetch_metadata_not_found_is_value_error(self) -> None:
+        request = httpx.Request("GET", "https://huggingface.co/api/models/missing/repo")
+        not_found = errors.RepositoryNotFoundError(
+            "404 Client Error: Repository Not Found for url",
+            response=httpx.Response(404, request=request),
+        )
         fake_api = SimpleNamespace(
-            model_info=lambda **kwargs: (_ for _ in ()).throw(errors.RepositoryNotFoundError("Model not found"))
+            model_info=lambda **kwargs: (_ for _ in ()).throw(not_found)
         )
         with patch("huggingface_hub.HfApi", return_value=fake_api):
             with self.assertRaisesRegex(ValueError, "Model not found on Hugging Face"):
                 model_catalog.fetch_model_metadata("missing/repo")
+
+    def test_fetch_metadata_network_error_propagates(self) -> None:
+        fake_api = SimpleNamespace(
+            model_info=lambda **kwargs: (_ for _ in ()).throw(OSError("network down"))
+        )
+        with patch("huggingface_hub.HfApi", return_value=fake_api):
+            with self.assertRaisesRegex(OSError, "network down"):
+                model_catalog.fetch_model_metadata("owner/repo")
 
     def test_fetch_metadata_success_shape(self) -> None:
         fake_api = MagicMock()

@@ -393,12 +393,17 @@ def fetch_model_metadata(
 ) -> dict[str, Any]:
     """Fetch single-repo metadata from Hugging Face.
 
-    Raises ``ValueError`` for unknown repositories so the CLI exit-code
-    contract (exit 2) and UI error envelopes hold.
+    Raises ``ValueError`` when the repository is not found so the UI
+    ``/api/models/metadata`` error envelope holds; network/auth/rate-limit
+    errors propagate unchanged (the UI endpoint owns the envelope).
     """
     api = _hf_api()
     try:
         info = api.model_info(repo_id=reference, expand=HF_SEARCH_EXPAND, token=token)
     except Exception as exc:
-        raise ValueError(f"Model not found on Hugging Face: {reference!r}") from exc
+        from huggingface_hub.errors import RepositoryNotFoundError
+
+        if isinstance(exc, RepositoryNotFoundError):
+            raise ValueError(f"Model not found on Hugging Face: {reference!r}") from exc
+        raise  # network/server errors keep their real message
     return _model_info_to_payload(info)
