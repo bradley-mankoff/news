@@ -88,6 +88,7 @@ from openai import APIConnectionError, APITimeoutError, InternalServerError, Rat
 from .config import (
     ModelSamplingSettings,
     RuntimeConfig,
+    MODEL_BACKEND_EXTERNAL,
     MODEL_TASK_ARTICLE_SUMMARY,
     MODEL_TASK_STORY_DRAFTING,
     ensure_codex_safe_model_reference,
@@ -157,6 +158,7 @@ MODEL_RETRY_ATTEMPTS = 4
 MODEL_RETRY_BASE_DELAY_SECONDS = 2
 MODEL_REQUEST_TIMEOUT_SECONDS = 180
 MODEL_LOAD_PROBE_TIMEOUT_SECONDS = 120
+EXTERNAL_SERVER_READY_TIMEOUT_SECONDS = 300
 ARTICLE_DOWNLOAD_TIMEOUT_SECONDS = 20
 ARTICLE_SCRAPE_TOTAL_TIMEOUT_SECONDS = max(
     ARTICLE_DOWNLOAD_TIMEOUT_SECONDS,
@@ -4099,6 +4101,7 @@ def _ensure_main_model_server_ready() -> None:
     global MANAGED_MODEL_SERVER_READY
     global MANAGED_MODEL_SERVER_PROCESS
     global MANAGED_MODEL_SERVER_LOG_FILE
+    global MANAGED_MODEL_SERVER_EXTERNAL
     if MANAGED_MODEL_SERVER_READY:
         return
 
@@ -4106,9 +4109,35 @@ def _ensure_main_model_server_ready() -> None:
         if MANAGED_MODEL_SERVER_READY:
             return
 
+        MANAGED_MODEL_SERVER_EXTERNAL = False
         ensure_codex_safe_model_reference(MODEL_REFERENCE)
         progress_tracker.start_meter("model", total=3, unit="steps", detail="Checking model server.")
         record_activity_snapshot("before_model_server_preflight")
+        if MODEL_BACKEND == MODEL_BACKEND_EXTERNAL:
+            record_activity_snapshot("before_external_server_wait", ACTIVE_RUN_DIAGNOSTICS)
+            deadline = time.monotonic() + EXTERNAL_SERVER_READY_TIMEOUT_SECONDS
+            last_preflight: dict[str, Any] = {}
+            while time.monotonic() < deadline:
+                last_preflight = preflight_model_server()
+                if last_preflight.get("ok") and last_preflight.get("model_match"):
+                    break
+                time.sleep(2)
+            else:  # loop exhausted
+                detail = last_preflight.get("error") or last_preflight.get("served_models") or "no response"
+                raise TimeoutError(
+                    f"External model server did not become ready within "
+                    f"{EXTERNAL_SERVER_READY_TIMEOUT_SECONDS} seconds at {MODEL_BASE_URL}: {detail}."
+                )
+            generation_probe = probe_model_generation()
+            if not generation_probe.get("ok"):
+                raise RuntimeError(
+                    "External model server answered /models but failed a tiny generation probe. "
+                    f"{generation_probe.get('error') or generation_probe}."
+                )
+            MANAGED_MODEL_SERVER_EXTERNAL = True
+            MANAGED_MODEL_SERVER_READY = True
+            progress_tracker.finish_meter(detail="External model server ready.")
+            return
         existing_preflight = preflight_model_server()
         if ACTIVE_RUN_DIAGNOSTICS is not None:
             ACTIVE_RUN_DIAGNOSTICS.event("model_server_preflight", **existing_preflight)

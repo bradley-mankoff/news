@@ -304,6 +304,10 @@ class ConfigHelperTests(unittest.TestCase):
         self.assertEqual(prompt_profile_knob["default"], "balanced")
         self.assertIn("playful", prompt_profile_knob["options"])
         self.assertEqual(set(prompt_profile_knob["options"]), set(config_module.PROMPT_PROFILE_IDS))
+        backend_knobs = [knob for knob in registry if knob["env"] == "NEWS_MODEL_BACKEND"]
+        self.assertEqual(len(backend_knobs), 1)
+        self.assertEqual(backend_knobs[0]["group"], "Model Selection")
+        self.assertEqual(backend_knobs[0]["options"], ["external", "mlx-lm", "mlx-vlm"])
 
     def test_yaml_scope_and_runtime_config_helpers_cover_edge_branches(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -536,6 +540,16 @@ class ConfigHelperTests(unittest.TestCase):
             self.assertEqual(effective_env[config_module.PRESET_ENV_VAR], "preset")
 
     def test_remaining_config_helpers_cover_unseen_branches(self) -> None:
+        self.assertEqual(config_module.MODEL_BACKEND_EXTERNAL, "external")
+        self.assertEqual(config_module.SUPPORTED_MODEL_BACKENDS, ("mlx-lm", "mlx-vlm", "external"))
+        self.assertEqual(
+            config_module.build_model_server_command(
+                "m",
+                config_module.ModelServerSettings(base_url="http://x:9/v1"),
+                backend="external",
+            ),
+            "",
+        )
         self.assertEqual(config_module._coerce_source_text_list(123), [])
         self.assertEqual(
             config_module._default_story_synthesis_concurrency("some-other-model"),
