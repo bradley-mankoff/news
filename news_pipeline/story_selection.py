@@ -264,6 +264,10 @@ def _global_scale_screening_prompt_messages(
             ).strip()
         )
 
+    # The JSON example below contains literal braces, so this template cannot be
+    # an f-string; use .format() instead and escape JSON braces as {{ }}.
+    # .format() must run after dedent() because the injected screening_guidance
+    # is multi-line (byte-identity drift-guard: tests/test_prompt_catalog.py).
     system_prompt = SystemMessage(
         content=textwrap.dedent(
             """

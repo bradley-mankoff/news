@@ -31,6 +31,9 @@ PROMPT_TASKS = (
 DEFAULT_PROMPT_PROFILE_ID = "balanced"
 PROMPT_PROFILE_ENV_VAR = "NEWS_PROMPT_PROFILE"
 
+# Mirrors the keys of PROMPT_PROFILES; feeds the config knob options (UI
+# selector). Keep in sync with the PROMPT_PROFILES dict keys (drift-guard:
+# test_prompt_catalog.py::test_profile_ids_match_registry_keys).
 PROMPT_PROFILE_IDS = (
     "balanced",
     "consensus-and-contradiction",
