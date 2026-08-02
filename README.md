@@ -132,6 +132,11 @@ Model Tuning Presets, run source utilities, and edit `config/sources.yaml` or
 `config/recipients.yaml`. Source and recipient edits write those YAML files
 directly.
 
+The main Run Setup view is prompt-first: routing, editorial prompt profile, and
+task model selection. Model tuning, pipeline budgets, clustering thresholds,
+server settings, full prompt templates, and raw environment overrides live
+under Advanced Settings.
+
 ## CLI
 
 Run with a saved preset or explicit overrides:
@@ -208,8 +213,9 @@ NEWS_PROMPT_PROFILE=facts-only uv run news run
 
 Built-in profiles: `balanced` (default), `consensus-and-contradiction`,
 `playful`, `facts-only`, `explain-like-im-five`. The UI's "Editorial approach"
-panel selects a profile, restores defaults, and shows per-task diffs against
-`balanced`. Profiles can also be pinned inside a Run Preset's `env` map.
+panel selects a profile and restores defaults; the full per-task prompt
+templates and diffs against `balanced` are under Advanced Settings. Profiles
+can also be pinned inside a Run Preset's `env` map.
 
 ### Model Selection
 

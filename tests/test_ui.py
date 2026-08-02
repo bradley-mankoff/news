@@ -73,6 +73,36 @@ class UITests(unittest.TestCase):
         self.assertIn('title="${escapeHtml(tip)}"', ui_module.HTML)
         self.assertNotIn('data-tooltip="${escapeHtml(tip)}"', ui_module.HTML)
 
+    def test_advanced_settings_gate_holds_all_knobs(self) -> None:
+        html = ui_module.HTML
+        # Advanced tab hosts the moved panels; Run Setup no longer does.
+        self.assertIn('id="advancedPanels"', html)
+        self.assertIn("function renderAdvancedPanels", html)
+        self.assertIn("function modelTuningPanel", html)
+        run_setup = html.split("function renderRunSetup")[1].split("const SAMPLING_FIELDS")[0]
+        self.assertNotIn("Run budgets and quotas", run_setup)
+        self.assertNotIn("Optional run settings", run_setup)
+        self.assertNotIn("article_tuning_preset", run_setup)
+        self.assertNotIn("promptProfileReadouts", run_setup)
+        self.assertNotIn("promptProfileCompare", run_setup)
+        self.assertNotIn("<summary>Model tuning</summary>", html)
+        # Moved panels exist exactly once, inside renderAdvancedPanels.
+        advanced = html.split("function renderAdvancedPanels")[1].split("function renderAdvancedKnobs")[0]
+        self.assertEqual(advanced.count("Run budgets and quotas"), 1)
+        self.assertEqual(advanced.count("Optional run settings"), 1)
+        self.assertEqual(advanced.count('id="promptProfileReadouts"'), 1)
+        self.assertEqual(advanced.count('id="comparePromptProfileBtn"'), 1)
+        self.assertEqual(advanced.count('modelTuningPanel("article_summary")'), 1)
+        self.assertEqual(advanced.count('modelTuningPanel("story_drafting")'), 1)
+        # Dedicated envs are suppressed from the raw override list (no duplicates).
+        surface = html.split("const SURFACED_ENVS")[1].split("const TASK_CONFIG")[0]
+        for env in (
+            "NEWS_ARTICLE_TEXT_TOKEN_LIMIT",
+            "NEWS_MODEL_ARTICLE_SUMMARY_TEMPERATURE",
+            "NEWS_MODEL_STORY_DRAFTING_REPETITION_PENALTY",
+        ):
+            self.assertIn(f'"{env}"', surface)
+
     def test_pure_helpers_and_schema_payload(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
