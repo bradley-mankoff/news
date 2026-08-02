@@ -269,9 +269,15 @@ NEWS_PROMPT_PROFILE=facts-only uv run news run
 
 Built-in profiles: `balanced` (default), `consensus-and-contradiction`,
 `playful`, `facts-only`, `explain-like-im-five`. The UI's "Editorial approach"
-panel selects a profile and restores defaults; the full per-task prompt
-templates and diffs against `balanced` are under Advanced Settings. Profiles
-can also be pinned inside a Run Preset's `env` map.
+panel selects a profile, edits per-stage prompts (defaults visible), restores
+defaults per stage or globally, and shows per-task diffs against `balanced`.
+Per-stage edits are stored in `NEWS_PROMPT_OVERRIDE_<TASK>` env vars and layer
+on top of the selected profile (override wins). Profiles can also be pinned
+inside a Run Preset's `env` map.
+templates and diffs against
+`balanced` are under Advanced Settings. Profiles can also be pinned inside a
+Run Preset's `env` map.
+
 
 ### Model Selection
 

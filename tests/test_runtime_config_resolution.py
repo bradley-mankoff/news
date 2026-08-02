@@ -240,6 +240,37 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
                     materialize_outputs=False,
                 )
 
+    def test_prompt_override_envs_resolve_into_runtime_config(self) -> None:
+        config = load_runtime_config(
+            environ={},
+            overrides={"NEWS_PROMPT_OVERRIDE_STORY_DRAFTING": "Write shorter."},
+            materialize_outputs=False,
+        )
+
+        self.assertEqual(
+            config.prompt_instruction_overrides,
+            {"story_drafting": "Write shorter."},
+        )
+
+    def test_prompt_overrides_empty_and_whitespace_count_as_unset(self) -> None:
+        config = load_runtime_config(
+            environ={},
+            overrides={
+                "NEWS_PROMPT_OVERRIDE_ARTICLE_SUMMARY": "",
+                "NEWS_PROMPT_OVERRIDE_TITLE_GENERATION": "   ",
+            },
+            materialize_outputs=False,
+        )
+
+        self.assertEqual(config.prompt_instruction_overrides, {})
+        unset = load_runtime_config(
+            environ={},
+            overrides={},
+            materialize_outputs=False,
+        )
+        self.assertEqual(unset.prompt_instruction_overrides, {})
+
+
     def test_removed_topic_env_vars_reported_and_rejected(self) -> None:
         with self.assertRaisesRegex(ValueError, "NEWS_TOPIC_IDS"):
             load_runtime_config(

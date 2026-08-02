@@ -1372,6 +1372,11 @@ HTML = r"""<!doctype html>
       "NEWS_SOURCE_SCOPE",
       "NEWS_RECIPIENT_SCOPE",
       "NEWS_PROMPT_PROFILE",  // has a dedicated panel control; suppress the Advanced-tab duplicate
+      "NEWS_PROMPT_OVERRIDE_ARTICLE_SUMMARY",       // dedicated per-stage editors in the
+      "NEWS_PROMPT_OVERRIDE_STORY_SCALE_SCREENING", // Editorial approach panel; suppress
+      "NEWS_PROMPT_OVERRIDE_STORY_DRAFTING",        // the Advanced-tab duplicates
+      "NEWS_PROMPT_OVERRIDE_TITLE_GENERATION",
+      "NEWS_PROMPT_OVERRIDE_IMAGE_ART_DIRECTION",
       "NEWS_MODEL_ARTICLE_SUMMARY",
       "NEWS_MODEL_STORY_DRAFTING",
       "NEWS_MODEL_ARTICLE_SUMMARY_TUNING_PRESET",
@@ -1754,9 +1759,15 @@ HTML = r"""<!doctype html>
     }
     function collectEnv() {
       const env = {};
+      const profile = selectedPromptProfile();
       document.querySelectorAll("[data-env]").forEach(input => {
         const name = input.dataset.env;
         let val = input.type === "checkbox" ? (input.checked ? "1" : "") : input.value.trim();
+        if (name.startsWith("NEWS_PROMPT_OVERRIDE_") && profile) {
+          const task = Object.keys(PROMPT_OVERRIDE_ENVS).find(key => PROMPT_OVERRIDE_ENVS[key] === name);
+          const profileText = task && profile.prompts ? (profile.prompts[task] || "") : "";
+          if (!val || val === profileText.trim()) return;
+        }
         if (val) env[name] = val;
       });
       return env;
@@ -2407,6 +2418,8 @@ HTML = r"""<!doctype html>
       renderModelTuningControls("story_scale_screening");
       renderModelTuningControls("title_generation");
       refreshModelKnobLinks();
+      renderPromptProfilePanel();
+
       preview("run").catch(() => {});
     }
     function setKnobEnv(env) {
@@ -2639,23 +2652,61 @@ HTML = r"""<!doctype html>
       title_generation: "Title Generation",
       image_art_direction: "Image Art Direction"
     };
+    // Mirrors PROMPT_TASK_OVERRIDE_ENV_VARS in news_pipeline/prompt_catalog.py
+    // (drift-guard: tests/test_prompt_catalog.py::test_override_env_vars_cover_all_tasks).
+    const PROMPT_OVERRIDE_ENVS = {
+      article_summary: "NEWS_PROMPT_OVERRIDE_ARTICLE_SUMMARY",
+      story_scale_screening: "NEWS_PROMPT_OVERRIDE_STORY_SCALE_SCREENING",
+      story_drafting: "NEWS_PROMPT_OVERRIDE_STORY_DRAFTING",
+      title_generation: "NEWS_PROMPT_OVERRIDE_TITLE_GENERATION",
+      image_art_direction: "NEWS_PROMPT_OVERRIDE_IMAGE_ART_DIRECTION"
+    };
+    function selectedPromptProfile() {
+      const profiles = (state.schema && state.schema.prompt_profiles) || [];
+      const id = currentControlValue("NEWS_PROMPT_PROFILE") ||
+        (state.schema && state.schema.runtime && state.schema.runtime.prompt_profile_id) || "balanced";
+      return profiles.find(profile => profile.id === id) || null;
+    }
+    function livePromptOverrides() {
+      // Snapshot only edits that differ from the currently selected profile's
+      // text, so profile switches keep real edits and drop stale defaults.
+      const overrides = {};
+      const profile = selectedPromptProfile();
+      document.querySelectorAll("[data-env^='NEWS_PROMPT_OVERRIDE_']").forEach(el => {
+        const task = Object.keys(PROMPT_OVERRIDE_ENVS).find(key => PROMPT_OVERRIDE_ENVS[key] === el.dataset.env);
+        if (!task) return;
+        const profileText = (profile && profile.prompts && profile.prompts[task]) || "";
+        const value = el.value.trim();
+        if (value && value !== profileText.trim()) overrides[task] = value;
+      });
+      return overrides;
+    }
     function renderPromptProfilePanel() {
-      const schema = state.schema || {};
-      const profiles = schema.prompt_profiles || [];
-      const selectedId = currentControlValue("NEWS_PROMPT_PROFILE") || (schema.runtime && schema.runtime.prompt_profile_id) || "balanced";
-      const profile = profiles.find(item => item.id === selectedId) || null;
+      const profile = selectedPromptProfile();
       const descriptionEl = $("promptProfileDescription");
       if (descriptionEl) descriptionEl.textContent = profile ? profile.description : "";
       const readoutsEl = $("promptProfileReadouts");
       if (!readoutsEl) return;
+      const overrides = livePromptOverrides();
       if (!profile) {
         readoutsEl.innerHTML = `<p class="muted">No prompt profile selected.</p>`;
         return;
       }
       readoutsEl.innerHTML = Object.entries(PROMPT_TASK_LABELS).map(([task, label]) => {
-        const text = (profile.prompts && profile.prompts[task]) || "";
-        return `<label class="field"><span>${escapeHtml(label)}</span><textarea readonly rows="3">${escapeHtml(text)}</textarea></label>`;
+        const profileText = (profile.prompts && profile.prompts[task]) || "";
+        const effective = overrides[task] || profileText;
+        return `<label class="field"><span>${escapeHtml(label)}</span>
+          <textarea data-env="${escapeHtml(PROMPT_OVERRIDE_ENVS[task])}" rows="4" spellcheck="false">${escapeHtml(effective)}</textarea>
+          <code>${escapeHtml(PROMPT_OVERRIDE_ENVS[task])}</code>
+          <button type="button" class="prompt-stage-restore" data-task="${escapeHtml(task)}">Restore default</button></label>`;
       }).join("");
+      document.querySelectorAll("#promptProfileReadouts .prompt-stage-restore").forEach(btn => {
+        btn.onclick = () => {
+          const task = btn.dataset.task || "";
+          const editor = document.querySelector(`[data-env="${PROMPT_OVERRIDE_ENVS[task]}"]`);
+          if (editor) editor.value = (profile.prompts && profile.prompts[task]) || "";
+        };
+      });
     }
     const MODEL_TASK_LABELS = {
       factual_extraction: "Factual extraction",
@@ -2818,6 +2869,8 @@ HTML = r"""<!doctype html>
         renderModelTuningControls("story_scale_screening");
         renderModelTuningControls("title_generation");
         refreshModelKnobLinks();
+        renderPromptProfilePanel();
+
         preview("run").catch(() => {});
       };
       $("resetDefaultsBtn").onclick = () => {
@@ -2832,6 +2885,8 @@ HTML = r"""<!doctype html>
         renderModelTuningControls("story_scale_screening");
         renderModelTuningControls("title_generation");
         refreshModelKnobLinks();
+        renderPromptProfilePanel();
+
         preview("run").catch(() => {});
       };
       $("promptProfileSelect").onchange = () => {
@@ -2841,6 +2896,7 @@ HTML = r"""<!doctype html>
       $("restorePromptProfileBtn").onclick = () => {
         const el = document.querySelector('[data-env="NEWS_PROMPT_PROFILE"]');
         if (el) el.value = "";
+        document.querySelectorAll("[data-env^='NEWS_PROMPT_OVERRIDE_']").forEach(editor => { editor.value = ""; });
         renderPromptProfilePanel();
         preview("run").catch(() => {});
       };
