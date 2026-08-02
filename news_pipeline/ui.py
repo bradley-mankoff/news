@@ -1118,6 +1118,9 @@ HTML = r"""<!doctype html>
     .knob { border: 1px solid var(--line); border-radius: 14px; padding: 10px; background: #fff; box-shadow: 0 6px 16px rgba(36, 44, 60, 0.05); }
     .knob label { display: flex; gap: 6px; align-items: center; font-weight: 600; margin-bottom: 4px; }
     .knob code { display: none; }
+    .knob-links { margin-top: 6px; display: flex; gap: 10px; flex-wrap: wrap; font-size: 12px; }
+    .knob-links a { color: var(--blue); text-decoration: none; }
+    .knob-links a:hover { text-decoration: underline; }
     .knob-details { margin-top: 12px; }
     .knob-details > summary { cursor: pointer; color: var(--muted); font-weight: 600; }
     .form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 10px; }
@@ -1500,7 +1503,8 @@ HTML = r"""<!doctype html>
           `<option value="">${escapeHtml(emptyLabel || `default: ${formatDefault(knob.default)}`)}</option>`,
           ...options.map(opt => `<option value="${escapeHtml(opt)}"${current === opt ? " selected" : ""}>${escapeHtml(optionLabels[opt] || opt)}</option>`)
         ].join("");
-        return `<select${idAttr} data-env="${escapeHtml(knob.env)}">${opts}</select>`;
+        return `<select${idAttr} data-env="${escapeHtml(knob.env)}">${opts}</select>` + (knob.option_links && Object.keys(knob.option_links).length
+          ? `<div class="knob-links" data-links-for="${escapeHtml(knob.env)}"></div>` : "");
       }
       if (knob.type === "bool") {
         const normalized = String(current || "").toLowerCase();
@@ -1548,6 +1552,23 @@ HTML = r"""<!doctype html>
         const tip = `${name}: ${knobHint(name)}`;
         titleTarget.insertAdjacentHTML("beforeend", `<span class="env-info" title="${escapeHtml(tip)}" aria-label="${escapeHtml(tip)}">i</span>`);
       });
+    }
+    function renderKnobLinks(env) {
+      const container = document.querySelector(`[data-links-for="${env}"]`);
+      if (!container) return;
+      const knob = knobByEnv(env);
+      const links = knob && knob.option_links ? knob.option_links : {};
+      const value = currentControlValue(env);
+      if (!value) { container.innerHTML = ""; return; }
+      const entry = links[value];
+      if (!entry) {
+        container.innerHTML = `<span class="muted">No Hugging Face page for this external model</span>`;
+        return;
+      }
+      container.innerHTML = [
+        `<a href="${escapeHtml(entry.page)}" target="_blank" rel="noopener noreferrer">Hugging Face page</a>`,
+        `<a href="${escapeHtml(entry.hardware)}" target="_blank" rel="noopener noreferrer" title="Native Hardware Compatibility panel (GGUF/MLX) on the model page">Hardware compatibility</a>`
+      ].join(" · ");
     }
     function renderTabs() {
       $("tabs").innerHTML = `<button id="navToggle" class="nav-toggle" title="Collapse navigation" aria-label="Collapse navigation"><span class="collapse-icon">${icons.chevronLeft}</span><span class="expand-icon">${icons.chevronRight}</span></button>` +
@@ -1874,6 +1895,8 @@ HTML = r"""<!doctype html>
       renderModelTuningControls("article_summary");
       renderModelTuningControls("story_drafting");
       decorateEnvHints($("runSetupMount"));
+      renderKnobLinks("NEWS_MODEL_ARTICLE_SUMMARY");
+      renderKnobLinks("NEWS_MODEL_STORY_DRAFTING");
       renderPromptProfilePanel();
       $("actionSelect").value = "run";
       $("sourceOptions").classList.add("hidden");
@@ -2154,6 +2177,7 @@ HTML = r"""<!doctype html>
         `;
       }).join("");
       decorateEnvHints($("knobContainer"));
+      renderKnobLinks("NEWS_MODEL");
     }
     function collectModelTuningPresetBody(task) {
       return modelTuningPayload(task);
@@ -2425,6 +2449,12 @@ HTML = r"""<!doctype html>
       renderModelTuningControls("article_summary");
       renderModelTuningControls("story_drafting");
       wireEvents();
+      document.addEventListener("change", (event) => {
+        const el = event.target;
+        if (el && el.matches && el.matches("select[data-env]")) {
+          renderKnobLinks(el.dataset.env);
+        }
+      });
       await loadSources();
       await loadRecipients();
       state.presets = (state.schema.presets && state.schema.presets.presets) || [];

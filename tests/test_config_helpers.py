@@ -308,6 +308,43 @@ class ConfigHelperTests(unittest.TestCase):
         self.assertEqual(prompt_profile_knob["default"], "balanced")
         self.assertIn("playful", prompt_profile_knob["options"])
         self.assertEqual(set(prompt_profile_knob["options"]), set(config_module.PROMPT_PROFILE_IDS))
+        # Drift-guard: every model knob option maps to an HF page + hardware
+        # link; the backend knob (not a model choice) carries none.
+        model_knob_envs = ("NEWS_MODEL", "NEWS_MODEL_ARTICLE_SUMMARY", "NEWS_MODEL_STORY_DRAFTING")
+        for env in model_knob_envs:
+            model_knob = next(knob for knob in registry if knob["env"] == env)
+            self.assertEqual(
+                set(model_knob["option_links"]),
+                set(model_knob["options"]),
+                f"{env} option_links must cover every offered option",
+            )
+            for option, link in model_knob["option_links"].items():
+                self.assertEqual(sorted(link), ["hardware", "page"])
+                self.assertTrue(link["page"].startswith("https://huggingface.co/"), option)
+                self.assertEqual(link["hardware"], link["page"])
+        self.assertEqual(backend_knobs[0]["option_links"], {})
+        # hf_model_page_url: alias, .gguf reference, URL keys, MLX repo,
+        # external id and empty input.
+        qwythos_page = f"https://huggingface.co/{config_module.QWWYTHOS_REPO}"
+        self.assertEqual(
+            config_module.hf_model_page_url(config_module.QWWYTHOS_9B_4BIT_MODEL_ALIAS),
+            qwythos_page,
+        )
+        self.assertEqual(
+            config_module.hf_model_page_url(config_module.QWWYTHOS_9B_4BIT_MODEL_REFERENCE),
+            qwythos_page,
+        )
+        self.assertEqual(
+            config_module.hf_model_page_url(f"https://hf.co/{config_module.QWWYTHOS_9B_4BIT_MODEL_REFERENCE}"),
+            qwythos_page,
+        )
+        self.assertEqual(
+            config_module.hf_model_page_url(config_module.CODEX_TEST_MODEL_ALIAS),
+            f"https://huggingface.co/{config_module.CODEX_TEST_MODEL_NAME}",
+        )
+        self.assertIsNone(config_module.hf_model_page_url("gpt-4o-mini"))
+        self.assertIsNone(config_module.hf_model_page_url(""))
+        self.assertIsNone(config_module.hf_model_page_url("   "))
 
     def test_yaml_scope_and_runtime_config_helpers_cover_edge_branches(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

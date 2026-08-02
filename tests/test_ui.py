@@ -73,6 +73,12 @@ class UITests(unittest.TestCase):
         self.assertIn('title="${escapeHtml(tip)}"', ui_module.HTML)
         self.assertNotIn('data-tooltip="${escapeHtml(tip)}"', ui_module.HTML)
 
+    def test_model_knob_links_markup_contract(self) -> None:
+        self.assertIn("data-links-for", ui_module.HTML)
+        self.assertIn("renderKnobLinks", ui_module.HTML)
+        self.assertIn("knob-links", ui_module.HTML)
+        self.assertIn('rel="noopener noreferrer"', ui_module.HTML)
+
     def test_pure_helpers_and_schema_payload(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
@@ -110,6 +116,28 @@ class UITests(unittest.TestCase):
                 clear=False,
             ):
                 self.assertTrue(build_knob_registry())
+                # Drift-guard: the three model knobs carry non-empty per-option
+                # HF links and survive JSON round-trip (schema_payload
+                # serializes knobs with _send_json).
+                real_knobs = build_knob_registry()
+                model_knob_envs = {
+                    "NEWS_MODEL",
+                    "NEWS_MODEL_ARTICLE_SUMMARY",
+                    "NEWS_MODEL_STORY_DRAFTING",
+                }
+                for knob in real_knobs:
+                    if knob["type"] == "select" and knob["env"] in model_knob_envs:
+                        self.assertTrue(knob["option_links"])
+                        self.assertEqual(
+                            set(knob["option_links"]), set(knob["options"])
+                        )
+                        self.assertTrue(
+                            all(
+                                link["page"].startswith("https://huggingface.co/")
+                                for link in knob["option_links"].values()
+                            )
+                        )
+                        json.dumps(knob)  # must stay JSON-serializable
                 self.assertEqual(
                     _config_path_from_env("NEWS_SOURCES_YAML", "config/sources.yaml"),
                     sources_path,
