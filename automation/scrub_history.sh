@@ -26,8 +26,8 @@ REPO_URL="${REPO_URL:-https://github.com/bradley-mankoff/news}"
 WORKDIR="${WORKDIR:-/tmp/news-scrub}"
 SCRUB_USER="${SCRUB_USER:-home}"
 
-# The next command in this script is `rm -rf "$WORKDIR"`; guard the one
-# env-controlled destructive path against typos like WORKDIR=/ or $HOME.
+# The env-controlled destructive path below is `rm -rf "$WORKDIR"`; guard it
+# against typos like WORKDIR=/ or $HOME before anything can reach it.
 # Require an absolute path (kills relative typos like `..` or `.`) and reject
 # top-level/system directories (kills `/tmp` or `/Users` typos).
 case "$WORKDIR" in
@@ -97,12 +97,19 @@ git clone --mirror "$REPO_URL" "$WORKDIR"
 REPLACEMENTS_TXT="$(mktemp)"
 MESSAGES_TXT="$(mktemp)"
 
+# VERIFY_PASSED gates the cleanup trap's mirror removal: once the rewritten
+# history has been verified clean, the mirror holds the ONLY copy of it and
+# must survive any later failure (e.g. a transient push error) so the human
+# can retry the push instead of redoing the entire clone+rewrite cycle.
+VERIFY_PASSED=0
+
 cleanup() {
   rm -f "$REPLACEMENTS_TXT" "$MESSAGES_TXT"
-  # On failure, remove the mirror too: it holds the raw pre-scrub history
-  # (the very data the scrub is meant to contain). Keep it on success so the
-  # human can inspect the rewritten history before pushing.
-  if [ "${1:-0}" -ne 0 ]; then
+  # On failure BEFORE verification, remove the mirror too: it holds the raw
+  # pre-scrub history (the very data the scrub is meant to contain). Keep it
+  # on success (and after verification) so the human can inspect the
+  # rewritten history before pushing.
+  if [ "${1:-0}" -ne 0 ] && [ "$VERIFY_PASSED" -eq 0 ]; then
     echo "note: removing $WORKDIR (scrub did not complete); the mirror holds raw" >&2
     echo "      pre-scrub history and must not linger." >&2
     rm -rf "$WORKDIR"
@@ -156,6 +163,7 @@ elif [ "$AUDIT_STATUS" -ne 0 ]; then
   exit 1
 fi
 echo "==> Verification passed: rewritten history is clean."
+VERIFY_PASSED=1
 
 # --- push (dry-run default) --------------------------------------------------
 # git filter-repo removes the 'origin' remote as part of its default
@@ -179,8 +187,25 @@ else
   echo "==> Pushing rewritten history (develop, main, tags)"
   # No eval: the commands are fixed and known, so execute them directly with
   # a quoted WORKDIR (avoids shell injection via an env-controlled path).
-  git -C "$WORKDIR" push --force origin develop
-  git -C "$WORKDIR" push --force origin main
-  git -C "$WORKDIR" push --force --tags
+  # Check each push individually: a partial force-push is the one failure
+  # mode where the human must know exactly which refs moved. VERIFY_PASSED is
+  # already 1 here, so the cleanup trap keeps the rewritten mirror for retry.
+  PUSH_FAILED=0
+  for target in "origin develop" "origin main" "--tags"; do
+    # shellcheck disable=SC2086
+    if ! git -C "$WORKDIR" push --force $target; then
+      echo "error: push failed: git push --force $target" >&2
+      echo "       Earlier pushes in this list may already have reached the remote." >&2
+      echo "       The rewritten mirror is kept at $WORKDIR for retry/inspection." >&2
+      PUSH_FAILED=1
+      break
+    fi
+    echo "    ok: git push --force $target"
+  done
+  if [ "$PUSH_FAILED" -eq 1 ]; then
+    echo "error: force-push incomplete; do NOT re-run the scrub from scratch without" >&2
+    echo "       checking which refs moved (see the messages above)." >&2
+    exit 1
+  fi
   echo "==> Done. Re-clone all local checkouts; old clones retain the pre-scrub history."
 fi

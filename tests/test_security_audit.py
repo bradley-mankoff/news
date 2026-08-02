@@ -72,6 +72,30 @@ class SecurityAuditTests(unittest.TestCase):
             any(f.category == "personal-path" and f.path == "notes.txt" for f in findings)
         )
 
+    def test_unreadable_tracked_file_is_skipped_and_reported(self) -> None:
+        # Regression for the "never silently claim coverage" contract: an
+        # unreadable tracked file (broken symlink) must be counted + warned to
+        # stderr, never silently dropped from the "clean" claim.
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            _make_repo(tmpdir, {"ok.txt": "fine\n"})
+            (tmpdir / "broken-link").symlink_to(tmpdir / "does-not-exist")
+            _git(tmpdir, "add", "-A")
+            _git(
+                tmpdir,
+                "-c", "user.name=T",
+                "-c", "user.email=t@example.com",
+                "commit", "-qm", "add broken symlink",
+            )
+
+            stderr = io.StringIO()
+            with contextlib.redirect_stderr(stderr):
+                findings, skipped = scan_working_tree(tmpdir)
+
+        self.assertEqual(skipped, 1)
+        self.assertIn("cannot read tracked file", stderr.getvalue())
+        self.assertIn("1 tracked file(s) skipped", stderr.getvalue())
+
     def test_secret_patterns_detect_common_forms(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmpdir = Path(tmp)
@@ -243,6 +267,29 @@ class SecurityAuditTests(unittest.TestCase):
         self.assertTrue(any(h[1] == "personal-path" for h in history.message_hits))
         self.assertTrue(history.env_json_commits)
         self.assertTrue(history.has_findings)
+
+    def test_history_scan_finds_secrets_in_committed_content(self) -> None:
+        # The history-content secret path (`git grep -E SECRET_COMBINED_RE`)
+        # is the scrub gate's proof that no secrets remain after rewriting;
+        # it must be exercised end-to-end. This also pins the POSIX-ERE
+        # constraint: the combined pattern uses plain alternation because
+        # git grep rejects `(?:...)` groups — a regression to a Python-only
+        # construct would fail HERE, not on a real audit run.
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            _make_repo(tmpdir, {"creds.txt": f"token={_SECRET_SAMPLES[0]}\n"})
+            _git(
+                tmpdir,
+                "-c", "user.name=T",
+                "-c", "user.email=t@example.com",
+                "commit", "--allow-empty", "-qm", "another commit",
+            )
+            history = scan_history(tmpdir)
+
+        secret_stats = [s for s in history.content_stats if s.category == "secret"]
+        self.assertTrue(secret_stats)
+        self.assertGreaterEqual(secret_stats[0].commit_count, 1)
+        self.assertGreaterEqual(secret_stats[0].match_count, 1)
 
     def test_message_body_secrets_are_scanned_and_redacted(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
