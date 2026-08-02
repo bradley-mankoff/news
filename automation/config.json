@@ -6,6 +6,10 @@
   "default_lane": "Backlog",
   "poll_interval_seconds": 45,
   "state_file": "automation/state.json",
+  "deferred_work": {
+    "enabled": true,
+    "fallback_warn": true
+  },
   "lanes": {
     "Backlog": "backlog",
     "Todo": "todo",

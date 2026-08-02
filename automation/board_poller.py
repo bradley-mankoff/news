@@ -226,6 +226,96 @@ def fmt_deps(nums: list[int]) -> str:
     return ", ".join(f"#{n}" for n in nums)
 
 
+# ─── Deferred-work guard ────────────────────────────────────────────────
+# Implementation workflows must list deferred work in the completion record
+# under a `## Deferred work` section (contract in docs/deferred-work-guard.md).
+# When a run completes the poller parses that section and guarantees each item
+# is tracked as a board issue: dedupe against existing issues, create when
+# missing, put it in the default lane, and comment the linkage on the source
+# issue. Deferral language without the section posts a verification comment
+# instead of auto-creating (prose is not a reliable title source).
+
+DEFERRED_SECTION_RE = re.compile(r"^##\s+deferred\s+work\s*$", re.M | re.I)
+DEFERRED_NONE_RE = re.compile(r"^\s*\*none\*\.?\s*$", re.I)
+DEFERRAL_HINT_RE = re.compile(
+    r"\b(defer\w*|out\s+of\s+scope|not\s+in\s+scope|follow-?up|for\s+later"
+    r"|later\s+(?:phase|release|work|iteration|pass))\b",
+    re.I)
+
+
+def parse_deferred_work(body: str) -> list[dict]:
+    """Items from the `## Deferred work` section of a completion comment.
+
+    Format (one bullet per item; indented fields attach to the current item):
+      - **Title:** <imperative title, <=72 chars>
+        **Description:** <1-2 sentences>
+        **Reason:** <why deferred now>
+        **Label:** <optional; must already exist in the repo>
+    Returns [] when the section is absent, empty, or *None*.
+    """
+    m = DEFERRED_SECTION_RE.search(body or "")
+    if not m:
+        return []
+    chunk = (body or "")[m.end():]
+    end = re.search(r"^##\s+", chunk, re.M)
+    if end:
+        chunk = chunk[:end.start()]
+    if not chunk.strip() or DEFERRED_NONE_RE.match(chunk):
+        return []
+    items: list[dict] = []
+    for block in re.split(r"^-\s*\*\*Title:\*\*\s*", chunk, flags=re.M)[1:]:
+        lines = block.splitlines()
+        if not lines:
+            continue
+        item = {"title": lines[0].strip(),
+                "description": "", "reason": "", "label": ""}
+        for line in lines[1:]:
+            fm = re.match(r"^\s*\*\*(\w+):\*\*\s*(.*)$", line)
+            if fm:
+                key = fm.group(1).lower()
+                val = fm.group(2).strip()
+                if key in item and val:
+                    item[key] = val
+        if item["title"]:
+            items.append(item)
+    return items
+
+
+def normalize_title(title: str) -> str:
+    """Dedupe key: casefold, drop non-alphanumerics."""
+    return re.sub(r"[^a-z0-9]+", "", (title or "").casefold())
+
+
+def dedupe_deferred(item: dict, open_issues: list[dict],
+                    closed_issues: list[dict]) -> tuple[str, int | None]:
+    """Where a deferred item's tracking issue stands.
+
+    Returns:
+      ("link", n)        an OPEN issue with the same normalized title exists
+      ("create-ref", n)  only a CLOSED issue matches — create a new one
+                          referencing #n (the work still needs tracking)
+      ("create", None)   no existing issue — create one
+    """
+    target = normalize_title(item.get("title") or "")
+    if not target:
+        return "create", None
+    for iss in open_issues:
+        if normalize_title(iss.get("title") or "") == target:
+            return "link", iss["number"]
+    for iss in closed_issues:
+        if normalize_title(iss.get("title") or "") == target:
+            return "create-ref", iss["number"]
+    return "create", None
+
+
+def has_deferral_language(body: str) -> bool:
+    """True when free text plausibly mentions deferred/out-of-scope work.
+
+    Used only for the fallback warning — never for auto-creating issues.
+    """
+    return bool(DEFERRAL_HINT_RE.search(body or ""))
+
+
 def parse_verdict(bodies: list[str]) -> str | None:
     """Last `VERDICT: <approve|request-changes|block>` marker across bodies.
 
@@ -543,6 +633,170 @@ def conflict_episode_action(mergeable: str, fix_msg: str | None,
     return "failed"
 
 
+def fetch_issue_titles(cfg: dict, env: dict, state: str) -> list[dict] | None:
+    """Open/closed issues as [{number, title}] for the dedupe search."""
+    r = gh(["issue", "list", "-R", cfg["repo"], "--state", state,
+            "--limit", "200", "--json", "number,title"], env)
+    if r.returncode != 0:
+        log(f"DEFERRED: issue list ({state}) failed: {r.stderr.strip()[:200]}")
+        return None
+    return json.loads(r.stdout)
+
+
+def label_exists(cfg: dict, env: dict, label: str) -> bool:
+    """True when `label` already exists in the repo (gh fails on unknown
+    labels, so never pass one through unchecked)."""
+    r = gh(["label", "list", "-R", cfg["repo"], "--json", "name"], env)
+    return r.returncode == 0 and any(
+        l.get("name") == label for l in json.loads(r.stdout))
+
+
+def add_to_board(cfg: dict, env: dict, issue_number: int, lane: str,
+                 project_id: str, field_id: str,
+                 status_options: dict) -> bool:
+    """Add a new issue to the project and move it to `lane` (default Backlog)."""
+    url = f"https://github.com/{cfg['repo']}/issues/{issue_number}"
+    if DRY_RUN:
+        log(f"[dry-run] DEFERRED BOARD issue={issue_number} -> {lane}")
+        return True
+    r = gh(["project", "item-add", str(cfg["project_number"]),
+            "--owner", cfg["project_owner"], "--url", url,
+            "--format", "json"], env)
+    if r.returncode != 0:
+        log(f"DEFERRED BOARD ADD FAILED issue={issue_number}: "
+            f"{r.stderr.strip()[:200]}")
+        return False
+    try:
+        item_id = json.loads(r.stdout)["itemId"]
+    except (ValueError, KeyError):
+        m = re.search(r"(PVTI_[A-Za-z0-9_]+)", r.stdout or "")
+        if not m:
+            log(f"DEFERRED BOARD ADD: unexpected output: {r.stdout[:200]!r}")
+            return False
+        item_id = m.group(1)
+    option_id = status_options.get(lane)
+    if not option_id:
+        log(f"DEFERRED BOARD: lane '{lane}' not on board")
+        return False
+    return move_to_lane(cfg, env, project_id, item_id, field_id, option_id)
+
+
+def create_deferred_issue(cfg: dict, env: dict, issue_number: int,
+                          pr_number: int | None, source_title: str,
+                          item: dict, lane: str, project_id: str,
+                          field_id: str, status_options: dict) -> int | None:
+    """Create + board the tracking issue for one deferred item.
+
+    Returns the new issue number, 0 in dry-run (simulated), or None on failure.
+    """
+    title = item["title"]
+    body = (
+        f"Deferred from #{issue_number} during implementation"
+        + (f" (PR #{pr_number})" if pr_number else "") + ".\n\n"
+        + f"**What and why:** {item['description'] or 'TBD.'}\n\n"
+        + (f"**Reason deferred:** {item['reason']}\n\n" if item["reason"] else "")
+        + f"Context: source issue #{issue_number} ({source_title}).\n\n"
+        + "Acceptance criteria to be filled when this is planned."
+    )
+    cmd = ["issue", "create", "-R", cfg["repo"], "--title", title,
+           "--body", body]
+    label = item.get("label") or ""
+    if label and label_exists(cfg, env, label):
+        cmd += ["--label", label]
+    if DRY_RUN:
+        log(f"[dry-run] DEFERRED CREATE issue={issue_number}: {title}"
+            + (f" (label {label})" if label else ""))
+        return 0
+    r = gh(cmd, env)
+    if r.returncode != 0:
+        log(f"DEFERRED CREATE FAILED issue={issue_number}: "
+            f"{r.stderr.strip()[:200]}")
+        return None
+    m = re.search(r"issues/(\d+)\s*$", (r.stdout or "").strip())
+    if not m:
+        log(f"DEFERRED CREATE: cannot parse issue number from: {r.stdout[:200]!r}")
+        return None
+    new_num = int(m.group(1))
+    if not add_to_board(cfg, env, new_num, lane, project_id, field_id,
+                        status_options):
+        log(f"DEFERRED BOARD FAILED issue={new_num}; created but not boarded")
+        return None
+    return new_num
+
+
+def reconcile_deferred_work(cfg: dict, env: dict, issue_number: int,
+                            pr_number: int | None, rec: dict, runs_msg: str,
+                            project_id: str, field_id: str,
+                            status_options: dict) -> bool:
+    """Guarantee every deferred item in the run's completion record is tracked.
+
+    Idempotent: skips when `runs_msg` was already handled (state marker) and
+    dedupes against existing issue titles before creating. Returns False on
+    any failure so the caller retries on the next poll (marker not set); the
+    dedupe makes retries safe.
+    """
+    if rec.get("deferred_handled") == runs_msg:
+        return True
+    r = gh(["issue", "view", str(issue_number), "-R", cfg["repo"],
+            "--json", "title,comments"], env)
+    if r.returncode != 0:
+        log(f"DEFERRED SKIP issue={issue_number}: cannot read comments")
+        return False
+    data = json.loads(r.stdout)
+    source_title = data.get("title") or ""
+    bodies = [c.get("body") or "" for c in data.get("comments") or []]
+
+    items: list[dict] = []
+    for body in reversed(bodies):  # newest comment with a section wins
+        items = parse_deferred_work(body)
+        if items:
+            break
+    if not items:
+        if (cfg.get("deferred_work", {}).get("fallback_warn", True)
+                and bodies and has_deferral_language(bodies[-1])
+                and not rec.get("deferred_warned")):
+            comment_issue(
+                cfg, env, issue_number,
+                "This run's completion record mentions deferred or out-of-scope "
+                "work but has no `## Deferred work` section. If any deferred "
+                "item needs an issue, create one (or drag it to Todo).")
+            rec["deferred_warned"] = True
+        rec["deferred_handled"] = runs_msg
+        return True
+
+    open_issues = fetch_issue_titles(cfg, env, "open")
+    closed_issues = fetch_issue_titles(cfg, env, "closed")
+    if open_issues is None or closed_issues is None:
+        return False
+
+    lane = cfg.get("default_lane", "Backlog")
+    lines: list[str] = []
+    for item in items:
+        action, ref = dedupe_deferred(item, open_issues, closed_issues)
+        if action == "link":
+            lines.append(f"- **{item['title']}** \u2192 already tracked in #{ref}")
+            continue
+        created = create_deferred_issue(
+            cfg, env, issue_number, pr_number, source_title, item, lane,
+            project_id, field_id, status_options)
+        if created is None:
+            log(f"DEFERRED RETRY issue={issue_number}: create failed for "
+                f"'{item['title']}'")
+            return False
+        if created == 0:  # dry-run simulated
+            continue
+        if action == "create-ref":
+            lines.append(f"- **{item['title']}** \u2192 #{created} "
+                         f"(created; supersedes closed #{ref})")
+        else:
+            lines.append(f"- **{item['title']}** \u2192 #{created} (created, {lane})")
+    if lines:
+        comment_issue(cfg, env, issue_number,
+                      "Deferred work from this run:\n" + "\n".join(lines))
+    rec["deferred_handled"] = runs_msg
+    return True
+
+
 def poll(cfg: dict, env: dict, state: dict) -> None:
     project_id, field_id, status_options, items = fetch_project(cfg, env)
     first_run = not state.get("_meta", {}).get("snapshot_done")
@@ -809,9 +1063,11 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
                     continue
                 merge_base = cfg["dispatch"]["todo"].get("merge_develop_base")
                 merge_ok = True
+                pr_num = None
                 if issue_number and merge_base:
                     pr = find_issue_pr(cfg, env, issue_number, base=merge_base)
                     if pr:
+                        pr_num = pr.get("number")
                         merge_ok, note = merge_pr_to_base(cfg, env, pr, merge_base,
                                                           issue_number)
                         log(f"DEVELOP MERGE issue={issue_number} PR=#{pr['number']}: {note}"
@@ -822,6 +1078,16 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
                 if not merge_ok:
                     log(f"left item={item_id} in {in_progress_name} (develop merge failed)")
                     rec.pop("dispatch_msg", None)
+                    continue
+                # Deferred-work guard: anything deferred by this run must be
+                # tracked as an issue before the item moves to Ready for Review.
+                dw_cfg = cfg.get("deferred_work") or {}
+                if (issue_number and dw_cfg.get("enabled", True)
+                        and not reconcile_deferred_work(
+                            cfg, env, issue_number, pr_num, rec, msg,
+                            project_id, field_id, status_options)):
+                    log(f"DEFERRED RETRY item={item_id} issue={issue_number} "
+                        "(guard incomplete; will retry next poll)")
                     continue
                 option_id = status_options.get(complete_move_to)
                 if option_id and move_to_lane(

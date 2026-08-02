@@ -72,8 +72,10 @@ YAML is overwritten. If a workflow file is replaced, re-apply:
 - `archon-smart-pr-review.yaml`: `report-verdict` node after `implement-fixes`
   (posts `VERDICT: <approve|request-changes|block>` on the PR).
 - `archon-fix-github-issue.yaml`: `completion-comment` node after `report`
-  (posts the structured completion record on the issue).
-- `archon-idea-to-pr.yaml`: `completion-comment` node after `workflow-summary`.
+  (posts the structured completion record on the issue, including the
+  `## Deferred work` section the board poller parses).
+- `archon-idea-to-pr.yaml`: `completion-comment` node after `workflow-summary`
+  (same structured record + `## Deferred work` section).
 - `archon-fix-ship-conflicts.yaml`: fully inline (one `prompt` node, no DB
   commands); if missing, re-create it per `docs/archon-workflows.md` (same
   shape as the other local workflows — `name`, `description`, `nodes`, `effort`).
