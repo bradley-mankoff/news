@@ -324,6 +324,11 @@ class UITests(unittest.TestCase):
             self.assertEqual(payload["runtime"], {"runtime": "ok"})
             self.assertEqual(payload["sources"]["total"], 1)
             self.assertEqual(payload["recipients"]["total"], 1)
+            # Model catalog keys are local-only (offline) additions.
+            self.assertEqual(len(payload["model_catalog"]), 3)
+            self.assertEqual(payload["model_catalog"][0]["alias"], "qwythos-9b-8bit")
+            self.assertIn("factual_extraction", payload["model_recommendation_tasks"])
+            self.assertEqual(len(payload["model_recommendation_tasks"]), 7)
 
             helper_file = root / "nested" / "payload.yaml"
             helper_file.parent.mkdir(parents=True)
@@ -849,6 +854,87 @@ class UITests(unittest.TestCase):
         with patch.object(ui_module, "serve_ui", return_value=0) as serve:
             self.assertEqual(main(["--host", "0.0.0.0", "--port", "9000", "--open"]), 0)
         serve.assert_called_once_with("0.0.0.0", 9000, open_browser=True)
+
+    def _invoke_get(self, path: str) -> tuple[int, dict[str, str], str]:
+        handler = object.__new__(ui_module.NewsUIHandler)
+        state: dict[str, Any] = {"status": None, "headers": {}}
+        handler.path = path
+        handler.headers = {"Content-Length": "0"}
+        handler.rfile = BytesIO(b"")
+        handler.wfile = BytesIO()  # type: ignore[assignment]
+        handler.send_response = lambda status: state.__setitem__("status", status)
+        handler.send_header = lambda name, value: state["headers"].__setitem__(name, value)
+        handler.end_headers = lambda: None
+        handler.do_GET()
+        return state["status"], state["headers"], handler.wfile.getvalue().decode("utf-8")  # type: ignore[attr-defined]
+
+    def test_models_search_endpoint_error_and_success(self) -> None:
+        fake_models = [
+            {
+                "id": "owner/one",
+                "hf_url": "https://huggingface.co/owner/one",
+                "runtime_fit": {"status": "managed_mlx_lm", "reason": "ok"},
+            }
+        ]
+        with patch.object(
+            ui_module, "search_huggingface_models", return_value=fake_models
+        ) as search:
+            status, _, body = self._invoke_get(
+                "/api/models/search?q=qwythos&pipeline_tag=text-generation&limit=5"
+            )
+
+        self.assertEqual(status, 200)
+        payload = json.loads(body)
+        self.assertEqual(payload["query"], "qwythos")
+        self.assertEqual(payload["models"], fake_models)
+        self.assertIsNone(payload["error"])
+        search.assert_called_once_with("qwythos", pipeline_tag="text-generation", limit=5)
+
+        with patch.object(
+            ui_module, "search_huggingface_models", side_effect=RuntimeError("hf down")
+        ):
+            status, _, body = self._invoke_get("/api/models/search?q=qwythos")
+
+        self.assertEqual(status, 200)
+        payload = json.loads(body)
+        self.assertEqual(payload["models"], [])
+        self.assertEqual(payload["error"], "hf down")
+
+        status, _, body = self._invoke_get("/api/models/search")
+        self.assertEqual(status, 400)
+        self.assertIn("Missing query parameter q.", json.loads(body)["error"])
+
+    def test_models_metadata_endpoint(self) -> None:
+        fake_info = {
+            "id": "owner/repo",
+            "hf_url": "https://huggingface.co/owner/repo",
+            "runtime_fit": {"status": "external_only", "reason": "unknown"},
+        }
+        with patch.object(
+            ui_module, "fetch_model_metadata", return_value=fake_info
+        ) as fetch:
+            status, _, body = self._invoke_get("/api/models/metadata?model=owner%2Frepo")
+
+        self.assertEqual(status, 200)
+        payload = json.loads(body)
+        self.assertEqual(payload["model"], "owner/repo")
+        self.assertEqual(payload["info"], fake_info)
+        self.assertIsNone(payload["error"])
+        fetch.assert_called_once_with("owner/repo")
+
+        with patch.object(
+            ui_module, "fetch_model_metadata", side_effect=ValueError("Model not found on Hugging Face: 'nope'")
+        ):
+            status, _, body = self._invoke_get("/api/models/metadata?model=nope")
+
+        self.assertEqual(status, 200)
+        payload = json.loads(body)
+        self.assertIsNone(payload["info"])
+        self.assertIn("Model not found", payload["error"])
+
+        status, _, body = self._invoke_get("/api/models/metadata")
+        self.assertEqual(status, 400)
+        self.assertIn("Missing model parameter.", json.loads(body)["error"])
 
     def test_stream_run_events_error_branches(self) -> None:
         class _Writer:
