@@ -5,6 +5,7 @@ import base64
 import contextlib
 import copy
 import importlib.util
+import json
 import sys
 import tempfile
 import types
@@ -23,7 +24,7 @@ from datetime import datetime
 
 import news_pipeline.pipeline as pipeline
 from news_pipeline.article_summary_records import ArticleSummaryRecord
-from news_pipeline.config import ModelSamplingSettings
+from news_pipeline.config import ModelSamplingSettings, MODEL_TASK_STORY_SCALE_SCREENING, MODEL_TASK_TITLE_GENERATION
 
 
 class PipelineHelperTests(unittest.TestCase):
@@ -1483,7 +1484,6 @@ class PipelineHelperTests(unittest.TestCase):
             )[0]
         )
 
-
     def test_task_model_assignment_resolves_all_stages_and_inheritance(self) -> None:
         fake_assignments = {
             "default": object(),
@@ -1888,7 +1888,71 @@ class PipelineHelperTests(unittest.TestCase):
             selection_ctor.call_args.kwargs["prompt_instructions"],
             pipeline.PROMPT_INSTRUCTIONS["story_scale_screening"],
         )
+        self.assertEqual(
+            selection_ctor.call_args.kwargs["story_scale_screening_max_tokens"],
+            pipeline.MODEL_ASSIGNMENTS[MODEL_TASK_STORY_SCALE_SCREENING]
+            .tuning.story_scale_screening_max_tokens,
+        )
 
+    def test_story_selection_runtime_receives_scale_screening_token_cap(self) -> None:
+        # The tuned cap must reach the runtime constructor; a regression that
+        # threads the wrong field or hardcodes the cap would silently ignore
+        # NEWS_STORY_SCALE_SCREENING_MAX_TOKENS for every default run.
+        fake_assignments = {
+            MODEL_TASK_STORY_SCALE_SCREENING: SimpleNamespace(
+                tuning=SimpleNamespace(story_scale_screening_max_tokens=2600)
+            ),
+        }
+        with patch.object(pipeline, "MODEL_ASSIGNMENTS", fake_assignments), patch.object(
+            pipeline.story_selection_stage, "StorySelectionRuntime"
+        ) as selection_ctor:
+            pipeline._story_selection_runtime()
+        self.assertEqual(
+            selection_ctor.call_args.kwargs["story_scale_screening_max_tokens"],
+            2600,
+        )
+
+        # Fallback branch: unset tuning value falls back to the stage default.
+        fake_assignments[MODEL_TASK_STORY_SCALE_SCREENING] = SimpleNamespace(
+            tuning=SimpleNamespace(story_scale_screening_max_tokens=None)
+        )
+        with patch.object(pipeline, "MODEL_ASSIGNMENTS", fake_assignments), patch.object(
+            pipeline.story_selection_stage, "StorySelectionRuntime"
+        ) as selection_ctor:
+            pipeline._story_selection_runtime()
+        self.assertEqual(
+            selection_ctor.call_args.kwargs["story_scale_screening_max_tokens"],
+            pipeline.story_selection_stage.STORY_SCALE_VALIDATION_MAX_TOKENS,
+        )
+
+    def test_generate_image_art_brief_uses_tuned_title_generation_max_tokens(self) -> None:
+        captured: dict[str, object] = {}
+
+        def fake_build_chat_model(max_tokens, task="title_generation", **_kwargs):
+            captured["max_tokens"] = max_tokens
+            return object()
+
+        with patch.object(pipeline, "build_chat_model", side_effect=fake_build_chat_model), patch.object(
+            pipeline,
+            "invoke_with_retries",
+            return_value=AIMessage(content=json.dumps(
+                {"image_prompt": "A scene", "overlay_headline": "Today"}
+            )),
+        ), patch.object(
+            pipeline, "_safe_json_extract", side_effect=lambda s: s, create=True
+        ):
+            # Default path: tuned value (700) is used.
+            pipeline.generate_image_art_brief("Summary text", "Report title")
+            self.assertEqual(captured["max_tokens"], 700)
+
+            # Custom cap reaches the LLM call.
+            fake_assignments = dict(pipeline.MODEL_ASSIGNMENTS)
+            fake_assignments[MODEL_TASK_TITLE_GENERATION] = SimpleNamespace(
+                tuning=SimpleNamespace(title_generation_max_tokens=1200)
+            )
+            with patch.object(pipeline, "MODEL_ASSIGNMENTS", fake_assignments):
+                pipeline.generate_image_art_brief("Summary text", "Report title")
+            self.assertEqual(captured["max_tokens"], 1200)
 
     def test_image_rendering_and_image_art_helpers(self) -> None:
         with patch("PIL.ImageFont.truetype", return_value="truetype-font"), patch(

@@ -326,6 +326,26 @@ class UITests(unittest.TestCase):
             self.assertEqual(_body_preset_id({"preset_id": "Nightly"}), "Nightly")
             self.assertEqual(_body_preset_id({}), "")
 
+    def test_ui_js_task_config_envs_exist_in_knob_registry(self) -> None:
+        # The embedded JS (TASK_CONFIG / KNOB_HINTS) names env vars by string;
+        # a typo would silently break the advanced-settings panel for the two
+        # new tasks. Pin each new env var to both the JS source and the Python
+        # knob registry so the two surfaces cannot drift apart.
+        js_source = ui_module.HTML
+        knob_envs = {knob["env"] for knob in ui_module.runtime_knob_registry()}
+        for env in (
+            "NEWS_MODEL_STORY_SCALE_SCREENING",
+            "NEWS_MODEL_TITLE_GENERATION",
+            "NEWS_MODEL_STORY_SCALE_SCREENING_TUNING_PRESET",
+            "NEWS_MODEL_TITLE_GENERATION_TUNING_PRESET",
+            "NEWS_MODEL_STORY_SCALE_SCREENING_BASE_URL",
+            "NEWS_MODEL_TITLE_GENERATION_BASE_URL",
+            "NEWS_STORY_SCALE_SCREENING_MAX_TOKENS",
+            "NEWS_TITLE_GENERATION_MAX_TOKENS",
+        ):
+            self.assertIn(env, js_source)
+            self.assertIn(env, knob_envs)
+
     def test_crud_helpers_use_temp_files(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)

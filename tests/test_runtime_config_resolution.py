@@ -343,7 +343,6 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
             "title_generation_max_tokens",
         )
 
-
     def test_default_recipient_and_sender_are_clean_example_addresses(self) -> None:
         config = load_runtime_config(
             environ={},
@@ -563,9 +562,11 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
                 },
                 clear=True,
             ), patch.object(config_module, "MODEL_TUNING_PRESETS_PATH", preset_path):
-                config = load_runtime_config(materialize_outputs=False)
-                self.assertEqual(config.model_max_input_tokens, 6000)
-                self.assertEqual(config.model_tuning.model_max_input_tokens, 6000)
+                with self.assertRaisesRegex(
+                    ValueError,
+                    r"blank-default.*max_tokens.*must be a number",
+                ):
+                    load_runtime_config(materialize_outputs=False)
 
     def test_new_task_tuning_preset_applies_with_env_overrides(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -594,6 +595,7 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
                     "NEWS_MODEL_STORY_SCALE_SCREENING_TUNING_PRESET": "quick-scale-screen",
                     "NEWS_MODEL_STORY_SCALE_SCREENING_TEMPERATURE": "0.4",
                     "NEWS_STORY_SCALE_SCREENING_MAX_TOKENS": "2600",
+                    "NEWS_TITLE_GENERATION_MAX_TOKENS": "800",
                 },
                 clear=True,
             ), patch.object(config_module, "MODEL_TUNING_PRESETS_PATH", preset_path):
@@ -610,13 +612,17 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
                     config.model_assignments[MODEL_TASK_STORY_SCALE_SCREENING].reference,
                     "mlx-community/example-model",
                 )
-                # The other new task keeps its own defaults untouched.
+                # The other new task's override path is also exercised: the
+                # direct env override (800) wins over the 700 default.
                 title_tuning = config.model_assignments[MODEL_TASK_TITLE_GENERATION].tuning
-                self.assertEqual(title_tuning.title_generation_max_tokens, 700)
+                self.assertEqual(title_tuning.title_generation_max_tokens, 800)
                 self.assertEqual(
                     config.model_assignments[MODEL_TASK_TITLE_GENERATION].reference,
                     CODEX_TEST_MODEL_ALIAS,
                 )
+                # Documented defaults are pinned so drift is caught by CI.
+                self.assertEqual(config_module.DEFAULT_STORY_SCALE_SCREENING_MAX_TOKENS, 3000)
+                self.assertEqual(config_module.DEFAULT_TITLE_GENERATION_MAX_TOKENS, 700)
 
     def test_sampling_fields_remain_unset_without_override(self) -> None:
         with patch.dict(

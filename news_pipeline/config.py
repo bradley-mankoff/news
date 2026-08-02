@@ -319,12 +319,15 @@ DEFAULT_ARTICLE_TEXT_TOKEN_LIMIT = 4500
 DEFAULT_MODEL_MAX_INPUT_TOKENS = 6000
 DEFAULT_ARTICLE_SUMMARY_MAX_TOKENS = 1000
 DEFAULT_STORY_DRAFTING_MAX_TOKENS = 1800
+# Mirrors story_selection.STORY_SCALE_VALIDATION_MAX_TOKENS; keep in sync.
 DEFAULT_STORY_SCALE_SCREENING_MAX_TOKENS = 3000
 DEFAULT_TITLE_GENERATION_MAX_TOKENS = 700
 DEFAULT_MODEL_SERVER_PREFILL_STEP_SIZE = 512
 DEFAULT_MODEL_SERVER_PROMPT_CACHE_SIZE = 2
 DEFAULT_MODEL_SERVER_PROMPT_CACHE_BYTES = "512MB"
 DEFAULT_MODEL_SERVER_MAX_TOKENS = 1800
+# Retained for compatibility: story_discovery has no LLM stage, but legacy
+# NEWS_MODEL_STORY_DISCOVERY_* env vars must keep resolving. Do not remove.
 MODEL_TASK_SAMPLING_ENV_PREFIXES = {
     "default": "NEWS_MODEL",
     MODEL_TASK_STORY_DISCOVERY: "NEWS_MODEL_STORY_DISCOVERY",
@@ -344,6 +347,8 @@ MODEL_REASONING_SAMPLING_ENV_PREFIX = "NEWS_MODEL_REASONING"
 
 
 def _empty_model_sampling_map() -> dict[str, ModelSamplingSettings]:
+    # Keys mirror MODEL_TASK_SAMPLING_ENV_PREFIXES; story_discovery stays for
+    # legacy env-var compatibility (see comment on that map). Do not remove.
     return {
         "default": ModelSamplingSettings(),
         MODEL_TASK_STORY_DISCOVERY: ModelSamplingSettings(),
@@ -478,7 +483,13 @@ def _optional_int_env(name: str, environ: Mapping[str, str] | None = None) -> in
     raw = (environ or _active_env()).get(name)
     if raw is None or not raw.strip():
         return None
-    return int(raw.strip())
+    try:
+        return int(raw.strip())
+    except ValueError:
+        raise ValueError(
+            f"Invalid integer value for {name!r}: {raw.strip()!r}. "
+            "Expected a whole number (e.g. 700)."
+        ) from None
 
 
 def _optional_float_env(name: str, environ: Mapping[str, str] | None = None) -> float | None:
@@ -656,9 +667,16 @@ def _apply_model_tuning_preset(
             raise ValueError(
                 f"Unsupported tuning field {key!r} in model tuning preset {preset_id!r}."
             )
-        coerced_value = _coerce_optional_int_value(value)
-        if coerced_value is not None:
-            updates[field_name] = coerced_value
+        try:
+            coerced_value = _coerce_optional_int_value(value)
+        except (TypeError, ValueError):
+            coerced_value = None
+        if coerced_value is None:
+            raise ValueError(
+                f"Model tuning preset {preset_id!r} field {key!r} must be a number, "
+                f"got {value!r}."
+            )
+        updates[field_name] = coerced_value
 
     task_sampling[assignment_task] = target_sampling
     updates["task_sampling"] = task_sampling
