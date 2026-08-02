@@ -199,6 +199,24 @@ class SecurityAuditTests(unittest.TestCase):
         self.assertTrue(text.startswith("# Security Audit Report"))
         self.assertIn("- [x] `env.json` was never committed", text)
 
+    def test_report_write_failure_exits_2_not_1(self) -> None:
+        # A report-write failure is a scanner failure (exit 2), never
+        # "findings exist" (exit 1): the scrub verify gate discriminates 1
+        # from 2+ and would advise a --mailmap for a crash it didn't have.
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            _make_repo(tmpdir, {"readme.txt": "all clear\n"})
+            blocker = tmpdir / "blocker"
+            blocker.write_text("file, not a directory", encoding="utf-8")
+            stdout, stderr = io.StringIO(), io.StringIO()
+            with contextlib.redirect_stdout(stdout), \
+                 contextlib.redirect_stderr(stderr):
+                code = audit_main(["--repo", str(tmpdir), "--report",
+                                   str(blocker / "report.md")])
+
+        self.assertEqual(code, 2)
+        self.assertIn("cannot write report", stderr.getvalue())
+
     # --- history content / messages / env.json -------------------------------
 
     def test_history_scan_reports_content_messages_and_env_json(self) -> None:

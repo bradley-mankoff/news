@@ -28,9 +28,22 @@ SCRUB_USER="${SCRUB_USER:-home}"
 
 # The next command in this script is `rm -rf "$WORKDIR"`; guard the one
 # env-controlled destructive path against typos like WORKDIR=/ or $HOME.
+# Require an absolute path (kills relative typos like `..` or `.`) and reject
+# top-level/system directories (kills `/tmp` or `/Users` typos).
 case "$WORKDIR" in
   ""|"/"|"$HOME"|"$HOME"/*)
     echo "error: refusing unsafe WORKDIR: $WORKDIR (must be a scratch dir, e.g. /tmp/news-scrub)" >&2
+    exit 1
+    ;;
+  /*) ;;
+  *)
+    echo "error: refusing unsafe WORKDIR: $WORKDIR (must be an absolute path)" >&2
+    exit 1
+    ;;
+esac
+case "$WORKDIR" in
+  /tmp|/var|/Users|/home|/etc|/System|/private|/opt|/usr|/bin|/sbin)
+    echo "error: refusing unsafe WORKDIR: $WORKDIR (top-level system directory)" >&2
     exit 1
     ;;
 esac
