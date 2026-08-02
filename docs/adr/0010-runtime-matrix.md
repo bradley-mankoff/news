@@ -61,8 +61,9 @@ this ADR should be read as promising it.
 - Per-task external models continue to work via a distinct per-task base URL;
   per-task backend env vars are out of scope until a user need exists.
 - Model pickers and validation surfaces must constrain backends to the closed
-  set (`SUPPORTED_MODEL_BACKENDS`); future work (Model Catalog, hardware
-  compatibility links) builds on that single source of truth.
+  set (`SUPPORTED_MODEL_BACKENDS`); future work (Model Catalog) builds on that
+  single source of truth, as do the hardware compatibility links (issue #32)
+  already shipped in the model picker.
 - `news model-server-command` reports that no managed server command exists
   for the external backend.
 - The runtime matrix is documented in the README so operators know what is and

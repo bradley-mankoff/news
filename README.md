@@ -279,9 +279,12 @@ NEWS_MODEL_STORY_DRAFTING=qwythos-9b-8bit uv run news run --preset NAME
 ```
 Built-in aliases:
 
-- `gemma-e2b-tiny`: `deadbydawn101/gemma-4-E2B-Heretic-Uncensored-mlx-4bit` (Codex-safe test model)
-- `qwythos-9b-4bit`: `huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-Q4_K.gguf`
-- `qwythos-9b-8bit`: `huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-Q8_0.gguf` (default)
+- `gemma-e2b-tiny`: [`deadbydawn101/gemma-4-E2B-Heretic-Uncensored-mlx-4bit`](https://huggingface.co/deadbydawn101/gemma-4-E2B-Heretic-Uncensored-mlx-4bit) (Codex-safe test model)
+- `qwythos-9b-4bit`: [`huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF`](https://huggingface.co/huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF) ([`...Q4_K.gguf`](https://huggingface.co/huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF/blob/main/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-Q4_K.gguf))
+- `qwythos-9b-8bit`: [`huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF`](https://huggingface.co/huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF) ([`...Q8_0.gguf`](https://huggingface.co/huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF/blob/main/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-Q8_0.gguf)) (default)
+
+Each model page shows Hugging Face's native Hardware Compatibility panel
+(GGUF/MLX quantizations) — the UI model picker links directly to it.
 
 ### Runtime Matrix
 
