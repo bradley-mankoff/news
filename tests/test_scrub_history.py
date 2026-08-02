@@ -34,6 +34,32 @@ class ScrubHistoryScriptTests(unittest.TestCase):
                 self.assertEqual(r.returncode, 1)
                 self.assertIn("refusing unsafe WORKDIR", r.stderr)
 
+    def test_workdir_guard_rejects_system_and_relative_paths(self) -> None:
+        # A typo like WORKDIR=/tmp or WORKDIR=.. must be refused BEFORE the
+        # rm -rf runs (the rm -rf executes even in --dry-run mode).
+        for workdir in ("/tmp", "/var", "/Users", "/etc", "/System", "/opt",
+                        "..", ".", "scrub"):
+            env = dict(os.environ, WORKDIR=workdir)
+            r = subprocess.run(
+                ["bash", str(SCRIPT)], capture_output=True, text=True, env=env
+            )
+            self.assertEqual(r.returncode, 1, workdir)
+            self.assertIn("refusing unsafe WORKDIR", r.stderr)
+
+    def test_workdir_guard_accepts_scratch_paths(self) -> None:
+        # A scratch dir (the documented /tmp/news-scrub shape) must pass the
+        # guard; the script then fails later (clone against a nonexistent
+        # URL), never at the guard. The scratch dir lives inside a throwaway
+        # temp dir because the script rm -rf's it before cloning.
+        with tempfile.TemporaryDirectory() as tmp:
+            workdir = os.path.join(tmp, "news-scrub")
+            env = dict(os.environ, WORKDIR=workdir,
+                       REPO_URL="file:///nonexistent-news-repo")
+            r = subprocess.run(
+                ["bash", str(SCRIPT)], capture_output=True, text=True, env=env
+            )
+            self.assertNotIn("refusing unsafe WORKDIR", r.stderr)
+
     def test_mailmap_without_argument_is_usage_error(self) -> None:
         r = subprocess.run(
             ["bash", str(SCRIPT), "--mailmap"], capture_output=True, text=True
