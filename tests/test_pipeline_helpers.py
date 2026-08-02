@@ -1062,6 +1062,212 @@ class PipelineHelperTests(unittest.TestCase):
                 pipeline._attach_pending_activity_snapshots(deduped_diagnostics)
             deduped_diagnostics.record_activity_snapshot.assert_called_once_with(pending)
 
+    def test_external_model_server_readiness_path(self) -> None:
+        with patch.object(pipeline, "MODEL_BACKEND", "external"), patch.object(
+            pipeline, "MANAGED_MODEL_SERVER_EXTERNAL", False
+        ), patch.object(pipeline, "MANAGED_MODEL_SERVER_READY", False), patch.object(
+            pipeline, "ensure_codex_safe_model_reference"
+        ), patch.object(
+            pipeline,
+            "preflight_model_server",
+            return_value={"ok": True, "model_match": True},
+        ), patch.object(
+            pipeline, "probe_model_generation", return_value={"ok": True}
+        ), patch.object(
+            pipeline.subprocess,
+            "Popen",
+            side_effect=AssertionError("must not spawn a managed server"),
+        ), patch.object(
+            pipeline.progress_tracker, "finish_meter"
+        ) as finish_meter, patch.object(
+            pipeline, "record_activity_snapshot"
+        ) as snapshot:
+            pipeline._ensure_main_model_server_ready()
+            self.assertTrue(pipeline.MANAGED_MODEL_SERVER_EXTERNAL)
+            self.assertTrue(pipeline.MANAGED_MODEL_SERVER_READY)
+            finish_meter.assert_called_once_with(detail="External model server ready.")
+            snapshot.assert_any_call("before_external_server_wait", pipeline.ACTIVE_RUN_DIAGNOSTICS)
+            snapshot.assert_any_call("after_external_server_ready", pipeline.ACTIVE_RUN_DIAGNOSTICS)
+
+    def test_external_model_server_wrong_model_retries_then_ready(self) -> None:
+        with patch.object(pipeline, "MODEL_BACKEND", "external"), patch.object(
+            pipeline, "MANAGED_MODEL_SERVER_EXTERNAL", False
+        ), patch.object(pipeline, "MANAGED_MODEL_SERVER_READY", False), patch.object(
+            pipeline, "ensure_codex_safe_model_reference"
+        ), patch.object(
+            pipeline,
+            "preflight_model_server",
+            side_effect=[
+                {"ok": False, "error": "ConnectionError: not up yet"},
+                {"ok": True, "model_match": False, "served_models": ["other-model"]},
+            ],
+        ), patch.object(
+            pipeline, "probe_model_generation", return_value={"ok": True}
+        ), patch.object(pipeline.time, "sleep", return_value=None), patch.object(
+            pipeline.time, "monotonic", side_effect=[100.0, 100.0, 100.0]
+        ):
+            pipeline._ensure_main_model_server_ready()
+            self.assertTrue(pipeline.MANAGED_MODEL_SERVER_EXTERNAL)
+            self.assertTrue(pipeline.MANAGED_MODEL_SERVER_READY)
+
+    def test_external_model_server_served_models_detail_on_timeout(self) -> None:
+        with patch.object(pipeline, "MODEL_BACKEND", "external"), patch.object(
+            pipeline, "MANAGED_MODEL_SERVER_EXTERNAL", False
+        ), patch.object(pipeline, "MANAGED_MODEL_SERVER_READY", False), patch.object(
+            pipeline, "ensure_codex_safe_model_reference"
+        ), patch.object(
+            pipeline,
+            "preflight_model_server",
+            return_value={"ok": False, "served_models": ["other-model"]},
+        ), patch.object(pipeline.time, "sleep", return_value=None), patch.object(
+            pipeline.time, "monotonic", side_effect=[100.0, 100.0, 400.0]
+        ):
+            with self.assertRaisesRegex(TimeoutError, "other-model"):
+                pipeline._ensure_main_model_server_ready()
+            self.assertFalse(pipeline.MANAGED_MODEL_SERVER_EXTERNAL)
+            self.assertFalse(pipeline.MANAGED_MODEL_SERVER_READY)
+
+    def test_external_model_server_auth_rejection_fails_fast(self) -> None:
+        with patch.object(pipeline, "MODEL_BACKEND", "external"), patch.object(
+            pipeline, "MANAGED_MODEL_SERVER_EXTERNAL", False
+        ), patch.object(pipeline, "MANAGED_MODEL_SERVER_READY", False), patch.object(
+            pipeline, "ensure_codex_safe_model_reference"
+        ), patch.object(
+            pipeline,
+            "preflight_model_server",
+            return_value={"ok": False, "status_code": 401, "error": "HTTPError: 401 Client Error"},
+        ), patch.object(
+            pipeline.time, "monotonic", side_effect=[100.0, 100.0]
+        ):
+            with self.assertRaisesRegex(RuntimeError, "NEWS_MODEL_API_KEY"):
+                pipeline._ensure_main_model_server_ready()
+            self.assertFalse(pipeline.MANAGED_MODEL_SERVER_EXTERNAL)
+            self.assertFalse(pipeline.MANAGED_MODEL_SERVER_READY)
+
+    def test_external_model_server_probe_gates_wrong_model(self) -> None:
+        with patch.object(pipeline, "MODEL_BACKEND", "external"), patch.object(
+            pipeline, "MANAGED_MODEL_SERVER_EXTERNAL", False
+        ), patch.object(pipeline, "MANAGED_MODEL_SERVER_READY", False), patch.object(
+            pipeline, "ensure_codex_safe_model_reference"
+        ), patch.object(
+            pipeline,
+            "preflight_model_server",
+            return_value={"ok": True, "model_match": False, "served_models": ["other-model"]},
+        ), patch.object(
+            pipeline,
+            "probe_model_generation",
+            return_value={"ok": False, "error": "HTTPError: 404 model not found"},
+        ), patch.object(
+            pipeline.time, "monotonic", side_effect=[100.0, 100.0]
+        ):
+            with self.assertRaisesRegex(RuntimeError, "matches a served model id"):
+                pipeline._ensure_main_model_server_ready()
+            self.assertFalse(pipeline.MANAGED_MODEL_SERVER_EXTERNAL)
+            self.assertFalse(pipeline.MANAGED_MODEL_SERVER_READY)
+
+    def test_preflight_and_probe_send_auth_header_when_key_configured(self) -> None:
+        with patch.object(pipeline, "MODEL_API_KEY", "secret-key"):
+            with patch("news_pipeline.pipeline.requests.get") as get:
+                get.return_value.status_code = 200
+                get.return_value.raise_for_status = lambda: None
+                get.return_value.json.return_value = {"data": [{"id": "m"}]}
+                result = pipeline._preflight_openai_model_server(
+                    base_url="http://x/v1", model_name="m", model_reference="r"
+                )
+            self.assertTrue(result["ok"])
+            self.assertEqual(get.call_args.kwargs["headers"], {"Authorization": "Bearer secret-key"})
+
+            with patch("news_pipeline.pipeline.requests.post") as post:
+                post.return_value.status_code = 200
+                post.return_value.raise_for_status = lambda: None
+                post.return_value.json.return_value = {"choices": []}
+                result = pipeline._probe_chat_completion(
+                    base_url="http://x/v1", payload={"model": "m"}, timeout_seconds=5
+                )
+            self.assertTrue(result["ok"])
+            self.assertEqual(post.call_args.kwargs["headers"], {"Authorization": "Bearer secret-key"})
+
+    def test_preflight_sends_no_auth_header_by_default(self) -> None:
+        with patch.object(pipeline, "MODEL_API_KEY", "not-needed"):
+            with patch("news_pipeline.pipeline.requests.get") as get:
+                get.return_value.status_code = 200
+                get.return_value.raise_for_status = lambda: None
+                get.return_value.json.return_value = {"data": [{"id": "m"}]}
+                pipeline._preflight_openai_model_server(
+                    base_url="http://x/v1", model_name="m", model_reference="r"
+                )
+            self.assertEqual(get.call_args.kwargs["headers"], {})
+
+    def test_preflight_error_keeps_exception_type(self) -> None:
+        with patch(
+            "news_pipeline.pipeline.requests.get",
+            side_effect=pipeline.requests.ConnectionError("connection refused"),
+        ):
+            result = pipeline._preflight_openai_model_server(
+                base_url="http://x/v1", model_name="m", model_reference="r"
+            )
+        self.assertFalse(result["ok"])
+        self.assertIn("ConnectionError: connection refused", result["error"])
+
+    def test_raise_if_managed_model_server_exited_skips_external(self) -> None:
+        process = MagicMock()
+        with patch.object(pipeline, "MANAGED_MODEL_SERVER_ACTIVE", True), patch.object(
+            pipeline, "MANAGED_MODEL_SERVER_EXTERNAL", True
+        ), patch.object(pipeline, "MANAGED_MODEL_SERVER_PROCESS", process):
+            pipeline._raise_if_managed_model_server_exited()
+            process.poll.assert_not_called()
+
+    def test_managed_model_server_context_external_teardown(self) -> None:
+        with patch.object(pipeline, "MANAGED_MODEL_SERVER_ACTIVE", False), patch.object(
+            pipeline,
+            "_stop_managed_server_process",
+            side_effect=AssertionError("must not stop a server"),
+        ):
+            with pipeline.managed_model_server():
+                pipeline.MANAGED_MODEL_SERVER_EXTERNAL = True
+                pipeline.MANAGED_MODEL_SERVER_READY = True
+        self.assertFalse(pipeline.MANAGED_MODEL_SERVER_EXTERNAL)
+        self.assertFalse(pipeline.MANAGED_MODEL_SERVER_READY)
+        self.assertIsNone(pipeline.MANAGED_MODEL_SERVER_PROCESS)
+        self.assertIsNone(pipeline.MANAGED_MODEL_SERVER_LOG_FILE)
+        self.assertFalse(pipeline.MANAGED_MODEL_SERVER_EXIT_RECORDED)
+
+    def test_external_model_server_readiness_timeout(self) -> None:
+        with patch.object(pipeline, "MODEL_BACKEND", "external"), patch.object(
+            pipeline, "MANAGED_MODEL_SERVER_EXTERNAL", False
+        ), patch.object(pipeline, "MANAGED_MODEL_SERVER_READY", False), patch.object(
+            pipeline, "ensure_codex_safe_model_reference"
+        ), patch.object(
+            pipeline,
+            "preflight_model_server",
+            return_value={"ok": False, "error": "connection refused"},
+        ), patch.object(pipeline.time, "sleep", return_value=None), patch.object(
+            pipeline.time, "monotonic", side_effect=[100.0, 100.0, 400.0]
+        ):
+            with self.assertRaisesRegex(TimeoutError, "External model server did not become ready"):
+                pipeline._ensure_main_model_server_ready()
+            self.assertFalse(pipeline.MANAGED_MODEL_SERVER_EXTERNAL)
+            self.assertFalse(pipeline.MANAGED_MODEL_SERVER_READY)
+
+    def test_external_model_server_readiness_probe_failure(self) -> None:
+        with patch.object(pipeline, "MODEL_BACKEND", "external"), patch.object(
+            pipeline, "MANAGED_MODEL_SERVER_EXTERNAL", False
+        ), patch.object(pipeline, "MANAGED_MODEL_SERVER_READY", False), patch.object(
+            pipeline, "ensure_codex_safe_model_reference"
+        ), patch.object(
+            pipeline,
+            "preflight_model_server",
+            return_value={"ok": True, "model_match": True},
+        ), patch.object(
+            pipeline,
+            "probe_model_generation",
+            return_value={"ok": False, "error": "boom"},
+        ):
+            with self.assertRaisesRegex(RuntimeError, "failed a tiny generation probe"):
+                pipeline._ensure_main_model_server_ready()
+            self.assertFalse(pipeline.MANAGED_MODEL_SERVER_EXTERNAL)
+            self.assertFalse(pipeline.MANAGED_MODEL_SERVER_READY)
+
     def test_progress_tracker_and_run_logging_branches(self) -> None:
         stream = StringIO()
         tracker = pipeline.ProgressTracker(stream=stream, show_meter_detail=True)

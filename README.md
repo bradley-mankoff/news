@@ -184,6 +184,9 @@ Key Run Settings:
 - `NEWS_MODEL`: default model selection only. Task models are assigned
   separately with `NEWS_MODEL_ARTICLE_SUMMARY` and
   `NEWS_MODEL_STORY_DRAFTING`.
+- `NEWS_MODEL_BACKEND`: optional backend override for the default model
+  (`mlx-lm`, `mlx-vlm`, or `external`; inferred from the model reference
+  otherwise — see [Runtime Matrix](#runtime-matrix)).
 
 ### Model Selection
 
@@ -203,6 +206,38 @@ Built-in aliases:
 - `gemma-e2b-tiny`: `deadbydawn101/gemma-4-E2B-Heretic-Uncensored-mlx-4bit` (Codex-safe test model)
 - `qwythos-9b-4bit`: `huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-Q4_K.gguf`
 - `qwythos-9b-8bit`: `huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-Q8_0.gguf` (default)
+
+### Runtime Matrix
+
+Initially supported runtimes (recorded in
+[`docs/adr/0010-runtime-matrix.md`](docs/adr/0010-runtime-matrix.md)):
+
+- `mlx-lm` — managed local MLX language-model server on Apple Silicon.
+- `mlx-vlm` — managed local MLX vision-language-model server on Apple Silicon.
+- `external` — any OpenAI-compatible endpoint.
+
+Managed cross-platform GGUF via `llama.cpp` is **not** initially supported;
+GGUF files run through `mlx-vlm` on Apple Silicon.
+
+The default model's backend is inferred from the model reference unless
+`NEWS_MODEL_BACKEND` is set to `mlx-lm`, `mlx-vlm`, or `external` (any other
+value fails fast). To run the default model against an external
+OpenAI-compatible endpoint — no managed server is started; the pipeline waits
+for and probes the endpoint:
+
+```bash
+NEWS_MODEL_BACKEND=external NEWS_MODEL_BASE_URL=https://api.example.com/v1 NEWS_MODEL=<server-model-id> uv run news run
+```
+
+Authenticated endpoints are supported by setting `NEWS_MODEL_API_KEY`; it is
+sent as a `Bearer` token on `/models` and `/chat/completions` requests (unset
+sends no credentials). An endpoint that rejects the request with HTTP 401/403
+fails fast instead of waiting out the readiness deadline.
+
+`news model-server-command` reports that no managed server command exists for
+the external backend. Per-task models can also use external endpoints by
+giving that task a distinct base URL (`NEWS_MODEL_ARTICLE_SUMMARY_BASE_URL`,
+`NEWS_MODEL_STORY_DRAFTING_BASE_URL`).
 
 Normal report runs start the matching local MLX server, wait until it is ready,
 run the pipeline, and stop the managed server when the run exits. To keep a

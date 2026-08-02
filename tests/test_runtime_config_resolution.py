@@ -66,6 +66,66 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
         self.assertEqual(resolution.command_env_delta["NEWS_SOURCE_SCOPE"], "peripheral")
         self.assertNotIn("NEWS_RECIPIENT_SCOPE", resolution.command_env_delta)
 
+    def test_news_model_backend_external_override_for_default_model(self) -> None:
+        resolution = resolve_runtime_config(
+            RuntimeConfigRequest(
+                base_env={
+                    "NEWS_MODEL_BACKEND": "external",
+                    "NEWS_MODEL_BASE_URL": "https://api.example.com/v1",
+                },
+                overrides={"NEWS_MODEL": QWWYTHOS_9B_4BIT_MODEL_ALIAS},
+                materialize_outputs=False,
+                run_started_at=datetime(2026, 6, 14, 12, 0, 0),
+            )
+        )
+
+        self.assertEqual(resolution.config.model_backend, "external")
+        self.assertEqual(resolution.config.model_server_command, "")
+        self.assertEqual(resolution.config.model_assignments["default"].server_command, "")
+
+    def test_news_model_backend_explicit_mlx_vlm_beats_inference(self) -> None:
+        resolution = resolve_runtime_config(
+            RuntimeConfigRequest(
+                base_env={"NEWS_MODEL_BACKEND": "mlx-vlm"},
+                overrides={"NEWS_MODEL": "gemma-e2b-tiny"},
+                materialize_outputs=False,
+                run_started_at=datetime(2026, 6, 14, 12, 0, 0),
+            )
+        )
+
+        self.assertEqual(resolution.config.model_backend, "mlx-vlm")
+
+    def test_news_model_backend_invalid_value_raises_value_error(self) -> None:
+        with self.assertRaisesRegex(ValueError, "NEWS_MODEL_BACKEND must be one of: mlx-lm, mlx-vlm, external"):
+            resolve_runtime_config(
+                RuntimeConfigRequest(
+                    base_env={"NEWS_MODEL_BACKEND": "bogus"},
+                    materialize_outputs=False,
+                )
+            )
+
+    def test_news_model_backend_is_case_and_whitespace_insensitive(self) -> None:
+        resolution = resolve_runtime_config(
+            RuntimeConfigRequest(
+                base_env={
+                    "NEWS_MODEL_BACKEND": " EXTERNAL ",
+                    "NEWS_MODEL_BASE_URL": "https://api.example.com/v1",
+                },
+                materialize_outputs=False,
+            )
+        )
+
+        self.assertEqual(resolution.config.model_backend, "external")
+
+    def test_news_model_backend_external_requires_base_url(self) -> None:
+        with self.assertRaisesRegex(ValueError, "NEWS_MODEL_BACKEND=external requires NEWS_MODEL_BASE_URL"):
+            resolve_runtime_config(
+                RuntimeConfigRequest(
+                    base_env={"NEWS_MODEL_BACKEND": "external"},
+                    materialize_outputs=False,
+                )
+            )
+
     def test_preset_marker_overrides_do_not_desynchronize_resolution(self) -> None:
         resolution = resolve_runtime_config(
             RuntimeConfigRequest(
