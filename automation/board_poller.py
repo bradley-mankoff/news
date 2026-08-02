@@ -234,10 +234,20 @@ def move_to_lane(cfg: dict, env: dict, project_id: str, item_id: str,
     return r.returncode == 0
 
 
-def issue_has_label(cfg: dict, env: dict, issue_number: int, label: str) -> bool:
+def issue_has_label(cfg: dict, env: dict, issue_number: int,
+                    label: str) -> bool | None:
+    """Return True/False for a clean gh call; None when the check itself failed.
+
+    A transient gh failure (auth, rate limit, network) must not read as "label
+    absent": callers treat None as "cannot determine" and leave the item in
+    place to retry next poll (fail-closed).
+    """
     r = gh(["issue", "view", str(issue_number), "-R", cfg["repo"], "--json", "labels",
             "-q", ".labels[].name"], env)
-    return r.returncode == 0 and label in r.stdout.split()
+    if r.returncode != 0:
+        log(f"LABEL CHECK FAILED issue={issue_number}: {r.stderr.strip()}")
+        return None
+    return label in r.stdout.split()
 
 
 def resolve_worktree_branch(env: dict, issue_number: int) -> str | None:
@@ -250,11 +260,16 @@ def resolve_worktree_branch(env: dict, issue_number: int) -> str | None:
                        text=True, timeout=60, env=env, cwd=str(ROOT))
     if r.returncode != 0:
         return None
-    pat = re.compile(rf"task-issue-{issue_number}\b")
+    # Anchor to a branch-shaped token. archon's JSON log lines land on stdout
+    # (not stderr), so skip them; a full-line match also rejects variants like
+    # task-issue-315 when looking for task-issue-31.
+    pat = re.compile(rf"^\s*(archon/task-issue-{issue_number})\s*$")
     for line in r.stdout.splitlines():
-        line = line.strip()
-        if pat.search(line) and not line.startswith(("Path", "Type")):
-            return line
+        if line.lstrip().startswith("{"):  # archon JSON log line
+            continue
+        m = pat.match(line)
+        if m:
+            return m.group(1)
     return None
 
 
@@ -266,7 +281,15 @@ def resume_issue(cfg: dict, env: dict, branch: str, wf: str,
     prior context; the human's latest comment is passed as the message. Removes
     the needs-input label (the run is no longer blocked).
     """
-    full_branch = resolve_worktree_branch(env, issue_number) or branch
+    full_branch = resolve_worktree_branch(env, issue_number)
+    if full_branch is None:
+        # No worktree found (e.g. `archon isolation list` failed or the branch
+        # is gone): `archon continue` cannot use the shorthand branch, so do
+        # not resume with it. The caller falls back to a fresh dispatch and the
+        # needs-input label stays put (the issue is still awaiting input).
+        log(f"RESUME SKIPPED issue={issue_number}: no archon worktree for "
+            f"{branch!r}; caller should dispatch fresh")
+        return False, ""
     r = gh(["issue", "view", str(issue_number), "-R", cfg["repo"], "--json", "comments",
             "-q", ".comments[-1].body"], env)
     answer = (r.stdout or "").strip()[:600] if r.returncode == 0 else ""
@@ -283,8 +306,10 @@ def resume_issue(cfg: dict, env: dict, branch: str, wf: str,
     except OSError as exc:
         log(f"RESUME FAILED issue={issue_number}: {exc}")
         return False, msg
-    gh(["issue", "edit", str(issue_number), "-R", cfg["repo"],
-        "--remove-label", "needs-input"], env)
+    r = gh(["issue", "edit", str(issue_number), "-R", cfg["repo"],
+            "--remove-label", "needs-input"], env)
+    if r.returncode != 0:
+        log(f"LABEL REMOVAL FAILED issue={issue_number}: {r.stderr.strip()}")
     log(f"RESUMED issue={issue_number} branch={full_branch} wf={wf} pid={proc.pid}")
     return True, msg
 
@@ -447,13 +472,22 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
                 continue
             if runs_by_msg is None:
                 runs_by_msg = fetch_runs_by_message(env)
-            run_status = run_status_for(runs_by_msg, msg)
+            run_status = runs_by_msg.get(msg)
             if run_status == "completed":
                 issue_number = rec.get("issue_number")
                 blocked_name = next(
                     (k for k, v in cfg["lanes"].items() if v == "blocked"), None)
-                if (issue_number and blocked_name
-                        and issue_has_label(cfg, env, issue_number, "needs-input")):
+                label_state = (issue_has_label(cfg, env, issue_number, "needs-input")
+                               if (issue_number and blocked_name) else False)
+                if label_state is None:
+                    # gh label check failed (auth/rate-limit/network): do not
+                    # assume the label is absent. Leave the item in place and
+                    # retry next poll so a NEEDS INPUT issue never merges to
+                    # develop by accident.
+                    log(f"left item={item_id} in {in_progress_name} "
+                        f"(label check failed; retry next poll)")
+                    continue
+                if label_state:
                     option_id = status_options.get(blocked_name)
                     if option_id and move_to_lane(
                             cfg, env, project_id, item_id, field_id, option_id):
@@ -506,7 +540,7 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
                 continue
             if runs_by_msg is None:
                 runs_by_msg = fetch_runs_by_message(env)
-            rstatus = run_status_for(runs_by_msg, rmsg)
+            rstatus = runs_by_msg.get(rmsg)
             if rstatus == "completed":
                 ship_num = rec.get("ship_pr")
                 ship = None
@@ -554,12 +588,10 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
 
 
 def fetch_runs_by_message(env: dict) -> dict[str, str]:
-    """Map exact run user_message -> status of the NEWEST run with it.
+    """Map exact run user_message -> status of the NEWEST matching run.
 
     Re-dispatches reuse the same message for the same issue, so multiple runs
-    can share it; the newest run's status is the one that counts. Callers do
-    substring lookup because `archon continue` prepends a "Prior Context"
-    preamble to the message.
+    can share it; the newest run's status is the one that counts.
     """
     r = subprocess.run(["archon", "workflow", "runs", "--json"],
                        capture_output=True, text=True, timeout=60, env=env,
@@ -577,14 +609,6 @@ def fetch_runs_by_message(env: dict) -> dict[str, str]:
         if started > best.get(run_msg, ("", ""))[1]:
             best[run_msg] = (run.get("status") or "", started)
     return {msg: status for msg, (status, _) in best.items()}
-
-
-def run_status_for(runs_by_msg: dict[str, str], dispatch_msg: str) -> str | None:
-    """Status of the newest run whose message contains the dispatch message."""
-    for msg, status in runs_by_msg.items():
-        if dispatch_msg in msg:
-            return status
-    return None
 
 
 def save_state(cfg: dict, state: dict) -> None:

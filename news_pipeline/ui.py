@@ -46,6 +46,11 @@ from .source_catalog import (
     apply_source_catalog_patch,
     load_source_records,
 )
+from .prompt_catalog import (
+    DEFAULT_PROMPT_PROFILE_ID,
+    compare_prompt_profiles,
+    list_prompt_profiles,
+)
 
 
 DEFAULT_HOST = "127.0.0.1"
@@ -151,6 +156,7 @@ def _runtime_snapshot(
         config = resolution.config
         return {
             "preset_id": config.preset_id or "custom",
+            "prompt_profile_id": config.prompt_profile_id,
             "source_scope": config.source_scope,
             "recipient_scope": config.recipient_scope,
             "url_reuse_blocking_enabled": config.url_reuse_blocking_enabled,
@@ -289,6 +295,7 @@ def schema_payload() -> dict[str, Any]:
         "runtime_error": runtime_error,
         "presets": list_presets(),
         "model_tuning_presets": list_model_tuning_presets(),
+        "prompt_profiles": list_prompt_profiles(),
         "sources": _source_summary(),
         "recipients": _recipient_summary(),
         "source_match_modes": sorted(VALID_SOURCE_MATCH_MODES),
@@ -818,6 +825,16 @@ class NewsUIHandler(BaseHTTPRequestHandler):
                 self._send_json(list_presets())
             elif parsed.path == "/api/model-tuning-presets":
                 self._send_json(list_model_tuning_presets())
+            elif parsed.path.startswith("/api/prompt-profiles/compare"):
+                params = parse_qs(parsed.query)
+                profile = (params.get("profile") or [""])[0] or DEFAULT_PROMPT_PROFILE_ID
+                self._send_json(
+                    {
+                        "profile": profile,
+                        "baseline": DEFAULT_PROMPT_PROFILE_ID,
+                        "diffs": compare_prompt_profiles(profile),
+                    }
+                )
             elif parsed.path == "/api/sources":
                 self._send_json(list_sources())
             elif parsed.path == "/api/recipients":
@@ -1282,6 +1299,7 @@ HTML = r"""<!doctype html>
     const SURFACED_ENVS = new Set([
       "NEWS_SOURCE_SCOPE",
       "NEWS_RECIPIENT_SCOPE",
+      "NEWS_PROMPT_PROFILE",  // has a dedicated panel control; suppress the Advanced-tab duplicate
       "NEWS_MODEL_ARTICLE_SUMMARY",
       "NEWS_MODEL_STORY_DRAFTING",
       "NEWS_MODEL_ARTICLE_SUMMARY_TUNING_PRESET",
@@ -1634,6 +1652,7 @@ HTML = r"""<!doctype html>
       const articleRuntime = runtime.model && runtime.model.article_summary ? runtime.model.article_summary : {};
       const storyRuntime = runtime.model && runtime.model.story_drafting ? runtime.model.story_drafting : {};
       const actionOptions = (schema.actions || []).map(action => `<option value="${escapeHtml(action)}"${action === "run" ? " selected" : ""}>${escapeHtml(action)}</option>`).join("");
+      const promptProfileOptions = (schema.prompt_profiles || []).map(p => `<option value="${escapeHtml(p.id)}"${currentControlValue("NEWS_PROMPT_PROFILE") === p.id ? " selected" : ""}>${escapeHtml(p.name)}</option>`).join("");
       const sourceToolHidden = !["check-sources", "prune-sources", "source-languages"].includes(value("actionSelect"));
       const sourceScopes = {
         core: "Core",
@@ -1703,6 +1722,29 @@ HTML = r"""<!doctype html>
                 <code>NEWS_SOURCE_SCOPE</code>
               </label>
             </div>
+          </section>
+          <section class="panel">
+            <p class="eyebrow">Editorial approach</p>
+            <h2>Prompt profile</h2>
+            <p id="promptProfileDescription" class="muted"></p>
+            <div class="form-grid">
+              <label class="field"><span>Profile</span>
+                <select id="promptProfileSelect" data-env="NEWS_PROMPT_PROFILE">
+                  <option value="">default: Balanced</option>
+                  ${promptProfileOptions}
+                </select>
+                <code>NEWS_PROMPT_PROFILE</code>
+              </label>
+            </div>
+            <div id="promptProfileReadouts" class="stack"></div>
+            <div class="toolbar">
+              <button id="restorePromptProfileBtn">Restore defaults</button>
+              <button id="comparePromptProfileBtn">Compare with balanced</button>
+            </div>
+            <details class="details">
+              <summary>Comparison with balanced</summary>
+              <div id="promptProfileCompare"></div>
+            </details>
           </section>
           <section class="panel">
             <p class="eyebrow">Snapshot</p>
@@ -1832,6 +1874,7 @@ HTML = r"""<!doctype html>
       renderModelTuningControls("article_summary");
       renderModelTuningControls("story_drafting");
       decorateEnvHints($("runSetupMount"));
+      renderPromptProfilePanel();
       $("actionSelect").value = "run";
       $("sourceOptions").classList.add("hidden");
       $("actionSelect").onchange = () => {
@@ -2247,6 +2290,42 @@ HTML = r"""<!doctype html>
       await loadRecipients();
       editRecipient("");
     }
+    const PROMPT_TASK_LABELS = {
+      article_summary: "Article Summarization",
+      story_scale_screening: "Story Scale Screening",
+      story_drafting: "Story Drafting",
+      title_generation: "Title Generation",
+      image_art_direction: "Image Art Direction"
+    };
+    function renderPromptProfilePanel() {
+      const schema = state.schema || {};
+      const profiles = schema.prompt_profiles || [];
+      const selectedId = currentControlValue("NEWS_PROMPT_PROFILE") || (schema.runtime && schema.runtime.prompt_profile_id) || "balanced";
+      const profile = profiles.find(item => item.id === selectedId) || null;
+      const descriptionEl = $("promptProfileDescription");
+      if (descriptionEl) descriptionEl.textContent = profile ? profile.description : "";
+      const readoutsEl = $("promptProfileReadouts");
+      if (!readoutsEl) return;
+      if (!profile) {
+        readoutsEl.innerHTML = `<p class="muted">No prompt profile selected.</p>`;
+        return;
+      }
+      readoutsEl.innerHTML = Object.entries(PROMPT_TASK_LABELS).map(([task, label]) => {
+        const text = (profile.prompts && profile.prompts[task]) || "";
+        return `<label class="field"><span>${escapeHtml(label)}</span><textarea readonly rows="3">${escapeHtml(text)}</textarea></label>`;
+      }).join("");
+    }
+    async function comparePromptProfiles() {
+      const selectedId = currentControlValue("NEWS_PROMPT_PROFILE") || "balanced";
+      const data = await api(`/api/prompt-profiles/compare?profile=${encodeURIComponent(selectedId)}`);
+      const container = $("promptProfileCompare");
+      if (!container) return;
+      const diffs = data.diffs || {};
+      const entries = Object.entries(diffs);
+      container.innerHTML = entries.length
+        ? entries.map(([task, diff]) => `<div class="knob"><code>${escapeHtml(task)}</code><pre>${escapeHtml(diff)}</pre></div>`).join("")
+        : `<p class="muted">No differences from balanced.</p>`;
+    }
     function wireEvents() {
       $("previewBtn").onclick = () => preview("run").catch(err => setStatus(err.message, "bad"));
       $("runBtn").onclick = () => runAction("run").catch(err => setStatus(err.message, "bad"));
@@ -2291,6 +2370,17 @@ HTML = r"""<!doctype html>
         renderModelTuningControls("story_drafting");
         preview("run").catch(() => {});
       };
+      $("promptProfileSelect").onchange = () => {
+        renderPromptProfilePanel();
+        preview("run").catch(() => {});
+      };
+      $("restorePromptProfileBtn").onclick = () => {
+        const el = document.querySelector('[data-env="NEWS_PROMPT_PROFILE"]');
+        if (el) el.value = "";
+        renderPromptProfilePanel();
+        preview("run").catch(() => {});
+      };
+      $("comparePromptProfileBtn").onclick = () => comparePromptProfiles().catch(err => setStatus(err.message, "bad"));
       $("sourceSearch").oninput = renderSources;
       $("reloadSourcesBtn").onclick = loadSources;
       $("newSourceBtn").onclick = () => editSource("");

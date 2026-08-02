@@ -194,6 +194,23 @@ Key Run Settings:
   (`mlx-lm`, `mlx-vlm`, or `external`; inferred from the model reference
   otherwise — see [Runtime Matrix](#runtime-matrix)).
 
+### Prompt Profiles
+
+Prompt Profiles are built-in editorial tone bundles for the five LLM prompt
+stages (article summary, story scale screening, story drafting, title
+generation, image art direction). They swap editorial instruction sentences
+only; the pipeline's machine-required output contracts are unchanged.
+
+```bash
+uv run news run --prompt-profile playful
+NEWS_PROMPT_PROFILE=facts-only uv run news run
+```
+
+Built-in profiles: `balanced` (default), `consensus-and-contradiction`,
+`playful`, `facts-only`, `explain-like-im-five`. The UI's "Editorial approach"
+panel selects a profile, restores defaults, and shows per-task diffs against
+`balanced`. Profiles can also be pinned inside a Run Preset's `env` map.
+
 ### Model Selection
 
 ```bash

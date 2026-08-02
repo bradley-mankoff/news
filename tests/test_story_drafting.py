@@ -113,6 +113,33 @@ class StoryDraftingTests(unittest.TestCase):
         self.assertIn("source markers", prompt_text)
         self.assertIn("[[S1]]", prompt_text)
 
+    def test_story_prompt_instructions_injected_with_contract_intact(self) -> None:
+        messages = build_story_synthesis_prompt_messages(
+            {
+                "topic_title": "Weather",
+                "story_title": "Storm damage",
+                "summaries": ["Officials reported storm damage."],
+                "citation_sources": [
+                    _source(
+                        "S1",
+                        body_evidence=(
+                            "County logs listed ten damaged homes and two closed roads."
+                        ),
+                    )
+                ],
+            },
+            "May 30, 2026",
+            prompt_instructions="Write playfully.",
+        )
+
+        prompt_text = "\n\n".join(str(message.content) for message in messages)
+
+        self.assertIn("Write playfully.", prompt_text)
+        self.assertIn("Headline:", prompt_text)
+        self.assertIn("Main story:", prompt_text)
+        self.assertIn("Contradictions:", prompt_text)
+        self.assertIn("[[S1]]", prompt_text)
+
     def test_story_prompt_includes_citation_precedence_without_reordering_sources(self) -> None:
         messages = build_story_synthesis_prompt_messages(
             {

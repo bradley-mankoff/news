@@ -94,8 +94,8 @@ The handoff should be saved as `HANDOFF.md` at the repository root. Do not place
 - [x] Audit repository history for secrets and personal data before making the repository public — see `docs/security/audit-2026-08-02.md` and the gated scrub runbook `docs/security/history-scrub.md`.
 - [x] Replace real recipients, personal email defaults, and personal filesystem paths with safe examples — tree sanitized (issue #22); history scrub remains gated behind the runbook.
 - [x] Decide the initially supported runtime matrix (ADR 0010, Accepted): MLX/MLX-VLM on Apple Silicon + external OpenAI-compatible endpoints; `llama.cpp` adapter deferred.
-- [ ] Implement a Prompt Catalog and built-in Prompt Profiles.
-- [ ] Refactor hard-coded prompt construction to compose editable editorial instructions with pipeline-owned protocol requirements.
+- [x] Implement a Prompt Catalog and built-in Prompt Profiles.
+- [x] Refactor hard-coded prompt construction to compose editable editorial instructions with pipeline-owned protocol requirements.
 - [ ] Add prompt-profile selection and per-stage prompt editing to the normal UI.
 - [ ] Move all tuning, budgets, clustering thresholds, server controls, and raw environment overrides behind Advanced Settings.
 - [ ] Add task-specific model assignments for every actual LLM stage or explicitly document inheritance.
@@ -154,7 +154,9 @@ The handoff should be saved as `HANDOFF.md` at the repository root. Do not place
   - `generate_image_art_brief`
   - `_source_enabled_for_scope`
   - `load_sources`
-- Proposed Prompt Profile shape:
+- Proposed Prompt Profile shape (superseded: built-ins now live as Python
+  `PromptProfile` dataclasses in `news_pipeline/prompt_catalog.py`; YAML
+  override surface deferred to the user-editing issue):
 
 ```yaml
 id: consensus-and-contradiction
