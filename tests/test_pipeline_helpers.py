@@ -1730,6 +1730,19 @@ class PipelineHelperTests(unittest.TestCase):
         self.assertEqual(art_brief["overlay_headline"], "Report title")
         self.assertIn("image_prompt", art_brief)
 
+    def test_build_image_art_system_prompt_contains_protocol(self) -> None:
+        # The extracted pure helper must always carry the pipeline-owned JSON
+        # contract and overlay protocol regardless of the editorial sentences
+        # it is given (mirrors the mock-based assertions in the brief tests
+        # above, but directly on the helper).
+        system_text = pipeline._build_image_art_system_prompt("X", "Y")
+        self.assertIn(
+            "Return ONLY valid JSON with keys image_prompt and overlay_headline",
+            system_text,
+        )
+        self.assertIn("rendered later by code", system_text)
+        self.assertTrue(system_text.endswith("Y"))
+
     def test_generate_image_art_brief_injects_profile_instructions(self) -> None:
         captured: dict[str, str] = {}
 
