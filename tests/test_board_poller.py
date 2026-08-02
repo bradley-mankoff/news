@@ -3,6 +3,9 @@
 Covers the NEEDS INPUT / Blocked-lane / in-place resume machinery and the
 review fixes:
 
+Covers the NEEDS INPUT / Blocked-lane / in-place resume machinery and the
+review fixes:
+
 - run_status_for: substring matcher for `archon continue` "Prior Context"
   preambles (the resume-never-reconciles bug, CRITICAL)
 - issue_has_label: tri-state so a gh failure can never be misread as
@@ -20,6 +23,14 @@ review fixes:
   reconciliation blocked-lane gate (label None -> stays put, True ->
   Blocked, False -> develop merge)
 
+Also covers the ship-PR flow added for issue #22:
+- `run_status_for` / `fetch_runs_by_message` run-status lookup
+- `merge_pr_to_base` merge + auto-close reopen guard
+- `find_or_create_ship_pr` reuse-or-create semantics
+
+External CLIs (gh, archon) and filesystem side effects are mocked; no network
+or tooling is required.
+
 Follows the repo's unittest + MagicMock conventions (see tests/test_pipeline_helpers.py).
 """
 
@@ -32,6 +43,7 @@ from contextlib import ExitStack
 from unittest.mock import MagicMock, mock_open, patch
 
 from automation import board_poller as bp
+import automation.board_poller as poller  # head-side ship-PR tests use this name
 
 REPO = "bradley-mankoff/news"
 
@@ -68,6 +80,9 @@ def _cfg() -> dict:
             },
         },
     }
+
+
+CFG = {"repo": "bradley-mankoff/news"}
 
 
 ISOLATION_LIST = (
@@ -619,6 +634,127 @@ class PollFlowTest(unittest.TestCase):
              patch("automation.board_poller.log"):
             bp.poll(_cfg(), {}, state)
         dispatch.assert_called_once()
+
+class RunStatusTests(unittest.TestCase):
+    def test_run_status_for_matches_substring_and_takes_first(self) -> None:
+        # `archon continue` prepends a "Prior Context" preamble, so the
+        # resumed run's message CONTAINS (not equals) the dispatch message.
+        runs = {
+            "Prior Context...\nResuming issue #7 after human input. Latest comment: yes":
+                "running",
+            "Implement GitHub issue #7: old run": "completed",
+        }
+        self.assertEqual(
+            poller.run_status_for(runs, "Resuming issue #7 after human input."),
+            "running",
+        )
+
+    def test_run_status_for_returns_none_when_no_message_contains(self) -> None:
+        self.assertIsNone(poller.run_status_for({"other": "completed"}, "dispatch msg"))
+
+    def test_fetch_runs_by_message_keeps_newest_run_per_message(self) -> None:
+        payload = json.dumps({"runs": [
+            {"user_message": "Implement #7", "status": "completed",
+             "started_at": "2026-08-02T10:00:00Z"},
+            {"user_message": "Implement #7", "status": "running",
+             "started_at": "2026-08-02T11:00:00Z"},
+            {"user_message": "other", "status": "failed",
+             "started_at": "2026-08-02T09:00:00Z"},
+        ]})
+        with patch("automation.board_poller.subprocess.run") as run:
+            run.return_value = subprocess.CompletedProcess([], 0, stdout=payload)
+            result = poller.fetch_runs_by_message({})
+        self.assertEqual(result, {"Implement #7": "running", "other": "failed"})
+
+    def test_fetch_runs_by_message_returns_empty_on_gh_failure(self) -> None:
+        with patch("automation.board_poller.subprocess.run") as run:
+            run.return_value = subprocess.CompletedProcess([], 1, stderr="boom")
+            self.assertEqual(poller.fetch_runs_by_message({}), {})
+
+
+class MergePrToBaseTests(unittest.TestCase):
+    def test_merge_pr_to_base_reopens_auto_closed_issue(self) -> None:
+        with patch("automation.board_poller.gh") as gh, \
+             patch("automation.board_poller.time.sleep") as sleep:
+            gh.side_effect = [
+                subprocess.CompletedProcess([], 0),           # pr ready
+                subprocess.CompletedProcess([], 0),           # pr merge
+                subprocess.CompletedProcess([], 0, stdout='{"state": "CLOSED"}'),
+                subprocess.CompletedProcess([], 0),           # reopen
+            ]
+            ok, note = poller.merge_pr_to_base(
+                CFG, {}, {"number": 1, "state": "OPEN", "baseRefName": "develop"},
+                "develop", 7)
+        self.assertTrue(ok)
+        self.assertIn("reopened", note)
+        sleep.assert_called_once_with(6)
+
+    def test_merge_pr_to_base_skips_reopen_when_issue_stays_open(self) -> None:
+        with patch("automation.board_poller.gh") as gh, \
+             patch("automation.board_poller.time.sleep") as sleep:
+            gh.side_effect = [
+                subprocess.CompletedProcess([], 0),           # pr ready
+                subprocess.CompletedProcess([], 0),           # pr merge
+                subprocess.CompletedProcess([], 0, stdout='{"state": "OPEN"}'),
+            ]
+            ok, note = poller.merge_pr_to_base(
+                CFG, {}, {"number": 1, "state": "OPEN", "baseRefName": "develop"},
+                "develop", 7)
+        self.assertTrue(ok)
+        self.assertNotIn("reopened", note)
+
+    def test_merge_pr_to_base_returns_false_on_merge_failure(self) -> None:
+        with patch("automation.board_poller.gh") as gh:
+            gh.side_effect = [
+                subprocess.CompletedProcess([], 0),           # pr ready
+                subprocess.CompletedProcess([], 1, stderr="merge conflict"),
+            ]
+            ok, note = poller.merge_pr_to_base(
+                CFG, {}, {"number": 1, "state": "OPEN", "baseRefName": "develop"},
+                "develop", None)
+        self.assertFalse(ok)
+        self.assertIn("merge conflict", note)
+
+    def test_merge_pr_to_base_short_circuits_when_already_merged(self) -> None:
+        with patch("automation.board_poller.gh") as gh:
+            ok, note = poller.merge_pr_to_base(
+                CFG, {}, {"number": 1, "state": "MERGED", "baseRefName": "develop"},
+                "develop", None)
+        self.assertTrue(ok)
+        self.assertEqual(note, "already merged")
+        gh.assert_not_called()
+
+
+class ShipPrTests(unittest.TestCase):
+    def test_find_or_create_ship_pr_reuses_existing_open_pr(self) -> None:
+        r = subprocess.CompletedProcess([], 0, stdout=json.dumps([
+            {"number": 5, "headRefName": "archon/task-issue-7",
+             "baseRefName": "main", "state": "OPEN"},
+        ]))
+        with patch("automation.board_poller.gh", return_value=r) as gh:
+            pr = poller.find_or_create_ship_pr(CFG, {}, "archon/task-issue-7",
+                                               "Ship #7", 7, "main")
+        self.assertEqual(pr["number"], 5)
+        gh.assert_called_once()
+
+    def test_find_or_create_ship_pr_creates_when_missing(self) -> None:
+        r = subprocess.CompletedProcess([], 0, stdout="[]")
+        created = subprocess.CompletedProcess([], 0, stdout="https://github.com/o/r/pull/9")
+        with patch("automation.board_poller.gh", side_effect=[r, created]) as gh:
+            pr = poller.find_or_create_ship_pr(CFG, {}, "archon/task-issue-7",
+                                               "Ship #7", 7, "main")
+        self.assertEqual(pr["number"], 9)
+        create_call = [c.args[0] for c in gh.call_args_list
+                       if c.args[0][:2] == ["pr", "create"]]
+        self.assertTrue(create_call)
+
+    def test_find_or_create_ship_pr_returns_none_on_create_failure(self) -> None:
+        r = subprocess.CompletedProcess([], 0, stdout="[]")
+        failed = subprocess.CompletedProcess([], 1, stderr="auth expired")
+        with patch("automation.board_poller.gh", side_effect=[r, failed]):
+            pr = poller.find_or_create_ship_pr(CFG, {}, "archon/task-issue-7",
+                                               "Ship #7", 7, "main")
+        self.assertIsNone(pr)
 
 
 if __name__ == "__main__":

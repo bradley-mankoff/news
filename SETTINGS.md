@@ -26,8 +26,8 @@ Pipeline Budget, Model Server Settings, and Prompt Profile.
 | `NEWS_PROMPT_PROFILE` | `balanced` | Editorial tone for the five LLM prompt stages. One of `balanced`, `consensus-and-contradiction`, `explain-like-im-five`, `facts-only`, `playful`. |
 | `NEWS_MODEL` | `gemma-26b-moe` | Default friendly alias or full model repo/name. Task-specific model assignments inherit this value unless overridden. |
 | `NEWS_SOURCE_SCOPE` | `core` | `core` selects active English core sources. `peripheral` selects core plus peripheral sources. |
-| `NEWS_RECIPIENT_SCOPE` | `bradley` | `bradley` sends to `NEWS_BRADLEY_RECIPIENT`. `all` sends to active configured recipients. |
-| `NEWS_BRADLEY_RECIPIENT` | `bradley@mankoff.com` | Single-recipient address used by Bradley-scoped runs. |
+| `NEWS_RECIPIENT_SCOPE` | `bradley` | `bradley` (primary) sends to `NEWS_BRADLEY_RECIPIENT`. `all` sends to active configured recipients. |
+| `NEWS_BRADLEY_RECIPIENT` | `bradley@example.com` | Single-recipient address used by primary-recipient-scoped runs. |
 | `NEWS_BLOCK_REUSED_URLS` | `0` | Every run records URL history. `1` makes recorded URLs block future reuse. |
 | `NEWS_IMAGE_ENABLED` | `0` | `1` enables report image generation. Image model, size, crop, steps, and fail-open behavior are fixed defaults. |
 | `NEWS_RECENT_WINDOW_HOURS` | `24` | Only articles published within this window are considered. |
@@ -80,12 +80,12 @@ These settings are intentionally not part of the normal Run Settings surface.
 | Variable | Default | Description |
 |---|---|---|
 | `NEWS_SOURCES_YAML` | `config/sources.yaml` | Source list path. |
-| `NEWS_RECIPIENTS_YAML` | `config/recipients.yaml` | Recipient list path. |
+| `NEWS_RECIPIENTS_YAML` | `config/recipients.yaml` | Path to a local recipients file; the checked-in config/recipients.yaml is a public template. |
 | `NEWS_OUTPUT_DIR` | `output/daily_outputs` | Dated run-output directory. |
 | `NEWS_HISTORY_DB` | `output/history/news_history.duckdb` | DuckDB run and URL history path. |
 | `NEWS_HISTORY_EXPORT_CSV` | `1` | Export readable history CSVs after writes. |
 | `NEWS_ENV_JSON` | `env.json` | JSON file with SMTP password fallback. |
-| `NEWS_EMAIL_FROM` | `bradley.mankoff@gmail.com` | Sender address and SMTP username default. |
+| `NEWS_EMAIL_FROM` | `news@example.com` | Sender address and SMTP username default. |
 | `NEWS_EMAIL_RECIPIENTS` | `NEWS_BRADLEY_RECIPIENT` | Fallback recipient list if recipient YAML has no active entries. |
 | `NEWS_SMTP_HOST`, `NEWS_SMTP_PORT`, `NEWS_SMTP_USERNAME`, `NEWS_SMTP_USE_SSL`, `NEWS_SMTP_PASSWORD` | mail defaults | SMTP delivery configuration. |
 | `NEWS_UNSUBSCRIBE_BASE_URL`, `NEWS_UNSUBSCRIBE_HOST`, `NEWS_UNSUBSCRIBE_PORT`, `NEWS_UNSUBSCRIBE_SECRET` | local defaults | Unsubscribe endpoint configuration. |
@@ -130,7 +130,7 @@ bundles.
 | `uv run news run --prompt-profile NAME` | Run with a saved preset plus a Prompt Profile override. |
 | `uv run news run` | Run with defaults and explicit environment overrides. |
 | `uv run news ui` | Start the guided local control panel. |
-| `uv run news model-server-command` | Print the resolved local model server command and exit. |
+| `uv run news model-server-command` | Print the resolved local model server command and exit (external backend: prints a "no managed server command" notice and exits 2). |
 | `uv run news check-sources` | Check configured source connectivity. |
 | `uv run news source-languages` | Detect or verify source language tags. |
 | `uv run news serve-unsubscribe` | Start the local unsubscribe endpoint. |

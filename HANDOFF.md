@@ -1,7 +1,7 @@
 ## Goal
 Reframe the Daily News Pipeline as a local-first open-source project where users control editorial prompts, Hugging Face models, sources, translation, and delivery. Replace the current knob-heavy primary UI with a prompt-first guided interface while moving model tuning, pipeline budgets, server settings, and raw runtime controls behind an Advanced Settings gate.
 
-The handoff should be saved as `HANDOFF.md` at the repository root: `/Users/home/news/HANDOFF.md`. Do not place it in a hidden directory.
+The handoff should be saved as `HANDOFF.md` at the repository root. Do not place it in a hidden directory.
 
 ## Constraints & Preferences
 - The normal UI must prioritize user-customizable prompts.
@@ -26,7 +26,7 @@ The handoff should be saved as `HANDOFF.md` at the repository root: `/Users/home
 ### Done
 - [x] Mapped current project semantics from `CONTEXT.md`, operational behavior from `README.md`, settings from `SETTINGS.md`, and architecture decisions from `docs/adr/`.
 - [x] Confirmed GitNexus index state:
-  - Repository: `/Users/home/news`
+  - Repository: the repository root
   - Branch: `main`
   - Indexed/current commit: `06ef7b0`
   - Status: up to date
@@ -77,10 +77,9 @@ The handoff should be saved as `HANDOFF.md` at the repository root: `/Users/home
   - No `LICENSE`, `LICENSE.md`, `LICENSE.txt`, or `COPYING` was found — resolved: Apache-2.0 `LICENSE` added (ADR 0010).
   - `pyproject.toml:2` previously used the private folder name; renamed to `news-pipeline` (ADR 0009).
   - `README.md` quickstart previously referenced the private path; now clone-based (ADR 0009).
-  - `config/recipients.yaml` contains real names and email addresses.
-  - `news_pipeline/config.py:1637` defaults to `bradley@mankoff.com`.
-  - `news_pipeline/config.py:1648` defaults to `bradley.mankoff@gmail.com`.
-  - `news_pipeline/ui.py:58` includes Bradley-specific recipient guidance.
+  - `config/recipients.yaml` is now a public template with example entries (issue #22).
+  - `news_pipeline/config.py` defaults now `bradley@example.com` / `news@example.com` (issue #22).
+  - `news_pipeline/ui.py` recipient guidance is neutral (issue #22).
 - [x] Produced a repository-grounded architecture and rollout proposal in the prior response.
 - [x] No source files, tests, configuration, or documentation were modified.
 - [x] No tests were run because there was no behavioral implementation.
@@ -92,12 +91,9 @@ The handoff should be saved as `HANDOFF.md` at the repository root: `/Users/home
 ### Pending
 - [x] Decide the public project and package name (`news-pipeline`, ADR 0009).
 - [x] Choose a project license. Apache-2.0 chosen by owner on issue #21 (ADR 0010); AGPL-3.0 rejected (network copyleft).
-- [ ] Audit repository history for secrets and personal data before making the repository public.
-- [ ] Replace real recipients, personal email defaults, and personal filesystem paths with safe examples.
-- [ ] Decide the initially supported runtime matrix:
-  - Existing managed MLX/MLX-VLM on Apple Silicon
-  - External OpenAI-compatible endpoints
-  - Optional later `llama.cpp` adapter for cross-platform GGUF
+- [x] Audit repository history for secrets and personal data before making the repository public — see `docs/security/audit-2026-08-02.md` and the gated scrub runbook `docs/security/history-scrub.md`.
+- [x] Replace real recipients, personal email defaults, and personal filesystem paths with safe examples — tree sanitized (issue #22); history scrub remains gated behind the runbook.
+- [x] Decide the initially supported runtime matrix (ADR 0010, Accepted): MLX/MLX-VLM on Apple Silicon + external OpenAI-compatible endpoints; `llama.cpp` adapter deferred.
 - [x] Implement a Prompt Catalog and built-in Prompt Profiles.
 - [x] Refactor hard-coded prompt construction to compose editable editorial instructions with pipeline-owned protocol requirements.
 - [ ] Add prompt-profile selection and per-stage prompt editing to the normal UI.
@@ -131,8 +127,8 @@ The handoff should be saved as `HANDOFF.md` at the repository root: `/Users/home
 - **Initial runtime scope should be honest**: A practical first release can support Apple Silicon managed models plus external OpenAI-compatible endpoints; managed cross-platform GGUF can follow through a real `llama.cpp` adapter.
 
 ## Critical Context
-- Repository root: `/Users/home/news`
-- Intended visible handoff path: `/Users/home/news/HANDOFF.md`
+- Repository root: the repository
+- Intended visible handoff path: `HANDOFF.md` at the repository root
 - Current branch/commit observed: `main` at `06ef7b0`
 - GitNexus index was current at `06ef7b0`.
 - Commands executed during discovery:

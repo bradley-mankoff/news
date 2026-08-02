@@ -75,7 +75,12 @@ QWWYTHOS_9B_4BIT_MODEL_ALIAS = "qwythos-9b-4bit"
 QWWYTHOS_9B_4BIT_MODEL_REFERENCE = f"{QWWYTHOS_REPO}/{QWWYTHOS_Q4K_FILENAME}"
 QWWYTHOS_9B_8BIT_MODEL_ALIAS = "qwythos-9b-8bit"
 QWWYTHOS_9B_8BIT_MODEL_REFERENCE = f"{QWWYTHOS_REPO}/{QWWYTHOS_Q8_FILENAME}"
-QWWYTHOS_MODEL_BACKEND = "mlx-vlm"
+MODEL_BACKEND_MLX_LM = "mlx-lm"
+MODEL_BACKEND_MLX_VLM = "mlx-vlm"
+MODEL_BACKEND_EXTERNAL = "external"
+SUPPORTED_MODEL_BACKENDS = (MODEL_BACKEND_MLX_LM, MODEL_BACKEND_MLX_VLM, MODEL_BACKEND_EXTERNAL)
+# Retained public alias for the Qwythos default backend; prefer MODEL_BACKEND_MLX_VLM.
+QWWYTHOS_MODEL_BACKEND = MODEL_BACKEND_MLX_VLM
 DEFAULT_MODEL_ALIAS = QWWYTHOS_9B_8BIT_MODEL_ALIAS
 CODEX_TEST_MODEL_ALIAS = "gemma-e2b-tiny"
 CODEX_TEST_MODEL_NAME = "deadbydawn101/gemma-4-E2B-Heretic-Uncensored-mlx-4bit"
@@ -390,7 +395,7 @@ def _configured_model_assignments(
     presets: dict[str, dict[str, Any]],
 ) -> dict[str, TaskModelAssignment]:
     default_name = resolve_model_name(default_reference)
-    default_backend = infer_model_backend(default_reference)
+    default_backend = _configured_model_backend(default_reference)
     article_summary_reference = _str_env("NEWS_MODEL_ARTICLE_SUMMARY", default_reference) or default_reference
     article_summary_base_url = _str_env(
         "NEWS_MODEL_ARTICLE_SUMMARY_BASE_URL",
@@ -988,11 +993,38 @@ def _configured_model_reference() -> str:
 
 def infer_model_backend(model_reference: str) -> str:
     resolved_name = resolve_model_name(model_reference).lower()
-    if "qwythos" in resolved_name:
-        return QWWYTHOS_MODEL_BACKEND
-    if "gemma-4" in resolved_name or "gemma4" in resolved_name:
-        return "mlx-vlm"
-    return "mlx-lm"
+    if "qwythos" in resolved_name or "gemma-4" in resolved_name or "gemma4" in resolved_name:
+        return MODEL_BACKEND_MLX_VLM
+    return MODEL_BACKEND_MLX_LM
+
+
+def configured_model_api_key() -> str:
+    """Return the API key used for OpenAI-compatible endpoints.
+
+    Reads NEWS_MODEL_API_KEY; defaults to the unauthenticated "not-needed"
+    sentinel so local managed servers keep working without configuration.
+    """
+    return _str_env("NEWS_MODEL_API_KEY", "not-needed") or "not-needed"
+
+
+def _configured_model_backend(model_reference: str) -> str:
+    """Resolve the default model's backend: NEWS_MODEL_BACKEND override
+    (validated against SUPPORTED_MODEL_BACKENDS) or inferred from the
+    reference. Per-task models always use inference."""
+    configured = _str_env("NEWS_MODEL_BACKEND", "").strip().lower()
+    if not configured:
+        return infer_model_backend(model_reference)
+    if configured not in SUPPORTED_MODEL_BACKENDS:
+        raise ValueError(
+            "NEWS_MODEL_BACKEND must be one of: " + ", ".join(SUPPORTED_MODEL_BACKENDS)
+        )
+    if configured == MODEL_BACKEND_EXTERNAL and not _str_env("NEWS_MODEL_BASE_URL", ""):
+        raise ValueError(
+            "NEWS_MODEL_BACKEND=external requires NEWS_MODEL_BASE_URL to point at an "
+            "OpenAI-compatible endpoint (without it, the pipeline would poll the "
+            "default managed-server loopback URL and time out)."
+        )
+    return configured
 
 
 
@@ -1063,6 +1095,7 @@ def runtime_knob_registry() -> list[dict[str, Any]]:
         _runtime_knob("Run Settings", "Embedding model", "NEWS_EMBEDDING_MODEL", default="all-mpnet-base-v2", advanced=True),
         _runtime_knob("Run Settings", "Token encoding", "NEWS_TOKEN_ENCODING", default="o200k_base", advanced=True),
         _runtime_knob("Model Selection", "Default model", "NEWS_MODEL", "select", default=DEFAULT_MODEL_ALIAS, options=sorted(MODEL_ALIASES)),
+        _runtime_knob("Model Selection", "Model backend", "NEWS_MODEL_BACKEND", "select", options=sorted(SUPPORTED_MODEL_BACKENDS)),
         _runtime_knob("Model Selection", "Article Summarization model", "NEWS_MODEL_ARTICLE_SUMMARY", "select", options=sorted(MODEL_ALIASES)),
         _runtime_knob("Model Selection", "Story Drafting model", "NEWS_MODEL_STORY_DRAFTING", "select", options=sorted(MODEL_ALIASES)),
         _runtime_knob("Model Tuning", "Default tuning preset", "NEWS_MODEL_TUNING_PRESET", "select", options=tuning_presets),
@@ -1130,20 +1163,27 @@ def build_model_server_command(
     backend: str = "mlx-lm",
     model_concurrency: int = DEFAULT_PIPELINE_CONCURRENCY,
 ) -> str:
+    """Return the managed server command for the backend.
+
+    External backends have no managed server: returns "" (callers treat the
+    empty string as "connect to the endpoint directly").
+    """
+    if backend == MODEL_BACKEND_EXTERNAL:
+        return ""
     concurrency = max(1, int(model_concurrency))
     parsed_base_url = urlparse(settings.base_url or "")
     port = parsed_base_url.port or 8080
     extra_flags: list[str] = []
     if settings.prefill_step_size is not None:
         extra_flags.extend(["--prefill-step-size", str(settings.prefill_step_size)])
-    if backend != "mlx-vlm":
+    if backend != MODEL_BACKEND_MLX_VLM:
         if settings.prompt_cache_size is not None:
             extra_flags.extend(["--prompt-cache-size", str(settings.prompt_cache_size)])
         if settings.prompt_cache_bytes:
             extra_flags.extend(["--prompt-cache-bytes", str(settings.prompt_cache_bytes)])
     if settings.max_tokens is not None:
         extra_flags.extend(["--max-tokens", str(settings.max_tokens)])
-    if backend == "mlx-vlm":
+    if backend == MODEL_BACKEND_MLX_VLM:
         return " ".join(
             [
                 "uv run python -m mlx_vlm.server",
@@ -1619,7 +1659,7 @@ def _build_runtime_config(
         run_staging_dir.mkdir(parents=True, exist_ok=True)
         _sync_cursorignore_latest_output(ROOT_DIR, output_dir, run_output_dir)
 
-    bradley_recipient = _str_env("NEWS_BRADLEY_RECIPIENT", "bradley@mankoff.com")
+    bradley_recipient = _str_env("NEWS_BRADLEY_RECIPIENT", "bradley@example.com")
     source_scope = _configured_source_scope()
     recipient_scope = _configured_recipient_scope()
     url_reuse_blocking_enabled = _bool_env("NEWS_BLOCK_REUSED_URLS", False)
@@ -1636,7 +1676,7 @@ def _build_runtime_config(
         blocking_urls_filename if url_reuse_blocking_enabled else tracked_urls_filename
     )
     env_json_path = ROOT_DIR / _str_env("NEWS_ENV_JSON", "env.json")
-    email_from = _str_env("NEWS_EMAIL_FROM", "bradley.mankoff@gmail.com")
+    email_from = _str_env("NEWS_EMAIL_FROM", "news@example.com")
     smtp_password = (
         _str_env("NEWS_SMTP_PASSWORD", "").replace(" ", "")
         or _load_password_from_env_json(env_json_path)
