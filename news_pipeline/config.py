@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import sys
 from contextvars import ContextVar
 from dataclasses import dataclass, field, replace
 from datetime import datetime
@@ -1658,6 +1659,10 @@ def _build_runtime_config(
         run_staging_dir.mkdir(parents=True, exist_ok=True)
         _sync_cursorignore_latest_output(ROOT_DIR, output_dir, run_output_dir)
 
+    if _active_env().get("NEWS_BRADLEY_RECIPIENT"):
+        print("warning: NEWS_BRADLEY_RECIPIENT is obsolete; "
+              "set NEWS_PRIMARY_RECIPIENT instead (see SETTINGS.md)",
+              file=sys.stderr)
     primary_recipient = _str_env("NEWS_PRIMARY_RECIPIENT", "primary@example.com")
     source_scope = _configured_source_scope()
     recipient_scope = _configured_recipient_scope()
