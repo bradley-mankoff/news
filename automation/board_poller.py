@@ -234,26 +234,46 @@ def move_to_lane(cfg: dict, env: dict, project_id: str, item_id: str,
     return r.returncode == 0
 
 
-def issue_has_label(cfg: dict, env: dict, issue_number: int, label: str) -> bool:
-    r = gh(["issue", "view", str(issue_number), "-R", cfg["repo"], "--json", "labels",
-            "-q", ".labels[].name"], env)
-    return r.returncode == 0 and label in r.stdout.split()
+def issue_has_label(cfg: dict, env: dict, issue_number: int, label: str) -> bool | None:
+    """True/False, or None when the label state could not be determined.
+
+    A gh failure must never be misread as "label absent": the caller gates the
+    Blocked-vs-complete decision on this, and a blocked issue that falls through
+    to the normal completion path could ship past the human's decision.
+    """
+    try:
+        r = gh(["issue", "view", str(issue_number), "-R", cfg["repo"],
+                "--json", "labels", "-q", ".labels[].name"], env)
+    except subprocess.TimeoutExpired as exc:
+        log(f"LABEL CHECK TIMEOUT issue={issue_number}: {exc}")
+        return None
+    if r.returncode != 0:
+        log(f"LABEL CHECK FAILED issue={issue_number}: {r.stderr.strip()[:200]}")
+        return None
+    return label in r.stdout.split()
 
 
-def resolve_worktree_branch(env: dict, issue_number: int) -> str | None:
+def resolve_worktree_branch(env: dict, issue_number: int, repo: str) -> str | None:
     """Find the archon worktree branch for an issue (e.g. archon/task-issue-12).
 
     `archon continue` needs the full namespaced branch, not the shorthand the
-    poller passes to `workflow run --branch`.
+    poller passes to `workflow run --branch`. The parse is scoped to this
+    repo's section of `archon isolation list` so a same-named worktree of
+    another repository can never be resumed.
     """
     r = subprocess.run(["archon", "isolation", "list"], capture_output=True,
                        text=True, timeout=60, env=env, cwd=str(ROOT))
     if r.returncode != 0:
+        log(f"WORKTREE LIST FAILED: {r.stderr.strip()[:200]}")
         return None
     pat = re.compile(rf"task-issue-{issue_number}\b")
-    for line in r.stdout.splitlines():
-        line = line.strip()
-        if pat.search(line) and not line.startswith(("Path", "Type")):
+    in_repo = False
+    for raw in r.stdout.splitlines():
+        line = raw.strip()
+        if line.endswith(":") and "github.com" in line:   # repo section header
+            in_repo = repo in line
+            continue
+        if in_repo and pat.search(line) and not line.startswith(("Path", "Type")):
             return line
     return None
 
@@ -266,9 +286,16 @@ def resume_issue(cfg: dict, env: dict, branch: str, wf: str,
     prior context; the human's latest comment is passed as the message. Removes
     the needs-input label (the run is no longer blocked).
     """
-    full_branch = resolve_worktree_branch(env, issue_number) or branch
+    full_branch = resolve_worktree_branch(env, issue_number, cfg["repo"])
+    if full_branch is None:
+        log(f"RESUME DEFERRED issue={issue_number}: worktree branch not found "
+            f"(needs-input label kept; retrying next poll)")
+        return False, "", None
     r = gh(["issue", "view", str(issue_number), "-R", cfg["repo"], "--json", "comments",
             "-q", ".comments[-1].body"], env)
+    if r.returncode != 0:
+        log(f"COMMENT FETCH FAILED issue={issue_number}: {r.stderr.strip()[:200]} "
+            f"(resuming without the answer in context)")
     answer = (r.stdout or "").strip()[:600] if r.returncode == 0 else ""
     msg = (f"Resuming issue #{issue_number} after human input."
            + (f" Latest comment from the human: {answer}" if answer else ""))
@@ -282,11 +309,23 @@ def resume_issue(cfg: dict, env: dict, branch: str, wf: str,
             )
     except OSError as exc:
         log(f"RESUME FAILED issue={issue_number}: {exc}")
-        return False, msg
-    gh(["issue", "edit", str(issue_number), "-R", cfg["repo"],
-        "--remove-label", "needs-input"], env)
+        return False, msg, None
+    # A short grace period catches immediate non-zero exits (bad branch or
+    # workflow name): resuming must not be reported as success when no run
+    # will actually run, and the needs-input label must stay if it does.
+    time.sleep(2)
+    if proc.poll() is not None:
+        log(f"RESUME FAILED issue={issue_number}: archon continue exited "
+            f"immediately with code {proc.returncode}")
+        return False, msg, None
+    r = gh(["issue", "edit", str(issue_number), "-R", cfg["repo"],
+            "--remove-label", "needs-input"], env)
+    if r.returncode != 0:
+        log(f"RESUME LABEL REMOVE FAILED issue={issue_number}: "
+            f"{r.stderr.strip()[:200]}")
+        return False, msg, None
     log(f"RESUMED issue={issue_number} branch={full_branch} wf={wf} pid={proc.pid}")
-    return True, msg
+    return True, msg, full_branch
 
 
 def dispatch(cfg: dict, env: dict, wf: str, branch: str, message: str,
@@ -353,9 +392,10 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
                 branch = f"issue-{content['number']}"
                 prior = state.get(item_id, {})
                 ok = False
+                resumed_branch = None
                 if "needs-input" in labels and prior.get("branch") and prior.get("wf"):
-                    ok, msg = resume_issue(cfg, env, prior["branch"], prior["wf"],
-                                           content["number"])
+                    ok, msg, resumed_branch = resume_issue(
+                        cfg, env, prior["branch"], prior["wf"], content["number"])
                     if ok:
                         wf = prior["wf"]
                 if not ok:
@@ -373,7 +413,7 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
                 if ok:
                     dispatched_msg = msg
                     dispatched_wf = wf
-                    dispatched_branch = branch
+                    dispatched_branch = resumed_branch or branch
                 target = cfg["dispatch"]["todo"].get("move_to")
                 if ok and target:
                     option_id = status_options.get(target)
@@ -452,15 +492,20 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
                 issue_number = rec.get("issue_number")
                 blocked_name = next(
                     (k for k, v in cfg["lanes"].items() if v == "blocked"), None)
-                if (issue_number and blocked_name
-                        and issue_has_label(cfg, env, issue_number, "needs-input")):
-                    option_id = status_options.get(blocked_name)
-                    if option_id and move_to_lane(
-                            cfg, env, project_id, item_id, field_id, option_id):
-                        log(f"BLOCKED item={item_id} issue={issue_number} -> "
-                            f"{blocked_name} (awaiting human input)")
-                    rec.pop("dispatch_msg", None)
-                    continue
+                if issue_number and blocked_name:
+                    blocked = issue_has_label(cfg, env, issue_number, "needs-input")
+                    if blocked is None:
+                        log(f"BLOCKED CHECK DEFERRED item={item_id} issue={issue_number}; "
+                            f"retrying next poll")
+                        continue  # dispatch_msg retained -> re-checked next poll
+                    if blocked:
+                        option_id = status_options.get(blocked_name)
+                        if option_id and move_to_lane(
+                                cfg, env, project_id, item_id, field_id, option_id):
+                            log(f"BLOCKED item={item_id} issue={issue_number} -> "
+                                f"{blocked_name} (awaiting human input)")
+                        rec.pop("dispatch_msg", None)
+                        continue
                 merge_base = cfg["dispatch"]["todo"].get("merge_develop_base")
                 merge_ok = True
                 if issue_number and merge_base:
