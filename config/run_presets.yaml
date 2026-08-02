@@ -24,7 +24,7 @@ presets:
       NEWS_RELAX_STORY_DRAFTING_GUARDS: '1'
   local-prod:
     name: Local production review
-    description: Full source-pool review sent only to Bradley without blocking URL
+    description: Full source-pool review sent only to the primary recipient without blocking URL
       reuse.
     env:
       NEWS_SOURCE_SCOPE: peripheral

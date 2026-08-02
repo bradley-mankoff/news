@@ -239,6 +239,26 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
         )
 
 
+    def test_default_recipient_and_sender_are_example_addresses(self) -> None:
+        config = load_runtime_config(
+            environ={},
+            materialize_outputs=False,
+            run_started_at=datetime(2026, 6, 14, 12, 0, 0),
+        )
+
+        self.assertEqual(config.bradley_recipient, "bradley@example.com")
+        self.assertEqual(config.email_from, "news@example.com")
+
+    def test_personal_data_absent_from_defaults(self) -> None:
+        config = load_runtime_config(
+            environ={},
+            materialize_outputs=False,
+            run_started_at=datetime(2026, 6, 14, 12, 0, 0),
+        )
+
+        self.assertNotIn("mankoff", config.bradley_recipient)
+        self.assertNotIn("gmail", config.email_from)
+
     def test_ui_command_env_delta_matches_preview_overrides(self) -> None:
         body = {
             "action": "run",

@@ -54,7 +54,7 @@ RECIPIENT_HEADER = """# Email recipients for generated reports.
 #
 # Usage:
 # - pause: true keeps the recipient configured but skips delivery.
-# - NEWS_RECIPIENT_SCOPE=bradley sends only to bradley@mankoff.com,
+# - NEWS_RECIPIENT_SCOPE=bradley sends only to the primary recipient,
 #   regardless of this file.
 """
 RUN_PRESET_HEADER = """# Saved run presets for the daily news pipeline.
@@ -1371,7 +1371,7 @@ HTML = r"""<!doctype html>
       ["recipients", "Recipients", "person"]
     ];
     const KNOB_HINTS = {
-      NEWS_RECIPIENT_SCOPE: "Chooses whether this run targets only Bradley or all active recipients.",
+      NEWS_RECIPIENT_SCOPE: "Chooses whether this run targets only the primary recipient or all active recipients.",
       NEWS_SOURCE_SCOPE: "Chooses the source pool: core sources only, or the full source list.",
       NEWS_MODEL: "Default local model alias used when a task-specific model is not set.",
       NEWS_MODEL_ARTICLE_SUMMARY: "Model used for article summarization before story drafting.",
@@ -1640,7 +1640,7 @@ HTML = r"""<!doctype html>
         peripheral: "All"
       };
       const recipientScopes = {
-        bradley: "Bradley-only",
+        bradley: "Primary-only",
         all: "All"
       };
       const articleModel = knobField("NEWS_MODEL_ARTICLE_SUMMARY", "Article model", { emptyLabel: "default: qwythos-9b-8bit" });
@@ -1688,8 +1688,8 @@ HTML = r"""<!doctype html>
             <div class="form-grid">
               <label class="field"><span>Recipients</span>
                 <select id="recipientScope" data-env="NEWS_RECIPIENT_SCOPE">
-                  <option value="">default: Bradley-only</option>
-                  <option value="bradley"${currentControlValue("NEWS_RECIPIENT_SCOPE") === "bradley" ? " selected" : ""}>Bradley-only</option>
+                  <option value="">default: Primary-only</option>
+                  <option value="bradley"${currentControlValue("NEWS_RECIPIENT_SCOPE") === "bradley" ? " selected" : ""}>Primary-only</option>
                   <option value="all"${currentControlValue("NEWS_RECIPIENT_SCOPE") === "all" ? " selected" : ""}>All</option>
                 </select>
                 <code>NEWS_RECIPIENT_SCOPE</code>

@@ -175,7 +175,7 @@ Key Run Settings:
 
 - `NEWS_SOURCE_SCOPE=core|peripheral`: `peripheral` includes both core and
   peripheral sources.
-- `NEWS_RECIPIENT_SCOPE=bradley|all`: send to Bradley only or all active
+- `NEWS_RECIPIENT_SCOPE=bradley|all`: send to the primary recipient only or all active
   configured recipients.
 - `NEWS_BLOCK_REUSED_URLS=0|1`: every run records URL history; only `1` makes
   previously recorded URLs block future reuse.
@@ -316,7 +316,7 @@ hard-coded defaults rather than normal Run Settings.
 - `config/sources.yaml`: single source list. Normal runs select active English
   sources using `NEWS_SOURCE_SCOPE`.
 - `config/recipients.yaml`: active and paused recipients. `NEWS_RECIPIENT_SCOPE`
-  chooses Bradley-only or all active recipients.
+  chooses primary-only or all active recipients.
 - `config/model_tuning_presets.yaml`: saved Model Tuning Presets keyed by id.
 
 Normal collection accepts active English sources. Removed topic-scoped runtime
