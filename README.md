@@ -4,14 +4,18 @@ Python 3.12 `uv` project for building and sending the daily news report. Run
 commands from the repo root so `uv` uses this project environment.
 
 ```bash
-cd /Users/bradley_mankoff/personal_code/news
-/opt/homebrew/bin/uv sync --python /opt/homebrew/bin/python3.12
+git clone https://github.com/bradley-mankoff/news.git
+cd news
+uv sync
 uv run python -c 'import platform; print(platform.machine())'
 ```
 
-On Apple Silicon, the platform check should print `arm64`. These paths are
-machine-specific (single-user repo) — adjust them when running on another
-machine.
+On Apple Silicon, the platform check should print `arm64`. `uv` picks the
+Python version from `.python-version` (3.12) automatically.
+
+> **Package status**: `news-pipeline` (ADR 0009) is the public distribution
+> name, but the package is not published to PyPI yet — install instructions
+> will be added here at release time.
 
 ## Project Automation
 
@@ -21,15 +25,22 @@ The repo runs a fully automated agentic loop driven by the GitHub project board
 ### Board flow
 
 - Lanes: `Backlog` → `Todo` → `In Progress` → `Ready for Review` → `In Review` → `Done`.
+- Branch model: `main` = production; `develop` = integration (repo default branch,
+  workflow PRs target it); every issue works on its own branch
+  (`archon/task-issue-<N>`) in an isolated worktree, so issues in `Todo` run in
+  parallel.
 - Creating an issue lands it in `Backlog`; nothing starts from `Backlog`.
 - Moving an issue into `Todo` triggers an Archon workflow (label-aware: `bug`
   → `archon-fix-github-issue`, `feature`/`enhancement` → `archon-idea-to-pr`,
   default → `archon-fix-github-issue`), and the poller moves the issue to
   `In Progress`.
-- When the dispatched run completes, the poller moves the issue to
-  `Ready for Review` — the human tests the draft PR locally from there.
-- Moving an issue into `In Review` triggers `archon-smart-pr-review` on the
-  linked PR.
+- When the dispatched run completes, the poller marks the PR ready and merges
+  it into `develop`, then moves the issue to `Ready for Review` — the human
+  tests the integration branch from there. (Merge failure → issue stays in
+  `In Progress`, logged; drag back to `Todo` to re-run.)
+- Moving an issue into `In Review` makes the poller open the ship PR
+  (feature → `main`), run `archon-smart-pr-review` on it, and on review
+  completion merge it into `main` and move the issue to `Done` automatically.
 - Agents move issues with `python3 automation/move_item.py <issue> <lane>`.
 
 ### Two review stages (by design)
@@ -54,10 +65,11 @@ inventory: `docs/archon-workflows.md`.
 ### Components
 
 - `automation/board_poller.py` — polls the board every 45s, dispatches Archon
-  runs on lane transitions (moves the item to `In Progress` on dispatch, to
-  `Ready for Review` when the run completes). First poll after (re)start is a
-  snapshot: state is recorded, nothing is dispatched (prevents backlog bursts
-  after downtime).
+  runs on lane transitions; moves the item to `In Progress` on dispatch, merges
+  the feature PR into `develop` and moves to `Ready for Review` when the run
+  completes, and on review completion merges the ship PR into `main` and moves
+  to `Done`. First poll after (re)start is a snapshot: state is recorded,
+  nothing is dispatched (prevents backlog bursts after downtime).
 - `automation/config.json` — repo, project, lanes, and workflow mapping.
 - `automation/move_item.py` — move an issue to a lane from the CLI.
 - The poller runs as a launchd agent (`com.bradley-mankoff.news-board-poller`,
