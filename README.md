@@ -342,6 +342,33 @@ for a managed backend (ADR 0010 runtime matrix); hardware fitting itself lives
 on the Hugging Face model page. The UI's "Model catalog" panel shows curated
 cards, task recommendations, and search with the same verdicts.
 
+### Model Catalog
+
+The Model Catalog is the code-owned registry of models verified for the
+supported backends, with recommendations per task — factual extraction,
+structured output, synthesis, citation fidelity, speed, context length, and
+translation — rather than parameter count or popularity:
+
+```bash
+uv run news models catalog
+uv run news models search --query qwythos --task text-generation --limit 5
+```
+
+Curated models (3):
+
+- `qwythos-9b-8bit` — mlx-vlm, 1M-token context, default model
+  ([Hugging Face](https://huggingface.co/huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF))
+- `qwythos-9b-4bit` — mlx-vlm, 1M-token context
+  ([Hugging Face](https://huggingface.co/huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF))
+- `gemma-e2b-tiny` — mlx-lm, Codex-safe test model
+  ([Hugging Face](https://huggingface.co/deadbydawn101/gemma-4-E2B-Heretic-Uncensored-mlx-4bit))
+
+Hugging Face search results carry runtime-fit verdicts (`managed_mlx_lm`,
+`managed_mlx_vlm`, or `external_only`) so unlaunchable repos are never picked
+for a managed backend (ADR 0010 runtime matrix); hardware fitting itself lives
+on the Hugging Face model page. The UI's "Model catalog" panel shows curated
+cards, task recommendations, and search with the same verdicts.
+
 ### Runtime Matrix
 
 Initially supported runtimes (recorded in
