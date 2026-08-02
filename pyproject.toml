@@ -2,6 +2,8 @@
 name = "news-pipeline"
 version = "0.1.0"
 requires-python = ">=3.12"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
 
 dependencies = [
     "langchain-openai",
@@ -23,7 +25,7 @@ dependencies = [
 news = "news_pipeline.cli:main"
 
 [build-system]
-requires = ["setuptools>=61"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
