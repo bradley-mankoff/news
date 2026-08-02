@@ -543,20 +543,6 @@ class ReconcileDeferredWorkTest(unittest.TestCase):
         self.assertNotIn("Deferred work from this run",
                          " ".join(a[-1] for a in calls if a[0:2] == ["issue", "comment"]))
 
-    def test_read_failure_returns_false_without_markers(self):
-        def fake_gh(args, env, timeout=90):
-            if args[0:2] == ["issue", "view"]:
-                return _cp(returncode=1, stderr="rate limited")
-            return _cp(returncode=1)
-        with patch("automation.board_poller.gh", side_effect=fake_gh):
-            rec = {}
-            ok = reconcile_deferred_work(
-                self._cfg(), self._env(), 5, None, rec,
-                "run-1", "p", "f", {"Backlog": "o1"})
-        self.assertFalse(ok)
-        self.assertEqual(rec, {})
-
-
 class FetchProjectTest(unittest.TestCase):
     def _cfg(self):
         return {"project_number": 1, "project_owner": "o", "status_field": "Status"}

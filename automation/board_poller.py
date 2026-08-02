@@ -958,13 +958,12 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
                     labels = [n["name"] for n in content["labels"]["nodes"]]
                     wf = pick_workflow(cfg, labels)
                     branch = f"issue-{content['number']}"
-                    prior = state.get(item_id, {})
                     ok = False
-                    if "needs-input" in labels and prior.get("branch") and prior.get("wf"):
-                        ok, msg = resume_issue(cfg, env, prior["branch"], prior["wf"],
+                    if "needs-input" in labels and rec.get("branch") and rec.get("wf"):
+                        ok, msg = resume_issue(cfg, env, rec["branch"], rec["wf"],
                                                content["number"])
                         if ok:
-                            wf = prior["wf"]
+                            wf = rec["wf"]
                     if not ok:
                         msg = (
                             f"Implement GitHub issue #{content['number']}: {content['title']} "
@@ -1208,15 +1207,15 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
                     if verdict != "approve":
                         log(f"SHIP HELD PR #{ship_num}: verdict={verdict or 'none'} — not merging")
                         issue_number = rec.get("issue_number")
-                        if not issue_number or comment_issue(
+                        if issue_number and not comment_issue(
                                 cfg, env, issue_number,
                                 f"Ship review did not approve (VERDICT: {verdict or 'none'}). "
                                 "Fix the findings, then drag the issue back to In Review to re-review."):
-                            rec.pop("review_msg", None)
-                            rec.pop("ship_pr", None)
-                        else:
                             log(f"SHIP HELD NOTICE FAILED issue={issue_number}; "
                                 "keeping markers for retry")
+                            continue
+                        rec.pop("review_msg", None)
+                        rec.pop("ship_pr", None)
                         continue
                     if DRY_RUN:
                         log(f"[dry-run] MERGE PR #{ship_num} -> {ship_to}")
