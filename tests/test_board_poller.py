@@ -12,6 +12,9 @@ review fixes:
 - resume_issue: defers when the worktree branch can't be resolved, verifies
   the spawned run actually started, and only removes the needs-input label
   after a verified spawn and successful label edit (HIGH)
+- poll(): todo-lane resume-vs-dispatch branch selection and the completion
+  reconciliation blocked-lane gate (label None -> stays put, True ->
+  Blocked, False -> develop merge)
 
 Follows the repo's unittest + MagicMock conventions (see tests/test_pipeline_helpers.py).
 """
@@ -20,6 +23,7 @@ from __future__ import annotations
 
 import subprocess
 import unittest
+from contextlib import ExitStack
 from unittest.mock import MagicMock, mock_open, patch
 
 from automation import board_poller as bp
@@ -173,6 +177,21 @@ class ResolveWorktreeBranchTests(unittest.TestCase):
             result = bp.resolve_worktree_branch({}, 21, REPO)
         self.assertEqual(result, "archon/task-issue-21")
         self.assertNotEqual(result, "archon/task-issue-21\n    Path: /tmp/other/...")
+
+    def test_skips_json_log_lines_inside_repo_section(self) -> None:
+        """archon's JSON log lines land on stdout and must never be read as
+        the worktree branch (merged from the main-side review hardening)."""
+        listing = (
+            f"https://github.com/{REPO}.git:\n"
+            "  archon/task-issue-20\n"
+            '    {"ts": "2026-08-02T10:00:00Z", "msg": "resuming archon/task-issue-21"}\n'
+            "  archon/task-issue-21\n"
+            "    Path: /tmp/news/worktrees/archon/task-issue-21\n"
+        )
+        with patch.object(bp.subprocess, "run", return_value=self._fake(listing)):
+            self.assertEqual(
+                bp.resolve_worktree_branch({}, 21, REPO),
+                "archon/task-issue-21")
 
     def test_returns_none_when_repo_section_missing(self) -> None:
         listing = "https://github.com/someone/other.git:\n  archon/task-issue-21\n"
@@ -352,6 +371,159 @@ class PollResumeBranchTests(unittest.TestCase):
         resume.assert_not_called()
         dispatch.assert_called_once()
         self.assertIn("issue-21", dispatch.call_args[0][3])
+
+
+class PollFlowTest(unittest.TestCase):
+    """poll() branch selection and completion reconciliation for the resume
+    flow (ported from the main-side review hardening)."""
+
+    def _item(self, item_id: str = "item-1", number: int = 31,
+              status: str = "In Progress") -> dict:
+        return {
+            "id": item_id,
+            "fieldValueByName": {"name": status},
+            "content": {
+                "__typename": "Issue",
+                "number": number,
+                "title": f"Issue {number}",
+                "url": f"https://github.com/bradley-mankoff/news/issues/{number}",
+                "repository": {"nameWithOwner": "bradley-mankoff/news"},
+                "labels": {"nodes": [{"name": "needs-input"}]},
+            },
+        }
+
+    def _project(self, items: list[dict]) -> tuple[str, str, dict, list[dict]]:
+        return ("project-1", "field-1",
+                {"Backlog": "b", "Todo": "t", "In Progress": "ip",
+                 "Blocked": "bl", "Ready for Review": "r",
+                 "In Review": "rv", "Done": "d"},
+                items)
+
+    MSG = "Implement GitHub issue #31: Some issue (bradley-mankoff/news). Full issue: https://github.com/bradley-mankoff/news/issues/31"
+
+    def _in_progress_state(self, item_id: str = "item-1") -> dict:
+        return {
+            "_meta": {"snapshot_done": True},
+            item_id: {"status": "In Progress", "dispatch_msg": self.MSG,
+                      "issue_number": 31},
+        }
+
+    def _poll_patches(self, completed: bool = True, label_state=None):
+        """Entered via ExitStack; returns (stack, move_to_lane_mock)."""
+        stack = ExitStack()
+        stack.enter_context(patch(
+            "automation.board_poller.fetch_project",
+            return_value=self._project([self._item()])))
+        stack.enter_context(patch(
+            "automation.board_poller.fetch_runs_by_message",
+            return_value={self.MSG: "completed" if completed else "running"}))
+        stack.enter_context(patch(
+            "automation.board_poller.issue_has_label", return_value=label_state))
+        move = stack.enter_context(patch(
+            "automation.board_poller.move_to_lane", return_value=True))
+        stack.enter_context(patch("automation.board_poller.log"))
+        stack.enter_context(patch("automation.board_poller.save_state"))
+        return stack, move
+
+    # -- completion reconciliation -----------------------------------------
+
+    def test_label_check_failure_leaves_item_in_progress(self) -> None:
+        """gh failure (None) must not merge or move a NEEDS INPUT issue."""
+        state = self._in_progress_state()
+        stack, move = self._poll_patches(label_state=None)
+        with stack:
+            bp.poll(_cfg(), {}, state)
+        move.assert_not_called()
+        # dispatch_msg kept -> retried next poll
+        self.assertEqual(state["item-1"]["dispatch_msg"], self.MSG)
+
+    def test_needs_input_label_moves_item_to_blocked(self) -> None:
+        state = self._in_progress_state()
+        stack, move = self._poll_patches(label_state=True)
+        with stack:
+            bp.poll(_cfg(), {}, state)
+        move.assert_called_once()
+        self.assertEqual(move.call_args.args[3], "item-1")
+        self.assertEqual(move.call_args.args[5], "bl")  # Blocked option id
+        self.assertNotIn("dispatch_msg", state["item-1"])
+
+    def test_no_label_proceeds_to_develop_merge(self) -> None:
+        state = self._in_progress_state()
+        stack, move = self._poll_patches(label_state=False)
+        stack.enter_context(patch(
+            "automation.board_poller.find_issue_pr",
+            return_value={"number": 60, "headRefName": "archon/task-issue-31"}))
+        stack.enter_context(patch(
+            "automation.board_poller.merge_pr_to_base", return_value=(True, "merged")))
+        with stack:
+            bp.poll(_cfg(), {}, state)
+        move.assert_called_once()
+        self.assertEqual(move.call_args.args[5], "r")  # Ready for Review
+        self.assertNotIn("dispatch_msg", state["item-1"])
+
+    # -- todo-lane resume-vs-dispatch selection ----------------------------
+
+    def _todo_state(self) -> dict:
+        return {
+            "_meta": {"snapshot_done": True},
+            "item-1": {"status": "Blocked", "branch": "issue-31",
+                       "wf": "archon-idea-to-pr"},
+        }
+
+    def _poll_todo(self, state: dict, resume_result=None):
+        cfg = _cfg()
+        with patch("automation.board_poller.fetch_project",
+                   return_value=self._project(
+                       [self._item(status="Todo")])), \
+             patch("automation.board_poller.resume_issue",
+                   return_value=resume_result) as resume, \
+             patch("automation.board_poller.dispatch") as dispatch, \
+             patch("automation.board_poller.move_to_lane", return_value=True), \
+             patch("automation.board_poller.save_state"), \
+             patch("automation.board_poller.log"):
+            bp.poll(cfg, {}, state)
+        return resume, dispatch
+
+    def test_todo_entry_with_needs_input_label_resumes(self) -> None:
+        resume, dispatch = self._poll_todo(
+            self._todo_state(),
+            resume_result=(True, "Resuming issue #31 after human input.",
+                           "archon/task-issue-31"))
+        resume.assert_called_once()
+        self.assertEqual(resume.call_args.args[2], "issue-31")
+        self.assertEqual(resume.call_args.args[3], "archon-idea-to-pr")
+        dispatch.assert_not_called()
+
+    def test_todo_entry_without_label_dispatches_fresh(self) -> None:
+        state = self._todo_state()
+        item = self._item(status="Todo")
+        item["content"]["labels"] = {"nodes": []}
+        with patch("automation.board_poller.fetch_project",
+                   return_value=self._project([item])), \
+             patch("automation.board_poller.resume_issue") as resume, \
+             patch("automation.board_poller.dispatch",
+                   return_value=True) as dispatch, \
+             patch("automation.board_poller.move_to_lane", return_value=True), \
+             patch("automation.board_poller.save_state"), \
+             patch("automation.board_poller.log"):
+            bp.poll(_cfg(), {}, state)
+        resume.assert_not_called()
+        dispatch.assert_called_once()
+
+    def test_failed_resume_falls_back_to_fresh_dispatch(self) -> None:
+        state = self._todo_state()
+        with patch("automation.board_poller.fetch_project",
+                   return_value=self._project(
+                       [self._item(status="Todo")])), \
+             patch("automation.board_poller.resume_issue",
+                   return_value=(False, "", None)), \
+             patch("automation.board_poller.dispatch",
+                   return_value=True) as dispatch, \
+             patch("automation.board_poller.move_to_lane", return_value=True), \
+             patch("automation.board_poller.save_state"), \
+             patch("automation.board_poller.log"):
+            bp.poll(_cfg(), {}, state)
+        dispatch.assert_called_once()
 
 
 if __name__ == "__main__":

@@ -114,6 +114,7 @@ from . import story_clustering as story_clustering_stage
 from . import story_drafting as story_drafting_stage
 from . import story_records as story_records_stage
 from . import story_selection as story_selection_stage
+from .prompt_catalog import DEFAULT_PROMPT_INSTRUCTIONS, resolve_prompt_instructions
 from .feed_utils import (
     decode_google_news_article_path as _decode_google_news_article_path,
     google_news_query_target as _google_news_query_target,
@@ -243,6 +244,10 @@ LATEST_RUN_DETAILS_PATH = str(CONFIG.latest_run_details_path)
 HISTORY_DB_PATH = str(CONFIG.history_db_path)
 HISTORY_EXPORT_CSV = CONFIG.history_export_csv
 PRESET_ID = CONFIG.preset_id
+PROMPT_PROFILE_ID = CONFIG.prompt_profile_id
+# Resolved once at import time: the profile is frozen for the process lifetime
+# and validated eagerly (fail-fast on unknown ids) before any LLM work starts.
+PROMPT_INSTRUCTIONS = resolve_prompt_instructions(PROMPT_PROFILE_ID)
 SOURCE_SCOPE = CONFIG.source_scope
 RECIPIENT_SCOPE = CONFIG.recipient_scope
 URL_REUSE_BLOCKING_ENABLED = CONFIG.url_reuse_blocking_enabled
@@ -1566,6 +1571,7 @@ def _article_summarization_runtime() -> article_summarization_stage.ArticleSumma
         has_structured_entry=has_structured_entry,
         normalize_report_entry=normalize_report_entry,
         article_completed=progress_tracker.article_completed,
+        prompt_instructions=PROMPT_INSTRUCTIONS["article_summary"],
     )
 
 
@@ -1596,6 +1602,7 @@ def _story_drafting_runtime(
         fallback_synthesis_paragraph_from_summaries=_fallback_synthesis_paragraph_from_summaries,
         story_drafting_word_count=_story_drafting_word_count,
         progress_callback=_story_drafting_progress,
+        prompt_instructions=PROMPT_INSTRUCTIONS["story_drafting"],
     )
 
 
@@ -1616,6 +1623,7 @@ def _story_selection_runtime() -> story_selection_stage.StorySelectionRuntime:
         is_low_confidence_report_entry=is_low_confidence_report_entry,
         report_reference_key=_report_reference_key,
         progress_callback=progress_tracker.story_selection_progress,
+        prompt_instructions=PROMPT_INSTRUCTIONS["story_scale_screening"],
     )
 
 
@@ -3118,10 +3126,28 @@ def _enforce_text_free_image_prompt(prompt: str) -> str:
     return clean_prompt + guardrails
 
 
-def generate_image_art_brief(synthesis_body: str, report_title: str) -> dict[str, str]:
-    """Ask the text model for the FLUX prompt plus a separate overlay headline."""
+def generate_image_art_brief(
+    synthesis_body: str,
+    report_title: str,
+    *,
+    prompt_instructions: dict[str, str] | None = None,
+) -> dict[str, str]:
+    """Ask the text model for the FLUX prompt plus a separate overlay headline.
+
+    Consumes two prompt-catalog task slots from ``prompt_instructions``
+    (``image_art_direction`` and ``title_generation``). A missing/falsy slot
+    falls back to the ``balanced`` instructions for that task; a missing slot
+    in an explicitly provided dict is surfaced as a progress warning.
+    """
     fallback_headline = _sanitize_overlay_headline(report_title, "Daily News Brief")
     fallback_prompt = _fallback_image_prompt(synthesis_body)
+    instructions = prompt_instructions or {}
+    if prompt_instructions is not None and "image_art_direction" not in prompt_instructions:
+        progress_tracker.warning("prompt profile missing image_art_direction; using balanced default")
+    if prompt_instructions is not None and "title_generation" not in prompt_instructions:
+        progress_tracker.warning("prompt profile missing title_generation; using balanced default")
+    image_art_direction = instructions.get("image_art_direction") or DEFAULT_PROMPT_INSTRUCTIONS["image_art_direction"]
+    title_guidance = instructions.get("title_generation") or DEFAULT_PROMPT_INSTRUCTIONS["title_generation"]
     try:
         llm = build_chat_model(max_tokens=700, task="title_generation")
         response = invoke_with_retries(
@@ -3130,10 +3156,10 @@ def generate_image_art_brief(synthesis_body: str, report_title: str) -> dict[str
                 SystemMessage(content=(
                     "You are preparing art direction for a text-to-image news illustration. "
                     "Return ONLY valid JSON with keys image_prompt and overlay_headline. "
-                    "The image_prompt is for FLUX and must request a realistic documentary "
-                    "photograph with absolutely no text or typography in the image. "
+                    f"{image_art_direction} "
                     "The overlay_headline is readable text that will be rendered later by code, "
-                    "not by the image model. Keep overlay_headline punchy, factual, and <= 11 words."
+                    "not by the image model. "
+                    f"{title_guidance}"
                 )),
                 HumanMessage(content=(
                     "Use the final news output below to create the image prompt and the separate "
@@ -3301,7 +3327,11 @@ def generate_report_image_art(
     if not IMAGE_GENERATION_ENABLED:
         return None
 
-    art_brief = generate_image_art_brief(synthesis_body, report_title)
+    art_brief = generate_image_art_brief(
+        synthesis_body,
+        report_title,
+        prompt_instructions=PROMPT_INSTRUCTIONS,
+    )
     image_prompt = art_brief["image_prompt"]
     overlay_headline = art_brief["overlay_headline"]
     base_path = os.path.splitext(report_path)[0]

@@ -11,11 +11,12 @@ from .config import (
     load_runtime_config,
     reject_removed_topic_env_vars,
 )
+from .prompt_catalog import PROMPT_PROFILE_ENV_VAR, get_prompt_profile
 
 
 USAGE = """\
 Usage:
-  uv run news run [--preset NAME]
+  uv run news run [--preset NAME] [--prompt-profile NAME]
   uv run news check-sources [--sources-yaml PATH] [--only-failures]
   uv run news prune-sources [--sources-yaml PATH] [--recent-days 7]
   uv run news source-languages --sources-yaml PATH [--write-languages]
@@ -79,6 +80,39 @@ def _apply_cli_preset(preset: str | None) -> bool:
     except ValueError as error:
         print(str(error), file=sys.stderr)
         return False
+    return True
+
+
+def _consume_prompt_profile_arg(args: list[str]) -> tuple[str | None, list[str]]:
+    remaining: list[str] = []
+    profile: str | None = None
+    index = 0
+    while index < len(args):
+        arg = args[index]
+        if arg == "--prompt-profile":
+            if index + 1 >= len(args):
+                raise ValueError("--prompt-profile requires a profile name.")
+            profile = args[index + 1]
+            index += 2
+            continue
+        if arg.startswith("--prompt-profile="):
+            profile = arg.split("=", 1)[1]
+            index += 1
+            continue
+        remaining.append(arg)
+        index += 1
+    return profile, remaining
+
+
+def _apply_cli_prompt_profile(profile: str | None) -> bool:
+    if not profile:
+        return True
+    try:
+        get_prompt_profile(profile)
+    except ValueError as error:
+        print(str(error), file=sys.stderr)
+        return False
+    os.environ[PROMPT_PROFILE_ENV_VAR] = profile
     return True
 
 
@@ -151,11 +185,14 @@ def main(argv: list[str] | None = None) -> int:
     if command == "run":
         try:
             preset, args = _consume_preset_arg(args)
+            profile, args = _consume_prompt_profile_arg(args)
         except ValueError as error:
             print(str(error), file=sys.stderr)
             print(USAGE, file=sys.stderr)
             return 2
         if not _apply_cli_preset(preset):
+            return 2
+        if not _apply_cli_prompt_profile(profile):
             return 2
         if args:
             print(f"Unexpected arguments for run: {' '.join(args)}", file=sys.stderr)

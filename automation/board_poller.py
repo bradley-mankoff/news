@@ -273,6 +273,8 @@ def resolve_worktree_branch(env: dict, issue_number: int, repo: str) -> str | No
         if line.endswith(":") and "github.com" in line:   # repo section header
             in_repo = repo in line
             continue
+        if in_repo and line.lstrip().startswith("{"):  # archon JSON log line
+            continue
         if in_repo and pat.search(line) and not line.startswith(("Path", "Type")):
             return line
     return None
@@ -396,6 +398,7 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
                 if "needs-input" in labels and prior.get("branch") and prior.get("wf"):
                     ok, msg, resumed_branch = resume_issue(
                         cfg, env, prior["branch"], prior["wf"], content["number"])
+
                     if ok:
                         wf = prior["wf"]
                 if not ok:

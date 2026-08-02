@@ -23,6 +23,7 @@ from .story_records import (
     story_debug_record,
     story_rank_key,
 )
+from .prompt_catalog import DEFAULT_PROMPT_INSTRUCTIONS
 
 
 STORY_SCALE_VERDICTS = {
@@ -74,6 +75,7 @@ class StorySelectionRuntime:
     is_low_confidence_report_entry: Callable[[str], bool]
     report_reference_key: Callable[[str], str]
     progress_callback: Callable[[str, dict[str, Any]], None] | None = None
+    prompt_instructions: str | None = None
 
 
 def _compact_gate_text(value: Any, max_chars: int) -> str:
@@ -237,7 +239,11 @@ def _annotated_story_candidate(
     }
 
 
-def _global_scale_screening_prompt_messages(candidates: list[dict[str, Any]]) -> list[Any]:
+def _global_scale_screening_prompt_messages(
+    candidates: list[dict[str, Any]],
+    *,
+    prompt_instructions: str | None = None,
+) -> list[Any]:
     story_blocks: list[str] = []
     for index, candidate in enumerate(candidates):
         story_key = _validation_story_key(candidate, index)
@@ -258,6 +264,10 @@ def _global_scale_screening_prompt_messages(candidates: list[dict[str, Any]]) ->
             ).strip()
         )
 
+    # The JSON example below contains literal braces, so this template cannot be
+    # an f-string; use .format() instead and escape JSON braces as {{ }}.
+    # .format() must run after dedent() because the injected screening_guidance
+    # is multi-line (byte-identity drift-guard: tests/test_prompt_catalog.py).
     system_prompt = SystemMessage(
         content=textwrap.dedent(
             """
@@ -282,19 +292,20 @@ def _global_scale_screening_prompt_messages(candidates: list[dict[str, Any]]) ->
             - not_obvious: the scale is borderline or the supplied evidence does not justify an
               obvious large/small conclusion.
 
-            Be conservative: mark obviously_small_scale only when the supplied story draft and
-            article summaries make the limited scale plain. Do not invent broader stakes, but do
-            not mark national elections, interstate conflicts, civil wars, landmark court cases,
-            nationally important US state races, major public-health events, or stories with clear
-            global market/supply-chain/security implications as obviously small.
+            {screening_guidance}
 
             Return only valid JSON as an array of objects:
-            [{
+            [{{
               "story_key":"...",
               "scale":"obviously_large_scale|not_obvious|obviously_small_scale",
               "scale_reason":"short scale reason"
-            }]
+            }}]
             """
+        ).format(
+            screening_guidance=(
+                prompt_instructions
+                or DEFAULT_PROMPT_INSTRUCTIONS["story_scale_screening"]
+            )
         ).strip()
     )
     user_prompt = HumanMessage(
@@ -409,7 +420,10 @@ def apply_global_story_scale_screening(
                     max_tokens=STORY_SCALE_VALIDATION_MAX_TOKENS,
                     task="story_scale_screening",
                 ),
-                _global_scale_screening_prompt_messages(batch),
+                _global_scale_screening_prompt_messages(
+                    batch,
+                    prompt_instructions=runtime.prompt_instructions,
+                ),
                 task_name="global story scale screening",
                 fallback_content=fallback_content,
             )
