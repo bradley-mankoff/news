@@ -12,6 +12,7 @@ from typing import Any
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 
 from .article_summary_records import ArticleSummaryRecord
+from .prompt_catalog import DEFAULT_PROMPT_INSTRUCTIONS
 
 @dataclass(frozen=True)
 class ArticleSummarizationRuntime:
@@ -27,6 +28,7 @@ class ArticleSummarizationRuntime:
     has_structured_entry: Callable[[str, str], bool]
     normalize_report_entry: Callable[[dict, str], ArticleSummaryRecord]
     article_completed: Callable[..., None]
+    prompt_instructions: str | None = None
 
 
 ARTICLE_SUMMARY_FORMAT_ERROR_MESSAGE = (
@@ -58,10 +60,7 @@ def build_article_summary_prompt_messages(
     )
     display_name = str(current_article.get("source_display_name") or display_name)
     target = runtime.build_article_heading(current_article)
-    selection_guidance = (
-        "7. Prioritize facts that help later clustering and story synthesis; include major "
-        "concrete developments without inventing relevance."
-    )
+    selection_guidance = f"7. {runtime.prompt_instructions or DEFAULT_PROMPT_INSTRUCTIONS['article_summary']}"
     system_prompt = SystemMessage(content=textwrap.dedent(f"""
         Today: {now_label}.
         Current Task: Summarize one preselected article from the last {runtime.recent_window_hours} hours

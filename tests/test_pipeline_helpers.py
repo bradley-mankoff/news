@@ -1469,6 +1469,67 @@ class PipelineHelperTests(unittest.TestCase):
             art_brief = pipeline.generate_image_art_brief("Summary text", "Report title")
         self.assertEqual(art_brief["overlay_headline"], "Report title")
         self.assertIn("image_prompt", art_brief)
+
+    def test_generate_image_art_brief_injects_profile_instructions(self) -> None:
+        captured: dict[str, str] = {}
+
+        def fake_invoke(_llm, messages, **_kwargs):
+            captured["system"] = str(messages[0].content)
+            return AIMessage(content="unused")
+
+        with patch.object(pipeline, "build_chat_model", return_value=object()), patch.object(
+            pipeline, "invoke_with_retries", side_effect=fake_invoke
+        ), patch.object(
+            pipeline,
+            "_safe_json_extract",
+            return_value='{"image_prompt":"A documentary scene","overlay_headline":"Today in brief"}',
+            create=True,
+        ):
+            art_brief = pipeline.generate_image_art_brief(
+                "Summary text",
+                "Report title",
+                prompt_instructions={
+                    "image_art_direction": "Depict the central event without sensationalism.",
+                    "title_generation": "Prefer a title expressing the day's central shared development.",
+                },
+            )
+        system_text = captured["system"]
+        self.assertIn("Depict the central event without sensationalism.", system_text)
+        self.assertIn(
+            "Prefer a title expressing the day's central shared development.",
+            system_text,
+        )
+        self.assertIn(
+            "Return ONLY valid JSON with keys image_prompt and overlay_headline",
+            system_text,
+        )
+        self.assertTrue(art_brief["image_prompt"].startswith("A documentary scene"))
+        self.assertIn("Hard constraints", art_brief["image_prompt"])
+        self.assertEqual(art_brief["overlay_headline"], "Today in brief")
+
+    def test_generate_image_art_brief_uses_balanced_instructions_by_default(self) -> None:
+        captured: dict[str, str] = {}
+
+        def fake_invoke(_llm, messages, **_kwargs):
+            captured["system"] = str(messages[0].content)
+            return AIMessage(content="unused")
+
+        with patch.object(pipeline, "build_chat_model", return_value=object()), patch.object(
+            pipeline, "invoke_with_retries", side_effect=fake_invoke
+        ), patch.object(
+            pipeline,
+            "_safe_json_extract",
+            return_value='{"image_prompt":"A documentary scene","overlay_headline":"Today in brief"}',
+            create=True,
+        ):
+            art_brief = pipeline.generate_image_art_brief("Summary text", "Report title")
+        system_text = captured["system"]
+        self.assertIn(
+            "The image_prompt is for FLUX and must request a realistic documentary",
+            system_text,
+        )
+        self.assertIn("Keep overlay_headline punchy, factual, and <= 11 words.", system_text)
+        self.assertEqual(art_brief["overlay_headline"], "Today in brief")
     def test_import_fallback_and_progress_helpers(self) -> None:
         spec = importlib.util.spec_from_file_location("news_pipeline.pipeline_tiktoken_missing", pipeline.__file__)
         assert spec is not None and spec.loader is not None

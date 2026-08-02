@@ -137,6 +137,14 @@ class StorySelectionTests(unittest.TestCase):
         self.assertIn("Story key: story-1", prompt_messages[1].content)
         self.assertIn("obviously_large_scale", prompt_messages[0].content)
 
+        injected_messages = ss._global_scale_screening_prompt_messages(
+            [candidate],
+            prompt_instructions="Judge scale only from the supplied facts.",
+        )
+        self.assertIn("Judge scale only from the supplied facts.", injected_messages[0].content)
+        self.assertIn("Return only valid JSON", injected_messages[0].content)
+        self.assertIn("obviously_large_scale", injected_messages[0].content)
+
         self.assertEqual(
             ss._deterministic_global_scale_record({"story_title": "Wordle hints and answers"}),
             {

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from types import SimpleNamespace
 import unittest
 from typing import Any
@@ -8,6 +9,7 @@ from news_pipeline.article_summarization import (
     ArticleSummarizationRuntime,
     _notify_article_completed,
     _summarize_single_article,
+    build_article_summary_prompt_messages,
     run_article_summary_pass,
 )
 from news_pipeline.article_summary_records import ArticleSummaryRecord
@@ -145,6 +147,27 @@ class ArticleSummarizationTests(unittest.TestCase):
         results = run_article_summary_pass(articles, runtime)
 
         self.assertEqual([record.article_id for record in results], ["a1", "a2"])
+
+    def test_prompt_instructions_injected_with_contract_intact(self) -> None:
+        runtime, _ = _runtime()
+        runtime = replace(runtime, prompt_instructions="Playful summary guidance.")
+        messages = build_article_summary_prompt_messages(
+            {
+                "title": "Flood plan expands",
+                "source": "Fixture Wire",
+                "pub_date": "Sat, 16 May 2026 15:30:00 GMT",
+                "url": "https://example.com/flood",
+                "text": "ignored",
+            },
+            "May 30, 2026",
+            runtime,
+        )
+        prompt_text = "\n\n".join(str(message.content) for message in messages)
+
+        self.assertIn("Playful summary guidance.", prompt_text)
+        self.assertIn("DATABASE_ENTRY:", prompt_text)
+        self.assertIn("Do not call tools", prompt_text)
+        self.assertIn("7. Playful summary guidance.", prompt_text)
 
 
 if __name__ == "__main__":

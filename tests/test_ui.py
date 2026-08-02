@@ -143,6 +143,7 @@ class UITests(unittest.TestCase):
 
                 runtime_config = SimpleNamespace(
                     preset_id="daily",
+                    prompt_profile_id="balanced",
                     source_scope="core",
                     recipient_scope="bradley",
                     url_reuse_blocking_enabled=True,
@@ -213,6 +214,7 @@ class UITests(unittest.TestCase):
                     snapshot, error = _runtime_snapshot({"NEWS_SOURCE_SCOPE": "core"}, preset_id="daily")
                 self.assertIsNone(error)
                 self.assertEqual(snapshot["preset_id"], "daily")
+                self.assertEqual(snapshot["prompt_profile_id"], "balanced")
                 self.assertEqual(snapshot["model"]["reference"], "gemma-2b")
                 self.assertEqual(snapshot["delivery"]["unsubscribe_secret_set"], True)
 
@@ -220,6 +222,21 @@ class UITests(unittest.TestCase):
                     snapshot, error = _runtime_snapshot({}, preset_id="daily")
                 self.assertIsNone(snapshot)
                 self.assertEqual(error, "boom")
+
+                with patch.object(
+                    ui_module,
+                    "_runtime_snapshot",
+                    return_value=(
+                        {"prompt_profile_id": "balanced"},
+                        None,
+                    ),
+                ), patch.object(
+                    ui_module, "configured_removed_topic_env_vars", return_value=[]
+                ):
+                    payload = ui_module.schema_payload()
+                self.assertEqual(len(payload["prompt_profiles"]), 5)
+                self.assertEqual(payload["prompt_profiles"][0]["id"], "balanced")
+                self.assertEqual(payload["runtime"]["prompt_profile_id"], "balanced")
 
                 with patch.object(ui_module, "load_sources", return_value=[{"key": "Alpha"}]):
                     self.assertEqual(
@@ -640,6 +657,8 @@ class UITests(unittest.TestCase):
         ), patch.object(
             ui_module, "delete_recipient", return_value={"deleted": "a@example.com"}
         ), patch.object(
+            ui_module, "compare_prompt_profiles", return_value={"story_drafting": "diff"}
+        ), patch.object(
             ui_module.RUN_MANAGER, "start", return_value=SimpleNamespace(snapshot=lambda: {"run_id": "run-1"})
         ), patch.object(
             ui_module.RUN_MANAGER, "stop", return_value={"run_id": "run-1", "status": "stopped"}
@@ -666,6 +685,18 @@ class UITests(unittest.TestCase):
             self.assertEqual(invoke("do_GET", "/api/schema")[0], 200)
             self.assertEqual(json.loads(invoke("do_GET", "/api/presets")[2]), {"presets": []})
             self.assertEqual(json.loads(invoke("do_GET", "/api/model-tuning-presets")[2]), {"presets": []})
+            self.assertEqual(
+                json.loads(invoke("do_GET", "/api/prompt-profiles/compare?profile=playful")[2]),
+                {"profile": "playful", "baseline": "balanced", "diffs": {"story_drafting": "diff"}},
+            )
+            with patch.object(
+                ui_module,
+                "compare_prompt_profiles",
+                side_effect=ValueError("Unknown prompt profile 'bogus'."),
+            ):
+                status, _, body = invoke("do_GET", "/api/prompt-profiles/compare?profile=bogus")
+                self.assertEqual(status, 400)
+                self.assertIn("Unknown prompt profile", body)
             self.assertEqual(json.loads(invoke("do_GET", "/api/sources")[2]), {"sources": []})
             self.assertEqual(json.loads(invoke("do_GET", "/api/recipients")[2]), {"recipients": []})
             self.assertEqual(json.loads(invoke("do_GET", "/api/runs")[2]), {"runs": []})

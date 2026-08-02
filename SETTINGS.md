@@ -11,7 +11,8 @@ NEWS_MODEL=gemma-26b-moe NEWS_SOURCE_SCOPE=peripheral uv run news run
 Run Presets live in `config/run_presets.yaml` as env-style Run Settings maps.
 Preset IDs are data, not code paths; explicit shell/UI overrides win over preset
 values. In a shell, place `NEWS_` assignments on the same command line as
-`uv run news run` or export them first.
+`uv run news run` or export them first. Prompt Profiles can be pinned by a
+preset too, by adding `NEWS_PROMPT_PROFILE: playful` to the preset's `env` map.
 
 See `docs/adr/0007-model-configuration-vocabulary.md` for the vocabulary used
 to separate Run Settings, Run Presets, Task Model Assignment, Model Tuning,
@@ -22,6 +23,7 @@ Pipeline Budget, and Model Server Settings.
 | Variable | Default | Description |
 |---|---|---|
 | `NEWS_PRESET` | _(none)_ | Selects a saved preset when `--preset NAME` is not used. |
+| `NEWS_PROMPT_PROFILE` | `balanced` | Editorial tone for the five LLM prompt stages. One of `balanced`, `consensus-and-contradiction`, `playful`, `facts-only`, `explain-like-im-five`. |
 | `NEWS_MODEL` | `gemma-26b-moe` | Default friendly alias or full model repo/name. Task-specific model assignments inherit this value unless overridden. |
 | `NEWS_SOURCE_SCOPE` | `core` | `core` selects active English core sources. `peripheral` selects core plus peripheral sources. |
 | `NEWS_RECIPIENT_SCOPE` | `bradley` | `bradley` sends to `NEWS_BRADLEY_RECIPIENT`. `all` sends to active configured recipients. |

@@ -57,6 +57,37 @@ class CliTests(unittest.TestCase):
 
     def test_apply_cli_preset_accepts_missing_preset_without_mutating_environment(self) -> None:
         self.assertTrue(cli._apply_cli_preset(None))
+        self.assertTrue(cli._apply_cli_prompt_profile(None))
+
+    def test_run_prompt_profile_success_and_failure_paths(self) -> None:
+        with patch("news_pipeline.cli._run_pipeline_command", return_value=0), patch.dict(
+            os.environ, {}, clear=False
+        ):
+            code, stdout, stderr = self._invoke(["run", "--prompt-profile=playful"])
+            self.assertEqual(os.environ.get("NEWS_PROMPT_PROFILE"), "playful")
+
+        self.assertEqual(code, 0)
+        self.assertEqual(stdout, "")
+
+        with patch("news_pipeline.cli._run_pipeline_command", return_value=0), patch.dict(
+            os.environ, {}, clear=False
+        ):
+            code, stdout, stderr = self._invoke(["run", "--prompt-profile", "bogus"])
+
+        self.assertEqual(code, 2)
+        self.assertEqual(stdout, "")
+        self.assertIn("Unknown prompt profile 'bogus'", stderr)
+        self.assertIn("Available profiles:", stderr)
+        self.assertNotIn("Usage:", stderr)
+        self.assertNotIn("NEWS_PROMPT_PROFILE", os.environ)
+
+    def test_run_rejects_missing_prompt_profile_value(self) -> None:
+        code, stdout, stderr = self._invoke(["run", "--prompt-profile"])
+
+        self.assertEqual(code, 2)
+        self.assertEqual(stdout, "")
+        self.assertIn("--prompt-profile requires a profile name.", stderr)
+        self.assertIn("Usage:", stderr)
 
     def test_run_pipeline_command_delegates_to_pipeline(self) -> None:
         with patch("news_pipeline.pipeline.run_pipeline", return_value=None) as run_pipeline:
