@@ -115,6 +115,7 @@ from .article_collection import (
     collect_article_candidates,
 )
 from . import article_summarization as article_summarization_stage
+from .prompt_contracts import IMAGE_ART_JSON_CONTRACT, IMAGE_ART_OVERLAY_PROTOCOL
 from . import article_summary_records as article_summary_records_stage
 from . import citations as citations_stage
 from . import embeddings as embeddings_stage
@@ -3138,6 +3139,19 @@ def _enforce_text_free_image_prompt(prompt: str) -> str:
     return clean_prompt + guardrails
 
 
+def _build_image_art_system_prompt(image_art_direction: str, title_guidance: str) -> str:
+    """Compose the image-art system prompt from the pipeline-owned JSON contract
+    and the profile's editorial art-direction / title-generation sentences.
+    """
+    return (
+        "You are preparing art direction for a text-to-image news illustration. "
+        f"{IMAGE_ART_JSON_CONTRACT} "
+        f"{image_art_direction} "
+        f"{IMAGE_ART_OVERLAY_PROTOCOL} "
+        f"{title_guidance}"
+    )
+
+
 def generate_image_art_brief(
     synthesis_body: str,
     report_title: str,
@@ -3165,14 +3179,7 @@ def generate_image_art_brief(
         response = invoke_with_retries(
             llm,
             [
-                SystemMessage(content=(
-                    "You are preparing art direction for a text-to-image news illustration. "
-                    "Return ONLY valid JSON with keys image_prompt and overlay_headline. "
-                    f"{image_art_direction} "
-                    "The overlay_headline is readable text that will be rendered later by code, "
-                    "not by the image model. "
-                    f"{title_guidance}"
-                )),
+                SystemMessage(content=_build_image_art_system_prompt(image_art_direction, title_guidance)),
                 HumanMessage(content=(
                     "Use the final news output below to create the image prompt and the separate "
                     "footer headline.\n\n"
