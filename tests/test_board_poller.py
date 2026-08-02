@@ -4,9 +4,13 @@ import unittest
 
 from automation.board_poller import (
     conflict_episode_action,
+    dedupe_deferred,
     dep_gate,
+    has_deferral_language,
     match_issue_pr,
+    normalize_title,
     parse_dep_refs,
+    parse_deferred_work,
     parse_verdict,
 )
 
@@ -166,6 +170,106 @@ class ParseVerdictTest(unittest.TestCase):
     def test_multiline_body(self):
         self.assertEqual(
             parse_verdict(["line one\nVERDICT: approve\nline three"]), "approve")
+
+
+class ParseDeferredWorkTest(unittest.TestCase):
+    def _record(self, section):
+        return ("## What shipped\nStuff.\n\n## Deferred work\n" + section
+                + "\n\n## Decisions\nNone.")
+
+    def test_full_section(self):
+        body = self._record(
+            "- **Title:** Add llama.cpp/GGUF backend support\n"
+            "  **Description:** Port the model layer to llama.cpp.\n"
+            "  **Reason:** Packaging work beyond this decision.\n"
+            "  **Label:** feature\n"
+            "- **Title:** Extract shared readiness helper\n"
+            "  **Description:** Merge the two readiness loops.\n")
+        self.assertEqual(parse_deferred_work(body), [
+            {"title": "Add llama.cpp/GGUF backend support",
+             "description": "Port the model layer to llama.cpp.",
+             "reason": "Packaging work beyond this decision.",
+             "label": "feature"},
+            {"title": "Extract shared readiness helper",
+             "description": "Merge the two readiness loops.",
+             "reason": "", "label": ""},
+        ])
+
+    def test_none_marker(self):
+        self.assertEqual(parse_deferred_work(self._record("*None.*")), [])
+        self.assertEqual(parse_deferred_work(self._record("\n*none*\n")), [])
+
+    def test_absent_section(self):
+        self.assertEqual(parse_deferred_work("## What shipped\nNo deferrals."), [])
+        self.assertEqual(parse_deferred_work(""), [])
+
+    def test_section_terminates_at_next_heading(self):
+        body = self._record(
+            "- **Title:** First\n  **Description:** one\n\n## Decisions\n"
+            "- **Title:** Not mine\n")
+        self.assertEqual(parse_deferred_work(body), [
+            {"title": "First", "description": "one",
+             "reason": "", "label": ""}])
+
+    def test_case_insensitive_heading(self):
+        body = "## DEFERRED WORK\n- **Title:** X\n"
+        self.assertEqual(parse_deferred_work(body)[0]["title"], "X")
+
+    def test_malformed_item_skipped(self):
+        body = self._record(
+            "- **Title:** Good one\n  **Description:** fine\n"
+            "- **Description:** orphan (no title)\n")
+        items = parse_deferred_work(body)
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0]["title"], "Good one")
+
+
+class DeferredDedupeTest(unittest.TestCase):
+    def test_open_match_links(self):
+        item = {"title": "Add llama.cpp/GGUF backend support"}
+        open_issues = [{"number": 52, "title": "add llama.cpp GGUF backend support!"}]
+        self.assertEqual(dedupe_deferred(item, open_issues, []), ("link", 52))
+
+    def test_closed_match_creates_with_ref(self):
+        item = {"title": "Extract shared readiness helper"}
+        closed = [{"number": 9, "title": "Extract shared readiness helper"}]
+        self.assertEqual(dedupe_deferred(item, [], closed), ("create-ref", 9))
+
+    def test_no_match_creates(self):
+        self.assertEqual(
+            dedupe_deferred({"title": "Brand new thing"}, [], []),
+            ("create", None))
+
+    def test_punctuation_and_case_insensitive(self):
+        item = {"title": "Update OR supersede ADR 0007"}
+        open_issues = [{"number": 35, "title": "Update or supersede ADR-0007"}]
+        self.assertEqual(dedupe_deferred(item, open_issues, []), ("link", 35))
+
+    def test_open_wins_over_closed(self):
+        item = {"title": "Same title"}
+        open_issues = [{"number": 1, "title": "Same title"}]
+        closed = [{"number": 2, "title": "Same title"}]
+        self.assertEqual(dedupe_deferred(item, open_issues, closed), ("link", 1))
+
+    def test_empty_title_creates(self):
+        self.assertEqual(dedupe_deferred({"title": ""}, [], []), ("create", None))
+
+    def test_normalize_title(self):
+        self.assertEqual(normalize_title("  Add GGUF (v2) support! "), "addggufv2support")
+        self.assertEqual(normalize_title(""), "")
+
+
+class HasDeferralLanguageTest(unittest.TestCase):
+    def test_matches_deferral_phrasing(self):
+        for text in ("explicitly deferred", "this is deferred to a later phase",
+                     "out of scope for this issue", "not in scope",
+                     "recorded as a follow-up issue", "deferring the packaging work"):
+            self.assertTrue(has_deferral_language(text), text)
+
+    def test_clean_text_does_not_match(self):
+        for text in ("All review findings were addressed in the PR.",
+                     "249 passed + 25 subtests", "README.md updated", ""):
+            self.assertFalse(has_deferral_language(text), text)
 
 
 if __name__ == "__main__":

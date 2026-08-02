@@ -42,6 +42,12 @@ The repo runs a fully automated agentic loop driven by the GitHub project board
   it into `develop`, then moves the issue to `Ready for Review` — the human
   tests the integration branch from there. (Merge failure → issue stays in
   `In Progress`, logged; drag back to `Todo` to re-run.)
+- Deferred work is auto-tracked: the completion record on the issue carries a
+  `## Deferred work` section (one bullet per deferred item), and the poller
+  dedupes against existing issues and creates a Backlog issue for each item
+  that has no tracking issue, then comments the linkage. Deferral prose
+  without the section posts a verification comment instead (see
+  `docs/deferred-work-guard.md`).
 - Moving an issue into `In Review` makes the poller open the ship PR
   (feature → `main`), run `archon-smart-pr-review` on it, and on review
   completion merge it into `main` and move the issue to `Done` automatically.
