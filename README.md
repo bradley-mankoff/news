@@ -234,7 +234,11 @@ Key Run Settings:
 
 - `NEWS_SOURCE_SCOPE=core|peripheral`: `peripheral` includes both core and
   peripheral sources.
+<<<<<<< HEAD
 - `NEWS_RECIPIENT_SCOPE=primary|all`: send to the primary recipient only or all active
+=======
+- `NEWS_RECIPIENT_SCOPE=bradley|all`: send to the primary recipient only or all active
+>>>>>>> 10280ff (Fix: Audit repository history for secrets and personal data (#22))
   configured recipients.
 - `NEWS_BLOCK_REUSED_URLS=0|1`: every run records URL history; only `1` makes
   previously recorded URLs block future reuse.

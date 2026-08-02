@@ -78,9 +78,13 @@ The handoff should be saved as `HANDOFF.md` at the repository root. Do not place
   - `pyproject.toml:2` previously used the private folder name; renamed to `news-pipeline` (ADR 0009).
   - `README.md` quickstart previously referenced the private path; now clone-based (ADR 0009).
   - `config/recipients.yaml` is now a public template with example entries (issue #22).
+<<<<<<< HEAD
   - `news_pipeline/config.py` defaults now `primary@example.com` /
     `news@example.com` (renamed from `bradley@example.com` in issue #23;
     example defaults introduced in issue #22).
+=======
+  - `news_pipeline/config.py` defaults now `bradley@example.com` / `news@example.com` (issue #22).
+>>>>>>> 10280ff (Fix: Audit repository history for secrets and personal data (#22))
   - `news_pipeline/ui.py` recipient guidance is neutral (issue #22).
 - [x] Produced a repository-grounded architecture and rollout proposal in the prior response.
 - [x] No source files, tests, configuration, or documentation were modified.
