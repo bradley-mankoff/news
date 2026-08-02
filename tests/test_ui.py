@@ -128,6 +128,47 @@ class UITests(unittest.TestCase):
         ):
             self.assertIn(f'"{env}"', surface)
 
+    def test_surfaced_envs_are_registered_and_composed(self) -> None:
+        import re
+
+        html = ui_module.HTML
+        surface = html.split("const SURFACED_ENVS")[1].split("const TASK_CONFIG")[0]
+        surfaced = re.findall(r'"NEWS_[A-Z_]+"', surface)
+        # No duplicates in the suppression manifest.
+        self.assertEqual(len(surfaced), len(set(surfaced)))
+        # No typos: every surfaced env must be a real registered knob.
+        registry = {knob["env"] for knob in build_knob_registry()}
+        self.assertEqual([e for e in surfaced if e.strip('"') not in registry], [])
+        # The 12 sampling envs are exactly prefix x suffix compositions, all surfaced.
+        suffixes = re.findall(
+            r'\["([A-Z_]+)", "',
+            html.split("const SAMPLING_FIELDS")[1].split("function samplingFields")[0],
+        )
+        prefixes = re.findall(r'taskSamplingPrefix: "(NEWS_MODEL_[A-Z_]+)"', html)
+        composed = {f"{p}_{s}" for p in prefixes for s in suffixes}
+        self.assertEqual(len(composed), 12)
+        for env in composed:
+            self.assertIn(
+                f'"{env}"', surface, f"composed sampling env {env} not suppressed"
+            )
+        # NEWS_ARTICLE_TEXT_TOKEN_LIMIT (the 13th dedicated env) must also be surfaced.
+        self.assertIn('"NEWS_ARTICLE_TEXT_TOKEN_LIMIT"', surface)
+
+    def test_advanced_panels_rendered_at_boot(self) -> None:
+        html = ui_module.HTML
+        boot = html.split("async function init()")[1].split("init().catch")[0]
+        self.assertIn("renderAdvancedPanels();", boot)
+        self.assertLess(
+            boot.index("renderRunSetup();"), boot.index("renderAdvancedPanels();")
+        )
+        self.assertLess(
+            boot.index("renderAdvancedPanels();"), boot.index("renderAdvancedKnobs();")
+        )
+        advanced = html.split("function renderAdvancedPanels")[1].split(
+            "function renderAdvancedKnobs"
+        )[0]
+        self.assertIn("renderPromptProfilePanel();", advanced)
+
     def test_pure_helpers_and_schema_payload(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
