@@ -101,7 +101,7 @@ The handoff should be saved as `HANDOFF.md` at the repository root. Do not place
 - [ ] Add task-specific model assignments for every actual LLM stage or explicitly document inheritance.
 - [ ] Add a curated Model Catalog plus Hugging Face search/model metadata integration.
 - [x] Add `huggingface-hub` as a direct dependency (declared in `pyproject.toml`; API usage is tracked under the Model Catalog item above).
-- [ ] Add direct links from model choices to Hugging Face model pages and native hardware compatibility.
+- [x] Add direct links from model choices to Hugging Face model pages and native hardware compatibility.
 - [ ] Reintroduce explicit translation without content-based language detection.
 - [ ] Record exact prompt/model/translation snapshots in Run Session history.
 - [ ] Update or supersede ADR 0007 after the product and configuration decisions are accepted.

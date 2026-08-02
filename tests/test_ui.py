@@ -76,8 +76,14 @@ class UITests(unittest.TestCase):
     def test_model_knob_links_markup_contract(self) -> None:
         self.assertIn("data-links-for", ui_module.HTML)
         self.assertIn("renderKnobLinks", ui_module.HTML)
+        self.assertIn("refreshModelKnobLinks", ui_module.HTML)
         self.assertIn("knob-links", ui_module.HTML)
         self.assertIn('rel="noopener noreferrer"', ui_module.HTML)
+        self.assertIn("No Hugging Face page for this external model", ui_module.HTML)
+        self.assertIn("Native Hardware Compatibility panel", ui_module.HTML)
+        self.assertIn("escapeHtml(entry.page)", ui_module.HTML)
+        self.assertIn("escapeHtml(entry.hardware)", ui_module.HTML)
+        self.assertIn('data-links-for="${escapeHtml(knob.env)}"', ui_module.HTML)
 
     def test_pure_helpers_and_schema_payload(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
