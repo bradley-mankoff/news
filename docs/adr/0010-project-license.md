@@ -32,5 +32,5 @@ a hosted service to open their source; the owner chose a permissive posture).
   without disclosing source; contributors receive an explicit patent grant.
 - Downstream modifiers must state changes and retain notices (§4); no
   contributor agreement is needed (§5 — contributions are submitted under the
-  license); trademark use is not granted (§7).
+  license); trademark use is not granted (§6).
 - PyPI publication (ADR 0009) now has its licensing prerequisite met.
