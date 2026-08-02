@@ -65,6 +65,11 @@ archon workflow install <slug>            # marketplace copy
 
 ## Local edits to usable workflows (re-apply after archon reinstalls)
 
+**Automated:** run `python3 automation/apply_workflow_edits.py` (idempotent;
+restores everything below, including recreating `archon-fix-ship-conflicts.yaml`
+from its embedded template). `automation/deploy.sh` also restarts the board
+poller. Only the manual checklist follows, for when the script cannot run.
+
 The three added nodes are inline `prompt:` nodes in the workflow YAMLs — they do
 not depend on DB-registered commands, so they survive archon updates unless the
 YAML is overwritten. If a workflow file is replaced, re-apply:

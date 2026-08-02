@@ -25,6 +25,14 @@ between lanes. Contract:
   `archon-fix-ship-conflicts` once per episode (state markers), which resolves,
   validates, and pushes. Episodes end when the PR is mergeable; a fix run that
   finishes with the PR still conflicting posts a human-help comment once.
+- Deferred-work guard: implementation completion records carry a `## Deferred
+  work` section (one bullet per deferred item; contract enforced by the
+  completion-comment nodes). When a run completes, the poller dedupes each item
+  against open/closed issue titles, creates a Backlog issue (boarded) when no
+  tracking issue exists, links existing ones, and comments the linkage on the
+  source issue. Deferral language or unchecked acceptance criteria without the
+  section post a verification comment instead (never auto-create from prose).
+  Idempotent via per-run state markers; retried next poll on failure.
 - Dispatch = `archon workflow run <wf> --branch <branch> --detach "<msg>"`
   executed in the repo root.
 
@@ -241,6 +249,7 @@ DEFERRAL_HINT_RE = re.compile(
     r"\b(defer\w*|out\s+of\s+scope|not\s+in\s+scope|follow-?up|for\s+later"
     r"|later\s+(?:phase|release|work|iteration|pass))\b",
     re.I)
+UNCHECKED_CRITERION_RE = re.compile(r"^\s*-\s*\[\s*\]\s+(.+)$", re.M)
 
 
 def parse_deferred_work(body: str) -> list[dict]:
@@ -314,6 +323,16 @@ def has_deferral_language(body: str) -> bool:
     Used only for the fallback warning — never for auto-creating issues.
     """
     return bool(DEFERRAL_HINT_RE.search(body or ""))
+
+
+def find_unchecked_criteria(body: str) -> list[str]:
+    """Unchecked `- [ ]` checklist lines in a completion record.
+
+    An acceptance criterion the run did not mark done is a second deferral
+    signal, independent of the model's word choice.
+    """
+    return [m.group(1).strip()
+            for m in UNCHECKED_CRITERION_RE.finditer(body or "")]
 
 
 def parse_verdict(bodies: list[str]) -> str | None:
@@ -752,14 +771,23 @@ def reconcile_deferred_work(cfg: dict, env: dict, issue_number: int,
         if items:
             break
     if not items:
+        newest = bodies[-1] if bodies else ""
+        unmet = find_unchecked_criteria(newest)
         if (cfg.get("deferred_work", {}).get("fallback_warn", True)
-                and bodies and has_deferral_language(bodies[-1])
+                and (has_deferral_language(newest) or unmet)
                 and not rec.get("deferred_warned")):
+            note = ""
+            if unmet:
+                note = ("\nAcceptance criteria left unchecked in the completion "
+                        "record (likely deferred work):\n"
+                        + "\n".join(f"- {c[:160]}" for c in unmet[:8]))
+                if len(unmet) > 8:
+                    note += f"\n- … and {len(unmet) - 8} more"
             comment_issue(
                 cfg, env, issue_number,
-                "This run's completion record mentions deferred or out-of-scope "
-                "work but has no `## Deferred work` section. If any deferred "
-                "item needs an issue, create one (or drag it to Todo).")
+                "This run's completion record shows deferred or unfinished work "
+                "but has no `## Deferred work` section. If any deferred item "
+                "needs an issue, create one (or drag it to Todo)." + note)
             rec["deferred_warned"] = True
         rec["deferred_handled"] = runs_msg
         return True

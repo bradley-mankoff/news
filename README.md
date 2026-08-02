@@ -42,12 +42,18 @@ The repo runs a fully automated agentic loop driven by the GitHub project board
   it into `develop`, then moves the issue to `Ready for Review` — the human
   tests the integration branch from there. (Merge failure → issue stays in
   `In Progress`, logged; drag back to `Todo` to re-run.)
-- Deferred work is auto-tracked: the completion record on the issue carries a
-  `## Deferred work` section (one bullet per deferred item), and the poller
-  dedupes against existing issues and creates a Backlog issue for each item
-  that has no tracking issue, then comments the linkage. Deferral prose
-  without the section posts a verification comment instead (see
-  `docs/deferred-work-guard.md`).
+- Deferred work is auto-tracked (the deferral strategy): the completion record
+  on the issue carries a `## Deferred work` section — one bullet per deferred
+  item with `**Title:**` / `**Description:**` / `**Reason:**` / optional
+  `**Label:**` — enforced by the workflow-side `completion-comment` nodes, which
+  must trace the original issue ask (every criterion, described behavior, or
+  named component in the issue body that the run did NOT ship is deferred work
+  and must be listed). When a run completes, the poller dedupes each item
+  against open/closed issue titles (open match → link; closed match → new
+  issue referencing it; no match → create), boards new issues in the default
+  lane, and comments the linkage on the source issue. Deferral language or
+  unchecked acceptance criteria (`- [ ]`) without the section post a
+  verification comment instead — never an auto-created issue from prose.
 - Moving an issue into `In Review` makes the poller open the ship PR
   (feature → `main`), run `archon-smart-pr-review` on it, and on review
   completion merge it into `main` and move the issue to `Done` automatically.
@@ -72,6 +78,37 @@ The workflows are the stock Archon 0.6.0 pi-usable set, curated in the archon
 home (`workflows/`); claude-only workflows are archived, not discovered. Full
 inventory: `docs/archon-workflows.md`.
 
+### Human touchpoints
+
+Everything else in the loop is automated (dispatch, merges, lanes, deferred
+issue creation, conflict auto-fix). These are the only actions that need a
+human, by design:
+
+- **Test + promote:** when an issue lands in `Ready for Review`, test the
+  integration branch; when it works, move it to `In Review` with
+  `python3 automation/move_item.py <N> "In Review"`.
+- **Answer blockers:** a `Blocked` issue carries a `NEEDS INPUT:` comment
+  (with `needs-input` label) — answer on the issue, then drag it back to
+  `Todo` to resume the workflow in place.
+- **Re-review after a held ship:** if the ship review posts anything other
+  than `VERDICT: approve`, fix the findings and drag the issue back to
+  `In Review`.
+- **Ship-conflict manual help:** if the poller comments that it could not
+  resolve ship-PR conflicts automatically, merge `main` into the branch (or
+  rewrite the conflicting lines) and drag the issue back to `In Review`.
+- **Security gate (deliberate):** the history scrub requires human approval —
+  run `automation/scrub_history.sh --dry-run`, review, then `--execute`
+  (runbook: `docs/security/history-scrub.md`).
+- **Periodic health check:** `python3 automation/board_health.py` prints stale
+  runs, unknown blockers, and unsatisfied dependencies (read-only).
+- **Deploy after changes:** after pulling poller/automation changes or
+  reinstalling archon, run `automation/deploy.sh` (re-applies local workflow
+  edits, restarts the poller).
+- **New issues:** `python3 automation/create_issue.py "<title>"` creates the
+  issue, boards it, and lands it in the default lane in one step (add
+  `--label feature` for the idea-to-pr workflow; fill `Depends on` in the body
+  when gating). Work starts only when the issue is dragged to `Todo`.
+
 ### Components
 
 - `automation/board_poller.py` — polls the board every 45s, dispatches Archon
@@ -82,6 +119,12 @@ inventory: `docs/archon-workflows.md`.
   nothing is dispatched (prevents backlog bursts after downtime).
 - `automation/config.json` — repo, project, lanes, and workflow mapping.
 - `automation/move_item.py` — move an issue to a lane from the CLI.
+- `automation/create_issue.py` — create an issue and land it on the board in
+  the default lane in one step.
+- `automation/apply_workflow_edits.py` — idempotently re-apply the local
+  archon workflow edits (completion-comment nodes with the Deferred-work
+  contract, `report-verdict`, `archon-fix-ship-conflicts`) after an archon
+  reinstall; `automation/deploy.sh` also restarts the poller.
 - `automation/security_audit.py` — stdlib-only scanner for secrets and personal
   data in the working tree and full history; exits 0 when clean. Report:
   `docs/security/audit-2026-08-02.md`.
