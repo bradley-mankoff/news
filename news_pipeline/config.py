@@ -69,6 +69,10 @@ QWWYTHOS_9B_4BIT_MODEL_REFERENCE = f"{QWWYTHOS_REPO}/{QWWYTHOS_Q4K_FILENAME}"
 QWWYTHOS_9B_8BIT_MODEL_ALIAS = "qwythos-9b-8bit"
 QWWYTHOS_9B_8BIT_MODEL_REFERENCE = f"{QWWYTHOS_REPO}/{QWWYTHOS_Q8_FILENAME}"
 QWWYTHOS_MODEL_BACKEND = "mlx-vlm"
+MODEL_BACKEND_MLX_LM = "mlx-lm"
+MODEL_BACKEND_MLX_VLM = "mlx-vlm"
+MODEL_BACKEND_EXTERNAL = "external"
+SUPPORTED_MODEL_BACKENDS = (MODEL_BACKEND_MLX_LM, MODEL_BACKEND_MLX_VLM, MODEL_BACKEND_EXTERNAL)
 DEFAULT_MODEL_ALIAS = QWWYTHOS_9B_8BIT_MODEL_ALIAS
 CODEX_TEST_MODEL_ALIAS = "gemma-e2b-tiny"
 CODEX_TEST_MODEL_NAME = "deadbydawn101/gemma-4-E2B-Heretic-Uncensored-mlx-4bit"
@@ -382,7 +386,7 @@ def _configured_model_assignments(
     presets: dict[str, dict[str, Any]],
 ) -> dict[str, TaskModelAssignment]:
     default_name = resolve_model_name(default_reference)
-    default_backend = infer_model_backend(default_reference)
+    default_backend = _configured_model_backend(default_reference)
     article_summary_reference = _str_env("NEWS_MODEL_ARTICLE_SUMMARY", default_reference) or default_reference
     article_summary_base_url = _str_env(
         "NEWS_MODEL_ARTICLE_SUMMARY_BASE_URL",
@@ -981,10 +985,21 @@ def _configured_model_reference() -> str:
 def infer_model_backend(model_reference: str) -> str:
     resolved_name = resolve_model_name(model_reference).lower()
     if "qwythos" in resolved_name:
-        return QWWYTHOS_MODEL_BACKEND
+        return MODEL_BACKEND_MLX_VLM
     if "gemma-4" in resolved_name or "gemma4" in resolved_name:
-        return "mlx-vlm"
-    return "mlx-lm"
+        return MODEL_BACKEND_MLX_VLM
+    return MODEL_BACKEND_MLX_LM
+
+
+def _configured_model_backend(model_reference: str) -> str:
+    configured = _str_env("NEWS_MODEL_BACKEND", "").strip().lower()
+    if configured:
+        if configured not in SUPPORTED_MODEL_BACKENDS:
+            raise ValueError(
+                "NEWS_MODEL_BACKEND must be one of: " + ", ".join(SUPPORTED_MODEL_BACKENDS)
+            )
+        return configured
+    return infer_model_backend(model_reference)
 
 
 
@@ -1047,6 +1062,7 @@ def runtime_knob_registry() -> list[dict[str, Any]]:
         _runtime_knob("Run Settings", "Embedding model", "NEWS_EMBEDDING_MODEL", default="all-mpnet-base-v2", advanced=True),
         _runtime_knob("Run Settings", "Token encoding", "NEWS_TOKEN_ENCODING", default="o200k_base", advanced=True),
         _runtime_knob("Model Selection", "Default model", "NEWS_MODEL", "select", default=DEFAULT_MODEL_ALIAS, options=sorted(MODEL_ALIASES)),
+        _runtime_knob("Model Selection", "Model backend", "NEWS_MODEL_BACKEND", "select", options=sorted(SUPPORTED_MODEL_BACKENDS)),
         _runtime_knob("Model Selection", "Article Summarization model", "NEWS_MODEL_ARTICLE_SUMMARY", "select", options=sorted(MODEL_ALIASES)),
         _runtime_knob("Model Selection", "Story Drafting model", "NEWS_MODEL_STORY_DRAFTING", "select", options=sorted(MODEL_ALIASES)),
         _runtime_knob("Model Tuning", "Default tuning preset", "NEWS_MODEL_TUNING_PRESET", "select", options=tuning_presets),
@@ -1117,6 +1133,8 @@ def build_model_server_command(
     concurrency = max(1, int(model_concurrency))
     parsed_base_url = urlparse(settings.base_url or "")
     port = parsed_base_url.port or 8080
+    if backend == MODEL_BACKEND_EXTERNAL:
+        return ""
     extra_flags: list[str] = []
     if settings.prefill_step_size is not None:
         extra_flags.extend(["--prefill-step-size", str(settings.prefill_step_size)])
