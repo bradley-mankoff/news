@@ -76,6 +76,12 @@ inventory: `docs/archon-workflows.md`.
   nothing is dispatched (prevents backlog bursts after downtime).
 - `automation/config.json` — repo, project, lanes, and workflow mapping.
 - `automation/move_item.py` — move an issue to a lane from the CLI.
+- `automation/security_audit.py` — stdlib-only scanner for secrets and personal
+  data in the working tree and full history; exits 0 when clean. Report:
+  `docs/security/audit-2026-08-02.md`.
+- `automation/scrub_history.sh` — gated `git filter-repo` history scrub; prints
+  push commands by default (`--dry-run`), requires explicit `--execute` and
+  human approval. Runbook: `docs/security/history-scrub.md`.
 - The poller runs as a launchd agent (`com.bradley-mankoff.news-board-poller`,
   plist in `~/Library/LaunchAgents/`). Logs: `automation/board_poller.log`;
   state: `automation/state.json` (gitignored).
@@ -372,8 +378,8 @@ The `dev` preset:
 - Uses `gemma-e2b-tiny` (the smallest model — the only one we keep for
   local testing now that the 12b/26b gemma slots are filled by Qwythos).
 - Sets `NEWS_SOURCE_SCOPE=core` (the narrowest source pool).
-- Sets `NEWS_RECIPIENT_SCOPE=bradley` (sends to the single `bradley@…`
-  recipient only).
+- Sets `NEWS_RECIPIENT_SCOPE=bradley` (sends only to the primary
+  recipient).
 - Disables image generation and URL reuse blocking.
 - Sets `NEWS_MIN_ARTICLES_PER_STORY=2` and relaxes story drafting guards.
 
