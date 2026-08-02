@@ -26,16 +26,31 @@ REPO_URL="${REPO_URL:-https://github.com/bradley-mankoff/news}"
 WORKDIR="${WORKDIR:-/tmp/news-scrub}"
 SCRUB_USER="${SCRUB_USER:-home}"
 
+# The next command in this script is `rm -rf "$WORKDIR"`; guard the one
+# env-controlled destructive path against typos like WORKDIR=/ or $HOME.
+case "$WORKDIR" in
+  ""|"/"|"$HOME"|"$HOME"/*)
+    echo "error: refusing unsafe WORKDIR: $WORKDIR (must be a scratch dir, e.g. /tmp/news-scrub)" >&2
+    exit 1
+    ;;
+esac
+
 DRY_RUN=1
 MAILMAP=""
 
-for arg in "$@"; do
+while [ $# -gt 0 ]; do
+  arg="$1"
   case "$arg" in
     --execute) DRY_RUN=0 ;;
     --dry-run) DRY_RUN=1 ;;
     --mailmap)
-      echo "error: --mailmap requires a PATH argument" >&2
-      exit 2
+      # Space-separated form advertised in usage; consume the next argument.
+      if [ $# -lt 2 ]; then
+        echo "error: --mailmap requires a PATH argument" >&2
+        exit 2
+      fi
+      MAILMAP="$2"
+      shift
       ;;
     --mailmap=*) MAILMAP="${arg#--mailmap=}" ;;
     -h|--help) sed -n '1,20p' "$0"; exit 0 ;;
@@ -45,6 +60,7 @@ for arg in "$@"; do
       exit 2
       ;;
   esac
+  shift
 done
 
 if [ "$DRY_RUN" -eq 1 ]; then
@@ -67,7 +83,17 @@ git clone --mirror "$REPO_URL" "$WORKDIR"
 # personal data; sed restores them before filter-repo reads the files.
 REPLACEMENTS_TXT="$(mktemp)"
 MESSAGES_TXT="$(mktemp)"
-trap 'rm -f "$REPLACEMENTS_TXT" "$MESSAGES_TXT"' EXIT
+
+cleanup() {
+  rm -f "$REPLACEMENTS_TXT" "$MESSAGES_TXT"
+  # On failure, remove the mirror too: it holds the raw pre-scrub history
+  # (the very data the scrub is meant to contain). Keep it on success so the
+  # human can inspect the rewritten history before pushing.
+  if [ "${1:-0}" -ne 0 ]; then
+    rm -rf "$WORKDIR"
+  fi
+}
+trap 'cleanup $?' EXIT
 
 cat > "$REPLACEMENTS_TXT" <<'EOF'
 bradley[@]mankoff[.]com==>bradley@example.com
@@ -99,9 +125,19 @@ git -C "$WORKDIR" filter-repo "${FILTER_ARGS[@]}" --force
 
 # --- verify ------------------------------------------------------------------
 echo "==> Verifying rewritten history with the audit scanner (history-only)"
-if ! python3 "$AUDIT_SCRIPT" --history-only --repo "$WORKDIR"; then
+if python3 "$AUDIT_SCRIPT" --history-only --repo "$WORKDIR"; then
+  AUDIT_STATUS=0
+else
+  AUDIT_STATUS=$?
+fi
+if [ "$AUDIT_STATUS" -eq 1 ]; then
   echo "error: audit still finds personal data in the rewritten history." >&2
   echo "       If author emails remain, provide a --mailmap file (see docs/security/history-scrub.md)." >&2
+  exit 1
+elif [ "$AUDIT_STATUS" -ne 0 ]; then
+  # Exit 2+ means the scanner itself failed (git error, timeout, ...), not
+  # that data remains — do not advise a mailmap for a scanner crash.
+  echo "error: audit scanner failed (exit $AUDIT_STATUS); fix the scanner issue before pushing." >&2
   exit 1
 fi
 echo "==> Verification passed: rewritten history is clean."
@@ -120,9 +156,10 @@ if [ "$DRY_RUN" -eq 1 ]; then
   echo "    re-init automation/state.json, and contact GitHub Support to purge cached views."
 else
   echo "==> Pushing rewritten history (develop, main, tags)"
-  for cmd in "${PUSH_CMDS[@]}"; do
-    echo "    $cmd"
-    eval "$cmd"
-  done
+  # No eval: the commands are fixed and known, so execute them directly with
+  # a quoted WORKDIR (avoids shell injection via an env-controlled path).
+  git -C "$WORKDIR" push --force origin develop
+  git -C "$WORKDIR" push --force origin main
+  git -C "$WORKDIR" push --force --tags
   echo "==> Done. Re-clone all local checkouts; old clones retain the pre-scrub history."
 fi
