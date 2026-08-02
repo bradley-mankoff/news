@@ -1062,6 +1062,82 @@ class PipelineHelperTests(unittest.TestCase):
                 pipeline._attach_pending_activity_snapshots(deduped_diagnostics)
             deduped_diagnostics.record_activity_snapshot.assert_called_once_with(pending)
 
+    def test_external_model_server_readiness_path(self) -> None:
+        original_backend = pipeline.MODEL_BACKEND
+        original_external = pipeline.MANAGED_MODEL_SERVER_EXTERNAL
+        original_ready = pipeline.MANAGED_MODEL_SERVER_READY
+        try:
+            pipeline.MANAGED_MODEL_SERVER_EXTERNAL = False
+            pipeline.MANAGED_MODEL_SERVER_READY = False
+            with patch.object(pipeline, "MODEL_BACKEND", "external"), patch.object(
+                pipeline, "ensure_codex_safe_model_reference"
+            ), patch.object(
+                pipeline,
+                "preflight_model_server",
+                return_value={"ok": True, "model_match": True},
+            ), patch.object(
+                pipeline, "probe_model_generation", return_value={"ok": True}
+            ), patch.object(
+                pipeline.subprocess,
+                "Popen",
+                side_effect=AssertionError("must not spawn a managed server"),
+            ):
+                pipeline._ensure_main_model_server_ready()
+            self.assertTrue(pipeline.MANAGED_MODEL_SERVER_EXTERNAL)
+            self.assertTrue(pipeline.MANAGED_MODEL_SERVER_READY)
+        finally:
+            pipeline.MODEL_BACKEND = original_backend
+            pipeline.MANAGED_MODEL_SERVER_EXTERNAL = original_external
+            pipeline.MANAGED_MODEL_SERVER_READY = original_ready
+
+    def test_external_model_server_readiness_timeout(self) -> None:
+        original_backend = pipeline.MODEL_BACKEND
+        original_external = pipeline.MANAGED_MODEL_SERVER_EXTERNAL
+        original_ready = pipeline.MANAGED_MODEL_SERVER_READY
+        try:
+            pipeline.MANAGED_MODEL_SERVER_EXTERNAL = False
+            pipeline.MANAGED_MODEL_SERVER_READY = False
+            with patch.object(pipeline, "MODEL_BACKEND", "external"), patch.object(
+                pipeline, "ensure_codex_safe_model_reference"
+            ), patch.object(
+                pipeline,
+                "preflight_model_server",
+                return_value={"ok": False, "error": "connection refused"},
+            ), patch.object(pipeline.time, "sleep", return_value=None), patch.object(
+                pipeline.time, "monotonic", side_effect=[100.0, 100.0, 400.0]
+            ):
+                with self.assertRaisesRegex(TimeoutError, "External model server did not become ready"):
+                    pipeline._ensure_main_model_server_ready()
+        finally:
+            pipeline.MODEL_BACKEND = original_backend
+            pipeline.MANAGED_MODEL_SERVER_EXTERNAL = original_external
+            pipeline.MANAGED_MODEL_SERVER_READY = original_ready
+
+    def test_external_model_server_readiness_probe_failure(self) -> None:
+        original_backend = pipeline.MODEL_BACKEND
+        original_external = pipeline.MANAGED_MODEL_SERVER_EXTERNAL
+        original_ready = pipeline.MANAGED_MODEL_SERVER_READY
+        try:
+            pipeline.MANAGED_MODEL_SERVER_EXTERNAL = False
+            pipeline.MANAGED_MODEL_SERVER_READY = False
+            with patch.object(pipeline, "MODEL_BACKEND", "external"), patch.object(
+                pipeline, "ensure_codex_safe_model_reference"
+            ), patch.object(
+                pipeline,
+                "preflight_model_server",
+                return_value={"ok": True, "model_match": True},
+            ), patch.object(
+                pipeline,
+                "probe_model_generation",
+                return_value={"ok": False, "error": "boom"},
+            ):
+                with self.assertRaisesRegex(RuntimeError, "failed a tiny generation probe"):
+                    pipeline._ensure_main_model_server_ready()
+        finally:
+            pipeline.MODEL_BACKEND = original_backend
+            pipeline.MANAGED_MODEL_SERVER_EXTERNAL = original_external
+            pipeline.MANAGED_MODEL_SERVER_READY = original_ready
+
     def test_progress_tracker_and_run_logging_branches(self) -> None:
         stream = StringIO()
         tracker = pipeline.ProgressTracker(stream=stream, show_meter_detail=True)

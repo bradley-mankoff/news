@@ -92,6 +92,12 @@ def _run_pipeline_command() -> int:
 def _print_model_server_command() -> int:
     config = load_runtime_config()
     ensure_codex_safe_model_reference(config.model_reference)
+    if not config.model_server_command:
+        print(
+            f"external backend: no managed server command. "
+            f"Connect {config.model_base_url} directly (model {config.model_name})."
+        )
+        return 0
     print(config.model_server_command)
     return 0
 
