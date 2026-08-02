@@ -1280,11 +1280,16 @@ HTML = r"""<!doctype html>
       <div id="runSetupMount"></div>
     </section>
     <section id="advanced" class="view">
-      <div class="toolbar">
-        <input id="knobSearch" placeholder="Filter raw settings">
-        <button id="clearKnobsBtn">Clear overrides</button>
-      </div>
-      <div id="knobContainer"></div>
+      <div id="advancedPanels" class="stack"></div>
+      <section class="panel">
+        <p class="eyebrow">Raw environment</p>
+        <h2>Environment overrides</h2>
+        <div class="toolbar">
+          <input id="knobSearch" placeholder="Filter raw settings">
+          <button id="clearKnobsBtn">Clear overrides</button>
+        </div>
+        <div id="knobContainer"></div>
+      </section>
     </section>
     <section id="sources" class="view">
       <div class="toolbar">
@@ -1371,8 +1376,21 @@ HTML = r"""<!doctype html>
       "NEWS_MODEL_MAX_INPUT_TOKENS",
       "NEWS_ARTICLE_SUMMARY_MAX_TOKENS",
       "NEWS_STORY_DRAFTING_MAX_TOKENS",
+      "NEWS_ARTICLE_TEXT_TOKEN_LIMIT",
       "NEWS_MODEL_ARTICLE_SUMMARY_BASE_URL",
       "NEWS_MODEL_STORY_DRAFTING_BASE_URL",
+      "NEWS_MODEL_ARTICLE_SUMMARY_TEMPERATURE",
+      "NEWS_MODEL_ARTICLE_SUMMARY_TOP_P",
+      "NEWS_MODEL_ARTICLE_SUMMARY_TOP_K",
+      "NEWS_MODEL_ARTICLE_SUMMARY_MIN_P",
+      "NEWS_MODEL_ARTICLE_SUMMARY_PRESENCE_PENALTY",
+      "NEWS_MODEL_ARTICLE_SUMMARY_REPETITION_PENALTY",
+      "NEWS_MODEL_STORY_DRAFTING_TEMPERATURE",
+      "NEWS_MODEL_STORY_DRAFTING_TOP_P",
+      "NEWS_MODEL_STORY_DRAFTING_TOP_K",
+      "NEWS_MODEL_STORY_DRAFTING_MIN_P",
+      "NEWS_MODEL_STORY_DRAFTING_PRESENCE_PENALTY",
+      "NEWS_MODEL_STORY_DRAFTING_REPETITION_PENALTY",
       "NEWS_SOURCE_COLLECTION_CONCURRENCY",
       "NEWS_ARTICLE_SUMMARY_CONCURRENCY",
       "NEWS_STORY_SYNTHESIS_CONCURRENCY",
@@ -1870,6 +1888,7 @@ HTML = r"""<!doctype html>
         knobField("NEWS_MODEL_TITLE_GENERATION_PRESENCE_PENALTY", "Presence penalty"),
         knobField("NEWS_MODEL_TITLE_GENERATION_REPETITION_PENALTY", "Repetition penalty")
       ].join("");
+
       $("runSetupMount").innerHTML = `
         <div class="banner panel">
           <div class="banner-copy">
@@ -1921,15 +1940,9 @@ HTML = r"""<!doctype html>
                 <code>NEWS_PROMPT_PROFILE</code>
               </label>
             </div>
-            <div id="promptProfileReadouts" class="stack"></div>
             <div class="toolbar">
               <button id="restorePromptProfileBtn">Restore defaults</button>
-              <button id="comparePromptProfileBtn">Compare with balanced</button>
             </div>
-            <details class="details">
-              <summary>Comparison with balanced</summary>
-              <div id="promptProfileCompare"></div>
-            </details>
           </section>
           <section class="panel">
             <p class="eyebrow">Snapshot</p>
@@ -1943,24 +1956,7 @@ HTML = r"""<!doctype html>
             <div class="form-grid">
               ${articleModel}
             </div>
-            <details class="details">
-              <summary>Model tuning</summary>
-              <div class="form-grid">
-                <label class="field"><span>Tuning preset</span><select id="article_tuning_preset" data-task="article_summary" data-env="NEWS_MODEL_ARTICLE_SUMMARY_TUNING_PRESET"></select><code>NEWS_MODEL_ARTICLE_SUMMARY_TUNING_PRESET</code></label>
-                <label class="field"><span>Preset id</span><input id="article_tuning_id"><code>id</code></label>
-                <label class="field"><span>Display name</span><input id="article_tuning_name"><code>name</code></label>
-                <label class="field"><span>Description</span><textarea id="article_tuning_description"></textarea><code>description</code></label>
-                ${sharedModelTokens}
-                ${articleTokenCap}
-                ${articleBaseUrl}
-                ${articleSampling}
-              </div>
-              <div class="toolbar">
-                <button id="article_tuning_save" class="primary">Save current settings</button>
-                <button id="article_tuning_rename">Rename display name</button>
-                <button id="article_tuning_delete" class="danger">Delete preset</button>
-              </div>
-            </details>
+            <p class="muted">Sampling, token budgets, and server endpoints are in Advanced Settings.</p>
           </section>
           <section class="panel model-card">
             <p class="eyebrow">Model</p>
@@ -1968,49 +1964,15 @@ HTML = r"""<!doctype html>
             <p class="muted">Resolved: ${escapeHtml(storyRuntime.name || storyRuntime.reference || "-")}</p>
             <div class="form-grid">
               ${storyModel}
-            </div>
-            <details class="details">
-              <summary>Model tuning</summary>
-              <div class="form-grid">
-                <label class="field"><span>Tuning preset</span><select id="story_tuning_preset" data-task="story_drafting" data-env="NEWS_MODEL_STORY_DRAFTING_TUNING_PRESET"></select><code>NEWS_MODEL_STORY_DRAFTING_TUNING_PRESET</code></label>
-                <label class="field"><span>Preset id</span><input id="story_tuning_id"><code>id</code></label>
-                <label class="field"><span>Display name</span><input id="story_tuning_name"><code>name</code></label>
-                <label class="field"><span>Description</span><textarea id="story_tuning_description"></textarea><code>description</code></label>
-                ${storyTokenCap}
-                ${storyBaseUrl}
-                ${storySampling}
-              </div>
-              <div class="toolbar">
-                <button id="story_tuning_save" class="primary">Save current settings</button>
-                <button id="story_tuning_rename">Rename display name</button>
-                <button id="story_tuning_delete" class="danger">Delete preset</button>
-              </div>
-            </details>
+            <p class="muted">Sampling, token budgets, and server endpoints are in Advanced Settings.</p>
           </section>
-          <section class="panel model-card">
             <p class="eyebrow">Model</p>
             <h2>${escapeHtml(TASK_CONFIG.story_scale_screening.label)}</h2>
             <p class="muted">Resolved: ${escapeHtml(scaleRuntime.name || scaleRuntime.reference || "-")}</p>
             <div class="form-grid">
               ${scaleModel}
             </div>
-            <details class="details">
-              <summary>Model tuning</summary>
-              <div class="form-grid">
-                <label class="field"><span>Tuning preset</span><select id="scale_tuning_preset" data-task="story_scale_screening" data-env="NEWS_MODEL_STORY_SCALE_SCREENING_TUNING_PRESET"></select><code>NEWS_MODEL_STORY_SCALE_SCREENING_TUNING_PRESET</code></label>
-                <label class="field"><span>Preset id</span><input id="scale_tuning_id"><code>id</code></label>
-                <label class="field"><span>Display name</span><input id="scale_tuning_name"><code>name</code></label>
-                <label class="field"><span>Description</span><textarea id="scale_tuning_description"></textarea><code>description</code></label>
-                ${scaleTokenCap}
-                ${scaleBaseUrl}
-                ${scaleSampling}
-              </div>
-              <div class="toolbar">
-                <button id="scale_tuning_save" class="primary">Save current settings</button>
-                <button id="scale_tuning_rename">Rename display name</button>
-                <button id="scale_tuning_delete" class="danger">Delete preset</button>
-              </div>
-            </details>
+            <p class="muted">Sampling, token budgets, and server endpoints are in Advanced Settings.</p>
           </section>
           <section class="panel model-card">
             <p class="eyebrow">Model</p>
@@ -2019,23 +1981,7 @@ HTML = r"""<!doctype html>
             <div class="form-grid">
               ${titleModel}
             </div>
-            <details class="details">
-              <summary>Model tuning</summary>
-              <div class="form-grid">
-                <label class="field"><span>Tuning preset</span><select id="title_tuning_preset" data-task="title_generation" data-env="NEWS_MODEL_TITLE_GENERATION_TUNING_PRESET"></select><code>NEWS_MODEL_TITLE_GENERATION_TUNING_PRESET</code></label>
-                <label class="field"><span>Preset id</span><input id="title_tuning_id"><code>id</code></label>
-                <label class="field"><span>Display name</span><input id="title_tuning_name"><code>name</code></label>
-                <label class="field"><span>Description</span><textarea id="title_tuning_description"></textarea><code>description</code></label>
-                ${titleTokenCap}
-                ${titleBaseUrl}
-                ${titleSampling}
-              </div>
-              <div class="toolbar">
-                <button id="title_tuning_save" class="primary">Save current settings</button>
-                <button id="title_tuning_rename">Rename display name</button>
-                <button id="title_tuning_delete" class="danger">Delete preset</button>
-              </div>
-            </details>
+            <p class="muted">Sampling, token budgets, and server endpoints are in Advanced Settings.</p>
           </section>
           <section class="panel">
             <p class="eyebrow">Model catalog</p>
@@ -2073,30 +2019,37 @@ HTML = r"""<!doctype html>
             </details>
           </section>
           <section class="panel">
-            <p class="eyebrow">Budgets</p>
-            <h2>Run budgets and quotas</h2>
-            <div class="form-grid">
-              ${knobField("NEWS_SOURCE_COLLECTION_CONCURRENCY", "Source collection concurrency")}
-              ${knobField("NEWS_ARTICLE_SUMMARY_CONCURRENCY", "Article summary concurrency")}
-              ${knobField("NEWS_STORY_SYNTHESIS_CONCURRENCY", "Story synthesis concurrency")}
-              ${knobField("NEWS_ARTICLE_TEXT_TOKEN_LIMIT", "Article text token limit")}
-              ${knobField("NEWS_MAX_STORIES", "Max stories")}
-              ${knobField("NEWS_MIN_ARTICLES_PER_STORY", "Min articles per story")}
-              ${knobField("NEWS_STORY_CLUSTER_SIMILARITY_THRESHOLD", "Story cluster similarity")}
-              ${knobField("NEWS_STORY_SELECTION_OVERLAP_THRESHOLD", "Story selection overlap")}
-              ${knobField("NEWS_STORY_DEDUP_THRESHOLD", "Story dedup threshold")}
-              ${knobField("NEWS_STORY_BACKFILL_BATCH_MULTIPLIER", "Backfill batch multiplier")}
-            </div>
+            <details class="details">
+              <summary>Utilities</summary>
+              <div class="form-grid">
+                <label class="field"><span>Action</span><select id="actionSelect">${actionOptions}</select><code>command action</code></label>
+              </div>
+              <div id="sourceOptions">
+                <div class="form-grid">
+                  <label class="field"><span>Limit</span><input id="opt_limit" type="number" min="1"><code>--limit</code></label>
+                  <label class="field"><span>Recent days</span><input id="opt_recent_days" type="number" min="1" value="7"><code>--recent-days</code></label>
+                  <label class="field"><span>Timeout</span><input id="opt_timeout" type="number" min="1"><code>--timeout</code></label>
+                  <label class="field"><span>Concurrency</span><input id="opt_concurrency" type="number" min="1"><code>--concurrency</code></label>
+                  <label class="field"><span>Section</span><select id="opt_section"><option value=""></option><option>sources</option><option>all</option></select><code>--section</code></label>
+                  <label class="field"><span>Language model</span><input id="opt_language_model"><code>--language-model</code></label>
+                  <label class="field"><span>Language samples</span><input id="opt_language_samples" type="number" min="1"><code>--language-samples</code></label>
+                  <label class="field"><span>Min language confidence</span><input id="opt_min_language_confidence" type="number" step="0.01" min="0" max="1"><code>--min-language-confidence</code></label>
+                </div>
+                <div class="toolbar">
+                  <label><input id="opt_probe_articles" type="checkbox"> Probe articles</label>
+                  <label><input id="opt_prune_unscrapable" type="checkbox"> Prune unscrapable</label>
+                  <label><input id="opt_only_failures" type="checkbox"> Only failures</label>
+                  <label><input id="opt_write_languages" type="checkbox"> Write languages</label>
+                  <label><input id="opt_overwrite_languages" type="checkbox"> Overwrite languages</label>
+                  <label><input id="opt_json" type="checkbox"> JSON</label>
+                </div>
+                <div class="toolbar">
+                  <button id="utilityPreviewBtn">Preview utility</button>
+                  <button id="utilityRunBtn" class="primary">Run utility</button>
+                </div>
+              </div>
+            </details>
           </section>
-          <section class="panel">
-            <p class="eyebrow">Peripheral</p>
-            <h2>Optional run settings</h2>
-            <div class="form-grid">
-              ${knobField("NEWS_IMAGE_ENABLED", "Image generation")}
-              ${knobField("NEWS_BLOCK_REUSED_URLS", "Block reused URLs")}
-              ${knobField("NEWS_STORY_SCALE_SCREENING_ENABLED", "Story scale screening")}
-              ${knobField("NEWS_RELAX_STORY_DRAFTING_GUARDS", "Relax story drafting guards")}
-            </div>
           </section>
           <section class="panel">
             <details class="details">
@@ -2150,6 +2103,7 @@ HTML = r"""<!doctype html>
       renderKnobLinks("NEWS_MODEL_STORY_DRAFTING");
       renderPromptProfilePanel();
       renderModelCatalogPanel();
+
       $("actionSelect").value = "run";
       $("sourceOptions").classList.add("hidden");
       $("actionSelect").onchange = () => {
@@ -2163,6 +2117,93 @@ HTML = r"""<!doctype html>
           searchHuggingFaceModels().catch(err => setStatus(err.message, "bad"));
         }
       };
+    }
+    const SAMPLING_FIELDS = [
+      ["TEMPERATURE", "Temperature"],
+      ["TOP_P", "Top P"],
+      ["TOP_K", "Top K"],
+      ["MIN_P", "Min P"],
+      ["PRESENCE_PENALTY", "Presence penalty"],
+      ["REPETITION_PENALTY", "Repetition penalty"]
+    ];
+    function samplingFields(prefix) {
+      return SAMPLING_FIELDS.map(([suffix, label]) => knobField(`${prefix}_${suffix}`, label)).join("");
+    }
+    function modelTuningPanel(task) {
+      const meta = TASK_CONFIG[task];
+      const runtime = (state.schema && state.schema.runtime) || {};
+      const taskRuntime = runtime.model && runtime.model[meta.runtimeKey] ? runtime.model[meta.runtimeKey] : {};
+      const sharedCap = task === "article_summary" ? knobField("NEWS_MODEL_MAX_INPUT_TOKENS", "Shared model input cap") : "";
+      return `
+        <section class="panel model-card">
+          <p class="eyebrow">Model Tuning</p>
+          <h2>${escapeHtml(meta.label)}</h2>
+          <p class="muted">Resolved: ${escapeHtml(taskRuntime.name || taskRuntime.reference || "-")}</p>
+          <div class="form-grid">
+            <label class="field"><span>Tuning preset</span><select id="${meta.presetSelectId}" data-task="${task}" data-env="${meta.presetEnv}"></select><code>${meta.presetEnv}</code></label>
+            <label class="field"><span>Preset id</span><input id="${meta.idInputId}"><code>id</code></label>
+            <label class="field"><span>Display name</span><input id="${meta.nameInputId}"><code>name</code></label>
+            <label class="field"><span>Description</span><textarea id="${meta.descriptionInputId}"></textarea><code>description</code></label>
+            ${sharedCap}
+            ${knobField(meta.taskMaxTokensEnv, task === "article_summary" ? "Article summary max tokens" : "Story drafting max tokens")}
+            ${knobField(meta.baseUrlEnv, "Base URL")}
+            ${samplingFields(meta.taskSamplingPrefix)}
+          </div>
+          <div class="toolbar">
+            <button id="${meta.saveButtonId}" class="primary">Save current settings</button>
+            <button id="${meta.renameButtonId}">Rename display name</button>
+            <button id="${meta.deleteButtonId}" class="danger">Delete preset</button>
+          </div>
+        </section>`;
+    }
+    function renderAdvancedPanels() {
+      const container = $("advancedPanels");
+      if (!container) return;
+      container.innerHTML = `
+        ${modelTuningPanel("article_summary")}
+        ${modelTuningPanel("story_drafting")}
+        <section class="panel">
+          <p class="eyebrow">Budgets</p>
+          <h2>Run budgets and quotas</h2>
+          <div class="form-grid">
+            ${knobField("NEWS_SOURCE_COLLECTION_CONCURRENCY", "Source collection concurrency")}
+            ${knobField("NEWS_ARTICLE_SUMMARY_CONCURRENCY", "Article summary concurrency")}
+            ${knobField("NEWS_STORY_SYNTHESIS_CONCURRENCY", "Story synthesis concurrency")}
+            ${knobField("NEWS_ARTICLE_TEXT_TOKEN_LIMIT", "Article text token limit")}
+            ${knobField("NEWS_MAX_STORIES", "Max stories")}
+            ${knobField("NEWS_MIN_ARTICLES_PER_STORY", "Min articles per story")}
+            ${knobField("NEWS_STORY_CLUSTER_SIMILARITY_THRESHOLD", "Story cluster similarity")}
+            ${knobField("NEWS_STORY_SELECTION_OVERLAP_THRESHOLD", "Story selection overlap")}
+            ${knobField("NEWS_STORY_DEDUP_THRESHOLD", "Story dedup threshold")}
+            ${knobField("NEWS_STORY_BACKFILL_BATCH_MULTIPLIER", "Backfill batch multiplier")}
+          </div>
+        </section>
+        <section class="panel">
+          <p class="eyebrow">Peripheral</p>
+          <h2>Optional run settings</h2>
+          <div class="form-grid">
+            ${knobField("NEWS_IMAGE_ENABLED", "Image generation")}
+            ${knobField("NEWS_BLOCK_REUSED_URLS", "Block reused URLs")}
+            ${knobField("NEWS_STORY_SCALE_SCREENING_ENABLED", "Story scale screening")}
+            ${knobField("NEWS_RELAX_STORY_DRAFTING_GUARDS", "Relax story drafting guards")}
+          </div>
+        </section>
+        <section class="panel">
+          <p class="eyebrow">Prompt templates</p>
+          <h2>Full prompt templates</h2>
+          <p class="muted">Read-only preview of the exact instructions the selected profile supplies to each LLM stage.</p>
+          <div id="promptProfileReadouts" class="stack"></div>
+          <div class="toolbar">
+            <button id="comparePromptProfileBtn">Compare with balanced</button>
+          </div>
+          <details class="details">
+            <summary>Comparison with balanced</summary>
+            <div id="promptProfileCompare"></div>
+          </details>
+        </section>
+      `;
+      decorateEnvHints($("advancedPanels"));
+      renderPromptProfilePanel();
     }
     function renderModelTuningControls(task, { preserveEditor = false } = {}) {
       const meta = TASK_CONFIG[task];
@@ -2833,6 +2874,7 @@ HTML = r"""<!doctype html>
       state.schema = await api("/api/schema");
       renderTabs();
       renderRunSetup();
+      renderAdvancedPanels();
       renderAdvancedKnobs();
       renderStats();
       renderRunPresetDrawer();
