@@ -33,7 +33,7 @@ Project goal: build, review, and send a daily news report from configured source
 - Board: https://github.com/users/bradley-mankoff/projects/1 — lanes `Backlog` -> `Todo` -> `In Progress` -> `Blocked` -> `Ready for Review` -> `In Review` -> `Done`. The board drives everything; nothing starts from `Backlog`.
 - Status checks: `launchctl list | grep news-board-poller` (poller alive), `tail -f automation/board_poller.log` (poller log), `archon workflow runs` (runs, from repo root), `archon workflow get <id> --json` (one run).
 - Board ops: `python3 automation/move_item.py <issue> <lane>`; issues: `python3 automation/create_issue.py "<title>"`. Automation config: `automation/config.json` (lanes, workflow mapping, merge targets).
-- Creating a Backlog issue: `python3 automation/create_issue.py "<title>"` (one step: create + board + default lane; `--label feature` → idea-to-pr dispatch, `--body` for context, `--lane` to override).
+- Creating a Backlog issue: `python3 automation/create_issue.py "<title>"` (one step: create + board + default lane; `--label enhancement` → idea-to-pr dispatch, `--body` for context, `--lane` to override).
 - Who moves what: the human drags to `Todo` (start work) and `In Review` (ship + quality review); the poller moves `In Progress` (on dispatch), `Blocked` (run completed with a `needs-input` label — awaiting human answer), `Ready for Review` (run completed + PR merged into develop), `Done` (ship PR merged into main after review).
 - Branch model: `develop` = integration (repo default; workflow base); `main` = production (only via reviewed ship PRs); per-issue branches `archon/task-issue-<N>`.
 - GitHub access convention: gh CLI + the automation scripts (no MCP server).
