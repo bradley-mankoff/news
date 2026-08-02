@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import sys
+from typing import Callable
 
 from .config import (
     MODEL_BACKEND_EXTERNAL,
@@ -124,6 +125,15 @@ def _run_pipeline_command() -> int:
     return 0
 
 
+def _run_with_error_report(command: Callable[[], int]) -> int:
+    """Run a command, reporting ValueError config errors to stderr."""
+    try:
+        return command()
+    except ValueError as error:
+        print(str(error), file=sys.stderr)
+        return 2
+
+
 def _print_model_server_command() -> int:
     config = load_runtime_config()
     ensure_codex_safe_model_reference(config.model_reference)
@@ -206,32 +216,20 @@ def main(argv: list[str] | None = None) -> int:
             print(f"Unexpected arguments for run: {' '.join(args)}", file=sys.stderr)
             print(USAGE, file=sys.stderr)
             return 2
-        try:
-            return _run_pipeline_command()
-        except ValueError as error:
-            print(str(error), file=sys.stderr)
-            return 2
+        return _run_with_error_report(_run_pipeline_command)
 
     if action == "model-server-command":
         if args:
             print(f"Unexpected arguments for {command}: {' '.join(args)}", file=sys.stderr)
             print(USAGE, file=sys.stderr)
             return 2
-        try:
-            return _print_model_server_command()
-        except ValueError as error:
-            print(str(error), file=sys.stderr)
-            return 2
+        return _run_with_error_report(_print_model_server_command)
     if action == "codex-model-server-command":
         if args:
             print(f"Unexpected arguments for {command}: {' '.join(args)}", file=sys.stderr)
             print(USAGE, file=sys.stderr)
             return 2
-        try:
-            return _print_codex_model_server_command()
-        except ValueError as error:
-            print(str(error), file=sys.stderr)
-            return 2
+        return _run_with_error_report(_print_codex_model_server_command)
     if action == "serve-unsubscribe":
         if args:
             print(f"Unexpected arguments for {command}: {' '.join(args)}", file=sys.stderr)
