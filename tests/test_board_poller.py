@@ -44,7 +44,7 @@ class ResolveWorktreeBranchTest(unittest.TestCase):
         "\n"
         "https://github.com/bradley-mankoff/news.git:\n"
         "  archon/task-issue-25\n"
-        "    Path: /Users/x/worktrees/archon/task-issue-25\n"
+        "    Path: /tmp/worktrees/archon/task-issue-25\n"
         "    Type: task | Platform: cli | Last activity: 0d ago\n"
     )
 
