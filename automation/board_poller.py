@@ -140,12 +140,19 @@ def fetch_project(cfg: dict, env: dict) -> tuple[str, str, dict, list[dict]]:
 
 
 def find_issue_pr(cfg: dict, env: dict, issue_number: int,
-                  state: str = "all") -> dict | None:
-    """Find the PR linked to an issue (any state) by body/title reference."""
+                  state: str = "all") -> dict | None | str:
+    """Find the PR linked to an issue (any state) by body/title reference.
+
+    Returns the PR dict, None when genuinely absent, or "error" when gh
+    failed. A gh failure must never be misread as "no PR": the callers gate
+    the develop merge and the ship-PR head choice on this, and skipping the
+    merge silently ships the feature past the develop integration gate.
+    """
     r = gh(["pr", "list", "-R", cfg["repo"], "--state", state,
             "--json", "number,title,body,headRefName,baseRefName,state"], env)
     if r.returncode != 0:
-        return None
+        log(f"PR LIST FAILED issue={issue_number}: {r.stderr.strip()[:200]}")
+        return "error"
     prs = json.loads(r.stdout)
     pat = re.compile(
         rf"(?:\b(?:fix(?:es)?|clos(?:es|e)|resolv(?:es|e))\s+#{issue_number}\b)"
@@ -234,67 +241,90 @@ def move_to_lane(cfg: dict, env: dict, project_id: str, item_id: str,
     return r.returncode == 0
 
 
-def issue_has_label(cfg: dict, env: dict, issue_number: int,
-                    label: str) -> bool | None:
-    """Return True/False for a clean gh call; None when the check itself failed.
+def issue_has_label(cfg: dict, env: dict, issue_number: int, label: str) -> bool | None:
+    """True/False, or None when the label state could not be determined.
 
-    A transient gh failure (auth, rate limit, network) must not read as "label
-    absent": callers treat None as "cannot determine" and leave the item in
-    place to retry next poll (fail-closed).
+    A gh failure must never be misread as "label absent": the caller gates the
+    Blocked-vs-complete decision on this, and a blocked issue that falls through
+    to the normal completion path could ship past the human's decision.
     """
-    r = gh(["issue", "view", str(issue_number), "-R", cfg["repo"], "--json", "labels",
-            "-q", ".labels[].name"], env)
+    try:
+        r = gh(["issue", "view", str(issue_number), "-R", cfg["repo"],
+                "--json", "labels", "-q", ".labels[].name"], env)
+    except subprocess.TimeoutExpired as exc:
+        log(f"LABEL CHECK TIMEOUT issue={issue_number}: {exc}")
+        return None
     if r.returncode != 0:
-        log(f"LABEL CHECK FAILED issue={issue_number}: {r.stderr.strip()}")
+        log(f"LABEL CHECK FAILED issue={issue_number}: {r.stderr.strip()[:200]}")
         return None
     return label in r.stdout.split()
 
 
-def resolve_worktree_branch(env: dict, issue_number: int) -> str | None:
+def resolve_worktree_branch(env: dict, issue_number: int, repo: str) -> str | None:
     """Find the archon worktree branch for an issue (e.g. archon/task-issue-12).
 
     `archon continue` needs the full namespaced branch, not the shorthand the
-    poller passes to `workflow run --branch`.
+    poller passes to `workflow run --branch`. The parse is scoped to this
+    repo's section of `archon isolation list` so a same-named worktree of
+    another repository can never be resumed.
     """
     r = subprocess.run(["archon", "isolation", "list"], capture_output=True,
                        text=True, timeout=60, env=env, cwd=str(ROOT))
     if r.returncode != 0:
+        log(f"WORKTREE LIST FAILED: {r.stderr.strip()[:200]}")
         return None
-    # Anchor to a branch-shaped token. archon's JSON log lines land on stdout
-    # (not stderr), so skip them; a full-line match also rejects variants like
-    # task-issue-315 when looking for task-issue-31.
-    pat = re.compile(rf"^\s*(archon/task-issue-{issue_number})\s*$")
-    for line in r.stdout.splitlines():
-        if line.lstrip().startswith("{"):  # archon JSON log line
+    pat = re.compile(rf"task-issue-{issue_number}\b")
+    in_repo = False
+    for raw in r.stdout.splitlines():
+        line = raw.strip()
+        if line.endswith(":") and "github.com" in line:   # repo section header
+            in_repo = repo in line
             continue
-        m = pat.match(line)
-        if m:
-            return m.group(1)
+        if in_repo and line.lstrip().startswith("{"):  # archon JSON log line
+            continue
+        if in_repo and pat.search(line) and not line.startswith(("Path", "Type")):
+            return line
     return None
 
 
 def resume_issue(cfg: dict, env: dict, branch: str, wf: str,
-                 issue_number: int) -> tuple[bool, str]:
+                 issue_number: int) -> tuple[bool, str, str | None]:
     """Resume a blocked issue in its existing worktree after human input.
 
     Uses `archon continue` so the workflow picks up in the same worktree with
-    prior context; the human's latest comment is passed as the message. Removes
-    the needs-input label (the run is no longer blocked).
+    prior context; the human's latest comment is passed as the message.
+
+    Returns (ok, msg, full_branch). ok=False means the resume was NOT started
+    (or the spawned process died immediately); the caller falls back to a
+    fresh dispatch. Every False path leaves NO `archon continue` child
+    running, so the fallback can never double-run the issue: the needs-input
+    label is removed BEFORE the spawn, so a failed label edit means no child
+    was ever created. A lingering label stays as the recovery signal only on
+    the defer path (worktree branch unresolvable).
     """
-    full_branch = resolve_worktree_branch(env, issue_number)
+    full_branch = resolve_worktree_branch(env, issue_number, cfg["repo"])
     if full_branch is None:
-        # No worktree found (e.g. `archon isolation list` failed or the branch
-        # is gone): `archon continue` cannot use the shorthand branch, so do
-        # not resume with it. The caller falls back to a fresh dispatch and the
-        # needs-input label stays put (the issue is still awaiting input).
-        log(f"RESUME SKIPPED issue={issue_number}: no archon worktree for "
-            f"{branch!r}; caller should dispatch fresh")
-        return False, ""
+        log(f"RESUME DEFERRED issue={issue_number}: worktree branch not found "
+            f"(needs-input label kept; retrying next poll)")
+        return False, "", None
     r = gh(["issue", "view", str(issue_number), "-R", cfg["repo"], "--json", "comments",
             "-q", ".comments[-1].body"], env)
+    if r.returncode != 0:
+        log(f"COMMENT FETCH FAILED issue={issue_number}: {r.stderr.strip()[:200]} "
+            f"(resuming without the answer in context)")
     answer = (r.stdout or "").strip()[:600] if r.returncode == 0 else ""
     msg = (f"Resuming issue #{issue_number} after human input."
            + (f" Latest comment from the human: {answer}" if answer else ""))
+    # Remove the needs-input label FIRST: if this fails, no child has been
+    # spawned, so the caller's fresh-dispatch fallback cannot start a SECOND
+    # concurrent run for the same issue/worktree. The label edit is the gate;
+    # only a verified removal proceeds to spawn.
+    r = gh(["issue", "edit", str(issue_number), "-R", cfg["repo"],
+            "--remove-label", "needs-input"], env)
+    if r.returncode != 0:
+        log(f"RESUME LABEL REMOVE FAILED issue={issue_number}: "
+            f"{r.stderr.strip()[:200]} (label kept; not spawning)")
+        return False, msg, None
     log_path = ROOT / "automation" / "archon-runs.log"
     try:
         with open(log_path, "a") as out:
@@ -305,13 +335,18 @@ def resume_issue(cfg: dict, env: dict, branch: str, wf: str,
             )
     except OSError as exc:
         log(f"RESUME FAILED issue={issue_number}: {exc}")
-        return False, msg
-    r = gh(["issue", "edit", str(issue_number), "-R", cfg["repo"],
-            "--remove-label", "needs-input"], env)
-    if r.returncode != 0:
-        log(f"LABEL REMOVAL FAILED issue={issue_number}: {r.stderr.strip()}")
+        return False, msg, None
+    # A short grace period catches immediate non-zero exits (bad branch or
+    # workflow name): resuming must not be reported as success when no run
+    # will actually run. The label is already removed, so the caller's fresh
+    # dispatch replaces the dead run without a re-block cycle.
+    time.sleep(2)
+    if proc.poll() is not None:
+        log(f"RESUME FAILED issue={issue_number}: archon continue exited "
+            f"immediately with code {proc.returncode}")
+        return False, msg, None
     log(f"RESUMED issue={issue_number} branch={full_branch} wf={wf} pid={proc.pid}")
-    return True, msg
+    return True, msg, full_branch
 
 
 def dispatch(cfg: dict, env: dict, wf: str, branch: str, message: str,
@@ -378,9 +413,11 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
                 branch = f"issue-{content['number']}"
                 prior = state.get(item_id, {})
                 ok = False
+                resumed_branch = None
                 if "needs-input" in labels and prior.get("branch") and prior.get("wf"):
-                    ok, msg = resume_issue(cfg, env, prior["branch"], prior["wf"],
-                                           content["number"])
+                    ok, msg, resumed_branch = resume_issue(
+                        cfg, env, prior["branch"], prior["wf"], content["number"])
+
                     if ok:
                         wf = prior["wf"]
                 if not ok:
@@ -398,7 +435,7 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
                 if ok:
                     dispatched_msg = msg
                     dispatched_wf = wf
-                    dispatched_branch = branch
+                    dispatched_branch = resumed_branch or branch
                 target = cfg["dispatch"]["todo"].get("move_to")
                 if ok and target:
                     option_id = status_options.get(target)
@@ -420,6 +457,14 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
                     # Ensure the feature is in develop, then review the ship PR
                     # (feature -> main); on review completion the poller merges it.
                     pr = find_issue_pr(cfg, env, content["number"])
+                    if pr == "error":
+                        # A gh failure must never be misread as "no PR": the
+                        # develop merge would be skipped and the ship PR built
+                        # from a guessed head branch. Keep the item in place
+                        # (status not recorded -> lane re-entered next poll).
+                        log(f"PR LOOKUP DEFERRED item={item_id} "
+                            f"issue={content['number']}; retrying next poll")
+                        continue
                     if pr:
                         merge_base = cfg["dispatch"]["todo"].get(
                             "merge_develop_base", "develop")
@@ -477,28 +522,31 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
                 issue_number = rec.get("issue_number")
                 blocked_name = next(
                     (k for k, v in cfg["lanes"].items() if v == "blocked"), None)
-                label_state = (issue_has_label(cfg, env, issue_number, "needs-input")
-                               if (issue_number and blocked_name) else False)
-                if label_state is None:
-                    # gh label check failed (auth/rate-limit/network): do not
-                    # assume the label is absent. Leave the item in place and
-                    # retry next poll so a NEEDS INPUT issue never merges to
-                    # develop by accident.
-                    log(f"left item={item_id} in {in_progress_name} "
-                        f"(label check failed; retry next poll)")
-                    continue
-                if label_state:
-                    option_id = status_options.get(blocked_name)
-                    if option_id and move_to_lane(
-                            cfg, env, project_id, item_id, field_id, option_id):
-                        log(f"BLOCKED item={item_id} issue={issue_number} -> "
-                            f"{blocked_name} (awaiting human input)")
-                    rec.pop("dispatch_msg", None)
-                    continue
+                if issue_number and blocked_name:
+                    blocked = issue_has_label(cfg, env, issue_number, "needs-input")
+                    if blocked is None:
+                        log(f"BLOCKED CHECK DEFERRED item={item_id} issue={issue_number}; "
+                            f"retrying next poll")
+                        continue  # dispatch_msg retained -> re-checked next poll
+                    if blocked:
+                        option_id = status_options.get(blocked_name)
+                        if option_id and move_to_lane(
+                                cfg, env, project_id, item_id, field_id, option_id):
+                            log(f"BLOCKED item={item_id} issue={issue_number} -> "
+                                f"{blocked_name} (awaiting human input)")
+                        rec.pop("dispatch_msg", None)
+                        continue
                 merge_base = cfg["dispatch"]["todo"].get("merge_develop_base")
                 merge_ok = True
                 if issue_number and merge_base:
                     pr = find_issue_pr(cfg, env, issue_number)
+                    if pr == "error":
+                        # A gh failure must never be misread as "no PR": the
+                        # develop merge would be silently skipped and the item
+                        # advanced as if merged. Defer; dispatch_msg retained.
+                        log(f"PR LOOKUP DEFERRED item={item_id} "
+                            f"issue={issue_number}; retrying next poll")
+                        continue
                     if pr:
                         merge_ok, note = merge_pr_to_base(cfg, env, pr, merge_base,
                                                           issue_number)
