@@ -1301,6 +1301,9 @@ HTML = r"""<!doctype html>
     </div>
   </dialog>
   <script>
+    // Every env rendered as a dedicated knob (Run Setup or Advanced panels) must
+    // be listed here so renderAdvancedKnobs() omits it from the raw override
+    // list; otherwise the env appears twice and collectEnv() gets two inputs.
     const SURFACED_ENVS = new Set([
       "NEWS_SOURCE_SCOPE",
       "NEWS_RECIPIENT_SCOPE",
@@ -1849,8 +1852,13 @@ HTML = r"""<!doctype html>
         </section>`;
     }
     function renderAdvancedPanels() {
+      // Static container from the #advanced view; guard keeps this idempotent.
+      // Must run before renderModelTuningControls() so the tuning <select>s exist.
       const container = $("advancedPanels");
-      if (!container) return;
+      if (!container) {
+        console.error("renderAdvancedPanels: missing #advancedPanels container");
+        return;
+      }
       container.innerHTML = `
         ${modelTuningPanel("article_summary")}
         ${modelTuningPanel("story_drafting")}
