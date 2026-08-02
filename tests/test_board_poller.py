@@ -6,6 +6,7 @@ from automation.board_poller import (
     conflict_episode_action,
     dedupe_deferred,
     dep_gate,
+    find_unchecked_criteria,
     has_deferral_language,
     match_issue_pr,
     normalize_title,
@@ -270,6 +271,22 @@ class HasDeferralLanguageTest(unittest.TestCase):
         for text in ("All review findings were addressed in the PR.",
                      "249 passed + 25 subtests", "README.md updated", ""):
             self.assertFalse(has_deferral_language(text), text)
+
+
+class FindUncheckedCriteriaTest(unittest.TestCase):
+    def test_extracts_unchecked_lines(self):
+        body = ("## Acceptance criteria\n"
+                "- [x] MLX backend works — test_mlx\n"
+                "- [ ] llama.cpp adapter — not built\n"
+                "- [ ] GGUF loading — deferred\n")
+        self.assertEqual(find_unchecked_criteria(body),
+                         ["llama.cpp adapter — not built", "GGUF loading — deferred"])
+
+    def test_checked_lines_ignored(self):
+        self.assertEqual(find_unchecked_criteria("- [x] done\n[x] bare\n"), [])
+
+    def test_empty_body(self):
+        self.assertEqual(find_unchecked_criteria(""), [])
 
 
 if __name__ == "__main__":

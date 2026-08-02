@@ -11,11 +11,12 @@ Project goal: build, review, and send a daily news report from configured source
 - Need run presets -> `config/run_presets.yaml`.
 - Need model tuning presets -> `config/model_tuning_presets.yaml`.
 - Need board automation details -> `automation/` (`board_poller.py`, `config.json`).
-- Need the deferred-work guard design (why completion records carry a `## Deferred work` section) -> `docs/deferred-work-guard.md`.
+- Need the deferral strategy and the human-facing action checklist -> `README.md`, Project Automation (Deferred work bullet + Human touchpoints).
 - Need security audit results or the history-scrub runbook -> `docs/security/` (`audit-2026-08-02.md`, `history-scrub.md`).
 - Need the security audit scanner or the gated scrub wrapper -> `automation/` (`security_audit.py` — exit 0 clean / 1 findings; `scrub_history.sh` — dry-run default, force-push requires human approval).
 - Need a read-only board health report (stale runs, unknown blockers, unsatisfied deps) -> `python3 automation/board_health.py` (exit 0 always; prints findings).
 - Need poller one-shot/dry-run checks -> `python3 automation/board_poller.py --once` / `--dry-run` (no mutations, one poll).
+- Need to re-apply local archon workflow edits or restart the poller after a deploy -> `automation/deploy.sh` (idempotent; also covers archon reinstall, see `docs/archon-workflows.md`).
 - Need the Archon workflow inventory (usable vs archived) -> `docs/archon-workflows.md`.
 - Need the machine-local Archon setup/operations map (services, quirks, upgrade) -> `docs/archon-setup.md`.
 
@@ -31,8 +32,8 @@ Project goal: build, review, and send a daily news report from configured source
 ## Fresh-session quickstart (GitHub project/issue manager)
 - Board: https://github.com/users/bradley-mankoff/projects/1 — lanes `Backlog` -> `Todo` -> `In Progress` -> `Ready for Review` -> `In Review` -> `Done`. The board drives everything; nothing starts from `Backlog`.
 - Status checks: `launchctl list | grep news-board-poller` (poller alive), `tail -f automation/board_poller.log` (poller log), `archon workflow runs` (runs, from repo root), `archon workflow get <id> --json` (one run).
-- Board ops: `python3 automation/move_item.py <issue> <lane>`; issues: `gh issue create -R bradley-mankoff/news`. Automation config: `automation/config.json` (lanes, workflow mapping, merge targets).
-- Creating a Backlog issue (3 steps): `gh issue create -R bradley-mankoff/news`, then `gh project item-add 1 --owner bradley-mankoff --url <issue-url>`, then `python3 automation/move_item.py <N> Backlog`. (Items land in "No status" when added; the poller normalizes them to Backlog within a poll, but the explicit move is immediate.)
+- Board ops: `python3 automation/move_item.py <issue> <lane>`; issues: `python3 automation/create_issue.py "<title>"`. Automation config: `automation/config.json` (lanes, workflow mapping, merge targets).
+- Creating a Backlog issue: `python3 automation/create_issue.py "<title>"` (one step: create + board + default lane; `--label feature` → idea-to-pr dispatch, `--body` for context, `--lane` to override).
 - Who moves what: the human drags to `Todo` (start work) and `In Review` (ship + quality review); the poller moves `In Progress` (on dispatch), `Ready for Review` (run completed + PR merged into develop), `Done` (ship PR merged into main after review).
 - Branch model: `develop` = integration (repo default; workflow base); `main` = production (only via reviewed ship PRs); per-issue branches `archon/task-issue-<N>`.
 - GitHub access convention: gh CLI + the automation scripts (no MCP server).
