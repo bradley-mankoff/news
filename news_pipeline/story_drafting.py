@@ -183,7 +183,10 @@ def build_story_synthesis_prompt_messages(
     story_guidance = prompt_instructions or DEFAULT_PROMPT_INSTRUCTIONS["story_drafting"]
     citation_contract = STORY_DRAFTING_CITATION_CONTRACT
     output_contract = STORY_DRAFTING_OUTPUT_CONTRACT
-    system_prompt = SystemMessage(content=textwrap.dedent(f"""
+    # Dedent BEFORE .format(): the multi-line citation_contract value contains
+    # column-0 lines, so dedent-after-interpolation would collapse the margin
+    # and leave every template line indented 8 spaces (byte-identity drift).
+    system_prompt = SystemMessage(content=textwrap.dedent("""
         Today: {now_label}.
         You are synthesizing prewritten article summaries and cleaned article evidence into one newsletter story.
         Use only the supplied source summaries and cleaned article evidence.
@@ -212,15 +215,32 @@ def build_story_synthesis_prompt_messages(
         not only the source summaries.
         Do not write bullets, source-material notes, methodology, bibliography, or preamble.
         Do not merge in background material unless a source summary reports it as part of today's update.
-    """).strip())
-    user_prompt = HumanMessage(content=textwrap.dedent(f"""
-        Story: {story_title}
+    """).format(
+        now_label=now_label,
+        citation_contract=citation_contract,
+        story_guidance=story_guidance,
+    ).strip())
+    # User prompt byte-identity notes: the source block's FIRST line historically
+    # rendered at the 8-space placeholder position (the pre-existing
+    # {source_summary_lines} interpolation already forced a no-op dedent), while
+    # its remaining lines sit at column 0; the output-contract block rendered
+    # 8-space indented. Reconstruct that exact layout explicitly.
+    user_prompt = HumanMessage(content=(
+        textwrap.dedent("""
+            Story: {story_title}
 
-        Source summaries and cleaned article evidence to paraphrase, not quote:
-        {source_summary_lines}
-
-        {output_contract}
-    """).strip())
+        """).format(story_title=story_title).strip()
+        + "\n\n"
+        + textwrap.indent(
+            "Source summaries and cleaned article evidence to paraphrase, not quote:",
+            "        ",
+        )
+        + "\n"
+        + "        "
+        + source_summary_lines
+        + "\n\n"
+        + textwrap.indent(output_contract, "        ")
+    ))
     return [system_prompt, user_prompt]
 
 

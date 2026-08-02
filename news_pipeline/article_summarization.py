@@ -60,9 +60,12 @@ def build_article_summary_prompt_messages(
     selection_guidance = f"7. {runtime.prompt_instructions or DEFAULT_PROMPT_INSTRUCTIONS['article_summary']}"
     output_contract = ARTICLE_SUMMARY_OUTPUT_CONTRACT
     block_intro = ARTICLE_SUMMARY_BLOCK_INTRO
-    system_prompt = SystemMessage(content=textwrap.dedent(f"""
+    # Dedent BEFORE .format(): the multi-line output_contract value contains
+    # column-0 lines, so dedent-after-interpolation would collapse the margin
+    # and leave every template line indented 8 spaces (byte-identity drift).
+    system_prompt = SystemMessage(content=textwrap.dedent("""
         Today: {now_label}.
-        Current Task: Summarize one preselected article from the last {runtime.recent_window_hours} hours
+        Current Task: Summarize one preselected article from the last {recent_window_hours} hours
         for story discovery, selection, and synthesis.
         1. Use only the provided article metadata, URL, description, and article text.
         2. Do not call tools in this step.
@@ -73,7 +76,12 @@ def build_article_summary_prompt_messages(
            when the article reports a new fact about it or one short clause is needed for orientation.
         {selection_guidance}
         {output_contract}
-    """).strip())
+    """).format(
+        now_label=now_label,
+        recent_window_hours=runtime.recent_window_hours,
+        selection_guidance=selection_guidance,
+        output_contract=output_contract,
+    ).strip())
     story_line = f"Story: {current_article.get('story_title')}\n" if current_article.get("story_title") else ""
     article_payload = (
         "Selected article:\n\n"
