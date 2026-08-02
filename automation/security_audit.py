@@ -427,30 +427,20 @@ def write_report(
     add("")
     add("## History Findings")
     add("")
-    if history_emails:
-        add("### Personal emails in commit content")
+    def add_pattern_section(title: str, stats: list[CategoryStats]) -> None:
+        if not stats:
+            return
+        add(f"### {title}")
         add("")
         add("| Pattern | Affected commits | Matches | Example commits |")
         add("|---|---|---|---|")
-        for s in history_emails:
+        for s in stats:
             add(f"| `{s.label}` | {s.commit_count}/{total} | {s.match_count} | {_fmt_examples(s.example_commits)} |")
         add("")
-    if history_paths:
-        add("### Personal filesystem paths in commit content")
-        add("")
-        add("| Pattern | Affected commits | Matches | Example commits |")
-        add("|---|---|---|---|")
-        for s in history_paths:
-            add(f"| `{s.label}` | {s.commit_count}/{total} | {s.match_count} | {_fmt_examples(s.example_commits)} |")
-        add("")
-    if history_secrets:
-        add("### Secret patterns in commit content")
-        add("")
-        add("| Pattern | Affected commits | Matches | Example commits |")
-        add("|---|---|---|---|")
-        for s in history_secrets:
-            add(f"| `{s.label}` | {s.commit_count}/{total} | {s.match_count} | {_fmt_examples(s.example_commits)} |")
-        add("")
+
+    add_pattern_section("Personal emails in commit content", history_emails)
+    add_pattern_section("Personal filesystem paths in commit content", history_paths)
+    add_pattern_section("Secret patterns in commit content", history_secrets)
     if not any((history_emails, history_paths, history_secrets)):
         add("No personal data or secret patterns found in any commit.")
         add("")
