@@ -24,7 +24,11 @@ The repo runs a fully automated agentic loop driven by the GitHub project board
 
 ### Board flow
 
-- Lanes: `Backlog` → `Todo` → `In Progress` → `Ready for Review` → `In Review` → `Done`.
+- Lanes: `Backlog` → `Todo` → `In Progress` → `Blocked` → `Ready for Review` → `In Review` → `Done`.
+- `Blocked` = the agent asked the human a question (see the `NEEDS INPUT`
+  comment + `needs-input` label on the issue); answer on the issue and drag
+  the ticket back to `Todo` — the poller resumes the workflow in the same
+  worktree (`archon continue`) instead of starting over.
 - Branch model: `main` = production; `develop` = integration (repo default branch,
   workflow PRs target it); every issue works on its own branch
   (`archon/task-issue-<N>`) in an isolated worktree, so issues in `Todo` run in
@@ -180,6 +184,23 @@ Key Run Settings:
 - `NEWS_MODEL`: default model selection only. Task models are assigned
   separately with `NEWS_MODEL_ARTICLE_SUMMARY` and
   `NEWS_MODEL_STORY_DRAFTING`.
+
+### Prompt Profiles
+
+Prompt Profiles are built-in editorial tone bundles for the five LLM prompt
+stages (article summary, story scale screening, story drafting, title
+generation, image art direction). They swap editorial instruction sentences
+only; the pipeline's machine-required output contracts are unchanged.
+
+```bash
+uv run news run --prompt-profile playful
+NEWS_PROMPT_PROFILE=facts-only uv run news run
+```
+
+Built-in profiles: `balanced` (default), `consensus-and-contradiction`,
+`playful`, `facts-only`, `explain-like-im-five`. The UI's "Editorial approach"
+panel selects a profile, restores defaults, and shows per-task diffs against
+`balanced`. Profiles can also be pinned inside a Run Preset's `env` map.
 
 ### Model Selection
 

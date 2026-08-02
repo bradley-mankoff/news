@@ -297,6 +297,13 @@ class ConfigHelperTests(unittest.TestCase):
         self.assertEqual(knob["options"], ["one"])
         registry = config_module.runtime_knob_registry()
         self.assertTrue(any(knob["env"] == "NEWS_MODEL_CONCURRENCY" for knob in registry))
+        # Pin the Prompt Profile knob contract: select with catalog-backed
+        # default and options (drift-guard for runtime_knob_registry).
+        prompt_profile_knob = next(knob for knob in registry if knob["env"] == "NEWS_PROMPT_PROFILE")
+        self.assertEqual(prompt_profile_knob["type"], "select")
+        self.assertEqual(prompt_profile_knob["default"], "balanced")
+        self.assertIn("playful", prompt_profile_knob["options"])
+        self.assertEqual(set(prompt_profile_knob["options"]), set(config_module.PROMPT_PROFILE_IDS))
 
     def test_yaml_scope_and_runtime_config_helpers_cover_edge_branches(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

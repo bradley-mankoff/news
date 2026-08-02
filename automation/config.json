@@ -10,6 +10,7 @@
     "Backlog": "backlog",
     "Todo": "todo",
     "In Progress": "in_progress",
+    "Blocked": "blocked",
     "Ready for Review": "ready",
     "In Review": "review",
     "Done": "done"
