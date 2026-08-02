@@ -24,7 +24,11 @@ The repo runs a fully automated agentic loop driven by the GitHub project board
 
 ### Board flow
 
-- Lanes: `Backlog` → `Todo` → `In Progress` → `Ready for Review` → `In Review` → `Done`.
+- Lanes: `Backlog` → `Todo` → `In Progress` → `Blocked` → `Ready for Review` → `In Review` → `Done`.
+- `Blocked` = the agent asked the human a question (see the `NEEDS INPUT`
+  comment + `needs-input` label on the issue); answer on the issue and drag
+  the ticket back to `Todo` — the poller resumes the workflow in the same
+  worktree (`archon continue`) instead of starting over.
 - Branch model: `main` = production; `develop` = integration (repo default branch,
   workflow PRs target it); every issue works on its own branch
   (`archon/task-issue-<N>`) in an isolated worktree, so issues in `Todo` run in
