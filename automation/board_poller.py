@@ -140,12 +140,19 @@ def fetch_project(cfg: dict, env: dict) -> tuple[str, str, dict, list[dict]]:
 
 
 def find_issue_pr(cfg: dict, env: dict, issue_number: int,
-                  state: str = "all") -> dict | None:
-    """Find the PR linked to an issue (any state) by body/title reference."""
+                  state: str = "all") -> dict | None | str:
+    """Find the PR linked to an issue (any state) by body/title reference.
+
+    Returns the PR dict, None when genuinely absent, or "error" when gh
+    failed. A gh failure must never be misread as "no PR": the callers gate
+    the develop merge and the ship-PR head choice on this, and skipping the
+    merge silently ships the feature past the develop integration gate.
+    """
     r = gh(["pr", "list", "-R", cfg["repo"], "--state", state,
             "--json", "number,title,body,headRefName,baseRefName,state"], env)
     if r.returncode != 0:
-        return None
+        log(f"PR LIST FAILED issue={issue_number}: {r.stderr.strip()[:200]}")
+        return "error"
     prs = json.loads(r.stdout)
     pat = re.compile(
         rf"(?:\b(?:fix(?:es)?|clos(?:es|e)|resolv(?:es|e))\s+#{issue_number}\b)"
@@ -281,12 +288,19 @@ def resolve_worktree_branch(env: dict, issue_number: int, repo: str) -> str | No
 
 
 def resume_issue(cfg: dict, env: dict, branch: str, wf: str,
-                 issue_number: int) -> tuple[bool, str]:
+                 issue_number: int) -> tuple[bool, str, str | None]:
     """Resume a blocked issue in its existing worktree after human input.
 
     Uses `archon continue` so the workflow picks up in the same worktree with
-    prior context; the human's latest comment is passed as the message. Removes
-    the needs-input label (the run is no longer blocked).
+    prior context; the human's latest comment is passed as the message.
+
+    Returns (ok, msg, full_branch). ok=False means the resume was NOT started
+    (or the spawned process died immediately); the caller falls back to a
+    fresh dispatch. Every False path leaves NO `archon continue` child
+    running, so the fallback can never double-run the issue: the needs-input
+    label is removed BEFORE the spawn, so a failed label edit means no child
+    was ever created. A lingering label stays as the recovery signal only on
+    the defer path (worktree branch unresolvable).
     """
     full_branch = resolve_worktree_branch(env, issue_number, cfg["repo"])
     if full_branch is None:
@@ -301,6 +315,16 @@ def resume_issue(cfg: dict, env: dict, branch: str, wf: str,
     answer = (r.stdout or "").strip()[:600] if r.returncode == 0 else ""
     msg = (f"Resuming issue #{issue_number} after human input."
            + (f" Latest comment from the human: {answer}" if answer else ""))
+    # Remove the needs-input label FIRST: if this fails, no child has been
+    # spawned, so the caller's fresh-dispatch fallback cannot start a SECOND
+    # concurrent run for the same issue/worktree. The label edit is the gate;
+    # only a verified removal proceeds to spawn.
+    r = gh(["issue", "edit", str(issue_number), "-R", cfg["repo"],
+            "--remove-label", "needs-input"], env)
+    if r.returncode != 0:
+        log(f"RESUME LABEL REMOVE FAILED issue={issue_number}: "
+            f"{r.stderr.strip()[:200]} (label kept; not spawning)")
+        return False, msg, None
     log_path = ROOT / "automation" / "archon-runs.log"
     try:
         with open(log_path, "a") as out:
@@ -314,17 +338,12 @@ def resume_issue(cfg: dict, env: dict, branch: str, wf: str,
         return False, msg, None
     # A short grace period catches immediate non-zero exits (bad branch or
     # workflow name): resuming must not be reported as success when no run
-    # will actually run, and the needs-input label must stay if it does.
+    # will actually run. The label is already removed, so the caller's fresh
+    # dispatch replaces the dead run without a re-block cycle.
     time.sleep(2)
     if proc.poll() is not None:
         log(f"RESUME FAILED issue={issue_number}: archon continue exited "
             f"immediately with code {proc.returncode}")
-        return False, msg, None
-    r = gh(["issue", "edit", str(issue_number), "-R", cfg["repo"],
-            "--remove-label", "needs-input"], env)
-    if r.returncode != 0:
-        log(f"RESUME LABEL REMOVE FAILED issue={issue_number}: "
-            f"{r.stderr.strip()[:200]}")
         return False, msg, None
     log(f"RESUMED issue={issue_number} branch={full_branch} wf={wf} pid={proc.pid}")
     return True, msg, full_branch
@@ -438,6 +457,14 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
                     # Ensure the feature is in develop, then review the ship PR
                     # (feature -> main); on review completion the poller merges it.
                     pr = find_issue_pr(cfg, env, content["number"])
+                    if pr == "error":
+                        # A gh failure must never be misread as "no PR": the
+                        # develop merge would be skipped and the ship PR built
+                        # from a guessed head branch. Keep the item in place
+                        # (status not recorded -> lane re-entered next poll).
+                        log(f"PR LOOKUP DEFERRED item={item_id} "
+                            f"issue={content['number']}; retrying next poll")
+                        continue
                     if pr:
                         merge_base = cfg["dispatch"]["todo"].get(
                             "merge_develop_base", "develop")
@@ -513,6 +540,13 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
                 merge_ok = True
                 if issue_number and merge_base:
                     pr = find_issue_pr(cfg, env, issue_number)
+                    if pr == "error":
+                        # A gh failure must never be misread as "no PR": the
+                        # develop merge would be silently skipped and the item
+                        # advanced as if merged. Defer; dispatch_msg retained.
+                        log(f"PR LOOKUP DEFERRED item={item_id} "
+                            f"issue={issue_number}; retrying next poll")
+                        continue
                     if pr:
                         merge_ok, note = merge_pr_to_base(cfg, env, pr, merge_base,
                                                           issue_number)

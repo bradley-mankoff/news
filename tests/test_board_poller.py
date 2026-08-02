@@ -7,11 +7,15 @@ review fixes:
   preambles (the resume-never-reconciles bug, CRITICAL)
 - issue_has_label: tri-state so a gh failure can never be misread as
   "label absent" (a blocked issue could otherwise ship past the human, HIGH)
+- find_issue_pr: tri-state so a gh failure can never be misread as "no PR"
+  (the develop merge / ship-PR head choice would otherwise silently skip the
+  develop integration gate, HIGH)
 - resolve_worktree_branch: repo-scoped parsing with logged failures and no
   silent fallback to the invalid shorthand (HIGH)
-- resume_issue: defers when the worktree branch can't be resolved, verifies
-  the spawned run actually started, and only removes the needs-input label
-  after a verified spawn and successful label edit (HIGH)
+- resume_issue: defers when the worktree branch can't be resolved, removes
+  the needs-input label BEFORE spawning (a failed label edit leaves no child,
+  so the caller's fresh-dispatch fallback can never double-run the issue),
+  and verifies the spawned run actually started (HIGH)
 - poll(): todo-lane resume-vs-dispatch branch selection and the completion
   reconciliation blocked-lane gate (label None -> stays put, True ->
   Blocked, False -> develop merge)
@@ -21,6 +25,7 @@ Follows the repo's unittest + MagicMock conventions (see tests/test_pipeline_hel
 
 from __future__ import annotations
 
+import json
 import subprocess
 import unittest
 from contextlib import ExitStack
@@ -158,6 +163,51 @@ class IssueHasLabelTests(unittest.TestCase):
         self.assertIn("LABEL CHECK TIMEOUT", log.call_args[0][0])
 
 
+class FindIssuePrTests(unittest.TestCase):
+    """HIGH: a gh failure must return "error" (undetermined), never None —
+    the callers gate the develop merge and the ship-PR head choice on this,
+    and "no PR" would silently skip the develop integration merge."""
+
+    def _fake(self, returncode: int = 0, stdout: str = "[]",
+              stderr: str = "") -> MagicMock:
+        return MagicMock(returncode=returncode, stdout=stdout, stderr=stderr)
+
+    def test_returns_pr_when_body_references_issue(self) -> None:
+        prs = json.dumps([{"number": 60, "title": "Ship: license",
+                           "body": "Implements the license.\n\nFixes #21",
+                           "headRefName": "archon/task-issue-21",
+                           "baseRefName": "develop", "state": "OPEN"}])
+        with patch.object(bp, "gh", return_value=self._fake(stdout=prs)):
+            pr = bp.find_issue_pr(_cfg(), {}, 21)
+        self.assertIsNotNone(pr)
+        self.assertEqual(pr["number"], 60)
+
+    def test_returns_pr_when_title_references_issue(self) -> None:
+        prs = json.dumps([{"number": 61, "title": "Ship: license (#21)",
+                           "body": "", "headRefName": "archon/task-issue-21",
+                           "baseRefName": "main", "state": "OPEN"}])
+        with patch.object(bp, "gh", return_value=self._fake(stdout=prs)):
+            pr = bp.find_issue_pr(_cfg(), {}, 21)
+        self.assertEqual(pr["number"], 61)
+
+    def test_returns_none_when_no_pr_references_issue(self) -> None:
+        prs = json.dumps([{"number": 62, "title": "Unrelated",
+                           "body": "No reference here.",
+                           "headRefName": "x", "baseRefName": "develop",
+                           "state": "OPEN"}])
+        with patch.object(bp, "gh", return_value=self._fake(stdout=prs)):
+            self.assertIsNone(bp.find_issue_pr(_cfg(), {}, 21))
+
+    def test_returns_error_and_logs_when_gh_fails(self) -> None:
+        with patch.object(bp, "gh",
+                          return_value=self._fake(
+                              returncode=1, stderr="rate limit exceeded")), \
+             patch.object(bp, "log") as log:
+            self.assertEqual(bp.find_issue_pr(_cfg(), {}, 21), "error")
+        log.assert_called_once()
+        self.assertIn("PR LIST FAILED", log.call_args[0][0])
+
+
 class ResolveWorktreeBranchTests(unittest.TestCase):
     """HIGH: repo-scoped parse; failures logged; no silent wrong match."""
 
@@ -256,37 +306,42 @@ class ResumeIssueTests(unittest.TestCase):
         self.assertIn("needs-input", remove)
 
     def test_fails_when_continue_exits_immediately(self) -> None:
-        """A run that dies instantly must not be reported as resumed, and the
-        needs-input label must stay (it is the recovery signal)."""
+        """A run that dies instantly must not be reported as resumed. The
+        label is already removed by then (it gates the spawn), so the caller's
+        fresh dispatch replaces the dead run without a re-block cycle — but a
+        second run is only ever started after the child is confirmed dead."""
         proc = MagicMock()
         proc.poll.return_value = 1
+        comment = MagicMock(returncode=0, stdout="answer")
+        label = MagicMock(returncode=0, stdout="")
+        gh_calls = iter([comment, label])
         with patch.object(bp, "resolve_worktree_branch",
                           return_value="archon/task-issue-21"), \
              patch.object(bp, "time"), \
-             patch.object(bp.subprocess, "Popen", return_value=proc), \
-             patch.object(bp, "gh") as gh, \
+             patch.object(bp.subprocess, "Popen", return_value=proc) as popen, \
+             patch.object(bp, "gh",
+                          side_effect=lambda *a, **k: next(gh_calls)) as gh, \
              patch("builtins.open", mock_open()):
             ok, msg, full = bp.resume_issue(_cfg(), {}, "issue-21",
                                             "archon-fix-github-issue", 21)
         self.assertFalse(ok)
         self.assertIsNone(full)
-        # the comment fetch may have happened, but the needs-input label
-        # removal must NOT have been attempted
-        self.assertFalse(any("--remove-label" in c.args[0]
-                             for c in gh.call_args_list))
+        popen.assert_called_once()
+        # the label edit (the spawn gate) happened before the dead child
+        self.assertTrue(any("--remove-label" in c.args[0]
+                            for c in gh.call_args_list))
 
     def test_fails_when_label_removal_fails(self) -> None:
-        """A failed label removal would re-block the next completed run; the
-        resume must not be reported as successful."""
-        proc = MagicMock()
-        proc.poll.return_value = None
+        """The label edit gates the spawn: a failed removal must leave NO
+        child running, so the caller's fresh-dispatch fallback cannot start a
+        second concurrent run for the same issue/worktree (the double-run
+        hazard the reorder eliminates)."""
         comment = MagicMock(returncode=0, stdout="answer")
         label = MagicMock(returncode=1, stdout="", stderr="boom")
         gh_calls = iter([comment, label])
         with patch.object(bp, "resolve_worktree_branch",
                           return_value="archon/task-issue-21"), \
-             patch.object(bp, "time"), \
-             patch.object(bp.subprocess, "Popen", return_value=proc), \
+             patch.object(bp.subprocess, "Popen") as popen, \
              patch.object(bp, "gh", side_effect=lambda *a, **k: next(gh_calls)), \
              patch.object(bp, "log") as log, \
              patch("builtins.open", mock_open()):
@@ -294,6 +349,7 @@ class ResumeIssueTests(unittest.TestCase):
                                             "archon-fix-github-issue", 21)
         self.assertFalse(ok)
         self.assertIsNone(full)
+        popen.assert_not_called()  # no child -> caller fallback is safe
         self.assertTrue(any("LABEL REMOVE FAILED" in c.args[0]
                             for c in log.call_args_list))
 
@@ -460,6 +516,45 @@ class PollFlowTest(unittest.TestCase):
         move.assert_called_once()
         self.assertEqual(move.call_args.args[5], "r")  # Ready for Review
         self.assertNotIn("dispatch_msg", state["item-1"])
+
+    def test_pr_lookup_failure_leaves_item_in_progress(self) -> None:
+        """gh failure on PR lookup ("error") must not be read as "no PR":
+        the item stays put, dispatch_msg is retained, nothing merges."""
+        state = self._in_progress_state()
+        stack, move = self._poll_patches(label_state=False)
+        stack.enter_context(patch(
+            "automation.board_poller.find_issue_pr", return_value="error"))
+        merge = stack.enter_context(patch(
+            "automation.board_poller.merge_pr_to_base"))
+        with stack:
+            bp.poll(_cfg(), {}, state)
+        move.assert_not_called()
+        merge.assert_not_called()
+        self.assertEqual(state["item-1"]["dispatch_msg"], self.MSG)
+
+    def test_pr_lookup_failure_defers_review_lane(self) -> None:
+        """gh failure on PR lookup must not create a ship PR from a guessed
+        head branch; the item's status is not recorded, so the review lane is
+        re-entered (and the lookup retried) next poll."""
+        state = {"_meta": {"snapshot_done": True},
+                 "item-1": {"status": "Ready for Review"}}
+        item = self._item(status="In Review")
+        with patch("automation.board_poller.fetch_project",
+                   return_value=self._project([item])), \
+             patch("automation.board_poller.find_issue_pr",
+                   return_value="error"), \
+             patch("automation.board_poller.merge_pr_to_base") as merge, \
+             patch("automation.board_poller.find_or_create_ship_pr") as ship, \
+             patch("automation.board_poller.dispatch") as dispatch, \
+             patch("automation.board_poller.save_state"), \
+             patch("automation.board_poller.log") as log:
+            bp.poll(_cfg(), {}, state)
+        merge.assert_not_called()
+        ship.assert_not_called()
+        dispatch.assert_not_called()
+        self.assertEqual(state["item-1"]["status"], "Ready for Review")
+        self.assertTrue(any("PR LOOKUP DEFERRED" in c.args[0]
+                            for c in log.call_args_list))
 
     # -- todo-lane resume-vs-dispatch selection ----------------------------
 
