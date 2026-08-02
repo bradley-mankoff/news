@@ -46,8 +46,8 @@ The `bradley` terminology was replaced with `primary` (issue #23):
 - `NEWS_RECIPIENT_SCOPE=bradley` and `bradley-only` are rejected with a
   `ValueError` — use `primary` (or the `single` alias).
 - `NEWS_BRADLEY_RECIPIENT` is no longer read. Rename it to
-  `NEWS_PRIMARY_RECIPIENT`; a leftover `NEWS_BRADLEY_RECIPIENT` is silently
-  ignored (a warning is printed to stderr) and delivery falls back to the
+  `NEWS_PRIMARY_RECIPIENT`; a leftover `NEWS_BRADLEY_RECIPIENT` is ignored
+  (a warning is printed to stderr), and delivery falls back to the
   `primary@example.com` default.
 
 ## Advanced Run Settings
