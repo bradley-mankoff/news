@@ -4269,7 +4269,7 @@ def _run_pipeline() -> None:
     ACTIVE_RUN_DIAGNOSTICS = diagnostics
     ACTIVE_RUN_FINALIZER = _active_run_finalizer(diagnostics, CONFIG)
     image_status = "image on" if IMAGE_GENERATION_ENABLED else "image off"
-    send_target = "Bradley only" if RECIPIENT_SCOPE == "bradley" else "active recipients"
+    send_target = "Primary only" if RECIPIENT_SCOPE == "bradley" else "active recipients"
     preset_label = PRESET_ID or "custom"
     progress_tracker.step(
         "setup",
