@@ -74,7 +74,7 @@ The handoff should be saved as `HANDOFF.md` at the repository root: `/Users/home
   - Native hardware compatibility for saved GPU/CPU/Apple Silicon hardware and GGUF/MLX quantizations: https://huggingface.co/docs/hub/hardware
 - [x] Confirmed `huggingface-hub` appears transitively in `uv.lock` but is not a direct dependency in `pyproject.toml`.
 - [x] Audited immediate open-source blockers:
-  - No `LICENSE`, `LICENSE.md`, `LICENSE.txt`, or `COPYING` was found.
+  - No `LICENSE`, `LICENSE.md`, `LICENSE.txt`, or `COPYING` was found — resolved: Apache-2.0 `LICENSE` added (ADR 0010).
   - `pyproject.toml:2` previously used the private folder name; renamed to `news-pipeline` (ADR 0009).
   - `README.md` quickstart previously referenced the private path; now clone-based (ADR 0009).
   - `config/recipients.yaml` contains real names and email addresses.
@@ -91,7 +91,7 @@ The handoff should be saved as `HANDOFF.md` at the repository root: `/Users/home
 
 ### Pending
 - [x] Decide the public project and package name (`news-pipeline`, ADR 0009).
-- [ ] Choose a project license. Prior recommendation: Apache-2.0 for permissive use with a patent grant; AGPL-3.0 only if hosted modifications must remain open.
+- [x] Choose a project license. Apache-2.0 chosen by owner on issue #21 (ADR 0010); AGPL-3.0 rejected (network copyleft).
 - [ ] Audit repository history for secrets and personal data before making the repository public.
 - [ ] Replace real recipients, personal email defaults, and personal filesystem paths with safe examples.
 - [ ] Decide the initially supported runtime matrix:

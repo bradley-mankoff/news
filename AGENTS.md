@@ -49,6 +49,7 @@ Project goal: build, review, and send a daily news report from configured source
 - Add the label: `gh issue edit <N> --add-label needs-input`
 - Make no further changes. The run ends; the poller moves the issue to `Blocked` (no develop merge).
 - The human answers on the issue and drags it back to `Todo`; the poller resumes the workflow in the same worktree with their answer in the comments. Continue from where you stopped.
+- **Never use GitHub auto-close keywords (`fix`/`fixes`/`fixed`/`closes`/`resolves` + `#N`) in commit messages or PR bodies on develop PRs** — GitHub closes the issue the moment the branch merges into develop. Write `Issue: #N` instead; the issue closes automatically when the ship PR reaches `main`.
 - After the PR merges, the issue is moved to `Done` by the poller; manual move also works:
   `python3 automation/move_item.py <issue-number> Done`
 - Workflow dispatch is label-aware: `bug` -> `archon-fix-github-issue`; `feature`/`enhancement` -> `archon-idea-to-pr`; default -> `archon-fix-github-issue`. Overrides live in `automation/config.json`.

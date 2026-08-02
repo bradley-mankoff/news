@@ -336,6 +336,10 @@ uv run news history cleanup --apply
 uv run news history export
 ```
 
+## License
+
+Licensed under the [Apache License 2.0](LICENSE).
+
 ## Fast Test Run
 
 For a quick local test that minimizes runtime and sends to a single
