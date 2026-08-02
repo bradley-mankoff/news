@@ -49,7 +49,7 @@ SECRET_PATTERNS = [
     ("github-token", re.compile(r"gh[pousr]_[A-Za-z0-9]{20,}")),
     ("aws-access-key", re.compile(r"AKIA[0-9A-Z]{16}")),
     ("google-api-key", re.compile(r"AIza[0-9A-Za-z_-]{30,}")),
-    ("slack-token", re.compile(r"xox[baprs]-")),
+    ("slack-token", re.compile(r"xox[baprs]-[0-9]{10,}")),
     ("private-key-header", re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----")),
 ]
 
