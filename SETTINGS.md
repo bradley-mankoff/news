@@ -127,7 +127,7 @@ bundles.
 | `uv run news run --preset NAME` | Run with a saved preset. |
 | `uv run news run` | Run with defaults and explicit environment overrides. |
 | `uv run news ui` | Start the guided local control panel. |
-| `uv run news model-server-command` | Print the resolved local model server command and exit. |
+| `uv run news model-server-command` | Print the resolved local model server command and exit (external backend: prints a "no managed server command" notice and exits 2). |
 | `uv run news check-sources` | Check configured source connectivity. |
 | `uv run news source-languages` | Detect or verify source language tags. |
 | `uv run news serve-unsubscribe` | Start the local unsubscribe endpoint. |

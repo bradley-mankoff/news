@@ -104,6 +104,28 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
                 )
             )
 
+    def test_news_model_backend_is_case_and_whitespace_insensitive(self) -> None:
+        resolution = resolve_runtime_config(
+            RuntimeConfigRequest(
+                base_env={
+                    "NEWS_MODEL_BACKEND": " EXTERNAL ",
+                    "NEWS_MODEL_BASE_URL": "https://api.example.com/v1",
+                },
+                materialize_outputs=False,
+            )
+        )
+
+        self.assertEqual(resolution.config.model_backend, "external")
+
+    def test_news_model_backend_external_requires_base_url(self) -> None:
+        with self.assertRaisesRegex(ValueError, "NEWS_MODEL_BACKEND=external requires NEWS_MODEL_BASE_URL"):
+            resolve_runtime_config(
+                RuntimeConfigRequest(
+                    base_env={"NEWS_MODEL_BACKEND": "external"},
+                    materialize_outputs=False,
+                )
+            )
+
     def test_preset_marker_overrides_do_not_desynchronize_resolution(self) -> None:
         resolution = resolve_runtime_config(
             RuntimeConfigRequest(
