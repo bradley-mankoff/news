@@ -230,6 +230,61 @@ def move_to_lane(cfg: dict, env: dict, project_id: str, item_id: str,
     return r.returncode == 0
 
 
+def issue_has_label(cfg: dict, env: dict, issue_number: int, label: str) -> bool:
+    r = gh(["issue", "view", str(issue_number), "-R", cfg["repo"], "--json", "labels",
+            "-q", ".labels[].name"], env)
+    return r.returncode == 0 and label in r.stdout.split()
+
+
+def resolve_worktree_branch(env: dict, issue_number: int) -> str | None:
+    """Find the archon worktree branch for an issue (e.g. archon/task-issue-12).
+
+    `archon continue` needs the full namespaced branch, not the shorthand the
+    poller passes to `workflow run --branch`.
+    """
+    r = subprocess.run(["archon", "isolation", "list"], capture_output=True,
+                       text=True, timeout=60, env=env, cwd=str(ROOT))
+    if r.returncode != 0:
+        return None
+    pat = re.compile(rf"task-issue-{issue_number}\b")
+    for line in r.stdout.splitlines():
+        line = line.strip()
+        if pat.search(line) and not line.startswith(("Path", "Type")):
+            return line
+    return None
+
+
+def resume_issue(cfg: dict, env: dict, branch: str, wf: str,
+                 issue_number: int) -> tuple[bool, str]:
+    """Resume a blocked issue in its existing worktree after human input.
+
+    Uses `archon continue` so the workflow picks up in the same worktree with
+    prior context; the human's latest comment is passed as the message. Removes
+    the needs-input label (the run is no longer blocked).
+    """
+    full_branch = resolve_worktree_branch(env, issue_number) or branch
+    r = gh(["issue", "view", str(issue_number), "-R", cfg["repo"], "--json", "comments",
+            "-q", ".comments[-1].body"], env)
+    answer = (r.stdout or "").strip()[:600] if r.returncode == 0 else ""
+    msg = (f"Resuming issue #{issue_number} after human input."
+           + (f" Latest comment from the human: {answer}" if answer else ""))
+    log_path = ROOT / "automation" / "archon-runs.log"
+    try:
+        with open(log_path, "a") as out:
+            proc = subprocess.Popen(
+                ["archon", "continue", full_branch, "--workflow", wf, msg],
+                cwd=str(ROOT), env=env, stdout=out, stderr=subprocess.STDOUT,
+                start_new_session=True,
+            )
+    except OSError as exc:
+        log(f"RESUME FAILED issue={issue_number}: {exc}")
+        return False, msg
+    gh(["issue", "edit", str(issue_number), "-R", cfg["repo"],
+        "--remove-label", "needs-input"], env)
+    log(f"RESUMED issue={issue_number} branch={full_branch} wf={wf} pid={proc.pid}")
+    return True, msg
+
+
 def dispatch(cfg: dict, env: dict, wf: str, branch: str, message: str,
              item_id: str, number: int) -> bool:
     """Start an Archon workflow run in a detached child process.
@@ -283,25 +338,38 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
         dispatched_msg = None
         review_msg = None
         ship_pr_num = None
+        dispatched_wf = None
+        dispatched_branch = None
 
         if not first_run and prev != status_val:
             lane = cfg["lanes"].get(status_val)
             if lane == "todo" and content["__typename"] == "Issue":
                 labels = [n["name"] for n in content["labels"]["nodes"]]
                 wf = pick_workflow(cfg, labels)
-                msg = (
-                    f"Implement GitHub issue #{content['number']}: {content['title']} "
-                    f"({repo}). Full issue: {content['url']}"
-                )
-                if wf == "archon-idea-to-pr":
+                branch = f"issue-{content['number']}"
+                prior = state.get(item_id, {})
+                ok = False
+                if "needs-input" in labels and prior.get("branch") and prior.get("wf"):
+                    ok, msg = resume_issue(cfg, env, prior["branch"], prior["wf"],
+                                           content["number"])
+                    if ok:
+                        wf = prior["wf"]
+                if not ok:
                     msg = (
-                        f"Build feature from issue #{content['number']}: {content['title']} "
+                        f"Implement GitHub issue #{content['number']}: {content['title']} "
                         f"({repo}). Full issue: {content['url']}"
                     )
-                ok = dispatch(cfg, env, wf, f"issue-{content['number']}", msg,
-                              item_id, content["number"])
+                    if wf == "archon-idea-to-pr":
+                        msg = (
+                            f"Build feature from issue #{content['number']}: {content['title']} "
+                            f"({repo}). Full issue: {content['url']}"
+                        )
+                    ok = dispatch(cfg, env, wf, branch, msg,
+                                  item_id, content["number"])
                 if ok:
                     dispatched_msg = msg
+                    dispatched_wf = wf
+                    dispatched_branch = branch
                 target = cfg["dispatch"]["todo"].get("move_to")
                 if ok and target:
                     option_id = status_options.get(target)
@@ -352,6 +420,8 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
         if dispatched_msg:
             rec["dispatch_msg"] = dispatched_msg
             rec["issue_number"] = content["number"]
+            rec["wf"] = dispatched_wf
+            rec["branch"] = dispatched_branch
         if review_msg:
             rec["review_msg"] = review_msg
             rec["ship_pr"] = ship_pr_num
@@ -376,6 +446,17 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
             run_status = runs_by_msg.get(msg)
             if run_status == "completed":
                 issue_number = rec.get("issue_number")
+                blocked_name = next(
+                    (k for k, v in cfg["lanes"].items() if v == "blocked"), None)
+                if (issue_number and blocked_name
+                        and issue_has_label(cfg, env, issue_number, "needs-input")):
+                    option_id = status_options.get(blocked_name)
+                    if option_id and move_to_lane(
+                            cfg, env, project_id, item_id, field_id, option_id):
+                        log(f"BLOCKED item={item_id} issue={issue_number} -> "
+                            f"{blocked_name} (awaiting human input)")
+                    rec.pop("dispatch_msg", None)
+                    continue
                 merge_base = cfg["dispatch"]["todo"].get("merge_develop_base")
                 merge_ok = True
                 if issue_number and merge_base:
