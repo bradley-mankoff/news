@@ -95,7 +95,7 @@ class UITests(unittest.TestCase):
                 recipients_path,
                 {
                     "recipients": [
-                        {"email": "bradley@example.com", "name": "Bradley", "pause": True}
+                        {"email": "primary@example.com", "name": "Primary Recipient", "pause": True}
                     ]
                 },
             )
@@ -145,7 +145,7 @@ class UITests(unittest.TestCase):
                     preset_id="daily",
                     prompt_profile_id="balanced",
                     source_scope="core",
-                    recipient_scope="bradley",
+                    recipient_scope="primary",
                     url_reuse_blocking_enabled=True,
                     relaxed_story_drafting_guards=False,
                     sources_path=sources_path,
@@ -193,7 +193,7 @@ class UITests(unittest.TestCase):
                     image_crop_bottom_ratio=0.1,
                     image_model_id="model-id",
                     image_base_model="base-model",
-                    bradley_recipient="bradley@example.com",
+                    primary_recipient="primary@example.com",
                     email_recipients_fallback=["a@example.com"],
                     email_from="news@example.com",
                     smtp_host="smtp.example.com",
@@ -354,7 +354,7 @@ class UITests(unittest.TestCase):
             )
             _write_yaml_mapping(
                 recipients_path,
-                {"recipients": [{"email": "bradley@example.com", "name": "Bradley", "pause": False}]},
+                {"recipients": [{"email": "primary@example.com", "name": "Primary Recipient", "pause": False}]},
             )
 
             with patch.object(ui_module, "RUN_PRESETS_PATH", presets_path), patch.object(
@@ -370,7 +370,7 @@ class UITests(unittest.TestCase):
                 self.assertEqual(list_presets()["presets"][0]["id"], "seed")
                 self.assertEqual(list_model_tuning_presets()["presets"][0]["id"], "tiny")
                 self.assertEqual(list_sources()["sources"][0]["key"], "Alpha")
-                self.assertEqual(list_recipients()["recipients"][0]["email"], "bradley@example.com")
+                self.assertEqual(list_recipients()["recipients"][0]["email"], "primary@example.com")
 
                 with self.assertRaisesRegex(ValueError, "required"):
                     upsert_preset({})

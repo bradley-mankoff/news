@@ -386,8 +386,13 @@ class ConfigHelperTests(unittest.TestCase):
             self.assertEqual(config_module._normalize_recipient_scope("full"), config_module.RECIPIENT_SCOPE_ALL)
             with self.assertRaisesRegex(ValueError, "NEWS_RECIPIENT_SCOPE must be one of"):
                 config_module._normalize_recipient_scope("unsupported")
-            with patch.dict(os.environ, {"NEWS_RECIPIENT_SCOPE": "bradley-only"}, clear=True):
-                self.assertEqual(config_module._configured_recipient_scope(), config_module.RECIPIENT_SCOPE_BRADLEY)
+            with patch.dict(os.environ, {"NEWS_RECIPIENT_SCOPE": "single"}, clear=True):
+                self.assertEqual(config_module._configured_recipient_scope(), config_module.RECIPIENT_SCOPE_PRIMARY)
+            self.assertEqual(config_module.RECIPIENT_SCOPE_PRIMARY, "primary")
+            with self.assertRaisesRegex(ValueError, "NEWS_RECIPIENT_SCOPE must be one of"):
+                config_module._normalize_recipient_scope("bradley")
+            with self.assertRaisesRegex(ValueError, "NEWS_RECIPIENT_SCOPE must be one of"):
+                config_module._normalize_recipient_scope("bradley-only")
             self.assertFalse(
                 config_module._source_enabled_for_scope(
                     {"language": "es", "tier": "core"},

@@ -255,12 +255,12 @@ class PipelineHelperTests(unittest.TestCase):
                 {"a@example.com": {"name": "A", "pause": False}},
             )
 
-        with patch.object(pipeline, "RECIPIENT_SCOPE", "bradley"), patch.object(
-            pipeline, "BRADLEY_RECIPIENT", "bradley@example.com"
+        with patch.object(pipeline, "RECIPIENT_SCOPE", "primary"), patch.object(
+            pipeline, "PRIMARY_RECIPIENT", "primary@example.com"
         ):
             self.assertEqual(
                 pipeline.get_active_recipient_config({}),
-                {"bradley@example.com": {"name": "bradley@example.com", "pause": False}},
+                {"primary@example.com": {"name": "primary@example.com", "pause": False}},
             )
 
         with patch.object(pipeline, "RECIPIENT_SCOPE", "all"):
@@ -588,7 +588,7 @@ class PipelineHelperTests(unittest.TestCase):
             ),
             [record],
         )
-        self.assertEqual(pipeline._extract_first_name("bradley@example.com"), "bradley")
+        self.assertEqual(pipeline._extract_first_name("primary@example.com"), "primary")
         self.assertEqual(pipeline.build_email_subject(datetime(2026, 6, 6, 10, 0, 0)), "Daily LLM News, 06/06/26")
 
     def test_report_rendering_and_story_dedup_helpers(self) -> None:
@@ -775,7 +775,7 @@ class PipelineHelperTests(unittest.TestCase):
             [record],
         )
         self.assertEqual(pipeline.build_email_subject(datetime(2026, 6, 6, 10, 0, 0)), "Daily LLM News, 06/06/26")
-        self.assertEqual(pipeline._extract_first_name("bradley@example.com"), "bradley")
+        self.assertEqual(pipeline._extract_first_name("primary@example.com"), "primary")
         self.assertEqual(pipeline._fallback_synthesis_paragraph_from_summaries(["One. Two.", "Three."]), "One. Two. Three.")
         self.assertIn("Heading", pipeline._format_plain_text_synthesis("## Heading\nBody"))
         self.assertIn("<h2", pipeline._build_html_synthesis("## Heading\nBody", []))

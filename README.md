@@ -187,7 +187,7 @@ Run with a saved preset or explicit overrides:
 
 ```bash
 uv run news run --preset NAME
-NEWS_SOURCE_SCOPE=peripheral NEWS_RECIPIENT_SCOPE=bradley uv run news run
+NEWS_SOURCE_SCOPE=peripheral NEWS_RECIPIENT_SCOPE=primary uv run news run
 ```
 
 Useful utility commands:
@@ -230,7 +230,7 @@ Key Run Settings:
 
 - `NEWS_SOURCE_SCOPE=core|peripheral`: `peripheral` includes both core and
   peripheral sources.
-- `NEWS_RECIPIENT_SCOPE=bradley|all`: send to the primary recipient only or all active
+- `NEWS_RECIPIENT_SCOPE=primary|all`: send to the primary recipient only or all active
   configured recipients.
 - `NEWS_BLOCK_REUSED_URLS=0|1`: every run records URL history; only `1` makes
   previously recorded URLs block future reuse.
@@ -444,7 +444,7 @@ The `dev` preset:
 - Uses `gemma-e2b-tiny` (the smallest model — the only one we keep for
   local testing now that the 12b/26b gemma slots are filled by Qwythos).
 - Sets `NEWS_SOURCE_SCOPE=core` (the narrowest source pool).
-- Sets `NEWS_RECIPIENT_SCOPE=bradley` (sends only to the primary
+- Sets `NEWS_RECIPIENT_SCOPE=primary` (sends only to the primary
   recipient).
 - Disables image generation and URL reuse blocking.
 - Sets `NEWS_MIN_ARTICLES_PER_STORY=2` and relaxes story drafting guards.

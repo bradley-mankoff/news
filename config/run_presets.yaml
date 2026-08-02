@@ -7,7 +7,7 @@ presets:
     description: My sense of the default
     env:
       NEWS_SOURCE_SCOPE: peripheral
-      NEWS_RECIPIENT_SCOPE: bradley
+      NEWS_RECIPIENT_SCOPE: primary
       NEWS_BLOCK_REUSED_URLS: '0'
       NEWS_IMAGE_ENABLED: '0'
       NEWS_MODEL: gemma-e2b-tiny
@@ -16,7 +16,7 @@ presets:
     description: Small core-source review run with the Codex-safe tiny model.
     env:
       NEWS_SOURCE_SCOPE: core
-      NEWS_RECIPIENT_SCOPE: bradley
+      NEWS_RECIPIENT_SCOPE: primary
       NEWS_BLOCK_REUSED_URLS: '0'
       NEWS_IMAGE_ENABLED: '0'
       NEWS_MODEL: gemma-e2b-tiny
@@ -28,7 +28,7 @@ presets:
       reuse.
     env:
       NEWS_SOURCE_SCOPE: peripheral
-      NEWS_RECIPIENT_SCOPE: bradley
+      NEWS_RECIPIENT_SCOPE: primary
       NEWS_BLOCK_REUSED_URLS: '0'
       NEWS_IMAGE_ENABLED: '1'
       NEWS_MODEL: qwythos-9b-8bit
@@ -39,7 +39,7 @@ presets:
       experiments.
     env:
       NEWS_SOURCE_SCOPE: peripheral
-      NEWS_RECIPIENT_SCOPE: bradley
+      NEWS_RECIPIENT_SCOPE: primary
       NEWS_BLOCK_REUSED_URLS: '0'
       NEWS_IMAGE_ENABLED: '1'
       NEWS_MODEL: qwythos-9b-8bit

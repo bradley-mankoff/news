@@ -59,7 +59,7 @@ RECIPIENT_HEADER = """# Email recipients for generated reports.
 #
 # Usage:
 # - pause: true keeps the recipient configured but skips delivery.
-# - NEWS_RECIPIENT_SCOPE=bradley sends only to the primary recipient,
+# - NEWS_RECIPIENT_SCOPE=primary sends only to the primary recipient,
 #   regardless of this file.
 """
 RUN_PRESET_HEADER = """# Saved run presets for the daily news pipeline.
@@ -208,7 +208,7 @@ def _runtime_snapshot(
                 "base_model": config.image_base_model,
             },
             "delivery": {
-                "bradley_recipient": config.bradley_recipient,
+                "primary_recipient": config.primary_recipient,
                 "fallback_recipients": config.email_recipients_fallback,
                 "email_from": config.email_from,
                 "smtp_host": config.smtp_host,
@@ -1570,7 +1570,7 @@ HTML = r"""<!doctype html>
       const pieces = [
         preset ? `${preset.name || preset.id}` : "Custom run",
         `Sources ${runtime.source_scope || "core"}`,
-        `Recipients ${runtime.recipient_scope || "bradley"}`
+        `Recipients ${runtime.recipient_scope || "primary"}`
       ];
       $("presetSummary").textContent = pieces.join(" · ");
     }
@@ -1659,7 +1659,7 @@ HTML = r"""<!doctype html>
         peripheral: "All"
       };
       const recipientScopes = {
-        bradley: "Primary-only",
+        primary: "Primary-only",
         all: "All"
       };
       const articleModel = knobField("NEWS_MODEL_ARTICLE_SUMMARY", "Article model", { emptyLabel: "default: qwythos-9b-8bit" });
@@ -1708,7 +1708,7 @@ HTML = r"""<!doctype html>
               <label class="field"><span>Recipients</span>
                 <select id="recipientScope" data-env="NEWS_RECIPIENT_SCOPE">
                   <option value="">default: Primary-only</option>
-                  <option value="bradley"${currentControlValue("NEWS_RECIPIENT_SCOPE") === "bradley" ? " selected" : ""}>Primary-only</option>
+                  <option value="primary"${currentControlValue("NEWS_RECIPIENT_SCOPE") === "primary" ? " selected" : ""}>Primary-only</option>
                   <option value="all"${currentControlValue("NEWS_RECIPIENT_SCOPE") === "all" ? " selected" : ""}>All</option>
                 </select>
                 <code>NEWS_RECIPIENT_SCOPE</code>
