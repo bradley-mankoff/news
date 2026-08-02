@@ -106,7 +106,7 @@ human, by design:
   edits, restarts the poller).
 - **New issues:** `python3 automation/create_issue.py "<title>"` creates the
   issue, boards it, and lands it in the default lane in one step (add
-  `--label feature` for the idea-to-pr workflow; fill `Depends on` in the body
+  `--label enhancement` for the idea-to-pr workflow; fill `Depends on` in the body
   when gating). Work starts only when the issue is dragged to `Todo`.
 
 ### Components

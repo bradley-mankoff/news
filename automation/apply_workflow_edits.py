@@ -47,7 +47,7 @@ CONTRACT = """      ## Deferred work
       - **Title:** <imperative title, ≤72 chars, self-contained and searchable>
         **Description:** <1-2 sentences; what "done" looks like>
         **Reason:** <why deferred now>
-        **Label:** <optional; must already exist in the repo, e.g. feature>
+        **Label:** <optional; must already exist in the repo, e.g. enhancement>
       If nothing was deferred, write exactly: *None.*
 """
 

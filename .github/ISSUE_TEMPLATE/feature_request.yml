@@ -1,7 +1,7 @@
 name: Feature request
 description: New capability or enhancement. Small enough to ship in one pass, or split into dependency-ordered sub-issues.
 title: "[Feature]: "
-labels: ["feature"]
+labels: ["enhancement"]
 body:
   - type: textarea
     id: problem
