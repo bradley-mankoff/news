@@ -16,14 +16,14 @@ preset too, by adding `NEWS_PROMPT_PROFILE: playful` to the preset's `env` map.
 
 See `docs/adr/0007-model-configuration-vocabulary.md` for the vocabulary used
 to separate Run Settings, Run Presets, Task Model Assignment, Model Tuning,
-Pipeline Budget, and Model Server Settings.
+Pipeline Budget, Model Server Settings, and Prompt Profile.
 
 ## Default Run Settings
 
 | Variable | Default | Description |
 |---|---|---|
 | `NEWS_PRESET` | _(none)_ | Selects a saved preset when `--preset NAME` is not used. |
-| `NEWS_PROMPT_PROFILE` | `balanced` | Editorial tone for the five LLM prompt stages. One of `balanced`, `consensus-and-contradiction`, `playful`, `facts-only`, `explain-like-im-five`. |
+| `NEWS_PROMPT_PROFILE` | `balanced` | Editorial tone for the five LLM prompt stages. One of `balanced`, `consensus-and-contradiction`, `explain-like-im-five`, `facts-only`, `playful`. |
 | `NEWS_MODEL` | `gemma-26b-moe` | Default friendly alias or full model repo/name. Task-specific model assignments inherit this value unless overridden. |
 | `NEWS_SOURCE_SCOPE` | `core` | `core` selects active English core sources. `peripheral` selects core plus peripheral sources. |
 | `NEWS_RECIPIENT_SCOPE` | `bradley` | `bradley` sends to `NEWS_BRADLEY_RECIPIENT`. `all` sends to active configured recipients. |
@@ -127,6 +127,7 @@ bundles.
 | Command | Description |
 |---|---|
 | `uv run news run --preset NAME` | Run with a saved preset. |
+| `uv run news run --prompt-profile NAME` | Run with a saved preset plus a Prompt Profile override. |
 | `uv run news run` | Run with defaults and explicit environment overrides. |
 | `uv run news ui` | Start the guided local control panel. |
 | `uv run news model-server-command` | Print the resolved local model server command and exit (external backend: prints a "no managed server command" notice and exits 2). |

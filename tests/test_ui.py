@@ -689,6 +689,15 @@ class UITests(unittest.TestCase):
                 json.loads(invoke("do_GET", "/api/prompt-profiles/compare?profile=playful")[2]),
                 {"profile": "playful", "baseline": "balanced", "diffs": {"story_drafting": "diff"}},
             )
+            # Missing or empty profile param falls back to the catalog default.
+            self.assertEqual(
+                json.loads(invoke("do_GET", "/api/prompt-profiles/compare")[2]),
+                {"profile": "balanced", "baseline": "balanced", "diffs": {"story_drafting": "diff"}},
+            )
+            self.assertEqual(
+                json.loads(invoke("do_GET", "/api/prompt-profiles/compare?profile=")[2]),
+                {"profile": "balanced", "baseline": "balanced", "diffs": {"story_drafting": "diff"}},
+            )
             with patch.object(
                 ui_module,
                 "compare_prompt_profiles",

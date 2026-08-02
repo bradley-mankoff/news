@@ -257,6 +257,8 @@ HISTORY_DB_PATH = str(CONFIG.history_db_path)
 HISTORY_EXPORT_CSV = CONFIG.history_export_csv
 PRESET_ID = CONFIG.preset_id
 PROMPT_PROFILE_ID = CONFIG.prompt_profile_id
+# Resolved once at import time: the profile is frozen for the process lifetime
+# and validated eagerly (fail-fast on unknown ids) before any LLM work starts.
 PROMPT_INSTRUCTIONS = resolve_prompt_instructions(PROMPT_PROFILE_ID)
 SOURCE_SCOPE = CONFIG.source_scope
 RECIPIENT_SCOPE = CONFIG.recipient_scope
@@ -3142,10 +3144,20 @@ def generate_image_art_brief(
     *,
     prompt_instructions: dict[str, str] | None = None,
 ) -> dict[str, str]:
-    """Ask the text model for the FLUX prompt plus a separate overlay headline."""
+    """Ask the text model for the FLUX prompt plus a separate overlay headline.
+
+    Consumes two prompt-catalog task slots from ``prompt_instructions``
+    (``image_art_direction`` and ``title_generation``). A missing/falsy slot
+    falls back to the ``balanced`` instructions for that task; a missing slot
+    in an explicitly provided dict is surfaced as a progress warning.
+    """
     fallback_headline = _sanitize_overlay_headline(report_title, "Daily News Brief")
     fallback_prompt = _fallback_image_prompt(synthesis_body)
     instructions = prompt_instructions or {}
+    if prompt_instructions is not None and "image_art_direction" not in prompt_instructions:
+        progress_tracker.warning("prompt profile missing image_art_direction; using balanced default")
+    if prompt_instructions is not None and "title_generation" not in prompt_instructions:
+        progress_tracker.warning("prompt profile missing title_generation; using balanced default")
     image_art_direction = instructions.get("image_art_direction") or DEFAULT_PROMPT_INSTRUCTIONS["image_art_direction"]
     title_guidance = instructions.get("title_generation") or DEFAULT_PROMPT_INSTRUCTIONS["title_generation"]
     try:

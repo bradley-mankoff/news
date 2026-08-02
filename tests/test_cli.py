@@ -72,6 +72,7 @@ class CliTests(unittest.TestCase):
         with patch("news_pipeline.cli._run_pipeline_command", return_value=0), patch.dict(
             os.environ, {}, clear=False
         ):
+            env_before = dict(os.environ)
             code, stdout, stderr = self._invoke(["run", "--prompt-profile", "bogus"])
 
         self.assertEqual(code, 2)
@@ -79,7 +80,31 @@ class CliTests(unittest.TestCase):
         self.assertIn("Unknown prompt profile 'bogus'", stderr)
         self.assertIn("Available profiles:", stderr)
         self.assertNotIn("Usage:", stderr)
-        self.assertNotIn("NEWS_PROMPT_PROFILE", os.environ)
+        # No env mutation: equals the ambient environment (works even when a
+        # NEWS_PROMPT_PROFILE value exists in the outer environment).
+        self.assertEqual(os.environ.get("NEWS_PROMPT_PROFILE"), env_before.get("NEWS_PROMPT_PROFILE"))
+
+    def test_run_prompt_profile_empty_value_and_duplicate_flags(self) -> None:
+        # --prompt-profile= with an empty value is silently ignored: the run
+        # proceeds with the ambient/default profile (behavior pin; rejecting
+        # empty values like missing ones is a product decision, tracked in
+        # follow-up). Duplicate flags: the last one wins.
+        with patch("news_pipeline.cli._run_pipeline_command", return_value=0), patch.dict(
+            os.environ, {}, clear=False
+        ):
+            env_before = dict(os.environ)
+            code, stdout, stderr = self._invoke(["run", "--prompt-profile="])
+            self.assertEqual(os.environ.get("NEWS_PROMPT_PROFILE"), env_before.get("NEWS_PROMPT_PROFILE"))
+        self.assertEqual(code, 0)
+
+        with patch("news_pipeline.cli._run_pipeline_command", return_value=0), patch.dict(
+            os.environ, {}, clear=False
+        ):
+            code, stdout, stderr = self._invoke(
+                ["run", "--prompt-profile=playful", "--prompt-profile=facts-only"]
+            )
+            self.assertEqual(os.environ.get("NEWS_PROMPT_PROFILE"), "facts-only")
+        self.assertEqual(code, 0)
 
     def test_run_rejects_missing_prompt_profile_value(self) -> None:
         code, stdout, stderr = self._invoke(["run", "--prompt-profile"])

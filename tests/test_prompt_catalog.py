@@ -165,6 +165,26 @@ class PromptCatalogTests(unittest.TestCase):
         self.assertIn("playful", diffs["story_drafting"])
         self.assertIn("balanced:story_drafting", diffs["story_drafting"])
 
+    def test_profile_ids_match_registry_keys(self) -> None:
+        # Drift-guard: PROMPT_PROFILE_IDS feeds the config knob options (UI
+        # selector); a profile added to only one registry would silently vanish
+        # from the UI while remaining valid via env/CLI.
+        self.assertEqual(
+            set(prompt_catalog.PROMPT_PROFILE_IDS),
+            set(prompt_catalog.PROMPT_PROFILES),
+        )
+
+    def test_scale_screening_guidance_is_format_safe(self) -> None:
+        # story_selection renders the scale-screening prompt via
+        # textwrap.dedent(...).format(screening_guidance=...); a brace in any
+        # profile's guidance would raise KeyError/ValueError at prompt-build
+        # time, crashing the pipeline mid-run. Converting the data mistake into
+        # a failing unit test at catalog-review time instead.
+        for profile in prompt_catalog.PROMPT_PROFILES.values():
+            guidance = profile.prompts["story_scale_screening"]
+            self.assertNotIn("{", guidance, f"{profile.id} guidance would break .format()")
+            self.assertNotIn("}", guidance, f"{profile.id} guidance would break .format()")
+
 
 if __name__ == "__main__":
     unittest.main()

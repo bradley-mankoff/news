@@ -187,6 +187,18 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
 
         self.assertEqual(config.prompt_profile_id, "balanced")
 
+    def test_prompt_profile_empty_value_counts_as_unset(self) -> None:
+        # NEWS_PROMPT_PROFILE= (a common "unset" idiom in .env files and
+        # docker-compose) must not crash; it resolves to the default like the
+        # CLI/UI paths.
+        config = load_runtime_config(
+            environ={},
+            overrides={"NEWS_PROMPT_PROFILE": ""},
+            materialize_outputs=False,
+        )
+
+        self.assertEqual(config.prompt_profile_id, "balanced")
+
     def test_unknown_prompt_profile_error_lists_available_profiles(self) -> None:
         with self.assertRaisesRegex(ValueError, "Available profiles: .*balanced"):
             load_runtime_config(

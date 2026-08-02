@@ -25,6 +25,7 @@ import yaml
 
 from .prompt_catalog import (
     DEFAULT_PROMPT_PROFILE_ID,
+    PROMPT_PROFILE_ENV_VAR,
     PROMPT_PROFILE_IDS,
     get_prompt_profile,
 )
@@ -1085,7 +1086,7 @@ def runtime_knob_registry() -> list[dict[str, Any]]:
         _runtime_knob(
             "Run Settings",
             "Prompt profile",
-            "NEWS_PROMPT_PROFILE",
+            PROMPT_PROFILE_ENV_VAR,
             "select",
             default=DEFAULT_PROMPT_PROFILE_ID,
             options=list(PROMPT_PROFILE_IDS),
@@ -1663,7 +1664,11 @@ def _build_runtime_config(
     recipient_scope = _configured_recipient_scope()
     url_reuse_blocking_enabled = _bool_env("NEWS_BLOCK_REUSED_URLS", False)
     relaxed_story_drafting_guards = _bool_env("NEWS_RELAX_STORY_DRAFTING_GUARDS", False)
-    prompt_profile_id = _str_env("NEWS_PROMPT_PROFILE", DEFAULT_PROMPT_PROFILE_ID)
+    # Empty-but-present NEWS_PROMPT_PROFILE (a common "unset" idiom in .env
+    # files / docker-compose) counts as unset, matching sibling knobs and the
+    # CLI/UI semantics. Strict validation of non-empty ids happens below.
+    prompt_profile_id = _str_env(PROMPT_PROFILE_ENV_VAR, DEFAULT_PROMPT_PROFILE_ID) or DEFAULT_PROMPT_PROFILE_ID
+    # Resolved once at import time in pipeline.py; fails fast on unknown ids.
     get_prompt_profile(prompt_profile_id)
     tracked_urls_filename = "tracked_urls.txt"
     blocking_urls_filename = "blocking_urls.txt"

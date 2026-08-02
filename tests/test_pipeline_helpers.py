@@ -1736,6 +1736,37 @@ class PipelineHelperTests(unittest.TestCase):
         )
         self.assertIn("Keep overlay_headline punchy, factual, and <= 11 words.", system_text)
         self.assertEqual(art_brief["overlay_headline"], "Today in brief")
+
+    def test_generate_image_art_brief_per_key_fallback_and_warning(self) -> None:
+        captured: dict[str, str] = {}
+
+        def fake_invoke(_llm, messages, **_kwargs):
+            captured["system"] = str(messages[0].content)
+            return AIMessage(content="unused")
+
+        with patch.object(pipeline, "build_chat_model", return_value=object()), patch.object(
+            pipeline, "invoke_with_retries", side_effect=fake_invoke
+        ), patch.object(
+            pipeline,
+            "_safe_json_extract",
+            return_value='{"image_prompt":"A documentary scene","overlay_headline":"Today in brief"}',
+            create=True,
+        ), patch.object(pipeline.progress_tracker, "warning") as warning_mock:
+            art_brief = pipeline.generate_image_art_brief(
+                "Summary text",
+                "Report title",
+                prompt_instructions={
+                    "image_art_direction": "Depict the central event without sensationalism.",
+                    # title_generation intentionally missing: per-key fallback.
+                },
+            )
+        system_text = captured["system"]
+        self.assertIn("Depict the central event without sensationalism.", system_text)
+        self.assertIn("Keep overlay_headline punchy, factual, and <= 11 words.", system_text)
+        warning_mock.assert_called_once_with(
+            "prompt profile missing title_generation; using balanced default"
+        )
+        self.assertEqual(art_brief["overlay_headline"], "Today in brief")
     def test_import_fallback_and_progress_helpers(self) -> None:
         spec = importlib.util.spec_from_file_location("news_pipeline.pipeline_tiktoken_missing", pipeline.__file__)
         assert spec is not None and spec.loader is not None
@@ -1784,6 +1815,38 @@ class PipelineHelperTests(unittest.TestCase):
         with patch.object(pipeline.story_selection_stage, "StorySelectionRuntime", return_value="selection-runtime") as selection_runtime_ctor:
             self.assertEqual(pipeline._story_selection_runtime(), "selection-runtime")
         selection_runtime_ctor.assert_called_once()
+
+    def test_stage_runtimes_receive_resolved_profile_instructions(self) -> None:
+        # The feature's core propagation contract: every stage runtime must be
+        # built with the resolved profile instructions for its task slot. A
+        # refactor that drops or miskeys a kwarg would silently yield balanced
+        # output while the user selected another profile.
+        with patch.object(
+            pipeline.article_summarization_stage, "ArticleSummarizationRuntime"
+        ) as summary_ctor:
+            pipeline._article_summarization_runtime()
+        self.assertEqual(
+            summary_ctor.call_args.kwargs["prompt_instructions"],
+            pipeline.PROMPT_INSTRUCTIONS["article_summary"],
+        )
+
+        with patch.object(
+            pipeline.story_drafting_stage, "StoryDraftingRuntime"
+        ) as draft_ctor:
+            pipeline._story_drafting_runtime(min_articles_per_story=7)
+        self.assertEqual(
+            draft_ctor.call_args.kwargs["prompt_instructions"],
+            pipeline.PROMPT_INSTRUCTIONS["story_drafting"],
+        )
+
+        with patch.object(
+            pipeline.story_selection_stage, "StorySelectionRuntime"
+        ) as selection_ctor:
+            pipeline._story_selection_runtime()
+        self.assertEqual(
+            selection_ctor.call_args.kwargs["prompt_instructions"],
+            pipeline.PROMPT_INSTRUCTIONS["story_scale_screening"],
+        )
 
 
     def test_image_rendering_and_image_art_helpers(self) -> None:

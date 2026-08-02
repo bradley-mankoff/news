@@ -46,7 +46,11 @@ from .source_catalog import (
     apply_source_catalog_patch,
     load_source_records,
 )
-from .prompt_catalog import compare_prompt_profiles, list_prompt_profiles
+from .prompt_catalog import (
+    DEFAULT_PROMPT_PROFILE_ID,
+    compare_prompt_profiles,
+    list_prompt_profiles,
+)
 
 
 DEFAULT_HOST = "127.0.0.1"
@@ -823,11 +827,11 @@ class NewsUIHandler(BaseHTTPRequestHandler):
                 self._send_json(list_model_tuning_presets())
             elif parsed.path.startswith("/api/prompt-profiles/compare"):
                 params = parse_qs(parsed.query)
-                profile = (params.get("profile") or ["balanced"])[0]
+                profile = (params.get("profile") or [""])[0] or DEFAULT_PROMPT_PROFILE_ID
                 self._send_json(
                     {
                         "profile": profile,
-                        "baseline": "balanced",
+                        "baseline": DEFAULT_PROMPT_PROFILE_ID,
                         "diffs": compare_prompt_profiles(profile),
                     }
                 )
@@ -1295,6 +1299,7 @@ HTML = r"""<!doctype html>
     const SURFACED_ENVS = new Set([
       "NEWS_SOURCE_SCOPE",
       "NEWS_RECIPIENT_SCOPE",
+      "NEWS_PROMPT_PROFILE",  // has a dedicated panel control; suppress the Advanced-tab duplicate
       "NEWS_MODEL_ARTICLE_SUMMARY",
       "NEWS_MODEL_STORY_DRAFTING",
       "NEWS_MODEL_ARTICLE_SUMMARY_TUNING_PRESET",
