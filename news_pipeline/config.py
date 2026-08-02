@@ -1659,7 +1659,7 @@ def _build_runtime_config(
         run_staging_dir.mkdir(parents=True, exist_ok=True)
         _sync_cursorignore_latest_output(ROOT_DIR, output_dir, run_output_dir)
 
-    bradley_recipient = _str_env("NEWS_BRADLEY_RECIPIENT", "bradley@mankoff.com")
+    bradley_recipient = _str_env("NEWS_BRADLEY_RECIPIENT", "bradley@example.com")
     source_scope = _configured_source_scope()
     recipient_scope = _configured_recipient_scope()
     url_reuse_blocking_enabled = _bool_env("NEWS_BLOCK_REUSED_URLS", False)
@@ -1676,7 +1676,7 @@ def _build_runtime_config(
         blocking_urls_filename if url_reuse_blocking_enabled else tracked_urls_filename
     )
     env_json_path = ROOT_DIR / _str_env("NEWS_ENV_JSON", "env.json")
-    email_from = _str_env("NEWS_EMAIL_FROM", "bradley.mankoff@gmail.com")
+    email_from = _str_env("NEWS_EMAIL_FROM", "news@example.com")
     smtp_password = (
         _str_env("NEWS_SMTP_PASSWORD", "").replace(" ", "")
         or _load_password_from_env_json(env_json_path)

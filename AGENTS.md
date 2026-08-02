@@ -11,6 +11,8 @@ Project goal: build, review, and send a daily news report from configured source
 - Need run presets -> `config/run_presets.yaml`.
 - Need model tuning presets -> `config/model_tuning_presets.yaml`.
 - Need board automation details -> `automation/` (`board_poller.py`, `config.json`).
+- Need security audit results or the history-scrub runbook -> `docs/security/` (`audit-2026-08-02.md`, `history-scrub.md`).
+- Need the security audit scanner or the gated scrub wrapper -> `automation/` (`security_audit.py` — exit 0 clean / 1 findings; `scrub_history.sh` — dry-run default, force-push requires human approval).
 - Need the Archon workflow inventory (usable vs archived) -> `docs/archon-workflows.md`.
 
 ## Always-on behavior

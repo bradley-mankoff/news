@@ -95,7 +95,7 @@ class TerminalProgressTests(unittest.TestCase):
         stream = FakePipe()
         tracker = ProgressTracker(stream=stream)
 
-        tracker.step("setup", "preset custom | model large | image on | 57 sources | send Bradley")
+        tracker.step("setup", "preset custom | model large | image on | 57 sources | send Primary only")
 
         tracker.reset(total_sources=57)
         for index in range(1, 58):

@@ -76,6 +76,12 @@ inventory: `docs/archon-workflows.md`.
   nothing is dispatched (prevents backlog bursts after downtime).
 - `automation/config.json` — repo, project, lanes, and workflow mapping.
 - `automation/move_item.py` — move an issue to a lane from the CLI.
+- `automation/security_audit.py` — stdlib-only scanner for secrets and personal
+  data in the working tree and full history; exits 0 when clean. Report:
+  `docs/security/audit-2026-08-02.md`.
+- `automation/scrub_history.sh` — gated `git filter-repo` history scrub; prints
+  push commands by default (`--dry-run`), requires explicit `--execute` and
+  human approval. Runbook: `docs/security/history-scrub.md`.
 - The poller runs as a launchd agent (`com.bradley-mankoff.news-board-poller`,
   plist in `~/Library/LaunchAgents/`). Logs: `automation/board_poller.log`;
   state: `automation/state.json` (gitignored).
@@ -175,7 +181,7 @@ Key Run Settings:
 
 - `NEWS_SOURCE_SCOPE=core|peripheral`: `peripheral` includes both core and
   peripheral sources.
-- `NEWS_RECIPIENT_SCOPE=bradley|all`: send to Bradley only or all active
+- `NEWS_RECIPIENT_SCOPE=bradley|all`: send to the primary recipient only or all active
   configured recipients.
 - `NEWS_BLOCK_REUSED_URLS=0|1`: every run records URL history; only `1` makes
   previously recorded URLs block future reuse.
@@ -333,7 +339,7 @@ hard-coded defaults rather than normal Run Settings.
 - `config/sources.yaml`: single source list. Normal runs select active English
   sources using `NEWS_SOURCE_SCOPE`.
 - `config/recipients.yaml`: active and paused recipients. `NEWS_RECIPIENT_SCOPE`
-  chooses Bradley-only or all active recipients.
+  chooses primary-only or all active recipients.
 - `config/model_tuning_presets.yaml`: saved Model Tuning Presets keyed by id.
 
 Normal collection accepts active English sources. Removed topic-scoped runtime
@@ -389,8 +395,8 @@ The `dev` preset:
 - Uses `gemma-e2b-tiny` (the smallest model — the only one we keep for
   local testing now that the 12b/26b gemma slots are filled by Qwythos).
 - Sets `NEWS_SOURCE_SCOPE=core` (the narrowest source pool).
-- Sets `NEWS_RECIPIENT_SCOPE=bradley` (sends to the single `bradley@…`
-  recipient only).
+- Sets `NEWS_RECIPIENT_SCOPE=bradley` (sends only to the primary
+  recipient).
 - Disables image generation and URL reuse blocking.
 - Sets `NEWS_MIN_ARTICLES_PER_STORY=2` and relaxes story drafting guards.
 
