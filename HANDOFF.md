@@ -57,6 +57,16 @@ verified; a follow-up agent should be able to continue from here without re-deri
 
 ### Pending
 - [ ] None outstanding from this session. The only decision was the push choice, made by the user.
+- [x] Decide the public project and package name (`news-pipeline`, ADR 0009).
+- [x] Choose a project license. Apache-2.0 chosen by owner on issue #21 (ADR 0010); AGPL-3.0 rejected (network copyleft).
+- [x] Audit repository history for secrets and personal data before making the repository public — see `docs/security/audit-2026-08-02.md` and the gated scrub runbook `docs/security/history-scrub.md`.
+- [x] Replace real recipients, personal email defaults, and personal filesystem paths with safe examples — tree sanitized (issue #22); history scrub remains gated behind the runbook.
+- [x] Decide the initially supported runtime matrix (ADR 0010, Accepted): MLX/MLX-VLM on Apple Silicon + external OpenAI-compatible endpoints; `llama.cpp` adapter deferred.
+- [x] Implement a Prompt Catalog and built-in Prompt Profiles.
+- [x] Refactor hard-coded prompt construction to compose editable editorial instructions with pipeline-owned protocol requirements.
+- [x] Add prompt-profile selection and per-stage prompt editing to the normal UI.
+- [x] Add `huggingface-hub` as a direct dependency (declared in `pyproject.toml`; API usage is tracked under the Model Catalog item above).
+
 
 ## Key Decisions
 - **The poller owns the sync, not a watcher or git hooks.** Hooks are a dead end

@@ -2667,17 +2667,31 @@ HTML = r"""<!doctype html>
         (state.schema && state.schema.runtime && state.schema.runtime.prompt_profile_id) || "balanced";
       return profiles.find(profile => profile.id === id) || null;
     }
+    // Tracks which profile's defaults the override editors currently hold, so
+    // livePromptOverrides() can distinguish a stale default from a real edit
+    // when the profile select changes (the editors keep the previous profile's
+    // text until renderPromptProfilePanel() re-renders them).
+    let lastRenderedPromptProfileId = null;
     function livePromptOverrides() {
       // Snapshot only edits that differ from the currently selected profile's
-      // text, so profile switches keep real edits and drop stale defaults.
+      // text OR the previously rendered profile's defaults, so profile
+      // switches keep real edits and drop stale defaults.
       const overrides = {};
       const profile = selectedPromptProfile();
+      const prev = (lastRenderedPromptProfileId &&
+        ((state.schema && state.schema.prompt_profiles) || []).find(p => p.id === lastRenderedPromptProfileId)) || null;
       document.querySelectorAll("[data-env^='NEWS_PROMPT_OVERRIDE_']").forEach(el => {
         const task = Object.keys(PROMPT_OVERRIDE_ENVS).find(key => PROMPT_OVERRIDE_ENVS[key] === el.dataset.env);
         if (!task) return;
-        const profileText = (profile && profile.prompts && profile.prompts[task]) || "";
         const value = el.value.trim();
-        if (value && value !== profileText.trim()) overrides[task] = value;
+        if (!value) return;
+        const newText = ((profile && profile.prompts && profile.prompts[task]) || "").trim();
+        const oldText = ((prev && prev.prompts && prev.prompts[task]) || "").trim();
+        // A value equal to the previously rendered profile's text is a stale
+        // default, not an edit; a value equal to the new profile's text needs
+        // no override either.
+        if (value === oldText || value === newText) return;
+        overrides[task] = value;
       });
       return overrides;
     }
@@ -2688,6 +2702,9 @@ HTML = r"""<!doctype html>
       const readoutsEl = $("promptProfileReadouts");
       if (!readoutsEl) return;
       const overrides = livePromptOverrides();
+      // The editors still hold the previous render's text at this point, so
+      // record the profile those defaults came from AFTER the diff above.
+      lastRenderedPromptProfileId = profile ? profile.id : null;
       if (!profile) {
         readoutsEl.innerHTML = `<p class="muted">No prompt profile selected.</p>`;
         return;
