@@ -96,7 +96,7 @@ The handoff should be saved as `HANDOFF.md` at the repository root. Do not place
 - [x] Decide the initially supported runtime matrix (ADR 0010, Accepted): MLX/MLX-VLM on Apple Silicon + external OpenAI-compatible endpoints; `llama.cpp` adapter deferred.
 - [x] Implement a Prompt Catalog and built-in Prompt Profiles.
 - [x] Refactor hard-coded prompt construction to compose editable editorial instructions with pipeline-owned protocol requirements.
-- [ ] Add prompt-profile selection and per-stage prompt editing to the normal UI.
+- [x] Add prompt-profile selection and per-stage prompt editing to the normal UI.
 - [ ] Move all tuning, budgets, clustering thresholds, server controls, and raw environment overrides behind Advanced Settings.
 - [ ] Add task-specific model assignments for every actual LLM stage or explicitly document inheritance.
 - [ ] Add a curated Model Catalog plus Hugging Face search/model metadata integration.

@@ -102,6 +102,33 @@ class UITests(unittest.TestCase):
         self.assertIn('class="prompt-stage-restore"', ui_module.HTML)
         self.assertNotIn('textarea readonly rows="3"', ui_module.HTML)
 
+    def test_prompt_override_editors_drop_stale_defaults_on_profile_switch(self) -> None:
+        # Regression for the HIGH finding: switching the prompt profile must
+        # NOT freeze the previous profile's text as per-stage overrides.
+        # livePromptOverrides() must diff editor values against BOTH the newly
+        # selected profile and the last-rendered profile (tracked via
+        # lastRenderedPromptProfileId), so stale defaults are dropped and only
+        # genuine edits survive. Assertions run on the HTML module constant
+        # (JS source), matching the drift-guard style of this file.
+        self.assertIn("let lastRenderedPromptProfileId = null;", ui_module.HTML)
+        self.assertIn(
+            "lastRenderedPromptProfileId = profile ? profile.id : null;",
+            ui_module.HTML,
+        )
+        self.assertIn(
+            "if (value === oldText || value === newText) return;",
+            ui_module.HTML,
+        )
+        # The last-rendered profile must be recorded AFTER the diff, since the
+        # editors still hold the previous render's text at that point.
+        self.assertIn(
+            "// The editors still hold the previous render's text at this point, so",
+            ui_module.HTML,
+        )
+        # Empty editors still mean "no override" (matches collectEnv's
+        # suppression of empty/unset override env vars).
+        self.assertIn("if (!value) return;", ui_module.HTML)
+
     def test_pure_helpers_and_schema_payload(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
