@@ -4090,6 +4090,53 @@ def managed_model_server():
         MANAGED_MODEL_SERVER_EXIT_RECORDED = False
 
 
+def _ensure_external_model_server_ready() -> None:
+    """Wait for the external endpoint to answer /models, then probe generation.
+
+    Unlike the managed path below, an already-live endpoint is the goal (not an
+    error), so there is no conflict check; the generation probe is the real gate.
+    """
+    record_activity_snapshot("before_external_server_wait", ACTIVE_RUN_DIAGNOSTICS)
+    deadline = time.monotonic() + EXTERNAL_SERVER_READY_TIMEOUT_SECONDS
+    last_preflight: dict[str, Any] = {}
+    while time.monotonic() < deadline:
+        last_preflight = preflight_model_server()
+        if last_preflight.get("ok"):
+            break
+        status_code = last_preflight.get("status_code")
+        if status_code in (401, 403):
+            raise RuntimeError(
+                f"External model server at {MODEL_BASE_URL} rejected the request "
+                f"with HTTP {status_code}. The endpoint requires authentication: "
+                "set NEWS_MODEL_API_KEY to a valid key for this endpoint."
+            )
+        time.sleep(2)
+
+    detail = last_preflight.get("error") or last_preflight.get("served_models") or "no response"
+    if not last_preflight.get("ok"):
+        raise TimeoutError(
+            f"External model server did not become ready within "
+            f"{EXTERNAL_SERVER_READY_TIMEOUT_SECONDS} seconds at {MODEL_BASE_URL}: {detail}."
+        )
+    progress_tracker.update_meter(done=2, detail="Checking model generation.")
+    generation_probe = probe_model_generation()
+    if not generation_probe.get("ok"):
+        probe_status = generation_probe.get("status_code")
+        auth_hint = (
+            f" The endpoint rejected the probe with HTTP {probe_status}; set "
+            "NEWS_MODEL_API_KEY if it requires authentication."
+            if probe_status in (401, 403)
+            else ""
+        )
+        raise RuntimeError(
+            "External model server answered /models but failed a tiny generation probe. "
+            f"{generation_probe.get('error') or generation_probe}. "
+            "Verify the endpoint supports POST /chat/completions and that NEWS_MODEL "
+            f"({MODEL_REFERENCE}) matches a served model id.{auth_hint}"
+        )
+    record_activity_snapshot("after_external_server_ready", ACTIVE_RUN_DIAGNOSTICS)
+
+
 def _ensure_main_model_server_ready() -> None:
     global MANAGED_MODEL_SERVER_READY
     global MANAGED_MODEL_SERVER_PROCESS
@@ -4107,49 +4154,7 @@ def _ensure_main_model_server_ready() -> None:
         progress_tracker.start_meter("model", total=3, unit="steps", detail="Checking model server.")
         record_activity_snapshot("before_model_server_preflight")
         if MODEL_BACKEND == MODEL_BACKEND_EXTERNAL:
-            # External backend: no managed server is spawned. A live endpoint is
-            # the goal here (unlike the managed path below, where an already-live
-            # endpoint is an error), so skip the conflict check and just wait for
-            # /models to answer; the generation probe below is the real gate.
-            record_activity_snapshot("before_external_server_wait", ACTIVE_RUN_DIAGNOSTICS)
-            deadline = time.monotonic() + EXTERNAL_SERVER_READY_TIMEOUT_SECONDS
-            last_preflight: dict[str, Any] = {}
-            while time.monotonic() < deadline:
-                last_preflight = preflight_model_server()
-                if last_preflight.get("ok"):
-                    break
-                status_code = last_preflight.get("status_code")
-                if status_code in (401, 403):
-                    raise RuntimeError(
-                        f"External model server at {MODEL_BASE_URL} rejected the request "
-                        f"with HTTP {status_code}. The endpoint requires authentication: "
-                        "set NEWS_MODEL_API_KEY to a valid key for this endpoint."
-                    )
-                time.sleep(2)
-
-            detail = last_preflight.get("error") or last_preflight.get("served_models") or "no response"
-            if not last_preflight.get("ok"):
-                raise TimeoutError(
-                    f"External model server did not become ready within "
-                    f"{EXTERNAL_SERVER_READY_TIMEOUT_SECONDS} seconds at {MODEL_BASE_URL}: {detail}."
-                )
-            progress_tracker.update_meter(done=2, detail="Checking model generation.")
-            generation_probe = probe_model_generation()
-            if not generation_probe.get("ok"):
-                probe_status = generation_probe.get("status_code")
-                auth_hint = (
-                    f" The endpoint rejected the probe with HTTP {probe_status}; set "
-                    "NEWS_MODEL_API_KEY if it requires authentication."
-                    if probe_status in (401, 403)
-                    else ""
-                )
-                raise RuntimeError(
-                    "External model server answered /models but failed a tiny generation probe. "
-                    f"{generation_probe.get('error') or generation_probe}. "
-                    "Verify the endpoint supports POST /chat/completions and that NEWS_MODEL "
-                    f"({MODEL_REFERENCE}) matches a served model id.{auth_hint}"
-                )
-            record_activity_snapshot("after_external_server_ready", ACTIVE_RUN_DIAGNOSTICS)
+            _ensure_external_model_server_ready()
             MANAGED_MODEL_SERVER_EXTERNAL = True
             MANAGED_MODEL_SERVER_READY = True
             progress_tracker.finish_meter(detail="External model server ready.")
