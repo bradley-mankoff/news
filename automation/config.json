@@ -30,8 +30,9 @@
     "review": {
       "workflow": "archon-smart-pr-review",
       "ship_to": "main",
-      "merge_ship_on_review_complete": true,
-      "done_lane": "Done"
+      "merge_ship_on_approve": true,
+      "done_lane": "Done",
+      "conflict_fix_workflow": "archon-fix-ship-conflicts"
     }
   }
 }

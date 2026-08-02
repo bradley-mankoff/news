@@ -11,6 +11,20 @@ between lanes. Contract:
 - Every real transition into a dispatch lane fires one run: move into "Todo"
   starts implementation, move into "In Review" starts a PR review. Moving back
   out and in again fires again (re-work / re-review).
+- Dependency gate: an issue whose body has a `Depends on: #N` line does not
+  dispatch until every referenced issue is in the Done lane. It moves to
+  Blocked with a comment; when the deps ship it returns to Todo automatically
+  (and dispatches on the next poll). A dependency that closes without shipping
+  posts a re-scope notice on each dependent, once per episode.
+- Verdict gate: the ship PR is merged (and the issue closed) only when the
+  review run completed AND its final comment carries `VERDICT: approve`.
+  Any other verdict (or none) holds the ship in In Review with a notice.
+- Ship-conflict auto-fix: a CONFLICTING ship PR blocks the merge even after an
+  approving verdict. The poller first merges the base into the head via the
+  GitHub merge API (free, instant); on real conflicts it dispatches
+  `archon-fix-ship-conflicts` once per episode (state markers), which resolves,
+  validates, and pushes. Episodes end when the PR is mergeable; a fix run that
+  finishes with the PR still conflicting posts a human-help comment once.
 - Dispatch = `archon workflow run <wf> --branch <branch> --detach "<msg>"`
   executed in the repo root.
 
@@ -19,6 +33,9 @@ State:  automation/state.json (gitignored, machine-local).
 Log:    stdout; the launchd agent redirects to automation/board_poller.log.
 
 Requires: gh CLI (authenticated), archon CLI on PATH. Python stdlib only.
+
+Flags: --once runs a single poll and exits; --dry-run runs one poll with no
+mutations (no dispatch, no lane moves, no comments, no merges, no state write).
 """
 
 import json
@@ -31,6 +48,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+
+DRY_RUN = "--dry-run" in sys.argv
 
 QUERY = """
 query($login: String!, $number: Int!, $statusField: String!, $cursor: String) {
@@ -51,13 +70,13 @@ query($login: String!, $number: Int!, $statusField: String!, $cursor: String) {
         pageInfo { hasNextPage endCursor }
         nodes {
           id
-          fieldValueByName(name: $statusField) {
+          statusValue: fieldValueByName(name: $statusField) {
             ... on ProjectV2ItemFieldSingleSelectValue { name }
           }
           content {
             __typename
             ... on Issue {
-              number title url
+              number title url state body
               repository { nameWithOwner }
               labels(first: 20) { nodes { name } }
             }
@@ -83,6 +102,12 @@ mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $optionId: String!) {
   }) { projectV2Item { id } }
 }
 """
+
+# Issue-body dependency convention: a line like `Depends on: #42, #57`,
+# a bullet `- Depends on: #42`, or the GitHub issue-form rendering
+# `### Depends on` with the refs on the following line.
+
+VERDICT_VALUES = ("approve", "request-changes", "block")
 
 
 def log(msg: str) -> None:
@@ -116,7 +141,11 @@ def graphql(cfg: dict, env: dict, cursor: str | None) -> dict:
 
 
 def fetch_project(cfg: dict, env: dict) -> tuple[str, str, dict, list[dict]]:
-    """Returns (project_id, status_field_id, status_options: name->id, items)."""
+    """Returns (project_id, status_field_id, status_options: name->id, items).
+
+    Each item is {"id", "status", "content"}; status is the lane name
+    (or "No status" when the field is unset).
+    """
     data = graphql(cfg, env, None)
     project = data["data"]["user"]["projectV2"]
     if project is None:
@@ -131,57 +160,149 @@ def fetch_project(cfg: dict, env: dict) -> tuple[str, str, dict, list[dict]]:
     options = {o["name"]: o["id"] for o in field["options"]}
     items: list[dict] = []
     page = project["items"]
-    items.extend(page["nodes"])
-    while page["pageInfo"]["hasNextPage"]:
-        data = graphql(cfg, env, page["pageInfo"]["endCursor"])
-        page = data["data"]["user"]["projectV2"]["items"]
-        items.extend(page["nodes"])
+    while True:
+        for node in page["nodes"]:
+            items.append({
+                "id": node["id"],
+                "status": ((node.get("statusValue") or {}).get("name"))
+                          or "No status",
+                "content": node.get("content") or {},
+            })
+        if not page["pageInfo"]["hasNextPage"]:
+            break
+        page = graphql(cfg, env, page["pageInfo"]["endCursor"])["data"]["user"]["projectV2"]["items"]
     return project["id"], field["id"], options, items
 
 
-def find_issue_pr(cfg: dict, env: dict, issue_number: int,
-                  state: str = "all") -> dict | None:
-    """Find the PR linked to an issue (any state) by body/title reference."""
-    r = gh(["pr", "list", "-R", cfg["repo"], "--state", state,
-            "--json", "number,title,body,headRefName,baseRefName,state"], env)
-    if r.returncode != 0:
-        return None
-    prs = json.loads(r.stdout)
+def parse_dep_refs(body: str) -> list[int]:
+    """Issue refs from `Depends on: #N` lines in an issue body.
+
+    Accepts `Depends on: #42, #57`, `- Depends on: #42`, `**Depends on:** #42`,
+    and the GitHub issue-form rendering `### Depends on` with the refs on the
+    following line.
+    """
+    refs: set[int] = set()
+    pending = False
+    for raw in (body or "").splitlines():
+        line = raw.strip()
+        hm = re.match(r"^#{1,6}\s*depends\s+on\s*:?\s*(.*)$", line, re.I)
+        dm = re.match(r"^\s*(?:[-*]\s*|\*+\s*)?depends\s+on\s*:?\s*(.*)$", line, re.I)
+        if hm:
+            pending = True
+            line = hm.group(1).strip()
+        elif dm:
+            pending = False
+            line = dm.group(1).strip()
+        elif pending and line and not line.startswith("##"):
+            pending = False
+        else:
+            continue
+        if line:
+            refs.update(int(x) for x in re.findall(r"#(\d+)", line))
+    return sorted(refs)
+
+
+def dep_gate(deps: list[int], dep_lanes: dict[int, str], dep_states: dict[int, str],
+             done_lane: str) -> tuple[list[int], list[int]]:
+    """(unsatisfied, cancelled) for a dep list.
+
+    A dep is satisfied only when its issue is on the board in the done lane.
+    cancelled deps are closed without being done (subset of unsatisfied);
+    off-board deps are unsatisfied but never "cancelled" (we cannot tell a
+    shipped-and-removed issue from an abandoned one).
+    """
+    unsatisfied: list[int] = []
+    cancelled: list[int] = []
+    for n in deps:
+        lane = dep_lanes.get(n)
+        if lane != done_lane:
+            unsatisfied.append(n)
+            if lane is not None and dep_states.get(n) == "CLOSED":
+                cancelled.append(n)
+    return unsatisfied, cancelled
+
+
+def fmt_deps(nums: list[int]) -> str:
+    return ", ".join(f"#{n}" for n in nums)
+
+
+def parse_verdict(bodies: list[str]) -> str | None:
+    """Last `VERDICT: <approve|request-changes|block>` marker across bodies.
+
+    The marker may sit anywhere in a line (markdown-wrapped or prose-prefixed)
+    and is case-insensitive. Later comments win (a re-review supersedes the
+    earlier verdict); a malformed or absent marker yields None (never merge
+    on None).
+    """
+    verdict = None
+    for body in bodies or []:
+        for line in (body or "").splitlines():
+            m = re.search(r"VERDICT:\s*([a-z-]+)", line, re.I)
+            if m and m.group(1).lower() in VERDICT_VALUES:
+                verdict = m.group(1).lower()
+    return verdict
+
+
+def match_issue_pr(prs: list[dict], issue_number: int,
+                   base: str | None = None) -> dict | None:
+    """First PR whose body or title references the issue; optional base filter.
+
+    An issue can have several PRs (develop PR, ship PR, re-review duplicates);
+    the `base` filter pins the role (e.g. the develop PR vs the ship PR), so
+    the develop-merge passes never grab the ship PR and retarget it.
+    """
     pat = re.compile(
         rf"(?:\b(?:fix(?:es)?|clos(?:es|e)|resolv(?:es|e))\s+#{issue_number}\b)"
         rf"|(?:\bissue\s*:?\s*#{issue_number}\b)", re.I
     )
     for pr in prs:
+        if base and pr.get("baseRefName") != base:
+            continue
         if pat.search(pr.get("body") or ""):
             return pr
     for pr in prs:
+        if base and pr.get("baseRefName") != base:
+            continue
         if f"#{issue_number}" in (pr.get("title") or ""):
             return pr
     return None
+
+
+def find_issue_pr(cfg: dict, env: dict, issue_number: int,
+                  state: str = "all", base: str | None = None) -> dict | None:
+    """Find the PR linked to an issue (any state) by body/title reference.
+
+    Pass `base` (e.g. "develop") when a specific PR role is required — an
+    issue accumulates several PRs over its life and the newest is not
+    necessarily the one a pass wants.
+    """
+    r = gh(["pr", "list", "-R", cfg["repo"], "--state", state,
+            "--json", "number,title,body,headRefName,baseRefName,state"], env)
+    if r.returncode != 0:
+        return None
+    return match_issue_pr(json.loads(r.stdout), issue_number, base)
 
 
 def merge_pr_to_base(cfg: dict, env: dict, pr: dict, base: str,
                      issue_number: int | None = None) -> tuple[bool, str]:
     """Retarget a PR to `base`, mark it ready, merge with a merge commit.
 
-    If the merge auto-closes the issue (a `Fixes #N` keyword in the PR body),
-    reopen it: the issue must stay open until the ship PR merges into main.
+    Issue numbers may not be empty; a PR whose body names no issue number
+    fails fast (the develop merge must not close any issue).
     """
-    num = pr["number"]
-    if pr.get("state") == "MERGED":
-        return True, "already merged"
-    if pr.get("baseRefName") != base:
-        r = gh(["pr", "edit", str(num), "-R", cfg["repo"], "--base", base], env)
-        if r.returncode != 0:
-            return False, f"retarget failed: {r.stderr.strip()[:200]}"
-    gh(["pr", "ready", str(num), "-R", cfg["repo"]], env)  # no-op if already ready
-    r = gh(["pr", "merge", str(num), "-R", cfg["repo"], "--merge"], env)
+    if DRY_RUN:
+        log(f"[dry-run] MERGE PR #{pr.get('number')} -> {base}")
+        return True, "dry-run (no merge)"
+    if pr.get("state") == "CLOSED":
+        return True, "already merged (PR closed)"
+    r = gh(["pr", "edit", str(pr["number"]), "-R", cfg["repo"], "--base", base], env)
     if r.returncode != 0:
-        return False, r.stderr.strip()[:300]
+        return False, f"retarget failed: {r.stderr.strip()[:200]}"
+    gh(["pr", "ready", str(pr["number"]), "-R", cfg["repo"]], env)
+    rr = gh(["pr", "merge", str(pr["number"]), "-R", cfg["repo"], "--merge"], env)
+    if rr.returncode != 0:
+        return False, f"merge failed: {rr.stderr.strip()[:200]}"
     if issue_number:
-        # GitHub applies keyword-based auto-close asynchronously after the merge
-        # (PR body keywords AND commit-message keywords like "Fix #N"), so wait
-        # for it to land before checking whether we must reopen.
         time.sleep(6)
         q = gh(["issue", "view", str(issue_number), "-R", cfg["repo"],
                 "--json", "state"], env)
@@ -194,8 +315,11 @@ def merge_pr_to_base(cfg: dict, env: dict, pr: dict, base: str,
 def find_or_create_ship_pr(cfg: dict, env: dict, head: str, title: str,
                            issue_number: int, base: str) -> dict | None:
     """Reuse the open ship PR for this head/base, or create one."""
+    if DRY_RUN:
+        log(f"[dry-run] SHIP PR for head={head} base={base} (reuse or create)")
+        return {"number": 0, "headRefName": head}
     r = gh(["pr", "list", "-R", cfg["repo"], "--head", head, "--state", "open",
-            "--json", "number,headRefName,baseRefName,state"], env)
+            "--json", "number,baseRefName"], env)
     if r.returncode == 0:
         for pr in json.loads(r.stdout):
             if pr.get("baseRefName") == base:
@@ -205,10 +329,9 @@ def find_or_create_ship_pr(cfg: dict, env: dict, head: str, title: str,
     r = gh(["pr", "create", "-R", cfg["repo"], "--base", base, "--head", head,
             "--title", title, "--body", body], env)
     if r.returncode != 0:
-        log(f"SHIP PR CREATE FAILED head={head}: {r.stderr.strip()[:300]}")
         return None
-    return {"number": int(r.stdout.strip().rstrip("/").split("/")[-1]),
-            "headRefName": head, "baseRefName": base, "state": "OPEN"}
+    m = re.search(r"pull/(\d+)", r.stdout or "")
+    return {"number": int(m.group(1)), "headRefName": head} if m else None
 
 
 def pick_workflow(cfg: dict, labels: list[str]) -> str:
@@ -217,11 +340,14 @@ def pick_workflow(cfg: dict, labels: list[str]) -> str:
         wf = todo_cfg["label_overrides"].get(label.lower())
         if wf:
             return wf
-    return todo_cfg["default"]
+    return todo_cfg.get("default", "archon-fix-github-issue")
 
 
 def move_to_lane(cfg: dict, env: dict, project_id: str, item_id: str,
                  field_id: str, option_id: str) -> bool:
+    if DRY_RUN:
+        log(f"[dry-run] MOVE item={item_id} -> option {option_id}")
+        return True
     r = subprocess.run(
         ["gh", "api", "graphql",
          "-f", f"query={MOVE_MUTATION}",
@@ -231,6 +357,15 @@ def move_to_lane(cfg: dict, env: dict, project_id: str, item_id: str,
          "-F", f"optionId={option_id}"],
         capture_output=True, text=True, timeout=60, env=env,
     )
+    return r.returncode == 0
+
+
+def comment_issue(cfg: dict, env: dict, issue_number: int, body: str) -> bool:
+    if DRY_RUN:
+        log(f"[dry-run] COMMENT issue={issue_number}: {body[:100]}")
+        return True
+    r = gh(["issue", "comment", str(issue_number), "-R", cfg["repo"],
+            "--body", body], env)
     return r.returncode == 0
 
 
@@ -266,6 +401,9 @@ def resume_issue(cfg: dict, env: dict, branch: str, wf: str,
     prior context; the human's latest comment is passed as the message. Removes
     the needs-input label (the run is no longer blocked).
     """
+    if DRY_RUN:
+        log(f"[dry-run] RESUME issue={issue_number} branch={branch} wf={wf}")
+        return True, "dry-run"
     full_branch = resolve_worktree_branch(env, issue_number) or branch
     r = gh(["issue", "view", str(issue_number), "-R", cfg["repo"], "--json", "comments",
             "-q", ".comments[-1].body"], env)
@@ -299,6 +437,9 @@ def dispatch(cfg: dict, env: dict, wf: str, branch: str, message: str,
     launchd restarts of it). Output appends to automation/archon-runs.log.
     Returns True when the process spawned.
     """
+    if DRY_RUN:
+        log(f"[dry-run] DISPATCH wf={wf} branch={branch} issue={number}")
+        return True
     log_path = ROOT / "automation" / "archon-runs.log"
     try:
         with open(log_path, "a") as out:
@@ -314,11 +455,121 @@ def dispatch(cfg: dict, env: dict, wf: str, branch: str, message: str,
     return True
 
 
+def fetch_verdict(cfg: dict, env: dict, pr_number: int) -> str | None:
+    """Last VERDICT line across the PR's comments; None when absent/unreadable."""
+    r = gh(["pr", "view", str(pr_number), "-R", cfg["repo"],
+            "--json", "comments"], env)
+    if r.returncode != 0:
+        return None
+    try:
+        data = json.loads(r.stdout)
+    except ValueError:
+        return None
+    return parse_verdict([c.get("body") or "" for c in data.get("comments", [])])
+
+
+def find_ship_pr(cfg: dict, env: dict, issue_number: int, base: str) -> dict | None:
+    """Open ship PR (head -> base) linked to an issue; None when absent.
+
+    The ship PR shares its head branch with the issue's develop PR, so this
+    resolves the issue's PR first, then looks for an open PR with that head
+    targeting `base`.
+    """
+    pr = find_issue_pr(cfg, env, issue_number)
+    if not pr:
+        return None
+    r = gh(["pr", "list", "-R", cfg["repo"], "--head", pr.get("headRefName") or "",
+            "--state", "open", "--json", "number,baseRefName,mergeable,headRefName"],
+           env)
+    if r.returncode != 0:
+        return None
+    for p in json.loads(r.stdout or "[]"):
+        if p.get("baseRefName") == base:
+            return p
+    return None
+
+
+def try_merge_base_into_head(cfg: dict, env: dict, pr_number: int,
+                             head: str, base: str) -> tuple[bool, str]:
+    """Merge `base` into the PR head via the GitHub merge API.
+
+    Same operation as the "Update branch" button. Returns (True, note) when
+    the merge applied or was a no-op; (False, "conflict") when the branches
+    genuinely conflict; (False, note) on transient errors (caller retries
+    next poll without escalating).
+    """
+    if DRY_RUN:
+        log(f"[dry-run] SHIP CONFLICT UPDATE PR #{pr_number}: merge {base} -> {head}")
+        return True, "dry-run (no merge)"
+    r = gh(["api", "-X", "POST", f"repos/{cfg['repo']}/merges",
+            "-f", f"base={head}", "-f", f"head={base}"], env)
+    if r.returncode == 0:
+        return True, "base merged into head"
+    err = (r.stderr or "") + (r.stdout or "")
+    low = err.lower()
+    if "conflict" in low:
+        return False, "conflict"
+    if "no commits between" in low or "already up to date" in low:
+        return True, "no-op (head already contains base)"
+    return False, f"transient: {err.strip()[:200]}"
+
+
+def conflict_episode_action(mergeable: str, fix_msg: str | None,
+                            fix_status: str | None, mech_failed: bool) -> str:
+    """Next step for a conflicting ship PR in the review lane.
+
+    mergeable: GitHub's value (CONFLICTING / MERGEABLE / UNKNOWN).
+    fix_msg: dispatch message of the dedicated fix run, or None.
+    fix_status: run status for fix_msg, or None when fix_msg is None.
+    mech_failed: the mechanical merge API already hit real conflicts.
+
+    Returns one of:
+      "update"   try the mechanical base-into-head merge (no fix run yet)
+      "dispatch" mechanical merge failed with real conflicts — start the fix run
+      "active"   fix run in flight — wait
+      "failed"   fix run finished but the PR is still conflicting
+      "clear"    PR no longer conflicting — episode over, drop markers
+      "none"     nothing to do (mergeable and no episode markers)
+      "wait"     mergeability unknown — recheck next poll
+    """
+    if mergeable == "UNKNOWN":
+        return "wait"
+    if mergeable != "CONFLICTING":
+        return "clear" if (fix_msg or mech_failed) else "none"
+    if not fix_msg:
+        return "dispatch" if mech_failed else "update"
+    if fix_status in ("running", "pending", "queued", "scheduled"):
+        return "active"
+    return "failed"
+
+
 def poll(cfg: dict, env: dict, state: dict) -> None:
     project_id, field_id, status_options, items = fetch_project(cfg, env)
     first_run = not state.get("_meta", {}).get("snapshot_done")
 
+    lane_names = {v: k for k, v in cfg["lanes"].items()}
+    done_lane_name = lane_names.get("done")
+    todo_lane_name = lane_names.get("todo")
+    blocked_lane_name = lane_names.get("blocked")
+
+    # Issue number -> lane / open-state on this board, for the dep gate.
+    number_lane: dict[int, str] = {}
+    number_state: dict[int, str] = {}
+    for item in items:
+        content = item.get("content") or {}
+        if content.get("__typename") != "Issue":
+            continue
+        if content.get("repository", {}).get("nameWithOwner") != cfg["repo"]:
+            continue
+        number_lane[content["number"]] = item["status"]
+        number_state[content["number"]] = content.get("state") or ""
+
     seen: set[str] = set()
+    # Items dispatched in THIS poll: their run rows appear in `archon workflow
+    # runs` asynchronously, so the completion passes must not read a stale run
+    # with the same message (re-dispatches reuse the message) and pop the
+    # marker before the new run registers.
+    fresh_dispatched: set[str] = set()
     for item in items:
         item_id = item["id"]
         seen.add(item_id)
@@ -328,7 +579,7 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
         repo = content["repository"]["nameWithOwner"]
         if repo != cfg["repo"]:
             continue
-        status_val = (item.get("fieldValueByName") or {}).get("name") or "No status"
+        status_val = item["status"]
         # Convention: items on the board without a status land in the default lane.
         default_lane = cfg.get("default_lane", "Backlog")
         if status_val == "No status":
@@ -344,46 +595,85 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
         ship_pr_num = None
         dispatched_wf = None
         dispatched_branch = None
+        dep_gate_ran = False
+        dep_blocked_marker = None
+        dep_cancelled_noted = None
 
         if not first_run and prev != status_val:
             lane = cfg["lanes"].get(status_val)
             if lane == "todo" and content["__typename"] == "Issue":
-                labels = [n["name"] for n in content["labels"]["nodes"]]
-                wf = pick_workflow(cfg, labels)
-                branch = f"issue-{content['number']}"
-                prior = state.get(item_id, {})
-                ok = False
-                if "needs-input" in labels and prior.get("branch") and prior.get("wf"):
-                    ok, msg = resume_issue(cfg, env, prior["branch"], prior["wf"],
-                                           content["number"])
-                    if ok:
-                        wf = prior["wf"]
-                if not ok:
-                    msg = (
-                        f"Implement GitHub issue #{content['number']}: {content['title']} "
-                        f"({repo}). Full issue: {content['url']}"
-                    )
-                    if wf == "archon-idea-to-pr":
+                # Dependency gate: an issue whose Depends-on refs are not all
+                # in the Done lane does not dispatch; it moves to Blocked and
+                # the unblock pass returns it to Todo when the deps ship.
+                deps = parse_dep_refs(content.get("body") or "")
+                if deps and done_lane_name:
+                    dep_gate_ran = True
+                    unsatisfied, cancelled = dep_gate(
+                        deps, number_lane, number_state, done_lane_name)
+                    if unsatisfied or cancelled:
+                        noted = set(rec.get("dep_cancelled_noted") or [])
+                        fresh = [n for n in cancelled if n not in noted]
+                        for n in fresh:
+                            comment_issue(
+                                cfg, env, content["number"],
+                                f"#{n} closed without shipping, but this issue depends on it. "
+                                "Re-scope, rewire the Depends on line, or close this issue.")
+                            noted.add(n)
+                        if not rec.get("dep_blocked"):
+                            comment_issue(
+                                cfg, env, content["number"],
+                                f"Blocked before dispatch: depends on {fmt_deps(unsatisfied)} "
+                                "— not in the Done lane. Will start automatically when they ship. "
+                                "If a dependency is abandoned, re-scope or close this issue.")
+                            if blocked_lane_name:
+                                option_id = status_options.get(blocked_lane_name)
+                                if option_id and move_to_lane(
+                                        cfg, env, project_id, item_id, field_id, option_id):
+                                    log(f"DEP-BLOCKED item={item_id} "
+                                        f"issue={content['number']} -> {blocked_lane_name}")
+                                    status_val = blocked_lane_name
+                        dep_blocked_marker = deps
+                        dep_cancelled_noted = sorted(noted)
+                    else:
+                        dep_blocked_marker = None
+                if not dep_gate_ran or dep_blocked_marker is None:
+                    labels = [n["name"] for n in content["labels"]["nodes"]]
+                    wf = pick_workflow(cfg, labels)
+                    branch = f"issue-{content['number']}"
+                    prior = state.get(item_id, {})
+                    ok = False
+                    if "needs-input" in labels and prior.get("branch") and prior.get("wf"):
+                        ok, msg = resume_issue(cfg, env, prior["branch"], prior["wf"],
+                                               content["number"])
+                        if ok:
+                            wf = prior["wf"]
+                    if not ok:
                         msg = (
-                            f"Build feature from issue #{content['number']}: {content['title']} "
+                            f"Implement GitHub issue #{content['number']}: {content['title']} "
                             f"({repo}). Full issue: {content['url']}"
                         )
-                    ok = dispatch(cfg, env, wf, branch, msg,
-                                  item_id, content["number"])
-                if ok:
-                    dispatched_msg = msg
-                    dispatched_wf = wf
-                    dispatched_branch = branch
-                target = cfg["dispatch"]["todo"].get("move_to")
-                if ok and target:
-                    option_id = status_options.get(target)
-                    if option_id and move_to_lane(
-                            cfg, env, project_id, item_id, field_id, option_id):
-                        log(f"MOVED item={item_id} issue={content['number']} -> {target}")
-                    elif option_id is None:
-                        log(f"MOVE SKIPPED item={item_id}: lane '{target}' not on board")
-                    else:
-                        log(f"MOVE FAILED item={item_id} -> {target}")
+                        if wf == "archon-idea-to-pr":
+                            msg = (
+                                f"Build feature from issue #{content['number']}: {content['title']} "
+                                f"({repo}). Full issue: {content['url']}"
+                            )
+                        ok = dispatch(cfg, env, wf, branch, msg,
+                                      item_id, content["number"])
+                    if ok:
+                        dispatched_msg = msg
+                        dispatched_wf = wf
+                        dispatched_branch = branch
+                        fresh_dispatched.add(item_id)
+                    target = cfg["dispatch"]["todo"].get("move_to")
+                    if ok and target:
+                        option_id = status_options.get(target)
+                        if option_id and move_to_lane(
+                                cfg, env, project_id, item_id, field_id, option_id):
+                            log(f"MOVED item={item_id} issue={content['number']} -> {target}")
+                        elif option_id is None:
+                            log(f"MOVE SKIPPED item={item_id}: lane '{target}' not on board")
+                        else:
+                            log(f"MOVE FAILED item={item_id} -> {target}")
             elif lane == "review":
                 if content["__typename"] == "PullRequest":
                     pr_number = content["number"]
@@ -393,11 +683,11 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
                              msg, item_id, content["number"])
                 else:
                     # Ensure the feature is in develop, then review the ship PR
-                    # (feature -> main); on review completion the poller merges it.
-                    pr = find_issue_pr(cfg, env, content["number"])
+                    # (feature -> main); on an approving review the poller merges it.
+                    merge_base = cfg["dispatch"]["todo"].get(
+                        "merge_develop_base", "develop")
+                    pr = find_issue_pr(cfg, env, content["number"], base=merge_base)
                     if pr:
-                        merge_base = cfg["dispatch"]["todo"].get(
-                            "merge_develop_base", "develop")
                         ok, note = merge_pr_to_base(cfg, env, pr, merge_base,
                                                     content["number"])
                         log(f"DEVELOP MERGE issue={content['number']} PR=#{pr['number']}: {note}"
@@ -418,6 +708,7 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
                                     branch, msg, item_id, content["number"]):
                             review_msg = msg
                             ship_pr_num = ship["number"]
+                            fresh_dispatched.add(item_id)
 
         rec = state.get(item_id, {})
         rec["status"] = status_val
@@ -430,7 +721,62 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
             rec["review_msg"] = review_msg
             rec["ship_pr"] = ship_pr_num
             rec["issue_number"] = content["number"]
+        if dep_gate_ran:
+            if dep_blocked_marker:
+                rec["dep_blocked"] = dep_blocked_marker
+            else:
+                rec.pop("dep_blocked", None)
+            if dep_cancelled_noted:
+                rec["dep_cancelled_noted"] = dep_cancelled_noted
+            else:
+                rec.pop("dep_cancelled_noted", None)
         state[item_id] = rec
+
+    # Dep-unblock pass: blocked items with a dep marker re-check every poll, so
+    # a shipped dependency releases them (moves them to Todo, which dispatches
+    # on the next poll) without a manual drag.
+    if todo_lane_name and blocked_lane_name and done_lane_name:
+        for item in items:
+            content = item.get("content") or {}
+            if content.get("__typename") != "Issue":
+                continue
+            if content.get("repository", {}).get("nameWithOwner") != cfg["repo"]:
+                continue
+            if item["status"] != blocked_lane_name:
+                continue
+            item_id = item["id"]
+            rec = state.get(item_id, {})
+            if not rec.get("dep_blocked"):
+                continue
+            # The current body is authoritative: clearing the Depends-on line
+            # (or rewiring it) must release or re-block the item immediately.
+            deps = parse_dep_refs(content.get("body") or "")
+            unsatisfied, cancelled = dep_gate(
+                deps, number_lane, number_state, done_lane_name)
+            if unsatisfied:
+                noted = set(rec.get("dep_cancelled_noted") or [])
+                fresh = [n for n in cancelled if n not in noted]
+                for n in fresh:
+                    comment_issue(
+                        cfg, env, content["number"],
+                        f"#{n} closed without shipping, but this issue depends on it. "
+                        "Re-scope, rewire the Depends on line, or close this issue.")
+                    noted.add(n)
+                if fresh:
+                    rec["dep_cancelled_noted"] = sorted(noted)
+                    state[item_id] = rec
+                continue
+            option_id = status_options.get(todo_lane_name)
+            if option_id and move_to_lane(
+                    cfg, env, project_id, item_id, field_id, option_id):
+                if deps:
+                    comment_issue(
+                        cfg, env, content["number"],
+                        f"Dependencies satisfied ({fmt_deps(deps)} in Done). Moved to Todo.")
+                rec.pop("dep_blocked", None)
+                rec.pop("dep_cancelled_noted", None)
+                state[item_id] = rec
+                log(f"DEP-UNBLOCKED item={item_id} issue={content['number']} -> {todo_lane_name}")
 
     # Completion reconciliation: when a dispatched run finishes, merge the
     # feature PR into develop and move the item to Ready for Review.
@@ -440,7 +786,7 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
     runs_by_msg = None
     if complete_move_to and in_progress_name:
         for item_id, rec in list(state.items()):
-            if item_id == "_meta":
+            if item_id == "_meta" or item_id in fresh_dispatched:
                 continue
             msg = rec.get("dispatch_msg")
             if not msg or rec.get("status") != in_progress_name:
@@ -464,7 +810,7 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
                 merge_base = cfg["dispatch"]["todo"].get("merge_develop_base")
                 merge_ok = True
                 if issue_number and merge_base:
-                    pr = find_issue_pr(cfg, env, issue_number)
+                    pr = find_issue_pr(cfg, env, issue_number, base=merge_base)
                     if pr:
                         merge_ok, note = merge_pr_to_base(cfg, env, pr, merge_base,
                                                           issue_number)
@@ -491,15 +837,15 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
                 rec.pop("dispatch_msg", None)
 
     # Review completion: merge the ship PR to its base (main) and move the
-    # item to Done when the review run finishes.
+    # item to Done ONLY when the review run finished AND its verdict approves.
     ship_to = cfg["dispatch"]["review"].get("ship_to", "main")
     review_lane_name = next(
         (k for k, v in cfg["lanes"].items() if v == "review"), None)
     done_name = cfg["dispatch"]["review"].get("done_lane", "Done")
     if (review_lane_name and done_name
-            and cfg["dispatch"]["review"].get("merge_ship_on_review_complete")):
+            and cfg["dispatch"]["review"].get("merge_ship_on_approve")):
         for item_id, rec in list(state.items()):
-            if item_id == "_meta":
+            if item_id == "_meta" or item_id in fresh_dispatched:
                 continue
             rmsg = rec.get("review_msg")
             if not rmsg or rec.get("status") != review_lane_name:
@@ -516,18 +862,33 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
                     if r.returncode == 0:
                         ship = json.loads(r.stdout)
                 if ship and ship.get("state") != "MERGED":
-                    rr = gh(["pr", "merge", str(ship_num), "-R", cfg["repo"],
-                             "--merge"], env)
-                    if rr.returncode == 0:
-                        log(f"SHIPPED PR #{ship_num} -> {ship_to} (review completed)")
+                    verdict = fetch_verdict(cfg, env, ship_num)
+                    if verdict != "approve":
+                        log(f"SHIP HELD PR #{ship_num}: verdict={verdict or 'none'} — not merging")
                         issue_number = rec.get("issue_number")
                         if issue_number:
-                            gh(["issue", "close", str(issue_number), "-R", cfg["repo"]],
-                               env)
-                            log(f"CLOSED issue #{issue_number} (shipped)")
-                    else:
-                        log(f"SHIP MERGE FAILED PR #{ship_num}: {rr.stderr.strip()[:300]}")
+                            comment_issue(
+                                cfg, env, issue_number,
+                                f"Ship review did not approve (VERDICT: {verdict or 'none'}). "
+                                "Fix the findings, then drag the issue back to In Review to re-review.")
+                        rec.pop("review_msg", None)
+                        rec.pop("ship_pr", None)
                         continue
+                    if DRY_RUN:
+                        log(f"[dry-run] MERGE PR #{ship_num} -> {ship_to}")
+                    else:
+                        rr = gh(["pr", "merge", str(ship_num), "-R", cfg["repo"],
+                                 "--merge"], env)
+                        if rr.returncode == 0:
+                            log(f"SHIPPED PR #{ship_num} -> {ship_to} (approved)")
+                            issue_number = rec.get("issue_number")
+                            if issue_number:
+                                gh(["issue", "close", str(issue_number), "-R", cfg["repo"]],
+                                   env)
+                                log(f"CLOSED issue #{issue_number} (shipped)")
+                        else:
+                            log(f"SHIP MERGE FAILED PR #{ship_num}: {rr.stderr.strip()[:300]}")
+                            continue
                 elif not ship:
                     log(f"SHIP PR #{ship_num} not found for item={item_id}")
                     continue
@@ -540,6 +901,83 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
             elif rstatus in ("failed", "cancelled"):
                 log(f"REVIEW {rstatus.upper()} item={item_id}; left in {review_lane_name}")
                 rec.pop("review_msg", None)
+
+    # Ship-conflict remediation: a CONFLICTING ship PR blocks the verdict-gated
+    # merge. Try a mechanical base-into-head merge first (free, instant); on
+    # real conflicts dispatch the dedicated fix workflow once per episode
+    # (markers: conflict_fix_msg / conflict_mech_failed / conflict_fix_noted).
+    # Episodes end when the PR is mergeable; a fix run that finishes with the
+    # PR still conflicting posts a human-help comment once.
+    fix_wf = cfg["dispatch"]["review"].get("conflict_fix_workflow")
+    if review_lane_name and fix_wf:
+        for item_id, rec in list(state.items()):
+            if item_id == "_meta" or rec.get("status") != review_lane_name:
+                continue
+            issue_number = rec.get("issue_number")
+            if not issue_number:
+                continue
+            ship = find_ship_pr(cfg, env, issue_number, ship_to)
+            if not ship:
+                continue
+            ship_num = ship.get("number")
+            mergeable = ship.get("mergeable") or "UNKNOWN"
+            # Never remediate while a review run is active — its sync/fix
+            # nodes also write to the branch; concurrent writers race.
+            rmsg = rec.get("review_msg")
+            if rmsg and runs_by_msg is None:
+                runs_by_msg = fetch_runs_by_message(env)
+            review_active = bool(
+                rmsg and runs_by_msg
+                and run_status_for(runs_by_msg, rmsg)
+                in ("running", "pending", "queued", "scheduled"))
+            if review_active:
+                continue
+            fix_msg = rec.get("conflict_fix_msg")
+            mech_failed = bool(rec.get("conflict_mech_failed"))
+            if fix_msg and runs_by_msg is None:
+                runs_by_msg = fetch_runs_by_message(env)
+            fix_status = (run_status_for(runs_by_msg, fix_msg)
+                          if fix_msg and runs_by_msg else None)
+            action = conflict_episode_action(mergeable, fix_msg, fix_status, mech_failed)
+            if action == "update":
+                ok, note = try_merge_base_into_head(
+                    cfg, env, ship_num, ship.get("headRefName") or "", ship_to)
+                log(f"SHIP CONFLICT UPDATE PR #{ship_num}: {note}")
+                if not ok and note == "conflict":
+                    rec["conflict_mech_failed"] = True
+                    action = "dispatch"
+                elif not ok:
+                    action = "wait"  # transient error — retry next poll
+            if action == "dispatch":
+                msg = (f"Resolve merge conflicts on ship PR #{ship_num} "
+                       f"(issue #{issue_number}).")
+                branch = f"fix-ship-issue-{issue_number}"
+                if dispatch(cfg, env, fix_wf, branch, msg, item_id, issue_number):
+                    rec["conflict_fix_msg"] = msg
+                    rec["conflict_fix_noted"] = False
+                    comment_issue(
+                        cfg, env, issue_number,
+                        f"Ship PR #{ship_num} has merge conflicts. Resolving automatically "
+                        f"(merging main into the branch, then {fix_wf} if needed).")
+                    log(f"SHIP CONFLICT DISPATCH PR #{ship_num} issue={issue_number} "
+                        f"wf={fix_wf}")
+            elif action == "failed":
+                if not rec.get("conflict_fix_noted"):
+                    comment_issue(
+                        cfg, env, issue_number,
+                        f"Could not resolve the merge conflicts on ship PR #{ship_num} "
+                        "automatically — the fix run finished but the PR is still "
+                        "conflicting. Merge main into the branch manually (or rewrite "
+                        "the conflicting lines), then drag the issue back to In Review.")
+                    rec["conflict_fix_noted"] = True
+                log(f"SHIP CONFLICT UNRESOLVED PR #{ship_num} issue={issue_number} "
+                    "— needs human")
+            elif action == "clear":
+                log(f"SHIP CONFLICT RESOLVED PR #{ship_num} issue={issue_number}")
+                rec.pop("conflict_fix_msg", None)
+                rec.pop("conflict_mech_failed", None)
+                rec.pop("conflict_fix_noted", None)
+            state[item_id] = rec
 
     # Prune items that left the board.
     for item_id in list(state):
@@ -588,6 +1026,9 @@ def run_status_for(runs_by_msg: dict[str, str], dispatch_msg: str) -> str | None
 
 
 def save_state(cfg: dict, state: dict) -> None:
+    if DRY_RUN:
+        log("[dry-run] state not saved")
+        return
     path = ROOT / cfg["state_file"]
     tmp = path.with_suffix(".tmp")
     tmp.write_text(json.dumps(state, indent=2))
@@ -604,7 +1045,7 @@ def main() -> int:
     state_path = ROOT / cfg["state_file"]
     state = json.loads(state_path.read_text()) if state_path.exists() else {}
 
-    once = "--once" in sys.argv
+    once = "--once" in sys.argv or DRY_RUN
     while True:
         try:
             poll(cfg, env, state)
