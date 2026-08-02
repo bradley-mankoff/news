@@ -39,23 +39,37 @@ class ConfigHelperTests(unittest.TestCase):
                 model_max_input_tokens=1,
                 article_summary_max_tokens=2,
                 story_drafting_max_tokens=3,
+                story_scale_screening_max_tokens=3000,
+                title_generation_max_tokens=700,
                 task_sampling={"default": base_sampling},
             ),
             ModelTuningSettings(
                 article_summary_max_tokens=20,
+                title_generation_max_tokens=900,  # overlay wins
                 task_sampling={"story_drafting": overlay_sampling},
             ),
         )
         self.assertEqual(merged_tuning.article_summary_max_tokens, 20)
         self.assertEqual(merged_tuning.task_sampling["story_drafting"].top_p, 0.8)
+        # Silent-drop prevention for the two new per-task fields: base value
+        # survives when the overlay leaves it unset, overlay wins when set.
+        self.assertEqual(merged_tuning.story_scale_screening_max_tokens, 3000)  # base survives
+        self.assertEqual(merged_tuning.title_generation_max_tokens, 900)        # overlay wins
 
         with patch.object(config_module, "resolve_model_name", return_value="patched-model"), patch.object(
             config_module,
             "MODEL_SPECIFIC_TUNING_DEFAULTS",
-            {"patched-model": ModelTuningSettings(model_max_input_tokens=123, task_sampling={"default": overlay_sampling})},
+            {"patched-model": ModelTuningSettings(
+                model_max_input_tokens=123,
+                story_scale_screening_max_tokens=3100,
+                title_generation_max_tokens=710,
+                task_sampling={"default": overlay_sampling},
+            )},
         ):
             tuned = config_module._base_model_tuning("anything")
         self.assertEqual(tuned.model_max_input_tokens, 123)
+        self.assertEqual(tuned.story_scale_screening_max_tokens, 3100)
+        self.assertEqual(tuned.title_generation_max_tokens, 710)
         self.assertEqual(tuned.task_sampling["default"].top_p, 0.8)
 
         self.assertEqual(config_module._task_max_tokens_field("default"), "model_max_input_tokens")

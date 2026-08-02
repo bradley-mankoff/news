@@ -160,6 +160,18 @@ def _runtime_snapshot(
             )
         )
         config = resolution.config
+        missing = [
+            task
+            for task in (
+                "article_summary",
+                "story_drafting",
+                "story_scale_screening",
+                "title_generation",
+            )
+            if task not in config.model_assignments
+        ]
+        if missing:
+            raise KeyError(f"runtime config missing model assignments for tasks: {missing}")
         return {
             "preset_id": config.preset_id or "custom",
             "prompt_profile_id": config.prompt_profile_id,
