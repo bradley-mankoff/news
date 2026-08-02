@@ -7,8 +7,8 @@ Date: 2026-08-02
 ## When to Use
 
 The working tree is sanitized and the audit report (`docs/security/audit-2026-08-02.md`)
-documents the remaining exposure: personal emails in the content of all 111 commits,
-personal filesystem paths in 109/111 commits and 3 commit messages, and 3 personal
+documents the remaining exposure: personal emails in the content of 115/117 commits,
+personal filesystem paths in 113/117 commits and 7 commit messages, and 3 personal
 author/committer emails. If the repository is to be made public, this runbook rewrites
 that history with `git filter-repo` and requires a force-push of `develop` and `main`.
 
@@ -24,7 +24,7 @@ are In Progress on the board.
 - `git` >= 2.38.
 - A clean mirror clone (see step 1) — never run `filter-repo` inside a live worktree.
 - `automation/security_audit.py` available on the machine running the scrub (it is
-  committed to the repo, so any clone has it).
+  committed to the repo, so any non-bare clone has it).
 
 ## Steps
 
@@ -69,10 +69,18 @@ EOF
 
 ### 4. Create the mailmap
 
-Map the 3 personal author/committer emails to the public noreply identity (restore
-`[@]`/`[.]` placeholders; the middle line's `<hostname>` is the machine hostname from
-the audit's Author Metadata table — substitute the actual hostname of the machine that
-created the early commits):
+First discover the exact personal author/committer emails on the **unscrubbed**
+mirror (run this before step 5 — SHAs and emails change once the history is
+rewritten):
+
+```bash
+git -C /tmp/news-scrub log --all --format='%ae' | sort -u
+```
+
+Map the personal author/committer emails to the public noreply identity (restore
+`[@]`/`[.]` placeholders; the middle line's `<hostname>` is the machine hostname of
+the machine that created the early commits — the audit report redacts it
+(`bradley_mankoff[@]***`), so take it from the `git log` output above):
 
 ```text
 Bradley Mankoff <52721920+bradley-mankoff@users.noreply.github.com> bradley[@]mankoff[.]com
@@ -93,12 +101,17 @@ git filter-repo \
 
 ### 6. Verify
 
-Run the audit scanner against the rewritten history (bare mirror: history-only):
+The mirror clone is bare (no working tree), so the scanner must run from a normal
+checkout of this repo — the script lives there, and `--repo` targets the mirror:
 
 ```bash
-python3 /tmp/news-scrub/automation/security_audit.py --history-only --repo /tmp/news-scrub
+# from any non-bare checkout of this repo (e.g. the local clone you used to plan the scrub)
+python3 automation/security_audit.py --history-only --repo /tmp/news-scrub
 echo $?   # must be 0 (no findings)
 ```
+
+(Or use `automation/scrub_history.sh`, which automates steps 1–6 including this
+verification and resolves the scanner from its own directory.)
 
 ### 7. Push
 
