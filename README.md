@@ -184,6 +184,9 @@ Key Run Settings:
 - `NEWS_MODEL`: default model selection only. Task models are assigned
   separately with `NEWS_MODEL_ARTICLE_SUMMARY` and
   `NEWS_MODEL_STORY_DRAFTING`.
+- `NEWS_MODEL_BACKEND`: optional backend override for the default model
+  (`mlx-lm`, `mlx-vlm`, or `external`; inferred from the model reference
+  otherwise — see [Runtime Matrix](#runtime-matrix)).
 
 ### Model Selection
 
@@ -216,14 +219,20 @@ Initially supported runtimes (recorded in
 Managed cross-platform GGUF via `llama.cpp` is **not** initially supported;
 GGUF files run through `mlx-vlm` on Apple Silicon.
 
-The backend is inferred from the model reference unless `NEWS_MODEL_BACKEND` is
-set to `mlx-lm`, `mlx-vlm`, or `external` (any other value fails fast). To run
-the default model against an external OpenAI-compatible endpoint — no managed
-server is started; the pipeline waits for and probes the endpoint:
+The default model's backend is inferred from the model reference unless
+`NEWS_MODEL_BACKEND` is set to `mlx-lm`, `mlx-vlm`, or `external` (any other
+value fails fast). To run the default model against an external
+OpenAI-compatible endpoint — no managed server is started; the pipeline waits
+for and probes the endpoint:
 
 ```bash
 NEWS_MODEL_BACKEND=external NEWS_MODEL_BASE_URL=https://api.example.com/v1 NEWS_MODEL=<server-model-id> uv run news run
 ```
+
+Authenticated endpoints are supported by setting `NEWS_MODEL_API_KEY`; it is
+sent as a `Bearer` token on `/models` and `/chat/completions` requests (unset
+sends no credentials). An endpoint that rejects the request with HTTP 401/403
+fails fast instead of waiting out the readiness deadline.
 
 `news model-server-command` reports that no managed server command exists for
 the external backend. Per-task models can also use external endpoints by

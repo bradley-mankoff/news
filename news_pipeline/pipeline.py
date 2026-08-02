@@ -24,9 +24,15 @@ Local model server:
         is ready, runs the pipeline, then shuts the managed server down even if
         the run errors. Server logs are written beside the report output.
 
-    NEWS_MODEL=https://huggingface.co/EgorKodin/Huihui-gemma-4-12B-it-abliterated-mlx-4bit uv run news model-server-command
-        Prints the matching MLX server command for the selected model without
-        starting the pipeline.
+    NEWS_MODEL=... uv run news model-server-command
+        Prints the matching MLX server command for managed backends; for the
+        external backend, prints a notice instead (no managed command exists).
+
+    NEWS_MODEL_BACKEND=external NEWS_MODEL_BASE_URL=https://api.example.com/v1 uv run news run --preset NAME
+        Uses any OpenAI-compatible endpoint for the default model: no managed
+        server is started; the pipeline waits for and probes the endpoint.
+        Authenticated endpoints can pass NEWS_MODEL_API_KEY (sent as a Bearer
+        token on /models and /chat/completions).
 
     uv run news codex-model-server-command
         Prints the Codex-safe MLX server command for gemma-e2b-tiny. Codex-run
@@ -91,6 +97,7 @@ from .config import (
     MODEL_BACKEND_EXTERNAL,
     MODEL_TASK_ARTICLE_SUMMARY,
     MODEL_TASK_STORY_DRAFTING,
+    configured_model_api_key,
     ensure_codex_safe_model_reference,
     is_gemma_4_model_reference,
     load_recipients,
@@ -157,6 +164,8 @@ MODEL_RETRY_ATTEMPTS = 4
 MODEL_RETRY_BASE_DELAY_SECONDS = 2
 MODEL_REQUEST_TIMEOUT_SECONDS = 180
 MODEL_LOAD_PROBE_TIMEOUT_SECONDS = 120
+# External endpoints get the same readiness budget as the managed-server wait
+# (_wait_for_managed_model_server defaults to 300 s) so both paths behave alike.
 EXTERNAL_SERVER_READY_TIMEOUT_SECONDS = 300
 ARTICLE_DOWNLOAD_TIMEOUT_SECONDS = 20
 ARTICLE_SCRAPE_TOTAL_TIMEOUT_SECONDS = max(
@@ -174,6 +183,7 @@ MODEL_REFERENCE = CONFIG.model_reference
 MODEL_BASE_URL = CONFIG.model_base_url
 MODEL_BACKEND = CONFIG.model_backend
 MODEL_SERVER_COMMAND = CONFIG.model_server_command
+MODEL_API_KEY = configured_model_api_key()
 MODEL_REPORT_LABEL = _filesystem_safe_model_label(MODEL_REFERENCE)
 
 BRADLEY_RECIPIENT = CONFIG.bradley_recipient
@@ -2517,7 +2527,7 @@ def build_chat_model(max_tokens: int, *, task: str = "default") -> ChatOpenAI:
     )
     return ChatOpenAI(
         base_url=assignment.base_url,
-        api_key="not-needed",  # pragma: allowlist secret
+        api_key=MODEL_API_KEY,  # pragma: allowlist secret
         model=assignment.name,
         max_tokens=max_tokens,
         max_retries=0,
@@ -3872,6 +3882,17 @@ def _finish_run_diagnostics(diagnostics: RunDiagnostics, config: RuntimeConfig) 
     _active_run_finalizer(diagnostics, config).finish()
 
 
+def _model_auth_headers() -> dict[str, str]:
+    """Authorization headers for OpenAI-compatible endpoint requests.
+
+    Only sent when a real NEWS_MODEL_API_KEY is configured; the default
+    "not-needed" sentinel keeps unauthenticated local servers working.
+    """
+    if MODEL_API_KEY and MODEL_API_KEY != "not-needed":
+        return {"Authorization": f"Bearer {MODEL_API_KEY}"}
+    return {}
+
+
 def _preflight_openai_model_server(
     *,
     base_url: str,
@@ -3886,8 +3907,9 @@ def _preflight_openai_model_server(
         "served_models": [],
         "model_match": False,
     }
+    headers = _model_auth_headers()
     try:
-        response = requests.get(models_url, timeout=5)
+        response = requests.get(models_url, timeout=5, headers=headers)
         result["status_code"] = response.status_code
         response.raise_for_status()
         payload = response.json()
@@ -3904,7 +3926,7 @@ def _preflight_openai_model_server(
             expected = {model_name, model_reference, "default_model"}
             result["model_match"] = any(model in expected for model in served_models)
     except Exception as error:
-        result["error"] = str(error)
+        result["error"] = f"{type(error).__name__}: {error}"
     return result
 
 
@@ -3930,15 +3952,16 @@ def _probe_chat_completion(
         "ok": False,
     }
     payload = {**payload, "stream": False}
+    headers = _model_auth_headers()
     try:
-        response = requests.post(completions_url, json=payload, timeout=timeout_seconds)
+        response = requests.post(completions_url, json=payload, timeout=timeout_seconds, headers=headers)
         result["status_code"] = response.status_code
         response.raise_for_status()
         response_payload = response.json()
         result["content_preview"] = str(response_payload)[:80]
         result["ok"] = True
     except Exception as error:
-        result["error"] = str(error)
+        result["error"] = f"{type(error).__name__}: {error}"
     return result
 
 
@@ -4084,26 +4107,49 @@ def _ensure_main_model_server_ready() -> None:
         progress_tracker.start_meter("model", total=3, unit="steps", detail="Checking model server.")
         record_activity_snapshot("before_model_server_preflight")
         if MODEL_BACKEND == MODEL_BACKEND_EXTERNAL:
+            # External backend: no managed server is spawned. A live endpoint is
+            # the goal here (unlike the managed path below, where an already-live
+            # endpoint is an error), so skip the conflict check and just wait for
+            # /models to answer; the generation probe below is the real gate.
             record_activity_snapshot("before_external_server_wait", ACTIVE_RUN_DIAGNOSTICS)
             deadline = time.monotonic() + EXTERNAL_SERVER_READY_TIMEOUT_SECONDS
             last_preflight: dict[str, Any] = {}
             while time.monotonic() < deadline:
                 last_preflight = preflight_model_server()
-                if last_preflight.get("ok") and last_preflight.get("model_match"):
+                if last_preflight.get("ok"):
                     break
+                status_code = last_preflight.get("status_code")
+                if status_code in (401, 403):
+                    raise RuntimeError(
+                        f"External model server at {MODEL_BASE_URL} rejected the request "
+                        f"with HTTP {status_code}. The endpoint requires authentication: "
+                        "set NEWS_MODEL_API_KEY to a valid key for this endpoint."
+                    )
                 time.sleep(2)
-            else:  # loop exhausted
-                detail = last_preflight.get("error") or last_preflight.get("served_models") or "no response"
+
+            detail = last_preflight.get("error") or last_preflight.get("served_models") or "no response"
+            if not last_preflight.get("ok"):
                 raise TimeoutError(
                     f"External model server did not become ready within "
                     f"{EXTERNAL_SERVER_READY_TIMEOUT_SECONDS} seconds at {MODEL_BASE_URL}: {detail}."
                 )
+            progress_tracker.update_meter(done=2, detail="Checking model generation.")
             generation_probe = probe_model_generation()
             if not generation_probe.get("ok"):
+                probe_status = generation_probe.get("status_code")
+                auth_hint = (
+                    f" The endpoint rejected the probe with HTTP {probe_status}; set "
+                    "NEWS_MODEL_API_KEY if it requires authentication."
+                    if probe_status in (401, 403)
+                    else ""
+                )
                 raise RuntimeError(
                     "External model server answered /models but failed a tiny generation probe. "
-                    f"{generation_probe.get('error') or generation_probe}."
+                    f"{generation_probe.get('error') or generation_probe}. "
+                    "Verify the endpoint supports POST /chat/completions and that NEWS_MODEL "
+                    f"({MODEL_REFERENCE}) matches a served model id.{auth_hint}"
                 )
+            record_activity_snapshot("after_external_server_ready", ACTIVE_RUN_DIAGNOSTICS)
             MANAGED_MODEL_SERVER_EXTERNAL = True
             MANAGED_MODEL_SERVER_READY = True
             progress_tracker.finish_meter(detail="External model server ready.")
