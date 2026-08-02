@@ -26,4 +26,3 @@ the default profile and is byte-identical to the pre-catalog prompts.
 - Easier: tone variation, comparison, UI selection, future per-stage editing.
 - Harder/off-limits: YAML/editable prompt surface until the user-editing issue;
   profiles may not weaken machine-required output contracts.
-
