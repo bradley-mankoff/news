@@ -103,6 +103,8 @@ cleanup() {
   # (the very data the scrub is meant to contain). Keep it on success so the
   # human can inspect the rewritten history before pushing.
   if [ "${1:-0}" -ne 0 ]; then
+    echo "note: removing $WORKDIR (scrub did not complete); the mirror holds raw" >&2
+    echo "      pre-scrub history and must not linger." >&2
     rm -rf "$WORKDIR"
   fi
 }
@@ -156,6 +158,12 @@ fi
 echo "==> Verification passed: rewritten history is clean."
 
 # --- push (dry-run default) --------------------------------------------------
+# git filter-repo removes the 'origin' remote as part of its default
+# finalization, so re-add it before the push phase. This runs in dry-run too:
+# the printed commands must be executable as printed.
+echo "==> Re-adding origin remote for the push phase (filter-repo removes it)."
+git -C "$WORKDIR" remote add origin "$REPO_URL"
+
 PUSH_CMDS=(
   "git -C $WORKDIR push --force origin develop"
   "git -C $WORKDIR push --force origin main"
