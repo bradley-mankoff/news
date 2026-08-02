@@ -169,6 +169,32 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
                 )
             )
 
+    def test_prompt_profile_env_resolves_into_runtime_config(self) -> None:
+        config = load_runtime_config(
+            environ={},
+            overrides={"NEWS_PROMPT_PROFILE": "playful"},
+            materialize_outputs=False,
+        )
+
+        self.assertEqual(config.prompt_profile_id, "playful")
+
+    def test_prompt_profile_defaults_to_balanced_when_unset(self) -> None:
+        config = load_runtime_config(
+            environ={},
+            overrides={},
+            materialize_outputs=False,
+        )
+
+        self.assertEqual(config.prompt_profile_id, "balanced")
+
+    def test_unknown_prompt_profile_error_lists_available_profiles(self) -> None:
+        with self.assertRaisesRegex(ValueError, "Available profiles: .*balanced"):
+            load_runtime_config(
+                environ={},
+                overrides={"NEWS_PROMPT_PROFILE": "bogus"},
+                materialize_outputs=False,
+            )
+
     def test_removed_topic_env_vars_reported_and_rejected(self) -> None:
         with self.assertRaisesRegex(ValueError, "NEWS_TOPIC_IDS"):
             load_runtime_config(

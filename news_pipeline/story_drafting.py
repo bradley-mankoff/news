@@ -20,6 +20,7 @@ from .article_summary_records import (
 )
 from .story_records import ensure_story_record
 from .text_cleaning import clean_article_text
+from .prompt_catalog import DEFAULT_PROMPT_INSTRUCTIONS
 
 
 ARTICLE_BODY_EVIDENCE_MAX_CHARS = 2000
@@ -44,6 +45,7 @@ class StoryDraftingRuntime:
     fallback_synthesis_paragraph_from_summaries: Callable[[list[str]], str]
     story_drafting_word_count: Callable[[str], int]
     progress_callback: Callable[[str, dict[str, Any]], None] | None = None
+    prompt_instructions: str | None = None
 
 
 
@@ -141,7 +143,12 @@ def story_summary_blocks_from_clusters(
     return story_blocks
 
 
-def build_story_synthesis_prompt_messages(story_block: dict[str, Any], now_label: str) -> list[BaseMessage]:
+def build_story_synthesis_prompt_messages(
+    story_block: dict[str, Any],
+    now_label: str,
+    *,
+    prompt_instructions: str | None = None,
+) -> list[BaseMessage]:
     story_title = str(story_block.get("story_title") or "Story update")
     summaries = [str(summary or "").strip() for summary in story_block.get("summaries", []) if str(summary or "").strip()]
     citation_sources = [
@@ -169,10 +176,7 @@ def build_story_synthesis_prompt_messages(story_block: dict[str, Any], now_label
             f"S{index}: {summary}"
             for index, summary in enumerate(summaries, start=1)
         )
-    story_guidance = (
-        "Prioritize the headline, lede, and details around the central event supported "
-        "by the supplied source summaries and evidence."
-    )
+    story_guidance = prompt_instructions or DEFAULT_PROMPT_INSTRUCTIONS["story_drafting"]
     system_prompt = SystemMessage(content=textwrap.dedent(f"""
         Today: {now_label}.
         You are synthesizing prewritten article summaries and cleaned article evidence into one newsletter story.
@@ -426,7 +430,11 @@ def run_story_synthesis_block(
         runtime,
     )
     fallback_paragraph = runtime.fallback_synthesis_paragraph_from_summaries(summaries)
-    prompt_messages = build_story_synthesis_prompt_messages(story_block, now_label)
+    prompt_messages = build_story_synthesis_prompt_messages(
+        story_block,
+        now_label,
+        prompt_instructions=runtime.prompt_instructions,
+    )
     estimated_input_tokens = sum(runtime.estimate_message_token_count(message) for message in prompt_messages)
     response = runtime.invoke_with_retries(
         runtime.build_chat_model(
