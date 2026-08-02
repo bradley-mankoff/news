@@ -76,6 +76,7 @@ class StorySelectionRuntime:
     report_reference_key: Callable[[str], str]
     progress_callback: Callable[[str, dict[str, Any]], None] | None = None
     prompt_instructions: str | None = None
+    story_scale_screening_max_tokens: int = STORY_SCALE_VALIDATION_MAX_TOKENS
 
 
 def _compact_gate_text(value: Any, max_chars: int) -> str:
@@ -417,7 +418,7 @@ def apply_global_story_scale_screening(
         try:
             response = runtime.invoke_with_retries(
                 runtime.build_chat_model(
-                    max_tokens=STORY_SCALE_VALIDATION_MAX_TOKENS,
+                    max_tokens=runtime.story_scale_screening_max_tokens,
                     task="story_scale_screening",
                 ),
                 _global_scale_screening_prompt_messages(

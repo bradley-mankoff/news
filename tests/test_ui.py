@@ -164,6 +164,8 @@ class UITests(unittest.TestCase):
                     model_assignments={
                         "article_summary": {"reference": "gemma-2b"},
                         "story_drafting": {"reference": "gemma-2b"},
+                        "story_scale_screening": {"reference": "gemma-2b"},
+                        "title_generation": {"reference": "gemma-2b"},
                     },
                     model_tuning={"default": "base"},
                     pipeline_budget={
@@ -216,6 +218,8 @@ class UITests(unittest.TestCase):
                 self.assertEqual(snapshot["preset_id"], "daily")
                 self.assertEqual(snapshot["prompt_profile_id"], "balanced")
                 self.assertEqual(snapshot["model"]["reference"], "gemma-2b")
+                self.assertEqual(snapshot["model"]["story_scale_screening"]["reference"], "gemma-2b")
+                self.assertEqual(snapshot["model"]["title_generation"]["reference"], "gemma-2b")
                 self.assertEqual(snapshot["delivery"]["unsubscribe_secret_set"], True)
 
                 with patch.object(ui_module, "resolve_runtime_config", side_effect=RuntimeError("boom")):

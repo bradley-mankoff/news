@@ -67,6 +67,18 @@ class ConfigHelperTests(unittest.TestCase):
             config_module._task_max_tokens_field(config_module.MODEL_TASK_STORY_DRAFTING),
             "story_drafting_max_tokens",
         )
+        self.assertEqual(
+            config_module._task_max_tokens_field(config_module.MODEL_TASK_STORY_SCALE_SCREENING),
+            "story_scale_screening_max_tokens",
+        )
+        self.assertEqual(
+            config_module._task_max_tokens_field(config_module.MODEL_TASK_TITLE_GENERATION),
+            "title_generation_max_tokens",
+        )
+        self.assertEqual(
+            config_module._task_max_tokens_field(config_module.MODEL_TASK_IMAGE_ART_DIRECTION),
+            "title_generation_max_tokens",
+        )
         with self.assertRaises(ValueError):
             config_module._task_max_tokens_field("bogus")
 
@@ -120,6 +132,22 @@ class ConfigHelperTests(unittest.TestCase):
         )
         self.assertEqual(story_tuning.story_drafting_max_tokens, 17)
         self.assertEqual(story_tuning.task_sampling["story_drafting"].temperature, 0.25)
+
+        scale_tuning = config_module._apply_model_tuning_preset(
+            ModelTuningSettings(task_sampling={}),
+            preset_id="sample",
+            preset={"tuning": {"max_tokens": 2500}},
+            assignment_task="story_scale_screening",
+        )
+        self.assertEqual(scale_tuning.story_scale_screening_max_tokens, 2500)
+
+        title_tuning = config_module._apply_model_tuning_preset(
+            ModelTuningSettings(task_sampling={}),
+            preset_id="sample",
+            preset={"tuning": {"max_tokens": 700}},
+            assignment_task="title_generation",
+        )
+        self.assertEqual(title_tuning.title_generation_max_tokens, 700)
 
         with self.assertRaises(ValueError):
             config_module._sampling_settings_from_mapping([("temperature", 0.1)])
@@ -297,6 +325,28 @@ class ConfigHelperTests(unittest.TestCase):
         self.assertEqual(knob["options"], ["one"])
         registry = config_module.runtime_knob_registry()
         self.assertTrue(any(knob["env"] == "NEWS_MODEL_CONCURRENCY" for knob in registry))
+        knob_envs = {knob["env"] for knob in registry}
+        for env in (
+            "NEWS_MODEL_STORY_SCALE_SCREENING",
+            "NEWS_MODEL_TITLE_GENERATION",
+            "NEWS_MODEL_STORY_SCALE_SCREENING_TUNING_PRESET",
+            "NEWS_MODEL_TITLE_GENERATION_TUNING_PRESET",
+            "NEWS_STORY_SCALE_SCREENING_MAX_TOKENS",
+            "NEWS_TITLE_GENERATION_MAX_TOKENS",
+            "NEWS_MODEL_STORY_SCALE_SCREENING_BASE_URL",
+            "NEWS_MODEL_TITLE_GENERATION_BASE_URL",
+        ):
+            self.assertIn(env, knob_envs)
+        for knob in registry:
+            if knob["env"] in {"NEWS_MODEL_STORY_SCALE_SCREENING", "NEWS_MODEL_TITLE_GENERATION"}:
+                self.assertEqual(knob["group"], "Model Selection")
+                self.assertEqual(knob["type"], "select")
+            if knob["env"] in {"NEWS_STORY_SCALE_SCREENING_MAX_TOKENS", "NEWS_TITLE_GENERATION_MAX_TOKENS"}:
+                self.assertEqual(knob["group"], "Model Tuning")
+                self.assertEqual(knob["type"], "number")
+                self.assertEqual(knob["min"], 1)
+            if knob["env"] in {"NEWS_MODEL_STORY_SCALE_SCREENING_BASE_URL", "NEWS_MODEL_TITLE_GENERATION_BASE_URL"}:
+                self.assertEqual(knob["group"], "Model Server Settings")
         backend_knobs = [knob for knob in registry if knob["env"] == "NEWS_MODEL_BACKEND"]
         self.assertEqual(len(backend_knobs), 1)
         self.assertEqual(backend_knobs[0]["group"], "Model Selection")
