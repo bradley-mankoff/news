@@ -61,7 +61,7 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
         self.assertEqual(resolution.config.model_backend, "mlx-vlm")
         self.assertIn("python -m mlx_vlm.server", resolution.config.model_server_command)
         self.assertEqual(resolution.config.source_scope, "peripheral")
-        self.assertEqual(resolution.config.recipient_scope, "bradley")
+        self.assertEqual(resolution.config.recipient_scope, "primary")
         self.assertEqual(resolution.command_env_delta["NEWS_PRESET"], "dev")
         self.assertEqual(resolution.command_env_delta["NEWS_SOURCE_SCOPE"], "peripheral")
         self.assertNotIn("NEWS_RECIPIENT_SCOPE", resolution.command_env_delta)
@@ -284,11 +284,13 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
             run_started_at=datetime(2026, 6, 14, 12, 0, 0),
         )
 
-        self.assertEqual(config.bradley_recipient, "bradley@example.com")
+        self.assertEqual(config.primary_recipient, "primary@example.com")
         self.assertEqual(config.email_from, "news@example.com")
+        self.assertEqual(config.recipient_scope, "primary")
         # Exact-value asserts above already rule out personal data; these
         # negative asserts document that intent explicitly.
-        self.assertNotIn("mankoff", config.bradley_recipient)
+        self.assertNotIn("mankoff", config.primary_recipient)
+        self.assertNotIn("bradley", config.primary_recipient)
         self.assertNotIn("gmail", config.email_from)
 
     def test_ui_command_env_delta_matches_preview_overrides(self) -> None:
@@ -297,7 +299,7 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
             "preset": "dev",
             "env": {
                 "NEWS_SOURCE_SCOPE": "peripheral",
-                "NEWS_RECIPIENT_SCOPE": "bradley",
+                "NEWS_RECIPIENT_SCOPE": "primary",
             },
         }
 
