@@ -74,7 +74,7 @@ The repo runs a fully automated agentic loop driven by the GitHub project board
    CRITICAL/HIGH findings. It runs on the final diff — including anything you
    changed during testing.
 
-The workflows are the stock Archon 0.6.0 pi-usable set, curated in the archon
+The workflows are the stock Archon 0.7.0 pi-usable set, curated in the archon
 home (`workflows/`); claude-only workflows are archived, not discovered. Full
 inventory: `docs/archon-workflows.md`.
 
@@ -121,6 +121,10 @@ human, by design:
 - `automation/move_item.py` — move an issue to a lane from the CLI.
 - `automation/create_issue.py` — create an issue and land it on the board in
   the default lane in one step.
+- `automation/board_health.py` — read-only board health report: stale runs,
+  unknown blockers, unsatisfied dependencies (exit 0 always).
+- `automation/deploy.sh` — re-apply local archon workflow edits and restart
+  the board poller after a deploy or archon reinstall.
 - `automation/apply_workflow_edits.py` — idempotently re-apply the local
   archon workflow edits (completion-comment nodes with the Deferred-work
   contract, `report-verdict`, `archon-fix-ship-conflicts`) after an archon

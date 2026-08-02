@@ -1,6 +1,6 @@
 # Archon Workflow Inventory
 
-Machine-local archon (archon-pi build, v0.6.0 = stock Archon `e67940a3`) lives at
+Machine-local archon (archon-pi build, v0.7.0 = stock Archon) lives at
 `~/.local/share/archon-pi/archon-home/`.
 
 ## Execution model

@@ -259,6 +259,19 @@ class PipelineHelperTests(unittest.TestCase):
             pipeline, "PRIMARY_RECIPIENT", "primary@example.com"
         ):
             self.assertEqual(
+                pipeline.get_active_recipient_config(
+                    {
+                        "primary@example.com": {"name": "P", "pause": True},
+                        "other@example.com": {"name": "O", "pause": False},
+                    }
+                ),
+                {"primary@example.com": {"name": "P", "pause": True}},
+            )
+
+        with patch.object(pipeline, "RECIPIENT_SCOPE", "primary"), patch.object(
+            pipeline, "PRIMARY_RECIPIENT", "primary@example.com"
+        ):
+            self.assertEqual(
                 pipeline.get_active_recipient_config({}),
                 {"primary@example.com": {"name": "primary@example.com", "pause": False}},
             )

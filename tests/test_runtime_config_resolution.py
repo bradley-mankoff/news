@@ -3,6 +3,8 @@ from __future__ import annotations
 import os
 import tempfile
 import unittest
+import contextlib
+import io
 from datetime import datetime
 from pathlib import Path
 import textwrap
@@ -292,6 +294,41 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
         self.assertNotIn("mankoff", config.primary_recipient)
         self.assertNotIn("bradley", config.primary_recipient)
         self.assertNotIn("gmail", config.email_from)
+
+    def test_primary_recipient_env_override(self) -> None:
+        config = load_runtime_config(
+            environ={"NEWS_PRIMARY_RECIPIENT": "owner@example.com"},
+            materialize_outputs=False,
+            run_started_at=datetime(2026, 6, 14, 12, 0, 0),
+        )
+        self.assertEqual(config.primary_recipient, "owner@example.com")
+
+    def test_legacy_bradley_recipient_env_warns_and_is_ignored(self) -> None:
+        stderr = io.StringIO()
+        with patch.dict(os.environ,
+                        {"NEWS_BRADLEY_RECIPIENT": "old@example.com"},
+                        clear=True):
+            with contextlib.redirect_stderr(stderr):
+                config = load_runtime_config(
+                    environ=None,
+                    materialize_outputs=False,
+                    run_started_at=datetime(2026, 6, 14, 12, 0, 0),
+                )
+        # Legacy var is no longer read — delivery falls back to the default,
+        # and the migration is surfaced on stderr instead of silently.
+        self.assertEqual(config.primary_recipient, "primary@example.com")
+        self.assertIn("NEWS_BRADLEY_RECIPIENT is obsolete", stderr.getvalue())
+
+    def test_legacy_recipient_env_warning_not_emitted_when_unset(self) -> None:
+        stderr = io.StringIO()
+        with patch.dict(os.environ, {}, clear=True):
+            with contextlib.redirect_stderr(stderr):
+                load_runtime_config(
+                    environ=None,
+                    materialize_outputs=False,
+                    run_started_at=datetime(2026, 6, 14, 12, 0, 0),
+                )
+        self.assertNotIn("NEWS_BRADLEY_RECIPIENT is obsolete", stderr.getvalue())
 
     def test_ui_command_env_delta_matches_preview_overrides(self) -> None:
         body = {
