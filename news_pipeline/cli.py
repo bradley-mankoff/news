@@ -6,6 +6,7 @@ import os
 import sys
 
 from .config import (
+    MODEL_BACKEND_EXTERNAL,
     apply_run_preset_to_environment,
     ensure_codex_safe_model_reference,
     load_runtime_config,
@@ -126,12 +127,13 @@ def _run_pipeline_command() -> int:
 def _print_model_server_command() -> int:
     config = load_runtime_config()
     ensure_codex_safe_model_reference(config.model_reference)
-    if not config.model_server_command:
+    if config.model_backend == MODEL_BACKEND_EXTERNAL or not config.model_server_command:
         print(
             f"external backend: no managed server command. "
-            f"Connect {config.model_base_url} directly (model {config.model_name})."
+            f"Connect {config.model_base_url} directly (model {config.model_name}).",
+            file=sys.stderr,
         )
-        return 0
+        return 2
     print(config.model_server_command)
     return 0
 
@@ -204,20 +206,32 @@ def main(argv: list[str] | None = None) -> int:
             print(f"Unexpected arguments for run: {' '.join(args)}", file=sys.stderr)
             print(USAGE, file=sys.stderr)
             return 2
-        return _run_pipeline_command()
+        try:
+            return _run_pipeline_command()
+        except ValueError as error:
+            print(str(error), file=sys.stderr)
+            return 2
 
     if action == "model-server-command":
         if args:
             print(f"Unexpected arguments for {command}: {' '.join(args)}", file=sys.stderr)
             print(USAGE, file=sys.stderr)
             return 2
-        return _print_model_server_command()
+        try:
+            return _print_model_server_command()
+        except ValueError as error:
+            print(str(error), file=sys.stderr)
+            return 2
     if action == "codex-model-server-command":
         if args:
             print(f"Unexpected arguments for {command}: {' '.join(args)}", file=sys.stderr)
             print(USAGE, file=sys.stderr)
             return 2
-        return _print_codex_model_server_command()
+        try:
+            return _print_codex_model_server_command()
+        except ValueError as error:
+            print(str(error), file=sys.stderr)
+            return 2
     if action == "serve-unsubscribe":
         if args:
             print(f"Unexpected arguments for {command}: {' '.join(args)}", file=sys.stderr)

@@ -94,10 +94,7 @@ The handoff should be saved as `HANDOFF.md` at the repository root: `/Users/home
 - [ ] Choose a project license. Prior recommendation: Apache-2.0 for permissive use with a patent grant; AGPL-3.0 only if hosted modifications must remain open.
 - [ ] Audit repository history for secrets and personal data before making the repository public.
 - [ ] Replace real recipients, personal email defaults, and personal filesystem paths with safe examples.
-- [ ] Decide the initially supported runtime matrix:
-  - Existing managed MLX/MLX-VLM on Apple Silicon
-  - External OpenAI-compatible endpoints
-  - Optional later `llama.cpp` adapter for cross-platform GGUF
+- [x] Decide the initially supported runtime matrix (ADR 0010, Accepted): MLX/MLX-VLM on Apple Silicon + external OpenAI-compatible endpoints; `llama.cpp` adapter deferred.
 - [x] Implement a Prompt Catalog and built-in Prompt Profiles.
 - [x] Refactor hard-coded prompt construction to compose editable editorial instructions with pipeline-owned protocol requirements.
 - [ ] Add prompt-profile selection and per-stage prompt editing to the normal UI.

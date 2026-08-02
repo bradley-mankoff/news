@@ -54,6 +54,9 @@ this ADR should be read as promising it.
 - The default model can be served by an external OpenAI-compatible endpoint:
   with `NEWS_MODEL_BACKEND=external` the pipeline waits for and probes the
   endpoint and never spawns a managed server (nor raises "already in use").
+  Authenticated endpoints are supported via `NEWS_MODEL_API_KEY`, sent as a
+  `Bearer` token on `/models` and `/chat/completions` requests; HTTP 401/403
+  responses fail fast instead of waiting out the readiness deadline.
 - Managed server startup happens only for `mlx-lm`/`mlx-vlm`.
 - Per-task external models continue to work via a distinct per-task base URL;
   per-task backend env vars are out of scope until a user need exists.

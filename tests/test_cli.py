@@ -216,17 +216,41 @@ class CliTests(unittest.TestCase):
             model_base_url="https://api.example.com/v1",
             model_name="gpt-4o-mini",
             model_reference="gpt-4o-mini",
+            model_backend="external",
         )
         with patch("news_pipeline.cli.load_runtime_config", return_value=fake_config), patch(
             "news_pipeline.cli.ensure_codex_safe_model_reference"
         ) as ensure_safe:
             code, stdout, stderr = self._invoke(["model-server-command"])
 
-        self.assertEqual(code, 0)
-        self.assertIn("no managed server command", stdout)
-        self.assertIn("https://api.example.com/v1", stdout)
-        self.assertIn("gpt-4o-mini", stdout)
+        self.assertEqual(code, 2)
+        self.assertEqual(stdout, "")
+        self.assertIn("no managed server command", stderr)
+        self.assertIn("https://api.example.com/v1", stderr)
+        self.assertIn("gpt-4o-mini", stderr)
         ensure_safe.assert_called_once_with("gpt-4o-mini")
+
+    def test_model_server_command_config_value_error_prints_stderr(self) -> None:
+        with patch(
+            "news_pipeline.cli.load_runtime_config",
+            side_effect=ValueError("NEWS_MODEL_BACKEND must be one of: mlx-lm, mlx-vlm, external"),
+        ):
+            code, stdout, stderr = self._invoke(["model-server-command"])
+
+        self.assertEqual(code, 2)
+        self.assertEqual(stdout, "")
+        self.assertIn("NEWS_MODEL_BACKEND must be one of", stderr)
+
+    def test_run_command_config_value_error_prints_stderr(self) -> None:
+        with patch(
+            "news_pipeline.pipeline.run_pipeline",
+            side_effect=ValueError("NEWS_MODEL_BACKEND must be one of: mlx-lm, mlx-vlm, external"),
+        ):
+            code, stdout, stderr = self._invoke(["run"])
+
+        self.assertEqual(code, 2)
+        self.assertEqual(stdout, "")
+        self.assertIn("NEWS_MODEL_BACKEND must be one of", stderr)
 
     def test_unknown_command_returns_error(self) -> None:
         code, stdout, stderr = self._invoke(["not-a-command"])

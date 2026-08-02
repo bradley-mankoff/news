@@ -75,11 +75,12 @@ QWWYTHOS_9B_4BIT_MODEL_ALIAS = "qwythos-9b-4bit"
 QWWYTHOS_9B_4BIT_MODEL_REFERENCE = f"{QWWYTHOS_REPO}/{QWWYTHOS_Q4K_FILENAME}"
 QWWYTHOS_9B_8BIT_MODEL_ALIAS = "qwythos-9b-8bit"
 QWWYTHOS_9B_8BIT_MODEL_REFERENCE = f"{QWWYTHOS_REPO}/{QWWYTHOS_Q8_FILENAME}"
-QWWYTHOS_MODEL_BACKEND = "mlx-vlm"
 MODEL_BACKEND_MLX_LM = "mlx-lm"
 MODEL_BACKEND_MLX_VLM = "mlx-vlm"
 MODEL_BACKEND_EXTERNAL = "external"
 SUPPORTED_MODEL_BACKENDS = (MODEL_BACKEND_MLX_LM, MODEL_BACKEND_MLX_VLM, MODEL_BACKEND_EXTERNAL)
+# Retained public alias for the Qwythos default backend; prefer MODEL_BACKEND_MLX_VLM.
+QWWYTHOS_MODEL_BACKEND = MODEL_BACKEND_MLX_VLM
 DEFAULT_MODEL_ALIAS = QWWYTHOS_9B_8BIT_MODEL_ALIAS
 CODEX_TEST_MODEL_ALIAS = "gemma-e2b-tiny"
 CODEX_TEST_MODEL_NAME = "deadbydawn101/gemma-4-E2B-Heretic-Uncensored-mlx-4bit"
@@ -999,12 +1000,30 @@ def infer_model_backend(model_reference: str) -> str:
     return MODEL_BACKEND_MLX_LM
 
 
+def configured_model_api_key() -> str:
+    """Return the API key used for OpenAI-compatible endpoints.
+
+    Reads NEWS_MODEL_API_KEY; defaults to the unauthenticated "not-needed"
+    sentinel so local managed servers keep working without configuration.
+    """
+    return _str_env("NEWS_MODEL_API_KEY", "not-needed") or "not-needed"
+
+
 def _configured_model_backend(model_reference: str) -> str:
+    """Resolve the default model's backend: NEWS_MODEL_BACKEND override
+    (validated against SUPPORTED_MODEL_BACKENDS) or inferred from the
+    reference. Per-task models always use inference."""
     configured = _str_env("NEWS_MODEL_BACKEND", "").strip().lower()
     if configured:
         if configured not in SUPPORTED_MODEL_BACKENDS:
             raise ValueError(
                 "NEWS_MODEL_BACKEND must be one of: " + ", ".join(SUPPORTED_MODEL_BACKENDS)
+            )
+        if configured == MODEL_BACKEND_EXTERNAL and not _str_env("NEWS_MODEL_BASE_URL", ""):
+            raise ValueError(
+                "NEWS_MODEL_BACKEND=external requires NEWS_MODEL_BASE_URL to point at an "
+                "OpenAI-compatible endpoint (without it, the pipeline would poll the "
+                "default managed-server loopback URL and time out)."
             )
         return configured
     return infer_model_backend(model_reference)
@@ -1146,22 +1165,27 @@ def build_model_server_command(
     backend: str = "mlx-lm",
     model_concurrency: int = DEFAULT_PIPELINE_CONCURRENCY,
 ) -> str:
+    """Return the managed server command for the backend.
+
+    External backends have no managed server: returns "" (callers treat the
+    empty string as "connect to the endpoint directly").
+    """
+    if backend == MODEL_BACKEND_EXTERNAL:
+        return ""
     concurrency = max(1, int(model_concurrency))
     parsed_base_url = urlparse(settings.base_url or "")
     port = parsed_base_url.port or 8080
-    if backend == MODEL_BACKEND_EXTERNAL:
-        return ""
     extra_flags: list[str] = []
     if settings.prefill_step_size is not None:
         extra_flags.extend(["--prefill-step-size", str(settings.prefill_step_size)])
-    if backend != "mlx-vlm":
+    if backend != MODEL_BACKEND_MLX_VLM:
         if settings.prompt_cache_size is not None:
             extra_flags.extend(["--prompt-cache-size", str(settings.prompt_cache_size)])
         if settings.prompt_cache_bytes:
             extra_flags.extend(["--prompt-cache-bytes", str(settings.prompt_cache_bytes)])
     if settings.max_tokens is not None:
         extra_flags.extend(["--max-tokens", str(settings.max_tokens)])
-    if backend == "mlx-vlm":
+    if backend == MODEL_BACKEND_MLX_VLM:
         return " ".join(
             [
                 "uv run python -m mlx_vlm.server",
