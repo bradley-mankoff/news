@@ -94,6 +94,7 @@ from openai import APIConnectionError, APITimeoutError, InternalServerError, Rat
 from .config import (
     ModelSamplingSettings,
     RuntimeConfig,
+    DEFAULT_TITLE_GENERATION_MAX_TOKENS,
     MODEL_BACKEND_EXTERNAL,
     MODEL_TASK_ARTICLE_SUMMARY,
     MODEL_TASK_IMAGE_ART_DIRECTION,
@@ -3178,8 +3179,14 @@ def generate_image_art_brief(
     title_guidance = instructions.get("title_generation") or DEFAULT_PROMPT_INSTRUCTIONS["title_generation"]
     try:
         llm = build_chat_model(
-            max_tokens=MODEL_ASSIGNMENTS[MODEL_TASK_TITLE_GENERATION].tuning.title_generation_max_tokens or 700,
-            task="title_generation",
+            # Defensive fallback: tuning is always seeded, but a 0-valued env
+            # override would otherwise produce a zero-token cap. The fallback
+            # references the config constant so a default change propagates.
+            max_tokens=(
+                MODEL_ASSIGNMENTS[MODEL_TASK_TITLE_GENERATION].tuning.title_generation_max_tokens
+                or DEFAULT_TITLE_GENERATION_MAX_TOKENS
+            ),
+            task=MODEL_TASK_TITLE_GENERATION,
         )
         response = invoke_with_retries(
             llm,
