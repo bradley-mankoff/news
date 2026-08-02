@@ -23,6 +23,13 @@ from urllib.parse import urlparse
 
 import yaml
 
+from .prompt_catalog import (
+    DEFAULT_PROMPT_PROFILE_ID,
+    PROMPT_PROFILE_ENV_VAR,
+    PROMPT_PROFILE_IDS,
+    get_prompt_profile,
+)
+
 
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
@@ -219,6 +226,7 @@ class RuntimeConfig:
     history_export_csv: bool
     run_used_urls_path: Path
     preset_id: str
+    prompt_profile_id: str
     source_scope: str
     recipient_scope: str
     url_reuse_blocking_enabled: bool
@@ -1075,6 +1083,14 @@ def runtime_knob_registry() -> list[dict[str, Any]]:
         _runtime_knob("Run Settings", "Block reused URLs", "NEWS_BLOCK_REUSED_URLS", "bool", default=False),
         _runtime_knob("Run Settings", "Image generation", "NEWS_IMAGE_ENABLED", "bool", default=False),
         _runtime_knob("Run Settings", "Story scale screening", "NEWS_STORY_SCALE_SCREENING_ENABLED", "bool"),
+        _runtime_knob(
+            "Run Settings",
+            "Prompt profile",
+            PROMPT_PROFILE_ENV_VAR,
+            "select",
+            default=DEFAULT_PROMPT_PROFILE_ID,
+            options=list(PROMPT_PROFILE_IDS),
+        ),
         _runtime_knob("Run Settings", "Relax story drafting guards", "NEWS_RELAX_STORY_DRAFTING_GUARDS", "bool", advanced=True),
         _runtime_knob("Run Settings", "Embedding model", "NEWS_EMBEDDING_MODEL", default="all-mpnet-base-v2", advanced=True),
         _runtime_knob("Run Settings", "Token encoding", "NEWS_TOKEN_ENCODING", default="o200k_base", advanced=True),
@@ -1648,6 +1664,12 @@ def _build_runtime_config(
     recipient_scope = _configured_recipient_scope()
     url_reuse_blocking_enabled = _bool_env("NEWS_BLOCK_REUSED_URLS", False)
     relaxed_story_drafting_guards = _bool_env("NEWS_RELAX_STORY_DRAFTING_GUARDS", False)
+    # Empty-but-present NEWS_PROMPT_PROFILE (a common "unset" idiom in .env
+    # files / docker-compose) counts as unset, matching sibling knobs and the
+    # CLI/UI semantics. Strict validation of non-empty ids happens below.
+    prompt_profile_id = _str_env(PROMPT_PROFILE_ENV_VAR, DEFAULT_PROMPT_PROFILE_ID) or DEFAULT_PROMPT_PROFILE_ID
+    # Resolved once at import time in pipeline.py; fails fast on unknown ids.
+    get_prompt_profile(prompt_profile_id)
     tracked_urls_filename = "tracked_urls.txt"
     blocking_urls_filename = "blocking_urls.txt"
     run_used_urls_filename = (
@@ -1733,6 +1755,7 @@ def _build_runtime_config(
         history_export_csv=history_export_csv,
         run_used_urls_path=run_output_dir / run_used_urls_filename,
         preset_id=preset_id,
+        prompt_profile_id=prompt_profile_id,
         source_scope=source_scope,
         recipient_scope=recipient_scope,
         url_reuse_blocking_enabled=url_reuse_blocking_enabled,
