@@ -1555,20 +1555,44 @@ HTML = r"""<!doctype html>
     }
     function renderKnobLinks(env) {
       const container = document.querySelector(`[data-links-for="${env}"]`);
-      if (!container) return;
+      if (!container) {
+        console.warn(`renderKnobLinks: no [data-links-for="${env}"] container in the DOM`);
+        return;
+      }
       const knob = knobByEnv(env);
-      const links = knob && knob.option_links ? knob.option_links : {};
-      const value = currentControlValue(env);
+      if (!knob) {
+        container.innerHTML = `<span class="muted">Links unavailable</span>`;
+        return;
+      }
+      const links = knob.option_links ? knob.option_links : {};
+      // An empty select means "use the backend default"; mirror that
+      // resolution so the default model's links show on initial load and
+      // after Clear overrides / Reset defaults. Do NOT pre-select the
+      // default here (that would change collectEnv() submission semantics).
+      const value = currentControlValue(env) || (knob.default !== undefined && knob.default !== null ? String(knob.default) : "");
       if (!value) { container.innerHTML = ""; return; }
       const entry = links[value];
       if (!entry) {
+        // Only fires for values set outside the offered options (external or
+        // typed-in ids) — drift-guard tests pin that every option has a link.
         container.innerHTML = `<span class="muted">No Hugging Face page for this external model</span>`;
         return;
       }
+      // page and hardware are the same URL on purpose: HF's native Hardware
+      // Compatibility panel lives on the model page (see _model_option_links);
+      // a future "#hardware" anchor is a one-line change here.
       container.innerHTML = [
         `<a href="${escapeHtml(entry.page)}" target="_blank" rel="noopener noreferrer">Hugging Face page</a>`,
         `<a href="${escapeHtml(entry.hardware)}" target="_blank" rel="noopener noreferrer" title="Native Hardware Compatibility panel (GGUF/MLX) on the model page">Hardware compatibility</a>`
       ].join(" · ");
+    }
+    // Programmatic value changes (preset apply, clear/reset, startup restore)
+    // do not fire `change` events, so re-render links after those paths or the
+    // .knob-links container keeps the previous model's links.
+    function refreshModelKnobLinks() {
+      renderKnobLinks("NEWS_MODEL");
+      renderKnobLinks("NEWS_MODEL_ARTICLE_SUMMARY");
+      renderKnobLinks("NEWS_MODEL_STORY_DRAFTING");
     }
     function renderTabs() {
       $("tabs").innerHTML = `<button id="navToggle" class="nav-toggle" title="Collapse navigation" aria-label="Collapse navigation"><span class="collapse-icon">${icons.chevronLeft}</span><span class="expand-icon">${icons.chevronRight}</span></button>` +
@@ -2091,6 +2115,7 @@ HTML = r"""<!doctype html>
       renderPresetSummary();
       renderModelTuningControls("article_summary");
       renderModelTuningControls("story_drafting");
+      refreshModelKnobLinks();
       preview("run").catch(() => {});
     }
     function setKnobEnv(env) {
@@ -2381,6 +2406,7 @@ HTML = r"""<!doctype html>
         renderPresetSummary();
         renderModelTuningControls("article_summary");
         renderModelTuningControls("story_drafting");
+        refreshModelKnobLinks();
         preview("run").catch(() => {});
       };
       $("resetDefaultsBtn").onclick = () => {
@@ -2392,6 +2418,7 @@ HTML = r"""<!doctype html>
         renderPresetSummary();
         renderModelTuningControls("article_summary");
         renderModelTuningControls("story_drafting");
+        refreshModelKnobLinks();
         preview("run").catch(() => {});
       };
       $("promptProfileSelect").onchange = () => {
@@ -2463,6 +2490,7 @@ HTML = r"""<!doctype html>
         state.selectedRunPresetId = state.schema.runtime.preset_id;
         applySelectedPresetFromState();
       }
+      refreshModelKnobLinks();
       renderRunPresetDrawer();
       renderPresetSummary();
       if (state.schema.removed_topic_env_vars && state.schema.removed_topic_env_vars.length) {

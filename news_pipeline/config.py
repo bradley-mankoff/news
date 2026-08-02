@@ -949,18 +949,36 @@ def resolve_model_name(model_reference: str) -> str:
     return MODEL_ALIASES.get(clean_reference, clean_reference)
 
 
+HF_URL_PREFIXES = ("https://huggingface.co/", "https://hf.co/")
+
+
 def hf_model_page_url(model_choice: str) -> str | None:
     """Return the Hugging Face model-page URL for a model choice, or None.
 
-    Aliases and https://huggingface.co/... / https://hf.co/... URL keys are
-    normalized through resolve_model_name first; external/unknown ids (no
-    owner/name shape) yield None so callers can render a muted note instead
-    of a broken link.
+    Aliases and https://huggingface.co/... / https://hf.co/... URL keys in
+    MODEL_ALIASES are normalized through resolve_model_name first. Only
+    repos derived from MODEL_ALIASES values are ever emitted: external ids,
+    unknown URL-shaped ids, and ids without an owner/name shape (no "/")
+    all yield None so callers can render a muted note instead of a broken
+    link. Unsupported references also yield None rather than raising.
     """
     clean = (model_choice or "").strip()
     if not clean:
         return None
-    resolved = resolve_model_name(clean)
+    try:
+        resolved = resolve_model_name(clean)
+    except ValueError:
+        return None
+    # Only URLs derived from known MODEL_ALIASES values are emitted;
+    # anything else (external ids, unknown URLs) yields None so callers
+    # render a muted note instead of a broken link.
+    if resolved not in MODEL_ALIASES.values():
+        if not any(resolved.startswith(prefix) for prefix in HF_URL_PREFIXES):
+            return None
+        prefix = next(prefix for prefix in HF_URL_PREFIXES if resolved.startswith(prefix))
+        resolved = resolved[len(prefix):]
+        if resolved not in MODEL_ALIASES.values():
+            return None
     repo = resolved
     # GGUF references are repo + "/" + file; the page lives at the repo.
     if repo.endswith(".gguf") and "/" in repo:
@@ -971,12 +989,13 @@ def hf_model_page_url(model_choice: str) -> str | None:
 
 
 def _model_option_links() -> dict[str, dict[str, str]]:
-    """Map every MODEL_ALIASES key to its HF page + hardware links.
+    """Map every MODEL_ALIASES key that resolves to a Hugging Face repo to
+    its HF page + hardware links.
 
     Both values are the same URL: Hugging Face's native Hardware
-    Compatibility panel is embedded in each model page (shown for repos
-    offering GGUF or MLX files), so the model-page URL is the single correct
-    destination. The two keys exist so a future HF anchor (e.g.
+    Compatibility panel is embedded in each model page (typically shown for
+    repos offering GGUF or MLX files), so the model-page URL is the single
+    correct destination. The two keys exist so a future HF anchor (e.g.
     "#hardware") is a one-line change here.
     """
     links: dict[str, dict[str, str]] = {}
@@ -1112,6 +1131,9 @@ def _runtime_knob(
         "step": step,
         "advanced": advanced,
         "secret": secret,
+        # option_links maps each offered option -> {"page": url, "hardware":
+        # url} for model-choice knobs; the drift-guard test pins that its
+        # keys cover `options` exactly, and non-model knobs pass {}.
         "option_links": option_links or {},
     }
 
