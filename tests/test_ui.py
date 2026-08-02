@@ -73,6 +73,35 @@ class UITests(unittest.TestCase):
         self.assertIn('title="${escapeHtml(tip)}"', ui_module.HTML)
         self.assertNotIn('data-tooltip="${escapeHtml(tip)}"', ui_module.HTML)
 
+    def test_prompt_override_editors_and_restore_buttons_in_html(self) -> None:
+        # The Editorial approach panel must expose editable per-stage editors
+        # bound to the override env vars, with per-stage restore buttons; the
+        # old read-only readout is gone. Assertions run on the HTML module
+        # constant (JS source), so the new JS lives in one obvious block.
+        self.assertIn("NEWS_PROMPT_OVERRIDE_ARTICLE_SUMMARY", ui_module.HTML)
+        self.assertIn("NEWS_PROMPT_OVERRIDE_STORY_SCALE_SCREENING", ui_module.HTML)
+        self.assertIn("NEWS_PROMPT_OVERRIDE_STORY_DRAFTING", ui_module.HTML)
+        self.assertIn("NEWS_PROMPT_OVERRIDE_TITLE_GENERATION", ui_module.HTML)
+        self.assertIn("NEWS_PROMPT_OVERRIDE_IMAGE_ART_DIRECTION", ui_module.HTML)
+        # All five override env vars are suppressed from the Advanced tab like
+        # NEWS_PROMPT_PROFILE itself (dedicated editors are the single surface).
+        surfaced_block = ui_module.HTML.split("const SURFACED_ENVS = new Set([", 1)[1].split("]);", 1)[0]
+        for env_var in (
+            "NEWS_PROMPT_OVERRIDE_ARTICLE_SUMMARY",
+            "NEWS_PROMPT_OVERRIDE_STORY_SCALE_SCREENING",
+            "NEWS_PROMPT_OVERRIDE_STORY_DRAFTING",
+            "NEWS_PROMPT_OVERRIDE_TITLE_GENERATION",
+            "NEWS_PROMPT_OVERRIDE_IMAGE_ART_DIRECTION",
+        ):
+            self.assertIn(env_var, surfaced_block)
+        # Editable textareas carry data-env and are not readonly.
+        self.assertIn(
+            'textarea data-env="${escapeHtml(PROMPT_OVERRIDE_ENVS[task])}" rows="4"',
+            ui_module.HTML,
+        )
+        self.assertIn('class="prompt-stage-restore"', ui_module.HTML)
+        self.assertNotIn('textarea readonly rows="3"', ui_module.HTML)
+
     def test_pure_helpers_and_schema_payload(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
