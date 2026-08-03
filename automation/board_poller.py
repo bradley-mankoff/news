@@ -27,12 +27,17 @@ between lanes. Contract:
   finishes with the PR still conflicting posts a human-help comment once.
 - Deferred-work guard: implementation completion records carry a `## Deferred
   work` section (one bullet per deferred item; contract enforced by the
-  completion-comment nodes). When a run completes, the poller dedupes each item
-  against open/closed issue titles, creates a Backlog issue (boarded) when no
-  tracking issue exists, links existing ones, and comments the linkage on the
-  source issue. Deferral language or unchecked acceptance criteria without the
-  section post a verification comment instead (never auto-create from prose).
-  Idempotent via per-run state markers; retried next poll on failure.
+  completion-comment nodes). The completion-comment node is the dedupe judge:
+  it consults open/closed issue titles + initial bodies and repo context
+  (HANDOFF.md, ADRs) and stamps each item `**Links to:** #N` (already tracked),
+  `**Supersedes:** #N` (closed — create a new one referencing it), `**Skip:**`
+  (never-to-be-done), or leaves it bare (create). The poller executes
+  mechanically: links, creates (boarded in the default lane), skips, and
+  comments the linkage on the source issue; an exact-title safety check links
+  but never creates. Deferral language or unchecked acceptance criteria
+  without the section post a verification comment instead (never auto-create
+  from prose). Idempotent via per-run state markers; retried next poll on
+  failure.
 - Dispatch = `archon workflow run <wf> --branch <branch> "<msg>"` executed in
   the repo root as a detached child (`subprocess.Popen` + `start_new_session`).
   `--detach` is NOT used — the archon-pi build's detached-child spawn is broken
@@ -263,6 +268,9 @@ def parse_deferred_work(body: str) -> list[dict] | None:
         **Label:** <optional; must already exist in the repo>
     Returns None when the section is absent; [] when the section is present
     but empty or `*None.*` (the contract's explicit "nothing deferred" form).
+    Indented fields: `**Links to:** #N` (already tracked — the model judged it
+    covered), `**Supersedes:** #N` (closed issue — create a new one referencing
+    it), `**Skip:** <reason>` (never-to-be-done — do not create).
     """
     m = DEFERRED_SECTION_RE.search(body or "")
     if not m:
@@ -279,14 +287,24 @@ def parse_deferred_work(body: str) -> list[dict] | None:
         if not lines:
             continue
         item = {"title": lines[0].strip(),
-                "description": "", "reason": "", "label": ""}
+                "description": "", "reason": "", "label": "",
+                "links_to": None, "supersedes": None, "skip": ""}
         for line in lines[1:]:
-            fm = re.match(r"^\s*\*\*(\w+):\*\*\s*(.*)$", line)
-            if fm:
-                key = fm.group(1).lower()
-                val = fm.group(2).strip()
-                if key in item and val:
-                    item[key] = val
+            fm = re.match(r"^\s*\*\*([\w ]+?):\*\*\s*(.*)$", line)
+            if not fm:
+                continue
+            key = fm.group(1).strip().lower()
+            val = fm.group(2).strip()
+            if key == "links to":
+                m = re.search(r"#?(\d+)", val)
+                item["links_to"] = int(m.group(1)) if m else None
+            elif key == "supersedes":
+                m = re.search(r"#?(\d+)", val)
+                item["supersedes"] = int(m.group(1)) if m else None
+            elif key == "skip":
+                item["skip"] = val
+            elif key in item and val:
+                item[key] = val
         if item["title"]:
             items.append(item)
     return items
@@ -299,13 +317,18 @@ def normalize_title(title: str) -> str:
 
 def dedupe_deferred(item: dict, open_issues: list[dict],
                     closed_issues: list[dict]) -> tuple[str, int | None]:
-    """Where a deferred item's tracking issue stands.
+    """Safety net for deferred items the model did not link itself.
+
+    The completion-comment node is the real judge (it consults issue titles +
+    initial bodies and repo context and stamps each item with `Links to:` /
+    `Supersedes:` / `Skip:`). This exact-title check only ever LINKS or adds a
+    reference — it can never create an issue the model would not have wanted.
 
     Returns:
       ("link", n)        an OPEN issue with the same normalized title exists
       ("create-ref", n)  only a CLOSED issue matches — create a new one
-                          referencing #n (the work still needs tracking)
-      ("create", None)   no existing issue — create one
+                          referencing #n
+      ("create", None)   no exact match — create
     """
     target = normalize_title(item.get("title") or "")
     if not target:
@@ -893,6 +916,26 @@ def reconcile_deferred_work(cfg: dict, env: dict, issue_number: int,
     lane = cfg.get("default_lane", "Backlog")
     lines: list[str] = []
     for item in items:
+        if item.get("skip"):
+            lines.append(f"- **{item['title']}** \u2014 skipped ({item['skip']})")
+            continue
+        if item.get("links_to") is not None:
+            target = item["links_to"]
+            if any(i.get("number") == target for i in open_issues):
+                lines.append(f"- **{item['title']}** \u2192 already tracked in #{target}")
+            else:
+                log(f"DEFERRED: '{item['title']}' links to #{target}, which is not "
+                    "an open issue; creating fresh")
+                created = create_deferred_issue(
+                    cfg, env, issue_number, pr_number, source_title, item, lane,
+                    project_id, field_id, status_options)
+                if created is None:
+                    log(f"DEFERRED RETRY issue={issue_number}: create failed for "
+                        f"'{item['title']}'")
+                    return False
+                if created:
+                    lines.append(f"- **{item['title']}** \u2192 #{created} (created, {lane})")
+            continue
         action, ref = dedupe_deferred(item, open_issues, closed_issues)
         if action == "link":
             lines.append(f"- **{item['title']}** \u2192 already tracked in #{ref}")

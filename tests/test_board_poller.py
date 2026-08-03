@@ -11,6 +11,7 @@ from automation.board_poller import (
     dedupe_deferred,
     dep_gate,
     fetch_project,
+
     find_unchecked_criteria,
     fmt_deps,
     has_deferral_language,
@@ -79,6 +80,7 @@ ISOLATION_LIST = (
     "  archon/task-issue-210\n"         # must NOT match issue 21 (\b boundary)
     "    Path: /tmp/news/worktrees/archon/task-issue-210\n"
     "    Type: task | Platform: cli | Last activity: 0d ago\n"
+
 )
 
 
@@ -260,10 +262,12 @@ class ParseDeferredWorkTest(unittest.TestCase):
             {"title": "Add llama.cpp/GGUF backend support",
              "description": "Port the model layer to llama.cpp.",
              "reason": "Packaging work beyond this decision.",
-             "label": "feature"},
+             "label": "feature",
+             "links_to": None, "supersedes": None, "skip": ""},
             {"title": "Extract shared readiness helper",
              "description": "Merge the two readiness loops.",
-             "reason": "", "label": ""},
+             "reason": "", "label": "",
+             "links_to": None, "supersedes": None, "skip": ""},
         ])
 
     def test_none_marker(self):
@@ -280,7 +284,8 @@ class ParseDeferredWorkTest(unittest.TestCase):
             "- **Title:** Not mine\n")
         self.assertEqual(parse_deferred_work(body), [
             {"title": "First", "description": "one",
-             "reason": "", "label": ""}])
+             "reason": "", "label": "",
+             "links_to": None, "supersedes": None, "skip": ""}])
 
     def test_case_insensitive_heading(self):
         body = "## DEFERRED WORK\n- **Title:** X\n"
@@ -293,6 +298,47 @@ class ParseDeferredWorkTest(unittest.TestCase):
         items = parse_deferred_work(body)
         self.assertEqual(len(items), 1)
         self.assertEqual(items[0]["title"], "Good one")
+
+    def test_links_to_field(self):
+        body = self._record(
+            "- **Title:** GGUF backend\n"
+            "  **Description:** port to llama.cpp\n"
+            "  **Links to:** #75\n")
+        item = parse_deferred_work(body)[0]
+        self.assertEqual(item["links_to"], 75)
+        self.assertIsNone(item["supersedes"])
+        self.assertEqual(item["skip"], "")
+
+    def test_links_to_bare_number(self):
+        body = self._record("- **Title:** X\n  **Links to:** 52\n")
+        self.assertEqual(parse_deferred_work(body)[0]["links_to"], 52)
+
+    def test_supersedes_field(self):
+        body = self._record("- **Title:** X\n  **Supersedes:** #9\n")
+        item = parse_deferred_work(body)[0]
+        self.assertEqual(item["supersedes"], 9)
+        self.assertIsNone(item["links_to"])
+
+    def test_skip_field(self):
+        body = self._record("- **Title:** X\n  **Skip:** HANDOFF forbids this\n")
+        item = parse_deferred_work(body)[0]
+        self.assertEqual(item["skip"], "HANDOFF forbids this")
+
+    def test_bare_item_has_no_stamps(self):
+        body = self._record("- **Title:** X\n  **Description:** d\n")
+        item = parse_deferred_work(body)[0]
+        self.assertIsNone(item["links_to"])
+        self.assertIsNone(item["supersedes"])
+        self.assertEqual(item["skip"], "")
+
+    def test_multiple_items_keep_stamps_separate(self):
+        body = self._record(
+            "- **Title:** A\n  **Links to:** #30\n"
+            "- **Title:** B\n  **Skip:** already covered\n")
+        a, b = parse_deferred_work(body)
+        self.assertEqual(a["links_to"], 30)
+        self.assertEqual(b["skip"], "already covered")
+        self.assertIsNone(b["links_to"])
 
 
 class DeferredDedupeTest(unittest.TestCase):
