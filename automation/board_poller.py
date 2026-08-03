@@ -54,6 +54,7 @@ mutations (no dispatch, no lane moves, no comments, no merges, no state write).
 import json
 import os
 import re
+import socket
 import subprocess
 import sys
 import time
@@ -135,6 +136,107 @@ def gh(args: list[str], env: dict, timeout: int = 90) -> subprocess.CompletedPro
     return subprocess.run(
         ["gh", *args], capture_output=True, text=True, timeout=timeout, env=env
     )
+
+
+# --- Local develop sync (keep the dev UI on the latest integration code) --
+#
+# Develop merges happen server-side via the GitHub API, so the local checkout
+# never learns about them on its own. After every successful develop merge the
+# poller refreshes the local checkout (fetch + fast-forward only) and restarts
+# the control-panel UI if it is running, so the dev loop is: merge lands ->
+# local code + UI are already current when the issue moves to Ready for Review.
+# Never destructive: dirty trees, non-develop branches, and unpushed local
+# commits all skip with a logged reason instead of forcing.
+
+UI_HOST = "127.0.0.1"
+UI_PORT = 8766
+UI_LOG_PATH = "/tmp/news-ui.log"
+
+
+def _port_open(host: str, port: int, timeout: float = 0.5) -> bool:
+    """True when something accepts TCP connections on host:port."""
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
+def _ui_running() -> bool:
+    return _port_open(UI_HOST, UI_PORT)
+
+
+def _restart_ui() -> bool:
+    """Kill a running news UI and relaunch it; True when the port comes back."""
+    subprocess.run(["pkill", "-f", "news ui"], capture_output=True, text=True)
+    time.sleep(1)
+    news_bin = ROOT / ".venv" / "bin" / "news"
+    if not news_bin.exists():
+        log(f"LOCAL SYNC: cannot restart UI - missing {news_bin}")
+        return False
+    with open(UI_LOG_PATH, "a") as out:
+        subprocess.Popen(
+            [str(news_bin), "ui", "--host", UI_HOST, "--port", str(UI_PORT)],
+            stdout=out, stderr=subprocess.STDOUT,
+            start_new_session=True, cwd=str(ROOT),
+        )
+    deadline = time.monotonic() + 30
+    while time.monotonic() < deadline:
+        if _port_open(UI_HOST, UI_PORT):
+            return True
+        time.sleep(1)
+    return False
+
+
+def sync_local_develop() -> str:
+    """Refresh the local develop checkout and UI after a remote merge.
+
+    Fast-forward only: skips (never forces) when the tree is dirty, the
+    checked-out branch is not develop, or local develop has unpushed
+    commits. Restarts the control-panel UI only when it is running.
+    Returns a one-line summary for the poller log.
+    """
+    if DRY_RUN:
+        return "LOCAL SYNC: dry-run (no fetch/merge/restart)"
+    r = subprocess.run(["git", "fetch", "origin"], capture_output=True,
+                       text=True, timeout=90, cwd=str(ROOT))
+    if r.returncode != 0:
+        return f"LOCAL SYNC FAILED: git fetch: {r.stderr.strip()[:200]}"
+    branch = subprocess.run(["git", "rev-parse", "--abbrev-ref", "HEAD"],
+                            capture_output=True, text=True, timeout=30,
+                            cwd=str(ROOT))
+    if branch.returncode != 0 or branch.stdout.strip() != "develop":
+        return (f"LOCAL SYNC SKIP: not on develop "
+                f"(branch={branch.stdout.strip() or '?'!r})")
+    dirty = subprocess.run(["git", "status", "--porcelain"],
+                           capture_output=True, text=True, timeout=30,
+                           cwd=str(ROOT))
+    dirty_files = [ln for ln in dirty.stdout.splitlines() if ln.strip()]
+    if dirty_files:
+        return f"LOCAL SYNC SKIP: working tree dirty ({len(dirty_files)} file(s))"
+    ahead = subprocess.run(["git", "rev-list", "--count", "origin/develop..HEAD"],
+                           capture_output=True, text=True, timeout=30,
+                           cwd=str(ROOT))
+    if ahead.returncode == 0 and ahead.stdout.strip() != "0":
+        n = ahead.stdout.strip()
+        return (f"LOCAL SYNC SKIP: local develop has {n} unpushed commit(s); "
+                "sync blocked until they are pushed (fast-forward only)")
+    behind = subprocess.run(["git", "rev-list", "--count", "HEAD..origin/develop"],
+                            capture_output=True, text=True, timeout=30,
+                            cwd=str(ROOT))
+    if behind.returncode == 0 and behind.stdout.strip() == "0":
+        return "LOCAL SYNC: develop already up to date"
+    m = subprocess.run(["git", "merge", "--ff-only", "origin/develop"],
+                       capture_output=True, text=True, timeout=90, cwd=str(ROOT))
+    if m.returncode != 0:
+        return f"LOCAL SYNC FAILED: fast-forward merge: {m.stderr.strip()[:200]}"
+    merged = (m.stdout.strip() or f"{behind.stdout.strip()} commit(s)").splitlines()[-1]
+    if not _ui_running():
+        return f"LOCAL SYNC: develop updated ({merged}); UI not running, left as is"
+    if _restart_ui():
+        return f"LOCAL SYNC: develop updated ({merged}); UI restarted"
+    return (f"LOCAL SYNC WARNING: develop updated ({merged}) but UI restart "
+            f"failed - see {UI_LOG_PATH}")
 
 
 def graphql(cfg: dict, env: dict, cursor: str | None) -> dict:
@@ -1191,6 +1293,8 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
                     log(f"left item={item_id} in {in_progress_name} (develop merge failed)")
                     rec.pop("dispatch_msg", None)
                     continue
+                if merge_ok:
+                    log(sync_local_develop())
                 # Deferred-work guard: anything deferred by this run must be
                 # tracked as an issue before the item moves to Ready for Review.
                 dw_cfg = cfg.get("deferred_work") or {}
@@ -1432,6 +1536,9 @@ def main() -> int:
 
     state_path = ROOT / cfg["state_file"]
     state = json.loads(state_path.read_text()) if state_path.exists() else {}
+
+    if not DRY_RUN:
+        log(sync_local_develop())
 
     once = "--once" in sys.argv or DRY_RUN
     consecutive_failures = 0
