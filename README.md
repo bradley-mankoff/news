@@ -49,9 +49,12 @@ The repo runs a fully automated agentic loop driven by the GitHub project board
   must trace the original issue ask (every criterion, described behavior, or
   named component in the issue body that the run did NOT ship is deferred work
   and must be listed). When a run completes, the poller dedupes each item
-  against open/closed issue titles (open match → link; closed match → new
-  issue referencing it; no match → create), boards new issues in the default
-  lane, and comments the linkage on the source issue. Deferral language or
+  against open/closed issue titles: exact open-title match → link; ≥2 shared
+  significant title keywords with an open issue → "possible duplicate of #N"
+  comment instead of creating (the source issue itself is excluded — its
+  deferrals legitimately share vocabulary with it); exact closed-title match →
+  new issue referencing it; no match → create. New issues land in the default
+  lane and the linkage is commented on the source issue. Deferral language or
   unchecked acceptance criteria (`- [ ]`) without the section post a
   verification comment instead — never an auto-created issue from prose.
 - Moving an issue into `In Review` makes the poller open the ship PR

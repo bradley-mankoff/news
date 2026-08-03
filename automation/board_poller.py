@@ -28,11 +28,14 @@ between lanes. Contract:
 - Deferred-work guard: implementation completion records carry a `## Deferred
   work` section (one bullet per deferred item; contract enforced by the
   completion-comment nodes). When a run completes, the poller dedupes each item
-  against open/closed issue titles, creates a Backlog issue (boarded) when no
-  tracking issue exists, links existing ones, and comments the linkage on the
-  source issue. Deferral language or unchecked acceptance criteria without the
-  section post a verification comment instead (never auto-create from prose).
-  Idempotent via per-run state markers; retried next poll on failure.
+  against open/closed issue titles — exact title match links; >=2 shared
+  significant title keywords warns "possible duplicate" instead of creating
+  (the source issue itself is excluded); closed-title match creates a new issue
+  referencing it; no match creates — boards new issues in the default lane,
+  and comments the linkage on the source issue. Deferral language or unchecked
+  acceptance criteria without the section post a verification comment instead
+  (never auto-create from prose). Idempotent via per-run state markers;
+  retried next poll on failure.
 - Dispatch = `archon workflow run <wf> --branch <branch> --detach "<msg>"`
   executed in the repo root.
 
@@ -295,25 +298,81 @@ def normalize_title(title: str) -> str:
     return re.sub(r"[^a-z0-9]+", "", (title or "").casefold())
 
 
+# Generic verbs/nouns that carry no topic signal in this repo's issue titles.
+TITLE_STOPWORDS = {
+    "add", "added", "and", "for", "the", "a", "an", "in", "on", "to", "of",
+    "via", "with", "from", "into", "out", "use", "using", "support", "new",
+    "make", "ensure", "fix", "update", "updated", "implement", "our", "when",
+    "before", "after", "then", "now", "up", "down", "also", "show", "how",
+    "what", "why", "need", "needs", "should", "back", "over", "under", "it",
+    "its", "is", "are", "be", "by", "as", "at", "set", "get", "run", "runs",
+    "running", "test", "tests", "tested", "work", "works", "issue", "item",
+    "one", "any", "more", "most", "all", "each", "some", "without", "within",
+}
+
+
+def title_keywords(title: str) -> set[str]:
+    """Topic-significant tokens of an issue title (for near-duplicate matching).
+
+    Tokens are lowercased, keep embedded punctuation (`llama.cpp`, `force-push`),
+    and must be >=4 chars and not in TITLE_STOPWORDS.
+    """
+    toks = re.findall(r"[a-z0-9]+(?:[.\-][a-z0-9]+)*", (title or "").casefold())
+    return {t for t in toks
+            if len(t) >= 4 and t not in TITLE_STOPWORDS and not t.isdigit()}
+
+
+def duplicate_candidates(title: str, issues: list[dict]) -> list[int]:
+    """Issues sharing >=2 significant title keywords, best (most shared) first.
+
+    Exact-title matches are handled separately by dedupe_deferred; this catches
+    semantic duplicates phrased differently (e.g. "Add llama.cpp/GGUF backend
+    support" vs "Add managed cross-platform GGUF via a llama.cpp adapter").
+    The caller must exclude the source issue itself — a run's deferrals
+    legitimately share vocabulary with the issue being implemented.
+    """
+    kw = title_keywords(title)
+    if not kw:
+        return []
+    scored = []
+    for iss in issues:
+        shared = kw & title_keywords(iss.get("title") or "")
+        if len(shared) >= 2:
+            scored.append((len(shared), iss["number"]))
+    scored.sort(reverse=True)
+    return [n for _, n in scored]
+
+
+def shared_keywords(title_a: str, title_b: str) -> list[str]:
+    """Significant keywords common to two titles, most specific first."""
+    return sorted(title_keywords(title_a) & title_keywords(title_b))
+
+
 def dedupe_deferred(item: dict, open_issues: list[dict],
                     closed_issues: list[dict]) -> tuple[str, int | None]:
     """Where a deferred item's tracking issue stands.
 
     Returns:
       ("link", n)        an OPEN issue with the same normalized title exists
+      ("warn", n)        no exact match, but an OPEN issue shares >=2 significant
+                          title keywords — likely the same work phrased differently;
+                          the caller comments instead of creating
       ("create-ref", n)  only a CLOSED issue matches — create a new one
                           referencing #n (the work still needs tracking)
       ("create", None)   no existing issue — create one
     """
     target = normalize_title(item.get("title") or "")
-    if not target:
-        return "create", None
-    for iss in open_issues:
-        if normalize_title(iss.get("title") or "") == target:
-            return "link", iss["number"]
-    for iss in closed_issues:
-        if normalize_title(iss.get("title") or "") == target:
-            return "create-ref", iss["number"]
+    if target:
+        for iss in open_issues:
+            if normalize_title(iss.get("title") or "") == target:
+                return "link", iss["number"]
+    candidates = duplicate_candidates(item.get("title") or "", open_issues)
+    if candidates:
+        return "warn", candidates[0]
+    if target:
+        for iss in closed_issues:
+            if normalize_title(iss.get("title") or "") == target:
+                return "create-ref", iss["number"]
     return "create", None
 
 
@@ -799,10 +858,21 @@ def reconcile_deferred_work(cfg: dict, env: dict, issue_number: int,
 
     lane = cfg.get("default_lane", "Backlog")
     lines: list[str] = []
+    # The source issue itself can't be a duplicate of its own deferral: a
+    # run's follow-ups legitimately share vocabulary with the implemented
+    # issue, so exclude it from near-match candidates.
+    open_issues = [i for i in open_issues if i.get("number") != issue_number]
     for item in items:
         action, ref = dedupe_deferred(item, open_issues, closed_issues)
         if action == "link":
             lines.append(f"- **{item['title']}** \u2192 already tracked in #{ref}")
+            continue
+        if action == "warn":
+            cand = next((i for i in open_issues if i.get("number") == ref), {})
+            kw = shared_keywords(item.get("title") or "", cand.get("title") or "")
+            lines.append(f"- **{item['title']}** \u2014 possible duplicate of #{ref} "
+                         f"(shared: {', '.join(kw)}); not created \u2014 "
+                         "confirm and close one if it is")
             continue
         created = create_deferred_issue(
             cfg, env, issue_number, pr_number, source_title, item, lane,

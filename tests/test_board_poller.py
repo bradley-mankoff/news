@@ -6,6 +6,7 @@ from automation.board_poller import (
     conflict_episode_action,
     dedupe_deferred,
     dep_gate,
+    duplicate_candidates,
     find_unchecked_criteria,
     has_deferral_language,
     match_issue_pr,
@@ -13,6 +14,8 @@ from automation.board_poller import (
     parse_dep_refs,
     parse_deferred_work,
     parse_verdict,
+    shared_keywords,
+    title_keywords,
 )
 
 
@@ -258,6 +261,115 @@ class DeferredDedupeTest(unittest.TestCase):
     def test_normalize_title(self):
         self.assertEqual(normalize_title("  Add GGUF (v2) support! "), "addggufv2support")
         self.assertEqual(normalize_title(""), "")
+
+
+class TitleKeywordsTest(unittest.TestCase):
+    def test_significant_tokens_kept(self):
+        self.assertEqual(
+            title_keywords("Add llama.cpp/GGUF backend support"),
+            {"llama.cpp", "gguf", "backend"})
+
+    def test_stopwords_dropped(self):
+        self.assertEqual(title_keywords("Add support for the new via"), set())
+
+    def test_short_tokens_dropped(self):
+        self.assertEqual(title_keywords("Fix UI go bug"), set())
+        self.assertEqual(title_keywords("Parse CSV output"), {"parse", "output"})
+
+    def test_embedded_punctuation_kept(self):
+        self.assertEqual(
+            title_keywords("Execute gated history scrub and force-push develop/main"),
+            {"execute", "gated", "history", "scrub", "force-push", "develop", "main"})
+
+
+class DuplicateCandidatesTest(unittest.TestCase):
+    def test_gguf_phrasings_match(self):
+        # The three real duplicates on the board (one manual, two guard-created).
+        issues = [
+            {"number": 75, "title": "Add managed cross-platform GGUF via a llama.cpp adapter"},
+            {"number": 97, "title": "Add managed GGUF/llama.cpp backend support for external_only models"},
+        ]
+        self.assertEqual(
+            duplicate_candidates("Add llama.cpp/GGUF backend support", issues),
+            [97, 75])
+
+    def test_scrub_phrasings_match(self):
+        self.assertEqual(
+            duplicate_candidates(
+                "Execute gated history scrub and force-push develop/main",
+                [{"number": 74, "title": "Scrub personal data from git history before open-sourcing"}]),
+            [74])
+
+    def test_catalog_phrasings_match(self):
+        self.assertEqual(
+            duplicate_candidates(
+                "Add curated Model Catalog plus Hugging Face metadata integration",
+                [{"number": 30, "title": "Add curated Model Catalog plus Hugging Face search/metadata integration"}]),
+            [30])
+
+    def test_translation_phrasings_match(self):
+        self.assertEqual(
+            duplicate_candidates(
+                "Reintroduce the translation pipeline stage",
+                [{"number": 33, "title": "Reintroduce explicit translation without content-based language detection"}]),
+            [33])
+
+    def test_single_shared_keyword_does_not_match(self):
+        # Both mention "pipeline" but are different work.
+        self.assertEqual(
+            duplicate_candidates(
+                "Add CI pipeline running pytest",
+                [{"number": 60, "title": "Add README installation instructions for news-pipeline at publish time"}]),
+            [])
+
+    def test_unrelated_does_not_match(self):
+        self.assertEqual(
+            duplicate_candidates(
+                "Add copyright line to LICENSE",
+                [{"number": 58, "title": "Add llama.cpp/GGUF backend support"}]),
+            [])
+
+    def test_shared_keywords_reported(self):
+        self.assertEqual(
+            shared_keywords("Add llama.cpp/GGUF backend support",
+                            "Add managed cross-platform GGUF via a llama.cpp adapter"),
+            ["gguf", "llama.cpp"])
+
+    def test_source_issue_shared_vocabulary_found(self):
+        # duplicate_candidates DOES flag the source issue ("Replace personal
+        # data..." vs its own deferral "Scrub personal data...") — the
+        # reconcile loop excludes the source issue before dedupe, which is why
+        # this behavior is acceptable.
+        self.assertEqual(
+            duplicate_candidates(
+                "Scrub personal data from git history",
+                [{"number": 23, "title": "Replace personal data with safe examples"}]),
+            [23])
+        # ...but an unrelated issue sharing "data" alone is also not a match.
+        self.assertEqual(
+            duplicate_candidates(
+                "Scrub personal data from git history",
+                [{"number": 5, "title": "Add safe data examples"}]),
+            [])
+
+
+class DeferredDedupeWarnTest(unittest.TestCase):
+    def test_near_match_warns_instead_of_create(self):
+        item = {"title": "Add llama.cpp/GGUF backend support"}
+        open_issues = [{"number": 75, "title": "Add managed cross-platform GGUF via a llama.cpp adapter"}]
+        self.assertEqual(dedupe_deferred(item, open_issues, []), ("warn", 75))
+
+    def test_exact_open_wins_over_near(self):
+        item = {"title": "Same title"}
+        open_issues = [{"number": 1, "title": "Same title"},
+                       {"number": 2, "title": "Same title phrased differently"}]
+        self.assertEqual(dedupe_deferred(item, open_issues, []), ("link", 1))
+
+    def test_near_open_wins_over_exact_closed(self):
+        item = {"title": "Add llama.cpp/GGUF backend support"}
+        open_issues = [{"number": 75, "title": "Add managed cross-platform GGUF via a llama.cpp adapter"}]
+        closed = [{"number": 9, "title": "Add llama.cpp/GGUF backend support"}]
+        self.assertEqual(dedupe_deferred(item, open_issues, closed), ("warn", 75))
 
 
 class HasDeferralLanguageTest(unittest.TestCase):
