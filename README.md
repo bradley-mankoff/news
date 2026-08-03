@@ -34,14 +34,32 @@ The repo runs a fully automated agentic loop driven by the GitHub project board
   (`archon/task-issue-<N>`) in an isolated worktree, so issues in `Todo` run in
   parallel.
 - Creating an issue lands it in `Backlog`; nothing starts from `Backlog`.
+- **Slicing convention:** slice issues as tracer bullets — narrow, end-to-end
+  vertical slices (schema → API → UI → tests), each demoable and sized to one
+  context window — and keep parallel runs merge-safe by declaring file/area
+  ownership in the plan. Two issues may run in parallel only when their
+  planned file sets are disjoint; overlapping ownership means the later one
+  declares `Depends on: #<earlier>`. Any set of issues with satisfied
+  dependencies can be triggered together.
+- A `Depends on: #N` line (one line; `#42, #57` for several) gates dispatch:
+  an issue dragged to `Todo` with an unsatisfied dependency returns to
+  `Backlog` with a comment and returns to `Todo` (auto-dispatch) when the
+  dependency ships. `Blocked` is exclusively NEEDS INPUT.
 - Moving an issue into `Todo` triggers an Archon workflow (label-aware: `bug`
   → `archon-fix-github-issue`, `feature`/`enhancement` → `archon-idea-to-pr`,
   default → `archon-fix-github-issue`), and the poller moves the issue to
   `In Progress`.
 - When the dispatched run completes, the poller marks the PR ready and merges
   it into `develop`, then moves the issue to `Ready for Review` — the human
-  tests the integration branch from there. (Merge failure → issue stays in
-  `In Progress`, logged; drag back to `Todo` to re-run.)
+  tests the integration branch from there.
+- **Develop conflicts auto-fix:** implementation workflows sync with `develop`
+  before opening their PR (parallel runs progressively absorb each other); a
+  PR that still conflicts at merge time is resolved automatically — the
+  poller first merges `develop` into the branch via the GitHub merge API, then
+  dispatches `archon-fix-develop-conflicts` once per conflict episode. If the
+  fix run finishes and the PR is still conflicting, the poller comments on the
+  issue asking for manual help (merge develop into the branch; the poller
+  merges automatically once it is mergeable).
 - Deferred work is auto-tracked (the deferral strategy): the completion record
   on the issue carries a `## Deferred work` section — one bullet per deferred
   item with `**Title:**` / `**Description:**` / `**Reason:**` / optional
@@ -53,9 +71,11 @@ The repo runs a fully automated agentic loop driven by the GitHub project board
   chores, test/doc tweaks, and review findings belonging to the parent are
   stamped `**Skip:**` (preserved in the record, not the backlog). It then
   dedupes by consulting all open/closed issue titles + initial bodies and repo
-  context (HANDOFF.md, ADRs) and stamps each item `**Links to:** #N` (already
-  tracked), `**Supersedes:** #N` (closed — new issue referencing it),
-  `**Skip:** <reason>`, or leaves it bare. When a run completes, the poller
+  context (pending checklists, ADRs, `.out-of-scope/`) and stamps each item
+  `**Links to:** #N` (already tracked), `**Supersedes:** #N` (closed — new
+  issue referencing it), `**Out of scope:** <slug>` (durable rejection — the
+  poller records it in `.out-of-scope/<slug>.md`), `**Skip:** <reason>`, or
+  leaves it bare. When a run completes, the poller
   executes mechanically: links, creates (boarded in the default lane),
   skips, and comments the linkage on the source issue (an exact-title safety
   check links but never creates). Deferral language or
@@ -103,6 +123,10 @@ human, by design:
 - **Ship-conflict manual help:** if the poller comments that it could not
   resolve ship-PR conflicts automatically, merge `main` into the branch (or
   rewrite the conflicting lines) and drag the issue back to `In Review`.
+- **Develop-conflict manual help:** if the poller comments that the develop
+  resolver could not fix a conflict, merge `develop` into the branch (or
+  rewrite the conflicting lines) — the poller merges automatically once the
+  branch is mergeable; no re-drag needed.
 - **Security gate (deliberate):** the history scrub requires human approval —
   run `automation/scrub_history.sh --dry-run`, review, then `--execute`
   (runbook: `docs/security/history-scrub.md`).
@@ -162,6 +186,26 @@ archon workflow run archon-smart-pr-review "Review PR #123"
 - Archon runs: `archon workflow runs` (run from the repo root).
 - Poller: `launchctl list | grep news-board-poller`, or
   `tail -f automation/board_poller.log`.
+- Board: `gh project item-list 1 --owner bradley-mankoff --format json`.
+
+### Local dev loop (automatic)
+
+When the poller merges a PR into `develop` server-side, it also refreshes the
+local checkout and restarts the UI automatically — no manual steps:
+
+- `sync_local_develop()` in `automation/board_poller.py`: `git fetch` →
+  fast-forward-only merge → UI restart (only if the UI is running on
+  127.0.0.1:8766). Runs after every successful develop merge and once at
+  poller startup (catches merges that landed while the poller was down).
+- Strict skip boundaries (each logs one line in `automation/board_poller.log`):
+  `--dry-run`, fetch failure, not on `develop`, dirty tree, unpushed local
+  commits. Never forced, never destructive — unpushed local work is a human
+  decision point (push it and the sync resumes).
+- Test invocation that works reliably on this machine:
+  `.venv/bin/python3 -m pytest tests/ -q` — plain `uv run pytest` / `uv run
+  news` are intermittently flaky ("Failed to spawn") even with a healthy
+  venv; if the `news` entrypoint ever vanishes from `.venv/bin`, re-run
+  `uv pip install -e .`.
 
 ## UI
 
