@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import sys
 from contextvars import ContextVar
 from dataclasses import dataclass, field, replace
 from datetime import datetime
@@ -29,6 +30,7 @@ from .prompt_catalog import (
     PROMPT_PROFILE_IDS,
     get_prompt_profile,
 )
+from .prompt_contracts import validate_editorial_instructions
 
 
 
@@ -96,9 +98,9 @@ PERIPHERAL_SOURCE_TIER = "peripheral"
 SOURCE_SCOPE_CORE = CORE_SOURCE_TIER
 SOURCE_SCOPE_PERIPHERAL = PERIPHERAL_SOURCE_TIER
 SOURCE_SCOPES = (SOURCE_SCOPE_CORE, SOURCE_SCOPE_PERIPHERAL)
-RECIPIENT_SCOPE_BRADLEY = "bradley"
+RECIPIENT_SCOPE_PRIMARY = "primary"
 RECIPIENT_SCOPE_ALL = "all"
-RECIPIENT_SCOPES = (RECIPIENT_SCOPE_BRADLEY, RECIPIENT_SCOPE_ALL)
+RECIPIENT_SCOPES = (RECIPIENT_SCOPE_PRIMARY, RECIPIENT_SCOPE_ALL)
 PRESET_ENV_VAR = "NEWS_PRESET"
 ACTIVE_PRESET_ENV_VAR = "NEWS_ACTIVE_PRESET"
 PRESET_MARKER_ENV_VARS = {PRESET_ENV_VAR, ACTIVE_PRESET_ENV_VAR}
@@ -257,7 +259,7 @@ class RuntimeConfig:
     model_server_command: str
     recent_window_hours: int
     max_articles_per_source: int
-    bradley_recipient: str
+    primary_recipient: str
     email_recipients_fallback: list[str]
     email_from: str
     smtp_host: str
@@ -1005,6 +1007,64 @@ def resolve_model_name(model_reference: str) -> str:
     return MODEL_ALIASES.get(clean_reference, clean_reference)
 
 
+HF_URL_PREFIXES = ("https://huggingface.co/", "https://hf.co/")
+
+
+def hf_model_page_url(model_choice: str) -> str | None:
+    """Return the Hugging Face model-page URL for a model choice, or None.
+
+    Aliases and https://huggingface.co/... / https://hf.co/... URL keys in
+    MODEL_ALIASES are normalized through resolve_model_name first. Only
+    repos derived from MODEL_ALIASES values are ever emitted: external ids,
+    unknown URL-shaped ids, and ids without an owner/name shape (no "/")
+    all yield None so callers can render a muted note instead of a broken
+    link. Unsupported references also yield None rather than raising.
+    """
+    clean = (model_choice or "").strip()
+    if not clean:
+        return None
+    try:
+        resolved = resolve_model_name(clean)
+    except ValueError:
+        return None
+    # Only URLs derived from known MODEL_ALIASES values are emitted;
+    # anything else (external ids, unknown URLs) yields None so callers
+    # render a muted note instead of a broken link.
+    if resolved not in MODEL_ALIASES.values():
+        if not any(resolved.startswith(prefix) for prefix in HF_URL_PREFIXES):
+            return None
+        prefix = next(prefix for prefix in HF_URL_PREFIXES if resolved.startswith(prefix))
+        resolved = resolved[len(prefix):]
+        if resolved not in MODEL_ALIASES.values():
+            return None
+    repo = resolved
+    # GGUF references are repo + "/" + file; the page lives at the repo.
+    if repo.endswith(".gguf") and "/" in repo:
+        repo = repo.rsplit("/", 1)[0]
+    if "/" not in repo:  # external/unknown ids have no HF repo page
+        return None
+    return f"https://huggingface.co/{repo}"
+
+
+def _model_option_links() -> dict[str, dict[str, str]]:
+    """Map every MODEL_ALIASES key that resolves to a Hugging Face repo to
+    its HF page + hardware links.
+
+    Both values are the same URL: Hugging Face's native Hardware
+    Compatibility panel is embedded in each model page (typically shown for
+    repos offering GGUF or MLX files), so the model-page URL is the single
+    correct destination. The two keys exist so a future HF anchor (e.g.
+    "#hardware") is a one-line change here.
+    """
+    links: dict[str, dict[str, str]] = {}
+    for option in MODEL_ALIASES:
+        url = hf_model_page_url(option)
+        if url is None:
+            continue
+        links[option] = {"page": url, "hardware": url}
+    return links
+
+
 def is_codex_test_model_reference(model_reference: str) -> bool:
     clean_reference = (model_reference or "").strip()
     return (
@@ -1114,6 +1174,7 @@ def _runtime_knob(
     step: int | float | None = None,
     advanced: bool = False,
     secret: bool = False,
+    option_links: dict[str, dict[str, str]] | None = None,
 ) -> dict[str, Any]:
     return {
         "id": env.lower(),
@@ -1128,14 +1189,19 @@ def _runtime_knob(
         "step": step,
         "advanced": advanced,
         "secret": secret,
+        # option_links maps each offered option -> {"page": url, "hardware":
+        # url} for model-choice knobs; the drift-guard test pins that its
+        # keys cover `options` exactly, and non-model knobs pass {}.
+        "option_links": option_links or {},
     }
 
 
 def runtime_knob_registry() -> list[dict[str, Any]]:
     tuning_presets = sorted(load_model_tuning_presets())
+    model_links = _model_option_links()
     knobs = [
         _runtime_knob("Run Settings", "Source scope", "NEWS_SOURCE_SCOPE", "select", default="core", options=list(SOURCE_SCOPES)),
-        _runtime_knob("Run Settings", "Recipient scope", "NEWS_RECIPIENT_SCOPE", "select", default="bradley", options=list(RECIPIENT_SCOPES)),
+        _runtime_knob("Run Settings", "Recipient scope", "NEWS_RECIPIENT_SCOPE", "select", default="primary", options=list(RECIPIENT_SCOPES)),
         _runtime_knob("Run Settings", "Block reused URLs", "NEWS_BLOCK_REUSED_URLS", "bool", default=False),
         _runtime_knob("Run Settings", "Image generation", "NEWS_IMAGE_ENABLED", "bool", default=False),
         _runtime_knob("Run Settings", "Story scale screening", "NEWS_STORY_SCALE_SCREENING_ENABLED", "bool"),
@@ -1150,12 +1216,12 @@ def runtime_knob_registry() -> list[dict[str, Any]]:
         _runtime_knob("Run Settings", "Relax story drafting guards", "NEWS_RELAX_STORY_DRAFTING_GUARDS", "bool", advanced=True),
         _runtime_knob("Run Settings", "Embedding model", "NEWS_EMBEDDING_MODEL", default="all-mpnet-base-v2", advanced=True),
         _runtime_knob("Run Settings", "Token encoding", "NEWS_TOKEN_ENCODING", default="o200k_base", advanced=True),
-        _runtime_knob("Model Selection", "Default model", "NEWS_MODEL", "select", default=DEFAULT_MODEL_ALIAS, options=sorted(MODEL_ALIASES)),
+        _runtime_knob("Model Selection", "Default model", "NEWS_MODEL", "select", default=DEFAULT_MODEL_ALIAS, options=sorted(MODEL_ALIASES), option_links=model_links),
         _runtime_knob("Model Selection", "Model backend", "NEWS_MODEL_BACKEND", "select", options=sorted(SUPPORTED_MODEL_BACKENDS)),
-        _runtime_knob("Model Selection", "Article Summarization model", "NEWS_MODEL_ARTICLE_SUMMARY", "select", options=sorted(MODEL_ALIASES)),
-        _runtime_knob("Model Selection", "Story Drafting model", "NEWS_MODEL_STORY_DRAFTING", "select", options=sorted(MODEL_ALIASES)),
-        _runtime_knob("Model Selection", "Story Scale Screening model", "NEWS_MODEL_STORY_SCALE_SCREENING", "select", options=sorted(MODEL_ALIASES)),
-        _runtime_knob("Model Selection", "Title Generation model", "NEWS_MODEL_TITLE_GENERATION", "select", options=sorted(MODEL_ALIASES)),
+        _runtime_knob("Model Selection", "Article Summarization model", "NEWS_MODEL_ARTICLE_SUMMARY", "select", options=sorted(MODEL_ALIASES), option_links=model_links),
+        _runtime_knob("Model Selection", "Story Drafting model", "NEWS_MODEL_STORY_DRAFTING", "select", options=sorted(MODEL_ALIASES), option_links=model_links),
+        _runtime_knob("Model Selection", "Story Scale Screening model", "NEWS_MODEL_STORY_SCALE_SCREENING", "select", options=sorted(MODEL_ALIASES), option_links=model_links),
+        _runtime_knob("Model Selection", "Title Generation model", "NEWS_MODEL_TITLE_GENERATION", "select", options=sorted(MODEL_ALIASES), option_links=model_links),
         _runtime_knob("Model Tuning", "Default tuning preset", "NEWS_MODEL_TUNING_PRESET", "select", options=tuning_presets),
         _runtime_knob("Model Tuning", "Article Summarization tuning preset", "NEWS_MODEL_ARTICLE_SUMMARY_TUNING_PRESET", "select", options=tuning_presets),
         _runtime_knob("Model Tuning", "Story Drafting tuning preset", "NEWS_MODEL_STORY_DRAFTING_TUNING_PRESET", "select", options=tuning_presets),
@@ -1454,10 +1520,9 @@ def _configured_source_scope() -> str:
 
 
 def _normalize_recipient_scope(value: Any) -> str:
-    scope = str(value or RECIPIENT_SCOPE_BRADLEY).strip().lower().replace("_", "-")
+    scope = str(value or RECIPIENT_SCOPE_PRIMARY).strip().lower().replace("_", "-")
     aliases = {
-        "bradley-only": RECIPIENT_SCOPE_BRADLEY,
-        "single": RECIPIENT_SCOPE_BRADLEY,
+        "single": RECIPIENT_SCOPE_PRIMARY,
         "full": RECIPIENT_SCOPE_ALL,
     }
     normalized = aliases.get(scope, scope)
@@ -1467,7 +1532,7 @@ def _normalize_recipient_scope(value: Any) -> str:
 
 
 def _configured_recipient_scope() -> str:
-    return _normalize_recipient_scope(_str_env("NEWS_RECIPIENT_SCOPE", RECIPIENT_SCOPE_BRADLEY))
+    return _normalize_recipient_scope(_str_env("NEWS_RECIPIENT_SCOPE", RECIPIENT_SCOPE_PRIMARY))
 
 
 def _source_enabled_for_scope(
@@ -1723,7 +1788,11 @@ def _build_runtime_config(
         run_staging_dir.mkdir(parents=True, exist_ok=True)
         _sync_cursorignore_latest_output(ROOT_DIR, output_dir, run_output_dir)
 
-    bradley_recipient = _str_env("NEWS_BRADLEY_RECIPIENT", "bradley@example.com")
+    if _active_env().get("NEWS_BRADLEY_RECIPIENT"):
+        print("warning: NEWS_BRADLEY_RECIPIENT is obsolete; "
+              "set NEWS_PRIMARY_RECIPIENT instead (see SETTINGS.md)",
+              file=sys.stderr)
+    primary_recipient = _str_env("NEWS_PRIMARY_RECIPIENT", "primary@example.com")
     source_scope = _configured_source_scope()
     recipient_scope = _configured_recipient_scope()
     url_reuse_blocking_enabled = _bool_env("NEWS_BLOCK_REUSED_URLS", False)
@@ -1734,6 +1803,15 @@ def _build_runtime_config(
     prompt_profile_id = _str_env(PROMPT_PROFILE_ENV_VAR, DEFAULT_PROMPT_PROFILE_ID) or DEFAULT_PROMPT_PROFILE_ID
     # Resolved once at import time in pipeline.py; fails fast on unknown ids.
     get_prompt_profile(prompt_profile_id)
+    # Editorial sentences must never weaken the pipeline-owned output contracts
+    # (parsers, retries, citation renderers, sanitizers depend on them); a
+    # violating profile fails fast at config resolution, not mid-run.
+    profile_violations = validate_editorial_instructions(get_prompt_profile(prompt_profile_id).prompts)
+    if profile_violations:
+        raise ValueError(
+            f"Prompt profile {prompt_profile_id!r} violates pipeline-owned output contracts: "
+            + "; ".join(profile_violations)
+        )
     tracked_urls_filename = "tracked_urls.txt"
     blocking_urls_filename = "blocking_urls.txt"
     run_used_urls_filename = (
@@ -1747,7 +1825,7 @@ def _build_runtime_config(
     )
     fallback_recipients = [
         addr.strip()
-        for addr in _str_env("NEWS_EMAIL_RECIPIENTS", bradley_recipient).split(",")
+        for addr in _str_env("NEWS_EMAIL_RECIPIENTS", primary_recipient).split(",")
         if addr.strip()
     ]
 
@@ -1846,7 +1924,7 @@ def _build_runtime_config(
         model_server_command=default_model_assignment.server_command,
         recent_window_hours=pipeline_budget.recent_window_hours,
         max_articles_per_source=pipeline_budget.max_articles_per_source,
-        bradley_recipient=bradley_recipient,
+        primary_recipient=primary_recipient,
         email_recipients_fallback=fallback_recipients,
         email_from=email_from,
         smtp_host=_str_env("NEWS_SMTP_HOST", "smtp.gmail.com"),

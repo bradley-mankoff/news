@@ -372,6 +372,78 @@ class ConfigHelperTests(unittest.TestCase):
         self.assertEqual(prompt_profile_knob["default"], "balanced")
         self.assertIn("playful", prompt_profile_knob["options"])
         self.assertEqual(set(prompt_profile_knob["options"]), set(config_module.PROMPT_PROFILE_IDS))
+        # Drift-guard: every model knob option maps to an HF page + hardware
+        # link; the backend knob (not a model choice) carries none.
+        model_knob_envs = ("NEWS_MODEL", "NEWS_MODEL_ARTICLE_SUMMARY", "NEWS_MODEL_STORY_DRAFTING")
+        for env in model_knob_envs:
+            model_knob = next(knob for knob in registry if knob["env"] == env)
+            self.assertEqual(
+                set(model_knob["option_links"]),
+                set(model_knob["options"]),
+                f"{env} option_links must cover every offered option",
+            )
+            for option, link in model_knob["option_links"].items():
+                self.assertEqual(sorted(link), ["hardware", "page"])
+                self.assertTrue(link["page"].startswith("https://huggingface.co/"), option)
+                self.assertNotIn("https://huggingface.co/https://", link["page"], option)
+                self.assertEqual(link["hardware"], link["page"])
+        self.assertEqual(backend_knobs[0]["option_links"], {})
+        # Drift-guard: aliases must never land in the unsupported set, or the
+        # registry build and hf_model_page_url's ValueError fallback break.
+        self.assertEqual(
+            set(config_module.UNSUPPORTED_MODEL_REFERENCES) & set(config_module.MODEL_ALIASES),
+            set(),
+        )
+        # hf_model_page_url: alias, .gguf reference, URL keys, MLX repo,
+        # external id and empty input.
+        qwythos_page = f"https://huggingface.co/{config_module.QWWYTHOS_REPO}"
+        self.assertEqual(
+            config_module.hf_model_page_url(config_module.QWWYTHOS_9B_4BIT_MODEL_ALIAS),
+            qwythos_page,
+        )
+        self.assertEqual(
+            config_module.hf_model_page_url(config_module.QWWYTHOS_9B_4BIT_MODEL_REFERENCE),
+            qwythos_page,
+        )
+        self.assertEqual(
+            config_module.hf_model_page_url(f"https://hf.co/{config_module.QWWYTHOS_9B_4BIT_MODEL_REFERENCE}"),
+            qwythos_page,
+        )
+        self.assertEqual(
+            config_module.hf_model_page_url(f"https://huggingface.co/{config_module.QWWYTHOS_9B_4BIT_MODEL_REFERENCE}"),
+            qwythos_page,
+        )
+        self.assertEqual(
+            config_module.hf_model_page_url(f"  https://hf.co/{config_module.QWWYTHOS_9B_4BIT_MODEL_REFERENCE}  "),
+            qwythos_page,
+        )
+        self.assertEqual(
+            config_module.hf_model_page_url(config_module.CODEX_TEST_MODEL_ALIAS),
+            f"https://huggingface.co/{config_module.CODEX_TEST_MODEL_NAME}",
+        )
+        self.assertIsNone(config_module.hf_model_page_url("gpt-4o-mini"))
+        self.assertIsNone(config_module.hf_model_page_url("openai/gpt-4o"))
+        self.assertIsNone(config_module.hf_model_page_url("foo.gguf"))
+        self.assertIsNone(config_module.hf_model_page_url("https://huggingface.co/unknown/owner-repo"))
+        self.assertIsNone(config_module.hf_model_page_url("https://example.com/not-huggingface"))
+        self.assertIsNone(config_module.hf_model_page_url(""))
+        self.assertIsNone(config_module.hf_model_page_url("   "))
+        # Unsupported references yield None rather than raising ValueError.
+        with patch.object(config_module, "UNSUPPORTED_MODEL_REFERENCES", {"qwythos-9b-8bit"}):
+            self.assertIsNone(config_module.hf_model_page_url("qwythos-9b-8bit"))
+
+    def test_docs_drift_guard_links_match_model_aliases(self) -> None:
+        """Every MODEL_ALIASES HF page URL must appear in README.md and
+        SETTINGS.md (the docs hardcode the same URLs the UI renders)."""
+        repo_root = Path(__file__).resolve().parents[1]
+        docs_text = "\n".join(
+            (repo_root / name).read_text(encoding="utf-8")
+            for name in ("README.md", "SETTINGS.md")
+        )
+        for alias in config_module.MODEL_ALIASES:
+            url = config_module.hf_model_page_url(alias)
+            self.assertIsNotNone(url, alias)
+            self.assertIn(url, docs_text, f"{alias} page URL missing from README/SETTINGS")
 
     def test_yaml_scope_and_runtime_config_helpers_cover_edge_branches(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -450,8 +522,20 @@ class ConfigHelperTests(unittest.TestCase):
             self.assertEqual(config_module._normalize_recipient_scope("full"), config_module.RECIPIENT_SCOPE_ALL)
             with self.assertRaisesRegex(ValueError, "NEWS_RECIPIENT_SCOPE must be one of"):
                 config_module._normalize_recipient_scope("unsupported")
-            with patch.dict(os.environ, {"NEWS_RECIPIENT_SCOPE": "bradley-only"}, clear=True):
-                self.assertEqual(config_module._configured_recipient_scope(), config_module.RECIPIENT_SCOPE_BRADLEY)
+            with patch.dict(os.environ, {"NEWS_RECIPIENT_SCOPE": "single"}, clear=True):
+                self.assertEqual(config_module._configured_recipient_scope(), config_module.RECIPIENT_SCOPE_PRIMARY)
+            self.assertEqual(config_module.RECIPIENT_SCOPE_PRIMARY, "primary")
+            with self.assertRaisesRegex(ValueError, "NEWS_RECIPIENT_SCOPE must be one of"):
+                config_module._normalize_recipient_scope("bradley")
+            with self.assertRaisesRegex(ValueError, "NEWS_RECIPIENT_SCOPE must be one of"):
+                config_module._normalize_recipient_scope("bradley-only")
+            # Normalization edges: default, case, whitespace, underscore forms.
+            self.assertEqual(config_module._normalize_recipient_scope(None), config_module.RECIPIENT_SCOPE_PRIMARY)
+            self.assertEqual(config_module._normalize_recipient_scope(""), config_module.RECIPIENT_SCOPE_PRIMARY)
+            self.assertEqual(config_module._normalize_recipient_scope("PRIMARY"), config_module.RECIPIENT_SCOPE_PRIMARY)
+            self.assertEqual(config_module._normalize_recipient_scope(" primary "), config_module.RECIPIENT_SCOPE_PRIMARY)
+            with self.assertRaisesRegex(ValueError, "NEWS_RECIPIENT_SCOPE must be one of"):
+                config_module._normalize_recipient_scope("primary_scope")
             self.assertFalse(
                 config_module._source_enabled_for_scope(
                     {"language": "es", "tier": "core"},

@@ -256,12 +256,25 @@ class PipelineHelperTests(unittest.TestCase):
                 {"a@example.com": {"name": "A", "pause": False}},
             )
 
-        with patch.object(pipeline, "RECIPIENT_SCOPE", "bradley"), patch.object(
-            pipeline, "BRADLEY_RECIPIENT", "bradley@example.com"
+        with patch.object(pipeline, "RECIPIENT_SCOPE", "primary"), patch.object(
+            pipeline, "PRIMARY_RECIPIENT", "primary@example.com"
+        ):
+            self.assertEqual(
+                pipeline.get_active_recipient_config(
+                    {
+                        "primary@example.com": {"name": "P", "pause": True},
+                        "other@example.com": {"name": "O", "pause": False},
+                    }
+                ),
+                {"primary@example.com": {"name": "P", "pause": True}},
+            )
+
+        with patch.object(pipeline, "RECIPIENT_SCOPE", "primary"), patch.object(
+            pipeline, "PRIMARY_RECIPIENT", "primary@example.com"
         ):
             self.assertEqual(
                 pipeline.get_active_recipient_config({}),
-                {"bradley@example.com": {"name": "bradley@example.com", "pause": False}},
+                {"primary@example.com": {"name": "primary@example.com", "pause": False}},
             )
 
         with patch.object(pipeline, "RECIPIENT_SCOPE", "all"):
@@ -589,7 +602,7 @@ class PipelineHelperTests(unittest.TestCase):
             ),
             [record],
         )
-        self.assertEqual(pipeline._extract_first_name("bradley@example.com"), "bradley")
+        self.assertEqual(pipeline._extract_first_name("primary@example.com"), "primary")
         self.assertEqual(pipeline.build_email_subject(datetime(2026, 6, 6, 10, 0, 0)), "Daily LLM News, 06/06/26")
 
     def test_report_rendering_and_story_dedup_helpers(self) -> None:
@@ -776,7 +789,7 @@ class PipelineHelperTests(unittest.TestCase):
             [record],
         )
         self.assertEqual(pipeline.build_email_subject(datetime(2026, 6, 6, 10, 0, 0)), "Daily LLM News, 06/06/26")
-        self.assertEqual(pipeline._extract_first_name("bradley@example.com"), "bradley")
+        self.assertEqual(pipeline._extract_first_name("primary@example.com"), "primary")
         self.assertEqual(pipeline._fallback_synthesis_paragraph_from_summaries(["One. Two.", "Three."]), "One. Two. Three.")
         self.assertIn("Heading", pipeline._format_plain_text_synthesis("## Heading\nBody"))
         self.assertIn("<h2", pipeline._build_html_synthesis("## Heading\nBody", []))
@@ -1716,6 +1729,19 @@ class PipelineHelperTests(unittest.TestCase):
             art_brief = pipeline.generate_image_art_brief("Summary text", "Report title")
         self.assertEqual(art_brief["overlay_headline"], "Report title")
         self.assertIn("image_prompt", art_brief)
+
+    def test_build_image_art_system_prompt_contains_protocol(self) -> None:
+        # The extracted pure helper must always carry the pipeline-owned JSON
+        # contract and overlay protocol regardless of the editorial sentences
+        # it is given (mirrors the mock-based assertions in the brief tests
+        # above, but directly on the helper).
+        system_text = pipeline._build_image_art_system_prompt("X", "Y")
+        self.assertIn(
+            "Return ONLY valid JSON with keys image_prompt and overlay_headline",
+            system_text,
+        )
+        self.assertIn("rendered later by code", system_text)
+        self.assertTrue(system_text.endswith("Y"))
 
     def test_generate_image_art_brief_injects_profile_instructions(self) -> None:
         captured: dict[str, str] = {}

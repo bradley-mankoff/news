@@ -42,6 +42,25 @@ The repo runs a fully automated agentic loop driven by the GitHub project board
   it into `develop`, then moves the issue to `Ready for Review` — the human
   tests the integration branch from there. (Merge failure → issue stays in
   `In Progress`, logged; drag back to `Todo` to re-run.)
+- Deferred work is auto-tracked (the deferral strategy): the completion record
+  on the issue carries a `## Deferred work` section — one bullet per deferred
+  item with `**Title:**` / `**Description:**` / `**Reason:**` / optional
+  `**Label:**` — enforced by the workflow-side `completion-comment` nodes, which
+  must trace the original issue ask (every criterion, described behavior, or
+  named component in the issue body that the run did NOT ship is deferred work
+  and must be listed). The node also judges each item against a size bar:
+  only independently schedulable deliverables are spawned as issues; small
+  chores, test/doc tweaks, and review findings belonging to the parent are
+  stamped `**Skip:**` (preserved in the record, not the backlog). It then
+  dedupes by consulting all open/closed issue titles + initial bodies and repo
+  context (HANDOFF.md, ADRs) and stamps each item `**Links to:** #N` (already
+  tracked), `**Supersedes:** #N` (closed — new issue referencing it),
+  `**Skip:** <reason>`, or leaves it bare. When a run completes, the poller
+  executes mechanically: links, creates (boarded in the default lane),
+  skips, and comments the linkage on the source issue (an exact-title safety
+  check links but never creates). Deferral language or
+  unchecked acceptance criteria (`- [ ]`) without the section post a
+  verification comment instead — never an auto-created issue from prose.
 - Moving an issue into `In Review` makes the poller open the ship PR
   (feature → `main`), run `archon-smart-pr-review` on it, and on review
   completion merge it into `main` and move the issue to `Done` automatically.
@@ -62,9 +81,40 @@ The repo runs a fully automated agentic loop driven by the GitHub project board
    CRITICAL/HIGH findings. It runs on the final diff — including anything you
    changed during testing.
 
-The workflows are the stock Archon 0.6.0 pi-usable set, curated in the archon
+The workflows are the stock Archon 0.7.0 pi-usable set, curated in the archon
 home (`workflows/`); claude-only workflows are archived, not discovered. Full
 inventory: `docs/archon-workflows.md`.
+
+### Human touchpoints
+
+Everything else in the loop is automated (dispatch, merges, lanes, deferred
+issue creation, conflict auto-fix). These are the only actions that need a
+human, by design:
+
+- **Test + promote:** when an issue lands in `Ready for Review`, test the
+  integration branch; when it works, move it to `In Review` with
+  `python3 automation/move_item.py <N> "In Review"`.
+- **Answer blockers:** a `Blocked` issue carries a `NEEDS INPUT:` comment
+  (with `needs-input` label) — answer on the issue, then drag it back to
+  `Todo` to resume the workflow in place.
+- **Re-review after a held ship:** if the ship review posts anything other
+  than `VERDICT: approve`, fix the findings and drag the issue back to
+  `In Review`.
+- **Ship-conflict manual help:** if the poller comments that it could not
+  resolve ship-PR conflicts automatically, merge `main` into the branch (or
+  rewrite the conflicting lines) and drag the issue back to `In Review`.
+- **Security gate (deliberate):** the history scrub requires human approval —
+  run `automation/scrub_history.sh --dry-run`, review, then `--execute`
+  (runbook: `docs/security/history-scrub.md`).
+- **Periodic health check:** `python3 automation/board_health.py` prints stale
+  runs, unknown blockers, and unsatisfied dependencies (read-only).
+- **Deploy after changes:** after pulling poller/automation changes or
+  reinstalling archon, run `automation/deploy.sh` (re-applies local workflow
+  edits, restarts the poller).
+- **New issues:** `python3 automation/create_issue.py "<title>"` creates the
+  issue, boards it, and lands it in the default lane in one step (add
+  `--label enhancement` for the idea-to-pr workflow; fill `Depends on` in the body
+  when gating). Work starts only when the issue is dragged to `Todo`.
 
 ### Components
 
@@ -76,6 +126,16 @@ inventory: `docs/archon-workflows.md`.
   nothing is dispatched (prevents backlog bursts after downtime).
 - `automation/config.json` — repo, project, lanes, and workflow mapping.
 - `automation/move_item.py` — move an issue to a lane from the CLI.
+- `automation/create_issue.py` — create an issue and land it on the board in
+  the default lane in one step.
+- `automation/board_health.py` — read-only board health report: stale runs,
+  unknown blockers, unsatisfied dependencies (exit 0 always).
+- `automation/deploy.sh` — re-apply local archon workflow edits and restart
+  the board poller after a deploy or archon reinstall.
+- `automation/apply_workflow_edits.py` — idempotently re-apply the local
+  archon workflow edits (completion-comment nodes with the Deferred-work
+  contract, `report-verdict`, `archon-fix-ship-conflicts`) after an archon
+  reinstall; `automation/deploy.sh` also restarts the poller.
 - `automation/security_audit.py` — stdlib-only scanner for secrets and personal
   data in the working tree and full history; exits 0 when clean. Report:
   `docs/security/audit-2026-08-02.md`.
@@ -85,7 +145,7 @@ inventory: `docs/archon-workflows.md`.
 - The poller runs as a launchd agent (`com.bradley-mankoff.news-board-poller`,
   plist in `~/Library/LaunchAgents/`). Logs: `automation/board_poller.log`;
   state: `automation/state.json` (gitignored).
-- Archon executes all workflows on DeepSeek (`deepseek/deepseek-v4-flash`,
+- Archon executes all workflows on OpenCode Zen Go (`opencode-go/deepseek-v4-flash`,
   max effort → xhigh thinking) via the Pi provider; tiers are configured in
   the archon-pi home `config.yaml`.
 
@@ -138,7 +198,7 @@ Run with a saved preset or explicit overrides:
 
 ```bash
 uv run news run --preset NAME
-NEWS_SOURCE_SCOPE=peripheral NEWS_RECIPIENT_SCOPE=bradley uv run news run
+NEWS_SOURCE_SCOPE=peripheral NEWS_RECIPIENT_SCOPE=primary uv run news run
 ```
 
 Useful utility commands:
@@ -181,7 +241,7 @@ Key Run Settings:
 
 - `NEWS_SOURCE_SCOPE=core|peripheral`: `peripheral` includes both core and
   peripheral sources.
-- `NEWS_RECIPIENT_SCOPE=bradley|all`: send to the primary recipient only or all active
+- `NEWS_RECIPIENT_SCOPE=primary|all`: send to the primary recipient only or all active
   configured recipients.
 - `NEWS_BLOCK_REUSED_URLS=0|1`: every run records URL history; only `1` makes
   previously recorded URLs block future reuse.
@@ -239,9 +299,39 @@ algorithmic embedding/TF-IDF clustering and inherits the default model. There
 is no `NEWS_MODEL_IMAGE_ART_DIRECTION` env var.
 Built-in aliases:
 
-- `gemma-e2b-tiny`: `deadbydawn101/gemma-4-E2B-Heretic-Uncensored-mlx-4bit` (Codex-safe test model)
-- `qwythos-9b-4bit`: `huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-Q4_K.gguf`
-- `qwythos-9b-8bit`: `huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-Q8_0.gguf` (default)
+- `gemma-e2b-tiny`: [`deadbydawn101/gemma-4-E2B-Heretic-Uncensored-mlx-4bit`](https://huggingface.co/deadbydawn101/gemma-4-E2B-Heretic-Uncensored-mlx-4bit) (Codex-safe test model)
+- `qwythos-9b-4bit`: [`huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF`](https://huggingface.co/huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF) ([`...Q4_K.gguf`](https://huggingface.co/huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF/blob/main/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-Q4_K.gguf))
+- `qwythos-9b-8bit`: [`huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF`](https://huggingface.co/huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF) ([`...Q8_0.gguf`](https://huggingface.co/huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF/blob/main/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-Q8_0.gguf)) (default)
+
+Each model page shows Hugging Face's native Hardware Compatibility panel
+(GGUF/MLX quantizations) — the UI model picker links directly to it.
+
+### Model Catalog
+
+The Model Catalog is the code-owned registry of models verified for the
+supported backends, with recommendations per task — factual extraction,
+structured output, synthesis, citation fidelity, speed, context length, and
+translation — rather than parameter count or popularity:
+
+```bash
+uv run news models catalog
+uv run news models search --query qwythos --task text-generation --limit 5
+```
+
+Curated models (3):
+
+- `qwythos-9b-8bit` — mlx-vlm, 1M-token context, default model
+  ([Hugging Face](https://huggingface.co/huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF))
+- `qwythos-9b-4bit` — mlx-vlm, 1M-token context
+  ([Hugging Face](https://huggingface.co/huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF))
+- `gemma-e2b-tiny` — mlx-lm, Codex-safe test model
+  ([Hugging Face](https://huggingface.co/deadbydawn101/gemma-4-E2B-Heretic-Uncensored-mlx-4bit))
+
+Hugging Face search results carry runtime-fit verdicts (`managed_mlx_lm`,
+`managed_mlx_vlm`, or `external_only`) so unlaunchable repos are never picked
+for a managed backend (ADR 0010 runtime matrix); hardware fitting itself lives
+on the Hugging Face model page. The UI's "Model catalog" panel shows curated
+cards, task recommendations, and search with the same verdicts.
 
 ### Runtime Matrix
 
@@ -415,7 +505,7 @@ The `dev` preset:
 - Uses `gemma-e2b-tiny` (the smallest model — the only one we keep for
   local testing now that the 12b/26b gemma slots are filled by Qwythos).
 - Sets `NEWS_SOURCE_SCOPE=core` (the narrowest source pool).
-- Sets `NEWS_RECIPIENT_SCOPE=bradley` (sends only to the primary
+- Sets `NEWS_RECIPIENT_SCOPE=primary` (sends only to the primary
   recipient).
 - Disables image generation and URL reuse blocking.
 - Sets `NEWS_MIN_ARTICLES_PER_STORY=2` and relaxes story drafting guards.

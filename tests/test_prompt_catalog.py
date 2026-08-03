@@ -1,16 +1,18 @@
 """Prompt Catalog integrity and drift-guard tests.
 
 The drift-guard tests assert that the `balanced` profile strings appear
-verbatim in the rendered prompts of each stage module, so the default behavior
+verbatim in the rendered prompts of each stage module, and golden snapshot
+tests assert the exact rendered bytes (ADR 0011), so the default behavior
 stays byte-identical to the pre-catalog prompts.
 """
 
 from __future__ import annotations
 
+from dataclasses import replace
 from types import SimpleNamespace
 import unittest
 
-from news_pipeline import prompt_catalog
+from news_pipeline import pipeline, prompt_catalog, prompt_contracts
 from news_pipeline.article_summarization import (
     ArticleSummarizationRuntime,
     build_article_summary_prompt_messages,
@@ -143,6 +145,122 @@ class PromptCatalogTests(unittest.TestCase):
         self.assertIn(balanced, prompt_text)
         self.assertIn("Return only valid JSON", prompt_text)
 
+    def test_balanced_article_summary_prompt_is_byte_identical(self) -> None:
+        # Golden byte-identity snapshot: the rendered prompts must stay
+        # byte-identical to the pre-catalog prompts (ADR 0011). Substring
+        # checks alone let whitespace drift through (dedent-margin collapse),
+        # so lock the exact bytes the LLM receives.
+        messages = build_article_summary_prompt_messages(
+            {"title": "Flood plan expands", "source": "Fixture Wire"},
+            "May 30, 2026",
+            _article_summarization_runtime(),
+        )
+        self.assertEqual(
+            str(messages[0].content),
+            """Today: May 30, 2026.
+Current Task: Summarize one preselected article from the last 24 hours
+for story discovery, selection, and synthesis.
+1. Use only the provided article metadata, URL, description, and article text.
+2. Do not call tools in this step.
+3. Ignore outlet style and focus on concrete reported claims.
+4. Include key facts: what reportedly happened, where, timeline, named actors, casualties or damage if reported, and what remains unconfirmed.
+5. If the article text is thin, summarize only what is actually supported by the provided text and metadata.
+6. Do not recap the general history of a longstanding subject or conflict; include background only
+   when the article reports a new fact about it or one short clause is needed for orientation.
+7. Prioritize facts that help later clustering and story synthesis; include major concrete developments without inventing relevance.
+8. Start your response with 'DATABASE_ENTRY:' and then exactly the requested Markdown block.
+9. Do not include any text before 'DATABASE_ENTRY:' or after the summary.""",
+        )
+        self.assertEqual(
+            str(messages[1].content),
+            """Selected article:
+
+Title: Flood plan expands
+Source: Fixture Wire
+Published: Unknown publish time
+URL: N/A
+Description: N/A
+Article text:
+N/A
+
+Return exactly this block, replacing only the summary text:
+
+DATABASE_ENTRY:
+### Flood plan expands
+Metadata:
+- Source: Fixture Wire
+- Published: Unknown publish time
+- URL: N/A
+
+Summary:
+<4-7 sentence article summary in plain prose, no brackets>""",
+        )
+
+    def test_balanced_story_drafting_prompts_are_byte_identical(self) -> None:
+        # Golden byte-identity snapshot (ADR 0011). Note the historical
+        # layout: the source block's first line renders at the 8-space
+        # placeholder position while its remaining lines sit at column 0, and
+        # the output-contract block renders 8-space indented.
+        messages = build_story_synthesis_prompt_messages(_story_block(), "May 30, 2026")
+        self.assertEqual(
+            str(messages[0].content),
+            """Today: May 30, 2026.
+You are synthesizing prewritten article summaries and cleaned article evidence into one newsletter story.
+Use only the supplied source summaries and cleaned article evidence.
+Write one custom story headline, then one cohesive main story paragraph, roughly 70-130 words.
+The headline should be factual, specific, 4-10 words, and not copied wholesale from a source headline.
+End every factual sentence with one or more source markers using the listed source IDs,
+like [[S1]] or one combined marker for multiple sources like [[S1,S3]].
+Use only listed source IDs and do not invent sources.
+In the main story, try to support important claims with concrete evidence details from the
+cleaned article evidence when it is available. Paraphrase those details in your own words;
+do not quote article text, copy distinctive article wording, or use quotation marks around
+article-body phrasing. Cite the source IDs for the article or articles that supply each
+paraphrased evidence detail.
+If a source says it appears to cite another listed source, prefer the listed primary source
+for shared facts and cite the derivative source only for unique reporting or analysis.
+Prioritize the headline, lede, and details around the central event supported by the supplied source summaries and evidence.
+Lead with today's reported development. Include concrete reported claims, named actors,
+places, timing, figures, damage, statements, deadlines, and uncertainty when supported.
+Then assess whether the sources directly or materially contradict each other.
+A reportable contradiction is a factual disagreement about the same claim, count,
+timeline, attribution, status, quote, or outcome where the cited accounts cannot
+both be true in the same context. Do not require identical wording.
+Omission, different focus, routine updates over time, or one source addressing a
+subject another source does not address is not a contradiction.
+If there is no direct or material factual contradiction, write exactly 'NONE' for Contradictions.
+If there is a contradiction, write 1-3 concise prose sentences under Contradictions.
+Each contradiction sentence must cite the disagreeing sources and must use the cleaned article evidence,
+not only the source summaries.
+Do not write bullets, source-material notes, methodology, bibliography, or preamble.
+Do not merge in background material unless a source summary reports it as part of today's update.""",
+        )
+        self.assertEqual(
+            str(messages[1].content),
+            """Story: Storm damage
+
+        Source summaries and cleaned article evidence to paraphrase, not quote:
+        S1:
+Title: Fixture article S1
+Article ID: s1
+Source: Fixture Wire
+Published: Sat, 16 May 2026 15:30:00 GMT
+URL: https://example.com/s1
+Summary: Officials reported storm damage.
+Cleaned article evidence to paraphrase, not quote: N/A
+Citation precedence: Cite this source only for facts it directly supports.
+
+        Return exactly this format:
+        Headline: <custom story headline>
+        Main story: <story paragraph with sentence-end source markers>
+        Contradictions: NONE
+
+        Or, only if there is a real direct or material contradiction:
+        Headline: <custom story headline>
+        Main story: <story paragraph with sentence-end source markers>
+        Contradictions: <short contradiction evidence paragraph with sentence-end source markers>""",
+        )
+
     def test_get_unknown_profile_error_lists_available(self) -> None:
         with self.assertRaisesRegex(ValueError, "Available profiles: .*balanced"):
             prompt_catalog.get_prompt_profile("nope")
@@ -184,6 +302,109 @@ class PromptCatalogTests(unittest.TestCase):
             guidance = profile.prompts["story_scale_screening"]
             self.assertNotIn("{", guidance, f"{profile.id} guidance would break .format()")
             self.assertNotIn("}", guidance, f"{profile.id} guidance would break .format()")
+
+    def test_protocol_tasks_match_prompt_tasks(self) -> None:
+        # Drift-guard: the contract registry must cover exactly the same five
+        # stages the Prompt Catalog editorializes; a stage added to only one
+        # side would silently skip contract validation.
+        self.assertEqual(prompt_contracts.PROTOCOL_TASKS, prompt_catalog.PROMPT_TASKS)
+        self.assertEqual(
+            set(prompt_contracts.PROTOCOL_MARKERS),
+            set(prompt_catalog.PROMPT_TASKS),
+        )
+
+    def test_all_profiles_render_all_prompt_contracts(self) -> None:
+        # Every built-in profile must render every stage with its full machine
+        # contract intact; a template edit that drops a protocol marker fails
+        # here regardless of which profile is active.
+        for profile in prompt_catalog.PROMPT_PROFILES.values():
+            summary_messages = build_article_summary_prompt_messages(
+                {"title": "Flood plan expands", "source": "Fixture Wire"},
+                "May 30, 2026",
+                replace(
+                    _article_summarization_runtime(),
+                    prompt_instructions=profile.prompts["article_summary"],
+                ),
+            )
+            prompt_contracts.assert_prompt_contract(
+                "article_summary",
+                "\n\n".join(str(message.content) for message in summary_messages),
+            )
+
+            screening_messages = _global_scale_screening_prompt_messages(
+                [_story_block()],
+                prompt_instructions=profile.prompts["story_scale_screening"],
+            )
+            prompt_contracts.assert_prompt_contract(
+                "story_scale_screening",
+                "\n\n".join(str(message.content) for message in screening_messages),
+            )
+
+            drafting_messages = build_story_synthesis_prompt_messages(
+                _story_block(),
+                "May 30, 2026",
+                prompt_instructions=profile.prompts["story_drafting"],
+            )
+            prompt_contracts.assert_prompt_contract(
+                "story_drafting",
+                "\n\n".join(str(message.content) for message in drafting_messages),
+            )
+
+            art_system_prompt = pipeline._build_image_art_system_prompt(
+                profile.prompts["image_art_direction"],
+                profile.prompts["title_generation"],
+            )
+            prompt_contracts.assert_prompt_contract("image_art_direction", art_system_prompt)
+            prompt_contracts.assert_prompt_contract("title_generation", art_system_prompt)
+            # Marker-only drift guard is vacuous for these two tasks: every
+            # marker lives in the unconditionally-injected JSON contract, so a
+            # template edit that drops the {image_art_direction}/{title_guidance}
+            # interpolation would pass the checks above. Require the profile's
+            # own editorial sentences to be present in the rendered prompt.
+            self.assertIn(profile.prompts["image_art_direction"], art_system_prompt)
+            self.assertIn(profile.prompts["title_generation"], art_system_prompt)
+
+    def test_validate_prompt_contract_reports_missing_markers(self) -> None:
+        missing = prompt_contracts.validate_prompt_contract("story_drafting", "no markers here")
+        self.assertIn("Headline:", missing)
+        with self.assertRaisesRegex(ValueError, "missing markers:.*Headline"):
+            prompt_contracts.assert_prompt_contract("story_drafting", "no markers here")
+        with self.assertRaisesRegex(ValueError, "Unknown prompt task"):
+            prompt_contracts.validate_prompt_contract("no_such_task", "anything")
+
+    def test_validate_editorial_instructions_accepts_builtin_profiles(self) -> None:
+        # Vocabulary overlap (image_prompt, overlay_headline,
+        # obviously_small_scale) is not a violation; only strong contract
+        # sentences are blocked.
+        for profile in prompt_catalog.PROMPT_PROFILES.values():
+            self.assertEqual(
+                prompt_contracts.validate_editorial_instructions(profile.prompts),
+                [],
+                f"{profile.id} instructions must not violate the output contracts",
+            )
+
+    def test_validate_editorial_instructions_rejects_violations(self) -> None:
+        clean = {
+            "article_summary": "Summarize factually.",
+            "story_scale_screening": "Be conservative.",
+            "story_drafting": "Write a factual story.",
+            "title_generation": "Keep it short.",
+            "image_art_direction": "Depict the event.",
+        }
+        self.assertEqual(prompt_contracts.validate_editorial_instructions(clean), [])
+
+        violating = dict(clean)
+        violating["story_drafting"] = "Do not use [[S1]] markers"
+        violating["story_scale_screening"] = "Return {json} here"
+        del violating["title_generation"]
+        violations = prompt_contracts.validate_editorial_instructions(violating)
+        self.assertTrue(
+            any("missing or empty instructions for title_generation" in item for item in violations)
+        )
+        self.assertTrue(any("brace" in item for item in violations))
+        self.assertTrue(
+            any("story_drafting" in item and "[[S1]]" in item for item in violations)
+        )
 
 
 if __name__ == "__main__":
