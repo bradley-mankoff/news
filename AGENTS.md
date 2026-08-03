@@ -19,6 +19,7 @@ Project goal: build, review, and send a daily news report from configured source
 - Need to re-apply local archon workflow edits or restart the poller after a deploy -> `automation/deploy.sh` (idempotent; also covers archon reinstall, see `docs/archon-workflows.md`).
 - Need the Archon workflow inventory (usable vs archived) -> `docs/archon-workflows.md`.
 - Need the machine-local Archon setup/operations map (services, quirks, upgrade) -> `docs/archon-setup.md`.
+- Adding/changing model aliases? Update the HF page URLs in README.md and SETTINGS.md too — `tests/test_config_helpers.py::test_docs_drift_guard_links_match_model_aliases` pins that the docs carry every alias's page URL.
 
 ## Always-on behavior
 - Always-on communication: **caveman full** (pi-caveman extension). Always-on code discipline: **ponytail full** (@dietrichgebert/ponytail extension+skills). Do not disable these unless the user explicitly asks.

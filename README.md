@@ -279,9 +279,39 @@ NEWS_MODEL_STORY_DRAFTING=qwythos-9b-8bit uv run news run --preset NAME
 ```
 Built-in aliases:
 
-- `gemma-e2b-tiny`: `deadbydawn101/gemma-4-E2B-Heretic-Uncensored-mlx-4bit` (Codex-safe test model)
-- `qwythos-9b-4bit`: `huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-Q4_K.gguf`
-- `qwythos-9b-8bit`: `huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-Q8_0.gguf` (default)
+- `gemma-e2b-tiny`: [`deadbydawn101/gemma-4-E2B-Heretic-Uncensored-mlx-4bit`](https://huggingface.co/deadbydawn101/gemma-4-E2B-Heretic-Uncensored-mlx-4bit) (Codex-safe test model)
+- `qwythos-9b-4bit`: [`huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF`](https://huggingface.co/huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF) ([`...Q4_K.gguf`](https://huggingface.co/huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF/blob/main/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-Q4_K.gguf))
+- `qwythos-9b-8bit`: [`huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF`](https://huggingface.co/huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF) ([`...Q8_0.gguf`](https://huggingface.co/huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF/blob/main/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-Q8_0.gguf)) (default)
+
+Each model page shows Hugging Face's native Hardware Compatibility panel
+(GGUF/MLX quantizations) — the UI model picker links directly to it.
+
+### Model Catalog
+
+The Model Catalog is the code-owned registry of models verified for the
+supported backends, with recommendations per task — factual extraction,
+structured output, synthesis, citation fidelity, speed, context length, and
+translation — rather than parameter count or popularity:
+
+```bash
+uv run news models catalog
+uv run news models search --query qwythos --task text-generation --limit 5
+```
+
+Curated models (3):
+
+- `qwythos-9b-8bit` — mlx-vlm, 1M-token context, default model
+  ([Hugging Face](https://huggingface.co/huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF))
+- `qwythos-9b-4bit` — mlx-vlm, 1M-token context
+  ([Hugging Face](https://huggingface.co/huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF))
+- `gemma-e2b-tiny` — mlx-vlm, Codex-safe test model
+  ([Hugging Face](https://huggingface.co/deadbydawn101/gemma-4-E2B-Heretic-Uncensored-mlx-4bit))
+
+Hugging Face search results carry runtime-fit verdicts (`managed_mlx_lm`,
+`managed_mlx_vlm`, or `external_only`) so unlaunchable repos are never picked
+for a managed backend (ADR 0010 runtime matrix); hardware fitting itself lives
+on the Hugging Face model page. The UI's "Model catalog" panel shows curated
+cards, task recommendations, and search with the same verdicts.
 
 ### Runtime Matrix
 
