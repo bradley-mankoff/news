@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import sys
 from typing import Callable
@@ -12,6 +13,11 @@ from .config import (
     ensure_codex_safe_model_reference,
     load_runtime_config,
     reject_removed_topic_env_vars,
+)
+from .model_catalog import (
+    HF_SEARCH_PIPELINE_TAGS,
+    list_model_catalog,
+    search_huggingface_models,
 )
 from .prompt_catalog import PROMPT_PROFILE_ENV_VAR, get_prompt_profile
 
@@ -29,6 +35,8 @@ Usage:
   uv run news history backfill [--dry-run|--apply]
   uv run news history cleanup [--dry-run|--apply]
   uv run news history export
+  uv run news models catalog [--json]
+  uv run news models search --query Q [--task T] [--limit N] [--json]
 """
 
 ACTION_ALIASES = {
@@ -48,6 +56,8 @@ ACTION_ALIASES = {
     "detect-source-languages": "source-languages",
     "source-language": "source-languages",
     "history": "history",
+    "models": "models",
+    "model-catalog": "models",
     "ui": "ui",
     "local-ui": "ui",
     "control-panel": "ui",
@@ -166,6 +176,113 @@ def _run_ui(args: list[str]) -> int:
     return ui_main(args)
 
 
+def _parse_models_search_args(args: list[str]) -> tuple[str, str | None, int, bool]:
+    """Parse `news models search` arguments into (query, pipeline_tag, limit, json)."""
+    query = ""
+    pipeline_tag: str | None = None
+    limit = 20
+    as_json = False
+    index = 0
+    while index < len(args):
+        arg = args[index]
+        if arg == "--query":
+            if index + 1 >= len(args):
+                raise ValueError("--query requires a value.")
+            query = args[index + 1]
+            index += 2
+            continue
+        if arg.startswith("--query="):
+            query = arg.split("=", 1)[1]
+            index += 1
+            continue
+        if arg == "--task":
+            if index + 1 >= len(args):
+                raise ValueError("--task requires a value.")
+            pipeline_tag = args[index + 1]
+            index += 2
+            continue
+        if arg.startswith("--task="):
+            pipeline_tag = arg.split("=", 1)[1]
+            index += 1
+            continue
+        if arg == "--limit":
+            if index + 1 >= len(args):
+                raise ValueError("--limit requires a value.")
+            limit = _parse_models_search_limit(args[index + 1])
+            index += 2
+            continue
+        if arg.startswith("--limit="):
+            limit = _parse_models_search_limit(arg.split("=", 1)[1])
+            index += 1
+            continue
+        if arg == "--json":
+            as_json = True
+            index += 1
+            continue
+        raise ValueError(f"Unexpected argument for models search: {arg}")
+    if pipeline_tag is not None and pipeline_tag not in HF_SEARCH_PIPELINE_TAGS:
+        valid = ", ".join(HF_SEARCH_PIPELINE_TAGS)
+        raise ValueError(
+            f"Unknown search task {pipeline_tag!r}. Valid tasks: {valid}"
+        )
+    if not query.strip():
+        raise ValueError("models search requires --query (e.g. --query qwythos).")
+    return query, pipeline_tag, limit, as_json
+
+
+def _parse_models_search_limit(raw: str) -> int:
+    try:
+        return max(1, min(int(raw), 50))
+    except ValueError:
+        raise ValueError(f"--limit must be an integer, got {raw!r}.") from None
+
+
+def _run_models(args: list[str]) -> int:
+    """Run the `news models` command (catalog / search subcommands).
+
+    Network calls happen only for `search`; `catalog` is offline-first.
+    """
+    if not args:
+        raise ValueError("models requires a subcommand: catalog or search.")
+    subcommand = args[0]
+    rest = args[1:]
+    if subcommand == "catalog":
+        unexpected = [arg for arg in rest if arg != "--json"]
+        if unexpected:
+            raise ValueError(
+                f"Unexpected arguments for models catalog: {' '.join(unexpected)}"
+            )
+        as_json = "--json" in rest
+        entries = list_model_catalog()
+        if as_json:
+            print(json.dumps(entries, indent=2))
+        else:
+            for entry in entries:
+                context = "-" if entry["context_length"] is None else str(entry["context_length"])
+                print(
+                    f"{entry['alias']:<20} {entry['backend']:<8} "
+                    f"ctx={context:<8} {entry['hf_url']}"
+                )
+        return 0
+    if subcommand == "search":
+        query, pipeline_tag, limit, as_json = _parse_models_search_args(rest)
+        try:
+            results = search_huggingface_models(
+                query, pipeline_tag=pipeline_tag, limit=limit
+            )
+        except Exception as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
+        if as_json:
+            print(json.dumps({"query": query, "models": results}, indent=2))
+        else:
+            for item in results:
+                fit = item.get("runtime_fit") or {}
+                print(f"{item['id']} [{fit.get('status', 'unknown')}] {fit.get('reason', '')}")
+        return 0
+    raise ValueError(f"Unknown models subcommand: {subcommand!r}. Valid: catalog, search.")
+
+
 def _run_history(args: list[str]) -> int:
     from .history_store import parse_history_args
 
@@ -197,6 +314,8 @@ def main(argv: list[str] | None = None) -> int:
         return _run_ui(args)
     if action == "history":
         return _run_history(args)
+    if action == "models":
+        return _run_with_error_report(lambda: _run_models(args))
 
     reject_removed_topic_env_vars()
 

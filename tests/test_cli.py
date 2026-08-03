@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import contextlib
 import io
+import json
 import os
 import unittest
 from pathlib import Path
@@ -251,6 +252,102 @@ class CliTests(unittest.TestCase):
         self.assertEqual(code, 2)
         self.assertEqual(stdout, "")
         self.assertIn("NEWS_MODEL_BACKEND must be one of", stderr)
+
+    def test_models_catalog_lists_entries(self) -> None:
+        code, stdout, stderr = self._invoke(["models", "catalog"])
+
+        self.assertEqual(code, 0)
+        self.assertIn("qwythos-9b-8bit", stdout)
+        self.assertIn("qwythos-9b-4bit", stdout)
+        self.assertIn("gemma-e2b-tiny", stdout)
+        self.assertIn("huggingface.co", stdout)
+
+        code, stdout, stderr = self._invoke(["models", "catalog", "--json"])
+
+        self.assertEqual(code, 0)
+        entries = json.loads(stdout)
+        self.assertEqual(len(entries), 3)
+        self.assertEqual(entries[0]["alias"], "qwythos-9b-8bit")
+        self.assertTrue(entries[0]["is_default"])
+
+    def test_models_catalog_rejects_unexpected_args(self) -> None:
+        code, stdout, stderr = self._invoke(["models", "catalog", "oops"])
+
+        self.assertEqual(code, 2)
+        self.assertEqual(stdout, "")
+        self.assertIn("Unexpected arguments for models catalog: oops", stderr)
+
+    def test_models_search_requires_query(self) -> None:
+        code, stdout, stderr = self._invoke(["models", "search"])
+
+        self.assertEqual(code, 2)
+        self.assertEqual(stdout, "")
+        self.assertIn("--query", stderr)
+
+        code, stdout, stderr = self._invoke(["models", "search", "--json"])
+
+        self.assertEqual(code, 2)
+        self.assertIn("--query", stderr)
+
+    def test_models_search_success(self) -> None:
+        fake_results = [
+            {
+                "id": "owner/one",
+                "hf_url": "https://huggingface.co/owner/one",
+                "runtime_fit": {"status": "managed_mlx_lm", "reason": "MLX language model"},
+            },
+            {
+                "id": "owner/two",
+                "hf_url": "https://huggingface.co/owner/two",
+                "runtime_fit": {"status": "external_only", "reason": "unknown library"},
+            },
+        ]
+        with patch("news_pipeline.cli.search_huggingface_models", return_value=fake_results) as search:
+            code, stdout, stderr = self._invoke(
+                ["models", "search", "--query", "qwythos", "--task", "text-generation", "--limit", "7", "--json"]
+            )
+
+        self.assertEqual(code, 0)
+        payload = json.loads(stdout)
+        self.assertEqual(payload["query"], "qwythos")
+        self.assertEqual([item["id"] for item in payload["models"]], ["owner/one", "owner/two"])
+        search.assert_called_once_with("qwythos", pipeline_tag="text-generation", limit=7)
+
+        with patch("news_pipeline.cli.search_huggingface_models", return_value=fake_results) as search:
+            code, stdout, stderr = self._invoke(["models", "search", "--query=qwythos", "--limit=999"])
+
+        self.assertEqual(code, 0)
+        self.assertIn("owner/one [managed_mlx_lm] MLX language model", stdout)
+        self.assertIn("owner/two [external_only]", stdout)
+        search.assert_called_once_with("qwythos", pipeline_tag=None, limit=50)
+
+    def test_models_search_rejects_bad_task_and_limit(self) -> None:
+        code, stdout, stderr = self._invoke(
+            ["models", "search", "--query", "qwythos", "--task", "bogus"]
+        )
+
+        self.assertEqual(code, 2)
+        self.assertEqual(stdout, "")
+        self.assertIn("Unknown search task 'bogus'", stderr)
+        self.assertIn("text-generation", stderr)
+
+        code, stdout, stderr = self._invoke(
+            ["models", "search", "--query", "qwythos", "--limit", "lots"]
+        )
+
+        self.assertEqual(code, 2)
+        self.assertEqual(stdout, "")
+        self.assertIn("--limit must be an integer", stderr)
+
+    def test_models_search_error_exit_code(self) -> None:
+        with patch(
+            "news_pipeline.cli.search_huggingface_models", side_effect=ValueError("boom")
+        ):
+            code, stdout, stderr = self._invoke(["models", "search", "--query", "qwythos"])
+
+        self.assertEqual(code, 2)
+        self.assertEqual(stdout, "")
+        self.assertIn("boom", stderr)
 
     def test_unknown_command_returns_error(self) -> None:
         code, stdout, stderr = self._invoke(["not-a-command"])
