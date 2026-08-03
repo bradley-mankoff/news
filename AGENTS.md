@@ -4,6 +4,7 @@ Project goal: build, review, and send a daily news report from configured source
 
 ## Route
 - Need setup, commands, UI usage, PR review flow, or operational runbook -> `README.md`.
+- Need the vendored matt pocock skills (omp wrapper: `~/.claude/skills/`; archon commands: `.archon/commands/`; split + provenance) -> `docs/archon-workflows.md` (Local edits section) + the skill dirs themselves.
 - Need to contribute a new idea -> describe it to this session's agent; it grills you into template shape (what & why, binary acceptance criteria, out of scope, `Depends on`) and creates the issue via `python3 automation/create_issue.py` (README, Human touchpoints). Ideas only start when the human drags them to `Todo`.
 - Need project vocabulary, business rules, or architecture context -> `CONTEXT.md`.
 - Need domain concept vocabulary or the checked-in knowledge bundle -> `knowledge/` (OKF v0.2; conformance checked by `tests/test_okf.py`).
