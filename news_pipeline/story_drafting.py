@@ -21,6 +21,10 @@ from .article_summary_records import (
 from .story_records import ensure_story_record
 from .text_cleaning import clean_article_text
 from .prompt_catalog import DEFAULT_PROMPT_INSTRUCTIONS
+from .prompt_contracts import (
+    STORY_DRAFTING_CITATION_CONTRACT,
+    STORY_DRAFTING_OUTPUT_CONTRACT,
+)
 
 
 ARTICLE_BODY_EVIDENCE_MAX_CHARS = 2000
@@ -177,15 +181,18 @@ def build_story_synthesis_prompt_messages(
             for index, summary in enumerate(summaries, start=1)
         )
     story_guidance = prompt_instructions or DEFAULT_PROMPT_INSTRUCTIONS["story_drafting"]
-    system_prompt = SystemMessage(content=textwrap.dedent(f"""
+    citation_contract = STORY_DRAFTING_CITATION_CONTRACT
+    output_contract = STORY_DRAFTING_OUTPUT_CONTRACT
+    # Dedent BEFORE .format(): the multi-line citation_contract value contains
+    # column-0 lines, so dedent-after-interpolation would collapse the margin
+    # and leave every template line indented 8 spaces (byte-identity drift).
+    system_prompt = SystemMessage(content=textwrap.dedent("""
         Today: {now_label}.
         You are synthesizing prewritten article summaries and cleaned article evidence into one newsletter story.
         Use only the supplied source summaries and cleaned article evidence.
         Write one custom story headline, then one cohesive main story paragraph, roughly 70-130 words.
         The headline should be factual, specific, 4-10 words, and not copied wholesale from a source headline.
-        End every factual sentence with one or more source markers using the listed source IDs,
-        like [[S1]] or one combined marker for multiple sources like [[S1,S3]].
-        Use only listed source IDs and do not invent sources.
+        {citation_contract}
         In the main story, try to support important claims with concrete evidence details from the
         cleaned article evidence when it is available. Paraphrase those details in your own words;
         do not quote article text, copy distinctive article wording, or use quotation marks around
@@ -208,23 +215,32 @@ def build_story_synthesis_prompt_messages(
         not only the source summaries.
         Do not write bullets, source-material notes, methodology, bibliography, or preamble.
         Do not merge in background material unless a source summary reports it as part of today's update.
-    """).strip())
-    user_prompt = HumanMessage(content=textwrap.dedent(f"""
-        Story: {story_title}
+    """).format(
+        now_label=now_label,
+        citation_contract=citation_contract,
+        story_guidance=story_guidance,
+    ).strip())
+    # User prompt byte-identity notes: the source block's FIRST line historically
+    # rendered at the 8-space placeholder position (the pre-existing
+    # {source_summary_lines} interpolation already forced a no-op dedent), while
+    # its remaining lines sit at column 0; the output-contract block rendered
+    # 8-space indented. Reconstruct that exact layout explicitly.
+    user_prompt = HumanMessage(content=(
+        textwrap.dedent("""
+            Story: {story_title}
 
-        Source summaries and cleaned article evidence to paraphrase, not quote:
-        {source_summary_lines}
-
-        Return exactly this format:
-        Headline: <custom story headline>
-        Main story: <story paragraph with sentence-end source markers>
-        Contradictions: NONE
-
-        Or, only if there is a real direct or material contradiction:
-        Headline: <custom story headline>
-        Main story: <story paragraph with sentence-end source markers>
-        Contradictions: <short contradiction evidence paragraph with sentence-end source markers>
-    """).strip())
+        """).format(story_title=story_title).strip()
+        + "\n\n"
+        + textwrap.indent(
+            "Source summaries and cleaned article evidence to paraphrase, not quote:",
+            "        ",
+        )
+        + "\n"
+        + "        "
+        + source_summary_lines
+        + "\n\n"
+        + textwrap.indent(output_contract, "        ")
+    ))
     return [system_prompt, user_prompt]
 
 

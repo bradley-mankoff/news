@@ -6,7 +6,7 @@
 #
 # Usage:
 # - pause: true keeps the recipient configured but skips delivery.
-# - NEWS_RECIPIENT_SCOPE=bradley sends only to the primary recipient,
+# - NEWS_RECIPIENT_SCOPE=primary sends only to the primary recipient,
 #   regardless of this file.
 recipients:
   - email: you@example.com

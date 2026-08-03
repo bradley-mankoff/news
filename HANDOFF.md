@@ -78,7 +78,9 @@ The handoff should be saved as `HANDOFF.md` at the repository root. Do not place
   - `pyproject.toml:2` previously used the private folder name; renamed to `news-pipeline` (ADR 0009).
   - `README.md` quickstart previously referenced the private path; now clone-based (ADR 0009).
   - `config/recipients.yaml` is now a public template with example entries (issue #22).
-  - `news_pipeline/config.py` defaults now `bradley@example.com` / `news@example.com` (issue #22).
+  - `news_pipeline/config.py` defaults now `primary@example.com` /
+    `news@example.com` (renamed from `bradley@example.com` in issue #23;
+    example defaults introduced in issue #22).
   - `news_pipeline/ui.py` recipient guidance is neutral (issue #22).
 - [x] Produced a repository-grounded architecture and rollout proposal in the prior response.
 - [x] No source files, tests, configuration, or documentation were modified.
@@ -101,7 +103,7 @@ The handoff should be saved as `HANDOFF.md` at the repository root. Do not place
 - [ ] Add task-specific model assignments for every actual LLM stage or explicitly document inheritance.
 - [ ] Add a curated Model Catalog plus Hugging Face search/model metadata integration.
 - [x] Add `huggingface-hub` as a direct dependency (declared in `pyproject.toml`; API usage is tracked under the Model Catalog item above).
-- [ ] Add direct links from model choices to Hugging Face model pages and native hardware compatibility.
+- [x] Add direct links from model choices to Hugging Face model pages and native hardware compatibility.
 - [ ] Reintroduce explicit translation without content-based language detection.
 - [ ] Record exact prompt/model/translation snapshots in Run Session history.
 - [ ] Update or supersede ADR 0007 after the product and configuration decisions are accepted.

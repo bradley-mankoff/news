@@ -81,7 +81,7 @@ The repo runs a fully automated agentic loop driven by the GitHub project board
    CRITICAL/HIGH findings. It runs on the final diff — including anything you
    changed during testing.
 
-The workflows are the stock Archon 0.6.0 pi-usable set, curated in the archon
+The workflows are the stock Archon 0.7.0 pi-usable set, curated in the archon
 home (`workflows/`); claude-only workflows are archived, not discovered. Full
 inventory: `docs/archon-workflows.md`.
 
@@ -128,6 +128,10 @@ human, by design:
 - `automation/move_item.py` — move an issue to a lane from the CLI.
 - `automation/create_issue.py` — create an issue and land it on the board in
   the default lane in one step.
+- `automation/board_health.py` — read-only board health report: stale runs,
+  unknown blockers, unsatisfied dependencies (exit 0 always).
+- `automation/deploy.sh` — re-apply local archon workflow edits and restart
+  the board poller after a deploy or archon reinstall.
 - `automation/apply_workflow_edits.py` — idempotently re-apply the local
   archon workflow edits (completion-comment nodes with the Deferred-work
   contract, `report-verdict`, `archon-fix-ship-conflicts`) after an archon
@@ -194,7 +198,7 @@ Run with a saved preset or explicit overrides:
 
 ```bash
 uv run news run --preset NAME
-NEWS_SOURCE_SCOPE=peripheral NEWS_RECIPIENT_SCOPE=bradley uv run news run
+NEWS_SOURCE_SCOPE=peripheral NEWS_RECIPIENT_SCOPE=primary uv run news run
 ```
 
 Useful utility commands:
@@ -237,7 +241,7 @@ Key Run Settings:
 
 - `NEWS_SOURCE_SCOPE=core|peripheral`: `peripheral` includes both core and
   peripheral sources.
-- `NEWS_RECIPIENT_SCOPE=bradley|all`: send to the primary recipient only or all active
+- `NEWS_RECIPIENT_SCOPE=primary|all`: send to the primary recipient only or all active
   configured recipients.
 - `NEWS_BLOCK_REUSED_URLS=0|1`: every run records URL history; only `1` makes
   previously recorded URLs block future reuse.
@@ -282,9 +286,39 @@ NEWS_MODEL_STORY_DRAFTING=qwythos-9b-8bit uv run news run --preset NAME
 ```
 Built-in aliases:
 
-- `gemma-e2b-tiny`: `deadbydawn101/gemma-4-E2B-Heretic-Uncensored-mlx-4bit` (Codex-safe test model)
-- `qwythos-9b-4bit`: `huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-Q4_K.gguf`
-- `qwythos-9b-8bit`: `huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-Q8_0.gguf` (default)
+- `gemma-e2b-tiny`: [`deadbydawn101/gemma-4-E2B-Heretic-Uncensored-mlx-4bit`](https://huggingface.co/deadbydawn101/gemma-4-E2B-Heretic-Uncensored-mlx-4bit) (Codex-safe test model)
+- `qwythos-9b-4bit`: [`huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF`](https://huggingface.co/huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF) ([`...Q4_K.gguf`](https://huggingface.co/huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF/blob/main/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-Q4_K.gguf))
+- `qwythos-9b-8bit`: [`huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF`](https://huggingface.co/huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF) ([`...Q8_0.gguf`](https://huggingface.co/huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF/blob/main/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-Q8_0.gguf)) (default)
+
+Each model page shows Hugging Face's native Hardware Compatibility panel
+(GGUF/MLX quantizations) — the UI model picker links directly to it.
+
+### Model Catalog
+
+The Model Catalog is the code-owned registry of models verified for the
+supported backends, with recommendations per task — factual extraction,
+structured output, synthesis, citation fidelity, speed, context length, and
+translation — rather than parameter count or popularity:
+
+```bash
+uv run news models catalog
+uv run news models search --query qwythos --task text-generation --limit 5
+```
+
+Curated models (3):
+
+- `qwythos-9b-8bit` — mlx-vlm, 1M-token context, default model
+  ([Hugging Face](https://huggingface.co/huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF))
+- `qwythos-9b-4bit` — mlx-vlm, 1M-token context
+  ([Hugging Face](https://huggingface.co/huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF))
+- `gemma-e2b-tiny` — mlx-lm, Codex-safe test model
+  ([Hugging Face](https://huggingface.co/deadbydawn101/gemma-4-E2B-Heretic-Uncensored-mlx-4bit))
+
+Hugging Face search results carry runtime-fit verdicts (`managed_mlx_lm`,
+`managed_mlx_vlm`, or `external_only`) so unlaunchable repos are never picked
+for a managed backend (ADR 0010 runtime matrix); hardware fitting itself lives
+on the Hugging Face model page. The UI's "Model catalog" panel shows curated
+cards, task recommendations, and search with the same verdicts.
 
 ### Runtime Matrix
 
@@ -451,7 +485,7 @@ The `dev` preset:
 - Uses `gemma-e2b-tiny` (the smallest model — the only one we keep for
   local testing now that the 12b/26b gemma slots are filled by Qwythos).
 - Sets `NEWS_SOURCE_SCOPE=core` (the narrowest source pool).
-- Sets `NEWS_RECIPIENT_SCOPE=bradley` (sends only to the primary
+- Sets `NEWS_RECIPIENT_SCOPE=primary` (sends only to the primary
   recipient).
 - Disables image generation and URL reuse blocking.
 - Sets `NEWS_MIN_ARTICLES_PER_STORY=2` and relaxes story drafting guards.

@@ -57,6 +57,7 @@ import re
 import subprocess
 import sys
 import time
+import traceback
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -115,10 +116,6 @@ mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $optionId: String!) {
   }) { projectV2Item { id } }
 }
 """
-
-# Issue-body dependency convention: a line like `Depends on: #42, #57`,
-# a bullet `- Depends on: #42`, or the GitHub issue-form rendering
-# `### Depends on` with the refs on the following line.
 
 VERDICT_VALUES = ("approve", "request-changes", "block")
 
@@ -241,7 +238,9 @@ def fmt_deps(nums: list[int]) -> str:
 
 # ─── Deferred-work guard ────────────────────────────────────────────────
 # Implementation workflows must list deferred work in the completion record
-# under a `## Deferred work` section (contract in docs/deferred-work-guard.md).
+# under a `## Deferred work` section (contract: README, Project Automation →
+# "Deferred work is auto-tracked" bullet; enforced by the completion-comment
+# nodes in apply_workflow_edits.py).
 # When a run completes the poller parses that section and guarantees each item
 # is tracked as a board issue: dedupe against existing issues, create when
 # missing, put it in the default lane, and comment the linkage on the source
@@ -257,7 +256,7 @@ DEFERRAL_HINT_RE = re.compile(
 UNCHECKED_CRITERION_RE = re.compile(r"^\s*-\s*\[\s*\]\s+(.+)$", re.M)
 
 
-def parse_deferred_work(body: str) -> list[dict]:
+def parse_deferred_work(body: str) -> list[dict] | None:
     """Items from the `## Deferred work` section of a completion comment.
 
     Format (one bullet per item; indented fields attach to the current item):
@@ -268,11 +267,12 @@ def parse_deferred_work(body: str) -> list[dict]:
         **Links to:** #N       (already tracked — the model judged it covered)
         **Supersedes:** #N     (closed issue — create a new one referencing it)
         **Skip:** <reason>     (never-to-be-done — do not create)
-    Returns [] when the section is absent, empty, or *None*.
+    Returns None when the section is absent; [] when the section is present
+    but empty or `*None.*` (the contract's explicit "nothing deferred" form).
     """
     m = DEFERRED_SECTION_RE.search(body or "")
     if not m:
-        return []
+        return None
     chunk = (body or "")[m.end():]
     end = re.search(r"^##\s+", chunk, re.M)
     if end:
@@ -368,7 +368,7 @@ def parse_verdict(bodies: list[str]) -> str | None:
     verdict = None
     for body in bodies or []:
         for line in (body or "").splitlines():
-            m = re.search(r"VERDICT:\s*([a-z-]+)", line, re.I)
+            m = re.search(r"(?:^|[^\w])VERDICT:\s*([a-z-]+)", line, re.I)
             if m and m.group(1).lower() in VERDICT_VALUES:
                 verdict = m.group(1).lower()
     return verdict
@@ -400,32 +400,49 @@ def match_issue_pr(prs: list[dict], issue_number: int,
 
 
 def find_issue_pr(cfg: dict, env: dict, issue_number: int,
-                  state: str = "all", base: str | None = None) -> dict | None:
-    """Find the PR linked to an issue (any state) by body/title reference.
+                  state: str = "all", base: str | None = None) -> tuple[dict | None, bool]:
+    """(pr, ok) for the PR linked to an issue (any state).
 
     Pass `base` (e.g. "develop") when a specific PR role is required — an
     issue accumulates several PRs over its life and the newest is not
-    necessarily the one a pass wants.
+    necessarily the one a pass wants. ok=False means the gh lookup itself
+    failed (network/auth/rate limit) — callers must NOT treat None as
+    "no PR exists" and advance; they should retry on the next poll.
     """
     r = gh(["pr", "list", "-R", cfg["repo"], "--state", state,
             "--json", "number,title,body,headRefName,baseRefName,state"], env)
     if r.returncode != 0:
-        return None
-    return match_issue_pr(json.loads(r.stdout), issue_number, base)
+        log(f"find_issue_pr: gh pr list failed for issue #{issue_number}: "
+            f"{r.stderr.strip()[:200]}")
+        return None, False
+    try:
+        prs = json.loads(r.stdout)
+    except ValueError as exc:
+        log(f"find_issue_pr: unparseable gh output for issue #{issue_number}: {exc}")
+        return None, False
+    return match_issue_pr(prs, issue_number, base), True
 
 
 def merge_pr_to_base(cfg: dict, env: dict, pr: dict, base: str,
                      issue_number: int | None = None) -> tuple[bool, str]:
     """Retarget a PR to `base`, mark it ready, merge with a merge commit.
 
-    Issue numbers may not be empty; a PR whose body names no issue number
-    fails fast (the develop merge must not close any issue).
+    Callers pass `issue_number` for develop merges so the issue can be
+    reopened if GitHub's keyword auto-close (`Fixes #N` in the PR body or
+    commit message) closes it early — the issue must stay open until the
+    ship PR merges into main. Without an issue number the merge proceeds
+    and the reopen check is skipped; callers should not merge develop PRs
+    that are not linked to an issue. A PR already merged short-circuits as
+    success; a PR closed WITHOUT merging is a loud failure (never treat it
+    as merged — the code is not in `base`).
     """
     if DRY_RUN:
         log(f"[dry-run] MERGE PR #{pr.get('number')} -> {base}")
         return True, "dry-run (no merge)"
+    if pr.get("state") == "MERGED":
+        return True, "already merged"
     if pr.get("state") == "CLOSED":
-        return True, "already merged (PR closed)"
+        return False, "PR closed without merging; re-drag the issue to Todo to re-run"
     r = gh(["pr", "edit", str(pr["number"]), "-R", cfg["repo"], "--base", base], env)
     if r.returncode != 0:
         return False, f"retarget failed: {r.stderr.strip()[:200]}"
@@ -434,6 +451,9 @@ def merge_pr_to_base(cfg: dict, env: dict, pr: dict, base: str,
     if rr.returncode != 0:
         return False, f"merge failed: {rr.stderr.strip()[:200]}"
     if issue_number:
+        # GitHub applies keyword-based auto-close asynchronously after the
+        # merge (PR-body keywords AND commit-message keywords like "Fix #N"),
+        # so wait for it to land before checking whether we must reopen.
         time.sleep(6)
         q = gh(["issue", "view", str(issue_number), "-R", cfg["repo"],
                 "--json", "state"], env)
@@ -586,17 +606,21 @@ def dispatch(cfg: dict, env: dict, wf: str, branch: str, message: str,
     return True
 
 
-def fetch_verdict(cfg: dict, env: dict, pr_number: int) -> str | None:
-    """Last VERDICT line across the PR's comments; None when absent/unreadable."""
+def fetch_verdict(cfg: dict, env: dict, pr_number: int) -> tuple[str | None, bool]:
+    """(verdict, ok). ok=False means the lookup failed (gh error or
+    unparseable output) — the caller must NOT treat the verdict as a real
+    non-approve and must NOT pop retry markers; retry next poll instead."""
     r = gh(["pr", "view", str(pr_number), "-R", cfg["repo"],
             "--json", "comments"], env)
     if r.returncode != 0:
-        return None
+        log(f"VERDICT FETCH FAILED PR #{pr_number}: {r.stderr.strip()[:200]}")
+        return None, False
     try:
         data = json.loads(r.stdout)
-    except ValueError:
-        return None
-    return parse_verdict([c.get("body") or "" for c in data.get("comments", [])])
+    except ValueError as exc:
+        log(f"VERDICT PARSE FAILED PR #{pr_number}: {exc}")
+        return None, False
+    return parse_verdict([c.get("body") or "" for c in data.get("comments", [])]), True
 
 
 def find_ship_pr(cfg: dict, env: dict, issue_number: int, base: str) -> dict | None:
@@ -606,8 +630,8 @@ def find_ship_pr(cfg: dict, env: dict, issue_number: int, base: str) -> dict | N
     resolves the issue's PR first, then looks for an open PR with that head
     targeting `base`.
     """
-    pr = find_issue_pr(cfg, env, issue_number)
-    if not pr:
+    pr, pr_ok = find_issue_pr(cfg, env, issue_number)
+    if not pr_ok or not pr:
         return None
     r = gh(["pr", "list", "-R", cfg["repo"], "--head", pr.get("headRefName") or "",
             "--state", "open", "--json", "number,baseRefName,mergeable,headRefName"],
@@ -652,6 +676,8 @@ def conflict_episode_action(mergeable: str, fix_msg: str | None,
     mergeable: GitHub's value (CONFLICTING / MERGEABLE / UNKNOWN).
     fix_msg: dispatch message of the dedicated fix run, or None.
     fix_status: run status for fix_msg, or None when fix_msg is None.
+    (None with fix_msg set = run not yet registered or status lookup
+    failed — treated as "active", never escalated.)
     mech_failed: the mechanical merge API already hit real conflicts.
 
     Returns one of:
@@ -669,6 +695,11 @@ def conflict_episode_action(mergeable: str, fix_msg: str | None,
         return "clear" if (fix_msg or mech_failed) else "none"
     if not fix_msg:
         return "dispatch" if mech_failed else "update"
+    if fix_status is None:
+        # Fix run dispatched but not yet registered in `archon workflow runs`
+        # (async spawn), or the status lookup failed — never escalate on
+        # unknown state; wait for a positive terminal status.
+        return "active"
     if fix_status in ("running", "pending", "queued", "scheduled"):
         return "active"
     return "failed"
@@ -787,12 +818,13 @@ def reconcile_deferred_work(cfg: dict, env: dict, issue_number: int,
     source_title = data.get("title") or ""
     bodies = [c.get("body") or "" for c in data.get("comments") or []]
 
-    items: list[dict] = []
-    for body in reversed(bodies):  # newest comment with a section wins
-        items = parse_deferred_work(body)
-        if items:
+    items: list[dict] | None = None
+    for body in reversed(bodies):  # newest comment WITH a section wins, even empty
+        parsed = parse_deferred_work(body)
+        if parsed is not None:
+            items = parsed
             break
-    if not items:
+    if items is None:  # no `## Deferred work` section anywhere
         newest = bodies[-1] if bodies else ""
         unmet = find_unchecked_criteria(newest)
         if (cfg.get("deferred_work", {}).get("fallback_warn", True)
@@ -949,13 +981,17 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
                                 f"Blocked before dispatch: depends on {fmt_deps(unsatisfied)} "
                                 "— not in the Done lane. Will start automatically when they ship. "
                                 "If a dependency is abandoned, re-scope or close this issue.")
-                            if blocked_lane_name:
-                                option_id = status_options.get(blocked_lane_name)
-                                if option_id and move_to_lane(
-                                        cfg, env, project_id, item_id, field_id, option_id):
-                                    log(f"DEP-BLOCKED item={item_id} "
-                                        f"issue={content['number']} -> {blocked_lane_name}")
-                                    status_val = blocked_lane_name
+                        if blocked_lane_name:
+                            # Always re-route to Blocked while deps are unsatisfied
+                            # (not just on first block): a human re-drag to Todo must
+                            # not strand the item undispatched — the unblock pass is
+                            # the single release path and only scans the Blocked lane.
+                            option_id = status_options.get(blocked_lane_name)
+                            if option_id and move_to_lane(
+                                    cfg, env, project_id, item_id, field_id, option_id):
+                                log(f"DEP-BLOCKED item={item_id} "
+                                    f"issue={content['number']} -> {blocked_lane_name}")
+                                status_val = blocked_lane_name
                         dep_blocked_marker = deps
                         dep_cancelled_noted = sorted(noted)
                     else:
@@ -964,13 +1000,12 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
                     labels = [n["name"] for n in content["labels"]["nodes"]]
                     wf = pick_workflow(cfg, labels)
                     branch = f"issue-{content['number']}"
-                    prior = state.get(item_id, {})
                     ok = False
-                    if "needs-input" in labels and prior.get("branch") and prior.get("wf"):
-                        ok, msg = resume_issue(cfg, env, prior["branch"], prior["wf"],
+                    if "needs-input" in labels and rec.get("branch") and rec.get("wf"):
+                        ok, msg = resume_issue(cfg, env, rec["branch"], rec["wf"],
                                                content["number"])
                         if ok:
-                            wf = prior["wf"]
+                            wf = rec["wf"]
                     if not ok:
                         msg = (
                             f"Implement GitHub issue #{content['number']}: {content['title']} "
@@ -1010,7 +1045,7 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
                     # (feature -> main); on an approving review the poller merges it.
                     merge_base = cfg["dispatch"]["todo"].get(
                         "merge_develop_base", "develop")
-                    pr = find_issue_pr(cfg, env, content["number"], base=merge_base)
+                    pr, _pr_ok = find_issue_pr(cfg, env, content["number"], base=merge_base)
                     if pr:
                         ok, note = merge_pr_to_base(cfg, env, pr, merge_base,
                                                     content["number"])
@@ -1135,7 +1170,14 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
                 merge_ok = True
                 pr_num = None
                 if issue_number and merge_base:
-                    pr = find_issue_pr(cfg, env, issue_number, base=merge_base)
+                    pr, pr_ok = find_issue_pr(cfg, env, issue_number, base=merge_base)
+                    if not pr_ok:
+                        # gh lookup failed — cannot positively confirm the merge
+                        # state; leave the item In Progress with its marker and
+                        # retry next poll (never advance without confirmation).
+                        log(f"DEVELOP MERGE DEFERRED issue={issue_number}: PR lookup "
+                            "failed (gh error); retrying next poll")
+                        continue
                     if pr:
                         pr_num = pr.get("number")
                         merge_ok, note = merge_pr_to_base(cfg, env, pr, merge_base,
@@ -1198,15 +1240,22 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
                     if r.returncode == 0:
                         ship = json.loads(r.stdout)
                 if ship and ship.get("state") != "MERGED":
-                    verdict = fetch_verdict(cfg, env, ship_num)
+                    verdict, verdict_ok = fetch_verdict(cfg, env, ship_num)
+                    if not verdict_ok:
+                        # Lookup failure, not a review outcome: do NOT accuse the
+                        # reviewer and do NOT pop the retry markers.
+                        log(f"SHIP VERDICT UNREADABLE PR #{ship_num}; retrying next poll")
+                        continue
                     if verdict != "approve":
                         log(f"SHIP HELD PR #{ship_num}: verdict={verdict or 'none'} — not merging")
                         issue_number = rec.get("issue_number")
-                        if issue_number:
-                            comment_issue(
+                        if issue_number and not comment_issue(
                                 cfg, env, issue_number,
                                 f"Ship review did not approve (VERDICT: {verdict or 'none'}). "
-                                "Fix the findings, then drag the issue back to In Review to re-review.")
+                                "Fix the findings, then drag the issue back to In Review to re-review."):
+                            log(f"SHIP HELD NOTICE FAILED issue={issue_number}; "
+                                "keeping markers for retry")
+                            continue
                         rec.pop("review_msg", None)
                         rec.pop("ship_pr", None)
                         continue
@@ -1299,13 +1348,16 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
                         f"wf={fix_wf}")
             elif action == "failed":
                 if not rec.get("conflict_fix_noted"):
-                    comment_issue(
-                        cfg, env, issue_number,
-                        f"Could not resolve the merge conflicts on ship PR #{ship_num} "
-                        "automatically — the fix run finished but the PR is still "
-                        "conflicting. Merge main into the branch manually (or rewrite "
-                        "the conflicting lines), then drag the issue back to In Review.")
-                    rec["conflict_fix_noted"] = True
+                    if comment_issue(
+                            cfg, env, issue_number,
+                            f"Could not resolve the merge conflicts on ship PR #{ship_num} "
+                            "automatically — the fix run finished but the PR is still "
+                            "conflicting. Merge main into the branch manually (or rewrite "
+                            "the conflicting lines), then drag the issue back to In Review."):
+                        rec["conflict_fix_noted"] = True
+                    else:
+                        log(f"SHIP CONFLICT HELP NOTICE FAILED issue={issue_number}; "
+                            "will retry next poll")
                 log(f"SHIP CONFLICT UNRESOLVED PR #{ship_num} issue={issue_number} "
                     "— needs human")
             elif action == "clear":
@@ -1382,11 +1434,18 @@ def main() -> int:
     state = json.loads(state_path.read_text()) if state_path.exists() else {}
 
     once = "--once" in sys.argv or DRY_RUN
+    consecutive_failures = 0
     while True:
         try:
             poll(cfg, env, state)
-        except Exception as exc:  # keep the loop alive on transient failures
-            log(f"poll error: {exc}")
+            consecutive_failures = 0
+        except Exception:  # keep the loop alive on transient failures
+            consecutive_failures += 1
+            log(f"poll error (attempt {consecutive_failures}):\n"
+                + traceback.format_exc().rstrip())
+            if consecutive_failures > 3:
+                log("POLLER STUCK: repeated poll failures — check gh/archon auth "
+                    "and board config")
         if once:
             return 0
         time.sleep(cfg["poll_interval_seconds"])

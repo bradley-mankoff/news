@@ -1,18 +1,28 @@
 from __future__ import annotations
 
+import json
+import subprocess
 import unittest
+from unittest.mock import patch
 
 from automation.board_poller import (
     conflict_episode_action,
     dedupe_deferred,
     dep_gate,
+    fetch_project,
     find_unchecked_criteria,
+    fmt_deps,
     has_deferral_language,
     match_issue_pr,
+    merge_pr_to_base,
     normalize_title,
     parse_dep_refs,
     parse_deferred_work,
     parse_verdict,
+    pick_workflow,
+    reconcile_deferred_work,
+    run_status_for,
+    try_merge_base_into_head,
 )
 
 
@@ -168,6 +178,10 @@ class ParseVerdictTest(unittest.TestCase):
     def test_lowercase_marker(self):
         self.assertEqual(parse_verdict(["verdict: approve"]), "approve")
 
+    def test_embedded_token_marker_ignored(self):
+        self.assertIsNone(parse_verdict(["XVERDICT: approve"]))
+        self.assertIsNone(parse_verdict(["REVERDICT: approve"]))
+
     def test_multiline_body(self):
         self.assertEqual(
             parse_verdict(["line one\nVERDICT: approve\nline three"]), "approve")
@@ -203,8 +217,8 @@ class ParseDeferredWorkTest(unittest.TestCase):
         self.assertEqual(parse_deferred_work(self._record("\n*none*\n")), [])
 
     def test_absent_section(self):
-        self.assertEqual(parse_deferred_work("## What shipped\nNo deferrals."), [])
-        self.assertEqual(parse_deferred_work(""), [])
+        self.assertIsNone(parse_deferred_work("## What shipped\nNo deferrals."))
+        self.assertIsNone(parse_deferred_work(""))
 
     def test_section_terminates_at_next_heading(self):
         body = self._record(
@@ -331,6 +345,291 @@ class FindUncheckedCriteriaTest(unittest.TestCase):
 
     def test_empty_body(self):
         self.assertEqual(find_unchecked_criteria(""), [])
+
+
+class FmtDepsTest(unittest.TestCase):
+    def test_formats_refs(self):
+        self.assertEqual(fmt_deps([42, 57]), "#42, #57")
+
+    def test_empty(self):
+        self.assertEqual(fmt_deps([]), "")
+
+
+class PickWorkflowTest(unittest.TestCase):
+    def _cfg(self):
+        return {"dispatch": {"todo": {
+            "default": "archon-fix-github-issue",
+            "label_overrides": {"feature": "archon-idea-to-pr"},
+        }}}
+
+    def test_label_override_wins(self):
+        self.assertEqual(pick_workflow(self._cfg(), ["enhancement", "feature"]),
+                         "archon-idea-to-pr")
+
+    def test_label_match_is_case_insensitive(self):
+        self.assertEqual(pick_workflow(self._cfg(), ["Feature"]),
+                         "archon-idea-to-pr")
+
+    def test_falls_back_to_default(self):
+        self.assertEqual(pick_workflow(self._cfg(), ["docs"]),
+                         "archon-fix-github-issue")
+
+    def test_empty_labels(self):
+        self.assertEqual(pick_workflow(self._cfg(), []),
+                         "archon-fix-github-issue")
+
+
+class RunStatusForTest(unittest.TestCase):
+    def test_exact_match(self):
+        self.assertEqual(run_status_for({"m1": "completed"}, "m1"), "completed")
+
+    def test_substring_match(self):
+        self.assertEqual(
+            run_status_for({"Prior Context m1": "running"}, "m1"), "running")
+
+    def test_no_match(self):
+        self.assertIsNone(run_status_for({"other": "completed"}, "m1"))
+
+    def test_empty_map(self):
+        self.assertIsNone(run_status_for({}, "m1"))
+
+
+class MergePrToBaseTest(unittest.TestCase):
+    def test_already_merged_short_circuits(self):
+        ok, note = merge_pr_to_base({"repo": "o/r"}, {},
+                                    {"number": 1, "state": "MERGED"}, "develop", 5)
+        self.assertTrue(ok)
+        self.assertIn("already merged", note)
+
+    def test_closed_without_merge_is_a_loud_failure(self):
+        ok, note = merge_pr_to_base({"repo": "o/r"}, {},
+                                    {"number": 1, "state": "CLOSED"}, "develop", 5)
+        self.assertFalse(ok)
+        self.assertIn("without merging", note)
+
+    def _reopen_flow(self, issue_state="CLOSED"):
+        calls = []
+
+        def fake_gh(args, env, timeout=90):
+            calls.append(args)
+            if args[0:2] == ["pr", "edit"]:
+                return _cp()
+            if args[0:2] == ["pr", "ready"]:
+                return _cp()
+            if args[0:2] == ["pr", "merge"]:
+                return _cp()
+            if args[0:2] == ["issue", "view"]:
+                return _cp(stdout=json.dumps({"state": issue_state}))
+            if args[0:2] == ["issue", "reopen"]:
+                return _cp()
+            return _cp(returncode=1)
+        return calls, fake_gh
+
+    def test_reopens_issue_after_keyword_auto_close(self):
+        calls, fake_gh = self._reopen_flow("CLOSED")
+        with patch("automation.board_poller.gh", side_effect=fake_gh), \
+                patch("automation.board_poller.time.sleep"):
+            ok, note = merge_pr_to_base({"repo": "o/r"}, {},
+                                        {"number": 7, "state": "OPEN"},
+                                        "develop", 5)
+        self.assertTrue(ok)
+        self.assertIn("reopened", note)
+        self.assertTrue(any(a[0:2] == ["issue", "reopen"] for a in calls))
+
+    def test_no_reopen_when_issue_still_open(self):
+        calls, fake_gh = self._reopen_flow("OPEN")
+        with patch("automation.board_poller.gh", side_effect=fake_gh), \
+                patch("automation.board_poller.time.sleep"):
+            ok, note = merge_pr_to_base({"repo": "o/r"}, {},
+                                        {"number": 7, "state": "OPEN"},
+                                        "develop", 5)
+        self.assertTrue(ok)
+        self.assertFalse(any(a[0:2] == ["issue", "reopen"] for a in calls))
+
+    def test_merge_without_issue_number_skips_reopen_check(self):
+        calls, fake_gh = self._reopen_flow("CLOSED")
+        with patch("automation.board_poller.gh", side_effect=fake_gh):
+            ok, note = merge_pr_to_base({"repo": "o/r"}, {},
+                                        {"number": 7, "state": "OPEN"}, "develop")
+        self.assertTrue(ok)
+        self.assertFalse(any(a[0:2] == ["issue", "view"] for a in calls))
+
+    def test_merge_failure_reported(self):
+        def fake_gh(args, env, timeout=90):
+            if args[0:2] == ["pr", "edit"]:
+                return _cp()
+            if args[0:2] == ["pr", "ready"]:
+                return _cp()
+            if args[0:2] == ["pr", "merge"]:
+                return _cp(returncode=1, stderr="merge failed: conflict")
+            return _cp(returncode=1)
+        with patch("automation.board_poller.gh", side_effect=fake_gh):
+            ok, note = merge_pr_to_base({"repo": "o/r"}, {},
+                                        {"number": 7, "state": "OPEN"}, "develop")
+        self.assertFalse(ok)
+        self.assertIn("merge failed", note)
+
+
+class TryMergeBaseIntoHeadTest(unittest.TestCase):
+    def _run(self, stderr="", returncode=1):
+        with patch("automation.board_poller.gh",
+                   return_value=_cp(returncode=returncode, stderr=stderr)):
+            return try_merge_base_into_head({"repo": "o/r"}, {}, 7, "head", "main")
+
+    def test_success(self):
+        self.assertEqual(self._run(returncode=0),
+                         (True, "base merged into head"))
+
+    def test_conflict_bucket(self):
+        self.assertEqual(self._run(stderr="Merge conflict in file.py"),
+                         (False, "conflict"))
+
+    def test_no_commits_between_bucket(self):
+        self.assertEqual(self._run(stderr="no commits between main and head"),
+                         (True, "no-op (head already contains base)"))
+
+    def test_already_up_to_date_bucket(self):
+        self.assertEqual(self._run(stderr="already up to date"),
+                         (True, "no-op (head already contains base)"))
+
+    def test_transient_bucket(self):
+        ok, note = self._run(stderr="Server error (500)")
+        self.assertFalse(ok)
+        self.assertTrue(note.startswith("transient:"))
+
+
+class ReconcileDeferredWorkTest(unittest.TestCase):
+    def _cfg(self):
+        return {"deferred_work": {"fallback_warn": True},
+                "default_lane": "Backlog", "repo": "o/r"}
+
+    def _env(self):
+        return {}
+
+    def _run(self, comments, rec=None, runs_msg="run-1"):
+        rec = {} if rec is None else rec
+        calls = []
+
+        def fake_gh(args, env, timeout=90):
+            calls.append(args)
+            if args[0:2] == ["issue", "view"]:
+                return _cp(stdout=json.dumps({"title": "T",
+                                              "comments": comments}))
+            if args[0:2] == ["issue", "comment"]:
+                return _cp()
+            if args[0:2] == ["issue", "list"]:
+                return _cp(stdout="[]")
+            return _cp(returncode=1)
+        with patch("automation.board_poller.gh", side_effect=fake_gh):
+            ok = reconcile_deferred_work(
+                self._cfg(), self._env(), 5, None, rec,
+                runs_msg, "p", "f", {"Backlog": "o1"})
+        return ok, rec, calls
+
+    def test_fallback_warn_posts_once_and_marks_handled(self):
+        comments = [{"body": "Completed. Some work explicitly deferred to a later phase."}]
+        ok, rec, calls = self._run(comments)
+        self.assertTrue(ok)
+        self.assertTrue(rec["deferred_warned"])
+        self.assertEqual(rec["deferred_handled"], "run-1")
+        self.assertEqual(
+            sum(1 for a in calls if a[0:2] == ["issue", "comment"]), 1)
+        self.assertIn("has no `## Deferred work` section",
+                      calls[-1][-1])
+
+    def test_handled_marker_skips_entirely(self):
+        rec = {"deferred_handled": "run-1"}
+        with patch("automation.board_poller.gh") as m:
+            ok = reconcile_deferred_work(
+                self._cfg(), self._env(), 5, None, rec,
+                "run-1", "p", "f", {"Backlog": "o1"})
+        self.assertTrue(ok)
+        m.assert_not_called()
+
+    def test_fetch_failure_returns_false_without_markers(self):
+        def fake_gh(args, env, timeout=90):
+            if args[0:2] == ["issue", "view"]:
+                return _cp(returncode=1, stderr="rate limited")
+            return _cp(returncode=1)
+        with patch("automation.board_poller.gh", side_effect=fake_gh):
+            rec = {}
+            ok = reconcile_deferred_work(
+                self._cfg(), self._env(), 5, None, rec,
+                "run-1", "p", "f", {"Backlog": "o1"})
+        self.assertFalse(ok)
+        self.assertEqual(rec, {})
+
+    def test_none_section_with_deferral_language_does_not_warn(self):
+        comments = [{"body": ("Completed.\n\n## Deferred work\n*None.*\n\n"
+                               "Nothing deferred to a later phase.")}]
+        ok, rec, calls = self._run(comments)
+        self.assertTrue(ok)
+        self.assertNotIn("deferred_warned", rec)
+        self.assertEqual(rec["deferred_handled"], "run-1")
+        self.assertEqual(
+            sum(1 for a in calls if a[0:2] == ["issue", "comment"]), 0)
+
+    def test_empty_section_is_not_fallback_warn(self):
+        comments = [{"body": "## Deferred work\n\n(nothing)\n"}]
+        ok, rec, _ = self._run(comments)
+        self.assertTrue(ok)
+        self.assertNotIn("deferred_warned", rec)
+
+    def test_newest_comment_with_section_wins_over_older_items(self):
+        comments = [
+            {"body": "## Deferred work\n- **Title:** Old item\n"},
+            {"body": "## Deferred work\n*None.*\n"},
+        ]
+        ok, rec, calls = self._run(comments)
+        self.assertTrue(ok)
+        self.assertEqual(rec["deferred_handled"], "run-1")
+        # newest *None.* section must NOT resurface the older run's items
+        self.assertNotIn("Deferred work from this run",
+                         " ".join(a[-1] for a in calls if a[0:2] == ["issue", "comment"]))
+
+class FetchProjectTest(unittest.TestCase):
+    def _cfg(self):
+        return {"project_number": 1, "project_owner": "o", "status_field": "Status"}
+
+    def test_missing_project_raises(self):
+        data = {"data": {"user": {"projectV2": None}}}
+        with patch("automation.board_poller.graphql", return_value=data):
+            with self.assertRaisesRegex(RuntimeError, "not found"):
+                fetch_project(self._cfg(), {})
+
+    def test_missing_status_field_raises(self):
+        data = {"data": {"user": {"projectV2": {
+            "id": "pv1",
+            "fields": {"nodes": []},
+            "items": {"nodes": [], "pageInfo": {"hasNextPage": False}},
+        }}}}
+        with patch("automation.board_poller.graphql", return_value=data):
+            with self.assertRaisesRegex(RuntimeError, "status field"):
+                fetch_project(self._cfg(), {})
+
+    def test_pagination_assembles_all_items(self):
+        def fake_graphql(cfg, env, cursor):
+            if cursor is None:
+                return {"data": {"user": {"projectV2": {
+                    "id": "pv1",
+                    "fields": {"nodes": [{"id": "f1", "name": "Status", "options": [{"name": "Todo", "id": "o1"}]}]},
+                    "items": {"nodes": [{"id": "i1", "statusValue": {"name": "Todo"}, "content": {"number": 1}}],
+                              "pageInfo": {"hasNextPage": True, "endCursor": "c2"}},
+                }}}}
+            return {"data": {"user": {"projectV2": {
+                "items": {"nodes": [{"id": "i2", "statusValue": None, "content": {"number": 2}}],
+                          "pageInfo": {"hasNextPage": False}},
+            }}}}
+
+        with patch("automation.board_poller.graphql", side_effect=fake_graphql):
+            pid, fid, options, items = fetch_project(self._cfg(), {})
+        self.assertEqual(options, {"Todo": "o1"})
+        self.assertEqual([i["id"] for i in items], ["i1", "i2"])
+        self.assertEqual(items[1]["status"], "No status")
+
+
+def _cp(returncode=0, stdout="", stderr=""):
+    return subprocess.CompletedProcess([], returncode, stdout, stderr)
 
 
 if __name__ == "__main__":
