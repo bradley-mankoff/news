@@ -1280,11 +1280,16 @@ HTML = r"""<!doctype html>
       <div id="runSetupMount"></div>
     </section>
     <section id="advanced" class="view">
-      <div class="toolbar">
-        <input id="knobSearch" placeholder="Filter raw settings">
-        <button id="clearKnobsBtn">Clear overrides</button>
-      </div>
-      <div id="knobContainer"></div>
+      <div id="advancedPanels" class="stack"></div>
+      <section class="panel">
+        <p class="eyebrow">Raw environment</p>
+        <h2>Environment overrides</h2>
+        <div class="toolbar">
+          <input id="knobSearch" placeholder="Filter raw settings">
+          <button id="clearKnobsBtn">Clear overrides</button>
+        </div>
+        <div id="knobContainer"></div>
+      </section>
     </section>
     <section id="sources" class="view">
       <div class="toolbar">
@@ -1360,19 +1365,60 @@ HTML = r"""<!doctype html>
     </div>
   </dialog>
   <script>
+    // Every env rendered as a dedicated knob (Run Setup or Advanced panels) must
+    // be listed here so renderAdvancedKnobs() omits it from the raw override
+    // list; otherwise the env appears twice and collectEnv() gets two inputs.
     const SURFACED_ENVS = new Set([
       "NEWS_SOURCE_SCOPE",
       "NEWS_RECIPIENT_SCOPE",
       "NEWS_PROMPT_PROFILE",  // has a dedicated panel control; suppress the Advanced-tab duplicate
+      "NEWS_PROMPT_OVERRIDE_ARTICLE_SUMMARY",       // dedicated per-stage editors in the
+      "NEWS_PROMPT_OVERRIDE_STORY_SCALE_SCREENING", // Editorial approach panel; suppress
+      "NEWS_PROMPT_OVERRIDE_STORY_DRAFTING",        // the Advanced-tab duplicates
+      "NEWS_PROMPT_OVERRIDE_TITLE_GENERATION",
+      "NEWS_PROMPT_OVERRIDE_IMAGE_ART_DIRECTION",
       "NEWS_MODEL_ARTICLE_SUMMARY",
       "NEWS_MODEL_STORY_DRAFTING",
+      "NEWS_MODEL_STORY_SCALE_SCREENING",
+      "NEWS_MODEL_TITLE_GENERATION",
       "NEWS_MODEL_ARTICLE_SUMMARY_TUNING_PRESET",
       "NEWS_MODEL_STORY_DRAFTING_TUNING_PRESET",
+      "NEWS_MODEL_STORY_SCALE_SCREENING_TUNING_PRESET",
+      "NEWS_MODEL_TITLE_GENERATION_TUNING_PRESET",
       "NEWS_MODEL_MAX_INPUT_TOKENS",
       "NEWS_ARTICLE_SUMMARY_MAX_TOKENS",
       "NEWS_STORY_DRAFTING_MAX_TOKENS",
+      "NEWS_STORY_SCALE_SCREENING_MAX_TOKENS",
+      "NEWS_TITLE_GENERATION_MAX_TOKENS",
+      "NEWS_ARTICLE_TEXT_TOKEN_LIMIT",
       "NEWS_MODEL_ARTICLE_SUMMARY_BASE_URL",
       "NEWS_MODEL_STORY_DRAFTING_BASE_URL",
+      "NEWS_MODEL_STORY_SCALE_SCREENING_BASE_URL",
+      "NEWS_MODEL_TITLE_GENERATION_BASE_URL",
+      "NEWS_MODEL_ARTICLE_SUMMARY_TEMPERATURE",
+      "NEWS_MODEL_ARTICLE_SUMMARY_TOP_P",
+      "NEWS_MODEL_ARTICLE_SUMMARY_TOP_K",
+      "NEWS_MODEL_ARTICLE_SUMMARY_MIN_P",
+      "NEWS_MODEL_ARTICLE_SUMMARY_PRESENCE_PENALTY",
+      "NEWS_MODEL_ARTICLE_SUMMARY_REPETITION_PENALTY",
+      "NEWS_MODEL_STORY_DRAFTING_TEMPERATURE",
+      "NEWS_MODEL_STORY_DRAFTING_TOP_P",
+      "NEWS_MODEL_STORY_DRAFTING_TOP_K",
+      "NEWS_MODEL_STORY_DRAFTING_MIN_P",
+      "NEWS_MODEL_STORY_DRAFTING_PRESENCE_PENALTY",
+      "NEWS_MODEL_STORY_DRAFTING_REPETITION_PENALTY",
+      "NEWS_MODEL_STORY_SCALE_SCREENING_TEMPERATURE",
+      "NEWS_MODEL_STORY_SCALE_SCREENING_TOP_P",
+      "NEWS_MODEL_STORY_SCALE_SCREENING_TOP_K",
+      "NEWS_MODEL_STORY_SCALE_SCREENING_MIN_P",
+      "NEWS_MODEL_STORY_SCALE_SCREENING_PRESENCE_PENALTY",
+      "NEWS_MODEL_STORY_SCALE_SCREENING_REPETITION_PENALTY",
+      "NEWS_MODEL_TITLE_GENERATION_TEMPERATURE",
+      "NEWS_MODEL_TITLE_GENERATION_TOP_P",
+      "NEWS_MODEL_TITLE_GENERATION_TOP_K",
+      "NEWS_MODEL_TITLE_GENERATION_MIN_P",
+      "NEWS_MODEL_TITLE_GENERATION_PRESENCE_PENALTY",
+      "NEWS_MODEL_TITLE_GENERATION_REPETITION_PENALTY",
       "NEWS_SOURCE_COLLECTION_CONCURRENCY",
       "NEWS_ARTICLE_SUMMARY_CONCURRENCY",
       "NEWS_STORY_SYNTHESIS_CONCURRENCY",
@@ -1730,9 +1776,15 @@ HTML = r"""<!doctype html>
     }
     function collectEnv() {
       const env = {};
+      const profile = selectedPromptProfile();
       document.querySelectorAll("[data-env]").forEach(input => {
         const name = input.dataset.env;
         let val = input.type === "checkbox" ? (input.checked ? "1" : "") : input.value.trim();
+        if (name.startsWith("NEWS_PROMPT_OVERRIDE_") && profile) {
+          const task = Object.keys(PROMPT_OVERRIDE_ENVS).find(key => PROMPT_OVERRIDE_ENVS[key] === name);
+          const profileText = task && profile.prompts ? (profile.prompts[task] || "") : "";
+          if (!val || val === profileText.trim()) return;
+        }
         if (val) env[name] = val;
       });
       return env;
@@ -1918,15 +1970,9 @@ HTML = r"""<!doctype html>
                 <code>NEWS_PROMPT_PROFILE</code>
               </label>
             </div>
-            <div id="promptProfileReadouts" class="stack"></div>
             <div class="toolbar">
               <button id="restorePromptProfileBtn">Restore defaults</button>
-              <button id="comparePromptProfileBtn">Compare with balanced</button>
             </div>
-            <details class="details">
-              <summary>Comparison with balanced</summary>
-              <div id="promptProfileCompare"></div>
-            </details>
           </section>
           <section class="panel">
             <p class="eyebrow">Snapshot</p>
@@ -1940,24 +1986,7 @@ HTML = r"""<!doctype html>
             <div class="form-grid">
               ${articleModel}
             </div>
-            <details class="details">
-              <summary>Model tuning</summary>
-              <div class="form-grid">
-                <label class="field"><span>Tuning preset</span><select id="article_tuning_preset" data-task="article_summary" data-env="NEWS_MODEL_ARTICLE_SUMMARY_TUNING_PRESET"></select><code>NEWS_MODEL_ARTICLE_SUMMARY_TUNING_PRESET</code></label>
-                <label class="field"><span>Preset id</span><input id="article_tuning_id"><code>id</code></label>
-                <label class="field"><span>Display name</span><input id="article_tuning_name"><code>name</code></label>
-                <label class="field"><span>Description</span><textarea id="article_tuning_description"></textarea><code>description</code></label>
-                ${sharedModelTokens}
-                ${articleTokenCap}
-                ${articleBaseUrl}
-                ${articleSampling}
-              </div>
-              <div class="toolbar">
-                <button id="article_tuning_save" class="primary">Save current settings</button>
-                <button id="article_tuning_rename">Rename display name</button>
-                <button id="article_tuning_delete" class="danger">Delete preset</button>
-              </div>
-            </details>
+            <p class="muted">Sampling, token budgets, and server endpoints are in Advanced Settings.</p>
           </section>
           <section class="panel model-card">
             <p class="eyebrow">Model</p>
@@ -1966,23 +1995,7 @@ HTML = r"""<!doctype html>
             <div class="form-grid">
               ${storyModel}
             </div>
-            <details class="details">
-              <summary>Model tuning</summary>
-              <div class="form-grid">
-                <label class="field"><span>Tuning preset</span><select id="story_tuning_preset" data-task="story_drafting" data-env="NEWS_MODEL_STORY_DRAFTING_TUNING_PRESET"></select><code>NEWS_MODEL_STORY_DRAFTING_TUNING_PRESET</code></label>
-                <label class="field"><span>Preset id</span><input id="story_tuning_id"><code>id</code></label>
-                <label class="field"><span>Display name</span><input id="story_tuning_name"><code>name</code></label>
-                <label class="field"><span>Description</span><textarea id="story_tuning_description"></textarea><code>description</code></label>
-                ${storyTokenCap}
-                ${storyBaseUrl}
-                ${storySampling}
-              </div>
-              <div class="toolbar">
-                <button id="story_tuning_save" class="primary">Save current settings</button>
-                <button id="story_tuning_rename">Rename display name</button>
-                <button id="story_tuning_delete" class="danger">Delete preset</button>
-              </div>
-            </details>
+            <p class="muted">Sampling, token budgets, and server endpoints are in Advanced Settings.</p>
           </section>
           <section class="panel model-card">
             <p class="eyebrow">Model</p>
@@ -1991,23 +2004,7 @@ HTML = r"""<!doctype html>
             <div class="form-grid">
               ${scaleModel}
             </div>
-            <details class="details">
-              <summary>Model tuning</summary>
-              <div class="form-grid">
-                <label class="field"><span>Tuning preset</span><select id="scale_tuning_preset" data-task="story_scale_screening" data-env="NEWS_MODEL_STORY_SCALE_SCREENING_TUNING_PRESET"></select><code>NEWS_MODEL_STORY_SCALE_SCREENING_TUNING_PRESET</code></label>
-                <label class="field"><span>Preset id</span><input id="scale_tuning_id"><code>id</code></label>
-                <label class="field"><span>Display name</span><input id="scale_tuning_name"><code>name</code></label>
-                <label class="field"><span>Description</span><textarea id="scale_tuning_description"></textarea><code>description</code></label>
-                ${scaleTokenCap}
-                ${scaleBaseUrl}
-                ${scaleSampling}
-              </div>
-              <div class="toolbar">
-                <button id="scale_tuning_save" class="primary">Save current settings</button>
-                <button id="scale_tuning_rename">Rename display name</button>
-                <button id="scale_tuning_delete" class="danger">Delete preset</button>
-              </div>
-            </details>
+            <p class="muted">Sampling, token budgets, and server endpoints are in Advanced Settings.</p>
           </section>
           <section class="panel model-card">
             <p class="eyebrow">Model</p>
@@ -2016,23 +2013,7 @@ HTML = r"""<!doctype html>
             <div class="form-grid">
               ${titleModel}
             </div>
-            <details class="details">
-              <summary>Model tuning</summary>
-              <div class="form-grid">
-                <label class="field"><span>Tuning preset</span><select id="title_tuning_preset" data-task="title_generation" data-env="NEWS_MODEL_TITLE_GENERATION_TUNING_PRESET"></select><code>NEWS_MODEL_TITLE_GENERATION_TUNING_PRESET</code></label>
-                <label class="field"><span>Preset id</span><input id="title_tuning_id"><code>id</code></label>
-                <label class="field"><span>Display name</span><input id="title_tuning_name"><code>name</code></label>
-                <label class="field"><span>Description</span><textarea id="title_tuning_description"></textarea><code>description</code></label>
-                ${titleTokenCap}
-                ${titleBaseUrl}
-                ${titleSampling}
-              </div>
-              <div class="toolbar">
-                <button id="title_tuning_save" class="primary">Save current settings</button>
-                <button id="title_tuning_rename">Rename display name</button>
-                <button id="title_tuning_delete" class="danger">Delete preset</button>
-              </div>
-            </details>
+            <p class="muted">Sampling, token budgets, and server endpoints are in Advanced Settings.</p>
           </section>
           <section class="panel">
             <p class="eyebrow">Model catalog</p>
@@ -2068,32 +2049,6 @@ HTML = r"""<!doctype html>
               </div>
               <div id="modelSearchResults" class="stack"></div>
             </details>
-          </section>
-          <section class="panel">
-            <p class="eyebrow">Budgets</p>
-            <h2>Run budgets and quotas</h2>
-            <div class="form-grid">
-              ${knobField("NEWS_SOURCE_COLLECTION_CONCURRENCY", "Source collection concurrency")}
-              ${knobField("NEWS_ARTICLE_SUMMARY_CONCURRENCY", "Article summary concurrency")}
-              ${knobField("NEWS_STORY_SYNTHESIS_CONCURRENCY", "Story synthesis concurrency")}
-              ${knobField("NEWS_ARTICLE_TEXT_TOKEN_LIMIT", "Article text token limit")}
-              ${knobField("NEWS_MAX_STORIES", "Max stories")}
-              ${knobField("NEWS_MIN_ARTICLES_PER_STORY", "Min articles per story")}
-              ${knobField("NEWS_STORY_CLUSTER_SIMILARITY_THRESHOLD", "Story cluster similarity")}
-              ${knobField("NEWS_STORY_SELECTION_OVERLAP_THRESHOLD", "Story selection overlap")}
-              ${knobField("NEWS_STORY_DEDUP_THRESHOLD", "Story dedup threshold")}
-              ${knobField("NEWS_STORY_BACKFILL_BATCH_MULTIPLIER", "Backfill batch multiplier")}
-            </div>
-          </section>
-          <section class="panel">
-            <p class="eyebrow">Peripheral</p>
-            <h2>Optional run settings</h2>
-            <div class="form-grid">
-              ${knobField("NEWS_IMAGE_ENABLED", "Image generation")}
-              ${knobField("NEWS_BLOCK_REUSED_URLS", "Block reused URLs")}
-              ${knobField("NEWS_STORY_SCALE_SCREENING_ENABLED", "Story scale screening")}
-              ${knobField("NEWS_RELAX_STORY_DRAFTING_GUARDS", "Relax story drafting guards")}
-            </div>
           </section>
           <section class="panel">
             <details class="details">
@@ -2160,6 +2115,100 @@ HTML = r"""<!doctype html>
           searchHuggingFaceModels().catch(err => setStatus(err.message, "bad"));
         }
       };
+    }
+    const SAMPLING_FIELDS = [
+      ["TEMPERATURE", "Temperature"],
+      ["TOP_P", "Top P"],
+      ["TOP_K", "Top K"],
+      ["MIN_P", "Min P"],
+      ["PRESENCE_PENALTY", "Presence penalty"],
+      ["REPETITION_PENALTY", "Repetition penalty"]
+    ];
+    function samplingFields(prefix) {
+      return SAMPLING_FIELDS.map(([suffix, label]) => knobField(`${prefix}_${suffix}`, label)).join("");
+    }
+    function modelTuningPanel(task) {
+      const meta = TASK_CONFIG[task];
+      const runtime = (state.schema && state.schema.runtime) || {};
+      const taskRuntime = runtime.model && runtime.model[meta.runtimeKey] ? runtime.model[meta.runtimeKey] : {};
+      const sharedCap = task === "article_summary" ? knobField("NEWS_MODEL_MAX_INPUT_TOKENS", "Shared model input cap") : "";
+      return `
+        <section class="panel model-card">
+          <p class="eyebrow">Model Tuning</p>
+          <h2>${escapeHtml(meta.label)}</h2>
+          <p class="muted">Resolved: ${escapeHtml(taskRuntime.name || taskRuntime.reference || "-")}</p>
+          <div class="form-grid">
+            <label class="field"><span>Tuning preset</span><select id="${meta.presetSelectId}" data-task="${task}" data-env="${meta.presetEnv}"></select><code>${meta.presetEnv}</code></label>
+            <label class="field"><span>Preset id</span><input id="${meta.idInputId}"><code>id</code></label>
+            <label class="field"><span>Display name</span><input id="${meta.nameInputId}"><code>name</code></label>
+            <label class="field"><span>Description</span><textarea id="${meta.descriptionInputId}"></textarea><code>description</code></label>
+            ${sharedCap}
+            ${knobField(meta.taskMaxTokensEnv, task === "article_summary" ? "Article summary max tokens" : task === "story_drafting" ? "Story drafting max tokens" : task === "story_scale_screening" ? "Scale screening max tokens" : "Title generation max tokens")}
+            ${knobField(meta.baseUrlEnv, "Base URL")}
+            ${samplingFields(meta.taskSamplingPrefix)}
+          </div>
+          <div class="toolbar">
+            <button id="${meta.saveButtonId}" class="primary">Save current settings</button>
+            <button id="${meta.renameButtonId}">Rename display name</button>
+            <button id="${meta.deleteButtonId}" class="danger">Delete preset</button>
+          </div>
+        </section>`;
+    }
+    function renderAdvancedPanels() {
+      // Static container from the #advanced view; guard keeps this idempotent.
+      // Must run before renderModelTuningControls() so the tuning <select>s exist.
+      const container = $("advancedPanels");
+      if (!container) {
+        console.error("renderAdvancedPanels: missing #advancedPanels container");
+        return;
+      }
+      container.innerHTML = `
+        ${modelTuningPanel("article_summary")}
+        ${modelTuningPanel("story_drafting")}
+        ${modelTuningPanel("story_scale_screening")}
+        ${modelTuningPanel("title_generation")}
+        <section class="panel">
+          <p class="eyebrow">Budgets</p>
+          <h2>Run budgets and quotas</h2>
+          <div class="form-grid">
+            ${knobField("NEWS_SOURCE_COLLECTION_CONCURRENCY", "Source collection concurrency")}
+            ${knobField("NEWS_ARTICLE_SUMMARY_CONCURRENCY", "Article summary concurrency")}
+            ${knobField("NEWS_STORY_SYNTHESIS_CONCURRENCY", "Story synthesis concurrency")}
+            ${knobField("NEWS_ARTICLE_TEXT_TOKEN_LIMIT", "Article text token limit")}
+            ${knobField("NEWS_MAX_STORIES", "Max stories")}
+            ${knobField("NEWS_MIN_ARTICLES_PER_STORY", "Min articles per story")}
+            ${knobField("NEWS_STORY_CLUSTER_SIMILARITY_THRESHOLD", "Story cluster similarity")}
+            ${knobField("NEWS_STORY_SELECTION_OVERLAP_THRESHOLD", "Story selection overlap")}
+            ${knobField("NEWS_STORY_DEDUP_THRESHOLD", "Story dedup threshold")}
+            ${knobField("NEWS_STORY_BACKFILL_BATCH_MULTIPLIER", "Backfill batch multiplier")}
+          </div>
+        </section>
+        <section class="panel">
+          <p class="eyebrow">Peripheral</p>
+          <h2>Optional run settings</h2>
+          <div class="form-grid">
+            ${knobField("NEWS_IMAGE_ENABLED", "Image generation")}
+            ${knobField("NEWS_BLOCK_REUSED_URLS", "Block reused URLs")}
+            ${knobField("NEWS_STORY_SCALE_SCREENING_ENABLED", "Story scale screening")}
+            ${knobField("NEWS_RELAX_STORY_DRAFTING_GUARDS", "Relax story drafting guards")}
+          </div>
+        </section>
+        <section class="panel">
+          <p class="eyebrow">Prompt templates</p>
+          <h2>Full prompt templates</h2>
+          <p class="muted">Read-only preview of the exact instructions the selected profile supplies to each LLM stage.</p>
+          <div id="promptProfileReadouts" class="stack"></div>
+          <div class="toolbar">
+            <button id="comparePromptProfileBtn">Compare with balanced</button>
+          </div>
+          <details class="details">
+            <summary>Comparison with balanced</summary>
+            <div id="promptProfileCompare"></div>
+          </details>
+        </section>
+      `;
+      decorateEnvHints($("advancedPanels"));
+      renderPromptProfilePanel();
     }
     function renderModelTuningControls(task, { preserveEditor = false } = {}) {
       const meta = TASK_CONFIG[task];
@@ -2354,6 +2403,7 @@ HTML = r"""<!doctype html>
       renderModelTuningControls("story_drafting");
       renderModelTuningControls("story_scale_screening");
       renderModelTuningControls("title_generation");
+      renderPromptProfilePanel();
       refreshModelKnobLinks();
       preview("run").catch(() => {});
     }
@@ -2587,23 +2637,78 @@ HTML = r"""<!doctype html>
       title_generation: "Title Generation",
       image_art_direction: "Image Art Direction"
     };
+    // Mirrors PROMPT_TASK_OVERRIDE_ENV_VARS in news_pipeline/prompt_catalog.py
+    // (drift-guard: tests/test_prompt_catalog.py::test_override_env_vars_cover_all_tasks).
+    const PROMPT_OVERRIDE_ENVS = {
+      article_summary: "NEWS_PROMPT_OVERRIDE_ARTICLE_SUMMARY",
+      story_scale_screening: "NEWS_PROMPT_OVERRIDE_STORY_SCALE_SCREENING",
+      story_drafting: "NEWS_PROMPT_OVERRIDE_STORY_DRAFTING",
+      title_generation: "NEWS_PROMPT_OVERRIDE_TITLE_GENERATION",
+      image_art_direction: "NEWS_PROMPT_OVERRIDE_IMAGE_ART_DIRECTION"
+    };
+    function selectedPromptProfile() {
+      const profiles = (state.schema && state.schema.prompt_profiles) || [];
+      const id = currentControlValue("NEWS_PROMPT_PROFILE") ||
+        (state.schema && state.schema.runtime && state.schema.runtime.prompt_profile_id) || "balanced";
+      return profiles.find(profile => profile.id === id) || null;
+    }
+    // Tracks which profile's defaults the override editors currently hold, so
+    // livePromptOverrides() can distinguish a stale default from a real edit
+    // when the profile select changes (the editors keep the previous profile's
+    // text until renderPromptProfilePanel() re-renders them).
+    let lastRenderedPromptProfileId = null;
+    function livePromptOverrides() {
+      // Snapshot only edits that differ from the currently selected profile's
+      // text OR the previously rendered profile's defaults, so profile
+      // switches keep real edits and drop stale defaults.
+      const overrides = {};
+      const profile = selectedPromptProfile();
+      const prev = (lastRenderedPromptProfileId &&
+        ((state.schema && state.schema.prompt_profiles) || []).find(p => p.id === lastRenderedPromptProfileId)) || null;
+      document.querySelectorAll("[data-env^='NEWS_PROMPT_OVERRIDE_']").forEach(el => {
+        const task = Object.keys(PROMPT_OVERRIDE_ENVS).find(key => PROMPT_OVERRIDE_ENVS[key] === el.dataset.env);
+        if (!task) return;
+        const value = el.value.trim();
+        if (!value) return;
+        const newText = ((profile && profile.prompts && profile.prompts[task]) || "").trim();
+        const oldText = ((prev && prev.prompts && prev.prompts[task]) || "").trim();
+        // A value equal to the previously rendered profile's text is a stale
+        // default, not an edit; a value equal to the new profile's text needs
+        // no override either.
+        if (value === oldText || value === newText) return;
+        overrides[task] = value;
+      });
+      return overrides;
+    }
     function renderPromptProfilePanel() {
-      const schema = state.schema || {};
-      const profiles = schema.prompt_profiles || [];
-      const selectedId = currentControlValue("NEWS_PROMPT_PROFILE") || (schema.runtime && schema.runtime.prompt_profile_id) || "balanced";
-      const profile = profiles.find(item => item.id === selectedId) || null;
+      const profile = selectedPromptProfile();
       const descriptionEl = $("promptProfileDescription");
       if (descriptionEl) descriptionEl.textContent = profile ? profile.description : "";
       const readoutsEl = $("promptProfileReadouts");
       if (!readoutsEl) return;
+      const overrides = livePromptOverrides();
+      // The editors still hold the previous render's text at this point, so
+      // record the profile those defaults came from AFTER the diff above.
+      lastRenderedPromptProfileId = profile ? profile.id : null;
       if (!profile) {
         readoutsEl.innerHTML = `<p class="muted">No prompt profile selected.</p>`;
         return;
       }
       readoutsEl.innerHTML = Object.entries(PROMPT_TASK_LABELS).map(([task, label]) => {
-        const text = (profile.prompts && profile.prompts[task]) || "";
-        return `<label class="field"><span>${escapeHtml(label)}</span><textarea readonly rows="3">${escapeHtml(text)}</textarea></label>`;
+        const profileText = (profile.prompts && profile.prompts[task]) || "";
+        const effective = overrides[task] || profileText;
+        return `<label class="field"><span>${escapeHtml(label)}</span>
+          <textarea data-env="${escapeHtml(PROMPT_OVERRIDE_ENVS[task])}" rows="4" spellcheck="false">${escapeHtml(effective)}</textarea>
+          <code>${escapeHtml(PROMPT_OVERRIDE_ENVS[task])}</code>
+          <button type="button" class="prompt-stage-restore" data-task="${escapeHtml(task)}">Restore default</button></label>`;
       }).join("");
+      document.querySelectorAll("#promptProfileReadouts .prompt-stage-restore").forEach(btn => {
+        btn.onclick = () => {
+          const task = btn.dataset.task || "";
+          const editor = document.querySelector(`[data-env="${PROMPT_OVERRIDE_ENVS[task]}"]`);
+          if (editor) editor.value = (profile.prompts && profile.prompts[task]) || "";
+        };
+      });
     }
     const MODEL_TASK_LABELS = {
       factual_extraction: "Factual extraction",
@@ -2765,6 +2870,7 @@ HTML = r"""<!doctype html>
         renderModelTuningControls("story_drafting");
         renderModelTuningControls("story_scale_screening");
         renderModelTuningControls("title_generation");
+        renderPromptProfilePanel();
         refreshModelKnobLinks();
         preview("run").catch(() => {});
       };
@@ -2779,6 +2885,7 @@ HTML = r"""<!doctype html>
         renderModelTuningControls("story_drafting");
         renderModelTuningControls("story_scale_screening");
         renderModelTuningControls("title_generation");
+        renderPromptProfilePanel();
         refreshModelKnobLinks();
         preview("run").catch(() => {});
       };
@@ -2789,6 +2896,7 @@ HTML = r"""<!doctype html>
       $("restorePromptProfileBtn").onclick = () => {
         const el = document.querySelector('[data-env="NEWS_PROMPT_PROFILE"]');
         if (el) el.value = "";
+        document.querySelectorAll("[data-env^='NEWS_PROMPT_OVERRIDE_']").forEach(editor => { editor.value = ""; });
         renderPromptProfilePanel();
         preview("run").catch(() => {});
       };
@@ -2830,6 +2938,7 @@ HTML = r"""<!doctype html>
       state.schema = await api("/api/schema");
       renderTabs();
       renderRunSetup();
+      renderAdvancedPanels();
       renderAdvancedKnobs();
       renderStats();
       renderRunPresetDrawer();

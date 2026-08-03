@@ -274,6 +274,11 @@ def _global_scale_screening_prompt_messages(
     # itself must stay an f-string-free .format() block.
     # .format() must run after dedent() because the injected screening_guidance
     # is multi-line (byte-identity drift-guard: tests/test_prompt_catalog.py).
+    # User-entered guidance (prompt overrides) may contain literal braces.
+    # str.format() never re-parses substituted values, so the value is escaped
+    # before injection ({{ }}) and unescaped afterwards to keep user text
+    # byte-identical; the template's own JSON braces are already single { }
+    # by then, so the unescape touches only the injected guidance.
     system_prompt = SystemMessage(
         content=textwrap.dedent(
             """
@@ -304,11 +309,13 @@ def _global_scale_screening_prompt_messages(
             """
         ).format(
             screening_guidance=(
-                prompt_instructions
-                or DEFAULT_PROMPT_INSTRUCTIONS["story_scale_screening"]
+                (prompt_instructions
+                 or DEFAULT_PROMPT_INSTRUCTIONS["story_scale_screening"])
+                .replace("{", "{{")
+                .replace("}", "}}")
             ),
             scale_contract=STORY_SCALE_SCREENING_JSON_CONTRACT,
-        ).strip()
+        ).replace("{{", "{").replace("}}", "}").strip()
     )
     user_prompt = HumanMessage(
         content=(
