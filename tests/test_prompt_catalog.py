@@ -292,6 +292,66 @@ Citation precedence: Cite this source only for facts it directly supports.
             set(prompt_catalog.PROMPT_PROFILES),
         )
 
+    def test_override_env_vars_cover_all_tasks(self) -> None:
+        # Drift-guard: PROMPT_TASK_OVERRIDE_ENV_VARS feeds the config knobs and
+        # is mirrored by the JS PROMPT_OVERRIDE_ENVS map in ui.py; a task added
+        # to only one side would silently lose its editor or its env wiring.
+        self.assertEqual(
+            set(prompt_catalog.PROMPT_TASK_OVERRIDE_ENV_VARS),
+            set(prompt_catalog.PROMPT_TASKS),
+        )
+        for task, env_var in prompt_catalog.PROMPT_TASK_OVERRIDE_ENV_VARS.items():
+            self.assertTrue(
+                env_var.startswith(prompt_catalog.PROMPT_OVERRIDE_ENV_PREFIX),
+                f"{task} env var {env_var} lacks the override prefix",
+            )
+            self.assertEqual(
+                env_var,
+                f"{prompt_catalog.PROMPT_OVERRIDE_ENV_PREFIX}{task.upper()}",
+            )
+
+    def test_resolve_instructions_applies_overrides(self) -> None:
+        playful = prompt_catalog.PROMPT_PROFILES["playful"].prompts
+        resolved = prompt_catalog.resolve_prompt_instructions(
+            "playful", {"article_summary": "Custom text"}
+        )
+        self.assertEqual(resolved["article_summary"], "Custom text")
+        self.assertEqual(resolved["story_drafting"], playful["story_drafting"])
+        # Empty and whitespace-only overrides are ignored.
+        for empty in ("", "   "):
+            self.assertEqual(
+                prompt_catalog.resolve_prompt_instructions(
+                    "playful", {"article_summary": empty}
+                ),
+                playful,
+            )
+        # Unknown task keys are ignored (never injected into PROMPT_INSTRUCTIONS).
+        self.assertEqual(
+            prompt_catalog.resolve_prompt_instructions(
+                "playful", {"not_a_task": "Bogus", "article_summary": "Custom"}
+            ),
+            {**playful, "article_summary": "Custom"},
+        )
+        # overrides=None returns the profile unchanged.
+        self.assertEqual(prompt_catalog.resolve_prompt_instructions("playful"), playful)
+
+    def test_scale_screening_override_with_braces_renders_safely(self) -> None:
+        # User-entered override text may contain literal braces; the screening
+        # prompt is rendered via str.format(), so braces must be escaped before
+        # injection and unescaped after (regression for the story_selection.py
+        # hardening). Rendered text must stay byte-identical to the user input.
+        for guidance in (
+            "Screen {these} braces",
+            "balanced {and} {{nested}} braces }}",
+            "no braces at all",
+        ):
+            messages = _global_scale_screening_prompt_messages(
+                [_story_block()],
+                prompt_instructions=guidance,
+            )
+            prompt_text = "\n\n".join(str(message.content) for message in messages)
+            self.assertIn(guidance, prompt_text)
+
     def test_scale_screening_guidance_is_format_safe(self) -> None:
         # story_selection renders the scale-screening prompt via
         # textwrap.dedent(...).format(screening_guidance=...); a brace in any

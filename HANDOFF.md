@@ -57,6 +57,7 @@ verified; a follow-up agent should be able to continue from here without re-deri
 
 ### Pending
 - [ ] None outstanding from this session. The only decision was the push choice, made by the user.
+- [x] Prompt-profile selection and per-stage prompt editing in the normal UI (PR #70, issue #27).
 
 ## Key Decisions
 - **The poller owns the sync, not a watcher or git hooks.** Hooks are a dead end

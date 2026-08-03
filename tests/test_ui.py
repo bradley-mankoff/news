@@ -144,6 +144,61 @@ class UITests(unittest.TestCase):
         )[0]
         self.assertIn("renderPromptProfilePanel();", advanced)
 
+    def test_prompt_override_editors_and_restore_buttons_in_html(self) -> None:
+        # The Editorial approach panel must expose editable per-stage editors
+        # bound to the override env vars, with per-stage restore buttons; the
+        # old read-only readout is gone. Assertions run on the HTML module
+        # constant (JS source), so the new JS lives in one obvious block.
+        self.assertIn("NEWS_PROMPT_OVERRIDE_ARTICLE_SUMMARY", ui_module.HTML)
+        self.assertIn("NEWS_PROMPT_OVERRIDE_STORY_SCALE_SCREENING", ui_module.HTML)
+        self.assertIn("NEWS_PROMPT_OVERRIDE_STORY_DRAFTING", ui_module.HTML)
+        self.assertIn("NEWS_PROMPT_OVERRIDE_TITLE_GENERATION", ui_module.HTML)
+        self.assertIn("NEWS_PROMPT_OVERRIDE_IMAGE_ART_DIRECTION", ui_module.HTML)
+        # All five override env vars are suppressed from the Advanced tab like
+        # NEWS_PROMPT_PROFILE itself (dedicated editors are the single surface).
+        surfaced_block = ui_module.HTML.split("const SURFACED_ENVS = new Set([", 1)[1].split("]);", 1)[0]
+        for env_var in (
+            "NEWS_PROMPT_OVERRIDE_ARTICLE_SUMMARY",
+            "NEWS_PROMPT_OVERRIDE_STORY_SCALE_SCREENING",
+            "NEWS_PROMPT_OVERRIDE_STORY_DRAFTING",
+            "NEWS_PROMPT_OVERRIDE_TITLE_GENERATION",
+            "NEWS_PROMPT_OVERRIDE_IMAGE_ART_DIRECTION",
+        ):
+            self.assertIn(env_var, surfaced_block)
+        # Editable textareas carry data-env and are not readonly.
+        self.assertIn(
+            'textarea data-env="${escapeHtml(PROMPT_OVERRIDE_ENVS[task])}" rows="4"',
+            ui_module.HTML,
+        )
+        self.assertIn('class="prompt-stage-restore"', ui_module.HTML)
+        self.assertNotIn('textarea readonly rows="3"', ui_module.HTML)
+
+    def test_prompt_override_editors_drop_stale_defaults_on_profile_switch(self) -> None:
+        # Regression for the HIGH finding: switching the prompt profile must
+        # NOT freeze the previous profile's text as per-stage overrides.
+        # livePromptOverrides() must diff editor values against BOTH the newly
+        # selected profile and the last-rendered profile (tracked via
+        # lastRenderedPromptProfileId), so stale defaults are dropped and only
+        # genuine edits survive. Assertions run on the HTML module constant
+        # (JS source), matching the drift-guard style of this file.
+        self.assertIn("let lastRenderedPromptProfileId = null;", ui_module.HTML)
+        self.assertIn(
+            "lastRenderedPromptProfileId = profile ? profile.id : null;",
+            ui_module.HTML,
+        )
+        self.assertIn(
+            "if (value === oldText || value === newText) return;",
+            ui_module.HTML,
+        )
+        # The last-rendered profile must be recorded AFTER the diff, since the
+        # editors still hold the previous render's text at that point.
+        self.assertIn(
+            "// The editors still hold the previous render's text at this point, so",
+            ui_module.HTML,
+        )
+        # Empty editors still mean "no override" (matches collectEnv's
+        # suppression of empty/unset override env vars).
+        self.assertIn("if (!value) return;", ui_module.HTML)
     def test_model_knob_links_markup_contract(self) -> None:
         self.assertIn("data-links-for", ui_module.HTML)
         self.assertIn("renderKnobLinks", ui_module.HTML)

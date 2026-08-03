@@ -260,7 +260,9 @@ PRESET_ID = CONFIG.preset_id
 PROMPT_PROFILE_ID = CONFIG.prompt_profile_id
 # Resolved once at import time: the profile is frozen for the process lifetime
 # and validated eagerly (fail-fast on unknown ids) before any LLM work starts.
-PROMPT_INSTRUCTIONS = resolve_prompt_instructions(PROMPT_PROFILE_ID)
+PROMPT_INSTRUCTIONS = resolve_prompt_instructions(
+    PROMPT_PROFILE_ID, overrides=CONFIG.prompt_instruction_overrides
+)
 SOURCE_SCOPE = CONFIG.source_scope
 RECIPIENT_SCOPE = CONFIG.recipient_scope
 URL_REUSE_BLOCKING_ENABLED = CONFIG.url_reuse_blocking_enabled
