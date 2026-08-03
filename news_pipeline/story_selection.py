@@ -23,6 +23,7 @@ from .story_records import (
     story_debug_record,
     story_rank_key,
 )
+from .config import MODEL_TASK_STORY_SCALE_SCREENING
 from .prompt_catalog import DEFAULT_PROMPT_INSTRUCTIONS
 from .prompt_contracts import STORY_SCALE_SCREENING_JSON_CONTRACT
 
@@ -35,6 +36,8 @@ STORY_SCALE_VERDICTS = {
 STORY_SCALE_OBVIOUSLY_LARGE = "obviously_large_scale"
 STORY_SCALE_DEFAULT_VERDICT = "not_obvious"
 STORY_SCALE_OBVIOUSLY_SMALL = "obviously_small_scale"
+# Also the tuning default (config.DEFAULT_STORY_SCALE_SCREENING_MAX_TOKENS);
+# keep both in sync.
 STORY_SCALE_VALIDATION_MAX_TOKENS = 3000
 STORY_SCALE_VALIDATION_BATCH_SIZE = 8
 STORY_SCALE_VALIDATION_TEXT_CHARS = 900
@@ -77,6 +80,7 @@ class StorySelectionRuntime:
     report_reference_key: Callable[[str], str]
     progress_callback: Callable[[str, dict[str, Any]], None] | None = None
     prompt_instructions: str | None = None
+    story_scale_screening_max_tokens: int = STORY_SCALE_VALIDATION_MAX_TOKENS
 
 
 def _compact_gate_text(value: Any, max_chars: int) -> str:
@@ -422,8 +426,8 @@ def apply_global_story_scale_screening(
         try:
             response = runtime.invoke_with_retries(
                 runtime.build_chat_model(
-                    max_tokens=STORY_SCALE_VALIDATION_MAX_TOKENS,
-                    task="story_scale_screening",
+                    max_tokens=runtime.story_scale_screening_max_tokens,
+                    task=MODEL_TASK_STORY_SCALE_SCREENING,
                 ),
                 _global_scale_screening_prompt_messages(
                     batch,

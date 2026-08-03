@@ -19,7 +19,10 @@ from news_pipeline.config import (
     QWWYTHOS_9B_4BIT_MODEL_ALIAS,
     QWWYTHOS_9B_4BIT_MODEL_REFERENCE,
     MODEL_TASK_ARTICLE_SUMMARY,
+    MODEL_TASK_IMAGE_ART_DIRECTION,
     MODEL_TASK_STORY_DRAFTING,
+    MODEL_TASK_STORY_SCALE_SCREENING,
+    MODEL_TASK_TITLE_GENERATION,
     ModelSamplingSettings,
     ModelServerSettings,
     PRESET_ENV_VAR,
@@ -335,6 +338,69 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
             config.model_assignments[MODEL_TASK_STORY_DRAFTING].reference,
         )
 
+    def test_task_model_assignments_cover_all_four_llm_stages(self) -> None:
+        config = load_runtime_config(
+            environ={},
+            overrides={
+                "NEWS_MODEL": CODEX_TEST_MODEL_ALIAS,
+                "NEWS_MODEL_STORY_SCALE_SCREENING": QWWYTHOS_9B_4BIT_MODEL_ALIAS,
+                "NEWS_MODEL_TITLE_GENERATION": "qwythos-9b-8bit",
+            },
+            materialize_outputs=False,
+        )
+
+        self.assertEqual(
+            set(config.model_assignments),
+            {
+                "default",
+                MODEL_TASK_ARTICLE_SUMMARY,
+                MODEL_TASK_STORY_DRAFTING,
+                MODEL_TASK_STORY_SCALE_SCREENING,
+                MODEL_TASK_TITLE_GENERATION,
+            },
+        )
+        self.assertEqual(
+            config.model_assignments[MODEL_TASK_STORY_SCALE_SCREENING].reference,
+            QWWYTHOS_9B_4BIT_MODEL_ALIAS,
+        )
+        self.assertEqual(
+            config.model_assignments[MODEL_TASK_STORY_SCALE_SCREENING].name,
+            QWWYTHOS_9B_4BIT_MODEL_REFERENCE,
+        )
+        self.assertEqual(
+            config.model_assignments[MODEL_TASK_TITLE_GENERATION].reference,
+            "qwythos-9b-8bit",
+        )
+        self.assertNotEqual(
+            config.model_assignments["default"].reference,
+            config.model_assignments[MODEL_TASK_STORY_SCALE_SCREENING].reference,
+        )
+        self.assertNotEqual(
+            config.model_assignments["default"].reference,
+            config.model_assignments[MODEL_TASK_TITLE_GENERATION].reference,
+        )
+        # Unset per-task env vars inherit the default reference and base URL.
+        self.assertEqual(
+            config.model_assignments[MODEL_TASK_ARTICLE_SUMMARY].reference,
+            CODEX_TEST_MODEL_ALIAS,
+        )
+        self.assertEqual(
+            config.model_assignments[MODEL_TASK_STORY_SCALE_SCREENING].base_url,
+            config.model_assignments["default"].base_url,
+        )
+        # image_art_direction inherits the title_generation token cap field.
+        self.assertEqual(
+            config_module._task_max_tokens_field(MODEL_TASK_IMAGE_ART_DIRECTION),
+            "title_generation_max_tokens",
+        )
+        self.assertEqual(
+            config_module._task_max_tokens_field(MODEL_TASK_STORY_SCALE_SCREENING),
+            "story_scale_screening_max_tokens",
+        )
+        self.assertEqual(
+            config_module._task_max_tokens_field(MODEL_TASK_TITLE_GENERATION),
+            "title_generation_max_tokens",
+        )
 
     def test_default_recipient_and_sender_are_clean_example_addresses(self) -> None:
         config = load_runtime_config(
@@ -573,13 +639,86 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
                 os.environ,
                 {
                     "NEWS_MODEL": CODEX_TEST_MODEL_ALIAS,
+                    "NEWS_MODEL_TITLE_GENERATION": "mlx-community/example-model",
+                    "NEWS_MODEL_TITLE_GENERATION_TUNING_PRESET": "wrong-task",
+                },
+                clear=True,
+            ), patch.object(config_module, "MODEL_TUNING_PRESETS_PATH", preset_path):
+                with self.assertRaisesRegex(
+                    ValueError,
+                    r"wrong-task.*article_summary.*title_generation",
+                ):
+                    load_runtime_config(materialize_outputs=False)
+
+            with patch.dict(
+                os.environ,
+                {
+                    "NEWS_MODEL": CODEX_TEST_MODEL_ALIAS,
                     "NEWS_MODEL_TUNING_PRESET": "blank-default",
                 },
                 clear=True,
             ), patch.object(config_module, "MODEL_TUNING_PRESETS_PATH", preset_path):
+                with self.assertRaisesRegex(
+                    ValueError,
+                    r"blank-default.*max_tokens.*must be a number",
+                ):
+                    load_runtime_config(materialize_outputs=False)
+
+    def test_new_task_tuning_preset_applies_with_env_overrides(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmpdir_path = Path(tmpdir)
+            preset_path = tmpdir_path / "model_tuning_presets.yaml"
+            preset_path.write_text(
+                textwrap.dedent(
+                    """\
+                    presets:
+                      quick-scale-screen:
+                        model: mlx-community/example-model
+                        task: story_scale_screening
+                        tuning:
+                          temperature: 0.7
+                          max_tokens: 2500
+                    """
+                ),
+                encoding="utf-8",
+            )
+
+            with patch.dict(
+                os.environ,
+                {
+                    "NEWS_MODEL": CODEX_TEST_MODEL_ALIAS,
+                    "NEWS_MODEL_STORY_SCALE_SCREENING": "mlx-community/example-model",
+                    "NEWS_MODEL_STORY_SCALE_SCREENING_TUNING_PRESET": "quick-scale-screen",
+                    "NEWS_MODEL_STORY_SCALE_SCREENING_TEMPERATURE": "0.4",
+                    "NEWS_STORY_SCALE_SCREENING_MAX_TOKENS": "2600",
+                    "NEWS_TITLE_GENERATION_MAX_TOKENS": "800",
+                },
+                clear=True,
+            ), patch.object(config_module, "MODEL_TUNING_PRESETS_PATH", preset_path):
                 config = load_runtime_config(materialize_outputs=False)
-                self.assertEqual(config.model_max_input_tokens, 6000)
-                self.assertEqual(config.model_tuning.model_max_input_tokens, 6000)
+                scale_tuning = config.model_assignments[MODEL_TASK_STORY_SCALE_SCREENING].tuning
+                self.assertEqual(scale_tuning.story_scale_screening_max_tokens, 2600)
+                self.assertEqual(
+                    scale_tuning.task_sampling[MODEL_TASK_STORY_SCALE_SCREENING].temperature,
+                    0.4,
+                )
+                # Preset max_tokens (2500) is applied, then the direct env
+                # override (2600) wins.
+                self.assertEqual(
+                    config.model_assignments[MODEL_TASK_STORY_SCALE_SCREENING].reference,
+                    "mlx-community/example-model",
+                )
+                # The other new task's override path is also exercised: the
+                # direct env override (800) wins over the 700 default.
+                title_tuning = config.model_assignments[MODEL_TASK_TITLE_GENERATION].tuning
+                self.assertEqual(title_tuning.title_generation_max_tokens, 800)
+                self.assertEqual(
+                    config.model_assignments[MODEL_TASK_TITLE_GENERATION].reference,
+                    CODEX_TEST_MODEL_ALIAS,
+                )
+                # Documented defaults are pinned so drift is caught by CI.
+                self.assertEqual(config_module.DEFAULT_STORY_SCALE_SCREENING_MAX_TOKENS, 3000)
+                self.assertEqual(config_module.DEFAULT_TITLE_GENERATION_MAX_TOKENS, 700)
 
     def test_sampling_fields_remain_unset_without_override(self) -> None:
         with patch.dict(

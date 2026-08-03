@@ -94,9 +94,13 @@ from openai import APIConnectionError, APITimeoutError, InternalServerError, Rat
 from .config import (
     ModelSamplingSettings,
     RuntimeConfig,
+    DEFAULT_TITLE_GENERATION_MAX_TOKENS,
     MODEL_BACKEND_EXTERNAL,
     MODEL_TASK_ARTICLE_SUMMARY,
+    MODEL_TASK_IMAGE_ART_DIRECTION,
     MODEL_TASK_STORY_DRAFTING,
+    MODEL_TASK_STORY_SCALE_SCREENING,
+    MODEL_TASK_TITLE_GENERATION,
     configured_model_api_key,
     ensure_codex_safe_model_reference,
     is_gemma_4_model_reference,
@@ -1639,6 +1643,10 @@ def _story_selection_runtime() -> story_selection_stage.StorySelectionRuntime:
         report_reference_key=_report_reference_key,
         progress_callback=progress_tracker.story_selection_progress,
         prompt_instructions=PROMPT_INSTRUCTIONS["story_scale_screening"],
+        story_scale_screening_max_tokens=(
+            MODEL_ASSIGNMENTS[MODEL_TASK_STORY_SCALE_SCREENING].tuning.story_scale_screening_max_tokens
+            or story_selection_stage.STORY_SCALE_VALIDATION_MAX_TOKENS
+        ),
     )
 
 
@@ -2514,6 +2522,15 @@ def _task_model_assignment(task: str):
         return MODEL_ASSIGNMENTS[MODEL_TASK_ARTICLE_SUMMARY]
     if normalized_task == MODEL_TASK_STORY_DRAFTING:
         return MODEL_ASSIGNMENTS[MODEL_TASK_STORY_DRAFTING]
+    if normalized_task == MODEL_TASK_STORY_SCALE_SCREENING:
+        return MODEL_ASSIGNMENTS[MODEL_TASK_STORY_SCALE_SCREENING]
+    if normalized_task == MODEL_TASK_TITLE_GENERATION:
+        return MODEL_ASSIGNMENTS[MODEL_TASK_TITLE_GENERATION]
+    # image_art_direction is produced by the same LLM call as title_generation
+    # (generate_image_art_brief); it inherits that assignment by design.
+    if normalized_task == MODEL_TASK_IMAGE_ART_DIRECTION:
+        return MODEL_ASSIGNMENTS[MODEL_TASK_TITLE_GENERATION]
+    # story_discovery has no LLM stage (TF-IDF/embedding clustering); it inherits default.
     return MODEL_ASSIGNMENTS["default"]
 
 
@@ -3177,7 +3194,16 @@ def generate_image_art_brief(
     image_art_direction = instructions.get("image_art_direction") or DEFAULT_PROMPT_INSTRUCTIONS["image_art_direction"]
     title_guidance = instructions.get("title_generation") or DEFAULT_PROMPT_INSTRUCTIONS["title_generation"]
     try:
-        llm = build_chat_model(max_tokens=700, task="title_generation")
+        llm = build_chat_model(
+            # Defensive fallback: tuning is always seeded, but a 0-valued env
+            # override would otherwise produce a zero-token cap. The fallback
+            # references the config constant so a default change propagates.
+            max_tokens=(
+                MODEL_ASSIGNMENTS[MODEL_TASK_TITLE_GENERATION].tuning.title_generation_max_tokens
+                or DEFAULT_TITLE_GENERATION_MAX_TOKENS
+            ),
+            task=MODEL_TASK_TITLE_GENERATION,
+        )
         response = invoke_with_retries(
             llm,
             [

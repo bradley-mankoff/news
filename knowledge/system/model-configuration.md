@@ -23,8 +23,12 @@ sources:
 # Definition
 
 **Run Settings** are all user-controllable values for one run. A **Run Preset**
-is a saved overlay. **Task Model Assignment** selects a model for work such as
-Article Summarization or Story Drafting. **Model Tuning** is explicit inference
+is a saved overlay. **Task Model Assignment** selects a model for a model-using task. Every actual
+LLM stage has its own assignment: Article Summarization, Story Drafting, Story
+Scale Screening, and Title Generation. Image Art Direction inherits the Title
+Generation assignment (one shared LLM call produces both outputs), and Story
+Discovery has no LLM stage (embedding/TF-IDF clustering) so it inherits the
+default model. **Model Tuning** is explicit inference
 configuration, **Model Defaults** fill unset values, **Pipeline Budget** covers
 non-model limits, and **Model Server Settings** configure the local
 OpenAI-compatible server.
