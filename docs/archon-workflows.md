@@ -85,8 +85,26 @@ YAML is overwritten. If a workflow file is replaced, re-apply:
 - Both implementation workflows: `sync-with-develop` node before the PR node
   (merges develop into the branch, resolves, validates) — `create-pr` /
   `finalize-pr` depend on it.
+- `archon-review-block.yaml`: `spec-review` node after `sync` (Spec axis of
+  the two-axis review — the diff vs the originating issue's criteria and Out
+  of scope; posts a summary on the PR, never a VERDICT); `synthesize`
+  depends on it.
 - `archon-fix-develop-conflicts.yaml`: fully inline (one `prompt` node, no DB
   commands); the develop-lane twin of `archon-fix-ship-conflicts`.
+
+## Vendored matt pocock skills (MIT, adapted)
+
+Wrapper-facing skills (grilling, to-spec, to-tickets, triage, wayfinder, and
+the execution disciplines) are installed at `~/.claude/skills/` (home level,
+auto-discovered by the omp wrapper — attribution + license in
+`~/.claude/skills/LICENSE-mattpocock-skills.txt`). The execution disciplines
+used inside workflows are also vendored as repo-level commands in
+`.archon/commands/` (`implement`, `tdd`, `code-review`, `diagnosing-bugs`,
+`prototype`, `research`, `domain-modeling`, `codebase-design`,
+`resolving-merge-conflicts`, `handoff` — `archon validate commands` checks
+them). Workflow prompts reference `resolving-merge-conflicts` (sync + resolver
+nodes) and `code-review` (spec-review node). Update: re-pull upstream, re-adapt
+(the adaptations are mechanical: de-slash, tracker mechanics → this repo).
 - `archon-fix-ship-conflicts.yaml`: fully inline (one `prompt` node, no DB
   commands); if missing, re-create it per `docs/archon-workflows.md` (same
   shape as the other local workflows — `name`, `description`, `nodes`, `effort`).

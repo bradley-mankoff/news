@@ -49,6 +49,11 @@ Thumbs.db
 .cursor/
 .agents/
 .archon/
+!.archon/
+.archon/config.yaml
+.archon/mcp/
+!.archon/commands/
+!.archon/commands/*.md
 .claude/
 
 # R
@@ -67,3 +72,4 @@ automation/archon-runs.log
 
 # pi CLI project-local state
 .pi/
+
