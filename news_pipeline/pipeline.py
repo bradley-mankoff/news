@@ -2,11 +2,11 @@
 
 Common usage:
     uv run news run --preset NAME
-    NEWS_SOURCE_SCOPE=peripheral NEWS_RECIPIENT_SCOPE=bradley uv run news run
+    NEWS_SOURCE_SCOPE=peripheral NEWS_RECIPIENT_SCOPE=primary uv run news run
 
 Common Run Settings:
     NEWS_SOURCE_SCOPE=core|peripheral
-    NEWS_RECIPIENT_SCOPE=bradley|all
+    NEWS_RECIPIENT_SCOPE=primary|all
     NEWS_BLOCK_REUSED_URLS=0|1
     NEWS_IMAGE_ENABLED=0|1
 
@@ -115,6 +115,7 @@ from .article_collection import (
     collect_article_candidates,
 )
 from . import article_summarization as article_summarization_stage
+from .prompt_contracts import IMAGE_ART_JSON_CONTRACT, IMAGE_ART_OVERLAY_PROTOCOL
 from . import article_summary_records as article_summary_records_stage
 from . import citations as citations_stage
 from . import embeddings as embeddings_stage
@@ -187,7 +188,7 @@ MODEL_SERVER_COMMAND = CONFIG.model_server_command
 MODEL_API_KEY = configured_model_api_key()
 MODEL_REPORT_LABEL = _filesystem_safe_model_label(MODEL_REFERENCE)
 
-BRADLEY_RECIPIENT = CONFIG.bradley_recipient
+PRIMARY_RECIPIENT = CONFIG.primary_recipient
 USER_AGENT = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"
@@ -991,7 +992,7 @@ def _compat_runtime_values(config: RuntimeConfig) -> dict[str, Any]:
         "MODEL_BASE_URL": config.model_base_url,
         "MODEL_BACKEND": config.model_backend,
         "MODEL_SERVER_COMMAND": config.model_server_command,
-        "BRADLEY_RECIPIENT": config.bradley_recipient,
+        "PRIMARY_RECIPIENT": config.primary_recipient,
         "RECENT_WINDOW_HOURS": config.recent_window_hours,
         "MAX_ARTICLES_PER_SOURCE": config.max_articles_per_source,
         "RUN_STARTED_AT": config.run_started_at,
@@ -1811,13 +1812,13 @@ def serve_unsubscribe_endpoint() -> None:
 
 
 def get_active_recipient_config(recipient_config: dict[str, dict]) -> dict[str, dict]:
-    if RECIPIENT_SCOPE == "bradley":
-        preferred_config = recipient_config.get(BRADLEY_RECIPIENT)
+    if RECIPIENT_SCOPE == "primary":
+        preferred_config = recipient_config.get(PRIMARY_RECIPIENT)
         if preferred_config:
-            return {BRADLEY_RECIPIENT: preferred_config}
+            return {PRIMARY_RECIPIENT: preferred_config}
         return {
-            BRADLEY_RECIPIENT: {
-                "name": BRADLEY_RECIPIENT,
+            PRIMARY_RECIPIENT: {
+                "name": PRIMARY_RECIPIENT,
                 "pause": False,
             }
         }
@@ -3140,6 +3141,19 @@ def _enforce_text_free_image_prompt(prompt: str) -> str:
     return clean_prompt + guardrails
 
 
+def _build_image_art_system_prompt(image_art_direction: str, title_guidance: str) -> str:
+    """Compose the image-art system prompt from the pipeline-owned JSON contract
+    and the profile's editorial art-direction / title-generation sentences.
+    """
+    return (
+        "You are preparing art direction for a text-to-image news illustration. "
+        f"{IMAGE_ART_JSON_CONTRACT} "
+        f"{image_art_direction} "
+        f"{IMAGE_ART_OVERLAY_PROTOCOL} "
+        f"{title_guidance}"
+    )
+
+
 def generate_image_art_brief(
     synthesis_body: str,
     report_title: str,
@@ -3167,14 +3181,7 @@ def generate_image_art_brief(
         response = invoke_with_retries(
             llm,
             [
-                SystemMessage(content=(
-                    "You are preparing art direction for a text-to-image news illustration. "
-                    "Return ONLY valid JSON with keys image_prompt and overlay_headline. "
-                    f"{image_art_direction} "
-                    "The overlay_headline is readable text that will be rendered later by code, "
-                    "not by the image model. "
-                    f"{title_guidance}"
-                )),
+                SystemMessage(content=_build_image_art_system_prompt(image_art_direction, title_guidance)),
                 HumanMessage(content=(
                     "Use the final news output below to create the image prompt and the separate "
                     "footer headline.\n\n"
@@ -4271,7 +4278,7 @@ def _run_pipeline() -> None:
     ACTIVE_RUN_DIAGNOSTICS = diagnostics
     ACTIVE_RUN_FINALIZER = _active_run_finalizer(diagnostics, CONFIG)
     image_status = "image on" if IMAGE_GENERATION_ENABLED else "image off"
-    send_target = "Primary only" if RECIPIENT_SCOPE == "bradley" else "active recipients"
+    send_target = "Primary only" if RECIPIENT_SCOPE == "primary" else "active recipients"
     preset_label = PRESET_ID or "custom"
     progress_tracker.step(
         "setup",
@@ -4315,8 +4322,8 @@ def _run_pipeline() -> None:
             f"{tier}: {count}" for tier, count in sorted(active_source_tiers.items())
         )
         progress_tracker.detail(f"Active source tiers: {tier_summary}.")
-    if RECIPIENT_SCOPE == "bradley":
-        progress_tracker.detail(f"Delivery limited to {BRADLEY_RECIPIENT}.")
+    if RECIPIENT_SCOPE == "primary":
+        progress_tracker.detail(f"Delivery limited to {PRIMARY_RECIPIENT}.")
     progress_tracker.detail(f"Run staging folder: {RUN_OUTPUT_DIR}")
     progress_tracker.detail(f"Latest readable run review: {LATEST_RUN_MARKDOWN_PATH}")
     progress_tracker.detail(f"Rolling run log: {LATEST_RUN_LOG_PATH}")

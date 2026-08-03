@@ -1,0 +1,29 @@
+name: Bug report
+description: Something does not work as expected.
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: What you did, what happened, and what you expected instead.
+    validations:
+      required: true
+  - type: input
+    id: depends_on
+    attributes:
+      label: Depends on
+      description: Issue refs that must be in the Done lane before this starts. Leave empty if none.
+      placeholder: "#42, #57"
+  - type: textarea
+    id: criteria
+    attributes:
+      label: Acceptance criteria
+      description: One per line, each binary — a reviewer answers YES or NO without judgement (e.g. "The bug no longer reproduces with ..."). The implementation workflow reports evidence for each.
+      placeholder: |
+        - The bug no longer reproduces with ...
+        - ...
+      render: markdown
+    validations:
+      required: true

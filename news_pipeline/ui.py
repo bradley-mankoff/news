@@ -51,6 +51,12 @@ from .prompt_catalog import (
     compare_prompt_profiles,
     list_prompt_profiles,
 )
+from .model_catalog import (
+    MODEL_RECOMMENDATION_TASKS,
+    fetch_model_metadata,
+    list_model_catalog,
+    search_huggingface_models,
+)
 
 
 DEFAULT_HOST = "127.0.0.1"
@@ -59,7 +65,7 @@ RECIPIENT_HEADER = """# Email recipients for generated reports.
 #
 # Usage:
 # - pause: true keeps the recipient configured but skips delivery.
-# - NEWS_RECIPIENT_SCOPE=bradley sends only to the primary recipient,
+# - NEWS_RECIPIENT_SCOPE=primary sends only to the primary recipient,
 #   regardless of this file.
 """
 RUN_PRESET_HEADER = """# Saved run presets for the daily news pipeline.
@@ -208,7 +214,7 @@ def _runtime_snapshot(
                 "base_model": config.image_base_model,
             },
             "delivery": {
-                "bradley_recipient": config.bradley_recipient,
+                "primary_recipient": config.primary_recipient,
                 "fallback_recipients": config.email_recipients_fallback,
                 "email_from": config.email_from,
                 "smtp_host": config.smtp_host,
@@ -296,6 +302,8 @@ def schema_payload() -> dict[str, Any]:
         "presets": list_presets(),
         "model_tuning_presets": list_model_tuning_presets(),
         "prompt_profiles": list_prompt_profiles(),
+        "model_catalog": list_model_catalog(),
+        "model_recommendation_tasks": list(MODEL_RECOMMENDATION_TASKS),
         "sources": _source_summary(),
         "recipients": _recipient_summary(),
         "source_match_modes": sorted(VALID_SOURCE_MATCH_MODES),
@@ -835,6 +843,45 @@ class NewsUIHandler(BaseHTTPRequestHandler):
                         "diffs": compare_prompt_profiles(profile),
                     }
                 )
+            elif parsed.path == "/api/models/search":
+                params = parse_qs(parsed.query)
+                query = (params.get("q") or [""])[0].strip()
+                if not query:
+                    self._send_json(
+                        {"query": "", "models": [], "error": "Missing query parameter q."},
+                        status=HTTPStatus.BAD_REQUEST,
+                    )
+                    return
+                pipeline_tag = (params.get("pipeline_tag") or [None])[0] or None
+                raw_limit = (params.get("limit") or [""])[0]
+                try:
+                    limit = int(raw_limit) if raw_limit else 20
+                except ValueError:
+                    limit = 20
+                try:
+                    models = search_huggingface_models(
+                        query, pipeline_tag=pipeline_tag, limit=limit
+                    )
+                except Exception as exc:
+                    models = []
+                    self._send_json({"query": query, "models": [], "error": str(exc)})
+                else:
+                    self._send_json({"query": query, "models": models, "error": None})
+            elif parsed.path == "/api/models/metadata":
+                params = parse_qs(parsed.query)
+                reference = (params.get("model") or [""])[0].strip()
+                if not reference:
+                    self._send_json(
+                        {"model": "", "info": None, "error": "Missing model parameter."},
+                        status=HTTPStatus.BAD_REQUEST,
+                    )
+                    return
+                try:
+                    info = fetch_model_metadata(reference)
+                except Exception as exc:
+                    self._send_json({"model": reference, "info": None, "error": str(exc)})
+                else:
+                    self._send_json({"model": reference, "info": info, "error": None})
             elif parsed.path == "/api/sources":
                 self._send_json(list_sources())
             elif parsed.path == "/api/recipients":
@@ -1118,6 +1165,9 @@ HTML = r"""<!doctype html>
     .knob { border: 1px solid var(--line); border-radius: 14px; padding: 10px; background: #fff; box-shadow: 0 6px 16px rgba(36, 44, 60, 0.05); }
     .knob label { display: flex; gap: 6px; align-items: center; font-weight: 600; margin-bottom: 4px; }
     .knob code { display: none; }
+    .knob-links { margin-top: 6px; display: flex; gap: 10px; flex-wrap: wrap; font-size: 12px; }
+    .knob-links a { color: var(--blue); text-decoration: none; }
+    .knob-links a:hover { text-decoration: underline; }
     .knob-details { margin-top: 12px; }
     .knob-details > summary { cursor: pointer; color: var(--muted); font-weight: 600; }
     .form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 10px; }
@@ -1505,7 +1555,8 @@ HTML = r"""<!doctype html>
           `<option value="">${escapeHtml(emptyLabel || `default: ${formatDefault(knob.default)}`)}</option>`,
           ...options.map(opt => `<option value="${escapeHtml(opt)}"${current === opt ? " selected" : ""}>${escapeHtml(optionLabels[opt] || opt)}</option>`)
         ].join("");
-        return `<select${idAttr} data-env="${escapeHtml(knob.env)}">${opts}</select>`;
+        return `<select${idAttr} data-env="${escapeHtml(knob.env)}">${opts}</select>` + (knob.option_links && Object.keys(knob.option_links).length
+          ? `<div class="knob-links" data-links-for="${escapeHtml(knob.env)}"></div>` : "");
       }
       if (knob.type === "bool") {
         const normalized = String(current || "").toLowerCase();
@@ -1554,6 +1605,47 @@ HTML = r"""<!doctype html>
         titleTarget.insertAdjacentHTML("beforeend", `<span class="env-info" title="${escapeHtml(tip)}" aria-label="${escapeHtml(tip)}">i</span>`);
       });
     }
+    function renderKnobLinks(env) {
+      const container = document.querySelector(`[data-links-for="${env}"]`);
+      if (!container) {
+        console.warn(`renderKnobLinks: no [data-links-for="${env}"] container in the DOM`);
+        return;
+      }
+      const knob = knobByEnv(env);
+      if (!knob) {
+        container.innerHTML = `<span class="muted">Links unavailable</span>`;
+        return;
+      }
+      const links = knob.option_links ? knob.option_links : {};
+      // An empty select means "use the backend default"; mirror that
+      // resolution so the default model's links show on initial load and
+      // after Clear overrides / Reset defaults. Do NOT pre-select the
+      // default here (that would change collectEnv() submission semantics).
+      const value = currentControlValue(env) || (knob.default !== undefined && knob.default !== null ? String(knob.default) : "");
+      if (!value) { container.innerHTML = ""; return; }
+      const entry = links[value];
+      if (!entry) {
+        // Only fires for values set outside the offered options (external or
+        // typed-in ids) — drift-guard tests pin that every option has a link.
+        container.innerHTML = `<span class="muted">No Hugging Face page for this external model</span>`;
+        return;
+      }
+      // page and hardware are the same URL on purpose: HF's native Hardware
+      // Compatibility panel lives on the model page (see _model_option_links);
+      // a future "#hardware" anchor is a one-line change here.
+      container.innerHTML = [
+        `<a href="${escapeHtml(entry.page)}" target="_blank" rel="noopener noreferrer">Hugging Face page</a>`,
+        `<a href="${escapeHtml(entry.hardware)}" target="_blank" rel="noopener noreferrer" title="Native Hardware Compatibility panel (GGUF/MLX) on the model page">Hardware compatibility</a>`
+      ].join(" · ");
+    }
+    // Programmatic value changes (preset apply, clear/reset, startup restore)
+    // do not fire `change` events, so re-render links after those paths or the
+    // .knob-links container keeps the previous model's links.
+    function refreshModelKnobLinks() {
+      renderKnobLinks("NEWS_MODEL");
+      renderKnobLinks("NEWS_MODEL_ARTICLE_SUMMARY");
+      renderKnobLinks("NEWS_MODEL_STORY_DRAFTING");
+    }
     function renderTabs() {
       $("tabs").innerHTML = `<button id="navToggle" class="nav-toggle" title="Collapse navigation" aria-label="Collapse navigation"><span class="collapse-icon">${icons.chevronLeft}</span><span class="expand-icon">${icons.chevronRight}</span></button>` +
         tabs.map(([id, label, icon]) => `<button class="tab-button" data-tab="${id}" title="${escapeHtml(label)}">${icons[icon]}<span class="tab-text">${escapeHtml(label)}</span></button>`).join("");
@@ -1575,7 +1667,7 @@ HTML = r"""<!doctype html>
       const pieces = [
         preset ? `${preset.name || preset.id}` : "Custom run",
         `Sources ${runtime.source_scope || "core"}`,
-        `Recipients ${runtime.recipient_scope || "bradley"}`
+        `Recipients ${runtime.recipient_scope || "primary"}`
       ];
       $("presetSummary").textContent = pieces.join(" · ");
     }
@@ -1670,7 +1762,7 @@ HTML = r"""<!doctype html>
         peripheral: "All"
       };
       const recipientScopes = {
-        bradley: "Primary-only",
+        primary: "Primary-only",
         all: "All"
       };
       const articleModel = knobField("NEWS_MODEL_ARTICLE_SUMMARY", "Article model", { emptyLabel: "default: qwythos-9b-8bit" });
@@ -1719,7 +1811,7 @@ HTML = r"""<!doctype html>
               <label class="field"><span>Recipients</span>
                 <select id="recipientScope" data-env="NEWS_RECIPIENT_SCOPE">
                   <option value="">default: Primary-only</option>
-                  <option value="bradley"${currentControlValue("NEWS_RECIPIENT_SCOPE") === "bradley" ? " selected" : ""}>Primary-only</option>
+                  <option value="primary"${currentControlValue("NEWS_RECIPIENT_SCOPE") === "primary" ? " selected" : ""}>Primary-only</option>
                   <option value="all"${currentControlValue("NEWS_RECIPIENT_SCOPE") === "all" ? " selected" : ""}>All</option>
                 </select>
                 <code>NEWS_RECIPIENT_SCOPE</code>
@@ -1814,6 +1906,41 @@ HTML = r"""<!doctype html>
             </details>
           </section>
           <section class="panel">
+            <p class="eyebrow">Model catalog</p>
+            <h2>Curated models and Hugging Face search</h2>
+            <p class="muted">Curated models verified for the managed backends, per-task recommendations, and searchable Hugging Face models with runtime-fit verdicts (hardware fitting lives on the Hugging Face model page).</p>
+            <div class="form-grid">
+              <label class="field"><span>Recommendation task</span>
+                <select id="recommendationTask">
+                  <option value="">Pick a task…</option>
+                </select>
+                <code>task</code>
+              </label>
+            </div>
+            <div id="recommendationReadout" class="stack"></div>
+            <div id="catalogCards" class="stack"></div>
+            <details class="details">
+              <summary>Search Hugging Face</summary>
+              <div class="form-grid">
+                <label class="field"><span>Query</span><input id="modelSearchQuery" type="text" placeholder="e.g. qwythos"><code>q</code></label>
+                <label class="field"><span>Pipeline tag</span>
+                  <select id="modelSearchPipeline">
+                    <option value="">any</option>
+                    <option value="text-generation">text-generation</option>
+                    <option value="text2text-generation">text2text-generation</option>
+                    <option value="image-text-to-text">image-text-to-text</option>
+                  </select>
+                  <code>pipeline_tag</code>
+                </label>
+                <label class="field"><span>Limit</span><input id="modelSearchLimit" type="number" min="1" max="50" value="10"><code>limit</code></label>
+              </div>
+              <div class="toolbar">
+                <button id="modelSearchBtn">Search</button>
+              </div>
+              <div id="modelSearchResults" class="stack"></div>
+            </details>
+          </section>
+          <section class="panel">
             <p class="eyebrow">Budgets</p>
             <h2>Run budgets and quotas</h2>
             <div class="form-grid">
@@ -1885,11 +2012,22 @@ HTML = r"""<!doctype html>
       renderModelTuningControls("article_summary");
       renderModelTuningControls("story_drafting");
       decorateEnvHints($("runSetupMount"));
+      renderKnobLinks("NEWS_MODEL_ARTICLE_SUMMARY");
+      renderKnobLinks("NEWS_MODEL_STORY_DRAFTING");
       renderPromptProfilePanel();
+      renderModelCatalogPanel();
       $("actionSelect").value = "run";
       $("sourceOptions").classList.add("hidden");
       $("actionSelect").onchange = () => {
         $("sourceOptions").classList.toggle("hidden", !["check-sources","prune-sources","source-languages"].includes(value("actionSelect")));
+      };
+      $("recommendationTask").onchange = () => renderRecommendations(value("recommendationTask"));
+      $("modelSearchBtn").onclick = () => searchHuggingFaceModels().catch(err => setStatus(err.message, "bad"));
+      $("modelSearchQuery").onkeydown = ev => {
+        if (ev.key === "Enter") {
+          ev.preventDefault();
+          searchHuggingFaceModels().catch(err => setStatus(err.message, "bad"));
+        }
       };
     }
     function renderModelTuningControls(task, { preserveEditor = false } = {}) {
@@ -2080,6 +2218,7 @@ HTML = r"""<!doctype html>
       renderModelTuningControls("article_summary");
       renderModelTuningControls("story_drafting");
       renderPromptProfilePanel();
+      refreshModelKnobLinks();
       preview("run").catch(() => {});
     }
     function setKnobEnv(env) {
@@ -2166,6 +2305,7 @@ HTML = r"""<!doctype html>
         `;
       }).join("");
       decorateEnvHints($("knobContainer"));
+      renderKnobLinks("NEWS_MODEL");
     }
     function collectModelTuningPresetBody(task) {
       return modelTuningPayload(task);
@@ -2382,6 +2522,122 @@ HTML = r"""<!doctype html>
         };
       });
     }
+    const MODEL_TASK_LABELS = {
+      factual_extraction: "Factual extraction",
+      structured_output: "Structured output",
+      synthesis: "Synthesis",
+      citation_fidelity: "Citation fidelity",
+      speed: "Speed",
+      context_length: "Context length",
+      translation: "Translation"
+    };
+    const RUNTIME_FIT_LABELS = {
+      managed_mlx_lm: "Managed mlx-lm",
+      managed_mlx_vlm: "Managed mlx-vlm",
+      external_only: "External only"
+    };
+    function modelCatalogEntries() {
+      return (state.schema && state.schema.model_catalog) || [];
+    }
+    function useModelReference(reference) {
+      const sel = document.querySelector('[data-env="NEWS_MODEL"]');
+      if (!sel) return;
+      if (!Array.from(sel.options).some(option => option.value === reference)) {
+        sel.insertAdjacentHTML("afterbegin", `<option value="${escapeHtml(reference)}">${escapeHtml(reference)}</option>`);
+      }
+      sel.value = reference;
+      sel.dispatchEvent(new Event("change"));
+    }
+    function renderModelCatalogPanel() {
+      const select = $("recommendationTask");
+      if (!select) return;
+      const tasks = (state.schema && state.schema.model_recommendation_tasks) || [];
+      select.innerHTML = `<option value="">Pick a task…</option>` + tasks.map(task =>
+        `<option value="${escapeHtml(task)}">${escapeHtml(MODEL_TASK_LABELS[task] || task)}</option>`
+      ).join("");
+      const cards = $("catalogCards");
+      cards.innerHTML = modelCatalogEntries().map(entry => `
+        <div class="knob">
+          <label>${escapeHtml(entry.name)} <code>${escapeHtml(entry.alias)}</code></label>
+          <p class="muted">${escapeHtml(entry.description)}</p>
+          <p class="muted">Backend: ${escapeHtml(entry.backend)} · Context: ${entry.context_length != null ? escapeHtml(String(entry.context_length)) : "n/a"} · <a href="${escapeHtml(entry.hf_url)}" target="_blank" rel="noopener">Hugging Face page</a></p>
+          <div class="toolbar"><button data-use-model="${escapeHtml(entry.alias)}">Set as default model</button></div>
+        </div>
+      `).join("");
+      cards.querySelectorAll("[data-use-model]").forEach(btn => {
+        btn.onclick = () => useModelReference(btn.dataset.useModel);
+      });
+      renderRecommendations(select.value);
+    }
+    function renderRecommendations(task) {
+      const container = $("recommendationReadout");
+      if (!container) return;
+      if (!task) {
+        container.innerHTML = `<p class="muted">Pick a task to see curated recommendations.</p>`;
+        return;
+      }
+      const picks = modelCatalogEntries().filter(entry => entry.task_notes && entry.task_notes[task]);
+      if (!picks.length) {
+        container.innerHTML = `<p class="muted">No verified curated model for this task yet — search below for a candidate.</p>`;
+        return;
+      }
+      container.innerHTML = picks.map(entry => `
+        <div class="knob">
+          <label>${escapeHtml(entry.name)} <code>${escapeHtml(entry.alias)}</code></label>
+          <p class="muted">${escapeHtml(entry.task_notes[task])}</p>
+          <div class="toolbar"><button data-use-model="${escapeHtml(entry.alias)}">Use</button></div>
+        </div>
+      `).join("");
+      container.querySelectorAll("[data-use-model]").forEach(btn => {
+        btn.onclick = () => useModelReference(btn.dataset.useModel);
+      });
+    }
+    async function searchHuggingFaceModels() {
+      const container = $("modelSearchResults");
+      if (!container) return;
+      const query = value("modelSearchQuery").trim();
+      if (!query) {
+        container.innerHTML = `<p class="muted">Enter a query to search Hugging Face.</p>`;
+        return;
+      }
+      const pipeline = value("modelSearchPipeline");
+      const limit = parseInt(value("modelSearchLimit") || "10", 10) || 10;
+      container.innerHTML = `<p class="muted">Searching…</p>`;
+      try {
+        const data = await api(`/api/models/search?q=${encodeURIComponent(query)}&pipeline_tag=${encodeURIComponent(pipeline)}&limit=${limit}`);
+        if (data.error) {
+          container.innerHTML = `<p class="muted">${escapeHtml(data.error)}</p>`;
+          return;
+        }
+        const models = data.models || [];
+        if (!models.length) {
+          container.innerHTML = `<p class="muted">No models found.</p>`;
+          return;
+        }
+        const backendExternal = (state.schema && state.schema.current_env && state.schema.current_env.NEWS_MODEL_BACKEND) === "external";
+        container.innerHTML = models.map(item => {
+          const fit = item.runtime_fit || {};
+          const fitLabel = RUNTIME_FIT_LABELS[fit.status] || fit.status || "unknown";
+          const externalOnly = fit.status === "external_only";
+          const useDisabled = externalOnly && !backendExternal;
+          return `
+            <div class="knob">
+              <label><a href="${escapeHtml(item.hf_url)}" target="_blank" rel="noopener">${escapeHtml(item.id)}</a></label>
+              <p class="muted">${escapeHtml(item.pipeline_tag || "-")} · ${escapeHtml(item.library_name || "-")} · downloads ${escapeHtml(String(item.downloads ?? "-"))} · likes ${escapeHtml(String(item.likes ?? "-"))} · context ${item.context_length != null ? escapeHtml(String(item.context_length)) : "-"}</p>
+              <p class="muted">Fit: ${escapeHtml(fitLabel)} — ${escapeHtml(fit.reason || "")}</p>
+              <div class="toolbar">
+                <button data-use-hf-model="${escapeHtml(item.id)}" ${useDisabled ? "disabled" : ""}>${useDisabled ? "External only — set NEWS_MODEL_BACKEND=external to use" : "Use"}</button>
+              </div>
+            </div>
+          `;
+        }).join("");
+        container.querySelectorAll("[data-use-hf-model]").forEach(btn => {
+          btn.onclick = () => useModelReference(btn.dataset.useHfModel);
+        });
+      } catch (err) {
+        container.innerHTML = `<p class="muted">${escapeHtml(err.message)}</p>`;
+      }
+    }
     async function comparePromptProfiles() {
       const selectedId = currentControlValue("NEWS_PROMPT_PROFILE") || "balanced";
       const data = await api(`/api/prompt-profiles/compare?profile=${encodeURIComponent(selectedId)}`);
@@ -2425,6 +2681,7 @@ HTML = r"""<!doctype html>
         renderModelTuningControls("article_summary");
         renderModelTuningControls("story_drafting");
         renderPromptProfilePanel();
+        refreshModelKnobLinks();
         preview("run").catch(() => {});
       };
       $("resetDefaultsBtn").onclick = () => {
@@ -2437,6 +2694,7 @@ HTML = r"""<!doctype html>
         renderModelTuningControls("article_summary");
         renderModelTuningControls("story_drafting");
         renderPromptProfilePanel();
+        refreshModelKnobLinks();
         preview("run").catch(() => {});
       };
       $("promptProfileSelect").onchange = () => {
@@ -2495,6 +2753,12 @@ HTML = r"""<!doctype html>
       renderModelTuningControls("article_summary");
       renderModelTuningControls("story_drafting");
       wireEvents();
+      document.addEventListener("change", (event) => {
+        const el = event.target;
+        if (el && el.matches && el.matches("select[data-env]")) {
+          renderKnobLinks(el.dataset.env);
+        }
+      });
       await loadSources();
       await loadRecipients();
       state.presets = (state.schema.presets && state.schema.presets.presets) || [];
@@ -2503,6 +2767,7 @@ HTML = r"""<!doctype html>
         state.selectedRunPresetId = state.schema.runtime.preset_id;
         applySelectedPresetFromState();
       }
+      refreshModelKnobLinks();
       renderRunPresetDrawer();
       renderPresetSummary();
       if (state.schema.removed_topic_env_vars && state.schema.removed_topic_env_vars.length) {

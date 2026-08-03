@@ -24,6 +24,7 @@ from .story_records import (
     story_rank_key,
 )
 from .prompt_catalog import DEFAULT_PROMPT_INSTRUCTIONS
+from .prompt_contracts import STORY_SCALE_SCREENING_JSON_CONTRACT
 
 
 STORY_SCALE_VERDICTS = {
@@ -264,8 +265,9 @@ def _global_scale_screening_prompt_messages(
             ).strip()
         )
 
-    # The JSON example below contains literal braces, so this template cannot be
-    # an f-string; use .format() instead and escape JSON braces as {{ }}.
+    # The JSON contract is injected as a .format() VALUE (inserted verbatim,
+    # never re-parsed), so its single braces are safe here; only the template
+    # itself must stay an f-string-free .format() block.
     # .format() must run after dedent() because the injected screening_guidance
     # is multi-line (byte-identity drift-guard: tests/test_prompt_catalog.py).
     # User-entered guidance (prompt overrides) may contain literal braces.
@@ -299,12 +301,7 @@ def _global_scale_screening_prompt_messages(
 
             {screening_guidance}
 
-            Return only valid JSON as an array of objects:
-            [{{
-              "story_key":"...",
-              "scale":"obviously_large_scale|not_obvious|obviously_small_scale",
-              "scale_reason":"short scale reason"
-            }}]
+            {scale_contract}
             """
         ).format(
             screening_guidance=(
@@ -312,7 +309,8 @@ def _global_scale_screening_prompt_messages(
                  or DEFAULT_PROMPT_INSTRUCTIONS["story_scale_screening"])
                 .replace("{", "{{")
                 .replace("}", "}}")
-            )
+            ),
+            scale_contract=STORY_SCALE_SCREENING_JSON_CONTRACT,
         ).replace("{{", "{").replace("}}", "}").strip()
     )
     user_prompt = HumanMessage(

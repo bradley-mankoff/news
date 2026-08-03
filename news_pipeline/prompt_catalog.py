@@ -5,8 +5,9 @@ the five LLM prompt stages (article summary, story scale screening, story
 drafting, title generation, image art direction). The machine-required output
 contracts (``DATABASE_ENTRY:`` blocks, ``Headline:``/``Main story:``/
 ``Contradictions:`` format, ``[[S1]]`` citation markers, strict JSON for image
-art, retry correction messages, scale label vocabulary) stay hardcoded in the
-stage modules. Profiles only swap the editorial sentences.
+art, retry correction messages, scale label vocabulary) live in
+``news_pipeline/prompt_contracts.py`` (ADR 0011); profiles only swap the
+editorial sentences.
 
 This module is deliberately stdlib-only (``dataclasses``, ``difflib``,
 ``typing``) so that ``config.py`` can import it without creating an import
