@@ -46,12 +46,12 @@ CONTRACT = """      ## Deferred work
       issues: `gh issue list -R bradley-mankoff/news --state open --limit 200
       --json number,title,body` (and `--state closed` for the Supersedes check).
       Read each candidate's TITLE and INITIAL DESCRIPTION (the body — never the
-      comments). Using the repo context (HANDOFF.md pending items, ADRs, this
+      comments). Using the repo context (pending checklists, ADRs, this
       issue) decide per item, and stamp the item accordingly:
       - an open issue already covers the SAME deliverable (the same work, not
         just the same topic or family) — including the issue being implemented
         when the deferred item is part of ITS remaining scope, and any
-        HANDOFF.md/ADR item that already has a tracking issue:
+        a pending-checklist/ADR item that already has a tracking issue:
         add `**Links to:** #N`.
       - a closed issue covered it (done or abandoned): add `**Supersedes:** #N`
         (the poller creates a new issue referencing it).
