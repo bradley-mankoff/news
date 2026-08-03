@@ -33,8 +33,10 @@ between lanes. Contract:
   source issue. Deferral language or unchecked acceptance criteria without the
   section post a verification comment instead (never auto-create from prose).
   Idempotent via per-run state markers; retried next poll on failure.
-- Dispatch = `archon workflow run <wf> --branch <branch> --detach "<msg>"`
-  executed in the repo root.
+- Dispatch = `archon workflow run <wf> --branch <branch> "<msg>"` executed in
+  the repo root as a detached child (`subprocess.Popen` + `start_new_session`).
+  `--detach` is NOT used — the archon-pi build's detached-child spawn is broken
+  (see `dispatch()`).
 
 Config: automation/config.json (repo, committed).
 State:  automation/state.json (gitignored, machine-local).
@@ -458,9 +460,15 @@ def find_or_create_ship_pr(cfg: dict, env: dict, head: str, title: str,
     r = gh(["pr", "create", "-R", cfg["repo"], "--base", base, "--head", head,
             "--title", title, "--body", body], env)
     if r.returncode != 0:
+        log(f"find_or_create_ship_pr: gh pr create failed (head={head}): "
+            f"{r.stderr.strip()[:200]}")
         return None
     m = re.search(r"pull/(\d+)", r.stdout or "")
-    return {"number": int(m.group(1)), "headRefName": head} if m else None
+    if not m:
+        log(f"find_or_create_ship_pr: cannot parse PR number from: "
+            f"{r.stdout[:200]!r}")
+        return None
+    return {"number": int(m.group(1)), "headRefName": head}
 
 
 def pick_workflow(cfg: dict, labels: list[str]) -> str:
@@ -1057,7 +1065,17 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
                     # (feature -> main); on an approving review the poller merges it.
                     merge_base = cfg["dispatch"]["todo"].get(
                         "merge_develop_base", "develop")
-                    pr, _pr_ok = find_issue_pr(cfg, env, content["number"], base=merge_base)
+                    pr, pr_ok = find_issue_pr(cfg, env, content["number"], base=merge_base)
+                    if not pr_ok:
+                        # A gh failure must never be misread as "no PR": the
+                        # develop merge would be skipped and the ship PR built
+                        # from a guessed head branch. Keep the item in place
+                        # (status not recorded -> lane re-entered next poll)
+                        # and retry then.
+                        log(f"REVIEW PREP DEFERRED item={item_id} "
+                            f"issue={content['number']}: PR lookup failed "
+                            "(gh error); retrying next poll")
+                        continue
                     if pr:
                         ok, note = merge_pr_to_base(cfg, env, pr, merge_base,
                                                     content["number"])
@@ -1080,6 +1098,9 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
                             review_msg = msg
                             ship_pr_num = ship["number"]
                             fresh_dispatched.add(item_id)
+                    else:
+                        log(f"SHIP PR CREATE FAILED issue={content['number']} "
+                            f"head={head} (gh error); will retry on next lane change")
 
         rec = state.get(item_id, {})
         rec["status"] = status_val
@@ -1169,15 +1190,24 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
                 issue_number = rec.get("issue_number")
                 blocked_name = next(
                     (k for k, v in cfg["lanes"].items() if v == "blocked"), None)
-                if (issue_number and blocked_name
-                        and issue_has_label(cfg, env, issue_number, "needs-input")):
-                    option_id = status_options.get(blocked_name)
-                    if option_id and move_to_lane(
-                            cfg, env, project_id, item_id, field_id, option_id):
-                        log(f"BLOCKED item={item_id} issue={issue_number} -> "
-                            f"{blocked_name} (awaiting human input)")
-                    rec.pop("dispatch_msg", None)
-                    continue
+                if issue_number and blocked_name:
+                    label_state = issue_has_label(
+                        cfg, env, issue_number, "needs-input")
+                    if label_state is None:
+                        # gh failure — must not be misread as "label absent":
+                        # the run may be awaiting human input. Keep the marker
+                        # and retry next poll (never advance on uncertainty).
+                        log(f"LABEL CHECK UNREADABLE issue={issue_number}; holding "
+                            "completion until the needs-input state is known")
+                        continue
+                    if label_state:
+                        option_id = status_options.get(blocked_name)
+                        if option_id and move_to_lane(
+                                cfg, env, project_id, item_id, field_id, option_id):
+                            log(f"BLOCKED item={item_id} issue={issue_number} -> "
+                                f"{blocked_name} (awaiting human input)")
+                        rec.pop("dispatch_msg", None)
+                        continue
                 merge_base = cfg["dispatch"]["todo"].get("merge_develop_base")
                 merge_ok = True
                 pr_num = None

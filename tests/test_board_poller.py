@@ -832,5 +832,402 @@ class ResumeIssueTests(unittest.TestCase):
         self.assertIsNone(full)
 
 
+class FindIssuePrTest(unittest.TestCase):
+    """HIGH: the (pr, ok) tri-state contract that gates the develop merge.
+
+    A gh failure must return (None, False) so callers defer instead of
+    advancing past the integration gate; a genuinely absent PR is
+    (None, True) — the two must stay distinguishable.
+    """
+
+    def _cfg(self):
+        return {"repo": "o/r"}
+
+    def test_gh_failure_returns_ok_false(self):
+        with patch("automation.board_poller.gh",
+                   return_value=_cp(returncode=1, stderr="rate limited")), \
+             patch("automation.board_poller.log"):
+            pr, ok = bp.find_issue_pr(self._cfg(), {}, 21)
+        self.assertIsNone(pr)
+        self.assertFalse(ok)          # caller must NOT advance
+
+    def test_unparseable_output_returns_ok_false(self):
+        with patch("automation.board_poller.gh",
+                   return_value=_cp(stdout="not json")), \
+             patch("automation.board_poller.log"):
+            pr, ok = bp.find_issue_pr(self._cfg(), {}, 21)
+        self.assertIsNone(pr)
+        self.assertFalse(ok)
+
+    def test_no_pr_returns_ok_true(self):
+        with patch("automation.board_poller.gh", return_value=_cp(stdout="[]")):
+            pr, ok = bp.find_issue_pr(self._cfg(), {}, 21)
+        self.assertIsNone(pr)
+        self.assertTrue(ok)           # genuinely absent is distinguishable
+
+    def test_base_filter_propagates(self):
+        prs = json.dumps([
+            {"number": 47, "baseRefName": "develop", "body": "Issue: #21",
+             "title": "", "headRefName": "h", "state": "OPEN"},
+            {"number": 51, "baseRefName": "main", "body": "Issue #21",
+             "title": "", "headRefName": "h", "state": "OPEN"},
+        ])
+        with patch("automation.board_poller.gh", return_value=_cp(stdout=prs)):
+            pr, ok = bp.find_issue_pr(self._cfg(), {}, 21, base="develop")
+        self.assertTrue(ok)
+        self.assertEqual(pr["number"], 47)
+
+
+class FindOrCreateShipPrTest(unittest.TestCase):
+    """Ship-PR create failures must be logged, never silently ignored — the
+    review lane was stranding items with no log entry when gh failed."""
+
+    def _cfg(self):
+        return {"repo": "o/r"}
+
+    def test_reuses_existing_open_pr_for_head_and_base(self):
+        prs = json.dumps([{"number": 88, "baseRefName": "main"}])
+        with patch("automation.board_poller.gh", return_value=_cp(stdout=prs)):
+            pr = bp.find_or_create_ship_pr(
+                self._cfg(), {}, "archon/task-issue-5", "Ship: X (#5)", 5, "main")
+        self.assertEqual(pr["number"], 88)
+
+    def test_create_parses_pull_number_from_url(self):
+        def fake_gh(args, env, timeout=90):
+            if args[0:2] == ["pr", "list"]:
+                return _cp(stdout="[]")
+            if args[0:2] == ["pr", "create"]:
+                return _cp(stdout="https://github.com/o/r/pull/77")
+            return _cp(returncode=1)
+        with patch("automation.board_poller.gh", side_effect=fake_gh):
+            pr = bp.find_or_create_ship_pr(
+                self._cfg(), {}, "head", "T", 5, "main")
+        self.assertEqual(pr["number"], 77)
+
+    def test_create_failure_logged_and_returns_none(self):
+        def fake_gh(args, env, timeout=90):
+            if args[0:2] == ["pr", "list"]:
+                return _cp(stdout="[]")
+            return _cp(returncode=1, stderr="boom")
+        with patch("automation.board_poller.gh", side_effect=fake_gh), \
+             patch("automation.board_poller.log") as log:
+            pr = bp.find_or_create_ship_pr(
+                self._cfg(), {}, "head", "T", 5, "main")
+        self.assertIsNone(pr)
+        self.assertTrue(any("pr create failed" in c[0][0]
+                            for c in log.call_args_list))
+
+    def test_unparseable_stdout_logged_and_returns_none(self):
+        def fake_gh(args, env, timeout=90):
+            if args[0:2] == ["pr", "list"]:
+                return _cp(stdout="[]")
+            if args[0:2] == ["pr", "create"]:
+                return _cp(stdout="something unexpected")
+            return _cp(returncode=1)
+        with patch("automation.board_poller.gh", side_effect=fake_gh), \
+             patch("automation.board_poller.log") as log:
+            pr = bp.find_or_create_ship_pr(
+                self._cfg(), {}, "head", "T", 5, "main")
+        self.assertIsNone(pr)
+        self.assertTrue(any("cannot parse PR number" in c[0][0]
+                            for c in log.call_args_list))
+
+
+class PollFlowTest(unittest.TestCase):
+    """poll()-level flow tests: the state-machine glue between helpers.
+
+    The pre-rewrite suite's PollFlowTest was deleted in this PR; these restore
+    coverage of the highest-risk orchestration: the todo dep gate, the
+    review-lane gh-failure deferral, the needs-input gate, and the
+    verdict-gated ship merge. External CLIs are mocked; no network required.
+    """
+
+    def _cfg(self):
+        cfg = _cfg()
+        cfg["dispatch"]["review"]["merge_ship_on_approve"] = True
+        return cfg
+
+    def _item(self, number, lane, body="", labels=None):
+        return {"id": f"item-{number}", "status": lane, "content": {
+            "__typename": "Issue", "number": number,
+            "title": f"Issue {number}",
+            "url": f"https://github.com/{REPO}/issues/{number}",
+            "repository": {"nameWithOwner": REPO},
+            "labels": {"nodes": [{"name": l} for l in (labels or [])]},
+            "state": "OPEN", "body": body}}
+
+    def _project(self, items):
+        return ("project-1", "field-1",
+                {"Backlog": "o-backlog", "Todo": "o-todo",
+                 "In Progress": "o-ip", "Blocked": "o-blocked",
+                 "Ready for Review": "o-ready", "In Review": "o-review",
+                 "Done": "o-done"}, items)
+
+    def test_unsatisfied_dep_blocks_dispatch_and_moves_to_blocked(self):
+        state = {"_meta": {"snapshot_done": True},
+                 "item-31": {"status": "Backlog"},
+                 "item-30": {"status": "Todo"}}  # dep item: no transition
+        items = [self._item(31, "Todo", body="Depends on: #30"),
+                 self._item(30, "Todo")]
+        with patch("automation.board_poller.fetch_project",
+                   return_value=self._project(items)), \
+             patch("automation.board_poller.move_to_lane",
+                   return_value=True) as move, \
+             patch("automation.board_poller.dispatch") as dispatch, \
+             patch("automation.board_poller.comment_issue",
+                   return_value=True) as comment, \
+             patch("automation.board_poller.log"), \
+             patch("automation.board_poller.save_state"):
+            bp.poll(self._cfg(), {}, state)
+        dispatch.assert_not_called()      # never dispatch before deps ship
+        # routed to the Blocked lane with the dep marker recorded
+        self.assertTrue(any(c.args[5] == "o-blocked"
+                            for c in move.call_args_list))
+        self.assertEqual(state["item-31"]["dep_blocked"], [30])
+        self.assertTrue(any("depends on #30" in c.args[3]
+                            for c in comment.call_args_list))
+        self.assertEqual(state["item-31"]["status"], "Blocked")
+
+    def test_review_lane_gh_lookup_failure_defers(self):
+        """A gh failure on the develop-PR lookup must never build a ship PR
+        from a guessed head branch or dispatch a review."""
+        state = {"_meta": {"snapshot_done": True},
+                 "item-5": {"status": "Ready for Review"}}
+        items = [self._item(5, "In Review")]
+        with patch("automation.board_poller.fetch_project",
+                   return_value=self._project(items)), \
+             patch("automation.board_poller.find_issue_pr",
+                   return_value=(None, False)) as find_pr, \
+             patch("automation.board_poller.find_or_create_ship_pr") as ship, \
+             patch("automation.board_poller.dispatch") as dispatch, \
+             patch("automation.board_poller.merge_pr_to_base") as merge, \
+             patch("automation.board_poller.log") as log, \
+             patch("automation.board_poller.save_state"):
+            bp.poll(self._cfg(), {}, state)
+        find_pr.assert_called_once()
+        ship.assert_not_called()
+        dispatch.assert_not_called()
+        merge.assert_not_called()
+        # status NOT recorded -> lane re-entered next poll (retry)
+        self.assertEqual(state["item-5"]["status"], "Ready for Review")
+        self.assertTrue(any("REVIEW PREP DEFERRED" in c[0][0]
+                            for c in log.call_args_list))
+
+    def test_needs_input_label_moves_completed_run_to_blocked(self):
+        state = {"_meta": {"snapshot_done": True},
+                 "item-5": {"status": "In Progress", "dispatch_msg": "run msg",
+                            "issue_number": 5}}
+        items = [self._item(5, "In Progress")]
+        with patch("automation.board_poller.fetch_project",
+                   return_value=self._project(items)), \
+             patch("automation.board_poller.fetch_runs_by_message",
+                   return_value={"run msg": "completed"}), \
+             patch("automation.board_poller.issue_has_label",
+                   return_value=True), \
+             patch("automation.board_poller.find_issue_pr") as find_pr, \
+             patch("automation.board_poller.move_to_lane",
+                   return_value=True) as move, \
+             patch("automation.board_poller.log"), \
+             patch("automation.board_poller.save_state"):
+            bp.poll(self._cfg(), {}, state)
+        self.assertTrue(any(c.args[5] == "o-blocked"
+                            for c in move.call_args_list))
+        find_pr.assert_not_called()      # no develop merge while blocked
+        self.assertNotIn("dispatch_msg", state["item-5"])
+
+    def test_needs_input_label_lookup_failure_holds_completion(self):
+        """A gh failure on the label check must NOT be misread as 'label
+        absent': the run may be awaiting human input — keep the marker."""
+        state = {"_meta": {"snapshot_done": True},
+                 "item-5": {"status": "In Progress", "dispatch_msg": "run msg",
+                            "issue_number": 5}}
+        items = [self._item(5, "In Progress")]
+        with patch("automation.board_poller.fetch_project",
+                   return_value=self._project(items)), \
+             patch("automation.board_poller.fetch_runs_by_message",
+                   return_value={"run msg": "completed"}), \
+             patch("automation.board_poller.issue_has_label",
+                   return_value=None), \
+             patch("automation.board_poller.find_issue_pr") as find_pr, \
+             patch("automation.board_poller.move_to_lane") as move, \
+             patch("automation.board_poller.log") as log, \
+             patch("automation.board_poller.save_state"):
+            bp.poll(self._cfg(), {}, state)
+        move.assert_not_called()
+        find_pr.assert_not_called()      # no develop merge on uncertainty
+        self.assertEqual(state["item-5"]["dispatch_msg"], "run msg")
+        self.assertEqual(state["item-5"]["status"], "In Progress")
+        self.assertTrue(any("LABEL CHECK UNREADABLE" in c[0][0]
+                            for c in log.call_args_list))
+
+    def _review_state(self):
+        return {"_meta": {"snapshot_done": True},
+                "item-5": {"status": "In Review", "review_msg": "rv msg",
+                           "ship_pr": 51, "issue_number": 5}}
+
+    def _ship_pr_gh(self):
+        calls = []
+
+        def fake_gh(args, env, timeout=90):
+            calls.append(args)
+            if args[0:2] == ["pr", "view"]:
+                return _cp(stdout=json.dumps(
+                    {"number": 51, "state": "OPEN", "baseRefName": "main"}))
+            if args[0:2] == ["pr", "merge"]:
+                return _cp()
+            if args[0:2] == ["issue", "close"]:
+                return _cp()
+            return _cp(returncode=1)
+        return calls, fake_gh
+
+    def test_approving_verdict_merges_ship_pr_and_closes_issue(self):
+        state = self._review_state()
+        items = [self._item(5, "In Review")]
+        calls, fake_gh = self._ship_pr_gh()
+        with patch("automation.board_poller.fetch_project",
+                   return_value=self._project(items)), \
+             patch("automation.board_poller.fetch_runs_by_message",
+                   return_value={"rv msg": "completed"}), \
+             patch("automation.board_poller.fetch_verdict",
+                   return_value=("approve", True)), \
+             patch("automation.board_poller.gh", side_effect=fake_gh), \
+             patch("automation.board_poller.move_to_lane",
+                   return_value=True) as move, \
+             patch("automation.board_poller.log"), \
+             patch("automation.board_poller.save_state"):
+            bp.poll(self._cfg(), {}, state)
+        self.assertTrue(any(a[0:2] == ["pr", "merge"] for a in calls))
+        self.assertTrue(any(a[0:2] == ["issue", "close"] for a in calls))
+        self.assertTrue(any(c.args[5] == "o-done"
+                            for c in move.call_args_list))
+        self.assertNotIn("review_msg", state["item-5"])
+        self.assertNotIn("ship_pr", state["item-5"])
+
+    def test_non_approve_verdict_holds_ship_and_pops_markers(self):
+        state = self._review_state()
+        items = [self._item(5, "In Review")]
+        calls, fake_gh = self._ship_pr_gh()
+        with patch("automation.board_poller.fetch_project",
+                   return_value=self._project(items)), \
+             patch("automation.board_poller.fetch_runs_by_message",
+                   return_value={"rv msg": "completed"}), \
+             patch("automation.board_poller.fetch_verdict",
+                   return_value=("none", True)), \
+             patch("automation.board_poller.gh", side_effect=fake_gh), \
+             patch("automation.board_poller.comment_issue",
+                   return_value=True) as comment, \
+             patch("automation.board_poller.move_to_lane") as move, \
+             patch("automation.board_poller.log") as log, \
+             patch("automation.board_poller.save_state"):
+            bp.poll(self._cfg(), {}, state)
+        comment.assert_called_once()
+        self.assertIn("did not approve", comment.call_args[0][3])
+        move.assert_not_called()
+        self.assertFalse(any(a[0:2] == ["pr", "merge"] for a in calls))
+        self.assertNotIn("review_msg", state["item-5"])
+        self.assertTrue(any("SHIP HELD" in c[0][0]
+                            for c in log.call_args_list))
+
+    def test_hold_notice_failure_keeps_markers_for_retry(self):
+        state = self._review_state()
+        items = [self._item(5, "In Review")]
+        calls, fake_gh = self._ship_pr_gh()
+        with patch("automation.board_poller.fetch_project",
+                   return_value=self._project(items)), \
+             patch("automation.board_poller.fetch_runs_by_message",
+                   return_value={"rv msg": "completed"}), \
+             patch("automation.board_poller.fetch_verdict",
+                   return_value=("none", True)), \
+             patch("automation.board_poller.gh", side_effect=fake_gh), \
+             patch("automation.board_poller.comment_issue",
+                   return_value=False), \
+             patch("automation.board_poller.move_to_lane"), \
+             patch("automation.board_poller.log"), \
+             patch("automation.board_poller.save_state"):
+            bp.poll(self._cfg(), {}, state)
+        self.assertEqual(state["item-5"]["review_msg"], "rv msg")
+        self.assertEqual(state["item-5"]["ship_pr"], 51)
+
+
+class ReconcileDeferredWorkCreateTest(unittest.TestCase):
+    """The auto-create path: dedupe (link/create-ref) + create + board + the
+    linkage comment. A parse or wiring bug here silently creates duplicate or
+    unboarded tracking issues."""
+
+    def _cfg(self):
+        return {"deferred_work": {}, "default_lane": "Backlog",
+                "repo": "o/r", "project_number": 1,
+                "project_owner": "o"}
+
+    def _deferred_comment(self):
+        return {"body": ("## Deferred work\n"
+                          "- **Title:** Add llama.cpp backend\n"
+                          "  **Description:** Port the model layer.\n"
+                          "  **Reason:** Packaging.\n")}
+
+    def _run(self, open_stdout="[]", closed_stdout="[]", rec=None):
+        rec = {} if rec is None else rec
+        calls = []
+
+        def fake_gh(args, env, timeout=90):
+            calls.append(args)
+            if args[0:2] == ["issue", "view"]:
+                return _cp(stdout=json.dumps(
+                    {"title": "T", "comments": [self._deferred_comment()]}))
+            if args[0:2] == ["issue", "list"]:
+                state = args[args.index("--state") + 1]
+                return _cp(stdout=open_stdout if state == "open" else closed_stdout)
+            if args[0:2] == ["issue", "create"]:
+                return _cp(stdout="https://github.com/o/r/issues/99")
+            if args[0:2] == ["project", "item-add"]:
+                return _cp(stdout='{"itemId": "PVTI_1"}')
+            if args[0:2] == ["issue", "comment"]:
+                return _cp()
+            return _cp(returncode=1)
+        with patch("automation.board_poller.gh", side_effect=fake_gh), \
+             patch("automation.board_poller.move_to_lane", return_value=True):
+            ok = reconcile_deferred_work(
+                self._cfg(), {}, 5, None, rec, "run-1",
+                "p", "f", {"Backlog": "o1"})
+        return ok, rec, calls
+
+    def test_creates_boards_and_links_new_items(self):
+        ok, rec, calls = self._run()
+        self.assertTrue(ok)
+        self.assertEqual(rec["deferred_handled"], "run-1")
+        creates = [a for a in calls if a[0:2] == ["issue", "create"]]
+        self.assertEqual(len(creates), 1)
+        self.assertIn("Add llama.cpp backend", creates[0])
+        adds = [a for a in calls if a[0:2] == ["project", "item-add"]]
+        self.assertEqual(len(adds), 1)
+        self.assertTrue(any("/issues/99" in a for a in adds[0]))
+        comments = [a for a in calls if a[0:2] == ["issue", "comment"]]
+        self.assertEqual(len(comments), 1)
+        self.assertIn("#99", comments[0][-1])
+
+    def test_open_match_links_without_creating(self):
+        existing = json.dumps([{"number": 99,
+                               "title": "Add llama.cpp backend"}])
+        ok, rec, calls = self._run(open_stdout=existing)
+        self.assertTrue(ok)
+        self.assertEqual(rec["deferred_handled"], "run-1")
+        self.assertFalse(any(a[0:2] == ["issue", "create"] for a in calls))
+        self.assertFalse(any(a[0:2] == ["project", "item-add"] for a in calls))
+        comments = [a for a in calls if a[0:2] == ["issue", "comment"]]
+        self.assertEqual(len(comments), 1)
+        self.assertIn("already tracked in #99", comments[0][-1])
+
+    def test_closed_match_creates_ref_superseding_closed(self):
+        existing = json.dumps([{"number": 98,
+                               "title": "Add llama.cpp backend"}])
+        ok, rec, calls = self._run(closed_stdout=existing)
+        self.assertTrue(ok)
+        creates = [a for a in calls if a[0:2] == ["issue", "create"]]
+        self.assertEqual(len(creates), 1)
+        comments = [a for a in calls if a[0:2] == ["issue", "comment"]]
+        self.assertEqual(len(comments), 1)
+        self.assertIn("supersedes closed #98", comments[0][-1])
+
+
 if __name__ == "__main__":
     unittest.main()
