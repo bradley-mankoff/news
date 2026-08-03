@@ -265,11 +265,13 @@ class ParseDeferredWorkTest(unittest.TestCase):
              "description": "Port the model layer to llama.cpp.",
              "reason": "Packaging work beyond this decision.",
              "label": "feature",
-             "links_to": None, "supersedes": None, "skip": ""},
+             "links_to": None, "supersedes": None, "skip": "",
+             "out_of_scope": ""},
             {"title": "Extract shared readiness helper",
              "description": "Merge the two readiness loops.",
              "reason": "", "label": "",
-             "links_to": None, "supersedes": None, "skip": ""},
+             "links_to": None, "supersedes": None, "skip": "",
+             "out_of_scope": ""},
         ])
 
     def test_none_marker(self):
@@ -287,7 +289,8 @@ class ParseDeferredWorkTest(unittest.TestCase):
         self.assertEqual(parse_deferred_work(body), [
             {"title": "First", "description": "one",
              "reason": "", "label": "",
-             "links_to": None, "supersedes": None, "skip": ""}])
+             "links_to": None, "supersedes": None, "skip": "",
+             "out_of_scope": ""}])
 
     def test_case_insensitive_heading(self):
         body = "## DEFERRED WORK\n- **Title:** X\n"
@@ -325,6 +328,12 @@ class ParseDeferredWorkTest(unittest.TestCase):
         body = self._record("- **Title:** X\n  **Skip:** HANDOFF forbids this\n")
         item = parse_deferred_work(body)[0]
         self.assertEqual(item["skip"], "HANDOFF forbids this")
+
+    def test_out_of_scope_field(self):
+        body = self._record("- **Title:** X\n  **Out of scope:** dark-mode\n")
+        item = parse_deferred_work(body)[0]
+        self.assertEqual(item["out_of_scope"], "dark-mode")
+        self.assertEqual(item["skip"], "")
 
     def test_bare_item_has_no_stamps(self):
         body = self._record("- **Title:** X\n  **Description:** d\n")

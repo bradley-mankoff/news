@@ -28,36 +28,41 @@ WORKFLOWS = ARCHON_HOME / "workflows"
 # The Deferred-work contract shared by both completion-comment nodes. The
 # board poller parses the `## Deferred work` section (docs: README, Project
 # Automation -> Deferred work guard).
-CONTRACT = """      ## Deferred work
-      If ANY work is being deferred — anything intentionally not done now that still
-      needs doing later — it MUST be listed here, one bullet per item. This includes:
-      - explicit "later"/"future"/"out of scope"/"deferred" decisions, including
-        anything you wrote into an ADR, README, or the report above (the board poller
-        reads this section and creates a tracking issue for every item);
-      - NOT-Building / scope-limit exclusions that are future work (not "never");
-      - skipped or blocked review findings that warrant follow-up.
-      Trace the ORIGINAL issue ask first (the issue body from the Inputs above): compare every
-      acceptance criterion, described behavior, and named component in the issue
-      body against what this run actually shipped. Anything from the issue that is
-      NOT done is deferred work and MUST be listed, even if you never mentioned it
-      anywhere else in this comment or the PR. If something from the issue is
-      genuinely superseded or abandoned, list it anyway and say so in the Reason.
-      DEDUPE — judge every item before finalizing the section. Fetch the existing
-      issues: `gh issue list -R bradley-mankoff/news --state open --limit 200
-      --json number,title,body` (and `--state closed` for the Supersedes check).
-      Read each candidate's TITLE and INITIAL DESCRIPTION (the body — never the
-      comments). Using the repo context (pending checklists, ADRs, this
-      issue) decide per item, and stamp the item accordingly:
-      - an open issue already covers the SAME deliverable (the same work, not
-        just the same topic or family) — including the issue being implemented
-        when the deferred item is part of ITS remaining scope, and any
-        a pending-checklist/ADR item that already has a tracking issue:
-        add `**Links to:** #N`.
-      - a closed issue covered it (done or abandoned): add `**Supersedes:** #N`
-        (the poller creates a new issue referencing it).
-      - it is genuinely never-to-be-done (superseded by context; HANDOFF forbids
-        it): add `**Skip:** <one-line reason>`.
-      - otherwise leave the item bare — the poller creates the tracking issue.
+CONTRACT = """      Trace the ORIGINAL issue ask first (the issue body from the Inputs above):
+      compare every acceptance criterion, described behavior, and named component
+      in the issue body — including its **Out of scope** section — against what
+      this run actually shipped:
+      - anything NOT done and NOT in the issue's Out of scope section is an
+        UNMET acceptance criterion, not deferred work: mark it
+        `- [ ] <criterion> — <why not met>` in the Acceptance criteria section
+        above. It is part of this issue's delivery — the human will send the
+        issue back, and the poller will not create a tracking issue for it.
+      - anything in the issue's Out of scope section that is future work (not
+        "never") IS deferred work and MUST be listed here.
+      DEDUPE — judge every item before finalizing the section:
+      - check the codebase for an existing implementation of the item (search by
+        domain concept, not wording — grep the module/API names). Already
+        implemented -> `**Skip:** already implemented — <pointer>`. Never write
+        built things to the out-of-scope KB.
+      - read `.out-of-scope/*.md` (concept files: reasons + prior requests). An
+        item matching a recorded concept -> `**Skip:** rejected — .out-of-scope/<file>`
+        (do not re-litigate; the human can revisit by editing the file).
+      - fetch the existing issues: `gh issue list -R bradley-mankoff/news
+        --state open --limit 200 --json number,title,body` (and `--state closed`
+        for the Supersedes check). Read each candidate's TITLE and INITIAL
+        DESCRIPTION (the body — never the comments). Using the repo context
+        (pending checklists, ADRs, this issue) decide per item:
+        - an open issue already covers the SAME deliverable (the same work, not
+          just the same topic or family) — including the issue being implemented
+          when the deferred item is part of ITS remaining scope, and any
+          pending-checklist/ADR item that already has a tracking issue:
+          add `**Links to:** #N`.
+        - a closed issue covered it (done or abandoned): add `**Supersedes:** #N`
+          (the poller creates a new issue referencing it).
+        - it is genuinely rejected — never-to-be-done, superseded by context:
+          stamp `**Out of scope:** <kebab-concept-slug>` (the poller records it
+          in `.out-of-scope/<slug>.md` so the same request does not resurrect).
+        - otherwise leave the item bare — the poller creates the tracking issue.
       If you are unsure whether an issue covers the same deliverable, treat them
       as distinct (bare) — a new tracking issue is cheap and the human can merge.
       SIZE BAR — not every finding deserves a tracking issue. Apply the
@@ -78,7 +83,7 @@ CONTRACT = """      ## Deferred work
         **Description:** <1-2 sentences; what "done" looks like>
         **Reason:** <why deferred now>
         **Label:** <optional; must already exist in the repo, e.g. enhancement>
-        **Links to:** #N    (or **Supersedes:** #N, or **Skip:** <reason> — optional)
+        **Links to:** #N    (or **Supersedes:** #N / **Out of scope:** <slug> / **Skip:** <reason> — optional)
       If nothing was deferred, write exactly: *None.*
 """
 
