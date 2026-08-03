@@ -241,6 +241,9 @@ nodes:
          - `git checkout -B conflict-fix origin/<headRefName>` (fresh local branch
            from the PR head; safe to force-reset later if needed)
          - `git merge origin/<baseRefName>`
+         Follow `.archon/commands/resolving-merge-conflicts.md` for hunk-by-hunk
+         discipline: preserve both intents, never invent behavior, never `--abort`.
+
          - Resolve every conflict:
            * Keep BOTH sides' intent: the feature's changes (PR title + diff)
              AND the base's changes. Drop nothing without a reason.
@@ -304,6 +307,9 @@ nodes:
          - `git checkout -B conflict-fix origin/<headRefName>` (fresh local branch
            from the PR head; safe to force-reset later if needed)
          - `git merge origin/<baseRefName>`
+         Follow `.archon/commands/resolving-merge-conflicts.md` for hunk-by-hunk
+         discipline: preserve both intents, never invent behavior, never `--abort`.
+
          - Resolve every conflict:
            * Keep BOTH sides' intent: the feature's changes (PR title + diff)
              AND develop's changes. Drop nothing without a reason.
@@ -346,6 +352,9 @@ SYNC_FIX_NODE = r"""
       2. If the current branch has no commits yet (fresh worktree), skip the
          merge — nothing can conflict. Log "no commits; skipping sync".
       3. Otherwise merge develop into the branch: `git merge origin/develop`.
+         Follow `.archon/commands/resolving-merge-conflicts.md` for hunk-by-hunk
+         discipline: preserve both intents, never invent behavior, never `--abort`.
+
          - On conflicts, resolve them keeping BOTH sides' intent: this
            feature's changes AND develop's changes. When both sides touched the
            same area, combine them; when one side supersedes the other, prefer
@@ -381,6 +390,9 @@ SYNC_IDEA_NODE = r"""
       2. If the current branch has no commits yet (fresh worktree), skip the
          merge — nothing can conflict. Log "no commits; skipping sync".
       3. Otherwise merge develop into the branch: `git merge origin/develop`.
+         Follow `.archon/commands/resolving-merge-conflicts.md` for hunk-by-hunk
+         discipline: preserve both intents, never invent behavior, never `--abort`.
+
          - On conflicts, resolve them keeping BOTH sides' intent: this
            feature's changes AND develop's changes. When both sides touched the
            same area, combine them; when one side supersedes the other, prefer
@@ -466,6 +478,56 @@ def ensure_sync_node(path: Path, anchor: str, node_text: str, target_id: str,
     path.write_text(text)
     return f"added sync-with-develop to {path.name}"
 
+
+def ensure_spec_review(path: Path) -> str | None:
+    """Insert the Spec-axis review node into archon-review-block.yaml and add
+    it to synthesize's dependencies. Idempotent on the node id."""
+    text = path.read_text()
+    if "- id: spec-review" in text:
+        return None
+    sync_block = ("  - id: sync\n"
+                  "    command: archon-sync-pr-with-main\n"
+                  "    depends_on: [review-scope]\n"
+                  "    context: fresh\n")
+    if sync_block not in text:
+        return "sync block not found in archon-review-block.yaml; insert spec-review manually"
+    spec_node = (sync_block + "\n"
+                 "  - id: spec-review\n"
+                 "    prompt: |\n"
+                 "      Review the PR diff against the ORIGINATING ISSUE — the Spec axis of a\n"
+                 "      two-axis review (Standards + Spec; see `.archon/commands/code-review.md`).\n"
+                 "\n"
+                 "      ## Steps\n"
+                 "\n"
+                 "      1. Identify the originating issue: from the PR body (`Issue: #N` /\n"
+                 "         `Fixes #N`), the branch name (`archon/task-issue-<N>`), or the commit\n"
+                 "         messages. Fetch it: `gh issue view <n> -R bradley-mankoff/news\n"
+                 "         --json title,body,labels`.\n"
+                 "      2. Read the issue's TITLE and INITIAL DESCRIPTION (never the comments):\n"
+                 "         acceptance criteria, described behaviors, named components, and the\n"
+                 "         **Out of scope** section.\n"
+                 "      3. Review the diff against that spec (three-dot from the merge base):\n"
+                 "         - every acceptance criterion met? every described behavior present?\n"
+                 "         - anything shipped the issue did not ask for (gold-plating)?\n"
+                 "         - anything from the issue left undone that is NOT in its Out of scope\n"
+                 "           section — that is an unmet criterion, not a deferral.\n"
+                 "      4. Write findings to `$ARTIFACTS_DIR/review/spec-review-findings.md` in\n"
+                 "         the same format as the other review agents (severity-prefixed lines,\n"
+                 "         each citing the criterion and the evidence or gap).\n"
+                 "      5. Post a 3-6 line summary as a PR comment: criteria met vs unmet,\n"
+                 "         gold-plating, and any unmet criteria that will bounce the issue at\n"
+                 "         Ready for Review. Do NOT post a `VERDICT:` line — the review workflow\n"
+                 "         owns the verdict.\n"
+                 "    depends_on: [sync]\n"
+                 "    context: fresh\n")
+    text = text.replace(sync_block, spec_node)
+    old = "depends_on: [code-review, error-handling, test-coverage, comment-quality, docs-impact]"
+    if old not in text:
+        return "synthesize deps not found in archon-review-block.yaml; rewire manually"
+    text = text.replace(old, old + ", spec-review")
+    path.write_text(text)
+    return "added spec-review node to archon-review-block.yaml"
+
 def main() -> int:
     changed: list[str] = []
     for fname, node_id, node_text, anchor in (
@@ -518,6 +580,10 @@ def main() -> int:
         SYNC_IDEA_NODE, "finalize-pr",
         "    depends_on: [validate]\n    context: fresh",
         "    depends_on: [sync-with-develop]\n    context: fresh")
+    if note:
+        changed.append(note)
+
+    note = ensure_spec_review(WORKFLOWS / "archon-review-block.yaml")
     if note:
         changed.append(note)
 
