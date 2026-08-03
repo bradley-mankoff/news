@@ -3,8 +3,9 @@ from __future__ import annotations
 import json
 import subprocess
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, mock_open, patch
 
+from automation import board_poller as bp
 from automation.board_poller import (
     conflict_episode_action,
     dedupe_deferred,
@@ -23,6 +24,61 @@ from automation.board_poller import (
     reconcile_deferred_work,
     run_status_for,
     try_merge_base_into_head,
+)
+
+
+REPO = "bradley-mankoff/news"
+
+
+def _cfg() -> dict:
+    return {
+        "repo": REPO,
+        "project_owner": "bradley-mankoff",
+        "project_number": 1,
+        "state_file": "automation/state.json",
+        "default_lane": "Backlog",
+        "lanes": {
+            "Backlog": "backlog",
+            "Todo": "todo",
+            "In Progress": "in_progress",
+            "Blocked": "blocked",
+            "Ready for Review": "ready",
+            "In Review": "review",
+            "Done": "done",
+        },
+        "dispatch": {
+            "todo": {
+                "default": "archon-fix-github-issue",
+                "move_to": "In Progress",
+                "complete_move_to": "Ready for Review",
+                "merge_develop_base": "develop",
+                "label_overrides": {"feature": "archon-idea-to-pr"},
+            },
+            "review": {
+                "workflow": "archon-smart-pr-review",
+                "ship_to": "main",
+                "merge_ship_on_review_complete": True,
+                "done_lane": "Done",
+            },
+        },
+    }
+
+
+ISOLATION_LIST = (
+    "https://github.com/someone/other.git:\n"
+    "  archon/task-issue-21\n"          # same-named worktree, wrong repo
+    "    Path: /tmp/other/worktrees/archon/task-issue-21\n"
+    "    Type: task | Platform: cli | Last activity: 0d ago\n"
+    f"https://github.com/{REPO}.git:\n"
+    "  archon/task-issue-20\n"
+    "    Path: /tmp/news/worktrees/archon/task-issue-20\n"
+    "    Type: task | Platform: cli | Last activity: 0d ago\n"
+    "  archon/task-issue-21\n"          # the target worktree
+    "    Path: /tmp/news/worktrees/archon/task-issue-21\n"
+    "    Type: task | Platform: cli | Last activity: 0d ago\n"
+    "  archon/task-issue-210\n"         # must NOT match issue 21 (\b boundary)
+    "    Path: /tmp/news/worktrees/archon/task-issue-210\n"
+    "    Type: task | Platform: cli | Last activity: 0d ago\n"
 )
 
 
@@ -586,6 +642,194 @@ class FetchProjectTest(unittest.TestCase):
 
 def _cp(returncode=0, stdout="", stderr=""):
     return subprocess.CompletedProcess([], returncode, stdout, stderr)
+
+
+class IssueHasLabelTests(unittest.TestCase):
+    """HIGH: a gh failure must return None (undetermined), never False —
+    the caller defers instead of routing a blocked issue into the normal
+    completion path (develop merge + ship PR)."""
+
+    def test_true_when_label_present(self) -> None:
+        fake = MagicMock(returncode=0, stdout="bug\nneeds-input\n")
+        with patch.object(bp, "gh", return_value=fake):
+            self.assertTrue(bp.issue_has_label(_cfg(), {}, 21, "needs-input"))
+
+    def test_false_when_label_absent(self) -> None:
+        fake = MagicMock(returncode=0, stdout="bug\n")
+        with patch.object(bp, "gh", return_value=fake):
+            self.assertFalse(bp.issue_has_label(_cfg(), {}, 21, "needs-input"))
+
+    def test_none_and_logged_when_gh_fails(self) -> None:
+        fake = MagicMock(returncode=1, stdout="", stderr="rate limit exceeded")
+        with patch.object(bp, "gh", return_value=fake), \
+             patch.object(bp, "log") as log:
+            self.assertIsNone(bp.issue_has_label(_cfg(), {}, 21, "needs-input"))
+        log.assert_called_once()
+        self.assertIn("LABEL CHECK FAILED", log.call_args[0][0])
+
+    def test_none_when_gh_times_out(self) -> None:
+        def boom(*_a, **_k):
+            raise subprocess.TimeoutExpired("gh", timeout=90)
+
+        with patch.object(bp, "gh", side_effect=boom), \
+             patch.object(bp, "log") as log:
+            self.assertIsNone(bp.issue_has_label(_cfg(), {}, 21, "needs-input"))
+        log.assert_called_once()
+        self.assertIn("LABEL CHECK TIMEOUT", log.call_args[0][0])
+
+
+class ResolveWorktreeBranchTests(unittest.TestCase):
+    """HIGH: repo-scoped parse; failures logged; no silent wrong match."""
+
+    def _fake(self, stdout: str = ISOLATION_LIST, returncode: int = 0) -> MagicMock:
+        return MagicMock(returncode=returncode, stdout=stdout)
+
+    def test_parses_own_repo_section_only(self) -> None:
+        with patch.object(bp.subprocess, "run", return_value=self._fake()):
+            self.assertEqual(
+                bp.resolve_worktree_branch({}, 21, REPO),
+                "archon/task-issue-21")
+
+    def test_ignores_same_named_worktree_in_other_repo(self) -> None:
+        """The other repo's archon/task-issue-21 appears FIRST in the listing;
+        the scoped parse must skip it and still find this repo's."""
+        with patch.object(bp.subprocess, "run", return_value=self._fake()):
+            result = bp.resolve_worktree_branch({}, 21, REPO)
+        self.assertEqual(result, "archon/task-issue-21")
+        self.assertNotEqual(result, "archon/task-issue-21\n    Path: /tmp/other/...")
+
+    def test_skips_json_log_lines_inside_repo_section(self) -> None:
+        """archon's JSON log lines land on stdout and must never be read as
+        the worktree branch."""
+        listing = (
+            f"https://github.com/{REPO}.git:\n"
+            "  archon/task-issue-20\n"
+            '    {"ts": "2026-08-02T10:00:00Z", "msg": "resuming archon/task-issue-21"}\n'
+            "  archon/task-issue-21\n"
+            "    Path: /tmp/news/worktrees/archon/task-issue-21\n"
+        )
+        with patch.object(bp.subprocess, "run", return_value=self._fake(listing)):
+            self.assertEqual(
+                bp.resolve_worktree_branch({}, 21, REPO),
+                "archon/task-issue-21")
+
+    def test_returns_none_when_repo_section_missing(self) -> None:
+        listing = "https://github.com/someone/other.git:\n  archon/task-issue-21\n"
+        with patch.object(bp.subprocess, "run",
+                          return_value=self._fake(stdout=listing)):
+            self.assertIsNone(bp.resolve_worktree_branch({}, 21, REPO))
+
+    def test_returns_none_and_logs_on_failure(self) -> None:
+        with patch.object(bp.subprocess, "run",
+                          return_value=self._fake(returncode=1)), \
+             patch.object(bp, "log") as log:
+            self.assertIsNone(bp.resolve_worktree_branch({}, 21, REPO))
+        self.assertTrue(any("WORKTREE LIST FAILED" in c.args[0]
+                            for c in log.call_args_list))
+
+
+class ResumeIssueTests(unittest.TestCase):
+    """HIGH: defer when the branch can't be resolved; verify the spawn;
+    only remove the needs-input label after verified spawn + successful edit."""
+
+    def test_deferred_when_worktree_branch_not_found(self) -> None:
+        with patch.object(bp, "resolve_worktree_branch", return_value=None), \
+             patch.object(bp, "gh") as gh, \
+             patch.object(bp, "subprocess") as sub:
+            ok, msg, full = bp.resume_issue(_cfg(), {}, "issue-21",
+                                            "archon-fix-github-issue", 21)
+        self.assertFalse(ok)
+        self.assertEqual(full, None)
+        gh.assert_not_called()
+        sub.Popen.assert_not_called()
+
+    def test_happy_path_spawns_continue_and_removes_label(self) -> None:
+        proc = MagicMock()
+        proc.pid = 42
+        proc.poll.return_value = None  # still running after grace period
+        comment = MagicMock(returncode=0, stdout="The answer is: Apache-2.0")
+        label = MagicMock(returncode=0, stdout="")
+        gh = MagicMock(side_effect=[comment, label])
+        with patch.object(bp, "resolve_worktree_branch",
+                          return_value="archon/task-issue-21"), \
+             patch.object(bp, "time") as time, \
+             patch.object(bp.subprocess, "Popen", return_value=proc) as popen, \
+             patch.object(bp, "gh", gh), \
+             patch("builtins.open", mock_open()):
+            ok, msg, full = bp.resume_issue(_cfg(), {}, "issue-21",
+                                            "archon-fix-github-issue", 21)
+        self.assertTrue(ok)
+        self.assertEqual(full, "archon/task-issue-21")
+        argv = popen.call_args[0][0]
+        self.assertEqual(argv[:4],
+                         ["archon", "continue", "archon/task-issue-21",
+                          "--workflow"])
+        self.assertIn("The answer is: Apache-2.0", msg)
+        time.sleep.assert_called_once_with(2)
+        # label removal invoked with --remove-label needs-input
+        remove = [c for c in gh.call_args_list
+                  if "--remove-label" in c.args[0]][0].args[0]
+        self.assertIn("needs-input", remove)
+
+    def test_fails_when_continue_exits_immediately(self) -> None:
+        """A run that dies instantly must not be reported as resumed. The
+        label is already removed by then (it gates the spawn), so the caller's
+        fresh dispatch replaces the dead run without a re-block cycle — but a
+        second run is only ever started after the child is confirmed dead."""
+        proc = MagicMock()
+        proc.poll.return_value = 1
+        comment = MagicMock(returncode=0, stdout="answer")
+        label = MagicMock(returncode=0, stdout="")
+        gh_calls = iter([comment, label])
+        with patch.object(bp, "resolve_worktree_branch",
+                          return_value="archon/task-issue-21"), \
+             patch.object(bp, "time"), \
+             patch.object(bp.subprocess, "Popen", return_value=proc) as popen, \
+             patch.object(bp, "gh",
+                          side_effect=lambda *a, **k: next(gh_calls)) as gh, \
+             patch("builtins.open", mock_open()):
+            ok, msg, full = bp.resume_issue(_cfg(), {}, "issue-21",
+                                            "archon-fix-github-issue", 21)
+        self.assertFalse(ok)
+        self.assertIsNone(full)
+        popen.assert_called_once()
+        # the label edit (the spawn gate) happened before the dead child
+        self.assertTrue(any("--remove-label" in c.args[0]
+                            for c in gh.call_args_list))
+
+    def test_fails_when_label_removal_fails(self) -> None:
+        """The label edit gates the spawn: a failed removal must leave NO
+        child running, so the caller's fresh-dispatch fallback cannot start a
+        second concurrent run for the same issue/worktree (the double-run
+        hazard the reorder eliminates)."""
+        comment = MagicMock(returncode=0, stdout="answer")
+        label = MagicMock(returncode=1, stdout="", stderr="boom")
+        gh_calls = iter([comment, label])
+        with patch.object(bp, "resolve_worktree_branch",
+                          return_value="archon/task-issue-21"), \
+             patch.object(bp.subprocess, "Popen") as popen, \
+             patch.object(bp, "gh", side_effect=lambda *a, **k: next(gh_calls)), \
+             patch.object(bp, "log") as log, \
+             patch("builtins.open", mock_open()):
+            ok, msg, full = bp.resume_issue(_cfg(), {}, "issue-21",
+                                            "archon-fix-github-issue", 21)
+        self.assertFalse(ok)
+        self.assertIsNone(full)
+        popen.assert_not_called()  # no child -> caller fallback is safe
+        self.assertTrue(any("LABEL REMOVE FAILED" in c.args[0]
+                            for c in log.call_args_list))
+
+    def test_fails_on_oserror_from_popen(self) -> None:
+        with patch.object(bp, "resolve_worktree_branch",
+                          return_value="archon/task-issue-21"), \
+             patch.object(bp.subprocess, "Popen", side_effect=OSError("no archon")), \
+             patch.object(bp, "gh",
+                          return_value=MagicMock(returncode=0, stdout="")), \
+             patch("builtins.open", mock_open()):
+            ok, msg, full = bp.resume_issue(_cfg(), {}, "issue-21",
+                                            "archon-fix-github-issue", 21)
+        self.assertFalse(ok)
+        self.assertIsNone(full)
 
 
 if __name__ == "__main__":
