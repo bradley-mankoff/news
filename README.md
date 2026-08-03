@@ -24,8 +24,11 @@ The repo runs a fully automated agentic loop driven by the GitHub project board
 
 ### Board flow
 
-- Lanes: `Backlog` → `Todo` → `In Progress` → `Blocked` → `Ready for Review` → `In Review` → `Done`.
-- `Blocked` = the agent asked the human a question (see the `NEEDS INPUT`
+- Lanes: `Backlog` → `Todo` → `In Progress` → `Blocked` → `Needs Input` → `Ready for Review` → `In Review` → `Done`.
+- `Blocked` = dependency-gated: an issue dragged to `Todo` whose `Depends on:`
+  refs are not all in `Done` moves here with a comment, and returns to `Todo`
+  (auto-dispatch) when its dependencies ship.
+- `Needs Input` = the agent asked the human a question (see the `NEEDS INPUT`
   comment + `needs-input` label on the issue); answer on the issue and drag
   the ticket back to `Todo` — the poller resumes the workflow in the same
   worktree (`archon continue`) instead of starting over.
@@ -42,9 +45,10 @@ The repo runs a fully automated agentic loop driven by the GitHub project board
   declares `Depends on: #<earlier>`. Any set of issues with satisfied
   dependencies can be triggered together.
 - A `Depends on: #N` line (one line; `#42, #57` for several) gates dispatch:
-  an issue dragged to `Todo` with an unsatisfied dependency returns to
-  `Backlog` with a comment and returns to `Todo` (auto-dispatch) when the
-  dependency ships. `Blocked` is exclusively NEEDS INPUT.
+  an issue dragged to `Todo` with an unsatisfied dependency moves to `Blocked`
+  with a comment and returns to `Todo` (auto-dispatch) when the
+  dependency ships. `Blocked` is exclusively dependency gating; `Needs Input`
+  is exclusively NEEDS INPUT questions.
 - Moving an issue into `Todo` triggers an Archon workflow (label-aware: `bug`
   → `archon-fix-github-issue`, `feature`/`enhancement` → `archon-idea-to-pr`,
   default → `archon-fix-github-issue`), and the poller moves the issue to
@@ -114,9 +118,9 @@ human, by design:
 - **Test + promote:** when an issue lands in `Ready for Review`, test the
   integration branch; when it works, move it to `In Review` with
   `python3 automation/move_item.py <N> "In Review"`.
-- **Answer blockers:** a `Blocked` issue carries a `NEEDS INPUT:` comment
-  (with `needs-input` label) — answer on the issue, then drag it back to
-  `Todo` to resume the workflow in place.
+- **Answer Needs Input:** an issue in `Needs Input` carries a `NEEDS INPUT:`
+  comment (with `needs-input` label) — answer on the issue, then drag it back
+  to `Todo` to resume the workflow in place.
 - **Re-review after a held ship:** if the ship review posts anything other
   than `VERDICT: approve`, fix the findings and drag the issue back to
   `In Review`.
@@ -135,6 +139,12 @@ human, by design:
 - **Deploy after changes:** after pulling poller/automation changes or
   reinstalling archon, run `automation/deploy.sh` (re-applies local workflow
   edits, restarts the poller).
+- **New ideas (top of funnel):** describe the idea in the agent session for
+  this repo (any format). The agent grills you — what & why, binary acceptance
+  criteria, out of scope, `Depends on` — then creates the issue in `Backlog`
+  via `python3 automation/create_issue.py`. Nothing auto-detects ideas from
+  chat; the board is the source of truth and work starts only when you drag
+  the issue to `Todo`.
 - **New issues:** `python3 automation/create_issue.py "<title>"` creates the
   issue, boards it, and lands it in the default lane in one step (add
   `--label enhancement` for the idea-to-pr workflow; fill `Depends on` in the body

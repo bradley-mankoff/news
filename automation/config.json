@@ -15,6 +15,7 @@
     "Todo": "todo",
     "In Progress": "in_progress",
     "Blocked": "blocked",
+    "Needs Input": "needs_input",
     "Ready for Review": "ready",
     "In Review": "review",
     "Done": "done"
