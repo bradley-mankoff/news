@@ -79,11 +79,24 @@ class UITests(unittest.TestCase):
         self.assertIn("refreshModelKnobLinks", ui_module.HTML)
         self.assertIn("knob-links", ui_module.HTML)
         self.assertIn('rel="noopener noreferrer"', ui_module.HTML)
-        self.assertIn("No Hugging Face page for this external model", ui_module.HTML)
+        self.assertIn("No Hugging Face page for this model reference", ui_module.HTML)
         self.assertIn("Native Hardware Compatibility panel", ui_module.HTML)
         self.assertIn("escapeHtml(entry.page)", ui_module.HTML)
         self.assertIn("escapeHtml(entry.hardware)", ui_module.HTML)
         self.assertIn('data-links-for="${escapeHtml(knob.env)}"', ui_module.HTML)
+        # Pin the remaining renderKnobLinks branches.
+        self.assertIn("Links unavailable", ui_module.HTML)
+        self.assertIn('container.innerHTML = ""', ui_module.HTML)
+        # Pin the delegated change-listener wiring: every select[data-env]
+        # change must re-render its links, guarded to knobs that carry
+        # option_links (otherwise non-model knobs trip the
+        # missing-container console.warn on every interaction).
+        self.assertIn('document.addEventListener("change"', ui_module.HTML)
+        self.assertIn('el.matches("select[data-env]")', ui_module.HTML)
+        self.assertIn(
+            "option_links",
+            ui_module.HTML.split('document.addEventListener("change"')[1],
+        )
 
     def test_pure_helpers_and_schema_payload(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

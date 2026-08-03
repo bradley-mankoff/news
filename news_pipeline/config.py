@@ -949,9 +949,6 @@ def resolve_model_name(model_reference: str) -> str:
     return MODEL_ALIASES.get(clean_reference, clean_reference)
 
 
-HF_URL_PREFIXES = ("https://huggingface.co/", "https://hf.co/")
-
-
 def hf_model_page_url(model_choice: str) -> str | None:
     """Return the Hugging Face model-page URL for a model choice, or None.
 
@@ -969,16 +966,12 @@ def hf_model_page_url(model_choice: str) -> str | None:
         resolved = resolve_model_name(clean)
     except ValueError:
         return None
-    # Only URLs derived from known MODEL_ALIASES values are emitted;
-    # anything else (external ids, unknown URLs) yields None so callers
-    # render a muted note instead of a broken link.
     if resolved not in MODEL_ALIASES.values():
-        if not any(resolved.startswith(prefix) for prefix in HF_URL_PREFIXES):
-            return None
-        prefix = next(prefix for prefix in HF_URL_PREFIXES if resolved.startswith(prefix))
-        resolved = resolved[len(prefix):]
-        if resolved not in MODEL_ALIASES.values():
-            return None
+        return None
+    # Defense in depth: URL-shaped alias values would double-prefix below,
+    # so never emit them (the drift-guard test pins the same invariant).
+    if resolved.startswith(("http://", "https://")):
+        return None
     repo = resolved
     # GGUF references are repo + "/" + file; the page lives at the repo.
     if repo.endswith(".gguf") and "/" in repo:
@@ -1132,8 +1125,9 @@ def _runtime_knob(
         "advanced": advanced,
         "secret": secret,
         # option_links maps each offered option -> {"page": url, "hardware":
-        # url} for model-choice knobs; the drift-guard test pins that its
-        # keys cover `options` exactly, and non-model knobs pass {}.
+        # url} for the three model-choice knobs; the drift-guard test pins
+        # that its keys cover `options` exactly. Non-model knobs omit it and
+        # fall back to {}.
         "option_links": option_links or {},
     }
 
