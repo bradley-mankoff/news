@@ -388,7 +388,8 @@ def parse_deferred_work(body: str) -> list[dict] | None:
             continue
         item = {"title": lines[0].strip(),
                 "description": "", "reason": "", "label": "",
-                "links_to": None, "supersedes": None, "skip": ""}
+                "links_to": None, "supersedes": None, "skip": "",
+                "out_of_scope": ""}
         for line in lines[1:]:
             fm = re.match(r"^\s*\*\*([\w ]+?):\*\*\s*(.*)$", line)
             if not fm:
@@ -403,6 +404,8 @@ def parse_deferred_work(body: str) -> list[dict] | None:
                 item["supersedes"] = int(m.group(1)) if m else None
             elif key == "skip":
                 item["skip"] = val
+            elif key == "out of scope":
+                item["out_of_scope"] = val
             elif key in item and val:
                 item[key] = val
         if item["title"]:
@@ -898,6 +901,53 @@ def create_deferred_issue(cfg: dict, env: dict, issue_number: int,
     return new_num
 
 
+def record_out_of_scope(cfg: dict, slug: str, item: dict,
+                        source_number: int, source_title: str) -> bool:
+    """Record a durable rejection in .out-of-scope/<slug>.md (Matt Pocock KB).
+
+    Creates or appends the concept file and commits it (a dirty tree is fine —
+    only the KB path is staged). Returns False on failure (logged, non-fatal:
+    the skip stands; a future run re-stamping the concept will retry the write).
+    """
+    slug = re.sub(r"[^a-z0-9-]+", "-", (slug or "").lower()).strip("-")
+    if not slug:
+        slug = re.sub(r"[^a-z0-9-]+", "-", (item.get("title") or "x").lower())[:40]
+    path = ROOT / ".out-of-scope" / f"{slug}.md"
+    if DRY_RUN:
+        log(f"[dry-run] OUT-OF-SCOPE {path.relative_to(ROOT)}")
+        return True
+    heading = slug.replace("-", " ").strip().title()
+    request_line = f'- #{source_number} — "{source_title}"'
+    if path.exists():
+        text = path.read_text()
+        if request_line in text:
+            return True
+        if "## Prior requests" in text:
+            text = text.replace("## Prior requests",
+                                "## Prior requests\n" + request_line, 1)
+        else:
+            text += f"\n## Prior requests\n\n{request_line}\n"
+    else:
+        why = item.get("reason") or item.get("description") or ""
+        text = (f"# {heading}\n\n{why}\n\n"
+                f"## Prior requests\n\n{request_line}\n")
+    try:
+        path.parent.mkdir(exist_ok=True)
+        path.write_text(text)
+        subprocess.run(["git", "add", "--", str(path)], capture_output=True,
+                       text=True, timeout=60, cwd=str(ROOT))
+        r = subprocess.run(["git", "commit", "-m", f"out-of-scope: {slug}",
+                            "--", str(path)], capture_output=True, text=True,
+                           timeout=60, cwd=str(ROOT))
+        if r.returncode != 0:
+            log(f"OUT-OF-SCOPE COMMIT FAILED {slug}: {r.stderr.strip()[:200]}")
+            return False
+    except OSError as exc:
+        log(f"OUT-OF-SCOPE WRITE FAILED {slug}: {exc}")
+        return False
+    return True
+
+
 def reconcile_deferred_work(cfg: dict, env: dict, issue_number: int,
                             pr_number: int | None, rec: dict, runs_msg: str,
                             project_id: str, field_id: str,
@@ -956,6 +1006,12 @@ def reconcile_deferred_work(cfg: dict, env: dict, issue_number: int,
     lane = cfg.get("default_lane", "Backlog")
     lines: list[str] = []
     for item in items:
+        if item.get("out_of_scope"):
+            record_out_of_scope(cfg, item["out_of_scope"], item,
+                                issue_number, source_title)
+            lines.append(f"- **{item['title']}** \u2014 out of scope, recorded in "
+                         f".out-of-scope/{item['out_of_scope'].strip('-')}.md")
+            continue
         if item.get("skip"):
             lines.append(f"- **{item['title']}** \u2014 skipped ({item['skip']})")
             continue
@@ -1061,8 +1117,10 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
             lane = cfg["lanes"].get(status_val)
             if lane == "todo" and content["__typename"] == "Issue":
                 # Dependency gate: an issue whose Depends-on refs are not all
-                # in the Done lane does not dispatch; it moves to Blocked and
-                # the unblock pass returns it to Todo when the deps ship.
+                # in the Done lane does not dispatch; it returns to the default
+                # lane (Backlog) and the unblock pass returns it to Todo (which
+                # dispatches) when the deps ship. Blocked stays exclusive to
+                # NEEDS INPUT.
                 deps = parse_dep_refs(content.get("body") or "")
                 if deps and done_lane_name:
                     dep_gate_ran = True
@@ -1080,20 +1138,16 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
                         if not rec.get("dep_blocked"):
                             comment_issue(
                                 cfg, env, content["number"],
-                                f"Blocked before dispatch: depends on {fmt_deps(unsatisfied)} "
-                                "— not in the Done lane. Will start automatically when they ship. "
-                                "If a dependency is abandoned, re-scope or close this issue.")
-                        if blocked_lane_name:
-                            # Always re-route to Blocked while deps are unsatisfied
-                            # (not just on first block): a human re-drag to Todo must
-                            # not strand the item undispatched — the unblock pass is
-                            # the single release path and only scans the Blocked lane.
-                            option_id = status_options.get(blocked_lane_name)
-                            if option_id and move_to_lane(
-                                    cfg, env, project_id, item_id, field_id, option_id):
-                                log(f"DEP-BLOCKED item={item_id} "
-                                    f"issue={content['number']} -> {blocked_lane_name}")
-                                status_val = blocked_lane_name
+                                f"Returned to Backlog: depends on {fmt_deps(unsatisfied)} "
+                                "— not in the Done lane. Will move to Todo automatically "
+                                "when they ship. If a dependency is abandoned, re-scope or "
+                                "close this issue.")
+                        option_id = status_options.get(default_lane)
+                        if option_id and move_to_lane(
+                                cfg, env, project_id, item_id, field_id, option_id):
+                            log(f"DEP-BLOCKED item={item_id} "
+                                f"issue={content['number']} -> {default_lane}")
+                            status_val = default_lane
                         dep_blocked_marker = deps
                         dep_cancelled_noted = sorted(noted)
                     else:
@@ -1193,17 +1247,17 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
                 rec.pop("dep_cancelled_noted", None)
         state[item_id] = rec
 
-    # Dep-unblock pass: blocked items with a dep marker re-check every poll, so
-    # a shipped dependency releases them (moves them to Todo, which dispatches
-    # on the next poll) without a manual drag.
-    if todo_lane_name and blocked_lane_name and done_lane_name:
+    # Dep-unblock pass: dep-marked items in the default lane re-check every
+    # poll, so a shipped dependency releases them (moves them to Todo, which
+    # dispatches on the next poll) without a manual drag.
+    if todo_lane_name and done_lane_name:
         for item in items:
             content = item.get("content") or {}
             if content.get("__typename") != "Issue":
                 continue
             if content.get("repository", {}).get("nameWithOwner") != cfg["repo"]:
                 continue
-            if item["status"] != blocked_lane_name:
+            if item["status"] != default_lane:
                 continue
             item_id = item["id"]
             rec = state.get(item_id, {})

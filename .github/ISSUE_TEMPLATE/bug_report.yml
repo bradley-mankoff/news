@@ -27,3 +27,13 @@ body:
       render: markdown
     validations:
       required: true
+  - type: textarea
+    id: out_of_scope
+    attributes:
+      label: Out of scope
+      description: Explicitly excluded work — anything listed here is not done in this issue (it may be future work); anything NOT listed here is part of this issue and must be delivered with it (docs, tests, validation included). Leave empty if nothing is excluded.
+      placeholder: |
+        - The ... will be handled separately
+      render: markdown
+    validations:
+      required: false
