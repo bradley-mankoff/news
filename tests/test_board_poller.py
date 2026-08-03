@@ -7,6 +7,7 @@ import unittest
 from unittest.mock import patch
 
 from automation.board_poller import (
+    branch_empty_vs_main,
     conflict_episode_action,
     dedupe_deferred,
     dep_gate,
@@ -100,6 +101,31 @@ class ConflictEpisodeActionTest(unittest.TestCase):
 class DevelopConflictActionTest(unittest.TestCase):
     def test_fresh_conflict_tries_mechanical(self):
         self.assertEqual(develop_conflict_action(False, None, None), "mech")
+
+
+class BranchEmptyVsMainTest(unittest.TestCase):
+    def _gh(self, stdout="", returncode=0):
+        return subprocess.CompletedProcess([], returncode, stdout=stdout, stderr="")
+
+    @patch("automation.board_poller.gh")
+    def test_empty_branch_is_already_shipped(self, gh):
+        gh.return_value = self._gh('{"ahead_by": 0}')
+        self.assertTrue(branch_empty_vs_main({"repo": "r"}, {}, "head", "main"))
+
+    @patch("automation.board_poller.gh")
+    def test_ahead_branch_is_shippable(self, gh):
+        gh.return_value = self._gh('{"ahead_by": 5}')
+        self.assertFalse(branch_empty_vs_main({"repo": "r"}, {}, "head", "main"))
+
+    @patch("automation.board_poller.gh")
+    def test_api_error_is_not_shipped(self, gh):
+        gh.return_value = self._gh("", returncode=1)
+        self.assertFalse(branch_empty_vs_main({"repo": "r"}, {}, "head", "main"))
+
+    @patch("automation.board_poller.gh")
+    def test_unparseable_is_not_shipped(self, gh):
+        gh.return_value = self._gh("not json")
+        self.assertFalse(branch_empty_vs_main({"repo": "r"}, {}, "head", "main"))
 
     def test_mech_failed_dispatches_resolver(self):
         self.assertEqual(develop_conflict_action(True, None, None), "dispatch")

@@ -576,7 +576,9 @@ def find_or_create_ship_pr(cfg: dict, env: dict, head: str, title: str,
         return {"number": 0, "headRefName": head}
     r = gh(["pr", "list", "-R", cfg["repo"], "--head", head, "--state", "open",
             "--json", "number,baseRefName"], env)
-    if r.returncode == 0:
+    if r.returncode != 0:
+        log(f"SHIP PR LIST FAILED head={head}: {r.stderr.strip()[:200]}")
+    elif r.returncode == 0:
         for pr in json.loads(r.stdout):
             if pr.get("baseRefName") == base:
                 return pr
@@ -585,9 +587,80 @@ def find_or_create_ship_pr(cfg: dict, env: dict, head: str, title: str,
     r = gh(["pr", "create", "-R", cfg["repo"], "--base", base, "--head", head,
             "--title", title, "--body", body], env)
     if r.returncode != 0:
+        log(f"SHIP PR CREATE FAILED head={head} issue={issue_number}: "
+            f"{r.stderr.strip()[:200]}")
         return None
     m = re.search(r"pull/(\d+)", r.stdout or "")
     return {"number": int(m.group(1)), "headRefName": head} if m else None
+
+
+def branch_empty_vs_main(cfg: dict, env: dict, head: str, base: str) -> bool:
+    """True when `head` has no commits beyond `base` — its work already
+    reached base via another ship PR's develop merge (the #24 case), so a
+    ship PR would be empty and a review would be meaningless."""
+    r = gh(["api", f"repos/{cfg['repo']}/compare/{base}...{head}"], env)
+    if r.returncode != 0:
+        return False  # unknown — treat as shippable (safe default)
+    try:
+        return int(json.loads(r.stdout).get("ahead_by", 1)) == 0
+    except (ValueError, TypeError):
+        return False
+
+
+def ensure_ship_review(cfg: dict, env: dict, item_id: str, issue_number: int,
+                       title: str, project_id: str, field_id: str,
+                       status_options: dict, done_name: str | None,
+                       rec: dict) -> tuple[str, str, int] | str | None:
+    """Open/verify the ship PR for an issue in the review lane and dispatch
+    the review workflow.
+
+    Returns ("ok", msg, ship_num) when a review run was dispatched;
+    "shipped" when the branch has no commits beyond main (issue closed and
+    moved to Done — nothing left to review); None when nothing could be done
+    this poll (logged; the recheck pass retries).
+    """
+    merge_base = cfg["dispatch"]["todo"].get("merge_develop_base", "develop")
+    pr, _ok = find_issue_pr(cfg, env, issue_number, base=merge_base)
+    if pr:
+        ok, note = merge_pr_to_base(cfg, env, pr, merge_base, issue_number)
+        log(f"DEVELOP MERGE issue={issue_number} PR=#{pr['number']}: {note}"
+            if ok else
+            f"DEVELOP MERGE FAILED issue={issue_number}: {note}")
+    head = (pr or {}).get("headRefName") or f"archon/task-issue-{issue_number}"
+    ship_to = cfg["dispatch"]["review"].get("ship_to", "main")
+    if branch_empty_vs_main(cfg, env, head, ship_to):
+        if DRY_RUN:
+            log(f"[dry-run] ALREADY SHIPPED issue={issue_number} head={head}")
+        else:
+            comment_issue(
+                cfg, env, issue_number,
+                "Closing as shipped: this branch has no commits beyond main — "
+                "its work already reached main via an earlier ship PR's develop "
+                "merge. No review needed.")
+            gh(["issue", "close", str(issue_number), "-R", cfg["repo"]], env)
+            log(f"ALREADY SHIPPED issue={issue_number} head={head} -> {done_name}")
+        if done_name:
+            option_id = status_options.get(done_name)
+            if option_id:
+                move_to_lane(cfg, env, project_id, item_id, field_id, option_id)
+        rec.pop("review_msg", None)
+        rec.pop("ship_pr", None)
+        rec.pop("review_held", None)
+        return "shipped"
+    ship = find_or_create_ship_pr(
+        cfg, env, head, f"Ship: {title} (#{issue_number})", issue_number, ship_to)
+    if not ship:
+        log(f"SHIP PR UNAVAILABLE issue={issue_number} head={head} — retrying next poll")
+        return None
+    msg = (f"Review PR #{ship['number']} (ship to {ship_to} for issue "
+           f"#{issue_number}: {title}).")
+    branch = f"review/issue-{issue_number}"
+    if not dispatch(cfg, env, cfg["dispatch"]["review"]["workflow"],
+                    branch, msg, item_id, issue_number):
+        log(f"SHIP REVIEW DISPATCH FAILED issue={issue_number} — retrying next poll")
+        return None
+    rec.pop("review_held", None)
+    return "ok", msg, ship["number"]
 
 
 def pick_workflow(cfg: dict, labels: list[str]) -> str:
@@ -1222,32 +1295,21 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
                              msg, item_id, content["number"])
                 else:
                     # Ensure the feature is in develop, then review the ship PR
-                    # (feature -> main); on an approving review the poller merges it.
-                    merge_base = cfg["dispatch"]["todo"].get(
-                        "merge_develop_base", "develop")
-                    pr, _pr_ok = find_issue_pr(cfg, env, content["number"], base=merge_base)
-                    if pr:
-                        ok, note = merge_pr_to_base(cfg, env, pr, merge_base,
-                                                    content["number"])
-                        log(f"DEVELOP MERGE issue={content['number']} PR=#{pr['number']}: {note}"
-                            if ok else
-                            f"DEVELOP MERGE FAILED issue={content['number']}: {note}")
-                    head = ((pr or {}).get("headRefName")
-                            or f"archon/task-issue-{content['number']}")
-                    ship_to = cfg["dispatch"]["review"].get("ship_to", "main")
-                    ship = find_or_create_ship_pr(
-                        cfg, env, head,
-                        f"Ship: {content['title']} (#{content['number']})",
-                        content["number"], ship_to)
-                    if ship:
-                        msg = (f"Review PR #{ship['number']} (ship to {ship_to} for issue "
-                               f"#{content['number']}: {content['title']}).")
-                        branch = f"review/issue-{content['number']}"
-                        if dispatch(cfg, env, cfg["dispatch"]["review"]["workflow"],
-                                    branch, msg, item_id, content["number"]):
-                            review_msg = msg
-                            ship_pr_num = ship["number"]
-                            fresh_dispatched.add(item_id)
+                    # (feature -> main); on an approving review the poller merges
+                    # it. The helper also closes issues whose work already
+                    # reached main (empty ship PR) and logs failures so the
+                    # recheck pass can retry.
+                    rec = state.get(item_id, {})
+                    result = ensure_ship_review(
+                        cfg, env, item_id, content["number"], content["title"],
+                        project_id, field_id, status_options, done_lane_name, rec)
+                    if isinstance(result, tuple):
+                        review_msg = result[1]
+                        ship_pr_num = result[2]
+                        fresh_dispatched.add(item_id)
+                    elif result == "shipped":
+                        if done_lane_name:
+                            status_val = done_lane_name
 
         rec = state.get(item_id, {})
         rec["status"] = status_val
@@ -1270,6 +1332,38 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
             else:
                 rec.pop("dep_cancelled_noted", None)
         state[item_id] = rec
+
+    # Review-lane recheck: an issue sitting in In Review with no review run
+    # on record (a transition consumed by a transient failure, or a ship-PR
+    # creation that failed silently) retries the ship flow every poll.
+    # review_held marks verdict-holds and failed runs so they do NOT
+    # auto-redispatch — the human re-drags those after fixing findings.
+    review_lane_name = next(
+        (k for k, v in cfg["lanes"].items() if v == "review"), None)
+    if review_lane_name:
+        for item in items:
+            content = item.get("content") or {}
+            if content.get("__typename") != "Issue":
+                continue
+            if content.get("repository", {}).get("nameWithOwner") != cfg["repo"]:
+                continue
+            if item["status"] != review_lane_name:
+                continue
+            item_id = item["id"]
+            if item_id in fresh_dispatched:
+                continue
+            rec = state.get(item_id, {})
+            if rec.get("review_msg") or rec.get("review_held"):
+                continue
+            number = content["number"]
+            result = ensure_ship_review(
+                cfg, env, item_id, number, content["title"],
+                project_id, field_id, status_options, done_lane_name, rec)
+            if isinstance(result, tuple):
+                rec["review_msg"] = result[1]
+                rec["ship_pr"] = result[2]
+                fresh_dispatched.add(item_id)
+            state[item_id] = rec
 
     # Dep-unblock pass: dep-marked items in the Blocked lane re-check every
     # poll, so a shipped dependency releases them (moves them to Todo, which
@@ -1494,6 +1588,10 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
                             log(f"SHIP HELD NOTICE FAILED issue={issue_number}; "
                                 "keeping markers for retry")
                             continue
+                        # Held verdicts do NOT auto-redispatch (the recheck pass
+                        # skips review_held items): the human re-drags after
+                        # fixing findings, which clears the marker on dispatch.
+                        rec["review_held"] = True
                         rec.pop("review_msg", None)
                         rec.pop("ship_pr", None)
                         continue
@@ -1523,6 +1621,9 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
                 rec.pop("ship_pr", None)
             elif rstatus in ("failed", "cancelled"):
                 log(f"REVIEW {rstatus.upper()} item={item_id}; left in {review_lane_name}")
+                # Do not auto-redispatch failed runs every poll (the recheck
+                # pass skips review_held items) — the human re-drags to retry.
+                rec["review_held"] = True
                 rec.pop("review_msg", None)
 
     # Ship-conflict remediation: a CONFLICTING ship PR blocks the verdict-gated
