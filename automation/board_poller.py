@@ -1057,6 +1057,29 @@ def reconcile_deferred_work(cfg: dict, env: dict, issue_number: int,
     return True
 
 
+def develop_conflict_action(mech_tried: bool, fix_msg: str | None,
+                            fix_status: str | None) -> str:
+    """Next step for a conflicting develop PR in the completion lane.
+
+    mech_tried: the mechanical base-into-head merge already hit real conflicts.
+    fix_msg: dispatch message of the develop resolver run, or None.
+    fix_status: run status for fix_msg, or None when fix_msg is None.
+
+    Returns one of:
+      "mech"     try the mechanical base-into-head merge (no fix run yet)
+      "dispatch" mechanical merge failed with real conflicts — start the resolver
+      "active"   resolver run in flight — wait (the outer merge retries anyway)
+      "failed"   resolver finished but the PR is still conflicting — needs human
+    """
+    if not mech_tried:
+        return "mech"
+    if not fix_msg:
+        return "dispatch"
+    if fix_status in ("running", "pending", "queued", "scheduled"):
+        return "active"
+    return "failed"
+
+
 def poll(cfg: dict, env: dict, state: dict) -> None:
     project_id, field_id, status_options, items = fetch_project(cfg, env)
     first_run = not state.get("_meta", {}).get("snapshot_done")
@@ -1344,10 +1367,66 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
                     else:
                         log(f"no PR found for issue #{issue_number}; skipping develop merge")
                 if not merge_ok:
+                    # Develop-merge conflict gate: mirror the ship-lane state
+                    # machine. Episode markers: dev_conflict_mech /
+                    # dev_conflict_fix_msg / dev_conflict_noted. The outer
+                    # merge retries every poll; this block only escalates.
+                    dev_wf = cfg["dispatch"]["todo"].get("conflict_fix_workflow")
+                    head = (pr or {}).get("headRefName")
+                    if (issue_number and pr_num and head and dev_wf
+                            and runs_by_msg is not None):
+                        fix_msg = rec.get("dev_conflict_fix_msg")
+                        act = develop_conflict_action(
+                            bool(rec.get("dev_conflict_mech")), fix_msg,
+                            (run_status_for(runs_by_msg, fix_msg)
+                             if fix_msg else None))
+                        if act == "mech":
+                            ok, note = try_merge_base_into_head(
+                                cfg, env, pr_num, head, merge_base)
+                            log(f"DEVELOP CONFLICT MECHANICAL PR #{pr_num} "
+                                f"issue={issue_number}: {note}")
+                            if not ok and note == "conflict":
+                                rec["dev_conflict_mech"] = True
+                        elif act == "dispatch":
+                            dmsg = (f"Resolve merge conflicts on develop PR #{pr_num} "
+                                    f"(issue #{issue_number}).")
+                            if dispatch(cfg, env, dev_wf,
+                                        f"fix-develop-issue-{issue_number}", dmsg,
+                                        item_id, issue_number):
+                                rec["dev_conflict_fix_msg"] = dmsg
+                                rec["dev_conflict_noted"] = False
+                                comment_issue(
+                                    cfg, env, issue_number,
+                                    f"Develop PR #{pr_num} has merge conflicts. "
+                                    f"Resolving automatically (merging develop into "
+                                    f"the branch, then {dev_wf} if needed).")
+                                log(f"DEVELOP CONFLICT DISPATCH PR #{pr_num} "
+                                    f"issue={issue_number} wf={dev_wf}")
+                        elif act == "failed":
+                            if not rec.get("dev_conflict_noted"):
+                                comment_issue(
+                                    cfg, env, issue_number,
+                                    f"Could not resolve the merge conflicts on develop "
+                                    f"PR #{pr_num} automatically — the fix run finished "
+                                    "but the PR is still conflicting. Merge develop into "
+                                    "the branch manually (or rewrite the conflicting "
+                                    "lines); the poller will merge automatically once the "
+                                    "branch is mergeable.")
+                                rec["dev_conflict_noted"] = True
+                            log(f"DEVELOP CONFLICT UNRESOLVED PR #{pr_num} "
+                                f"issue={issue_number} — needs human")
+                        # "active" falls through: keep the markers, retry next poll.
+                        state[item_id] = rec
+                        log(f"left item={item_id} in {in_progress_name} "
+                            "(develop merge conflict episode active)")
+                        continue
                     log(f"left item={item_id} in {in_progress_name} (develop merge failed)")
                     rec.pop("dispatch_msg", None)
                     continue
                 if merge_ok:
+                    for m in ("dev_conflict_mech", "dev_conflict_fix_msg",
+                              "dev_conflict_noted"):
+                        rec.pop(m, None)
                     log(sync_local_develop())
                 # Deferred-work guard: anything deferred by this run must be
                 # tracked as an issue before the item moves to Ready for Review.

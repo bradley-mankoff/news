@@ -32,6 +32,7 @@ Machine-local archon (archon-pi build, v0.7.0 = stock Archon) lives at
 | `archon-create-issue` | File a bug report with reproduction evidence. Requires the `agent-browser` skill only for web-UI repro playbooks (installed globally). |
 | `archon-resolve-conflicts` | Resolve PR merge conflicts. |
 | `archon-fix-ship-conflicts` | Resolve conflicts on a ship PR (In Review lane) so the verdict-gated merge can proceed: merge base into head, resolve, validate, push, comment. Dispatched by the board poller when the mechanical merge API hits real conflicts; never posts a `VERDICT:` line (the review workflow owns that). Fully inline prompt node — no DB commands. |
+| `archon-fix-develop-conflicts` | Resolve conflicts on a develop PR (In Progress lane) so the completion merge can proceed: merge develop into head, resolve, validate (`.venv` pytest), push, comment. Dispatched by the board poller's develop-conflict gate; never posts a `VERDICT:` line. Fully inline prompt node. |
 | `archon-assist` | Fallback general-purpose agent. |
 | `archon-workflow-builder` | Author a new workflow from a description. |
 | `archon-test-loop-dag` | Loop-mechanics test workflow (used in smoke tests). |
@@ -81,6 +82,11 @@ YAML is overwritten. If a workflow file is replaced, re-apply:
   `## Deferred work` section the board poller parses).
 - `archon-idea-to-pr.yaml`: `completion-comment` node after `workflow-summary`
   (same structured record + `## Deferred work` section).
+- Both implementation workflows: `sync-with-develop` node before the PR node
+  (merges develop into the branch, resolves, validates) — `create-pr` /
+  `finalize-pr` depend on it.
+- `archon-fix-develop-conflicts.yaml`: fully inline (one `prompt` node, no DB
+  commands); the develop-lane twin of `archon-fix-ship-conflicts`.
 - `archon-fix-ship-conflicts.yaml`: fully inline (one `prompt` node, no DB
   commands); if missing, re-create it per `docs/archon-workflows.md` (same
   shape as the other local workflows — `name`, `description`, `nodes`, `effort`).

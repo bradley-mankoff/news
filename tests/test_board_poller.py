@@ -10,6 +10,7 @@ from automation.board_poller import (
     conflict_episode_action,
     dedupe_deferred,
     dep_gate,
+    develop_conflict_action,
     fetch_project,
     find_unchecked_criteria,
     fmt_deps,
@@ -94,6 +95,22 @@ class ConflictEpisodeActionTest(unittest.TestCase):
 
     def test_mergeable_clears_mech_failed_only(self):
         self.assertEqual(conflict_episode_action("MERGEABLE", None, None, True), "clear")
+
+
+class DevelopConflictActionTest(unittest.TestCase):
+    def test_fresh_conflict_tries_mechanical(self):
+        self.assertEqual(develop_conflict_action(False, None, None), "mech")
+
+    def test_mech_failed_dispatches_resolver(self):
+        self.assertEqual(develop_conflict_action(True, None, None), "dispatch")
+
+    def test_resolver_active_waits(self):
+        for st in ("running", "pending", "queued", "scheduled"):
+            self.assertEqual(develop_conflict_action(True, "m", st), "active")
+
+    def test_resolver_done_still_failing_needs_human(self):
+        self.assertEqual(develop_conflict_action(True, "m", "completed"), "failed")
+        self.assertEqual(develop_conflict_action(True, "m", "failed"), "failed")
 
 
 class ParseDepRefsTest(unittest.TestCase):

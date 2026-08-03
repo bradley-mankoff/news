@@ -28,7 +28,15 @@ WORKFLOWS = ARCHON_HOME / "workflows"
 # The Deferred-work contract shared by both completion-comment nodes. The
 # board poller parses the `## Deferred work` section (docs: README, Project
 # Automation -> Deferred work guard).
-CONTRACT = """      Trace the ORIGINAL issue ask first (the issue body from the Inputs above):
+CONTRACT = """      ## Deferred work
+      If ANY work is being deferred — anything intentionally not done now that still
+      needs doing later — it MUST be listed here, one bullet per item. This includes:
+      - explicit "later"/"future"/"out of scope"/"deferred" decisions, including
+        anything you wrote into an ADR, README, or the report above (the board poller
+        reads this section and creates a tracking issue for every item);
+      - NOT-Building / scope-limit exclusions that are future work (not "never");
+      - skipped or blocked review findings that warrant follow-up.
+      Trace the ORIGINAL issue ask first (the issue body from the Inputs above):
       compare every acceptance criterion, described behavior, and named component
       in the issue body — including its **Out of scope** section — against what
       this run actually shipped:
@@ -200,7 +208,7 @@ VERDICT_NODE = """  # Final gate: post the review verdict on the PR so the board
     context: fresh
 """
 
-SHIP_CONFLICTS_WF = """name: archon-fix-ship-conflicts
+SHIP_CONFLICTS_WF = r"""name: archon-fix-ship-conflicts
 description: |
   Use when: a ship PR (feature -> main, In Review lane) has merge conflicts that
             block the board poller's verdict-gated merge.
@@ -260,6 +268,140 @@ nodes:
 effort: max
 """
 
+DEVELOP_CONFLICTS_WF = r"""
+name: archon-fix-develop-conflicts
+description: |
+  Use when: a develop PR (feature -> develop, In Progress lane) has merge
+            conflicts that block the board poller's completion merge.
+  Triggers: dispatched by the board poller; the dispatch message carries the PR number.
+  Does: merges develop into the PR head, resolves conflicts, validates,
+        pushes the resolution, comments on the PR.
+  NOT for: ship-PR conflicts (use archon-fix-ship-conflicts), review requests,
+        feature work, verdicts. Never post a VERDICT line — the review
+        workflow owns the verdict.
+
+nodes:
+  - id: resolve
+    prompt: |
+      You are resolving merge conflicts on a develop PR so the board poller can
+      merge it into develop.
+
+      ## Inputs
+
+      Dispatch message: $ARGUMENTS
+
+      ## Steps
+
+      1. PR number: extract it from the dispatch message with the pattern
+         `develop PR #(\d+)`. If the pattern is absent, report the error and stop.
+      2. Inspect the PR: `gh pr view <n> -R bradley-mankoff/news
+         --json number,state,mergeable,headRefName,baseRefName`
+         - If `state` is MERGED, or `mergeable` is not "CONFLICTING": comment on
+           the PR "No conflicts to resolve (mergeable: <value>)." and stop.
+      3. Resolve the conflicts locally (work only in this worktree; never touch
+         or push any branch other than the PR head):
+         - `git fetch origin <baseRefName> <headRefName>`
+         - `git checkout -B conflict-fix origin/<headRefName>` (fresh local branch
+           from the PR head; safe to force-reset later if needed)
+         - `git merge origin/<baseRefName>`
+         - Resolve every conflict:
+           * Keep BOTH sides' intent: the feature's changes (PR title + diff)
+             AND develop's changes. Drop nothing without a reason.
+           * When both sides changed the same area, combine them; when one side
+             supersedes the other, prefer the newer intent and note it in the
+             PR comment.
+           * If a conflict genuinely needs a human decision, do NOT guess:
+             leave the merge uncommitted, post a comment on the PR starting with
+             `NEEDS INPUT:` explaining the two options and their tradeoffs, and
+             stop WITHOUT pushing.
+      4. Validate before pushing: run the repo's test suite —
+         `.venv/bin/python3 -m pytest tests/ -q` (this machine's reliable
+         invocation; `uv run pytest -q` is flaky here), falling back to
+         `python3 -m unittest discover -s tests -q`. Fix ONLY merge-related
+         breakage (e.g. an import that moved in develop); do not refactor or
+         add features.
+      5. Push the resolution to the PR head branch without checking it out here:
+         `git push origin conflict-fix:<headRefName>`
+      6. Comment on the PR (3-6 lines): what was merged (base -> head), which
+         files had conflicts and how they were resolved, and the validation
+         result. Do NOT post a `VERDICT:` line.
+    depends_on: []
+    context: fresh
+    model: medium
+
+effort: max
+
+"""
+
+SYNC_FIX_NODE = r"""
+  - id: sync-with-develop
+    prompt: |
+      Sync this branch with the latest develop before the PR is created, so
+      parallel runs merge cleanly.
+
+      ## Steps
+
+      1. Fetch develop: `git fetch origin develop`. If the fetch fails, log the
+         error and continue (the develop merge in the workflow will surface it).
+      2. If the current branch has no commits yet (fresh worktree), skip the
+         merge — nothing can conflict. Log "no commits; skipping sync".
+      3. Otherwise merge develop into the branch: `git merge origin/develop`.
+         - On conflicts, resolve them keeping BOTH sides' intent: this
+           feature's changes AND develop's changes. When both sides touched the
+           same area, combine them; when one side supersedes the other, prefer
+           the newer intent and note it in the PR body.
+         - If a conflict genuinely needs a human decision, do NOT guess: leave
+           the merge uncommitted, post a comment on the issue starting with
+           `NEEDS INPUT:` explaining the two options and their tradeoffs, and
+           stop WITHOUT pushing (the board poller moves the issue to Blocked;
+           the human's answer resumes the run in this worktree).
+      4. Validate the merge: run the repo's test suite —
+         `.venv/bin/python3 -m pytest tests/ -q` (this machine's reliable
+         invocation), falling back to
+         `python3 -m unittest discover -s tests -q`. Fix ONLY merge-related
+         breakage (e.g. an import that moved in develop); do not refactor or
+         add features.
+      5. Commit the merge (or the resolution commits). Never push develop;
+         never push anything other than the current branch.
+    depends_on: [check-blocked]
+    when: "$check-blocked.output == 'clear'"
+    context: fresh
+"""
+
+SYNC_IDEA_NODE = r"""
+  - id: sync-with-develop
+    prompt: |
+      Sync this branch with the latest develop before the PR is finalized, so
+      parallel runs merge cleanly.
+
+      ## Steps
+
+      1. Fetch develop: `git fetch origin develop`. If the fetch fails, log the
+         error and continue (the develop merge in the workflow will surface it).
+      2. If the current branch has no commits yet (fresh worktree), skip the
+         merge — nothing can conflict. Log "no commits; skipping sync".
+      3. Otherwise merge develop into the branch: `git merge origin/develop`.
+         - On conflicts, resolve them keeping BOTH sides' intent: this
+           feature's changes AND develop's changes. When both sides touched the
+           same area, combine them; when one side supersedes the other, prefer
+           the newer intent and note it in the PR body.
+         - If a conflict genuinely needs a human decision, do NOT guess: leave
+           the merge uncommitted, post a comment on the issue starting with
+           `NEEDS INPUT:` explaining the two options and their tradeoffs, and
+           stop WITHOUT pushing (the board poller moves the issue to Blocked;
+           the human's answer resumes the run in this worktree).
+      4. Validate the merge: run the repo's test suite —
+         `.venv/bin/python3 -m pytest tests/ -q` (this machine's reliable
+         invocation), falling back to
+         `python3 -m unittest discover -s tests -q`. Fix ONLY merge-related
+         breakage (e.g. an import that moved in develop); do not refactor or
+         add features.
+      5. Commit the merge (or the resolution commits). Never push develop;
+         never push anything other than the current branch.
+    depends_on: [validate]
+    context: fresh
+"""
+
 
 def ensure_node(path: Path, node_id: str, node_text: str,
                 anchor: str) -> str | None:
@@ -299,6 +441,31 @@ def ensure_contract(path: Path, node_id: str) -> str | None:
     return f"added Deferred-work contract to {node_id} in {path.name}"
 
 
+
+def ensure_sync_node(path: Path, anchor: str, node_text: str, target_id: str,
+                     dep_old: str, dep_new: str) -> str | None:
+    """Insert the pre-PR sync node after `anchor` and rewire the downstream
+    node's depends_on to it. Idempotent on the node id."""
+    text = path.read_text()
+    if "- id: sync-with-develop" in text:
+        return None
+    if anchor not in text:
+        return f"anchor not found in {path.name}; insert sync-with-develop manually"
+    idx = text.find(anchor)
+    end = idx + len(anchor)
+    while end < len(text) and text[end] == "\n":
+        end += 1
+    text = text[:end] + "\n" + node_text + "\n" + text[end:]
+    tidx = text.find(f"- id: {target_id}")
+    if tidx == -1:
+        return f"target node {target_id} not found in {path.name}; rewire manually"
+    didx = text.find(dep_old, tidx)
+    if didx == -1:
+        return f"depends_on line not found after {target_id} in {path.name}"
+    text = text[:didx] + dep_new + text[didx + len(dep_old):]
+    path.write_text(text)
+    return f"added sync-with-develop to {path.name}"
+
 def main() -> int:
     changed: list[str] = []
     for fname, node_id, node_text, anchor in (
@@ -324,12 +491,50 @@ def main() -> int:
         if note:
             changed.append(note)
 
+    sync_fix_anchor = """  - id: check-blocked
+    bash: |
+      ISSUE_NUM=$(echo $extract-issue-number.output | grep -oE '[0-9]+' | head -1)
+      if gh issue view "$ISSUE_NUM" --json labels -q '.labels[].name' 2>/dev/null | grep -qx 'needs-input'; then
+        echo "blocked"
+      else
+        echo "clear"
+      fi
+    depends_on: [validate]
+"""
+    note = ensure_sync_node(
+        WORKFLOWS / "archon-fix-github-issue.yaml", sync_fix_anchor,
+        SYNC_FIX_NODE, "create-pr",
+        "    depends_on: [check-blocked]\n    context: fresh",
+        "    depends_on: [sync-with-develop]\n    context: fresh")
+    if note:
+        changed.append(note)
+    sync_idea_anchor = """  - id: validate
+    command: archon-validate
+    depends_on: [implement-tasks]
+    context: fresh
+"""
+    note = ensure_sync_node(
+        WORKFLOWS / "archon-idea-to-pr.yaml", sync_idea_anchor,
+        SYNC_IDEA_NODE, "finalize-pr",
+        "    depends_on: [validate]\n    context: fresh",
+        "    depends_on: [sync-with-develop]\n    context: fresh")
+    if note:
+        changed.append(note)
+
     ship = WORKFLOWS / "archon-fix-ship-conflicts.yaml"
     if not ship.exists():
         ship.write_text(SHIP_CONFLICTS_WF)
         changed.append("created archon-fix-ship-conflicts.yaml")
     elif "name: archon-fix-ship-conflicts" not in ship.read_text():
         changed.append("archon-fix-ship-conflicts.yaml exists but looks wrong — "
+                       "check its contents manually")
+
+    develop = WORKFLOWS / "archon-fix-develop-conflicts.yaml"
+    if not develop.exists():
+        develop.write_text(DEVELOP_CONFLICTS_WF)
+        changed.append("created archon-fix-develop-conflicts.yaml")
+    elif "name: archon-fix-develop-conflicts" not in develop.read_text():
+        changed.append("archon-fix-develop-conflicts.yaml exists but looks wrong — "
                        "check its contents manually")
 
     if changed:
