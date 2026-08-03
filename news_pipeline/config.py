@@ -949,6 +949,57 @@ def resolve_model_name(model_reference: str) -> str:
     return MODEL_ALIASES.get(clean_reference, clean_reference)
 
 
+def hf_model_page_url(model_choice: str) -> str | None:
+    """Return the Hugging Face model-page URL for a model choice, or None.
+
+    Aliases and https://huggingface.co/... / https://hf.co/... URL keys in
+    MODEL_ALIASES are normalized through resolve_model_name first. Only
+    repos derived from MODEL_ALIASES values are ever emitted: external ids,
+    unknown URL-shaped ids, and ids without an owner/name shape (no "/")
+    all yield None so callers can render a muted note instead of a broken
+    link. Unsupported references also yield None rather than raising.
+    """
+    clean = (model_choice or "").strip()
+    if not clean:
+        return None
+    try:
+        resolved = resolve_model_name(clean)
+    except ValueError:
+        return None
+    if resolved not in MODEL_ALIASES.values():
+        return None
+    # Defense in depth: URL-shaped alias values would double-prefix below,
+    # so never emit them (the drift-guard test pins the same invariant).
+    if resolved.startswith(("http://", "https://")):
+        return None
+    repo = resolved
+    # GGUF references are repo + "/" + file; the page lives at the repo.
+    if repo.endswith(".gguf") and "/" in repo:
+        repo = repo.rsplit("/", 1)[0]
+    if "/" not in repo:  # external/unknown ids have no HF repo page
+        return None
+    return f"https://huggingface.co/{repo}"
+
+
+def _model_option_links() -> dict[str, dict[str, str]]:
+    """Map every MODEL_ALIASES key that resolves to a Hugging Face repo to
+    its HF page + hardware links.
+
+    Both values are the same URL: Hugging Face's native Hardware
+    Compatibility panel is embedded in each model page (typically shown for
+    repos offering GGUF or MLX files), so the model-page URL is the single
+    correct destination. The two keys exist so a future HF anchor (e.g.
+    "#hardware") is a one-line change here.
+    """
+    links: dict[str, dict[str, str]] = {}
+    for option in MODEL_ALIASES:
+        url = hf_model_page_url(option)
+        if url is None:
+            continue
+        links[option] = {"page": url, "hardware": url}
+    return links
+
+
 def is_codex_test_model_reference(model_reference: str) -> bool:
     clean_reference = (model_reference or "").strip()
     return (
@@ -1058,6 +1109,7 @@ def _runtime_knob(
     step: int | float | None = None,
     advanced: bool = False,
     secret: bool = False,
+    option_links: dict[str, dict[str, str]] | None = None,
 ) -> dict[str, Any]:
     return {
         "id": env.lower(),
@@ -1072,11 +1124,17 @@ def _runtime_knob(
         "step": step,
         "advanced": advanced,
         "secret": secret,
+        # option_links maps each offered option -> {"page": url, "hardware":
+        # url} for the three model-choice knobs; the drift-guard test pins
+        # that its keys cover `options` exactly. Non-model knobs omit it and
+        # fall back to {}.
+        "option_links": option_links or {},
     }
 
 
 def runtime_knob_registry() -> list[dict[str, Any]]:
     tuning_presets = sorted(load_model_tuning_presets())
+    model_links = _model_option_links()
     knobs = [
         _runtime_knob("Run Settings", "Source scope", "NEWS_SOURCE_SCOPE", "select", default="core", options=list(SOURCE_SCOPES)),
         _runtime_knob("Run Settings", "Recipient scope", "NEWS_RECIPIENT_SCOPE", "select", default="bradley", options=list(RECIPIENT_SCOPES)),
@@ -1094,10 +1152,10 @@ def runtime_knob_registry() -> list[dict[str, Any]]:
         _runtime_knob("Run Settings", "Relax story drafting guards", "NEWS_RELAX_STORY_DRAFTING_GUARDS", "bool", advanced=True),
         _runtime_knob("Run Settings", "Embedding model", "NEWS_EMBEDDING_MODEL", default="all-mpnet-base-v2", advanced=True),
         _runtime_knob("Run Settings", "Token encoding", "NEWS_TOKEN_ENCODING", default="o200k_base", advanced=True),
-        _runtime_knob("Model Selection", "Default model", "NEWS_MODEL", "select", default=DEFAULT_MODEL_ALIAS, options=sorted(MODEL_ALIASES)),
+        _runtime_knob("Model Selection", "Default model", "NEWS_MODEL", "select", default=DEFAULT_MODEL_ALIAS, options=sorted(MODEL_ALIASES), option_links=model_links),
         _runtime_knob("Model Selection", "Model backend", "NEWS_MODEL_BACKEND", "select", options=sorted(SUPPORTED_MODEL_BACKENDS)),
-        _runtime_knob("Model Selection", "Article Summarization model", "NEWS_MODEL_ARTICLE_SUMMARY", "select", options=sorted(MODEL_ALIASES)),
-        _runtime_knob("Model Selection", "Story Drafting model", "NEWS_MODEL_STORY_DRAFTING", "select", options=sorted(MODEL_ALIASES)),
+        _runtime_knob("Model Selection", "Article Summarization model", "NEWS_MODEL_ARTICLE_SUMMARY", "select", options=sorted(MODEL_ALIASES), option_links=model_links),
+        _runtime_knob("Model Selection", "Story Drafting model", "NEWS_MODEL_STORY_DRAFTING", "select", options=sorted(MODEL_ALIASES), option_links=model_links),
         _runtime_knob("Model Tuning", "Default tuning preset", "NEWS_MODEL_TUNING_PRESET", "select", options=tuning_presets),
         _runtime_knob("Model Tuning", "Article Summarization tuning preset", "NEWS_MODEL_ARTICLE_SUMMARY_TUNING_PRESET", "select", options=tuning_presets),
         _runtime_knob("Model Tuning", "Story Drafting tuning preset", "NEWS_MODEL_STORY_DRAFTING_TUNING_PRESET", "select", options=tuning_presets),

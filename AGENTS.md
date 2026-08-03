@@ -14,6 +14,8 @@ Project goal: build, review, and send a daily news report from configured source
 - Need security audit results or the history-scrub runbook -> `docs/security/` (`audit-2026-08-02.md`, `history-scrub.md`).
 - Need the security audit scanner or the gated scrub wrapper -> `automation/` (`security_audit.py` — exit 0 clean / 1 findings; `scrub_history.sh` — dry-run default, force-push requires human approval).
 - Need the Archon workflow inventory (usable vs archived) -> `docs/archon-workflows.md`.
+- Need the machine-local Archon setup/operations map (services, quirks, upgrade) -> `docs/archon-setup.md`.
+- Adding/changing model aliases? Update the HF page URLs in README.md and SETTINGS.md too — `tests/test_config_helpers.py::test_docs_drift_guard_links_match_model_aliases` pins that the docs carry every alias's page URL.
 
 ## Always-on behavior
 - Always-on communication: **caveman full** (pi-caveman extension). Always-on code discipline: **ponytail full** (@dietrichgebert/ponytail extension+skills). Do not disable these unless the user explicitly asks.

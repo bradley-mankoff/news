@@ -308,6 +308,89 @@ class ConfigHelperTests(unittest.TestCase):
         self.assertEqual(len(backend_knobs), 1)
         self.assertEqual(backend_knobs[0]["group"], "Model Selection")
         self.assertEqual(backend_knobs[0]["options"], ["external", "mlx-lm", "mlx-vlm"])
+        # Drift-guard: every model knob option maps to an HF page + hardware
+        # link; the backend knob (not a model choice) carries none.
+        model_knob_envs = ("NEWS_MODEL", "NEWS_MODEL_ARTICLE_SUMMARY", "NEWS_MODEL_STORY_DRAFTING")
+        for env in model_knob_envs:
+            model_knob = next(knob for knob in registry if knob["env"] == env)
+            self.assertEqual(
+                set(model_knob["option_links"]),
+                set(model_knob["options"]),
+                f"{env} option_links must cover every offered option",
+            )
+            for option, link in model_knob["option_links"].items():
+                self.assertEqual(sorted(link), ["hardware", "page"])
+                self.assertTrue(link["page"].startswith("https://huggingface.co/"), option)
+                self.assertNotIn("https://huggingface.co/https://", link["page"], option)
+                self.assertEqual(link["hardware"], link["page"])
+        self.assertEqual(backend_knobs[0]["option_links"], {})
+        # Drift-guard: aliases must never land in the unsupported set, or the
+        # registry build and hf_model_page_url's ValueError fallback break.
+        self.assertEqual(
+            set(config_module.UNSUPPORTED_MODEL_REFERENCES) & set(config_module.MODEL_ALIASES),
+            set(),
+        )
+        # hf_model_page_url: alias, .gguf reference, URL keys, MLX repo,
+        # external id and empty input.
+        qwythos_page = f"https://huggingface.co/{config_module.QWWYTHOS_REPO}"
+        self.assertEqual(
+            config_module.hf_model_page_url(config_module.QWWYTHOS_9B_4BIT_MODEL_ALIAS),
+            qwythos_page,
+        )
+        self.assertEqual(
+            config_module.hf_model_page_url(config_module.QWWYTHOS_9B_4BIT_MODEL_REFERENCE),
+            qwythos_page,
+        )
+        self.assertEqual(
+            config_module.hf_model_page_url(f"https://hf.co/{config_module.QWWYTHOS_9B_4BIT_MODEL_REFERENCE}"),
+            qwythos_page,
+        )
+        self.assertEqual(
+            config_module.hf_model_page_url(f"https://huggingface.co/{config_module.QWWYTHOS_9B_4BIT_MODEL_REFERENCE}"),
+            qwythos_page,
+        )
+        self.assertEqual(
+            config_module.hf_model_page_url(f"  https://hf.co/{config_module.QWWYTHOS_9B_4BIT_MODEL_REFERENCE}  "),
+            qwythos_page,
+        )
+        self.assertEqual(
+            config_module.hf_model_page_url(config_module.CODEX_TEST_MODEL_ALIAS),
+            f"https://huggingface.co/{config_module.CODEX_TEST_MODEL_NAME}",
+        )
+        self.assertIsNone(config_module.hf_model_page_url("gpt-4o-mini"))
+        self.assertIsNone(config_module.hf_model_page_url("openai/gpt-4o"))
+        self.assertIsNone(config_module.hf_model_page_url("foo.gguf"))
+        self.assertIsNone(config_module.hf_model_page_url("https://huggingface.co/unknown/owner-repo"))
+        self.assertIsNone(config_module.hf_model_page_url("https://example.com/not-huggingface"))
+        self.assertIsNone(config_module.hf_model_page_url(""))
+        self.assertIsNone(config_module.hf_model_page_url("   "))
+        # Unsupported references yield None rather than raising ValueError.
+        with patch.object(config_module, "UNSUPPORTED_MODEL_REFERENCES", {"qwythos-9b-8bit"}):
+            self.assertIsNone(config_module.hf_model_page_url("qwythos-9b-8bit"))
+
+    def test_hf_model_page_url_edge_cases_never_emit_broken_links(self) -> None:
+        """Malformed / defensive inputs to hf_model_page_url must all yield
+        None (the 'never emit a broken link' contract), never a URL."""
+        ref = config_module.QWWYTHOS_9B_4BIT_MODEL_REFERENCE
+        self.assertIsNone(config_module.hf_model_page_url(None))
+        self.assertIsNone(config_module.hf_model_page_url(f"https://huggingface.co/{ref}/"))
+        self.assertIsNone(
+            config_module.hf_model_page_url(f"https://huggingface.co/https://hf.co/{ref}")
+        )
+        self.assertIsNone(config_module.hf_model_page_url("HTTPS://HUGGINGFACE.CO/foo/bar"))
+
+    def test_docs_drift_guard_links_match_model_aliases(self) -> None:
+        """Every MODEL_ALIASES HF page URL must appear in README.md and
+        SETTINGS.md (the docs hardcode the same URLs the UI renders)."""
+        repo_root = Path(__file__).resolve().parents[1]
+        docs_text = "\n".join(
+            (repo_root / name).read_text(encoding="utf-8")
+            for name in ("README.md", "SETTINGS.md")
+        )
+        for alias in config_module.MODEL_ALIASES:
+            url = config_module.hf_model_page_url(alias)
+            self.assertIsNotNone(url, alias)
+            self.assertIn(url, docs_text, f"{alias} page URL missing from README/SETTINGS")
 
     def test_yaml_scope_and_runtime_config_helpers_cover_edge_branches(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
