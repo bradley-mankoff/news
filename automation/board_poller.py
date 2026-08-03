@@ -985,6 +985,75 @@ def ensure_ship_review(cfg: dict, env: dict, item_id: str, issue_number: int,
     return "ok", msg, ship["number"]
 
 
+def branch_empty_vs_main(cfg: dict, env: dict, head: str, base: str) -> bool:
+    """True when `head` has no commits beyond `base` — its work already
+    reached base via another ship PR's develop merge (the #24 case), so a
+    ship PR would be empty and a review would be meaningless."""
+    r = gh(["api", f"repos/{cfg['repo']}/compare/{base}...{head}"], env)
+    if r.returncode != 0:
+        return False  # unknown — treat as shippable (safe default)
+    try:
+        return int(json.loads(r.stdout).get("ahead_by", 1)) == 0
+    except (ValueError, TypeError):
+        return False
+
+
+def ensure_ship_review(cfg: dict, env: dict, item_id: str, issue_number: int,
+                       title: str, project_id: str, field_id: str,
+                       status_options: dict, done_name: str | None,
+                       rec: dict) -> tuple[str, str, int] | str | None:
+    """Open/verify the ship PR for an issue in the review lane and dispatch
+    the review workflow.
+
+    Returns ("ok", msg, ship_num) when a review run was dispatched;
+    "shipped" when the branch has no commits beyond main (issue closed and
+    moved to Done — nothing left to review); None when nothing could be done
+    this poll (logged; the recheck pass retries).
+    """
+    merge_base = cfg["dispatch"]["todo"].get("merge_develop_base", "develop")
+    pr, _ok = find_issue_pr(cfg, env, issue_number, base=merge_base)
+    if pr:
+        ok, note = merge_pr_to_base(cfg, env, pr, merge_base, issue_number)
+        log(f"DEVELOP MERGE issue={issue_number} PR=#{pr['number']}: {note}"
+            if ok else
+            f"DEVELOP MERGE FAILED issue={issue_number}: {note}")
+    head = (pr or {}).get("headRefName") or f"archon/task-issue-{issue_number}"
+    ship_to = cfg["dispatch"]["review"].get("ship_to", "main")
+    if branch_empty_vs_main(cfg, env, head, ship_to):
+        if DRY_RUN:
+            log(f"[dry-run] ALREADY SHIPPED issue={issue_number} head={head}")
+        else:
+            comment_issue(
+                cfg, env, issue_number,
+                "Closing as shipped: this branch has no commits beyond main — "
+                "its work already reached main via an earlier ship PR's develop "
+                "merge. No review needed.")
+            gh(["issue", "close", str(issue_number), "-R", cfg["repo"]], env)
+            log(f"ALREADY SHIPPED issue={issue_number} head={head} -> {done_name}")
+        if done_name:
+            option_id = status_options.get(done_name)
+            if option_id:
+                move_to_lane(cfg, env, project_id, item_id, field_id, option_id)
+        rec.pop("review_msg", None)
+        rec.pop("ship_pr", None)
+        rec.pop("review_held", None)
+        return "shipped"
+    ship = find_or_create_ship_pr(
+        cfg, env, head, f"Ship: {title} (#{issue_number})", issue_number, ship_to)
+    if not ship:
+        log(f"SHIP PR UNAVAILABLE issue={issue_number} head={head} — retrying next poll")
+        return None
+    msg = (f"Review PR #{ship['number']} (ship to {ship_to} for issue "
+           f"#{issue_number}: {title}).")
+    branch = f"review/issue-{issue_number}"
+    if not dispatch(cfg, env, cfg["dispatch"]["review"]["workflow"],
+                    branch, msg, item_id, issue_number):
+        log(f"SHIP REVIEW DISPATCH FAILED issue={issue_number} — retrying next poll")
+        return None
+    rec.pop("review_held", None)
+    return "ok", msg, ship["number"]
+
+
 def pick_workflow(cfg: dict, labels: list[str]) -> str:
     todo_cfg = cfg["dispatch"]["todo"]
     for label in labels:
