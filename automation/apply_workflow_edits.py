@@ -670,6 +670,31 @@ def apply_rigorous_models(changed: list[str]) -> None:
 
 
 
+
+def ensure_sync_node(path: Path, anchor: str, node_text: str, target_id: str,
+                     dep_old: str, dep_new: str) -> str | None:
+    """Insert the pre-PR sync node after `anchor` and rewire the downstream
+    node's depends_on to it. Idempotent on the node id."""
+    text = path.read_text()
+    if "- id: sync-with-develop" in text:
+        return None
+    if anchor not in text:
+        return f"anchor not found in {path.name}; insert sync-with-develop manually"
+    idx = text.find(anchor)
+    end = idx + len(anchor)
+    while end < len(text) and text[end] == "\n":
+        end += 1
+    text = text[:end] + "\n" + node_text + "\n" + text[end:]
+    tidx = text.find(f"- id: {target_id}")
+    if tidx == -1:
+        return f"target node {target_id} not found in {path.name}; rewire manually"
+    didx = text.find(dep_old, tidx)
+    if didx == -1:
+        return f"depends_on line not found after {target_id} in {path.name}"
+    text = text[:didx] + dep_new + text[didx + len(dep_old):]
+    path.write_text(text)
+    return f"added sync-with-develop to {path.name}"
+
 def main() -> int:
     changed: list[str] = []
     for fname, node_id, node_text, anchor in (
