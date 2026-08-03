@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import sys
 from contextvars import ContextVar
 from dataclasses import dataclass, field, replace
 from datetime import datetime
@@ -92,9 +93,9 @@ PERIPHERAL_SOURCE_TIER = "peripheral"
 SOURCE_SCOPE_CORE = CORE_SOURCE_TIER
 SOURCE_SCOPE_PERIPHERAL = PERIPHERAL_SOURCE_TIER
 SOURCE_SCOPES = (SOURCE_SCOPE_CORE, SOURCE_SCOPE_PERIPHERAL)
-RECIPIENT_SCOPE_BRADLEY = "bradley"
+RECIPIENT_SCOPE_PRIMARY = "primary"
 RECIPIENT_SCOPE_ALL = "all"
-RECIPIENT_SCOPES = (RECIPIENT_SCOPE_BRADLEY, RECIPIENT_SCOPE_ALL)
+RECIPIENT_SCOPES = (RECIPIENT_SCOPE_PRIMARY, RECIPIENT_SCOPE_ALL)
 PRESET_ENV_VAR = "NEWS_PRESET"
 ACTIVE_PRESET_ENV_VAR = "NEWS_ACTIVE_PRESET"
 PRESET_MARKER_ENV_VARS = {PRESET_ENV_VAR, ACTIVE_PRESET_ENV_VAR}
@@ -251,7 +252,7 @@ class RuntimeConfig:
     model_server_command: str
     recent_window_hours: int
     max_articles_per_source: int
-    bradley_recipient: str
+    primary_recipient: str
     email_recipients_fallback: list[str]
     email_from: str
     smtp_host: str
@@ -1137,7 +1138,7 @@ def runtime_knob_registry() -> list[dict[str, Any]]:
     model_links = _model_option_links()
     knobs = [
         _runtime_knob("Run Settings", "Source scope", "NEWS_SOURCE_SCOPE", "select", default="core", options=list(SOURCE_SCOPES)),
-        _runtime_knob("Run Settings", "Recipient scope", "NEWS_RECIPIENT_SCOPE", "select", default="bradley", options=list(RECIPIENT_SCOPES)),
+        _runtime_knob("Run Settings", "Recipient scope", "NEWS_RECIPIENT_SCOPE", "select", default="primary", options=list(RECIPIENT_SCOPES)),
         _runtime_knob("Run Settings", "Block reused URLs", "NEWS_BLOCK_REUSED_URLS", "bool", default=False),
         _runtime_knob("Run Settings", "Image generation", "NEWS_IMAGE_ENABLED", "bool", default=False),
         _runtime_knob("Run Settings", "Story scale screening", "NEWS_STORY_SCALE_SCREENING_ENABLED", "bool"),
@@ -1448,10 +1449,9 @@ def _configured_source_scope() -> str:
 
 
 def _normalize_recipient_scope(value: Any) -> str:
-    scope = str(value or RECIPIENT_SCOPE_BRADLEY).strip().lower().replace("_", "-")
+    scope = str(value or RECIPIENT_SCOPE_PRIMARY).strip().lower().replace("_", "-")
     aliases = {
-        "bradley-only": RECIPIENT_SCOPE_BRADLEY,
-        "single": RECIPIENT_SCOPE_BRADLEY,
+        "single": RECIPIENT_SCOPE_PRIMARY,
         "full": RECIPIENT_SCOPE_ALL,
     }
     normalized = aliases.get(scope, scope)
@@ -1461,7 +1461,7 @@ def _normalize_recipient_scope(value: Any) -> str:
 
 
 def _configured_recipient_scope() -> str:
-    return _normalize_recipient_scope(_str_env("NEWS_RECIPIENT_SCOPE", RECIPIENT_SCOPE_BRADLEY))
+    return _normalize_recipient_scope(_str_env("NEWS_RECIPIENT_SCOPE", RECIPIENT_SCOPE_PRIMARY))
 
 
 def _source_enabled_for_scope(
@@ -1717,7 +1717,11 @@ def _build_runtime_config(
         run_staging_dir.mkdir(parents=True, exist_ok=True)
         _sync_cursorignore_latest_output(ROOT_DIR, output_dir, run_output_dir)
 
-    bradley_recipient = _str_env("NEWS_BRADLEY_RECIPIENT", "bradley@example.com")
+    if _active_env().get("NEWS_BRADLEY_RECIPIENT"):
+        print("warning: NEWS_BRADLEY_RECIPIENT is obsolete; "
+              "set NEWS_PRIMARY_RECIPIENT instead (see SETTINGS.md)",
+              file=sys.stderr)
+    primary_recipient = _str_env("NEWS_PRIMARY_RECIPIENT", "primary@example.com")
     source_scope = _configured_source_scope()
     recipient_scope = _configured_recipient_scope()
     url_reuse_blocking_enabled = _bool_env("NEWS_BLOCK_REUSED_URLS", False)
@@ -1741,7 +1745,7 @@ def _build_runtime_config(
     )
     fallback_recipients = [
         addr.strip()
-        for addr in _str_env("NEWS_EMAIL_RECIPIENTS", bradley_recipient).split(",")
+        for addr in _str_env("NEWS_EMAIL_RECIPIENTS", primary_recipient).split(",")
         if addr.strip()
     ]
 
@@ -1840,7 +1844,7 @@ def _build_runtime_config(
         model_server_command=default_model_assignment.server_command,
         recent_window_hours=pipeline_budget.recent_window_hours,
         max_articles_per_source=pipeline_budget.max_articles_per_source,
-        bradley_recipient=bradley_recipient,
+        primary_recipient=primary_recipient,
         email_recipients_fallback=fallback_recipients,
         email_from=email_from,
         smtp_host=_str_env("NEWS_SMTP_HOST", "smtp.gmail.com"),

@@ -11,7 +11,7 @@ Archon workflow engine + stock Pi provider, no custom extensions.
 | Archon home (`ARCHON_HOME`) | `~/.local/share/archon-pi/archon-home` |
 | `archon` command | `~/.local/bin/archon` — a wrapper script that exports `ARCHON_HOME` + pi defaults and execs `archon-pi/bin/archon` (stock v0.7.0 binary) |
 | `archon-pi` command | shim with the same env + `doctor`/`ui` helpers |
-| Config | `archon-home/config.yaml`: `defaultAssistant: pi`, `assistants.pi.model: deepseek/deepseek-v4-flash`, tiers small/medium/large → pi + deepseek + effort max |
+| Config | `archon-home/config.yaml`: `defaultAssistant: pi`, `assistants.pi.model: opencode-go/deepseek-v4-flash`, tiers small/medium/large → pi + opencode-go + effort max |
 | Curated workflows | `archon-home/workflows/` (15 pi-usable, override bundled by name) |
 | Archived workflows | `archon-home/workflows-archived/` (7 claude-only, not discovered) |
 | Database | `archon-home/archon.db` (SQLite) |
@@ -31,7 +31,7 @@ Archon workflow engine + stock Pi provider, no custom extensions.
 
 ## Execution model
 
-- Every workflow runs on `pi` / `deepseek/deepseek-v4-flash` at max effort.
+- Every workflow runs on `pi` / `opencode-go/deepseek-v4-flash` at max effort.
 - A workflow's `provider:` pin is overridden when its `model:` resolves to a
   tier — the tier's provider wins (bundled workflows pinned to claude still run
   on pi via the tiers).
@@ -64,7 +64,7 @@ Archon workflow engine + stock Pi provider, no custom extensions.
 ```bash
 archon version                     # v0.7.0
 archon validate workflows          # 15 valid
-archon ai tier list --json         # all tiers pi/deepseek-v4-flash, effort max
+archon ai tier list --json         # all tiers pi/opencode-go/deepseek-v4-flash, effort max
 archon workflow runs               # recent runs (from the repo root)
 launchctl list | grep news-board-poller
 ```
