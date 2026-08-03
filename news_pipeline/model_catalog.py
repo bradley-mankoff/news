@@ -148,12 +148,13 @@ CATALOG_MODELS: dict[str, CatalogModel] = {
         alias="gemma-e2b-tiny",
         reference="deadbydawn101/gemma-4-E2B-Heretic-Uncensored-mlx-4bit",
         name="Gemma E2B Tiny",
-        backend="mlx-lm",
+        backend="mlx-vlm",
         hf_repo="deadbydawn101/gemma-4-E2B-Heretic-Uncensored-mlx-4bit",
         context_length=None,
         description=(
-            "Codex-safe test model: tiny 4-bit MLX Gemma for fast runs and "
-            "automated verification, served by the managed mlx-lm backend."
+            "Codex-safe test model: tiny 4-bit MLX Gemma VLM for fast runs and "
+            "automated verification, served by the managed mlx-vlm backend "
+            "(HF metadata: image-text-to-text)."
         ),
         task_notes={
             "speed": MODEL_RECOMMENDATION_TASK_NOTES["speed"],
