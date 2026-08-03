@@ -26,8 +26,8 @@ Pipeline Budget, Model Server Settings, and Prompt Profile.
 | `NEWS_PROMPT_PROFILE` | `balanced` | Editorial tone for the five LLM prompt stages. One of `balanced`, `consensus-and-contradiction`, `explain-like-im-five`, `facts-only`, `playful`. |
 | `NEWS_MODEL` | `gemma-26b-moe` | Default friendly alias or full model repo/name. Task-specific model assignments inherit this value unless overridden. |
 | `NEWS_SOURCE_SCOPE` | `core` | `core` selects active English core sources. `peripheral` selects core plus peripheral sources. |
-| `NEWS_RECIPIENT_SCOPE` | `bradley` | `bradley` (primary) sends to `NEWS_BRADLEY_RECIPIENT`. `all` sends to active configured recipients. |
-| `NEWS_BRADLEY_RECIPIENT` | `bradley@example.com` | Single-recipient address used by primary-recipient-scoped runs. |
+| `NEWS_RECIPIENT_SCOPE` | `primary` | `primary` sends to `NEWS_PRIMARY_RECIPIENT`. `all` sends to active configured recipients. |
+| `NEWS_PRIMARY_RECIPIENT` | `primary@example.com` | Single-recipient address used by primary-recipient-scoped runs. |
 | `NEWS_BLOCK_REUSED_URLS` | `0` | Every run records URL history. `1` makes recorded URLs block future reuse. |
 | `NEWS_IMAGE_ENABLED` | `0` | `1` enables report image generation. Image model, size, crop, steps, and fail-open behavior are fixed defaults. |
 | `NEWS_RECENT_WINDOW_HOURS` | `24` | Only articles published within this window are considered. |
@@ -38,6 +38,17 @@ Pipeline Budget, Model Server Settings, and Prompt Profile.
 | `NEWS_TOTAL_ARTICLE_SUMMARY_CAP` | `40` | Pipeline Budget cap on articles sent to article summarization. |
 | `NEWS_ARTICLE_SUMMARY_MAX_TOKENS` | `1000` | Model Tuning token limit for each article summary. |
 | `NEWS_STORY_DRAFTING_MAX_TOKENS` | `1800` | Model Tuning token limit for story/newsletter synthesis. |
+
+## Renamed settings (migration note)
+
+The `bradley` terminology was replaced with `primary` (issue #23):
+
+- `NEWS_RECIPIENT_SCOPE=bradley` and `bradley-only` are rejected with a
+  `ValueError` — use `primary` (or the `single` alias).
+- `NEWS_BRADLEY_RECIPIENT` is no longer read. Rename it to
+  `NEWS_PRIMARY_RECIPIENT`; a leftover `NEWS_BRADLEY_RECIPIENT` is ignored
+  (a warning is printed to stderr), and delivery falls back to the
+  `primary@example.com` default.
 
 ## Advanced Run Settings
 
@@ -56,11 +67,14 @@ Pipeline Budget, Model Server Settings, and Prompt Profile.
 
 Built-in model aliases:
 
-| Alias | Resolved model |
-|---|---|
-| `gemma-e2b-tiny` | `deadbydawn101/gemma-4-E2B-Heretic-Uncensored-mlx-4bit` (kept as the Codex-safe test model) |
-| `qwythos-9b-4bit` | `huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-Q4_K.gguf` |
-| `qwythos-9b-8bit` | `huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-Q8_0.gguf` (default) |
+| Alias | Resolved model | Hugging Face page |
+|---|---|---|
+| `gemma-e2b-tiny` | `deadbydawn101/gemma-4-E2B-Heretic-Uncensored-mlx-4bit` (kept as the Codex-safe test model) | [deadbydawn101/gemma-4-E2B-Heretic-Uncensored-mlx-4bit](https://huggingface.co/deadbydawn101/gemma-4-E2B-Heretic-Uncensored-mlx-4bit) |
+| `qwythos-9b-4bit` | `huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-Q4_K.gguf` | [huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF](https://huggingface.co/huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF) |
+| `qwythos-9b-8bit` | `huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-Q8_0.gguf` (default) | [huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF](https://huggingface.co/huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF) |
+
+Each model page shows Hugging Face's native Hardware Compatibility panel
+(GGUF/MLX quantizations) — the UI model picker links directly to it.
 
 | Variable | Default | Description |
 |---|---|---|
@@ -86,7 +100,7 @@ These settings are intentionally not part of the normal Run Settings surface.
 | `NEWS_HISTORY_EXPORT_CSV` | `1` | Export readable history CSVs after writes. |
 | `NEWS_ENV_JSON` | `env.json` | JSON file with SMTP password fallback. |
 | `NEWS_EMAIL_FROM` | `news@example.com` | Sender address and SMTP username default. |
-| `NEWS_EMAIL_RECIPIENTS` | `NEWS_BRADLEY_RECIPIENT` | Fallback recipient list if recipient YAML has no active entries. |
+| `NEWS_EMAIL_RECIPIENTS` | `NEWS_PRIMARY_RECIPIENT` | Fallback recipient list if recipient YAML has no active entries. |
 | `NEWS_SMTP_HOST`, `NEWS_SMTP_PORT`, `NEWS_SMTP_USERNAME`, `NEWS_SMTP_USE_SSL`, `NEWS_SMTP_PASSWORD` | mail defaults | SMTP delivery configuration. |
 | `NEWS_UNSUBSCRIBE_BASE_URL`, `NEWS_UNSUBSCRIBE_HOST`, `NEWS_UNSUBSCRIBE_PORT`, `NEWS_UNSUBSCRIBE_SECRET` | local defaults | Unsubscribe endpoint configuration. |
 | `NEWS_TOKEN_ENCODING` | `o200k_base` | Token-counting encoding. |
