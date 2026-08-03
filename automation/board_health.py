@@ -50,6 +50,7 @@ def main() -> int:
     done_lane = lane_names.get("done")
     todo_lane = lane_names.get("todo")
     blocked_lane = lane_names.get("blocked")
+    needs_input_lane = lane_names.get("needs_input")
     in_progress_lane = lane_names.get("in_progress")
     review_lane = lane_names.get("review")
 
@@ -71,7 +72,8 @@ def main() -> int:
     total = len(issues)
     done_count = counts.get(lane_names.get("done", ""), 0)
     order = [lane_names.get(v) for v in
-             ("backlog", "todo", "in_progress", "blocked", "ready", "review", "done")
+             ("backlog", "todo", "in_progress", "blocked", "needs_input",
+              "ready", "review", "done")
              if lane_names.get(v)]
     summary = "Board: " + ", ".join(
         f"{name} {counts.get(name, 0)}" for name in order) + f" (total {total})"
@@ -99,10 +101,15 @@ def main() -> int:
                         f"#{number} in {in_progress_lane} with no active run "
                         f"(status {status or 'unknown'}) — re-drag to Todo or move it")
         elif lane == blocked_lane:
-            if "needs-input" not in labels and not rec.get("dep_blocked"):
+            if not rec.get("dep_blocked"):
                 findings.append(
-                    f"#{number} in {blocked_lane} without needs-input or a dependency "
-                    "marker — unknown blocker, check manually")
+                    f"#{number} in {blocked_lane} without a dependency marker — "
+                    "unknown blocker, check manually")
+        elif lane == needs_input_lane:
+            if "needs-input" not in labels:
+                findings.append(
+                    f"#{number} in {needs_input_lane} without the needs-input label — "
+                    "unknown blocker, check manually")
         elif lane == review_lane:
             rmsg = rec.get("review_msg")
             if not rmsg:

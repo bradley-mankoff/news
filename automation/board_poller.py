@@ -1223,10 +1223,10 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
             lane = cfg["lanes"].get(status_val)
             if lane == "todo" and content["__typename"] == "Issue":
                 # Dependency gate: an issue whose Depends-on refs are not all
-                # in the Done lane does not dispatch; it returns to the default
-                # lane (Backlog) and the unblock pass returns it to Todo (which
-                # dispatches) when the deps ship. Blocked stays exclusive to
-                # NEEDS INPUT.
+                # in the Done lane does not dispatch; it moves to the Blocked
+                # lane and the unblock pass returns it to Todo (which
+                # dispatches) when the deps ship. Needs Input stays exclusive
+                # to NEEDS INPUT questions.
                 deps = parse_dep_refs(content.get("body") or "")
                 if deps and done_lane_name:
                     dep_gate_ran = True
@@ -1244,16 +1244,17 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
                         if not rec.get("dep_blocked"):
                             comment_issue(
                                 cfg, env, content["number"],
-                                f"Returned to Backlog: depends on {fmt_deps(unsatisfied)} "
+                                f"Moved to Blocked: depends on {fmt_deps(unsatisfied)} "
                                 "— not in the Done lane. Will move to Todo automatically "
                                 "when they ship. If a dependency is abandoned, re-scope or "
                                 "close this issue.")
-                        option_id = status_options.get(default_lane)
-                        if option_id and move_to_lane(
-                                cfg, env, project_id, item_id, field_id, option_id):
-                            log(f"DEP-BLOCKED item={item_id} "
-                                f"issue={content['number']} -> {default_lane}")
-                            status_val = default_lane
+                        if blocked_lane_name:
+                            option_id = status_options.get(blocked_lane_name)
+                            if option_id and move_to_lane(
+                                    cfg, env, project_id, item_id, field_id, option_id):
+                                log(f"DEP-BLOCKED item={item_id} "
+                                    f"issue={content['number']} -> {blocked_lane_name}")
+                                status_val = blocked_lane_name
                         dep_blocked_marker = deps
                         dep_cancelled_noted = sorted(noted)
                     else:
@@ -1367,17 +1368,17 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
                 rec.pop("dep_cancelled_noted", None)
         state[item_id] = rec
 
-    # Dep-unblock pass: dep-marked items in the default lane re-check every
+    # Dep-unblock pass: dep-marked items in the Blocked lane re-check every
     # poll, so a shipped dependency releases them (moves them to Todo, which
     # dispatches on the next poll) without a manual drag.
-    if todo_lane_name and done_lane_name:
+    if todo_lane_name and blocked_lane_name and done_lane_name:
         for item in items:
             content = item.get("content") or {}
             if content.get("__typename") != "Issue":
                 continue
             if content.get("repository", {}).get("nameWithOwner") != cfg["repo"]:
                 continue
-            if item["status"] != default_lane:
+            if item["status"] != blocked_lane_name:
                 continue
             item_id = item["id"]
             rec = state.get(item_id, {})
@@ -1431,9 +1432,9 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
             run_status = run_status_for(runs_by_msg, msg)
             if run_status == "completed":
                 issue_number = rec.get("issue_number")
-                blocked_name = next(
-                    (k for k, v in cfg["lanes"].items() if v == "blocked"), None)
-                if issue_number and blocked_name:
+                needs_input_name = next(
+                    (k for k, v in cfg["lanes"].items() if v == "needs_input"), None)
+                if issue_number and needs_input_name:
                     label_state = issue_has_label(
                         cfg, env, issue_number, "needs-input")
                     if label_state is None:
@@ -1444,11 +1445,11 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
                             "completion until the needs-input state is known")
                         continue
                     if label_state:
-                        option_id = status_options.get(blocked_name)
+                        option_id = status_options.get(needs_input_name)
                         if option_id and move_to_lane(
                                 cfg, env, project_id, item_id, field_id, option_id):
-                            log(f"BLOCKED item={item_id} issue={issue_number} -> "
-                                f"{blocked_name} (awaiting human input)")
+                            log(f"NEEDS INPUT item={item_id} issue={issue_number} -> "
+                                f"{needs_input_name} (awaiting human input)")
                         rec.pop("dispatch_msg", None)
                         continue
                 merge_base = cfg["dispatch"]["todo"].get("merge_develop_base")
