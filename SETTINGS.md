@@ -24,6 +24,7 @@ Pipeline Budget, Model Server Settings, and Prompt Profile.
 |---|---|---|
 | `NEWS_PRESET` | _(none)_ | Selects a saved preset when `--preset NAME` is not used. |
 | `NEWS_PROMPT_PROFILE` | `balanced` | Editorial tone for the five LLM prompt stages. One of `balanced`, `consensus-and-contradiction`, `explain-like-im-five`, `facts-only`, `playful`. |
+| `NEWS_PROMPT_OVERRIDE_<TASK>` | _(unset)_ | Per-stage editorial override layered on top of `NEWS_PROMPT_PROFILE` (override wins). Tasks: `ARTICLE_SUMMARY`, `STORY_SCALE_SCREENING`, `STORY_DRAFTING`, `TITLE_GENERATION`, `IMAGE_ART_DIRECTION`. Unset/empty = use profile text. Editable from the UI's Editorial approach panel. |
 | `NEWS_MODEL` | `gemma-26b-moe` | Default friendly alias or full model repo/name. Task-specific model assignments inherit this value unless overridden. |
 | `NEWS_SOURCE_SCOPE` | `core` | `core` selects active English core sources. `peripheral` selects core plus peripheral sources. |
 | `NEWS_RECIPIENT_SCOPE` | `primary` | `primary` sends to `NEWS_PRIMARY_RECIPIENT`. `all` sends to active configured recipients. |

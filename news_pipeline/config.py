@@ -28,6 +28,7 @@ from .prompt_catalog import (
     DEFAULT_PROMPT_PROFILE_ID,
     PROMPT_PROFILE_ENV_VAR,
     PROMPT_PROFILE_IDS,
+    PROMPT_TASK_OVERRIDE_ENV_VARS,
     get_prompt_profile,
 )
 from .prompt_contracts import validate_editorial_instructions
@@ -229,6 +230,7 @@ class RuntimeConfig:
     run_used_urls_path: Path
     preset_id: str
     prompt_profile_id: str
+    prompt_instruction_overrides: dict[str, str]
     source_scope: str
     recipient_scope: str
     url_reuse_blocking_enabled: bool
@@ -1157,6 +1159,16 @@ def runtime_knob_registry() -> list[dict[str, Any]]:
             default=DEFAULT_PROMPT_PROFILE_ID,
             options=list(PROMPT_PROFILE_IDS),
         ),
+        *[
+            _runtime_knob(
+                "Run Settings",
+                f"Prompt override ({task.replace('_', ' ')})",
+                env_var,
+                "text",
+                advanced=True,
+            )
+            for task, env_var in PROMPT_TASK_OVERRIDE_ENV_VARS.items()
+        ],
         _runtime_knob("Run Settings", "Relax story drafting guards", "NEWS_RELAX_STORY_DRAFTING_GUARDS", "bool", advanced=True),
         _runtime_knob("Run Settings", "Embedding model", "NEWS_EMBEDDING_MODEL", default="all-mpnet-base-v2", advanced=True),
         _runtime_knob("Run Settings", "Token encoding", "NEWS_TOKEN_ENCODING", default="o200k_base", advanced=True),
@@ -1739,6 +1751,13 @@ def _build_runtime_config(
     prompt_profile_id = _str_env(PROMPT_PROFILE_ENV_VAR, DEFAULT_PROMPT_PROFILE_ID) or DEFAULT_PROMPT_PROFILE_ID
     # Resolved once at import time in pipeline.py; fails fast on unknown ids.
     get_prompt_profile(prompt_profile_id)
+    # Per-stage prompt overrides (NEWS_PROMPT_OVERRIDE_<TASK>): non-empty
+    # values only; empty-but-present counts as unset like sibling knobs.
+    prompt_instruction_overrides = {
+        task: value
+        for task, env_var in PROMPT_TASK_OVERRIDE_ENV_VARS.items()
+        if (value := _str_env(env_var, "").strip())
+    }
     # Editorial sentences must never weaken the pipeline-owned output contracts
     # (parsers, retries, citation renderers, sanitizers depend on them); a
     # violating profile fails fast at config resolution, not mid-run.
@@ -1834,6 +1853,7 @@ def _build_runtime_config(
         run_used_urls_path=run_output_dir / run_used_urls_filename,
         preset_id=preset_id,
         prompt_profile_id=prompt_profile_id,
+        prompt_instruction_overrides=prompt_instruction_overrides,
         source_scope=source_scope,
         recipient_scope=recipient_scope,
         url_reuse_blocking_enabled=url_reuse_blocking_enabled,
