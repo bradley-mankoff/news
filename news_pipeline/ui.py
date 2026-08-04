@@ -2061,10 +2061,7 @@ HTML = r"""<!doctype html>
         </div>
       `;
       renderPresetSummary();
-      renderModelTuningControls("article_summary");
-      renderModelTuningControls("story_drafting");
-      renderModelTuningControls("story_scale_screening");
-      renderModelTuningControls("title_generation");
+      renderModelTuningPanels();
       decorateEnvHints($("runSetupMount"));
       renderPromptProfilePanel();
       renderModelCatalogPanel();
@@ -2082,6 +2079,13 @@ HTML = r"""<!doctype html>
         }
       };
     }
+    // Knob labels for each task's per-task max-tokens env (modelTuningPanel).
+    const TASK_MAX_TOKENS_LABELS = {
+      article_summary: "Article summary max tokens",
+      story_drafting: "Story drafting max tokens",
+      story_scale_screening: "Scale screening max tokens",
+      title_generation: "Title generation max tokens"
+    };
     const SAMPLING_FIELDS = [
       ["TEMPERATURE", "Temperature"],
       ["TOP_P", "Top P"],
@@ -2109,7 +2113,7 @@ HTML = r"""<!doctype html>
             <label class="field"><span>Display name</span><input id="${meta.nameInputId}"><code>name</code></label>
             <label class="field"><span>Description</span><textarea id="${meta.descriptionInputId}"></textarea><code>description</code></label>
             ${sharedCap}
-            ${knobField(meta.taskMaxTokensEnv, task === "article_summary" ? "Article summary max tokens" : task === "story_drafting" ? "Story drafting max tokens" : task === "story_scale_screening" ? "Scale screening max tokens" : "Title generation max tokens")}
+            ${knobField(meta.taskMaxTokensEnv, TASK_MAX_TOKENS_LABELS[task] || "Max tokens")}
             ${knobField(meta.baseUrlEnv, "Base URL")}
             ${samplingFields(meta.taskSamplingPrefix)}
           </div>
@@ -2214,6 +2218,9 @@ HTML = r"""<!doctype html>
         loadModelTuningEditor(task, preset, { refresh: false });
       }
     }
+    function renderModelTuningPanels() {
+      Object.keys(TASK_CONFIG).forEach(task => renderModelTuningControls(task));
+    }
     function filteredModelTuningPresets(task, selectedModel, resolvedName) {
       const matches = state.modelTuningPresets.filter(preset => {
         const modelOk = !preset.model || preset.model === selectedModel || preset.model === resolvedName;
@@ -2228,12 +2235,8 @@ HTML = r"""<!doctype html>
       const sharedMax = valueByEnv("NEWS_MODEL_MAX_INPUT_TOKENS");
       if (sharedMax) tuning.model_max_input_tokens = sharedMax;
       const taskMax = valueByEnv(meta.taskMaxTokensEnv);
-      if (taskMax) {
-        if (task === "article_summary") tuning.article_summary_max_tokens = taskMax;
-        if (task === "story_drafting") tuning.story_drafting_max_tokens = taskMax;
-        if (task === "story_scale_screening") tuning.story_scale_screening_max_tokens = taskMax;
-        if (task === "title_generation") tuning.title_generation_max_tokens = taskMax;
-      }
+      // Tuning field names follow the `<task>_max_tokens` convention.
+      if (taskMax) tuning[`${task}_max_tokens`] = taskMax;
       const samplingFields = [
         ["temperature", `${meta.taskSamplingPrefix}_TEMPERATURE`],
         ["top_p", `${meta.taskSamplingPrefix}_TOP_P`],
@@ -2272,10 +2275,7 @@ HTML = r"""<!doctype html>
       if (preset) {
         const tuning = preset.tuning || {};
         if (tuning.model_max_input_tokens) setControlValue("NEWS_MODEL_MAX_INPUT_TOKENS", tuning.model_max_input_tokens);
-        if (task === "article_summary" && tuning.article_summary_max_tokens) setControlValue("NEWS_ARTICLE_SUMMARY_MAX_TOKENS", tuning.article_summary_max_tokens);
-        if (task === "story_drafting" && tuning.story_drafting_max_tokens) setControlValue("NEWS_STORY_DRAFTING_MAX_TOKENS", tuning.story_drafting_max_tokens);
-        if (task === "story_scale_screening" && tuning.story_scale_screening_max_tokens) setControlValue("NEWS_STORY_SCALE_SCREENING_MAX_TOKENS", tuning.story_scale_screening_max_tokens);
-        if (task === "title_generation" && tuning.title_generation_max_tokens) setControlValue("NEWS_TITLE_GENERATION_MAX_TOKENS", tuning.title_generation_max_tokens);
+        if (tuning[`${task}_max_tokens`]) setControlValue(meta.taskMaxTokensEnv, tuning[`${task}_max_tokens`]);
         [["temperature","TEMPERATURE"],["top_p","TOP_P"],["top_k","TOP_K"],["min_p","MIN_P"],["presence_penalty","PRESENCE_PENALTY"],["repetition_penalty","REPETITION_PENALTY"]].forEach(([field, suffix]) => {
           if (tuning[field] !== undefined && tuning[field] !== null && tuning[field] !== "") {
             setControlValue(`${meta.taskSamplingPrefix}_${suffix}`, tuning[field]);
@@ -2365,10 +2365,19 @@ HTML = r"""<!doctype html>
       state.selectedRunPresetId = preset.id || "";
       setKnobEnv(preset.env || {});
       renderPresetSummary();
-      renderModelTuningControls("article_summary");
-      renderModelTuningControls("story_drafting");
-      renderModelTuningControls("story_scale_screening");
-      renderModelTuningControls("title_generation");
+      renderModelTuningPanels();
+      renderPromptProfilePanel();
+      refreshModelKnobLinks();
+      preview("run").catch(() => {});
+    }
+    function resetAllOverrides() {
+      document.querySelectorAll("[data-env]").forEach(el => {
+        if (el.type === "checkbox") el.checked = false;
+        else el.value = "";
+      });
+      state.selectedRunPresetId = "";
+      renderPresetSummary();
+      renderModelTuningPanels();
       renderPromptProfilePanel();
       refreshModelKnobLinks();
       preview("run").catch(() => {});
@@ -2426,10 +2435,7 @@ HTML = r"""<!doctype html>
     async function loadModelTuningPresets() {
       const data = await api("/api/model-tuning-presets");
       state.modelTuningPresets = data.presets || [];
-      renderModelTuningControls("article_summary");
-      renderModelTuningControls("story_drafting");
-      renderModelTuningControls("story_scale_screening");
-      renderModelTuningControls("title_generation");
+      renderModelTuningPanels();
     }
     function renderAdvancedKnobs() {
       const search = value("knobSearch").toLowerCase();
@@ -2825,36 +2831,8 @@ HTML = r"""<!doctype html>
       $("savePresetEditorBtn").onclick = () => savePresetEditor().catch(err => setStatus(err.message, "bad"));
       $("deletePresetBtn").onclick = () => deleteSelectedPreset().catch(err => setStatus(err.message, "bad"));
       $("knobSearch").oninput = renderAdvancedKnobs;
-      $("clearKnobsBtn").onclick = () => {
-        document.querySelectorAll("[data-env]").forEach(el => {
-          if (el.type === "checkbox") el.checked = false;
-          else el.value = "";
-        });
-        state.selectedRunPresetId = "";
-        renderPresetSummary();
-        renderModelTuningControls("article_summary");
-        renderModelTuningControls("story_drafting");
-        renderModelTuningControls("story_scale_screening");
-        renderModelTuningControls("title_generation");
-        renderPromptProfilePanel();
-        refreshModelKnobLinks();
-        preview("run").catch(() => {});
-      };
-      $("resetDefaultsBtn").onclick = () => {
-        document.querySelectorAll("[data-env]").forEach(el => {
-          if (el.type === "checkbox") el.checked = false;
-          else el.value = "";
-        });
-        state.selectedRunPresetId = "";
-        renderPresetSummary();
-        renderModelTuningControls("article_summary");
-        renderModelTuningControls("story_drafting");
-        renderModelTuningControls("story_scale_screening");
-        renderModelTuningControls("title_generation");
-        renderPromptProfilePanel();
-        refreshModelKnobLinks();
-        preview("run").catch(() => {});
-      };
+      $("clearKnobsBtn").onclick = resetAllOverrides;
+      $("resetDefaultsBtn").onclick = resetAllOverrides;
       $("promptProfileSelect").onchange = () => {
         renderPromptProfilePanel();
         preview("run").catch(() => {});
@@ -2909,10 +2887,7 @@ HTML = r"""<!doctype html>
       renderStats();
       renderRunPresetDrawer();
       renderPresetSummary();
-      renderModelTuningControls("article_summary");
-      renderModelTuningControls("story_drafting");
-      renderModelTuningControls("story_scale_screening");
-      renderModelTuningControls("title_generation");
+      renderModelTuningPanels();
       wireEvents();
       document.addEventListener("change", (event) => {
         const el = event.target;

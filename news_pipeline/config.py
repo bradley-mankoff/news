@@ -544,6 +544,11 @@ def _merge_model_sampling_settings(
     )
 
 
+def _merge_optional_value(base_value: int | None, overlay_value: int | None) -> int | None:
+    """Return overlay_value when set (not None); otherwise base_value."""
+    return overlay_value if overlay_value is not None else base_value
+
+
 def _merge_model_tuning_settings(
     base: ModelTuningSettings,
     overlay: ModelTuningSettings,
@@ -555,30 +560,21 @@ def _merge_model_tuning_settings(
             overlay_sampling,
         )
     return ModelTuningSettings(
-        model_max_input_tokens=(
-            overlay.model_max_input_tokens
-            if overlay.model_max_input_tokens is not None
-            else base.model_max_input_tokens
+        model_max_input_tokens=_merge_optional_value(
+            base.model_max_input_tokens, overlay.model_max_input_tokens
         ),
-        article_summary_max_tokens=(
-            overlay.article_summary_max_tokens
-            if overlay.article_summary_max_tokens is not None
-            else base.article_summary_max_tokens
+        article_summary_max_tokens=_merge_optional_value(
+            base.article_summary_max_tokens, overlay.article_summary_max_tokens
         ),
-        story_drafting_max_tokens=(
-            overlay.story_drafting_max_tokens
-            if overlay.story_drafting_max_tokens is not None
-            else base.story_drafting_max_tokens
+        story_drafting_max_tokens=_merge_optional_value(
+            base.story_drafting_max_tokens, overlay.story_drafting_max_tokens
         ),
-        story_scale_screening_max_tokens=(
-            overlay.story_scale_screening_max_tokens
-            if overlay.story_scale_screening_max_tokens is not None
-            else base.story_scale_screening_max_tokens
+        story_scale_screening_max_tokens=_merge_optional_value(
+            base.story_scale_screening_max_tokens,
+            overlay.story_scale_screening_max_tokens,
         ),
-        title_generation_max_tokens=(
-            overlay.title_generation_max_tokens
-            if overlay.title_generation_max_tokens is not None
-            else base.title_generation_max_tokens
+        title_generation_max_tokens=_merge_optional_value(
+            base.title_generation_max_tokens, overlay.title_generation_max_tokens
         ),
         task_sampling=task_sampling,
     )
@@ -600,22 +596,23 @@ def _base_model_tuning(model_reference: str) -> ModelTuningSettings:
     return tuning
 
 
-def _task_max_tokens_field(task: str) -> str:
-    if task == "default":
-        return "model_max_input_tokens"
-    if task == MODEL_TASK_ARTICLE_SUMMARY:
-        return "article_summary_max_tokens"
-    if task == MODEL_TASK_STORY_DRAFTING:
-        return "story_drafting_max_tokens"
-    if task == MODEL_TASK_STORY_SCALE_SCREENING:
-        return "story_scale_screening_max_tokens"
-    if task == MODEL_TASK_TITLE_GENERATION:
-        return "title_generation_max_tokens"
+_TASK_MAX_TOKENS_FIELDS: dict[str, str] = {
+    "default": "model_max_input_tokens",
+    MODEL_TASK_ARTICLE_SUMMARY: "article_summary_max_tokens",
+    MODEL_TASK_STORY_DRAFTING: "story_drafting_max_tokens",
+    MODEL_TASK_STORY_SCALE_SCREENING: "story_scale_screening_max_tokens",
+    MODEL_TASK_TITLE_GENERATION: "title_generation_max_tokens",
     # image_art_direction is produced by the same LLM call as title_generation
     # (generate_image_art_brief); it inherits that task's token cap by design.
-    if task == MODEL_TASK_IMAGE_ART_DIRECTION:
-        return "title_generation_max_tokens"
-    raise ValueError(f"Unsupported model tuning task {task!r}.")
+    MODEL_TASK_IMAGE_ART_DIRECTION: "title_generation_max_tokens",
+}
+
+
+def _task_max_tokens_field(task: str) -> str:
+    try:
+        return _TASK_MAX_TOKENS_FIELDS[task]
+    except KeyError:
+        raise ValueError(f"Unsupported model tuning task {task!r}.") from None
 
 
 def _selected_model_tuning_preset_id(task: str) -> str:
@@ -766,36 +763,26 @@ def _apply_model_tuning_env_overrides(tuning: ModelTuningSettings) -> ModelTunin
         tuning.task_sampling.get("reasoning", ModelSamplingSettings()),
         prefix=MODEL_REASONING_SAMPLING_ENV_PREFIX,
     )
-    model_max_input_tokens = _optional_int_env("NEWS_MODEL_MAX_INPUT_TOKENS")
-    article_summary_max_tokens = _optional_int_env("NEWS_ARTICLE_SUMMARY_MAX_TOKENS")
-    story_drafting_max_tokens = _optional_int_env("NEWS_STORY_DRAFTING_MAX_TOKENS")
-    story_scale_screening_max_tokens = _optional_int_env("NEWS_STORY_SCALE_SCREENING_MAX_TOKENS")
-    title_generation_max_tokens = _optional_int_env("NEWS_TITLE_GENERATION_MAX_TOKENS")
     return ModelTuningSettings(
-        model_max_input_tokens=(
-            tuning.model_max_input_tokens
-            if model_max_input_tokens is None
-            else model_max_input_tokens
+        model_max_input_tokens=_merge_optional_value(
+            tuning.model_max_input_tokens,
+            _optional_int_env("NEWS_MODEL_MAX_INPUT_TOKENS"),
         ),
-        article_summary_max_tokens=(
-            tuning.article_summary_max_tokens
-            if article_summary_max_tokens is None
-            else article_summary_max_tokens
+        article_summary_max_tokens=_merge_optional_value(
+            tuning.article_summary_max_tokens,
+            _optional_int_env("NEWS_ARTICLE_SUMMARY_MAX_TOKENS"),
         ),
-        story_drafting_max_tokens=(
-            tuning.story_drafting_max_tokens
-            if story_drafting_max_tokens is None
-            else story_drafting_max_tokens
+        story_drafting_max_tokens=_merge_optional_value(
+            tuning.story_drafting_max_tokens,
+            _optional_int_env("NEWS_STORY_DRAFTING_MAX_TOKENS"),
         ),
-        story_scale_screening_max_tokens=(
-            tuning.story_scale_screening_max_tokens
-            if story_scale_screening_max_tokens is None
-            else story_scale_screening_max_tokens
+        story_scale_screening_max_tokens=_merge_optional_value(
+            tuning.story_scale_screening_max_tokens,
+            _optional_int_env("NEWS_STORY_SCALE_SCREENING_MAX_TOKENS"),
         ),
-        title_generation_max_tokens=(
-            tuning.title_generation_max_tokens
-            if title_generation_max_tokens is None
-            else title_generation_max_tokens
+        title_generation_max_tokens=_merge_optional_value(
+            tuning.title_generation_max_tokens,
+            _optional_int_env("NEWS_TITLE_GENERATION_MAX_TOKENS"),
         ),
         task_sampling=task_sampling,
     )

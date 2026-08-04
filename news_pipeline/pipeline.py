@@ -2517,20 +2517,13 @@ def _normalized_model_task(task: str) -> str:
 
 def _task_model_assignment(task: str):
     normalized_task = _normalized_model_task(task)
-    if normalized_task == MODEL_TASK_ARTICLE_SUMMARY:
-        return MODEL_ASSIGNMENTS[MODEL_TASK_ARTICLE_SUMMARY]
-    if normalized_task == MODEL_TASK_STORY_DRAFTING:
-        return MODEL_ASSIGNMENTS[MODEL_TASK_STORY_DRAFTING]
-    if normalized_task == MODEL_TASK_STORY_SCALE_SCREENING:
-        return MODEL_ASSIGNMENTS[MODEL_TASK_STORY_SCALE_SCREENING]
-    if normalized_task == MODEL_TASK_TITLE_GENERATION:
-        return MODEL_ASSIGNMENTS[MODEL_TASK_TITLE_GENERATION]
     # image_art_direction is produced by the same LLM call as title_generation
     # (generate_image_art_brief); it inherits that assignment by design.
+    # story_discovery has no LLM stage (TF-IDF/embedding clustering), and
+    # unknown tasks fall back to the default assignment.
     if normalized_task == MODEL_TASK_IMAGE_ART_DIRECTION:
-        return MODEL_ASSIGNMENTS[MODEL_TASK_TITLE_GENERATION]
-    # story_discovery has no LLM stage (TF-IDF/embedding clustering); it inherits default.
-    return MODEL_ASSIGNMENTS["default"]
+        normalized_task = MODEL_TASK_TITLE_GENERATION
+    return MODEL_ASSIGNMENTS.get(normalized_task, MODEL_ASSIGNMENTS["default"])
 
 
 def build_chat_model(max_tokens: int, *, task: str = "default") -> ChatOpenAI:
@@ -3831,15 +3824,14 @@ def _new_run_diagnostics(source_count: int) -> RunDiagnostics:
         settings={
             "preset_id": PRESET_ID or "custom",
             "source_scope": SOURCE_SCOPE,
-            "source_languages": {
-                language: sum(
-                    1 for feed in SOURCE_FEEDS.values()
-                    if (feed.get("language") or "en") == language
+            "source_languages": dict(
+                sorted(
+                    Counter(
+                        feed.get("language") or "en"
+                        for feed in SOURCE_FEEDS.values()
+                    ).items()
                 )
-                for language in sorted(
-                    {feed.get("language") or "en" for feed in SOURCE_FEEDS.values()}
-                )
-            },
+            ),
             "recipient_scope": RECIPIENT_SCOPE,
             "url_reuse_blocking_enabled": URL_REUSE_BLOCKING_ENABLED,
             "relaxed_story_drafting_guards": RELAXED_STORY_DRAFTING_GUARDS,
