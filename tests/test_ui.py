@@ -17,6 +17,7 @@ from unittest.mock import patch
 import yaml
 
 from news_pipeline import ui as ui_module
+from news_pipeline.config import CODEX_TEST_MODEL_ALIAS, GEMMA_4_12B_IT_4BIT_MODEL_ALIAS
 from news_pipeline.ui import (
     DEFAULT_HOST,
     DEFAULT_PORT,
@@ -542,6 +543,13 @@ class UITests(unittest.TestCase):
             self.assertIn(env, js_source)
             self.assertIn(env, knob_envs)
 
+    def test_ui_js_has_active_run_guard_text(self) -> None:
+        # The embedded JS rejects a second run client-side and reflects the
+        # active-run state in the controls; pin the copy so it cannot silently
+        # drift away from the server-side guard.
+        self.assertIn("A run is already active", ui_module.HTML)
+        self.assertIn("updateRunControls", ui_module.HTML)
+
     def test_crud_helpers_use_temp_files(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
@@ -781,6 +789,26 @@ class UITests(unittest.TestCase):
         self.assertEqual(preview["runtime_error"], "preview error")
         self.assertEqual(preview["removed_topic_env_vars"], ["NEWS_TOPIC_IDS"])
 
+    def test_preview_rejects_different_task_model_on_managed_base_url(self) -> None:
+        # Regression for #113: the preview must raise on the incompatible
+        # model/base-URL combination instead of showing a clean command.
+        # build_command re-raises the config ValueError, which the /api/preview
+        # route serializes via _send_error_json for the browser.
+        with patch.dict(os.environ, {"NEWS_MODEL": CODEX_TEST_MODEL_ALIAS}, clear=True):
+            with self.assertRaisesRegex(
+                ValueError,
+                r"Managed model server cannot serve multiple different models "
+                r"from the same base URL",
+            ):
+                preview_payload(
+                    {
+                        "action": "run",
+                        "env": {
+                            "NEWS_MODEL_ARTICLE_SUMMARY": GEMMA_4_12B_IT_4BIT_MODEL_ALIAS,
+                        },
+                    }
+                )
+
     def test_run_record_and_manager_processes(self) -> None:
         record = RunRecord("run-1", ["news", "run"], {"PASSWORD": "secret", "VISIBLE": "ok"})
         record.append("line one\n")
@@ -846,6 +874,35 @@ class UITests(unittest.TestCase):
         manager.runs[running_record.run_id] = running_record
         stopped = manager.stop(running_record.run_id)
         self.assertEqual(stopped["status"], "stopping")
+
+    def test_run_manager_rejects_overlapping_start(self) -> None:
+        class _FakeThread:
+            def __init__(self, target, args, daemon):
+                self.target = target
+                self.args = args
+                self.daemon = daemon
+                self.started = False
+
+            def start(self) -> None:
+                self.started = True
+
+        manager = RunManager()
+        with patch.object(ui_module, "build_command", return_value=(["news", "run"], {})), patch.object(
+            ui_module, "uuid"
+        ) as uuid_module, patch.object(ui_module.threading, "Thread", _FakeThread):
+            uuid_module.uuid4.return_value.hex = "a" * 16
+            first = manager.start({"action": "run"})
+            self.assertIs(manager.active(), first)
+            with self.assertRaisesRegex(ui_module.RunAlreadyActiveError, "already active"):
+                manager.start({"action": "run"})
+            self.assertEqual(len(manager.runs), 1)
+
+            # A completed run must not block the next start.
+            first.status = "completed"
+            uuid_module.uuid4.return_value.hex = "b" * 16
+            second = manager.start({"action": "run"})
+            self.assertEqual(second.run_id, "bbbbbbbbbbbb")
+            self.assertIs(manager.active(), second)
 
     def test_http_routes_and_entrypoints(self) -> None:
         with patch.object(
@@ -1048,6 +1105,39 @@ class UITests(unittest.TestCase):
         handler.end_headers = lambda: None
         handler.do_GET()
         return state["status"], state["headers"], handler.wfile.getvalue().decode("utf-8")  # type: ignore[attr-defined]
+
+    def test_http_run_rejects_second_start_with_conflict(self) -> None:
+        class _FakeThread:
+            def __init__(self, target, args, daemon):
+                self.started = False
+
+            def start(self) -> None:
+                self.started = True
+
+        def invoke(method: str, path: str, body: str | None = None) -> tuple[int, dict[str, str], str]:
+            payload = (body or "").encode("utf-8")
+            handler = object.__new__(ui_module.NewsUIHandler)
+            state: dict[str, Any] = {"status": None, "headers": {}}
+            handler.path = path
+            handler.headers = {"Content-Length": str(len(payload))}
+            handler.rfile = BytesIO(payload)  # type: ignore[assignment]
+            handler.wfile = BytesIO()  # type: ignore[assignment]
+            handler.send_response = lambda status: state.__setitem__("status", status)
+            handler.send_header = lambda name, value: state["headers"].__setitem__(name, value)
+            handler.end_headers = lambda: None
+            getattr(handler, method)()
+            return state["status"], state["headers"], handler.wfile.getvalue().decode("utf-8")  # type: ignore[attr-defined]
+
+        with patch.object(ui_module, "build_command", return_value=(["uv", "run", "news", "run"], {})), patch.object(
+            ui_module, "uuid"
+        ) as uuid_module, patch.object(ui_module.threading, "Thread", _FakeThread):
+            uuid_module.uuid4.return_value.hex = "c" * 16
+            status, _, body = invoke("do_POST", "/api/run", body=json.dumps({"action": "run"}))
+            self.assertEqual(status, 202)
+            self.assertEqual(json.loads(body)["run_id"], "cccccccccccc")
+            status, _, body = invoke("do_POST", "/api/run", body=json.dumps({"action": "run"}))
+            self.assertEqual(status, 409)
+            self.assertIn("already active", json.loads(body)["error"])
 
     def test_models_search_endpoint_error_and_success(self) -> None:
         fake_models = [

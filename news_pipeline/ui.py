@@ -735,20 +735,48 @@ class RunRecord:
                 "line_count": len(self.lines),
             }
 
+    def is_active(self) -> bool:
+        with self.lock:
+            return self.status in {"starting", "running", "stopping"}
+
+
+class RunAlreadyActiveError(RuntimeError):
+    """Raised when a run is requested while another run is still active."""
+
 
 class RunManager:
     def __init__(self):
         self.runs: dict[str, RunRecord] = {}
         self.lock = threading.Lock()
 
+    def active(self) -> RunRecord | None:
+        with self.lock:
+            for record in self.runs.values():
+                if record.is_active():
+                    return record
+            return None
+
     def start(self, body: dict[str, Any]) -> RunRecord:
         command, env = build_command(body)
         run_id = uuid.uuid4().hex[:12]
         record = RunRecord(run_id, command, env)
         with self.lock:
+            for existing in self.runs.values():
+                if existing.is_active():
+                    raise RunAlreadyActiveError(
+                        f"A run is already active ({existing.run_id}, status {existing.status}); "
+                        f"stop it or wait for it to finish before starting another."
+                    )
             self.runs[run_id] = record
         thread = threading.Thread(target=self._run_process, args=(record,), daemon=True)
-        thread.start()
+        try:
+            thread.start()
+        except Exception as exc:
+            with self.lock:
+                record.status = "failed"
+                record.returncode = -1
+                record.append(f"[ui] failed to start thread: {exc}\n")
+            raise
         return record
 
     def get(self, run_id: str) -> RunRecord | None:
@@ -924,7 +952,11 @@ class NewsUIHandler(BaseHTTPRequestHandler):
             if parsed.path == "/api/preview":
                 self._send_json(preview_payload(body))
             elif parsed.path == "/api/run":
-                record = RUN_MANAGER.start(body)
+                try:
+                    record = RUN_MANAGER.start(body)
+                except RunAlreadyActiveError as exc:
+                    self._send_error_json(exc, status=HTTPStatus.CONFLICT)
+                    return
                 self._send_json(record.snapshot(), status=HTTPStatus.ACCEPTED)
             elif parsed.path == "/api/presets":
                 self._send_json(upsert_preset(body, append_only=True), status=HTTPStatus.CREATED)
@@ -1161,6 +1193,7 @@ HTML = r"""<!doctype html>
     .warn { color: var(--gold); }
     .bad { color: var(--red); }
     .good { color: var(--green); }
+    button:disabled { opacity: .55; cursor: not-allowed; }
     #status:empty { display: none; }
     .hidden { display: none !important; }
     pre {
@@ -1447,7 +1480,10 @@ HTML = r"""<!doctype html>
         renameButtonId: "article_tuning_rename",
         deleteButtonId: "article_tuning_delete",
         modelMaxTokensId: "article_model_max_input_tokens",
+        maxTokensField: "article_summary_max_tokens",
+        maxTokensLabel: "Article summary max tokens",
         taskMaxTokensEnv: "NEWS_ARTICLE_SUMMARY_MAX_TOKENS",
+        taskMaxTokensLabel: "Article summary max tokens",
         taskSamplingPrefix: "NEWS_MODEL_ARTICLE_SUMMARY",
         runtimeKey: "article_summary"
       },
@@ -1467,7 +1503,10 @@ HTML = r"""<!doctype html>
         renameButtonId: "story_tuning_rename",
         deleteButtonId: "story_tuning_delete",
         modelMaxTokensId: null,
+        maxTokensField: "story_drafting_max_tokens",
+        maxTokensLabel: "Story drafting max tokens",
         taskMaxTokensEnv: "NEWS_STORY_DRAFTING_MAX_TOKENS",
+        taskMaxTokensLabel: "Story drafting max tokens",
         taskSamplingPrefix: "NEWS_MODEL_STORY_DRAFTING",
         runtimeKey: "story_drafting"
       },
@@ -1487,7 +1526,10 @@ HTML = r"""<!doctype html>
         renameButtonId: "scale_tuning_rename",
         deleteButtonId: "scale_tuning_delete",
         modelMaxTokensId: null,
+        maxTokensField: "story_scale_screening_max_tokens",
+        maxTokensLabel: "Scale screening max tokens",
         taskMaxTokensEnv: "NEWS_STORY_SCALE_SCREENING_MAX_TOKENS",
+        taskMaxTokensLabel: "Scale screening max tokens",
         taskSamplingPrefix: "NEWS_MODEL_STORY_SCALE_SCREENING",
         runtimeKey: "story_scale_screening"
       },
@@ -1507,7 +1549,10 @@ HTML = r"""<!doctype html>
         renameButtonId: "title_tuning_rename",
         deleteButtonId: "title_tuning_delete",
         modelMaxTokensId: null,
+        maxTokensField: "title_generation_max_tokens",
+        maxTokensLabel: "Title generation max tokens",
         taskMaxTokensEnv: "NEWS_TITLE_GENERATION_MAX_TOKENS",
+        taskMaxTokensLabel: "Title generation max tokens",
         taskSamplingPrefix: "NEWS_MODEL_TITLE_GENERATION",
         runtimeKey: "title_generation"
       }
@@ -2180,6 +2225,12 @@ HTML = r"""<!doctype html>
       decorateEnvHints($("advancedPanels"));
       renderPromptProfilePanel();
     }
+    function renderTaskTuningControls() {
+      renderModelTuningControls("article_summary");
+      renderModelTuningControls("story_drafting");
+      renderModelTuningControls("story_scale_screening");
+      renderModelTuningControls("title_generation");
+    }
     function renderModelTuningControls(task, { preserveEditor = false } = {}) {
       const meta = TASK_CONFIG[task];
       if (!meta) return;
@@ -2235,16 +2286,8 @@ HTML = r"""<!doctype html>
       const sharedMax = valueByEnv("NEWS_MODEL_MAX_INPUT_TOKENS");
       if (sharedMax) tuning.model_max_input_tokens = sharedMax;
       const taskMax = valueByEnv(meta.taskMaxTokensEnv);
-      // Tuning field names follow the `<task>_max_tokens` convention.
-      if (taskMax) tuning[`${task}_max_tokens`] = taskMax;
-      const samplingFields = [
-        ["temperature", `${meta.taskSamplingPrefix}_TEMPERATURE`],
-        ["top_p", `${meta.taskSamplingPrefix}_TOP_P`],
-        ["top_k", `${meta.taskSamplingPrefix}_TOP_K`],
-        ["min_p", `${meta.taskSamplingPrefix}_MIN_P`],
-        ["presence_penalty", `${meta.taskSamplingPrefix}_PRESENCE_PENALTY`],
-        ["repetition_penalty", `${meta.taskSamplingPrefix}_REPETITION_PENALTY`]
-      ];
+      if (taskMax) tuning[`${meta.runtimeKey}_max_tokens`] = taskMax;
+      const samplingFields = SAMPLING_FIELDS.map(([suffix]) => [suffix.toLowerCase(), `${meta.taskSamplingPrefix}_${suffix}`]);
       samplingFields.forEach(([key, env]) => {
         const raw = valueByEnv(env);
         if (raw) tuning[key] = raw;
@@ -2275,8 +2318,10 @@ HTML = r"""<!doctype html>
       if (preset) {
         const tuning = preset.tuning || {};
         if (tuning.model_max_input_tokens) setControlValue("NEWS_MODEL_MAX_INPUT_TOKENS", tuning.model_max_input_tokens);
-        if (tuning[`${task}_max_tokens`]) setControlValue(meta.taskMaxTokensEnv, tuning[`${task}_max_tokens`]);
-        [["temperature","TEMPERATURE"],["top_p","TOP_P"],["top_k","TOP_K"],["min_p","MIN_P"],["presence_penalty","PRESENCE_PENALTY"],["repetition_penalty","REPETITION_PENALTY"]].forEach(([field, suffix]) => {
+        const taskMaxTokens = tuning[`${meta.runtimeKey}_max_tokens`];
+        if (taskMaxTokens) setControlValue(meta.taskMaxTokensEnv, taskMaxTokens);
+        SAMPLING_FIELDS.forEach(([suffix]) => {
+          const field = suffix.toLowerCase();
           if (tuning[field] !== undefined && tuning[field] !== null && tuning[field] !== "") {
             setControlValue(`${meta.taskSamplingPrefix}_${suffix}`, tuning[field]);
           }
@@ -2381,6 +2426,10 @@ HTML = r"""<!doctype html>
       renderPromptProfilePanel();
       refreshModelKnobLinks();
       preview("run").catch(() => {});
+    }
+      renderPromptProfilePanel();
+      refreshModelKnobLinks();
+      previewQuietly("run");
     }
     function setKnobEnv(env) {
       document.querySelectorAll("[data-env]").forEach(el => {
@@ -2508,9 +2557,34 @@ HTML = r"""<!doctype html>
       $("previewPane").textContent = data.command_text + (data.runtime_error ? `\n\nPreview error: ${data.runtime_error}` : "");
       return data;
     }
+    function updateRunControls() {
+      const active = Boolean(state.activeRun);
+      ["runBtn", "utilityRunBtn"].forEach(id => {
+        const btn = $(id);
+        if (!btn) return;
+        btn.disabled = active;
+        btn.title = active ? "A run is already active; stop it or wait for it to finish." : "";
+      });
+      $("stopBtn").disabled = !active;
+    }
+    async function previewQuietly(action="run") {
+      // Auto-refresh path: surface failures inline in the preview pane instead
+      // of discarding them, so a rejected config never silently freezes the
+      // preview on stale content while the user is editing.
+      try {
+        await preview(action);
+      } catch (err) {
+        $("previewPane").textContent = `Preview unavailable: ${err.message}`;
+      }
+    }
     async function runAction(action="run") {
+      if (state.activeRun) {
+        setStatus(`A run is already active (${state.activeRun}); stop it or wait for it to finish.`, "warn");
+        return;
+      }
       const data = await api("/api/run", { method: "POST", body: JSON.stringify(requestBody(action)) });
       state.activeRun = data.run_id;
+      updateRunControls();
       $("logPane").textContent = "";
       const events = new EventSource(`/api/runs/${data.run_id}/events`);
       events.onmessage = event => {
@@ -2521,6 +2595,11 @@ HTML = r"""<!doctype html>
       events.addEventListener("status", event => {
         const payload = JSON.parse(event.data);
         $("logPane").textContent += `\n[ui] ${payload.status}\n`;
+        if (payload.status === "completed" || payload.status === "failed") {
+          state.activeRun = null;
+          updateRunControls();
+          setStatus(`Run ${payload.run_id} ${payload.status}.`, payload.status === "completed" ? "muted" : "bad");
+        }
         events.close();
       });
     }
@@ -2835,14 +2914,14 @@ HTML = r"""<!doctype html>
       $("resetDefaultsBtn").onclick = resetAllOverrides;
       $("promptProfileSelect").onchange = () => {
         renderPromptProfilePanel();
-        preview("run").catch(() => {});
+        previewQuietly("run");
       };
       $("restorePromptProfileBtn").onclick = () => {
         const el = document.querySelector('[data-env="NEWS_PROMPT_PROFILE"]');
         if (el) el.value = "";
         document.querySelectorAll("[data-env^='NEWS_PROMPT_OVERRIDE_']").forEach(editor => { editor.value = ""; });
         renderPromptProfilePanel();
-        preview("run").catch(() => {});
+        previewQuietly("run");
       };
       $("comparePromptProfileBtn").onclick = () => comparePromptProfiles().catch(err => setStatus(err.message, "bad"));
       $("sourceSearch").oninput = renderSources;
@@ -2859,13 +2938,13 @@ HTML = r"""<!doctype html>
         const modelSelect = $(meta.modelSelectId);
         if (modelSelect) modelSelect.onchange = () => {
           renderModelTuningControls(meta.runtimeKey);
-          preview("run").catch(() => {});
+          previewQuietly("run");
         };
         const tuningSelect = $(meta.presetSelectId);
         if (tuningSelect) tuningSelect.onchange = () => {
           const preset = state.modelTuningPresets.find(item => item.id === tuningSelect.value) || null;
           if (preset) loadModelTuningEditor(meta.runtimeKey, preset);
-          preview("run").catch(() => {});
+          previewQuietly("run");
         };
         $(meta.saveButtonId).onclick = () => saveModelTuningPreset(meta.runtimeKey).catch(err => setStatus(err.message, "bad"));
         $(meta.renameButtonId).onclick = () => renameModelTuningPreset(meta.runtimeKey).catch(err => setStatus(err.message, "bad"));
@@ -2880,6 +2959,15 @@ HTML = r"""<!doctype html>
     }
     async function init() {
       state.schema = await api("/api/schema");
+      try {
+        const runsData = await api("/api/runs");
+        const active = (runsData.runs || []).find(run => ["starting", "running", "stopping"].includes(run.status));
+        if (active) {
+          state.activeRun = active.run_id;
+          setStatus(`Run ${active.run_id} is active (${active.status}).`, "warn");
+        }
+      } catch (_err) { /* runs endpoint is best-effort at boot */ }
+      updateRunControls();
       renderTabs();
       renderRunSetup();
       renderAdvancedPanels();

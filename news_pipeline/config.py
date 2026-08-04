@@ -367,6 +367,15 @@ MODEL_TUNING_PRESET_ENV_VARS = {
     MODEL_TASK_TITLE_GENERATION: "NEWS_MODEL_TITLE_GENERATION_TUNING_PRESET",
 }
 MODEL_REASONING_SAMPLING_ENV_PREFIX = "NEWS_MODEL_REASONING"
+# Per-task model knobs share env shapes NEWS_MODEL_<TASK>[_TUNING_PRESET|_BASE_URL]
+# and NEWS_<TASK>_MAX_TOKENS (env suffix = task name upper-cased). Columns:
+# task, label prefix for the model/preset/base-URL knobs, max-tokens knob label.
+MODEL_TASK_KNOB_SPECS: tuple[tuple[str, str, str], ...] = (
+    (MODEL_TASK_ARTICLE_SUMMARY, "Article Summarization", "Article summary max tokens"),
+    (MODEL_TASK_STORY_DRAFTING, "Story Drafting", "Story drafting max tokens"),
+    (MODEL_TASK_STORY_SCALE_SCREENING, "Story Scale Screening", "Story scale screening max tokens"),
+    (MODEL_TASK_TITLE_GENERATION, "Title Generation", "Title generation max tokens"),
+)
 
 
 def _empty_model_sampling_map() -> dict[str, ModelSamplingSettings]:
@@ -469,10 +478,7 @@ def _configured_model_assignments(
     )
 
     task_env_suffixes = {
-        MODEL_TASK_ARTICLE_SUMMARY: "ARTICLE_SUMMARY",
-        MODEL_TASK_STORY_DRAFTING: "STORY_DRAFTING",
-        MODEL_TASK_STORY_SCALE_SCREENING: "STORY_SCALE_SCREENING",
-        MODEL_TASK_TITLE_GENERATION: "TITLE_GENERATION",
+        task: task.upper() for task, _, _ in MODEL_TASK_KNOB_SPECS
     }
     task_entries = {}
     for task, env_suffix in task_env_suffixes.items():
@@ -649,6 +655,94 @@ def _validate_model_tuning_preset_scope(
             f"Model tuning preset {preset_id!r} expects task {preset_task!r}, "
             f"but configured task is {assignment_task!r}."
         )
+
+
+def is_managed_model_backend(backend: str) -> bool:
+    """A managed backend serves exactly one model at the default base URL."""
+    return backend != MODEL_BACKEND_EXTERNAL
+
+
+def same_model_endpoint(left: str, right: str) -> bool:
+    """True when two base URLs denote the same model endpoint.
+
+    Comparison tolerates the spelling variants users actually produce:
+    trailing slashes on the path, scheme/host case differences, default
+    ports, and userinfo in the authority. A genuinely different path still
+    compares unequal, and an empty URL never matches a real one.
+    """
+
+    def _canonical(url: str) -> tuple[Any, ...]:
+        parsed = urlparse(url or "")
+        scheme = (parsed.scheme or "").lower()
+        host = (parsed.hostname or "").lower()
+        try:
+            port = parsed.port
+        except ValueError:  # malformed port; treat as distinct
+            port = None
+        if port is None:
+            port = 443 if scheme == "https" else 80 if scheme == "http" else None
+        return (scheme, host, port, parsed.path.rstrip("/"))
+
+    return bool(left) == bool(right) and _canonical(left) == _canonical(right)
+
+
+def managed_model_conflict_message(
+    *,
+    task: str,
+    reference: str,
+    name: str,
+    model_reference: str,
+    model_name: str,
+    model_base_url: str,
+) -> str:
+    """The actionable rejection message for a managed-server model conflict.
+
+    Shared by config resolution (ValueError) and the build_chat_model runtime
+    backstop (RuntimeError) so both funnels report the exact same wording.
+    """
+    return (
+        "Managed model server cannot serve multiple different models from the same base URL. "
+        f"Task {task!r} wants {reference!r} ({name!r}) "
+        f"but the managed main model is {model_reference!r} ({model_name!r}) at {model_base_url}. "
+        "Set a per-task base URL or run that task against an external server."
+    )
+
+
+def _validate_managed_model_assignments(
+    model_assignments: dict[str, TaskModelAssignment],
+    *,
+    model_reference: str,
+    model_name: str,
+    model_base_url: str,
+    model_backend: str,
+) -> None:
+    """Reject task models that cannot share the managed server's base URL.
+
+    A managed local server (any non-external default backend) serves exactly
+    one model at the default base URL. A task assignment that resolves to the
+    same base URL with a different model name cannot be served by that server;
+    it previously failed only mid-run in build_chat_model, after source
+    collection. External endpoints can serve multiple models, so the managed
+    path is the only one validated here.
+    """
+    if not is_managed_model_backend(model_backend):
+        return
+    for task, assignment in model_assignments.items():
+        # The default assignment defines the compared values (model_name,
+        # model_base_url), so it always matches; skip it.
+        if task == "default":
+            continue
+        if same_model_endpoint(assignment.base_url, model_base_url) and assignment.name != model_name:
+            raise ValueError(
+                managed_model_conflict_message(
+                    task=task,
+                    reference=assignment.reference,
+                    name=assignment.name,
+                    model_reference=model_reference,
+                    model_name=model_name,
+                    model_base_url=model_base_url,
+                )
+            )
 
 
 def _apply_model_tuning_preset(
@@ -1257,20 +1351,8 @@ def runtime_knob_registry() -> list[dict[str, Any]]:
         _runtime_knob("Run Settings", "Token encoding", "NEWS_TOKEN_ENCODING", default="o200k_base", advanced=True),
         _runtime_knob("Model Selection", "Default model", "NEWS_MODEL", "select", default=DEFAULT_MODEL_ALIAS, options=sorted(MODEL_ALIASES), option_links=model_links),
         _runtime_knob("Model Selection", "Model backend", "NEWS_MODEL_BACKEND", "select", options=sorted(SUPPORTED_MODEL_BACKENDS)),
-        _runtime_knob("Model Selection", "Article Summarization model", "NEWS_MODEL_ARTICLE_SUMMARY", "select", options=sorted(MODEL_ALIASES), option_links=model_links),
-        _runtime_knob("Model Selection", "Story Drafting model", "NEWS_MODEL_STORY_DRAFTING", "select", options=sorted(MODEL_ALIASES), option_links=model_links),
-        _runtime_knob("Model Selection", "Story Scale Screening model", "NEWS_MODEL_STORY_SCALE_SCREENING", "select", options=sorted(MODEL_ALIASES), option_links=model_links),
-        _runtime_knob("Model Selection", "Title Generation model", "NEWS_MODEL_TITLE_GENERATION", "select", options=sorted(MODEL_ALIASES), option_links=model_links),
         _runtime_knob("Model Tuning", "Default tuning preset", "NEWS_MODEL_TUNING_PRESET", "select", options=tuning_presets),
-        _runtime_knob("Model Tuning", "Article Summarization tuning preset", "NEWS_MODEL_ARTICLE_SUMMARY_TUNING_PRESET", "select", options=tuning_presets),
-        _runtime_knob("Model Tuning", "Story Drafting tuning preset", "NEWS_MODEL_STORY_DRAFTING_TUNING_PRESET", "select", options=tuning_presets),
-        _runtime_knob("Model Tuning", "Story Scale Screening tuning preset", "NEWS_MODEL_STORY_SCALE_SCREENING_TUNING_PRESET", "select", options=tuning_presets),
-        _runtime_knob("Model Tuning", "Title Generation tuning preset", "NEWS_MODEL_TITLE_GENERATION_TUNING_PRESET", "select", options=tuning_presets),
         _runtime_knob("Model Tuning", "Model input cap", "NEWS_MODEL_MAX_INPUT_TOKENS", "number", minimum=1, step=1),
-        _runtime_knob("Model Tuning", "Article summary max tokens", "NEWS_ARTICLE_SUMMARY_MAX_TOKENS", "number", minimum=1, step=1),
-        _runtime_knob("Model Tuning", "Story drafting max tokens", "NEWS_STORY_DRAFTING_MAX_TOKENS", "number", minimum=1, step=1),
-        _runtime_knob("Model Tuning", "Story scale screening max tokens", "NEWS_STORY_SCALE_SCREENING_MAX_TOKENS", "number", minimum=1, step=1),
-        _runtime_knob("Model Tuning", "Title generation max tokens", "NEWS_TITLE_GENERATION_MAX_TOKENS", "number", minimum=1, step=1),
         _runtime_knob("Pipeline Budget", "Article text token limit", "NEWS_ARTICLE_TEXT_TOKEN_LIMIT", "number", minimum=1, step=1),
         _runtime_knob("Pipeline Budget", "Total article summary cap", "NEWS_TOTAL_ARTICLE_SUMMARY_CAP", "number", minimum=0, step=1),
         _runtime_knob("Pipeline Budget", "Recent window hours", "NEWS_RECENT_WINDOW_HOURS", "number", minimum=1, step=1),
@@ -1296,6 +1378,45 @@ def runtime_knob_registry() -> list[dict[str, Any]]:
         _runtime_knob("Model Server Settings", "Server prompt cache bytes", "NEWS_MODEL_SERVER_PROMPT_CACHE_BYTES"),
         _runtime_knob("Model Server Settings", "Server max tokens", "NEWS_MODEL_SERVER_MAX_TOKENS", "number", minimum=1, step=1),
     ]
+    for task, task_label, max_tokens_label in MODEL_TASK_KNOB_SPECS:
+        env_suffix = task.upper()
+        knobs.append(
+            _runtime_knob(
+                "Model Selection",
+                f"{task_label} model",
+                f"NEWS_MODEL_{env_suffix}",
+                "select",
+                options=sorted(MODEL_ALIASES),
+                option_links=model_links,
+            )
+        )
+        knobs.append(
+            _runtime_knob(
+                "Model Tuning",
+                f"{task_label} tuning preset",
+                f"NEWS_MODEL_{env_suffix}_TUNING_PRESET",
+                "select",
+                options=tuning_presets,
+            )
+        )
+        knobs.append(
+            _runtime_knob(
+                "Model Tuning",
+                max_tokens_label,
+                f"NEWS_{env_suffix}_MAX_TOKENS",
+                "number",
+                minimum=1,
+                step=1,
+            )
+        )
+        knobs.append(
+            _runtime_knob(
+                "Model Server Settings",
+                f"{task_label} base URL",
+                f"NEWS_MODEL_{env_suffix}_BASE_URL",
+                default="http://127.0.0.1:8080/v1",
+            )
+        )
     sampling_suffixes = [
         ("TEMPERATURE", "Temperature", "number", 0, 2, 0.01),
         ("TOP_P", "Top P", "number", 0, 1, 0.01),
@@ -1925,6 +2046,13 @@ def _build_runtime_config(
     model_reference = default_model_assignment.reference
     model_name = default_model_assignment.name
     model_backend = default_model_assignment.backend
+    _validate_managed_model_assignments(
+        model_assignments,
+        model_reference=model_reference,
+        model_name=model_name,
+        model_base_url=model_base_url,
+        model_backend=model_backend,
+    )
     return RuntimeConfig(
         root_dir=ROOT_DIR,
         sources_path=sources_path,

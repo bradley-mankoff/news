@@ -1577,13 +1577,17 @@ class PipelineHelperTests(unittest.TestCase):
                 name="other-model",
                 tuning=fake_assignment.tuning,
             ),
-        ), patch.object(pipeline, "MANAGED_MODEL_SERVER_ACTIVE", True):
+        ), patch.object(pipeline, "MANAGED_MODEL_SERVER_ACTIVE", True), patch.object(
+            pipeline, "MODEL_BACKEND", "mlx-lm"
+        ):
             with self.assertRaisesRegex(RuntimeError, "multiple different models"):
                 pipeline.build_chat_model(64, task="analysis")
 
         with patch.object(pipeline, "ensure_codex_safe_model_reference"), patch.object(
             pipeline, "_task_model_assignment", return_value=fake_assignment
         ), patch.object(pipeline, "MANAGED_MODEL_SERVER_ACTIVE", True), patch.object(
+            pipeline, "MODEL_BACKEND", "mlx-lm"
+        ), patch.object(
             pipeline, "_ensure_main_model_server_ready"
         ) as ready, patch.object(pipeline, "_raise_if_managed_model_server_exited") as exited, patch.object(
             pipeline, "ChatOpenAI", return_value="chat-model"
@@ -1591,6 +1595,29 @@ class PipelineHelperTests(unittest.TestCase):
             self.assertEqual(pipeline.build_chat_model(64, task="analysis"), "chat-model")
         ready.assert_called_once()
         exited.assert_called_once()
+
+        # External backends serve multiple models from one base URL: the
+        # managed-server restriction (and its health gates) must not apply
+        # even while the managed-server context is active.
+        with patch.object(pipeline, "ensure_codex_safe_model_reference"), patch.object(
+            pipeline,
+            "_task_model_assignment",
+            return_value=SimpleNamespace(
+                base_url=pipeline.MODEL_BASE_URL,
+                reference="other-model",
+                name="other-model",
+                tuning=fake_assignment.tuning,
+            ),
+        ), patch.object(pipeline, "MANAGED_MODEL_SERVER_ACTIVE", True), patch.object(
+            pipeline, "MODEL_BACKEND", pipeline.MODEL_BACKEND_EXTERNAL
+        ), patch.object(
+            pipeline, "_ensure_main_model_server_ready"
+        ) as ready, patch.object(pipeline, "_raise_if_managed_model_server_exited") as exited, patch.object(
+            pipeline, "ChatOpenAI", return_value="chat-model"
+        ):
+            self.assertEqual(pipeline.build_chat_model(64, task="analysis"), "chat-model")
+        ready.assert_not_called()
+        exited.assert_not_called()
 
         with patch.object(pipeline.progress_tracker, "detail") as detail:
             pipeline.maybe_email_report("Title", "Body", "Synthesis", [], [], [])
@@ -1681,7 +1708,9 @@ class PipelineHelperTests(unittest.TestCase):
                 pipeline.smtplib,
                 "SMTP_SSL",
                 return_value=fake_smtp_ssl,
-            ), patch("builtins.open", side_effect=OSError("boom")):
+            ), patch("builtins.open", side_effect=OSError("boom")), patch.object(
+                pipeline.progress_tracker, "warning"
+            ) as warning:
                 pipeline.maybe_email_report(
                     "Daily Brief",
                     "Body text",
@@ -1696,6 +1725,8 @@ class PipelineHelperTests(unittest.TestCase):
         self.assertTrue(fake_smtp_ssl.started_tls is False)
         self.assertEqual(fake_smtp_ssl.logged_in, ("user", "secret"))
         self.assertEqual(len(fake_smtp_ssl.messages), 1)
+        warning.assert_called_once()
+        self.assertIn("Image attachment read failed", warning.call_args[0][0])
 
         self.assertEqual(pipeline._first_sentences("One. Two. Three.", max_sentences=2, max_chars=100), "One. Two.")
         self.assertEqual(pipeline._first_sentences("", max_sentences=2, max_chars=100), "")
@@ -2393,3 +2424,72 @@ class PipelineHelperTests(unittest.TestCase):
             ),
             "One two three four five six seven eight nine ten eleven",
         )
+
+    def test_report_recording_for_nonempty_synthesis(self) -> None:
+        diagnostics = pipeline.RunDiagnostics(
+            run_started_at="2026-08-03T19:04:38",
+            settings={},
+        )
+        token_stats = {
+            "primary_dataset": "synthetic dataset text",
+            "included_report_keys": ["a1"],
+        }
+        pipeline._record_report_diagnostics(
+            diagnostics,
+            path="/tmp/latest_run.md",
+            prompt_label="default prompt",
+            recipient_list=["reader@example.com", "editor@example.com"],
+            token_stats=token_stats,
+            reference_reports=["reference"],
+            citation_sources=[{"title": "Alpha"}],
+            citation_groups=[{"group": "g1"}],
+            image_art_diagnostics={"final_image_path": "/tmp/art.png"},
+        )
+        self.assertEqual(len(diagnostics.reports), 1)
+        report = diagnostics.reports[0]
+        self.assertEqual(report["path"], "/tmp/latest_run.md")
+        self.assertEqual(report["prompt_label"], "default prompt")
+        self.assertEqual(report["recipient_count"], 2)
+        self.assertEqual(report["recipients"], ["reader@example.com", "editor@example.com"])
+        self.assertEqual(report["reference_report_count"], 1)
+        self.assertEqual(report["citation_source_count"], 1)
+        self.assertEqual(report["citation_group_count"], 1)
+        self.assertEqual(report["token_stats"], token_stats)
+        self.assertEqual(report["image_art"], {"final_image_path": "/tmp/art.png"})
+        self.assertNotIn("synthesis_dataset_artifacts", report)
+
+    def test_report_recording_for_missing_image_art_and_empty_lists(self) -> None:
+        # image_art_diagnostics is None whenever image generation produced
+        # nothing (the failure path operators inspect most), and citation /
+        # reference lists can legitimately be empty for reports without
+        # citation markers.
+        diagnostics = pipeline.RunDiagnostics(
+            run_started_at="2026-08-03T19:04:38",
+            settings={},
+        )
+        pipeline._record_report_diagnostics(
+            diagnostics,
+            path="/tmp/latest_run.md",
+            prompt_label="default prompt",
+            recipient_list=[],
+            token_stats={},
+            reference_reports=[],
+            citation_sources=[],
+            citation_groups=[],
+            image_art_diagnostics=None,
+        )
+        self.assertEqual(len(diagnostics.reports), 1)
+        report = diagnostics.reports[0]
+        self.assertEqual(report["recipient_count"], 0)
+        self.assertEqual(report["recipients"], [])
+        self.assertEqual(report["reference_report_count"], 0)
+        self.assertEqual(report["citation_source_count"], 0)
+        self.assertEqual(report["citation_group_count"], 0)
+        self.assertIsNone(report["image_art"])
+
+    def test_no_stale_synthesis_dataset_artifacts_reference_in_pipeline(self) -> None:
+        # Regression guard for the NameError fixed in #127: the stale
+        # identifier must never reappear anywhere in production pipeline code,
+        # or report finalization would crash again at runtime.
+        source = Path(pipeline.__file__).read_text(encoding="utf-8")
+        self.assertNotIn("synthesis_dataset_artifacts", source)
