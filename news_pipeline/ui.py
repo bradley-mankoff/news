@@ -1402,6 +1402,7 @@ HTML = r"""<!doctype html>
     // be listed here so renderAdvancedKnobs() omits it from the raw override
     // list; otherwise the env appears twice and collectEnv() gets two inputs.
     const SURFACED_ENVS = new Set([
+      "NEWS_MODEL",  // dedicated "Default model" knob in Run Setup; suppress the Advanced-tab duplicate
       "NEWS_SOURCE_SCOPE",
       "NEWS_RECIPIENT_SCOPE",
       "NEWS_PROMPT_PROFILE",  // has a dedicated panel control; suppress the Advanced-tab duplicate
@@ -1410,10 +1411,6 @@ HTML = r"""<!doctype html>
       "NEWS_PROMPT_OVERRIDE_STORY_DRAFTING",        // the Advanced-tab duplicates
       "NEWS_PROMPT_OVERRIDE_TITLE_GENERATION",
       "NEWS_PROMPT_OVERRIDE_IMAGE_ART_DIRECTION",
-      "NEWS_MODEL_ARTICLE_SUMMARY",
-      "NEWS_MODEL_STORY_DRAFTING",
-      "NEWS_MODEL_STORY_SCALE_SCREENING",
-      "NEWS_MODEL_TITLE_GENERATION",
       "NEWS_MODEL_ARTICLE_SUMMARY_TUNING_PRESET",
       "NEWS_MODEL_STORY_DRAFTING_TUNING_PRESET",
       "NEWS_MODEL_STORY_SCALE_SCREENING_TUNING_PRESET",
@@ -1793,6 +1790,8 @@ HTML = r"""<!doctype html>
       renderKnobLinks("NEWS_MODEL");
       renderKnobLinks("NEWS_MODEL_ARTICLE_SUMMARY");
       renderKnobLinks("NEWS_MODEL_STORY_DRAFTING");
+      renderKnobLinks("NEWS_MODEL_STORY_SCALE_SCREENING");
+      renderKnobLinks("NEWS_MODEL_TITLE_GENERATION");
     }
     function renderTabs() {
       $("tabs").innerHTML = `<button id="navToggle" class="nav-toggle" title="Collapse navigation" aria-label="Collapse navigation"><span class="collapse-icon">${icons.chevronLeft}</span><span class="expand-icon">${icons.chevronRight}</span></button>` +
@@ -1904,10 +1903,8 @@ HTML = r"""<!doctype html>
     function renderRunSetup() {
       const schema = state.schema || {};
       const runtime = schema.runtime || {};
-      const articleRuntime = runtime.model && runtime.model.article_summary ? runtime.model.article_summary : {};
-      const storyRuntime = runtime.model && runtime.model.story_drafting ? runtime.model.story_drafting : {};
-      const scaleRuntime = runtime.model && runtime.model.story_scale_screening ? runtime.model.story_scale_screening : {};
-      const titleRuntime = runtime.model && runtime.model.title_generation ? runtime.model.title_generation : {};
+      const defaultRuntime = runtime.model ? runtime.model : {};
+      const runtimeError = schema.runtime_error || "";
       const actionOptions = (schema.actions || []).map(action => `<option value="${escapeHtml(action)}"${action === "run" ? " selected" : ""}>${escapeHtml(action)}</option>`).join("");
       const promptProfileOptions = (schema.prompt_profiles || []).map(p => `<option value="${escapeHtml(p.id)}"${currentControlValue("NEWS_PROMPT_PROFILE") === p.id ? " selected" : ""}>${escapeHtml(p.name)}</option>`).join("");
       const sourceToolHidden = !["check-sources", "prune-sources", "source-languages"].includes(value("actionSelect"));
@@ -1919,10 +1916,48 @@ HTML = r"""<!doctype html>
         primary: "Primary-only",
         all: "All"
       };
-      const articleModel = knobField("NEWS_MODEL_ARTICLE_SUMMARY", "Article model", { emptyLabel: "default: qwythos-9b-8bit" });
-      const storyModel = knobField("NEWS_MODEL_STORY_DRAFTING", "Story model", { emptyLabel: "default: qwythos-9b-8bit" });
-      const scaleModel = knobField("NEWS_MODEL_STORY_SCALE_SCREENING", "Scale screening model", { emptyLabel: "default: qwythos-9b-8bit" });
-      const titleModel = knobField("NEWS_MODEL_TITLE_GENERATION", "Title generation model", { emptyLabel: "default: qwythos-9b-8bit" });
+      const defaultModel = knobField("NEWS_MODEL", "Default model", { emptyLabel: "default: gemma-4-12b-it-4bit" });
+      const sharedModelTokens = knobField("NEWS_MODEL_MAX_INPUT_TOKENS", "Shared model input cap");
+      const articleTokenCap = knobField("NEWS_ARTICLE_SUMMARY_MAX_TOKENS", "Article summary max tokens");
+      const storyTokenCap = knobField("NEWS_STORY_DRAFTING_MAX_TOKENS", "Story drafting max tokens");
+      const scaleTokenCap = knobField("NEWS_STORY_SCALE_SCREENING_MAX_TOKENS", "Scale screening max tokens");
+      const titleTokenCap = knobField("NEWS_TITLE_GENERATION_MAX_TOKENS", "Title generation max tokens");
+      const articleBaseUrl = knobField("NEWS_MODEL_ARTICLE_SUMMARY_BASE_URL", "Base URL");
+      const storyBaseUrl = knobField("NEWS_MODEL_STORY_DRAFTING_BASE_URL", "Base URL");
+      const scaleBaseUrl = knobField("NEWS_MODEL_STORY_SCALE_SCREENING_BASE_URL", "Base URL");
+      const titleBaseUrl = knobField("NEWS_MODEL_TITLE_GENERATION_BASE_URL", "Base URL");
+      const articleSampling = [
+        knobField("NEWS_MODEL_ARTICLE_SUMMARY_TEMPERATURE", "Temperature"),
+        knobField("NEWS_MODEL_ARTICLE_SUMMARY_TOP_P", "Top P"),
+        knobField("NEWS_MODEL_ARTICLE_SUMMARY_TOP_K", "Top K"),
+        knobField("NEWS_MODEL_ARTICLE_SUMMARY_MIN_P", "Min P"),
+        knobField("NEWS_MODEL_ARTICLE_SUMMARY_PRESENCE_PENALTY", "Presence penalty"),
+        knobField("NEWS_MODEL_ARTICLE_SUMMARY_REPETITION_PENALTY", "Repetition penalty")
+      ].join("");
+      const storySampling = [
+        knobField("NEWS_MODEL_STORY_DRAFTING_TEMPERATURE", "Temperature"),
+        knobField("NEWS_MODEL_STORY_DRAFTING_TOP_P", "Top P"),
+        knobField("NEWS_MODEL_STORY_DRAFTING_TOP_K", "Top K"),
+        knobField("NEWS_MODEL_STORY_DRAFTING_MIN_P", "Min P"),
+        knobField("NEWS_MODEL_STORY_DRAFTING_PRESENCE_PENALTY", "Presence penalty"),
+        knobField("NEWS_MODEL_STORY_DRAFTING_REPETITION_PENALTY", "Repetition penalty")
+      ].join("");
+      const scaleSampling = [
+        knobField("NEWS_MODEL_STORY_SCALE_SCREENING_TEMPERATURE", "Temperature"),
+        knobField("NEWS_MODEL_STORY_SCALE_SCREENING_TOP_P", "Top P"),
+        knobField("NEWS_MODEL_STORY_SCALE_SCREENING_TOP_K", "Top K"),
+        knobField("NEWS_MODEL_STORY_SCALE_SCREENING_MIN_P", "Min P"),
+        knobField("NEWS_MODEL_STORY_SCALE_SCREENING_PRESENCE_PENALTY", "Presence penalty"),
+        knobField("NEWS_MODEL_STORY_SCALE_SCREENING_REPETITION_PENALTY", "Repetition penalty")
+      ].join("");
+      const titleSampling = [
+        knobField("NEWS_MODEL_TITLE_GENERATION_TEMPERATURE", "Temperature"),
+        knobField("NEWS_MODEL_TITLE_GENERATION_TOP_P", "Top P"),
+        knobField("NEWS_MODEL_TITLE_GENERATION_TOP_K", "Top K"),
+        knobField("NEWS_MODEL_TITLE_GENERATION_MIN_P", "Min P"),
+        knobField("NEWS_MODEL_TITLE_GENERATION_PRESENCE_PENALTY", "Presence penalty"),
+        knobField("NEWS_MODEL_TITLE_GENERATION_REPETITION_PENALTY", "Repetition penalty")
+      ].join("");
       $("runSetupMount").innerHTML = `
         <div class="banner panel">
           <div class="banner-copy">
@@ -1939,6 +1974,7 @@ HTML = r"""<!doctype html>
           </div>
         </div>
         <div class="stack">
+          ${runtimeError ? `<p class="bad" style="margin:0 0 8px">Configuration error: ${escapeHtml(runtimeError)}</p>` : ""}
           <section class="panel">
             <p class="eyebrow">Routing</p>
             <h2>Recipients and sources</h2>
@@ -1985,39 +2021,12 @@ HTML = r"""<!doctype html>
           </section>
           <section class="panel model-card">
             <p class="eyebrow">Model</p>
-            <h2>${escapeHtml(TASK_CONFIG.article_summary.label)}</h2>
-            <p class="muted">Resolved: ${escapeHtml(articleRuntime.name || articleRuntime.reference || "-")}</p>
+            <h2>Default model</h2>
+            <p class="muted">Resolved: ${escapeHtml(defaultRuntime.name || defaultRuntime.reference || "-")}</p>
             <div class="form-grid">
-              ${articleModel}
+              ${defaultModel}
             </div>
-            <p class="muted">Sampling, token budgets, and server endpoints are in Advanced Settings.</p>
-          </section>
-          <section class="panel model-card">
-            <p class="eyebrow">Model</p>
-            <h2>${escapeHtml(TASK_CONFIG.story_drafting.label)}</h2>
-            <p class="muted">Resolved: ${escapeHtml(storyRuntime.name || storyRuntime.reference || "-")}</p>
-            <div class="form-grid">
-              ${storyModel}
-            </div>
-            <p class="muted">Sampling, token budgets, and server endpoints are in Advanced Settings.</p>
-          </section>
-          <section class="panel model-card">
-            <p class="eyebrow">Model</p>
-            <h2>${escapeHtml(TASK_CONFIG.story_scale_screening.label)}</h2>
-            <p class="muted">Resolved: ${escapeHtml(scaleRuntime.name || scaleRuntime.reference || "-")}</p>
-            <div class="form-grid">
-              ${scaleModel}
-            </div>
-            <p class="muted">Sampling, token budgets, and server endpoints are in Advanced Settings.</p>
-          </section>
-          <section class="panel model-card">
-            <p class="eyebrow">Model</p>
-            <h2>${escapeHtml(TASK_CONFIG.title_generation.label)}</h2>
-            <p class="muted">Resolved: ${escapeHtml(titleRuntime.name || titleRuntime.reference || "-")}</p>
-            <div class="form-grid">
-              ${titleModel}
-            </div>
-            <p class="muted">Sampling, token budgets, and server endpoints are in Advanced Settings.</p>
+            <p class="muted">Per-task model alternatives and sampling are in Advanced Settings.</p>
           </section>
           <section class="panel">
             <p class="eyebrow">Model catalog</p>
@@ -2036,7 +2045,7 @@ HTML = r"""<!doctype html>
             <details class="details">
               <summary>Search Hugging Face</summary>
               <div class="form-grid">
-                <label class="field"><span>Query</span><input id="modelSearchQuery" type="text" placeholder="e.g. qwythos"><code>q</code></label>
+                <label class="field"><span>Query</span><input id="modelSearchQuery" type="text" placeholder="e.g. gemma"><code>q</code></label>
                 <label class="field"><span>Pipeline tag</span>
                   <select id="modelSearchPipeline">
                     <option value="">any</option>
@@ -2097,10 +2106,8 @@ HTML = r"""<!doctype html>
         </div>
       `;
       renderPresetSummary();
-      renderTaskTuningControls();
+      renderModelTuningPanels();
       decorateEnvHints($("runSetupMount"));
-      renderKnobLinks("NEWS_MODEL_ARTICLE_SUMMARY");
-      renderKnobLinks("NEWS_MODEL_STORY_DRAFTING");
       renderPromptProfilePanel();
       renderModelCatalogPanel();
       $("actionSelect").value = "run";
@@ -2117,6 +2124,13 @@ HTML = r"""<!doctype html>
         }
       };
     }
+    // Knob labels for each task's per-task max-tokens env (modelTuningPanel).
+    const TASK_MAX_TOKENS_LABELS = {
+      article_summary: "Article summary max tokens",
+      story_drafting: "Story drafting max tokens",
+      story_scale_screening: "Scale screening max tokens",
+      title_generation: "Title generation max tokens"
+    };
     const SAMPLING_FIELDS = [
       ["TEMPERATURE", "Temperature"],
       ["TOP_P", "Top P"],
@@ -2144,7 +2158,7 @@ HTML = r"""<!doctype html>
             <label class="field"><span>Display name</span><input id="${meta.nameInputId}"><code>name</code></label>
             <label class="field"><span>Description</span><textarea id="${meta.descriptionInputId}"></textarea><code>description</code></label>
             ${sharedCap}
-            ${knobField(meta.taskMaxTokensEnv, meta.taskMaxTokensLabel)}
+            ${knobField(meta.taskMaxTokensEnv, TASK_MAX_TOKENS_LABELS[task] || "Max tokens")}
             ${knobField(meta.baseUrlEnv, "Base URL")}
             ${samplingFields(meta.taskSamplingPrefix)}
           </div>
@@ -2254,6 +2268,9 @@ HTML = r"""<!doctype html>
       if (preset && !preserveEditor) {
         loadModelTuningEditor(task, preset, { refresh: false });
       }
+    }
+    function renderModelTuningPanels() {
+      Object.keys(TASK_CONFIG).forEach(task => renderModelTuningControls(task));
     }
     function filteredModelTuningPresets(task, selectedModel, resolvedName) {
       const matches = state.modelTuningPresets.filter(preset => {
@@ -2393,7 +2410,23 @@ HTML = r"""<!doctype html>
       state.selectedRunPresetId = preset.id || "";
       setKnobEnv(preset.env || {});
       renderPresetSummary();
-      renderTaskTuningControls();
+      renderModelTuningPanels();
+      renderPromptProfilePanel();
+      refreshModelKnobLinks();
+      preview("run").catch(() => {});
+    }
+    function resetAllOverrides() {
+      document.querySelectorAll("[data-env]").forEach(el => {
+        if (el.type === "checkbox") el.checked = false;
+        else el.value = "";
+      });
+      state.selectedRunPresetId = "";
+      renderPresetSummary();
+      renderModelTuningPanels();
+      renderPromptProfilePanel();
+      refreshModelKnobLinks();
+      preview("run").catch(() => {});
+    }
       renderPromptProfilePanel();
       refreshModelKnobLinks();
       previewQuietly("run");
@@ -2451,7 +2484,7 @@ HTML = r"""<!doctype html>
     async function loadModelTuningPresets() {
       const data = await api("/api/model-tuning-presets");
       state.modelTuningPresets = data.presets || [];
-      renderTaskTuningControls();
+      renderModelTuningPanels();
     }
     function renderAdvancedKnobs() {
       const search = value("knobSearch").toLowerCase();
@@ -2877,30 +2910,8 @@ HTML = r"""<!doctype html>
       $("savePresetEditorBtn").onclick = () => savePresetEditor().catch(err => setStatus(err.message, "bad"));
       $("deletePresetBtn").onclick = () => deleteSelectedPreset().catch(err => setStatus(err.message, "bad"));
       $("knobSearch").oninput = renderAdvancedKnobs;
-      $("clearKnobsBtn").onclick = () => {
-        document.querySelectorAll("[data-env]").forEach(el => {
-          if (el.type === "checkbox") el.checked = false;
-          else el.value = "";
-        });
-        state.selectedRunPresetId = "";
-        renderPresetSummary();
-        renderTaskTuningControls();
-        renderPromptProfilePanel();
-        refreshModelKnobLinks();
-        previewQuietly("run");
-      };
-      $("resetDefaultsBtn").onclick = () => {
-        document.querySelectorAll("[data-env]").forEach(el => {
-          if (el.type === "checkbox") el.checked = false;
-          else el.value = "";
-        });
-        state.selectedRunPresetId = "";
-        renderPresetSummary();
-        renderTaskTuningControls();
-        renderPromptProfilePanel();
-        refreshModelKnobLinks();
-        previewQuietly("run");
-      };
+      $("clearKnobsBtn").onclick = resetAllOverrides;
+      $("resetDefaultsBtn").onclick = resetAllOverrides;
       $("promptProfileSelect").onchange = () => {
         renderPromptProfilePanel();
         previewQuietly("run");
@@ -2964,7 +2975,7 @@ HTML = r"""<!doctype html>
       renderStats();
       renderRunPresetDrawer();
       renderPresetSummary();
-      renderTaskTuningControls();
+      renderModelTuningPanels();
       wireEvents();
       document.addEventListener("change", (event) => {
         const el = event.target;
@@ -2990,7 +3001,7 @@ HTML = r"""<!doctype html>
       }
       $("sourceOptions").classList.add("hidden");
       $("actionSelect").onchange();
-      await previewQuietly("run");
+      await preview("run").catch(err => setStatus(err.message, "bad"));
     }
     init().catch(err => setStatus(err.message, "bad"));
   </script>

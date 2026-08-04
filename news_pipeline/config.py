@@ -82,9 +82,15 @@ MODEL_BACKEND_MLX_LM = "mlx-lm"
 MODEL_BACKEND_MLX_VLM = "mlx-vlm"
 MODEL_BACKEND_EXTERNAL = "external"
 SUPPORTED_MODEL_BACKENDS = (MODEL_BACKEND_MLX_LM, MODEL_BACKEND_MLX_VLM, MODEL_BACKEND_EXTERNAL)
-# Retained public alias for the Qwythos default backend; prefer MODEL_BACKEND_MLX_VLM.
+# Legacy identifier retained for API compatibility; Qwythos is no longer the
+# default. Always use MODEL_BACKEND_MLX_VLM directly.
 QWWYTHOS_MODEL_BACKEND = MODEL_BACKEND_MLX_VLM
-DEFAULT_MODEL_ALIAS = QWWYTHOS_9B_8BIT_MODEL_ALIAS
+# Standard Gemma 4 12B instruction model, MLX 4-bit distribution. The default
+# must be a repo id (never owner/repo/file.gguf): mlx-vlm rejects file-qualified
+# references with HFValidationError (issue #124).
+GEMMA_4_12B_IT_4BIT_MODEL_ALIAS = "gemma-4-12b-it-4bit"
+GEMMA_4_12B_IT_4BIT_MODEL_REPO = "mlx-community/gemma-4-12B-it-4bit"
+DEFAULT_MODEL_ALIAS = GEMMA_4_12B_IT_4BIT_MODEL_ALIAS
 CODEX_TEST_MODEL_ALIAS = "gemma-e2b-tiny"
 CODEX_TEST_MODEL_NAME = "deadbydawn101/gemma-4-E2B-Heretic-Uncensored-mlx-4bit"
 MODEL_TASK_ARTICLE_SUMMARY = "article_summary"
@@ -116,17 +122,30 @@ VALID_SOURCE_MATCH_MODES = {
     SOURCE_MATCH_MODE_WIRE_ATTRIBUTION,
 }
 MODEL_ALIASES = {
-    QWWYTHOS_9B_4BIT_MODEL_ALIAS: QWWYTHOS_9B_4BIT_MODEL_REFERENCE,
-    QWWYTHOS_9B_8BIT_MODEL_ALIAS: QWWYTHOS_9B_8BIT_MODEL_REFERENCE,
-    f"https://huggingface.co/{QWWYTHOS_9B_4BIT_MODEL_REFERENCE}": QWWYTHOS_9B_4BIT_MODEL_REFERENCE,
-    f"https://hf.co/{QWWYTHOS_9B_4BIT_MODEL_REFERENCE}": QWWYTHOS_9B_4BIT_MODEL_REFERENCE,
-    f"https://huggingface.co/{QWWYTHOS_9B_8BIT_MODEL_REFERENCE}": QWWYTHOS_9B_8BIT_MODEL_REFERENCE,
-    f"https://hf.co/{QWWYTHOS_9B_8BIT_MODEL_REFERENCE}": QWWYTHOS_9B_8BIT_MODEL_REFERENCE,
+    GEMMA_4_12B_IT_4BIT_MODEL_ALIAS: GEMMA_4_12B_IT_4BIT_MODEL_REPO,
+    f"https://huggingface.co/{GEMMA_4_12B_IT_4BIT_MODEL_REPO}": GEMMA_4_12B_IT_4BIT_MODEL_REPO,
+    f"https://hf.co/{GEMMA_4_12B_IT_4BIT_MODEL_REPO}": GEMMA_4_12B_IT_4BIT_MODEL_REPO,
     CODEX_TEST_MODEL_ALIAS: CODEX_TEST_MODEL_NAME,
     f"https://huggingface.co/{CODEX_TEST_MODEL_NAME}": CODEX_TEST_MODEL_NAME,
     f"https://hf.co/{CODEX_TEST_MODEL_NAME}": CODEX_TEST_MODEL_NAME,
 }
-UNSUPPORTED_MODEL_REFERENCES: set[str] = set()
+# Qwythos GGUF references are NOT launchable by the managed mlx-vlm backend
+# (file-qualified GGUF refs raise HFValidationError) and are not validated for
+# any backend; stale configs fail fast with an actionable error instead of a
+# half-started server. The set covers every form the old docs published
+# (friendly aliases, raw owner/repo/file.gguf references, and their
+# https://huggingface.co/... / https://hf.co/... URL forms) so legacy configs
+# fail before launch. Opt-in work tracked separately.
+UNSUPPORTED_MODEL_REFERENCES: set[str] = {
+    QWWYTHOS_9B_8BIT_MODEL_ALIAS,
+    QWWYTHOS_9B_4BIT_MODEL_ALIAS,
+    QWWYTHOS_9B_8BIT_MODEL_REFERENCE,
+    QWWYTHOS_9B_4BIT_MODEL_REFERENCE,
+    f"https://huggingface.co/{QWWYTHOS_9B_8BIT_MODEL_REFERENCE}",
+    f"https://hf.co/{QWWYTHOS_9B_8BIT_MODEL_REFERENCE}",
+    f"https://huggingface.co/{QWWYTHOS_9B_4BIT_MODEL_REFERENCE}",
+    f"https://hf.co/{QWWYTHOS_9B_4BIT_MODEL_REFERENCE}",
+}
 CODEX_RUNTIME_ENV_VARS = ("CODEX_SANDBOX", "CODEX_CI", "CODEX_THREAD_ID")
 REMOVED_TOPIC_ENV_VARS = (
     "NEWS_TOPIC_IDS",
@@ -531,6 +550,11 @@ def _merge_model_sampling_settings(
     )
 
 
+def _merge_optional_value(base_value: int | None, overlay_value: int | None) -> int | None:
+    """Return overlay_value when set (not None); otherwise base_value."""
+    return overlay_value if overlay_value is not None else base_value
+
+
 def _merge_model_tuning_settings(
     base: ModelTuningSettings,
     overlay: ModelTuningSettings,
@@ -542,30 +566,21 @@ def _merge_model_tuning_settings(
             overlay_sampling,
         )
     return ModelTuningSettings(
-        model_max_input_tokens=(
-            overlay.model_max_input_tokens
-            if overlay.model_max_input_tokens is not None
-            else base.model_max_input_tokens
+        model_max_input_tokens=_merge_optional_value(
+            base.model_max_input_tokens, overlay.model_max_input_tokens
         ),
-        article_summary_max_tokens=(
-            overlay.article_summary_max_tokens
-            if overlay.article_summary_max_tokens is not None
-            else base.article_summary_max_tokens
+        article_summary_max_tokens=_merge_optional_value(
+            base.article_summary_max_tokens, overlay.article_summary_max_tokens
         ),
-        story_drafting_max_tokens=(
-            overlay.story_drafting_max_tokens
-            if overlay.story_drafting_max_tokens is not None
-            else base.story_drafting_max_tokens
+        story_drafting_max_tokens=_merge_optional_value(
+            base.story_drafting_max_tokens, overlay.story_drafting_max_tokens
         ),
-        story_scale_screening_max_tokens=(
-            overlay.story_scale_screening_max_tokens
-            if overlay.story_scale_screening_max_tokens is not None
-            else base.story_scale_screening_max_tokens
+        story_scale_screening_max_tokens=_merge_optional_value(
+            base.story_scale_screening_max_tokens,
+            overlay.story_scale_screening_max_tokens,
         ),
-        title_generation_max_tokens=(
-            overlay.title_generation_max_tokens
-            if overlay.title_generation_max_tokens is not None
-            else base.title_generation_max_tokens
+        title_generation_max_tokens=_merge_optional_value(
+            base.title_generation_max_tokens, overlay.title_generation_max_tokens
         ),
         task_sampling=task_sampling,
     )
@@ -587,22 +602,23 @@ def _base_model_tuning(model_reference: str) -> ModelTuningSettings:
     return tuning
 
 
-def _task_max_tokens_field(task: str) -> str:
-    if task == "default":
-        return "model_max_input_tokens"
-    if task == MODEL_TASK_ARTICLE_SUMMARY:
-        return "article_summary_max_tokens"
-    if task == MODEL_TASK_STORY_DRAFTING:
-        return "story_drafting_max_tokens"
-    if task == MODEL_TASK_STORY_SCALE_SCREENING:
-        return "story_scale_screening_max_tokens"
-    if task == MODEL_TASK_TITLE_GENERATION:
-        return "title_generation_max_tokens"
+_TASK_MAX_TOKENS_FIELDS: dict[str, str] = {
+    "default": "model_max_input_tokens",
+    MODEL_TASK_ARTICLE_SUMMARY: "article_summary_max_tokens",
+    MODEL_TASK_STORY_DRAFTING: "story_drafting_max_tokens",
+    MODEL_TASK_STORY_SCALE_SCREENING: "story_scale_screening_max_tokens",
+    MODEL_TASK_TITLE_GENERATION: "title_generation_max_tokens",
     # image_art_direction is produced by the same LLM call as title_generation
     # (generate_image_art_brief); it inherits that task's token cap by design.
-    if task == MODEL_TASK_IMAGE_ART_DIRECTION:
-        return "title_generation_max_tokens"
-    raise ValueError(f"Unsupported model tuning task {task!r}.")
+    MODEL_TASK_IMAGE_ART_DIRECTION: "title_generation_max_tokens",
+}
+
+
+def _task_max_tokens_field(task: str) -> str:
+    try:
+        return _TASK_MAX_TOKENS_FIELDS[task]
+    except KeyError:
+        raise ValueError(f"Unsupported model tuning task {task!r}.") from None
 
 
 def _selected_model_tuning_preset_id(task: str) -> str:
@@ -841,36 +857,26 @@ def _apply_model_tuning_env_overrides(tuning: ModelTuningSettings) -> ModelTunin
         tuning.task_sampling.get("reasoning", ModelSamplingSettings()),
         prefix=MODEL_REASONING_SAMPLING_ENV_PREFIX,
     )
-    model_max_input_tokens = _optional_int_env("NEWS_MODEL_MAX_INPUT_TOKENS")
-    article_summary_max_tokens = _optional_int_env("NEWS_ARTICLE_SUMMARY_MAX_TOKENS")
-    story_drafting_max_tokens = _optional_int_env("NEWS_STORY_DRAFTING_MAX_TOKENS")
-    story_scale_screening_max_tokens = _optional_int_env("NEWS_STORY_SCALE_SCREENING_MAX_TOKENS")
-    title_generation_max_tokens = _optional_int_env("NEWS_TITLE_GENERATION_MAX_TOKENS")
     return ModelTuningSettings(
-        model_max_input_tokens=(
-            tuning.model_max_input_tokens
-            if model_max_input_tokens is None
-            else model_max_input_tokens
+        model_max_input_tokens=_merge_optional_value(
+            tuning.model_max_input_tokens,
+            _optional_int_env("NEWS_MODEL_MAX_INPUT_TOKENS"),
         ),
-        article_summary_max_tokens=(
-            tuning.article_summary_max_tokens
-            if article_summary_max_tokens is None
-            else article_summary_max_tokens
+        article_summary_max_tokens=_merge_optional_value(
+            tuning.article_summary_max_tokens,
+            _optional_int_env("NEWS_ARTICLE_SUMMARY_MAX_TOKENS"),
         ),
-        story_drafting_max_tokens=(
-            tuning.story_drafting_max_tokens
-            if story_drafting_max_tokens is None
-            else story_drafting_max_tokens
+        story_drafting_max_tokens=_merge_optional_value(
+            tuning.story_drafting_max_tokens,
+            _optional_int_env("NEWS_STORY_DRAFTING_MAX_TOKENS"),
         ),
-        story_scale_screening_max_tokens=(
-            tuning.story_scale_screening_max_tokens
-            if story_scale_screening_max_tokens is None
-            else story_scale_screening_max_tokens
+        story_scale_screening_max_tokens=_merge_optional_value(
+            tuning.story_scale_screening_max_tokens,
+            _optional_int_env("NEWS_STORY_SCALE_SCREENING_MAX_TOKENS"),
         ),
-        title_generation_max_tokens=(
-            tuning.title_generation_max_tokens
-            if title_generation_max_tokens is None
-            else title_generation_max_tokens
+        title_generation_max_tokens=_merge_optional_value(
+            tuning.title_generation_max_tokens,
+            _optional_int_env("NEWS_TITLE_GENERATION_MAX_TOKENS"),
         ),
         task_sampling=task_sampling,
     )
@@ -1094,12 +1100,23 @@ def _bounded_env_float(
 
 
 def resolve_model_name(model_reference: str) -> str:
-    """Resolve a friendly model alias to the Hugging Face repo loaded by mlx."""
+    """Resolve a friendly model alias to the Hugging Face repo loaded by mlx.
+
+    Raises ValueError for references in UNSUPPORTED_MODEL_REFERENCES (the
+    legacy qwythos-9b-* aliases, raw GGUF references, and their URL forms) so
+    stale configs fail before launch.
+    """
     clean_reference = (model_reference or "").strip()
     if not clean_reference:
         clean_reference = DEFAULT_MODEL_ALIAS
     if clean_reference in UNSUPPORTED_MODEL_REFERENCES:
-        raise ValueError(f"Unsupported model reference: {clean_reference}")
+        raise ValueError(
+            f"Unsupported model reference: {clean_reference}. This reference "
+            f"was removed; the default is now {DEFAULT_MODEL_ALIAS} "
+            f"({GEMMA_4_12B_IT_4BIT_MODEL_REPO}). Set NEWS_MODEL to the new "
+            "alias, or use NEWS_MODEL_BACKEND=external with an "
+            "OpenAI-compatible endpoint (NEWS_MODEL_BASE_URL) for legacy models."
+        )
     return MODEL_ALIASES.get(clean_reference, clean_reference)
 
 
@@ -1134,7 +1151,8 @@ def hf_model_page_url(model_choice: str) -> str | None:
         if resolved not in MODEL_ALIASES.values():
             return None
     repo = resolved
-    # GGUF references are repo + "/" + file; the page lives at the repo.
+    # No GGUF aliases exist today (issue #124); this branch is a defensive
+    # guard in case a file-qualified reference is ever re-added.
     if repo.endswith(".gguf") and "/" in repo:
         repo = repo.rsplit("/", 1)[0]
     if "/" not in repo:  # external/unknown ids have no HF repo page
@@ -1204,6 +1222,13 @@ def _configured_model_reference() -> str:
 
 
 def infer_model_backend(model_reference: str) -> str:
+    """Infer the managed backend for a model reference.
+
+    The retained "qwythos" branch only matches raw references that are not in
+    UNSUPPORTED_MODEL_REFERENCES (aliases, GGUF refs, and URL forms all fail
+    fast in resolve_model_name); it exists for legacy/external configs
+    (issue #124 Deviation 3).
+    """
     resolved_name = resolve_model_name(model_reference).lower()
     if "qwythos" in resolved_name or "gemma-4" in resolved_name or "gemma4" in resolved_name:
         return MODEL_BACKEND_MLX_VLM
@@ -1245,6 +1270,8 @@ def _default_story_synthesis_concurrency(model_reference: str) -> int:
     if is_codex_test_model_reference(model_reference):
         return 2
     resolved_name = resolve_model_name(model_reference).lower()
+    # Retained legacy branch (issue #124 Deviation 3): raw Qwythos references
+    # not covered by UNSUPPORTED_MODEL_REFERENCES still route to mlx-vlm.
     if "qwythos" in resolved_name or is_gemma_4_model_reference(model_reference):
         return 1
     return DEFAULT_STORY_SYNTHESIS_CONCURRENCY

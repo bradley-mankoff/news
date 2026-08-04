@@ -5,7 +5,7 @@ then copy the generated command, or run directly from the terminal:
 
 ```bash
 uv run news run --preset NAME
-NEWS_MODEL=gemma-26b-moe NEWS_SOURCE_SCOPE=peripheral uv run news run
+NEWS_MODEL=gemma-4-12b-it-4bit NEWS_SOURCE_SCOPE=peripheral uv run news run
 ```
 
 Run Presets live in `config/run_presets.yaml` as env-style Run Settings maps.
@@ -25,7 +25,7 @@ Pipeline Budget, Model Server Settings, and Prompt Profile.
 | `NEWS_PRESET` | _(none)_ | Selects a saved preset when `--preset NAME` is not used. |
 | `NEWS_PROMPT_PROFILE` | `balanced` | Editorial tone for the five LLM prompt stages. One of `balanced`, `consensus-and-contradiction`, `explain-like-im-five`, `facts-only`, `playful`. |
 | `NEWS_PROMPT_OVERRIDE_<TASK>` | _(unset)_ | Per-stage editorial override layered on top of `NEWS_PROMPT_PROFILE` (override wins). Tasks: `ARTICLE_SUMMARY`, `STORY_SCALE_SCREENING`, `STORY_DRAFTING`, `TITLE_GENERATION`, `IMAGE_ART_DIRECTION`. Unset/empty = use profile text. Editable from the UI's Editorial approach panel. |
-| `NEWS_MODEL` | `gemma-26b-moe` | Default friendly alias or full model repo/name. Task-specific model assignments inherit this value unless overridden. Stages with no LLM call of their own (story discovery) inherit this value. |
+| `NEWS_MODEL` | `gemma-4-12b-it-4bit` | Default friendly alias or full model repo/name. Task-specific model assignments inherit this value unless overridden. Stages with no LLM call of their own (story discovery) inherit this value. |
 | `NEWS_SOURCE_SCOPE` | `core` | `core` selects active English core sources. `peripheral` selects core plus peripheral sources. |
 | `NEWS_RECIPIENT_SCOPE` | `primary` | `primary` sends to `NEWS_PRIMARY_RECIPIENT`. `all` sends to active configured recipients. |
 | `NEWS_PRIMARY_RECIPIENT` | `primary@example.com` | Single-recipient address used by primary-recipient-scoped runs. |
@@ -73,8 +73,11 @@ Built-in model aliases:
 | Alias | Resolved model | Hugging Face page |
 |---|---|---|
 | `gemma-e2b-tiny` | `deadbydawn101/gemma-4-E2B-Heretic-Uncensored-mlx-4bit` (kept as the Codex-safe test model) | [deadbydawn101/gemma-4-E2B-Heretic-Uncensored-mlx-4bit](https://huggingface.co/deadbydawn101/gemma-4-E2B-Heretic-Uncensored-mlx-4bit) |
-| `qwythos-9b-4bit` | `huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-Q4_K.gguf` | [huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF](https://huggingface.co/huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF) |
-| `qwythos-9b-8bit` | `huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-Q8_0.gguf` (default) | [huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF](https://huggingface.co/huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF) |
+| `gemma-4-12b-it-4bit` | `mlx-community/gemma-4-12B-it-4bit` (default) | [mlx-community/gemma-4-12B-it-4bit](https://huggingface.co/mlx-community/gemma-4-12B-it-4bit) |
+
+The legacy `qwythos-9b-*` aliases are **unsupported**: mlx-vlm cannot launch
+file-qualified GGUF references, so stale configs fail fast with an actionable
+error instead of a half-started server.
 
 Each model page shows Hugging Face's native Hardware Compatibility panel
 (GGUF/MLX quantizations) — the UI model picker links directly to it.
@@ -93,7 +96,7 @@ Each model page shows Hugging Face's native Hardware Compatibility panel
 Print the fully resolved local server command without running the pipeline:
 
 ```bash
-NEWS_MODEL=qwythos-9b-8bit uv run news model-server-command
+NEWS_MODEL=gemma-4-12b-it-4bit uv run news model-server-command
 ```
 
 ## Infrastructure

@@ -10,6 +10,7 @@ from news_pipeline.config import (
     DEFAULT_MODEL_ALIAS,
     DEFAULT_ARTICLE_TEXT_TOKEN_LIMIT,
     DEFAULT_TOTAL_ARTICLE_SUMMARY_CAP,
+    GEMMA_4_12B_IT_4BIT_MODEL_ALIAS,
     QWWYTHOS_9B_4BIT_MODEL_ALIAS,
     is_gemma_4_model_reference,
     load_runtime_config,
@@ -43,7 +44,7 @@ def _article_ids(count: int, *, prefix: str = "a") -> list[str]:
 
 
 class Gemma4ArticleBudgetTests(unittest.TestCase):
-    def test_gemma_4_and_qwythos_detection(self) -> None:
+    def test_gemma_4_detection_and_unsupported_qwythos_alias(self) -> None:
         self.assertTrue(is_gemma_4_model_reference(CODEX_TEST_MODEL_ALIAS))
         self.assertTrue(is_gemma_4_model_reference(CODEX_TEST_MODEL_NAME))
         self.assertTrue(
@@ -51,8 +52,11 @@ class Gemma4ArticleBudgetTests(unittest.TestCase):
                 "mlx-community/gemma-4-26B-A4B-it-heretic-4bit"
             )
         )
-        self.assertFalse(is_gemma_4_model_reference(QWWYTHOS_9B_4BIT_MODEL_ALIAS))
-        self.assertFalse(is_gemma_4_model_reference(DEFAULT_MODEL_ALIAS))
+        # The Qwythos alias is unsupported, so resolution fails fast with an
+        # actionable error instead of a half-started server (issue #124).
+        with self.assertRaisesRegex(ValueError, "Unsupported model reference"):
+            is_gemma_4_model_reference(QWWYTHOS_9B_4BIT_MODEL_ALIAS)
+        self.assertTrue(is_gemma_4_model_reference(DEFAULT_MODEL_ALIAS))
 
     def test_pipeline_budget_defaults_are_model_independent(self) -> None:
         with patch.dict(os.environ, {}, clear=True):
@@ -61,18 +65,18 @@ class Gemma4ArticleBudgetTests(unittest.TestCase):
                 environ={"NEWS_MODEL": DEFAULT_MODEL_ALIAS},
             )
         with patch.dict(os.environ, {}, clear=True):
-            optiq_config = load_runtime_config(
+            gemma_config = load_runtime_config(
                 materialize_outputs=False,
-                environ={"NEWS_MODEL": QWWYTHOS_9B_4BIT_MODEL_ALIAS},
+                environ={"NEWS_MODEL": GEMMA_4_12B_IT_4BIT_MODEL_ALIAS},
             )
 
         self.assertEqual(
             default_config.pipeline_budget.total_article_summary_cap,
-            optiq_config.pipeline_budget.total_article_summary_cap,
+            gemma_config.pipeline_budget.total_article_summary_cap,
         )
         self.assertEqual(
             default_config.pipeline_budget.article_text_token_limit,
-            optiq_config.pipeline_budget.article_text_token_limit,
+            gemma_config.pipeline_budget.article_text_token_limit,
         )
         self.assertEqual(
             default_config.pipeline_budget.total_article_summary_cap,
@@ -115,7 +119,7 @@ class Gemma4ArticleBudgetTests(unittest.TestCase):
         with patch.dict(
             os.environ,
             {
-                "NEWS_MODEL": QWWYTHOS_9B_4BIT_MODEL_ALIAS,
+                "NEWS_MODEL": GEMMA_4_12B_IT_4BIT_MODEL_ALIAS,
             },
             clear=True,
         ):
@@ -129,7 +133,7 @@ class Gemma4ArticleBudgetTests(unittest.TestCase):
         with patch.dict(
             os.environ,
             {
-                "NEWS_MODEL": QWWYTHOS_9B_4BIT_MODEL_ALIAS,
+                "NEWS_MODEL": GEMMA_4_12B_IT_4BIT_MODEL_ALIAS,
                 "NEWS_ARTICLE_SUMMARY_CONCURRENCY": "3",
                 "NEWS_STORY_SYNTHESIS_CONCURRENCY": "6",
             },
@@ -145,7 +149,7 @@ class Gemma4ArticleBudgetTests(unittest.TestCase):
         with patch.dict(
             os.environ,
             {
-                "NEWS_MODEL": QWWYTHOS_9B_4BIT_MODEL_ALIAS,
+                "NEWS_MODEL": GEMMA_4_12B_IT_4BIT_MODEL_ALIAS,
                 "NEWS_TOTAL_ARTICLE_SUMMARY_CAP": "55",
             },
             clear=True,

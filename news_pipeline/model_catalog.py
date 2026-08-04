@@ -52,19 +52,19 @@ MODEL_TASK_LABELS: dict[str, str] = {
 
 MODEL_RECOMMENDATION_TASK_NOTES: dict[str, str] = {
     "factual_extraction": (
-        "Prioritize the default Qwythos model: its 1M-token context keeps long "
-        "source text intact for extraction."
+        "Prioritize the default Gemma 4 12B model: its 256K-token context "
+        "keeps long source text intact for extraction."
     ),
     "structured_output": (
-        "The default Qwythos model is the verified structured-output pick; "
-        "keep the machine-required JSON contracts intact."
+        "The default Gemma 4 12B model is the verified structured-output "
+        "pick; keep the machine-required JSON contracts intact."
     ),
     "synthesis": (
-        "The default Qwythos model is the recommended synthesis engine for "
-        "cross-source story drafting."
+        "The default Gemma 4 12B model is the recommended synthesis engine "
+        "for cross-source story drafting."
     ),
     "citation_fidelity": (
-        "The default Qwythos model best preserves [[S1]]-style citation "
+        "The default Gemma 4 12B model best preserves [[S1]]-style citation "
         "markers across long drafts."
     ),
     "speed": (
@@ -72,8 +72,8 @@ MODEL_RECOMMENDATION_TASK_NOTES: dict[str, str] = {
         "Codex-safe runs; accept lower fidelity."
     ),
     "context_length": (
-        "The Qwythos pair offers 1M-token context; pick the 8-bit quant for "
-        "quality or the 4-bit quant for memory."
+        "The default Gemma 4 12B model offers 256K-token context, keeping "
+        "long source text intact across all stages."
     ),
     "translation": (
         "No verified curated model yet; the translation stage is not "
@@ -81,7 +81,7 @@ MODEL_RECOMMENDATION_TASK_NOTES: dict[str, str] = {
     ),
 }
 
-DEFAULT_CATALOG_MODEL_ALIAS = "qwythos-9b-8bit"
+DEFAULT_CATALOG_MODEL_ALIAS = "gemma-4-12b-it-4bit"
 
 
 @dataclass(frozen=True)
@@ -96,23 +96,23 @@ class CatalogModel:
     task_notes: dict[str, str]
 
 
-# Exactly 3 curated entries, copied verbatim from config.py:65-73, 121-133
-# (QWWYTHOS_* / CODEX_TEST_* constants and MODEL_ALIASES). Adding more requires
-# runtime verification on Apple Silicon - out of scope for this issue.
+# Exactly 2 curated entries (gemma-4-12b-it-4bit / gemma-e2b-tiny), aligned
+# with config.py GEMMA_4_12B_IT_4BIT_* and CODEX_TEST_* constants and
+# MODEL_ALIASES. The Qwythos GGUF pair is NOT curated: mlx-vlm cannot launch
+# file-qualified GGUF refs (issue #124). Adding more requires runtime
+# verification on Apple Silicon - out of scope for this issue.
 CATALOG_MODELS: dict[str, CatalogModel] = {
-    "qwythos-9b-8bit": CatalogModel(
-        alias="qwythos-9b-8bit",
-        reference=(
-            "huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF/"
-            "Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-Q8_0.gguf"
-        ),
-        name="Qwythos 9B (Q8)",
+    "gemma-4-12b-it-4bit": CatalogModel(
+        alias="gemma-4-12b-it-4bit",
+        reference="mlx-community/gemma-4-12B-it-4bit",
+        name="Gemma 4 12B Instruct (4-bit)",
         backend="mlx-vlm",
-        hf_repo="huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF",
-        context_length=1_000_000,
+        hf_repo="mlx-community/gemma-4-12B-it-4bit",
+        context_length=262_144,
         description=(
-            "The default model: 8-bit Qwythos with 1M-token context, served by "
-            "the managed mlx-vlm backend on Apple Silicon."
+            "The default model: the standard Gemma 4 12B instruction model as "
+            "the mlx-community 4-bit MLX distribution, served by the managed "
+            "mlx-vlm backend on Apple Silicon."
         ),
         task_notes={
             "factual_extraction": MODEL_RECOMMENDATION_TASK_NOTES["factual_extraction"],
@@ -120,27 +120,8 @@ CATALOG_MODELS: dict[str, CatalogModel] = {
             "synthesis": MODEL_RECOMMENDATION_TASK_NOTES["synthesis"],
             "citation_fidelity": MODEL_RECOMMENDATION_TASK_NOTES["citation_fidelity"],
             "context_length": (
-                "1M-token context at Q8 quality; the highest-fidelity curated pick."
-            ),
-        },
-    ),
-    "qwythos-9b-4bit": CatalogModel(
-        alias="qwythos-9b-4bit",
-        reference=(
-            "huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF/"
-            "Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-Q4_K.gguf"
-        ),
-        name="Qwythos 9B (Q4)",
-        backend="mlx-vlm",
-        hf_repo="huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF",
-        context_length=1_000_000,
-        description=(
-            "4-bit Qwythos with the same 1M-token context at lower memory; "
-            "served by the managed mlx-vlm backend."
-        ),
-        task_notes={
-            "context_length": (
-                "1M-token context at Q4 memory; the memory-lean curated pick."
+                "256K-token context keeps long source text intact across all "
+                "stages; the highest-fidelity curated pick."
             ),
         },
     ),
@@ -266,11 +247,7 @@ def runtime_fit_for_hf_model(info: Mapping[str, Any]) -> dict[str, str]:
     pipeline_tag = str(info.get("pipeline_tag") or "").lower()
 
     for model in CATALOG_MODELS.values():
-        if (
-            repo_id == model.hf_repo
-            or repo_id == model.reference
-            or str(model.reference or "").startswith(f"{repo_id}/")
-        ):
+        if repo_id == model.hf_repo or repo_id == model.reference:
             if model.backend == "mlx-vlm":
                 return {
                     "status": RUNTIME_FIT_MANAGED_MLX_VLM,
@@ -285,8 +262,8 @@ def runtime_fit_for_hf_model(info: Mapping[str, Any]) -> dict[str, str]:
         return {
             "status": RUNTIME_FIT_EXTERNAL_ONLY,
             "reason": (
-                "Managed MLX servers cannot launch arbitrary GGUF; only the "
-                "curated Qwythos GGUF+mmproj pair is wired (ADR 0010)."
+                "Managed MLX servers cannot launch GGUF files; use an external "
+                "OpenAI-compatible endpoint (NEWS_MODEL_BACKEND=external)."
             ),
         }
 

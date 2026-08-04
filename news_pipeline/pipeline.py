@@ -12,8 +12,7 @@ Common Run Settings:
 
 Model selection:
     NEWS_MODEL=gemma-e2b-tiny uv run news run --preset NAME
-    NEWS_MODEL=qwythos-9b-8bit uv run news run --preset NAME
-    NEWS_MODEL=qwythos-9b-4bit uv run news run --preset NAME
+    NEWS_MODEL=gemma-4-12b-it-4bit uv run news run --preset NAME
 
     NEWS_MODEL accepts either a friendly alias above or a full model repo/name.
     Task-specific model assignments inherit it unless overridden.
@@ -3847,6 +3846,14 @@ def _new_run_diagnostics(source_count: int) -> RunDiagnostics:
         settings={
             "preset_id": PRESET_ID or "custom",
             "source_scope": SOURCE_SCOPE,
+            "source_languages": dict(
+                sorted(
+                    Counter(
+                        feed.get("language") or "en"
+                        for feed in SOURCE_FEEDS.values()
+                    ).items()
+                )
+            ),
             "recipient_scope": RECIPIENT_SCOPE,
             "url_reuse_blocking_enabled": URL_REUSE_BLOCKING_ENABLED,
             "relaxed_story_drafting_guards": RELAXED_STORY_DRAFTING_GUARDS,
