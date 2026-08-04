@@ -3003,23 +3003,31 @@ def maybe_email_report(
         progress_tracker.detail(f"[email] Skipping email. Missing configuration: {', '.join(missing)}")
         return
 
+    # Read the image attachment once up front; a read failure degrades the
+    # email to no attached image (delivery must not depend on an attachment)
+    # but is surfaced to the operator via a warning.
+    html_image_art = image_art
+    related_image_bytes = None
+    related_image_cid = None
+    if image_art and image_art.get("final_image_path"):
+        try:
+            with open(str(image_art["final_image_path"]), "rb") as image_file:
+                related_image_bytes = image_file.read()
+            related_image_cid = make_msgid(domain="news-pipeline.local")
+            html_image_art = {
+                **image_art,
+                "content_id": related_image_cid[1:-1],
+            }
+        except Exception as error:
+            progress_tracker.warning(
+                f"[email] Image attachment read failed ({type(error).__name__}: {error}); "
+                "sending email without attached image."
+            )
+            html_image_art = image_art
+
     def build_message(recipient_email: str, recipient_name: str) -> EmailMessage:
         first_name = _extract_first_name(recipient_name or recipient_email)
         unsubscribe_url = build_unsubscribe_url(recipient_email)
-        html_image_art = image_art
-        related_image_bytes = None
-        related_image_cid = None
-        if image_art and image_art.get("final_image_path"):
-            try:
-                with open(str(image_art["final_image_path"]), "rb") as image_file:
-                    related_image_bytes = image_file.read()
-                related_image_cid = make_msgid(domain="news-pipeline.local")
-                html_image_art = {
-                    **image_art,
-                    "content_id": related_image_cid[1:-1],
-                }
-            except Exception:
-                html_image_art = image_art
         message = EmailMessage()
         message["Subject"] = build_email_subject()
         message["From"] = EMAIL_FROM
@@ -3952,13 +3960,26 @@ def _record_report_diagnostics(
     *,
     path: str,
     prompt_label: str,
-    recipient_list: List[str],
+    recipient_list: list[str],
     token_stats: dict[str, Any],
-    reference_reports: List[article_summary_records_stage.ArticleSummaryRecord | str],
+    reference_reports: list[article_summary_records_stage.ArticleSummaryRecord | str],
     citation_sources: list[dict[str, Any]],
     citation_groups: list[dict[str, Any]],
     image_art_diagnostics: dict[str, Any] | None,
 ) -> None:
+    """Record the finished report into run diagnostics.
+
+    Sole production call site for report recording; wraps the kwarg-agnostic
+    ``RunDiagnostics.record_report(**details)`` with the concrete fields the
+    pipeline produces, deriving the count fields from the source lists.
+    Optional list inputs are normalized defensively so a missing/``None``
+    collection degrades to an empty one instead of aborting finalization
+    after content generation. Unit-tested directly.
+    """
+    recipient_list = list(recipient_list or [])
+    reference_reports = list(reference_reports or [])
+    citation_sources = list(citation_sources or [])
+    citation_groups = list(citation_groups or [])
     diagnostics.record_report(
         path=path,
         prompt_label=prompt_label,

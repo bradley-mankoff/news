@@ -1665,7 +1665,9 @@ class PipelineHelperTests(unittest.TestCase):
                 pipeline.smtplib,
                 "SMTP_SSL",
                 return_value=fake_smtp_ssl,
-            ), patch("builtins.open", side_effect=OSError("boom")):
+            ), patch("builtins.open", side_effect=OSError("boom")), patch.object(
+                pipeline.progress_tracker, "warning"
+            ) as warning:
                 pipeline.maybe_email_report(
                     "Daily Brief",
                     "Body text",
@@ -1680,6 +1682,8 @@ class PipelineHelperTests(unittest.TestCase):
         self.assertTrue(fake_smtp_ssl.started_tls is False)
         self.assertEqual(fake_smtp_ssl.logged_in, ("user", "secret"))
         self.assertEqual(len(fake_smtp_ssl.messages), 1)
+        warning.assert_called_once()
+        self.assertIn("Image attachment read failed", warning.call_args[0][0])
 
         self.assertEqual(pipeline._first_sentences("One. Two. Three.", max_sentences=2, max_chars=100), "One. Two.")
         self.assertEqual(pipeline._first_sentences("", max_sentences=2, max_chars=100), "")
@@ -2383,15 +2387,16 @@ class PipelineHelperTests(unittest.TestCase):
             run_started_at="2026-08-03T19:04:38",
             settings={},
         )
+        token_stats = {
+            "primary_dataset": "synthetic dataset text",
+            "included_report_keys": ["a1"],
+        }
         pipeline._record_report_diagnostics(
             diagnostics,
             path="/tmp/latest_run.md",
             prompt_label="default prompt",
             recipient_list=["reader@example.com", "editor@example.com"],
-            token_stats={
-                "primary_dataset": "synthetic dataset text",
-                "included_report_keys": ["a1"],
-            },
+            token_stats=token_stats,
             reference_reports=["reference"],
             citation_sources=[{"title": "Alpha"}],
             citation_groups=[{"group": "g1"}],
@@ -2406,5 +2411,42 @@ class PipelineHelperTests(unittest.TestCase):
         self.assertEqual(report["reference_report_count"], 1)
         self.assertEqual(report["citation_source_count"], 1)
         self.assertEqual(report["citation_group_count"], 1)
+        self.assertEqual(report["token_stats"], token_stats)
         self.assertEqual(report["image_art"], {"final_image_path": "/tmp/art.png"})
         self.assertNotIn("synthesis_dataset_artifacts", report)
+
+    def test_report_recording_for_missing_image_art_and_empty_lists(self) -> None:
+        # image_art_diagnostics is None whenever image generation produced
+        # nothing (the failure path operators inspect most), and citation /
+        # reference lists can legitimately be empty for reports without
+        # citation markers.
+        diagnostics = pipeline.RunDiagnostics(
+            run_started_at="2026-08-03T19:04:38",
+            settings={},
+        )
+        pipeline._record_report_diagnostics(
+            diagnostics,
+            path="/tmp/latest_run.md",
+            prompt_label="default prompt",
+            recipient_list=[],
+            token_stats={},
+            reference_reports=[],
+            citation_sources=[],
+            citation_groups=[],
+            image_art_diagnostics=None,
+        )
+        self.assertEqual(len(diagnostics.reports), 1)
+        report = diagnostics.reports[0]
+        self.assertEqual(report["recipient_count"], 0)
+        self.assertEqual(report["recipients"], [])
+        self.assertEqual(report["reference_report_count"], 0)
+        self.assertEqual(report["citation_source_count"], 0)
+        self.assertEqual(report["citation_group_count"], 0)
+        self.assertIsNone(report["image_art"])
+
+    def test_no_stale_synthesis_dataset_artifacts_reference_in_pipeline(self) -> None:
+        # Regression guard for the NameError fixed in #127: the stale
+        # identifier must never reappear anywhere in production pipeline code,
+        # or report finalization would crash again at runtime.
+        source = Path(pipeline.__file__).read_text(encoding="utf-8")
+        self.assertNotIn("synthesis_dataset_artifacts", source)
