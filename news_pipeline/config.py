@@ -635,6 +635,37 @@ def _validate_model_tuning_preset_scope(
         )
 
 
+def _validate_managed_model_assignments(
+    model_assignments: dict[str, TaskModelAssignment],
+    *,
+    model_reference: str,
+    model_name: str,
+    model_base_url: str,
+    model_backend: str,
+) -> None:
+    """Reject task models that cannot share the managed server's base URL.
+
+    A managed local server (any non-external default backend) serves exactly
+    one model at the default base URL. A task assignment that resolves to the
+    same base URL with a different model name cannot be served by that server;
+    it previously failed only mid-run in build_chat_model, after source
+    collection. External endpoints can serve multiple models, so the managed
+    path is the only one validated here.
+    """
+    if model_backend == MODEL_BACKEND_EXTERNAL:
+        return
+    for task, assignment in model_assignments.items():
+        if task == "default":
+            continue
+        if assignment.base_url == model_base_url and assignment.name != model_name:
+            raise ValueError(
+                "Managed model server cannot serve multiple different models from the same base URL. "
+                f"Task {task!r} wants {assignment.reference!r} ({assignment.name!r}) "
+                f"but the managed main model is {model_reference!r} ({model_name!r}) at {model_base_url}. "
+                "Set a per-task base URL or run that task against an external server."
+            )
+
+
 def _apply_model_tuning_preset(
     tuning: ModelTuningSettings,
     *,
@@ -1898,6 +1929,13 @@ def _build_runtime_config(
     model_reference = default_model_assignment.reference
     model_name = default_model_assignment.name
     model_backend = default_model_assignment.backend
+    _validate_managed_model_assignments(
+        model_assignments,
+        model_reference=model_reference,
+        model_name=model_name,
+        model_base_url=model_base_url,
+        model_backend=model_backend,
+    )
     return RuntimeConfig(
         root_dir=ROOT_DIR,
         sources_path=sources_path,

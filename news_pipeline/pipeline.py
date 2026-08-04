@@ -2538,7 +2538,7 @@ def build_chat_model(max_tokens: int, *, task: str = "default") -> ChatOpenAI:
     ensure_codex_safe_model_reference(MODEL_REFERENCE)
     normalized_task = _normalized_model_task(task)
     assignment = _task_model_assignment(normalized_task)
-    if MANAGED_MODEL_SERVER_ACTIVE:
+    if MANAGED_MODEL_SERVER_ACTIVE and MODEL_BACKEND != MODEL_BACKEND_EXTERNAL:
         if assignment.base_url == MODEL_BASE_URL:
             if assignment.name != MODEL_NAME:
                 raise RuntimeError(
