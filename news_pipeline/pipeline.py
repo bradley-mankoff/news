@@ -96,9 +96,7 @@ from .config import (
     RuntimeConfig,
     DEFAULT_TITLE_GENERATION_MAX_TOKENS,
     MODEL_BACKEND_EXTERNAL,
-    MODEL_TASK_ARTICLE_SUMMARY,
     MODEL_TASK_IMAGE_ART_DIRECTION,
-    MODEL_TASK_STORY_DRAFTING,
     MODEL_TASK_STORY_SCALE_SCREENING,
     MODEL_TASK_TITLE_GENERATION,
     configured_model_api_key,
@@ -2519,22 +2517,18 @@ def _normalized_model_task(task: str) -> str:
     return clean_task or "default"
 
 
+# image_art_direction is produced by the same LLM call as title_generation
+# (generate_image_art_brief); it inherits that assignment by design.
+# story_discovery has no LLM stage (TF-IDF/embedding clustering); it inherits default.
+_TASK_MODEL_ASSIGNMENT_ALIASES = {
+    MODEL_TASK_IMAGE_ART_DIRECTION: MODEL_TASK_TITLE_GENERATION,
+}
+
+
 def _task_model_assignment(task: str):
     normalized_task = _normalized_model_task(task)
-    if normalized_task == MODEL_TASK_ARTICLE_SUMMARY:
-        return MODEL_ASSIGNMENTS[MODEL_TASK_ARTICLE_SUMMARY]
-    if normalized_task == MODEL_TASK_STORY_DRAFTING:
-        return MODEL_ASSIGNMENTS[MODEL_TASK_STORY_DRAFTING]
-    if normalized_task == MODEL_TASK_STORY_SCALE_SCREENING:
-        return MODEL_ASSIGNMENTS[MODEL_TASK_STORY_SCALE_SCREENING]
-    if normalized_task == MODEL_TASK_TITLE_GENERATION:
-        return MODEL_ASSIGNMENTS[MODEL_TASK_TITLE_GENERATION]
-    # image_art_direction is produced by the same LLM call as title_generation
-    # (generate_image_art_brief); it inherits that assignment by design.
-    if normalized_task == MODEL_TASK_IMAGE_ART_DIRECTION:
-        return MODEL_ASSIGNMENTS[MODEL_TASK_TITLE_GENERATION]
-    # story_discovery has no LLM stage (TF-IDF/embedding clustering); it inherits default.
-    return MODEL_ASSIGNMENTS["default"]
+    resolved_task = _TASK_MODEL_ASSIGNMENT_ALIASES.get(normalized_task, normalized_task)
+    return MODEL_ASSIGNMENTS.get(resolved_task, MODEL_ASSIGNMENTS["default"])
 
 
 def build_chat_model(max_tokens: int, *, task: str = "default") -> ChatOpenAI:
@@ -3017,23 +3011,30 @@ def maybe_email_report(
         progress_tracker.detail(f"[email] Skipping email. Missing configuration: {', '.join(missing)}")
         return
 
+    # Read the image attachment once up front; a read failure degrades the
+    # email to no attached image (delivery must not depend on an attachment)
+    # but is surfaced to the operator via a warning.
+    html_image_art = image_art
+    related_image_bytes = None
+    related_image_cid = None
+    if image_art and image_art.get("final_image_path"):
+        try:
+            with open(str(image_art["final_image_path"]), "rb") as image_file:
+                related_image_bytes = image_file.read()
+            related_image_cid = make_msgid(domain="news-pipeline.local")
+            html_image_art = {
+                **image_art,
+                "content_id": related_image_cid[1:-1],
+            }
+        except Exception as error:
+            progress_tracker.warning(
+                f"[email] Image attachment read failed ({type(error).__name__}: {error}); "
+                "sending email without attached image."
+            )
+
     def build_message(recipient_email: str, recipient_name: str) -> EmailMessage:
         first_name = _extract_first_name(recipient_name or recipient_email)
         unsubscribe_url = build_unsubscribe_url(recipient_email)
-        html_image_art = image_art
-        related_image_bytes = None
-        related_image_cid = None
-        if image_art and image_art.get("final_image_path"):
-            try:
-                with open(str(image_art["final_image_path"]), "rb") as image_file:
-                    related_image_bytes = image_file.read()
-                related_image_cid = make_msgid(domain="news-pipeline.local")
-                html_image_art = {
-                    **image_art,
-                    "content_id": related_image_cid[1:-1],
-                }
-            except Exception:
-                html_image_art = image_art
         message = EmailMessage()
         message["Subject"] = build_email_subject()
         message["From"] = EMAIL_FROM
@@ -3959,6 +3960,44 @@ def _active_run_finalizer(diagnostics: RunDiagnostics, config: RuntimeConfig) ->
 
 def _finish_run_diagnostics(diagnostics: RunDiagnostics, config: RuntimeConfig) -> None:
     _active_run_finalizer(diagnostics, config).finish()
+
+
+def _record_report_diagnostics(
+    diagnostics: RunDiagnostics,
+    *,
+    path: str,
+    prompt_label: str,
+    recipient_list: list[str],
+    token_stats: dict[str, Any],
+    reference_reports: list[article_summary_records_stage.ArticleSummaryRecord | str],
+    citation_sources: list[dict[str, Any]],
+    citation_groups: list[dict[str, Any]],
+    image_art_diagnostics: dict[str, Any] | None,
+) -> None:
+    """Record the finished report into run diagnostics.
+
+    Sole production call site for report recording; wraps the kwarg-agnostic
+    ``RunDiagnostics.record_report(**details)`` with the concrete fields the
+    pipeline produces, deriving the count fields from the source lists.
+    Optional list inputs are normalized defensively so a missing/``None``
+    collection degrades to an empty one instead of aborting finalization
+    after content generation. Unit-tested directly.
+    """
+    recipient_list = list(recipient_list or [])
+    reference_reports = list(reference_reports or [])
+    citation_sources = list(citation_sources or [])
+    citation_groups = list(citation_groups or [])
+    diagnostics.record_report(
+        path=path,
+        prompt_label=prompt_label,
+        recipient_count=len(recipient_list),
+        recipients=recipient_list,
+        token_stats=token_stats,
+        reference_report_count=len(reference_reports),
+        citation_source_count=len(citation_sources),
+        citation_group_count=len(citation_groups),
+        image_art=image_art_diagnostics,
+    )
 
 
 def _model_auth_headers() -> dict[str, str]:
@@ -4897,17 +4936,16 @@ def _run_pipeline() -> None:
                 for key, value in image_art.items()
                 if key not in {"data_uri", "image_prompt"}
             }
-        diagnostics.record_report(
+        _record_report_diagnostics(
+            diagnostics,
             path=LATEST_RUN_MARKDOWN_PATH,
             prompt_label=prompt_label,
-            recipient_count=len(recipient_list),
-            recipients=recipient_list,
+            recipient_list=recipient_list,
             token_stats=token_stats,
-            reference_report_count=len(reference_reports),
-            citation_source_count=len(citation_sources),
-            citation_group_count=len(citation_groups),
-            synthesis_dataset_artifacts=synthesis_dataset_artifacts,
-            image_art=image_art_diagnostics,
+            reference_reports=reference_reports,
+            citation_sources=citation_sources,
+            citation_groups=citation_groups,
+            image_art_diagnostics=image_art_diagnostics,
         )
 
         progress_tracker.set_final_step("email", 5)

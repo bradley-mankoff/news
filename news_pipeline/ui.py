@@ -1450,6 +1450,8 @@ HTML = r"""<!doctype html>
         renameButtonId: "article_tuning_rename",
         deleteButtonId: "article_tuning_delete",
         modelMaxTokensId: "article_model_max_input_tokens",
+        maxTokensField: "article_summary_max_tokens",
+        maxTokensLabel: "Article summary max tokens",
         taskMaxTokensEnv: "NEWS_ARTICLE_SUMMARY_MAX_TOKENS",
         taskMaxTokensLabel: "Article summary max tokens",
         taskSamplingPrefix: "NEWS_MODEL_ARTICLE_SUMMARY",
@@ -1471,6 +1473,8 @@ HTML = r"""<!doctype html>
         renameButtonId: "story_tuning_rename",
         deleteButtonId: "story_tuning_delete",
         modelMaxTokensId: null,
+        maxTokensField: "story_drafting_max_tokens",
+        maxTokensLabel: "Story drafting max tokens",
         taskMaxTokensEnv: "NEWS_STORY_DRAFTING_MAX_TOKENS",
         taskMaxTokensLabel: "Story drafting max tokens",
         taskSamplingPrefix: "NEWS_MODEL_STORY_DRAFTING",
@@ -1492,6 +1496,8 @@ HTML = r"""<!doctype html>
         renameButtonId: "scale_tuning_rename",
         deleteButtonId: "scale_tuning_delete",
         modelMaxTokensId: null,
+        maxTokensField: "story_scale_screening_max_tokens",
+        maxTokensLabel: "Scale screening max tokens",
         taskMaxTokensEnv: "NEWS_STORY_SCALE_SCREENING_MAX_TOKENS",
         taskMaxTokensLabel: "Scale screening max tokens",
         taskSamplingPrefix: "NEWS_MODEL_STORY_SCALE_SCREENING",
@@ -1513,6 +1519,8 @@ HTML = r"""<!doctype html>
         renameButtonId: "title_tuning_rename",
         deleteButtonId: "title_tuning_delete",
         modelMaxTokensId: null,
+        maxTokensField: "title_generation_max_tokens",
+        maxTokensLabel: "Title generation max tokens",
         taskMaxTokensEnv: "NEWS_TITLE_GENERATION_MAX_TOKENS",
         taskMaxTokensLabel: "Title generation max tokens",
         taskSamplingPrefix: "NEWS_MODEL_TITLE_GENERATION",
@@ -2056,10 +2064,7 @@ HTML = r"""<!doctype html>
         </div>
       `;
       renderPresetSummary();
-      renderModelTuningControls("article_summary");
-      renderModelTuningControls("story_drafting");
-      renderModelTuningControls("story_scale_screening");
-      renderModelTuningControls("title_generation");
+      renderTaskTuningControls();
       decorateEnvHints($("runSetupMount"));
       renderKnobLinks("NEWS_MODEL_ARTICLE_SUMMARY");
       renderKnobLinks("NEWS_MODEL_STORY_DRAFTING");
@@ -2172,6 +2177,12 @@ HTML = r"""<!doctype html>
       `;
       decorateEnvHints($("advancedPanels"));
       renderPromptProfilePanel();
+    }
+    function renderTaskTuningControls() {
+      renderModelTuningControls("article_summary");
+      renderModelTuningControls("story_drafting");
+      renderModelTuningControls("story_scale_screening");
+      renderModelTuningControls("title_generation");
     }
     function renderModelTuningControls(task, { preserveEditor = false } = {}) {
       const meta = TASK_CONFIG[task];
@@ -2349,10 +2360,7 @@ HTML = r"""<!doctype html>
       state.selectedRunPresetId = preset.id || "";
       setKnobEnv(preset.env || {});
       renderPresetSummary();
-      renderModelTuningControls("article_summary");
-      renderModelTuningControls("story_drafting");
-      renderModelTuningControls("story_scale_screening");
-      renderModelTuningControls("title_generation");
+      renderTaskTuningControls();
       renderPromptProfilePanel();
       refreshModelKnobLinks();
       previewQuietly("run");
@@ -2410,10 +2418,7 @@ HTML = r"""<!doctype html>
     async function loadModelTuningPresets() {
       const data = await api("/api/model-tuning-presets");
       state.modelTuningPresets = data.presets || [];
-      renderModelTuningControls("article_summary");
-      renderModelTuningControls("story_drafting");
-      renderModelTuningControls("story_scale_screening");
-      renderModelTuningControls("title_generation");
+      renderTaskTuningControls();
     }
     function renderAdvancedKnobs() {
       const search = value("knobSearch").toLowerCase();
@@ -2826,10 +2831,7 @@ HTML = r"""<!doctype html>
         });
         state.selectedRunPresetId = "";
         renderPresetSummary();
-        renderModelTuningControls("article_summary");
-        renderModelTuningControls("story_drafting");
-        renderModelTuningControls("story_scale_screening");
-        renderModelTuningControls("title_generation");
+        renderTaskTuningControls();
         renderPromptProfilePanel();
         refreshModelKnobLinks();
         previewQuietly("run");
@@ -2841,10 +2843,7 @@ HTML = r"""<!doctype html>
         });
         state.selectedRunPresetId = "";
         renderPresetSummary();
-        renderModelTuningControls("article_summary");
-        renderModelTuningControls("story_drafting");
-        renderModelTuningControls("story_scale_screening");
-        renderModelTuningControls("title_generation");
+        renderTaskTuningControls();
         renderPromptProfilePanel();
         refreshModelKnobLinks();
         previewQuietly("run");
@@ -2903,10 +2902,7 @@ HTML = r"""<!doctype html>
       renderStats();
       renderRunPresetDrawer();
       renderPresetSummary();
-      renderModelTuningControls("article_summary");
-      renderModelTuningControls("story_drafting");
-      renderModelTuningControls("story_scale_screening");
-      renderModelTuningControls("title_generation");
+      renderTaskTuningControls();
       wireEvents();
       document.addEventListener("change", (event) => {
         const el = event.target;
