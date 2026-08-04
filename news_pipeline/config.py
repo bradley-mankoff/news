@@ -348,6 +348,15 @@ MODEL_TUNING_PRESET_ENV_VARS = {
     MODEL_TASK_TITLE_GENERATION: "NEWS_MODEL_TITLE_GENERATION_TUNING_PRESET",
 }
 MODEL_REASONING_SAMPLING_ENV_PREFIX = "NEWS_MODEL_REASONING"
+# Per-task model knobs share env shapes NEWS_MODEL_<TASK>[_TUNING_PRESET|_BASE_URL]
+# and NEWS_<TASK>_MAX_TOKENS (env suffix = task name upper-cased). Columns:
+# task, label prefix for the model/preset/base-URL knobs, max-tokens knob label.
+MODEL_TASK_KNOB_SPECS: tuple[tuple[str, str, str], ...] = (
+    (MODEL_TASK_ARTICLE_SUMMARY, "Article Summarization", "Article summary max tokens"),
+    (MODEL_TASK_STORY_DRAFTING, "Story Drafting", "Story drafting max tokens"),
+    (MODEL_TASK_STORY_SCALE_SCREENING, "Story Scale Screening", "Story scale screening max tokens"),
+    (MODEL_TASK_TITLE_GENERATION, "Title Generation", "Title generation max tokens"),
+)
 
 
 def _empty_model_sampling_map() -> dict[str, ModelSamplingSettings]:
@@ -450,10 +459,7 @@ def _configured_model_assignments(
     )
 
     task_env_suffixes = {
-        MODEL_TASK_ARTICLE_SUMMARY: "ARTICLE_SUMMARY",
-        MODEL_TASK_STORY_DRAFTING: "STORY_DRAFTING",
-        MODEL_TASK_STORY_SCALE_SCREENING: "STORY_SCALE_SCREENING",
-        MODEL_TASK_TITLE_GENERATION: "TITLE_GENERATION",
+        task: task.upper() for task, _, _ in MODEL_TASK_KNOB_SPECS
     }
     task_entries = {}
     for task, env_suffix in task_env_suffixes.items():
@@ -1224,20 +1230,8 @@ def runtime_knob_registry() -> list[dict[str, Any]]:
         _runtime_knob("Run Settings", "Token encoding", "NEWS_TOKEN_ENCODING", default="o200k_base", advanced=True),
         _runtime_knob("Model Selection", "Default model", "NEWS_MODEL", "select", default=DEFAULT_MODEL_ALIAS, options=sorted(MODEL_ALIASES), option_links=model_links),
         _runtime_knob("Model Selection", "Model backend", "NEWS_MODEL_BACKEND", "select", options=sorted(SUPPORTED_MODEL_BACKENDS)),
-        _runtime_knob("Model Selection", "Article Summarization model", "NEWS_MODEL_ARTICLE_SUMMARY", "select", options=sorted(MODEL_ALIASES), option_links=model_links),
-        _runtime_knob("Model Selection", "Story Drafting model", "NEWS_MODEL_STORY_DRAFTING", "select", options=sorted(MODEL_ALIASES), option_links=model_links),
-        _runtime_knob("Model Selection", "Story Scale Screening model", "NEWS_MODEL_STORY_SCALE_SCREENING", "select", options=sorted(MODEL_ALIASES), option_links=model_links),
-        _runtime_knob("Model Selection", "Title Generation model", "NEWS_MODEL_TITLE_GENERATION", "select", options=sorted(MODEL_ALIASES), option_links=model_links),
         _runtime_knob("Model Tuning", "Default tuning preset", "NEWS_MODEL_TUNING_PRESET", "select", options=tuning_presets),
-        _runtime_knob("Model Tuning", "Article Summarization tuning preset", "NEWS_MODEL_ARTICLE_SUMMARY_TUNING_PRESET", "select", options=tuning_presets),
-        _runtime_knob("Model Tuning", "Story Drafting tuning preset", "NEWS_MODEL_STORY_DRAFTING_TUNING_PRESET", "select", options=tuning_presets),
-        _runtime_knob("Model Tuning", "Story Scale Screening tuning preset", "NEWS_MODEL_STORY_SCALE_SCREENING_TUNING_PRESET", "select", options=tuning_presets),
-        _runtime_knob("Model Tuning", "Title Generation tuning preset", "NEWS_MODEL_TITLE_GENERATION_TUNING_PRESET", "select", options=tuning_presets),
         _runtime_knob("Model Tuning", "Model input cap", "NEWS_MODEL_MAX_INPUT_TOKENS", "number", minimum=1, step=1),
-        _runtime_knob("Model Tuning", "Article summary max tokens", "NEWS_ARTICLE_SUMMARY_MAX_TOKENS", "number", minimum=1, step=1),
-        _runtime_knob("Model Tuning", "Story drafting max tokens", "NEWS_STORY_DRAFTING_MAX_TOKENS", "number", minimum=1, step=1),
-        _runtime_knob("Model Tuning", "Story scale screening max tokens", "NEWS_STORY_SCALE_SCREENING_MAX_TOKENS", "number", minimum=1, step=1),
-        _runtime_knob("Model Tuning", "Title generation max tokens", "NEWS_TITLE_GENERATION_MAX_TOKENS", "number", minimum=1, step=1),
         _runtime_knob("Pipeline Budget", "Article text token limit", "NEWS_ARTICLE_TEXT_TOKEN_LIMIT", "number", minimum=1, step=1),
         _runtime_knob("Pipeline Budget", "Total article summary cap", "NEWS_TOTAL_ARTICLE_SUMMARY_CAP", "number", minimum=0, step=1),
         _runtime_knob("Pipeline Budget", "Recent window hours", "NEWS_RECENT_WINDOW_HOURS", "number", minimum=1, step=1),
@@ -1263,6 +1257,45 @@ def runtime_knob_registry() -> list[dict[str, Any]]:
         _runtime_knob("Model Server Settings", "Server prompt cache bytes", "NEWS_MODEL_SERVER_PROMPT_CACHE_BYTES"),
         _runtime_knob("Model Server Settings", "Server max tokens", "NEWS_MODEL_SERVER_MAX_TOKENS", "number", minimum=1, step=1),
     ]
+    for task, task_label, max_tokens_label in MODEL_TASK_KNOB_SPECS:
+        env_suffix = task.upper()
+        knobs.append(
+            _runtime_knob(
+                "Model Selection",
+                f"{task_label} model",
+                f"NEWS_MODEL_{env_suffix}",
+                "select",
+                options=sorted(MODEL_ALIASES),
+                option_links=model_links,
+            )
+        )
+        knobs.append(
+            _runtime_knob(
+                "Model Tuning",
+                f"{task_label} tuning preset",
+                f"NEWS_MODEL_{env_suffix}_TUNING_PRESET",
+                "select",
+                options=tuning_presets,
+            )
+        )
+        knobs.append(
+            _runtime_knob(
+                "Model Tuning",
+                max_tokens_label,
+                f"NEWS_{env_suffix}_MAX_TOKENS",
+                "number",
+                minimum=1,
+                step=1,
+            )
+        )
+        knobs.append(
+            _runtime_knob(
+                "Model Server Settings",
+                f"{task_label} base URL",
+                f"NEWS_MODEL_{env_suffix}_BASE_URL",
+                default="http://127.0.0.1:8080/v1",
+            )
+        )
     sampling_suffixes = [
         ("TEMPERATURE", "Temperature", "number", 0, 2, 0.01),
         ("TOP_P", "Top P", "number", 0, 1, 0.01),
