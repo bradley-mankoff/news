@@ -735,20 +735,48 @@ class RunRecord:
                 "line_count": len(self.lines),
             }
 
+    def is_active(self) -> bool:
+        with self.lock:
+            return self.status in {"starting", "running", "stopping"}
+
+
+class RunAlreadyActiveError(RuntimeError):
+    """Raised when a run is requested while another run is still active."""
+
 
 class RunManager:
     def __init__(self):
         self.runs: dict[str, RunRecord] = {}
         self.lock = threading.Lock()
 
+    def active(self) -> RunRecord | None:
+        with self.lock:
+            for record in self.runs.values():
+                if record.is_active():
+                    return record
+            return None
+
     def start(self, body: dict[str, Any]) -> RunRecord:
         command, env = build_command(body)
         run_id = uuid.uuid4().hex[:12]
         record = RunRecord(run_id, command, env)
         with self.lock:
+            for existing in self.runs.values():
+                if existing.is_active():
+                    raise RunAlreadyActiveError(
+                        f"A run is already active ({existing.run_id}, status {existing.status}); "
+                        f"stop it or wait for it to finish before starting another."
+                    )
             self.runs[run_id] = record
         thread = threading.Thread(target=self._run_process, args=(record,), daemon=True)
-        thread.start()
+        try:
+            thread.start()
+        except Exception as exc:
+            with self.lock:
+                record.status = "failed"
+                record.returncode = -1
+                record.append(f"[ui] failed to start thread: {exc}\n")
+            raise
         return record
 
     def get(self, run_id: str) -> RunRecord | None:
@@ -924,7 +952,11 @@ class NewsUIHandler(BaseHTTPRequestHandler):
             if parsed.path == "/api/preview":
                 self._send_json(preview_payload(body))
             elif parsed.path == "/api/run":
-                record = RUN_MANAGER.start(body)
+                try:
+                    record = RUN_MANAGER.start(body)
+                except RunAlreadyActiveError as exc:
+                    self._send_error_json(exc, status=HTTPStatus.CONFLICT)
+                    return
                 self._send_json(record.snapshot(), status=HTTPStatus.ACCEPTED)
             elif parsed.path == "/api/presets":
                 self._send_json(upsert_preset(body, append_only=True), status=HTTPStatus.CREATED)
@@ -1161,6 +1193,7 @@ HTML = r"""<!doctype html>
     .warn { color: var(--gold); }
     .bad { color: var(--red); }
     .good { color: var(--green); }
+    button:disabled { opacity: .55; cursor: not-allowed; }
     #status:empty { display: none; }
     .hidden { display: none !important; }
     pre {
@@ -2536,9 +2569,24 @@ HTML = r"""<!doctype html>
       $("previewPane").textContent = data.command_text + (data.runtime_error ? `\n\nPreview error: ${data.runtime_error}` : "");
       return data;
     }
+    function updateRunControls() {
+      const active = Boolean(state.activeRun);
+      ["runBtn", "utilityRunBtn"].forEach(id => {
+        const btn = $(id);
+        if (!btn) return;
+        btn.disabled = active;
+        btn.title = active ? "A run is already active; stop it or wait for it to finish." : "";
+      });
+      $("stopBtn").disabled = !active;
+    }
     async function runAction(action="run") {
+      if (state.activeRun) {
+        setStatus(`A run is already active (${state.activeRun}); stop it or wait for it to finish.`, "warn");
+        return;
+      }
       const data = await api("/api/run", { method: "POST", body: JSON.stringify(requestBody(action)) });
       state.activeRun = data.run_id;
+      updateRunControls();
       $("logPane").textContent = "";
       const events = new EventSource(`/api/runs/${data.run_id}/events`);
       events.onmessage = event => {
@@ -2549,6 +2597,11 @@ HTML = r"""<!doctype html>
       events.addEventListener("status", event => {
         const payload = JSON.parse(event.data);
         $("logPane").textContent += `\n[ui] ${payload.status}\n`;
+        if (payload.status === "completed" || payload.status === "failed") {
+          state.activeRun = null;
+          updateRunControls();
+          setStatus(`Run ${payload.run_id} ${payload.status}.`, payload.status === "completed" ? "muted" : "bad");
+        }
         events.close();
       });
     }
@@ -2936,6 +2989,15 @@ HTML = r"""<!doctype html>
     }
     async function init() {
       state.schema = await api("/api/schema");
+      try {
+        const runsData = await api("/api/runs");
+        const active = (runsData.runs || []).find(run => ["starting", "running", "stopping"].includes(run.status));
+        if (active) {
+          state.activeRun = active.run_id;
+          setStatus(`Run ${active.run_id} is active (${active.status}).`, "warn");
+        }
+      } catch (_err) { /* runs endpoint is best-effort at boot */ }
+      updateRunControls();
       renderTabs();
       renderRunSetup();
       renderAdvancedPanels();
