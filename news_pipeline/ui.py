@@ -1453,6 +1453,7 @@ HTML = r"""<!doctype html>
         maxTokensField: "article_summary_max_tokens",
         maxTokensLabel: "Article summary max tokens",
         taskMaxTokensEnv: "NEWS_ARTICLE_SUMMARY_MAX_TOKENS",
+        taskMaxTokensLabel: "Article summary max tokens",
         taskSamplingPrefix: "NEWS_MODEL_ARTICLE_SUMMARY",
         runtimeKey: "article_summary"
       },
@@ -1475,6 +1476,7 @@ HTML = r"""<!doctype html>
         maxTokensField: "story_drafting_max_tokens",
         maxTokensLabel: "Story drafting max tokens",
         taskMaxTokensEnv: "NEWS_STORY_DRAFTING_MAX_TOKENS",
+        taskMaxTokensLabel: "Story drafting max tokens",
         taskSamplingPrefix: "NEWS_MODEL_STORY_DRAFTING",
         runtimeKey: "story_drafting"
       },
@@ -1497,6 +1499,7 @@ HTML = r"""<!doctype html>
         maxTokensField: "story_scale_screening_max_tokens",
         maxTokensLabel: "Scale screening max tokens",
         taskMaxTokensEnv: "NEWS_STORY_SCALE_SCREENING_MAX_TOKENS",
+        taskMaxTokensLabel: "Scale screening max tokens",
         taskSamplingPrefix: "NEWS_MODEL_STORY_SCALE_SCREENING",
         runtimeKey: "story_scale_screening"
       },
@@ -1519,6 +1522,7 @@ HTML = r"""<!doctype html>
         maxTokensField: "title_generation_max_tokens",
         maxTokensLabel: "Title generation max tokens",
         taskMaxTokensEnv: "NEWS_TITLE_GENERATION_MAX_TOKENS",
+        taskMaxTokensLabel: "Title generation max tokens",
         taskSamplingPrefix: "NEWS_MODEL_TITLE_GENERATION",
         runtimeKey: "title_generation"
       }
@@ -1886,47 +1890,6 @@ HTML = r"""<!doctype html>
       const storyModel = knobField("NEWS_MODEL_STORY_DRAFTING", "Story model", { emptyLabel: "default: qwythos-9b-8bit" });
       const scaleModel = knobField("NEWS_MODEL_STORY_SCALE_SCREENING", "Scale screening model", { emptyLabel: "default: qwythos-9b-8bit" });
       const titleModel = knobField("NEWS_MODEL_TITLE_GENERATION", "Title generation model", { emptyLabel: "default: qwythos-9b-8bit" });
-      const sharedModelTokens = knobField("NEWS_MODEL_MAX_INPUT_TOKENS", "Shared model input cap");
-      const articleTokenCap = knobField("NEWS_ARTICLE_SUMMARY_MAX_TOKENS", "Article summary max tokens");
-      const storyTokenCap = knobField("NEWS_STORY_DRAFTING_MAX_TOKENS", "Story drafting max tokens");
-      const scaleTokenCap = knobField("NEWS_STORY_SCALE_SCREENING_MAX_TOKENS", "Scale screening max tokens");
-      const titleTokenCap = knobField("NEWS_TITLE_GENERATION_MAX_TOKENS", "Title generation max tokens");
-      const articleBaseUrl = knobField("NEWS_MODEL_ARTICLE_SUMMARY_BASE_URL", "Base URL");
-      const storyBaseUrl = knobField("NEWS_MODEL_STORY_DRAFTING_BASE_URL", "Base URL");
-      const scaleBaseUrl = knobField("NEWS_MODEL_STORY_SCALE_SCREENING_BASE_URL", "Base URL");
-      const titleBaseUrl = knobField("NEWS_MODEL_TITLE_GENERATION_BASE_URL", "Base URL");
-      const articleSampling = [
-        knobField("NEWS_MODEL_ARTICLE_SUMMARY_TEMPERATURE", "Temperature"),
-        knobField("NEWS_MODEL_ARTICLE_SUMMARY_TOP_P", "Top P"),
-        knobField("NEWS_MODEL_ARTICLE_SUMMARY_TOP_K", "Top K"),
-        knobField("NEWS_MODEL_ARTICLE_SUMMARY_MIN_P", "Min P"),
-        knobField("NEWS_MODEL_ARTICLE_SUMMARY_PRESENCE_PENALTY", "Presence penalty"),
-        knobField("NEWS_MODEL_ARTICLE_SUMMARY_REPETITION_PENALTY", "Repetition penalty")
-      ].join("");
-      const storySampling = [
-        knobField("NEWS_MODEL_STORY_DRAFTING_TEMPERATURE", "Temperature"),
-        knobField("NEWS_MODEL_STORY_DRAFTING_TOP_P", "Top P"),
-        knobField("NEWS_MODEL_STORY_DRAFTING_TOP_K", "Top K"),
-        knobField("NEWS_MODEL_STORY_DRAFTING_MIN_P", "Min P"),
-        knobField("NEWS_MODEL_STORY_DRAFTING_PRESENCE_PENALTY", "Presence penalty"),
-        knobField("NEWS_MODEL_STORY_DRAFTING_REPETITION_PENALTY", "Repetition penalty")
-      ].join("");
-      const scaleSampling = [
-        knobField("NEWS_MODEL_STORY_SCALE_SCREENING_TEMPERATURE", "Temperature"),
-        knobField("NEWS_MODEL_STORY_SCALE_SCREENING_TOP_P", "Top P"),
-        knobField("NEWS_MODEL_STORY_SCALE_SCREENING_TOP_K", "Top K"),
-        knobField("NEWS_MODEL_STORY_SCALE_SCREENING_MIN_P", "Min P"),
-        knobField("NEWS_MODEL_STORY_SCALE_SCREENING_PRESENCE_PENALTY", "Presence penalty"),
-        knobField("NEWS_MODEL_STORY_SCALE_SCREENING_REPETITION_PENALTY", "Repetition penalty")
-      ].join("");
-      const titleSampling = [
-        knobField("NEWS_MODEL_TITLE_GENERATION_TEMPERATURE", "Temperature"),
-        knobField("NEWS_MODEL_TITLE_GENERATION_TOP_P", "Top P"),
-        knobField("NEWS_MODEL_TITLE_GENERATION_TOP_K", "Top K"),
-        knobField("NEWS_MODEL_TITLE_GENERATION_MIN_P", "Min P"),
-        knobField("NEWS_MODEL_TITLE_GENERATION_PRESENCE_PENALTY", "Presence penalty"),
-        knobField("NEWS_MODEL_TITLE_GENERATION_REPETITION_PENALTY", "Repetition penalty")
-      ].join("");
       $("runSetupMount").innerHTML = `
         <div class="banner panel">
           <div class="banner-copy">
@@ -2148,7 +2111,7 @@ HTML = r"""<!doctype html>
             <label class="field"><span>Display name</span><input id="${meta.nameInputId}"><code>name</code></label>
             <label class="field"><span>Description</span><textarea id="${meta.descriptionInputId}"></textarea><code>description</code></label>
             ${sharedCap}
-            ${knobField(meta.taskMaxTokensEnv, meta.maxTokensLabel)}
+            ${knobField(meta.taskMaxTokensEnv, meta.taskMaxTokensLabel)}
             ${knobField(meta.baseUrlEnv, "Base URL")}
             ${samplingFields(meta.taskSamplingPrefix)}
           </div>
@@ -2273,15 +2236,8 @@ HTML = r"""<!doctype html>
       const sharedMax = valueByEnv("NEWS_MODEL_MAX_INPUT_TOKENS");
       if (sharedMax) tuning.model_max_input_tokens = sharedMax;
       const taskMax = valueByEnv(meta.taskMaxTokensEnv);
-      if (taskMax) tuning[meta.maxTokensField] = taskMax;
-      const samplingFields = [
-        ["temperature", `${meta.taskSamplingPrefix}_TEMPERATURE`],
-        ["top_p", `${meta.taskSamplingPrefix}_TOP_P`],
-        ["top_k", `${meta.taskSamplingPrefix}_TOP_K`],
-        ["min_p", `${meta.taskSamplingPrefix}_MIN_P`],
-        ["presence_penalty", `${meta.taskSamplingPrefix}_PRESENCE_PENALTY`],
-        ["repetition_penalty", `${meta.taskSamplingPrefix}_REPETITION_PENALTY`]
-      ];
+      if (taskMax) tuning[`${meta.runtimeKey}_max_tokens`] = taskMax;
+      const samplingFields = SAMPLING_FIELDS.map(([suffix]) => [suffix.toLowerCase(), `${meta.taskSamplingPrefix}_${suffix}`]);
       samplingFields.forEach(([key, env]) => {
         const raw = valueByEnv(env);
         if (raw) tuning[key] = raw;
@@ -2312,8 +2268,10 @@ HTML = r"""<!doctype html>
       if (preset) {
         const tuning = preset.tuning || {};
         if (tuning.model_max_input_tokens) setControlValue("NEWS_MODEL_MAX_INPUT_TOKENS", tuning.model_max_input_tokens);
-        if (tuning[meta.maxTokensField]) setControlValue(meta.taskMaxTokensEnv, tuning[meta.maxTokensField]);
-        [["temperature","TEMPERATURE"],["top_p","TOP_P"],["top_k","TOP_K"],["min_p","MIN_P"],["presence_penalty","PRESENCE_PENALTY"],["repetition_penalty","REPETITION_PENALTY"]].forEach(([field, suffix]) => {
+        const taskMaxTokens = tuning[`${meta.runtimeKey}_max_tokens`];
+        if (taskMaxTokens) setControlValue(meta.taskMaxTokensEnv, taskMaxTokens);
+        SAMPLING_FIELDS.forEach(([suffix]) => {
+          const field = suffix.toLowerCase();
           if (tuning[field] !== undefined && tuning[field] !== null && tuning[field] !== "") {
             setControlValue(`${meta.taskSamplingPrefix}_${suffix}`, tuning[field]);
           }
@@ -2405,7 +2363,7 @@ HTML = r"""<!doctype html>
       renderTaskTuningControls();
       renderPromptProfilePanel();
       refreshModelKnobLinks();
-      preview("run").catch(() => {});
+      previewQuietly("run");
     }
     function setKnobEnv(env) {
       document.querySelectorAll("[data-env]").forEach(el => {
@@ -2532,6 +2490,16 @@ HTML = r"""<!doctype html>
       const data = await api("/api/preview", { method: "POST", body: JSON.stringify(requestBody(action)) });
       $("previewPane").textContent = data.command_text + (data.runtime_error ? `\n\nPreview error: ${data.runtime_error}` : "");
       return data;
+    }
+    async function previewQuietly(action="run") {
+      // Auto-refresh path: surface failures inline in the preview pane instead
+      // of discarding them, so a rejected config never silently freezes the
+      // preview on stale content while the user is editing.
+      try {
+        await preview(action);
+      } catch (err) {
+        $("previewPane").textContent = `Preview unavailable: ${err.message}`;
+      }
     }
     async function runAction(action="run") {
       const data = await api("/api/run", { method: "POST", body: JSON.stringify(requestBody(action)) });
@@ -2866,7 +2834,7 @@ HTML = r"""<!doctype html>
         renderTaskTuningControls();
         renderPromptProfilePanel();
         refreshModelKnobLinks();
-        preview("run").catch(() => {});
+        previewQuietly("run");
       };
       $("resetDefaultsBtn").onclick = () => {
         document.querySelectorAll("[data-env]").forEach(el => {
@@ -2878,18 +2846,18 @@ HTML = r"""<!doctype html>
         renderTaskTuningControls();
         renderPromptProfilePanel();
         refreshModelKnobLinks();
-        preview("run").catch(() => {});
+        previewQuietly("run");
       };
       $("promptProfileSelect").onchange = () => {
         renderPromptProfilePanel();
-        preview("run").catch(() => {});
+        previewQuietly("run");
       };
       $("restorePromptProfileBtn").onclick = () => {
         const el = document.querySelector('[data-env="NEWS_PROMPT_PROFILE"]');
         if (el) el.value = "";
         document.querySelectorAll("[data-env^='NEWS_PROMPT_OVERRIDE_']").forEach(editor => { editor.value = ""; });
         renderPromptProfilePanel();
-        preview("run").catch(() => {});
+        previewQuietly("run");
       };
       $("comparePromptProfileBtn").onclick = () => comparePromptProfiles().catch(err => setStatus(err.message, "bad"));
       $("sourceSearch").oninput = renderSources;
@@ -2906,13 +2874,13 @@ HTML = r"""<!doctype html>
         const modelSelect = $(meta.modelSelectId);
         if (modelSelect) modelSelect.onchange = () => {
           renderModelTuningControls(meta.runtimeKey);
-          preview("run").catch(() => {});
+          previewQuietly("run");
         };
         const tuningSelect = $(meta.presetSelectId);
         if (tuningSelect) tuningSelect.onchange = () => {
           const preset = state.modelTuningPresets.find(item => item.id === tuningSelect.value) || null;
           if (preset) loadModelTuningEditor(meta.runtimeKey, preset);
-          preview("run").catch(() => {});
+          previewQuietly("run");
         };
         $(meta.saveButtonId).onclick = () => saveModelTuningPreset(meta.runtimeKey).catch(err => setStatus(err.message, "bad"));
         $(meta.renameButtonId).onclick = () => renameModelTuningPreset(meta.runtimeKey).catch(err => setStatus(err.message, "bad"));
@@ -2960,7 +2928,7 @@ HTML = r"""<!doctype html>
       }
       $("sourceOptions").classList.add("hidden");
       $("actionSelect").onchange();
-      await preview("run").catch(() => {});
+      await previewQuietly("run");
     }
     init().catch(err => setStatus(err.message, "bad"));
   </script>

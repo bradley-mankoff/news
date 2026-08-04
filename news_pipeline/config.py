@@ -641,6 +641,94 @@ def _validate_model_tuning_preset_scope(
         )
 
 
+def is_managed_model_backend(backend: str) -> bool:
+    """A managed backend serves exactly one model at the default base URL."""
+    return backend != MODEL_BACKEND_EXTERNAL
+
+
+def same_model_endpoint(left: str, right: str) -> bool:
+    """True when two base URLs denote the same model endpoint.
+
+    Comparison tolerates the spelling variants users actually produce:
+    trailing slashes on the path, scheme/host case differences, default
+    ports, and userinfo in the authority. A genuinely different path still
+    compares unequal, and an empty URL never matches a real one.
+    """
+
+    def _canonical(url: str) -> tuple[Any, ...]:
+        parsed = urlparse(url or "")
+        scheme = (parsed.scheme or "").lower()
+        host = (parsed.hostname or "").lower()
+        try:
+            port = parsed.port
+        except ValueError:  # malformed port; treat as distinct
+            port = None
+        if port is None:
+            port = 443 if scheme == "https" else 80 if scheme == "http" else None
+        return (scheme, host, port, parsed.path.rstrip("/"))
+
+    return bool(left) == bool(right) and _canonical(left) == _canonical(right)
+
+
+def managed_model_conflict_message(
+    *,
+    task: str,
+    reference: str,
+    name: str,
+    model_reference: str,
+    model_name: str,
+    model_base_url: str,
+) -> str:
+    """The actionable rejection message for a managed-server model conflict.
+
+    Shared by config resolution (ValueError) and the build_chat_model runtime
+    backstop (RuntimeError) so both funnels report the exact same wording.
+    """
+    return (
+        "Managed model server cannot serve multiple different models from the same base URL. "
+        f"Task {task!r} wants {reference!r} ({name!r}) "
+        f"but the managed main model is {model_reference!r} ({model_name!r}) at {model_base_url}. "
+        "Set a per-task base URL or run that task against an external server."
+    )
+
+
+def _validate_managed_model_assignments(
+    model_assignments: dict[str, TaskModelAssignment],
+    *,
+    model_reference: str,
+    model_name: str,
+    model_base_url: str,
+    model_backend: str,
+) -> None:
+    """Reject task models that cannot share the managed server's base URL.
+
+    A managed local server (any non-external default backend) serves exactly
+    one model at the default base URL. A task assignment that resolves to the
+    same base URL with a different model name cannot be served by that server;
+    it previously failed only mid-run in build_chat_model, after source
+    collection. External endpoints can serve multiple models, so the managed
+    path is the only one validated here.
+    """
+    if not is_managed_model_backend(model_backend):
+        return
+    for task, assignment in model_assignments.items():
+        # The default assignment defines the compared values (model_name,
+        # model_base_url), so it always matches; skip it.
+        if task == "default":
+            continue
+        if same_model_endpoint(assignment.base_url, model_base_url) and assignment.name != model_name:
+            raise ValueError(
+                managed_model_conflict_message(
+                    task=task,
+                    reference=assignment.reference,
+                    name=assignment.name,
+                    model_reference=model_reference,
+                    model_name=model_name,
+                    model_base_url=model_base_url,
+                )
+            )
+
+
 def _apply_model_tuning_preset(
     tuning: ModelTuningSettings,
     *,
@@ -1931,6 +2019,13 @@ def _build_runtime_config(
     model_reference = default_model_assignment.reference
     model_name = default_model_assignment.name
     model_backend = default_model_assignment.backend
+    _validate_managed_model_assignments(
+        model_assignments,
+        model_reference=model_reference,
+        model_name=model_name,
+        model_base_url=model_base_url,
+        model_backend=model_backend,
+    )
     return RuntimeConfig(
         root_dir=ROOT_DIR,
         sources_path=sources_path,

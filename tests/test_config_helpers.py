@@ -193,6 +193,60 @@ class ConfigHelperTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Unknown model tuning preset"):
             config_module._configured_model_tuning("model", preset_id="missing", presets={})
 
+    def test_validate_managed_model_assignments_covers_branches(self) -> None:
+        # The default assignment defines the compared values (model_name,
+        # model_base_url), so it always matches and is skipped.
+        config_module._validate_managed_model_assignments(
+            {
+                "default": SimpleNamespace(base_url="http://127.0.0.1:8080/v1", reference="main", name="main"),
+                "article_summary": SimpleNamespace(base_url="http://127.0.0.1:8080/v1", reference="main", name="main"),
+            },
+            model_reference="main",
+            model_name="main",
+            model_base_url="http://127.0.0.1:8080/v1",
+            model_backend="mlx-lm",
+        )  # no raise: default skip + same-name task
+        # External backends serve multiple models: early return, no raise.
+        config_module._validate_managed_model_assignments(
+            {"article_summary": SimpleNamespace(base_url="http://127.0.0.1:8080/v1", reference="other", name="other")},
+            model_reference="main",
+            model_name="main",
+            model_base_url="http://127.0.0.1:8080/v1",
+            model_backend="external",
+        )
+        # Multiple violating tasks: first-error-wins by dict order.
+        with self.assertRaisesRegex(ValueError, "Task 'article_summary'"):
+            config_module._validate_managed_model_assignments(
+                {
+                    "article_summary": SimpleNamespace(base_url="http://127.0.0.1:8080/v1", reference="other", name="other"),
+                    "story_drafting": SimpleNamespace(base_url="http://127.0.0.1:8080/v1", reference="third", name="third"),
+                },
+                model_reference="main",
+                model_name="main",
+                model_base_url="http://127.0.0.1:8080/v1",
+                model_backend="mlx-lm",
+            )
+        # A trailing-slash spelling of the same endpoint still trips the guard.
+        with self.assertRaisesRegex(ValueError, "multiple different models"):
+            config_module._validate_managed_model_assignments(
+                {"article_summary": SimpleNamespace(base_url="http://127.0.0.1:8080/v1/", reference="other", name="other")},
+                model_reference="main",
+                model_name="main",
+                model_base_url="http://127.0.0.1:8080/v1",
+                model_backend="mlx-lm",
+            )
+
+    def test_same_model_endpoint_tolerates_spelling_variants(self) -> None:
+        canonical = "http://127.0.0.1:8080/v1"
+        self.assertTrue(config_module.same_model_endpoint(canonical, canonical + "/"))
+        self.assertTrue(config_module.same_model_endpoint(canonical, "HTTP://127.0.0.1:8080/v1"))
+        self.assertTrue(config_module.same_model_endpoint(canonical, "http://127.0.0.1:8080/v1"))
+        self.assertTrue(config_module.same_model_endpoint("http://127.0.0.1:80/v1", "http://127.0.0.1/v1"))
+        self.assertFalse(config_module.same_model_endpoint(canonical, "http://127.0.0.1:8080/v2"))
+        self.assertFalse(config_module.same_model_endpoint(canonical, "http://127.0.0.1:8081/v1"))
+        self.assertFalse(config_module.same_model_endpoint(canonical, ""))
+        self.assertTrue(config_module.same_model_endpoint("", ""))
+
     def test_runtime_model_and_env_helpers_cover_edge_branches(self) -> None:
         self.assertEqual(config_module.normalize_preset_id("  dev  "), "dev")
         self.assertTrue(config_module._bool_env("FLAG", False, {"FLAG": "yes"}))
