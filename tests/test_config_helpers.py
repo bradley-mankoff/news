@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import tempfile
 import textwrap
+import tomllib
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -526,6 +527,30 @@ class ConfigHelperTests(unittest.TestCase):
             url = config_module.hf_model_page_url(alias)
             self.assertIsNotNone(url, alias)
             self.assertIn(url, docs_text, f"{alias} page URL missing from README/SETTINGS")
+
+    def test_mlx_vlm_floor_is_gemma_4_capable(self) -> None:
+        """The managed mlx-vlm backend must be able to load the default
+        gemma4_unified model type (issue #124): floor >= 0.6.4 in both
+        pyproject.toml and uv.lock."""
+        repo_root = Path(__file__).resolve().parents[1]
+        pyproject = tomllib.loads((repo_root / "pyproject.toml").read_text(encoding="utf-8"))
+        mlx_vlm_dep = next(
+            (d for d in pyproject["project"]["dependencies"] if d.startswith("mlx-vlm")),
+            None,
+        )
+        self.assertIsNotNone(
+            mlx_vlm_dep, "mlx-vlm missing from pyproject.toml dependencies"
+        )
+        # Exact specifier token: >=0.6.4 must appear as its own clause (a
+        # floor like >=0.6.40 would otherwise match a substring check).
+        self.assertIn(
+            "mlx-vlm>=0.6.4", mlx_vlm_dep.split(";")[0].split(","), mlx_vlm_dep
+        )
+        lock = tomllib.loads((repo_root / "uv.lock").read_text(encoding="utf-8"))
+        mlx_vlm = next((p for p in lock["package"] if p["name"] == "mlx-vlm"), None)
+        self.assertIsNotNone(mlx_vlm, "mlx-vlm missing from uv.lock packages")
+        major, minor, patch = (int(x) for x in mlx_vlm["version"].split(".")[:3])
+        self.assertGreaterEqual((major, minor, patch), (0, 6, 4), mlx_vlm["version"])
 
     def test_default_model_knob_points_at_gemma_and_hides_qwythos(self) -> None:
         registry = config_module.runtime_knob_registry()

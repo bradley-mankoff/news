@@ -36,7 +36,12 @@ The initially supported runtime matrix is exactly:
 1. **`mlx-lm`** — managed local MLX language-model server on Apple Silicon
    (`darwin` + `arm64`, matching the pyproject markers).
 2. **`mlx-vlm`** — managed local MLX vision-language-model server on Apple
-   Silicon (same platform constraint).
+   Silicon (same platform constraint). Requires `mlx-vlm>=0.6.4,<0.7.0` to
+   launch Gemma 4 models (`gemma4_unified` model type, issue #124); the upper
+   bound is a deliberate 0.x-semver guard — mlx-vlm is pre-1.0, so minor
+   releases may break the managed-server contract, and the 0.6.10 cascade
+   (`mlx>=0.32.0`, `transformers>=5.14.0`) does not resolve against the
+   current lock. Revisit the bound when a newer release is triaged.
 3. **`external`** — any OpenAI-compatible endpoint, declared for the default
    model with `NEWS_MODEL_BACKEND=external` plus `NEWS_MODEL_BASE_URL`, or for
    a task model via that task's `_BASE_URL` env var (distinct base URL).
