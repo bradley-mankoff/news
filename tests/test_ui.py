@@ -128,6 +128,19 @@ class UITests(unittest.TestCase):
             )
         # NEWS_ARTICLE_TEXT_TOKEN_LIMIT (the 13th dedicated env) must also be surfaced.
         self.assertIn('"NEWS_ARTICLE_TEXT_TOKEN_LIMIT"', surface)
+        # NEWS_MODEL has a dedicated "Default model" knob in Run Setup, so it
+        # must be suppressed from the Advanced raw list (no duplicate inputs).
+        self.assertIn('"NEWS_MODEL"', surface)
+        # The four per-task model envs moved OUT of Run Setup into Advanced,
+        # so they must NOT be suppressed: each appears exactly once, in the
+        # Advanced raw override list.
+        for env in (
+            "NEWS_MODEL_ARTICLE_SUMMARY",
+            "NEWS_MODEL_STORY_DRAFTING",
+            "NEWS_MODEL_STORY_SCALE_SCREENING",
+            "NEWS_MODEL_TITLE_GENERATION",
+        ):
+            self.assertNotIn(f'"{env}"', surface, f"{env} must stay in the Advanced raw list")
 
     def test_advanced_panels_rendered_at_boot(self) -> None:
         html = ui_module.HTML
@@ -139,6 +152,24 @@ class UITests(unittest.TestCase):
         self.assertLess(
             boot.index("renderAdvancedPanels();"), boot.index("renderAdvancedKnobs();")
         )
+
+    def test_run_setup_single_default_model_card(self) -> None:
+        html = ui_module.HTML
+        run_setup = html.split("function renderRunSetup")[1].split("const SAMPLING_FIELDS")[0]
+        # Exactly one "Default model" knob; the four per-task model cards are gone.
+        self.assertEqual(run_setup.count('knobField("NEWS_MODEL", "Default model"'), 1)
+        for env in (
+            "NEWS_MODEL_ARTICLE_SUMMARY",
+            "NEWS_MODEL_STORY_DRAFTING",
+            "NEWS_MODEL_STORY_SCALE_SCREENING",
+            "NEWS_MODEL_TITLE_GENERATION",
+        ):
+            self.assertNotIn(f'knobField("{env}"', run_setup)
+        # The readout binds to the top-level runtime.model {name, reference}.
+        self.assertIn("defaultRuntime.name || defaultRuntime.reference", run_setup)
+        # A failed runtime snapshot renders a visible banner, not a silent "-".
+        self.assertIn("const runtimeError = schema.runtime_error || \"\";", run_setup)
+        self.assertIn("Configuration error: ${escapeHtml(runtimeError)}", run_setup)
         advanced = html.split("function renderAdvancedPanels")[1].split(
             "function renderAdvancedKnobs"
         )[0]

@@ -319,6 +319,16 @@ class ConfigHelperTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(ValueError, "Unsupported model reference"):
             config_module.resolve_model_name("qwythos-9b-8bit")
+        # Raw GGUF references and their URL forms fail fast too (all forms the
+        # old docs published as "Resolved model").
+        for unsupported in (
+            config_module.QWWYTHOS_9B_8BIT_MODEL_REFERENCE,
+            config_module.QWWYTHOS_9B_4BIT_MODEL_REFERENCE,
+            f"https://huggingface.co/{config_module.QWWYTHOS_9B_4BIT_MODEL_REFERENCE}",
+            f"https://hf.co/{config_module.QWWYTHOS_9B_4BIT_MODEL_REFERENCE}",
+        ):
+            with self.assertRaisesRegex(ValueError, "Unsupported model reference"):
+                config_module.resolve_model_name(unsupported)
         with patch.object(config_module, "UNSUPPORTED_MODEL_REFERENCES", {"blocked"}):
             with self.assertRaisesRegex(ValueError, "Unsupported model reference"):
                 config_module.resolve_model_name("blocked")
@@ -730,8 +740,12 @@ class ConfigHelperTests(unittest.TestCase):
             config_module._default_story_synthesis_concurrency("some-other-model"),
             config_module.DEFAULT_STORY_SYNTHESIS_CONCURRENCY,
         )
-        self.assertEqual(config_module.infer_model_backend(config_module.QWWYTHOS_9B_4BIT_MODEL_REFERENCE), "mlx-vlm")
         self.assertEqual(config_module.infer_model_backend("other-model"), "mlx-lm")
+        # Legacy raw Qwythos references fail fast like the aliases (issue #124);
+        # the retained "qwythos" routing branch only serves non-listed raw ids.
+        with self.assertRaisesRegex(ValueError, "Unsupported model reference"):
+            config_module.infer_model_backend(config_module.QWWYTHOS_9B_4BIT_MODEL_REFERENCE)
+        self.assertEqual(config_module.infer_model_backend("someone/qwythos-other-raw-id"), "mlx-vlm")
 
         with patch.dict(os.environ, {config_module.PRESET_ENV_VAR: "sample"}, clear=True):
             self.assertEqual(config_module._configured_preset_id(), "sample")

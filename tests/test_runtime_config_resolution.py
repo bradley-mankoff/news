@@ -23,6 +23,7 @@ from news_pipeline.config import (
     MODEL_TASK_STORY_DRAFTING,
     MODEL_TASK_STORY_SCALE_SCREENING,
     MODEL_TASK_TITLE_GENERATION,
+    QWWYTHOS_9B_4BIT_MODEL_REFERENCE,
     ModelSamplingSettings,
     ModelServerSettings,
     PRESET_ENV_VAR,
@@ -98,12 +99,33 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
         )
 
     def test_qwythos_aliases_fail_fast_with_actionable_error(self) -> None:
-        with self.assertRaisesRegex(ValueError, "Unsupported model reference"):
+        # The error message must name the replacement so stale configs are
+        # self-serviceable (issue acceptance criterion).
+        with self.assertRaisesRegex(
+            ValueError,
+            r"Unsupported model reference: qwythos-9b-8bit.*gemma-4-12b-it-4bit",
+        ):
             load_runtime_config(
                 environ={},
                 overrides={"NEWS_MODEL": "qwythos-9b-8bit"},
                 materialize_outputs=False,
             )
+
+    def test_raw_qwythos_gguf_references_fail_fast_too(self) -> None:
+        # Raw owner/repo/file.gguf references and their URL forms (the values
+        # the old SETTINGS.md published as "Resolved model") fail fast like
+        # the aliases instead of half-starting an mlx-vlm server (issue #124).
+        for stale in (
+            QWWYTHOS_9B_4BIT_MODEL_REFERENCE,
+            f"https://huggingface.co/{QWWYTHOS_9B_4BIT_MODEL_REFERENCE}",
+            f"https://hf.co/{QWWYTHOS_9B_4BIT_MODEL_REFERENCE}",
+        ):
+            with self.assertRaisesRegex(ValueError, "Unsupported model reference"):
+                load_runtime_config(
+                    environ={},
+                    overrides={"NEWS_MODEL": stale},
+                    materialize_outputs=False,
+                )
 
     def test_news_model_backend_external_override_for_default_model(self) -> None:
         resolution = resolve_runtime_config(

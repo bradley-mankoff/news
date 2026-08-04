@@ -247,11 +247,7 @@ def runtime_fit_for_hf_model(info: Mapping[str, Any]) -> dict[str, str]:
     pipeline_tag = str(info.get("pipeline_tag") or "").lower()
 
     for model in CATALOG_MODELS.values():
-        if (
-            repo_id == model.hf_repo
-            or repo_id == model.reference
-            or str(model.reference or "").startswith(f"{repo_id}/")
-        ):
+        if repo_id == model.hf_repo or repo_id == model.reference:
             if model.backend == "mlx-vlm":
                 return {
                     "status": RUNTIME_FIT_MANAGED_MLX_VLM,

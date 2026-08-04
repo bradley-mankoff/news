@@ -1369,6 +1369,7 @@ HTML = r"""<!doctype html>
     // be listed here so renderAdvancedKnobs() omits it from the raw override
     // list; otherwise the env appears twice and collectEnv() gets two inputs.
     const SURFACED_ENVS = new Set([
+      "NEWS_MODEL",  // dedicated "Default model" knob in Run Setup; suppress the Advanced-tab duplicate
       "NEWS_SOURCE_SCOPE",
       "NEWS_RECIPIENT_SCOPE",
       "NEWS_PROMPT_PROFILE",  // has a dedicated panel control; suppress the Advanced-tab duplicate
@@ -1744,6 +1745,8 @@ HTML = r"""<!doctype html>
       renderKnobLinks("NEWS_MODEL");
       renderKnobLinks("NEWS_MODEL_ARTICLE_SUMMARY");
       renderKnobLinks("NEWS_MODEL_STORY_DRAFTING");
+      renderKnobLinks("NEWS_MODEL_STORY_SCALE_SCREENING");
+      renderKnobLinks("NEWS_MODEL_TITLE_GENERATION");
     }
     function renderTabs() {
       $("tabs").innerHTML = `<button id="navToggle" class="nav-toggle" title="Collapse navigation" aria-label="Collapse navigation"><span class="collapse-icon">${icons.chevronLeft}</span><span class="expand-icon">${icons.chevronRight}</span></button>` +
@@ -1856,6 +1859,7 @@ HTML = r"""<!doctype html>
       const schema = state.schema || {};
       const runtime = schema.runtime || {};
       const defaultRuntime = runtime.model ? runtime.model : {};
+      const runtimeError = schema.runtime_error || "";
       const actionOptions = (schema.actions || []).map(action => `<option value="${escapeHtml(action)}"${action === "run" ? " selected" : ""}>${escapeHtml(action)}</option>`).join("");
       const promptProfileOptions = (schema.prompt_profiles || []).map(p => `<option value="${escapeHtml(p.id)}"${currentControlValue("NEWS_PROMPT_PROFILE") === p.id ? " selected" : ""}>${escapeHtml(p.name)}</option>`).join("");
       const sourceToolHidden = !["check-sources", "prune-sources", "source-languages"].includes(value("actionSelect"));
@@ -1925,6 +1929,7 @@ HTML = r"""<!doctype html>
           </div>
         </div>
         <div class="stack">
+          ${runtimeError ? `<p class="bad" style="margin:0 0 8px">Configuration error: ${escapeHtml(runtimeError)}</p>` : ""}
           <section class="panel">
             <p class="eyebrow">Routing</p>
             <h2>Recipients and sources</h2>
@@ -2061,8 +2066,6 @@ HTML = r"""<!doctype html>
       renderModelTuningControls("story_scale_screening");
       renderModelTuningControls("title_generation");
       decorateEnvHints($("runSetupMount"));
-      renderKnobLinks("NEWS_MODEL_ARTICLE_SUMMARY");
-      renderKnobLinks("NEWS_MODEL_STORY_DRAFTING");
       renderPromptProfilePanel();
       renderModelCatalogPanel();
       $("actionSelect").value = "run";
@@ -2935,7 +2938,7 @@ HTML = r"""<!doctype html>
       }
       $("sourceOptions").classList.add("hidden");
       $("actionSelect").onchange();
-      await preview("run").catch(() => {});
+      await preview("run").catch(err => setStatus(err.message, "bad"));
     }
     init().catch(err => setStatus(err.message, "bad"));
   </script>

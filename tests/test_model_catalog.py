@@ -85,7 +85,7 @@ class ModelCatalogTests(unittest.TestCase):
         self.assertNotIn(".gguf", default.reference)
         self.assertNotIn("qwythos", model_catalog.CATALOG_MODELS)
         for entry in model_catalog.CATALOG_MODELS.values():
-            self.assertNotIn("/", entry.reference.removeprefix(entry.hf_repo).lstrip("/"))
+            self.assertEqual(entry.reference, entry.hf_repo)
             # i.e. reference == hf_repo exactly (no file suffix)
 
     def test_recommendations_cover_all_tasks(self) -> None:

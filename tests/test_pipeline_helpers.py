@@ -768,6 +768,22 @@ class PipelineHelperTests(unittest.TestCase):
             self.assertEqual(session.model_call_stats["calls"]["demo"], 2)
             self.assertEqual(session.run_log_files, [run_log])
 
+    def test_new_run_diagnostics_reports_source_languages(self) -> None:
+        with patch.object(
+            pipeline,
+            "SOURCE_FEEDS",
+            {
+                "Alpha": {"name": "Alpha", "language": "en"},
+                "Beta": {"name": "Beta", "language": "de"},
+                "Gamma": {"name": "Gamma"},  # no language key -> "en"
+            },
+        ):
+            diagnostics = pipeline._new_run_diagnostics(3)
+        self.assertEqual(
+            diagnostics.settings["source_languages"],
+            {"de": 1, "en": 2},  # sorted keys, missing language defaults to "en"
+        )
+
     def test_rendering_and_finalizer_helpers(self) -> None:
         record = ArticleSummaryRecord(
             title="Headline",

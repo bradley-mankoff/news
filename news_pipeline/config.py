@@ -82,14 +82,14 @@ MODEL_BACKEND_MLX_LM = "mlx-lm"
 MODEL_BACKEND_MLX_VLM = "mlx-vlm"
 MODEL_BACKEND_EXTERNAL = "external"
 SUPPORTED_MODEL_BACKENDS = (MODEL_BACKEND_MLX_LM, MODEL_BACKEND_MLX_VLM, MODEL_BACKEND_EXTERNAL)
-# Retained public alias for the Qwythos default backend; prefer MODEL_BACKEND_MLX_VLM.
+# Legacy identifier retained for API compatibility; Qwythos is no longer the
+# default. Always use MODEL_BACKEND_MLX_VLM directly.
 QWWYTHOS_MODEL_BACKEND = MODEL_BACKEND_MLX_VLM
 # Standard Gemma 4 12B instruction model, MLX 4-bit distribution. The default
 # must be a repo id (never owner/repo/file.gguf): mlx-vlm rejects file-qualified
 # references with HFValidationError (issue #124).
 GEMMA_4_12B_IT_4BIT_MODEL_ALIAS = "gemma-4-12b-it-4bit"
 GEMMA_4_12B_IT_4BIT_MODEL_REPO = "mlx-community/gemma-4-12B-it-4bit"
-GEMMA_4_12B_IT_4BIT_MODEL_NAME = "Gemma 4 12B Instruct (4-bit)"
 DEFAULT_MODEL_ALIAS = GEMMA_4_12B_IT_4BIT_MODEL_ALIAS
 CODEX_TEST_MODEL_ALIAS = "gemma-e2b-tiny"
 CODEX_TEST_MODEL_NAME = "deadbydawn101/gemma-4-E2B-Heretic-Uncensored-mlx-4bit"
@@ -129,13 +129,22 @@ MODEL_ALIASES = {
     f"https://huggingface.co/{CODEX_TEST_MODEL_NAME}": CODEX_TEST_MODEL_NAME,
     f"https://hf.co/{CODEX_TEST_MODEL_NAME}": CODEX_TEST_MODEL_NAME,
 }
-# Qwythos GGUF aliases are NOT launchable by the managed mlx-vlm backend
+# Qwythos GGUF references are NOT launchable by the managed mlx-vlm backend
 # (file-qualified GGUF refs raise HFValidationError) and are not validated for
 # any backend; stale configs fail fast with an actionable error instead of a
-# half-started server. Opt-in work tracked separately.
+# half-started server. The set covers every form the old docs published
+# (friendly aliases, raw owner/repo/file.gguf references, and their
+# https://huggingface.co/... / https://hf.co/... URL forms) so legacy configs
+# fail before launch. Opt-in work tracked separately.
 UNSUPPORTED_MODEL_REFERENCES: set[str] = {
     QWWYTHOS_9B_8BIT_MODEL_ALIAS,
     QWWYTHOS_9B_4BIT_MODEL_ALIAS,
+    QWWYTHOS_9B_8BIT_MODEL_REFERENCE,
+    QWWYTHOS_9B_4BIT_MODEL_REFERENCE,
+    f"https://huggingface.co/{QWWYTHOS_9B_8BIT_MODEL_REFERENCE}",
+    f"https://hf.co/{QWWYTHOS_9B_8BIT_MODEL_REFERENCE}",
+    f"https://huggingface.co/{QWWYTHOS_9B_4BIT_MODEL_REFERENCE}",
+    f"https://hf.co/{QWWYTHOS_9B_4BIT_MODEL_REFERENCE}",
 }
 CODEX_RUNTIME_ENV_VARS = ("CODEX_SANDBOX", "CODEX_CI", "CODEX_THREAD_ID")
 REMOVED_TOPIC_ENV_VARS = (
@@ -1010,12 +1019,23 @@ def _bounded_env_float(
 
 
 def resolve_model_name(model_reference: str) -> str:
-    """Resolve a friendly model alias to the Hugging Face repo loaded by mlx."""
+    """Resolve a friendly model alias to the Hugging Face repo loaded by mlx.
+
+    Raises ValueError for references in UNSUPPORTED_MODEL_REFERENCES (the
+    legacy qwythos-9b-* aliases, raw GGUF references, and their URL forms) so
+    stale configs fail before launch.
+    """
     clean_reference = (model_reference or "").strip()
     if not clean_reference:
         clean_reference = DEFAULT_MODEL_ALIAS
     if clean_reference in UNSUPPORTED_MODEL_REFERENCES:
-        raise ValueError(f"Unsupported model reference: {clean_reference}")
+        raise ValueError(
+            f"Unsupported model reference: {clean_reference}. This reference "
+            f"was removed; the default is now {DEFAULT_MODEL_ALIAS} "
+            f"({GEMMA_4_12B_IT_4BIT_MODEL_REPO}). Set NEWS_MODEL to the new "
+            "alias, or use NEWS_MODEL_BACKEND=external with an "
+            "OpenAI-compatible endpoint (NEWS_MODEL_BASE_URL) for legacy models."
+        )
     return MODEL_ALIASES.get(clean_reference, clean_reference)
 
 
@@ -1050,7 +1070,8 @@ def hf_model_page_url(model_choice: str) -> str | None:
         if resolved not in MODEL_ALIASES.values():
             return None
     repo = resolved
-    # GGUF references are repo + "/" + file; the page lives at the repo.
+    # No GGUF aliases exist today (issue #124); this branch is a defensive
+    # guard in case a file-qualified reference is ever re-added.
     if repo.endswith(".gguf") and "/" in repo:
         repo = repo.rsplit("/", 1)[0]
     if "/" not in repo:  # external/unknown ids have no HF repo page
@@ -1120,6 +1141,13 @@ def _configured_model_reference() -> str:
 
 
 def infer_model_backend(model_reference: str) -> str:
+    """Infer the managed backend for a model reference.
+
+    The retained "qwythos" branch only matches raw references that are not in
+    UNSUPPORTED_MODEL_REFERENCES (aliases, GGUF refs, and URL forms all fail
+    fast in resolve_model_name); it exists for legacy/external configs
+    (issue #124 Deviation 3).
+    """
     resolved_name = resolve_model_name(model_reference).lower()
     if "qwythos" in resolved_name or "gemma-4" in resolved_name or "gemma4" in resolved_name:
         return MODEL_BACKEND_MLX_VLM
@@ -1161,6 +1189,8 @@ def _default_story_synthesis_concurrency(model_reference: str) -> int:
     if is_codex_test_model_reference(model_reference):
         return 2
     resolved_name = resolve_model_name(model_reference).lower()
+    # Retained legacy branch (issue #124 Deviation 3): raw Qwythos references
+    # not covered by UNSUPPORTED_MODEL_REFERENCES still route to mlx-vlm.
     if "qwythos" in resolved_name or is_gemma_4_model_reference(model_reference):
         return 1
     return DEFAULT_STORY_SYNTHESIS_CONCURRENCY

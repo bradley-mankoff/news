@@ -193,9 +193,9 @@ Model Tuning Presets, run source utilities, and edit `config/sources.yaml` or
 directly.
 
 The main Run Setup view is prompt-first: routing, editorial prompt profile, and
-task model selection. Model tuning, pipeline budgets, clustering thresholds,
-server settings, full prompt templates, and raw environment overrides live
-under Advanced Settings.
+default model selection. Per-task model selectors, model tuning, pipeline
+budgets, clustering thresholds, server settings, full prompt templates, and raw
+environment overrides live under Advanced Settings.
 
 ## CLI
 
@@ -288,7 +288,6 @@ Run Preset's `env` map.
 
 ```bash
 NEWS_MODEL=gemma-e2b-tiny uv run news run
-NEWS_MODEL=gemma-4-12b-it-4bit uv run news run --preset NAME
 NEWS_MODEL=gemma-4-12b-it-4bit uv run news run --preset NAME
 ```
 
