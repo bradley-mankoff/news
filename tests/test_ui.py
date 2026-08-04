@@ -17,6 +17,7 @@ from unittest.mock import patch
 import yaml
 
 from news_pipeline import ui as ui_module
+from news_pipeline.config import CODEX_TEST_MODEL_ALIAS, QWWYTHOS_9B_4BIT_MODEL_ALIAS
 from news_pipeline.ui import (
     DEFAULT_HOST,
     DEFAULT_PORT,
@@ -756,6 +757,26 @@ class UITests(unittest.TestCase):
         self.assertEqual(preview["runtime"], {"runtime": "ok"})
         self.assertEqual(preview["runtime_error"], "preview error")
         self.assertEqual(preview["removed_topic_env_vars"], ["NEWS_TOPIC_IDS"])
+
+    def test_preview_rejects_different_task_model_on_managed_base_url(self) -> None:
+        # Regression for #113: the preview must raise on the incompatible
+        # model/base-URL combination instead of showing a clean command.
+        # build_command re-raises the config ValueError, which the /api/preview
+        # route serializes via _send_error_json for the browser.
+        with patch.dict(os.environ, {"NEWS_MODEL": CODEX_TEST_MODEL_ALIAS}, clear=True):
+            with self.assertRaisesRegex(
+                ValueError,
+                r"Managed model server cannot serve multiple different models "
+                r"from the same base URL",
+            ):
+                preview_payload(
+                    {
+                        "action": "run",
+                        "env": {
+                            "NEWS_MODEL_ARTICLE_SUMMARY": QWWYTHOS_9B_4BIT_MODEL_ALIAS,
+                        },
+                    }
+                )
 
     def test_run_record_and_manager_processes(self) -> None:
         record = RunRecord("run-1", ["news", "run"], {"PASSWORD": "secret", "VISIBLE": "ok"})

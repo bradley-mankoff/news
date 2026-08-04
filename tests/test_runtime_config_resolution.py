@@ -311,7 +311,9 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
             overrides={
                 "NEWS_MODEL": CODEX_TEST_MODEL_ALIAS,
                 "NEWS_MODEL_ARTICLE_SUMMARY": QWWYTHOS_9B_4BIT_MODEL_ALIAS,
+                "NEWS_MODEL_ARTICLE_SUMMARY_BASE_URL": "http://127.0.0.1:8090/v1",
                 "NEWS_MODEL_STORY_DRAFTING": "qwythos-9b-8bit",
+                "NEWS_MODEL_STORY_DRAFTING_BASE_URL": "http://127.0.0.1:8091/v1",
             },
             materialize_outputs=False,
         )
@@ -324,6 +326,14 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
         self.assertEqual(
             config.model_assignments[MODEL_TASK_ARTICLE_SUMMARY].name,
             QWWYTHOS_9B_4BIT_MODEL_REFERENCE,
+        )
+        self.assertEqual(
+            config.model_assignments[MODEL_TASK_ARTICLE_SUMMARY].base_url,
+            "http://127.0.0.1:8090/v1",
+        )
+        self.assertEqual(
+            config.model_assignments[MODEL_TASK_STORY_DRAFTING].base_url,
+            "http://127.0.0.1:8091/v1",
         )
         self.assertEqual(
             config.model_assignments[MODEL_TASK_STORY_DRAFTING].reference,
@@ -344,7 +354,9 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
             overrides={
                 "NEWS_MODEL": CODEX_TEST_MODEL_ALIAS,
                 "NEWS_MODEL_STORY_SCALE_SCREENING": QWWYTHOS_9B_4BIT_MODEL_ALIAS,
+                "NEWS_MODEL_STORY_SCALE_SCREENING_BASE_URL": "http://127.0.0.1:8090/v1",
                 "NEWS_MODEL_TITLE_GENERATION": "qwythos-9b-8bit",
+                "NEWS_MODEL_TITLE_GENERATION_BASE_URL": "http://127.0.0.1:8091/v1",
             },
             materialize_outputs=False,
         )
@@ -385,7 +397,7 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
             CODEX_TEST_MODEL_ALIAS,
         )
         self.assertEqual(
-            config.model_assignments[MODEL_TASK_STORY_SCALE_SCREENING].base_url,
+            config.model_assignments[MODEL_TASK_ARTICLE_SUMMARY].base_url,
             config.model_assignments["default"].base_url,
         )
         # image_art_direction inherits the title_generation token cap field.
@@ -400,6 +412,81 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
         self.assertEqual(
             config_module._task_max_tokens_field(MODEL_TASK_TITLE_GENERATION),
             "title_generation_max_tokens",
+        )
+
+    def test_managed_default_rejects_different_task_model_on_shared_base_url(self) -> None:
+        # Regression for #113: the default managed server serves one model;
+        # a different task model on the same base URL must fail at config
+        # resolution, before source collection or server startup.
+        with self.assertRaisesRegex(
+            ValueError,
+            r"Managed model server cannot serve multiple different models "
+            r"from the same base URL.*Set a per-task base URL",
+        ):
+            load_runtime_config(
+                environ={},
+                overrides={
+                    "NEWS_MODEL": CODEX_TEST_MODEL_ALIAS,
+                    "NEWS_MODEL_ARTICLE_SUMMARY": QWWYTHOS_9B_4BIT_MODEL_ALIAS,
+                },
+                materialize_outputs=False,
+            )
+
+    def test_managed_default_rejects_task_model_on_trailing_slash_base_url(self) -> None:
+        # Regression for #113: URL spelling variants (trailing slash) of the
+        # shared base URL must still trip the early rejection instead of
+        # falling through to the old mid-run failure.
+        with self.assertRaisesRegex(ValueError, "Managed model server cannot serve"):
+            load_runtime_config(
+                environ={},
+                overrides={
+                    "NEWS_MODEL": CODEX_TEST_MODEL_ALIAS,
+                    "NEWS_MODEL_ARTICLE_SUMMARY": QWWYTHOS_9B_4BIT_MODEL_ALIAS,
+                    "NEWS_MODEL_ARTICLE_SUMMARY_BASE_URL": "http://127.0.0.1:8080/v1/",
+                },
+                materialize_outputs=False,
+            )
+
+    def test_external_backend_allows_different_task_models_on_shared_base_url(self) -> None:
+        # External OpenAI-compatible endpoints can serve multiple models; the
+        # managed-server restriction does not apply.
+        config = load_runtime_config(
+            environ={},
+            overrides={
+                "NEWS_MODEL_BACKEND": "external",
+                "NEWS_MODEL_BASE_URL": "https://api.example.com/v1",
+                "NEWS_MODEL": CODEX_TEST_MODEL_ALIAS,
+                "NEWS_MODEL_ARTICLE_SUMMARY": QWWYTHOS_9B_4BIT_MODEL_ALIAS,
+            },
+            materialize_outputs=False,
+        )
+        self.assertEqual(
+            config.model_assignments[MODEL_TASK_ARTICLE_SUMMARY].base_url,
+            config.model_base_url,
+        )
+        self.assertNotEqual(
+            config.model_assignments[MODEL_TASK_ARTICLE_SUMMARY].name,
+            config.model_name,
+        )
+
+    def test_same_task_model_on_shared_managed_base_url_resolves(self) -> None:
+        # Explicitly naming the default model for a task stays legal on the
+        # managed base URL (same model, same server).
+        config = load_runtime_config(
+            environ={},
+            overrides={
+                "NEWS_MODEL": CODEX_TEST_MODEL_ALIAS,
+                "NEWS_MODEL_ARTICLE_SUMMARY": CODEX_TEST_MODEL_ALIAS,
+            },
+            materialize_outputs=False,
+        )
+        self.assertEqual(
+            config.model_assignments[MODEL_TASK_ARTICLE_SUMMARY].name,
+            config.model_name,
+        )
+        self.assertEqual(
+            config.model_assignments[MODEL_TASK_ARTICLE_SUMMARY].base_url,
+            config.model_base_url,
         )
 
     def test_default_recipient_and_sender_are_clean_example_addresses(self) -> None:
@@ -604,6 +691,7 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
                 {
                     "NEWS_MODEL": CODEX_TEST_MODEL_ALIAS,
                     "NEWS_MODEL_STORY_DRAFTING": "mlx-community/example-model",
+                    "NEWS_MODEL_STORY_DRAFTING_BASE_URL": "http://127.0.0.1:8090/v1",
                     "NEWS_MODEL_STORY_DRAFTING_TUNING_PRESET": "concise-story-drafting",
                     "NEWS_MODEL_STORY_DRAFTING_TEMPERATURE": "0.4",
                     "NEWS_STORY_DRAFTING_MAX_TOKENS": "1500",
@@ -688,6 +776,7 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
                 {
                     "NEWS_MODEL": CODEX_TEST_MODEL_ALIAS,
                     "NEWS_MODEL_STORY_SCALE_SCREENING": "mlx-community/example-model",
+                    "NEWS_MODEL_STORY_SCALE_SCREENING_BASE_URL": "http://127.0.0.1:8090/v1",
                     "NEWS_MODEL_STORY_SCALE_SCREENING_TUNING_PRESET": "quick-scale-screen",
                     "NEWS_MODEL_STORY_SCALE_SCREENING_TEMPERATURE": "0.4",
                     "NEWS_STORY_SCALE_SCREENING_MAX_TOKENS": "2600",
