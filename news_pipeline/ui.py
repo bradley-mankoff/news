@@ -1377,10 +1377,6 @@ HTML = r"""<!doctype html>
       "NEWS_PROMPT_OVERRIDE_STORY_DRAFTING",        // the Advanced-tab duplicates
       "NEWS_PROMPT_OVERRIDE_TITLE_GENERATION",
       "NEWS_PROMPT_OVERRIDE_IMAGE_ART_DIRECTION",
-      "NEWS_MODEL_ARTICLE_SUMMARY",
-      "NEWS_MODEL_STORY_DRAFTING",
-      "NEWS_MODEL_STORY_SCALE_SCREENING",
-      "NEWS_MODEL_TITLE_GENERATION",
       "NEWS_MODEL_ARTICLE_SUMMARY_TUNING_PRESET",
       "NEWS_MODEL_STORY_DRAFTING_TUNING_PRESET",
       "NEWS_MODEL_STORY_SCALE_SCREENING_TUNING_PRESET",
@@ -1859,10 +1855,7 @@ HTML = r"""<!doctype html>
     function renderRunSetup() {
       const schema = state.schema || {};
       const runtime = schema.runtime || {};
-      const articleRuntime = runtime.model && runtime.model.article_summary ? runtime.model.article_summary : {};
-      const storyRuntime = runtime.model && runtime.model.story_drafting ? runtime.model.story_drafting : {};
-      const scaleRuntime = runtime.model && runtime.model.story_scale_screening ? runtime.model.story_scale_screening : {};
-      const titleRuntime = runtime.model && runtime.model.title_generation ? runtime.model.title_generation : {};
+      const defaultRuntime = runtime.model ? runtime.model : {};
       const actionOptions = (schema.actions || []).map(action => `<option value="${escapeHtml(action)}"${action === "run" ? " selected" : ""}>${escapeHtml(action)}</option>`).join("");
       const promptProfileOptions = (schema.prompt_profiles || []).map(p => `<option value="${escapeHtml(p.id)}"${currentControlValue("NEWS_PROMPT_PROFILE") === p.id ? " selected" : ""}>${escapeHtml(p.name)}</option>`).join("");
       const sourceToolHidden = !["check-sources", "prune-sources", "source-languages"].includes(value("actionSelect"));
@@ -1874,10 +1867,7 @@ HTML = r"""<!doctype html>
         primary: "Primary-only",
         all: "All"
       };
-      const articleModel = knobField("NEWS_MODEL_ARTICLE_SUMMARY", "Article model", { emptyLabel: "default: qwythos-9b-8bit" });
-      const storyModel = knobField("NEWS_MODEL_STORY_DRAFTING", "Story model", { emptyLabel: "default: qwythos-9b-8bit" });
-      const scaleModel = knobField("NEWS_MODEL_STORY_SCALE_SCREENING", "Scale screening model", { emptyLabel: "default: qwythos-9b-8bit" });
-      const titleModel = knobField("NEWS_MODEL_TITLE_GENERATION", "Title generation model", { emptyLabel: "default: qwythos-9b-8bit" });
+      const defaultModel = knobField("NEWS_MODEL", "Default model", { emptyLabel: "default: gemma-4-12b-it-4bit" });
       const sharedModelTokens = knobField("NEWS_MODEL_MAX_INPUT_TOKENS", "Shared model input cap");
       const articleTokenCap = knobField("NEWS_ARTICLE_SUMMARY_MAX_TOKENS", "Article summary max tokens");
       const storyTokenCap = knobField("NEWS_STORY_DRAFTING_MAX_TOKENS", "Story drafting max tokens");
@@ -1981,39 +1971,12 @@ HTML = r"""<!doctype html>
           </section>
           <section class="panel model-card">
             <p class="eyebrow">Model</p>
-            <h2>${escapeHtml(TASK_CONFIG.article_summary.label)}</h2>
-            <p class="muted">Resolved: ${escapeHtml(articleRuntime.name || articleRuntime.reference || "-")}</p>
+            <h2>Default model</h2>
+            <p class="muted">Resolved: ${escapeHtml(defaultRuntime.name || defaultRuntime.reference || "-")}</p>
             <div class="form-grid">
-              ${articleModel}
+              ${defaultModel}
             </div>
-            <p class="muted">Sampling, token budgets, and server endpoints are in Advanced Settings.</p>
-          </section>
-          <section class="panel model-card">
-            <p class="eyebrow">Model</p>
-            <h2>${escapeHtml(TASK_CONFIG.story_drafting.label)}</h2>
-            <p class="muted">Resolved: ${escapeHtml(storyRuntime.name || storyRuntime.reference || "-")}</p>
-            <div class="form-grid">
-              ${storyModel}
-            </div>
-            <p class="muted">Sampling, token budgets, and server endpoints are in Advanced Settings.</p>
-          </section>
-          <section class="panel model-card">
-            <p class="eyebrow">Model</p>
-            <h2>${escapeHtml(TASK_CONFIG.story_scale_screening.label)}</h2>
-            <p class="muted">Resolved: ${escapeHtml(scaleRuntime.name || scaleRuntime.reference || "-")}</p>
-            <div class="form-grid">
-              ${scaleModel}
-            </div>
-            <p class="muted">Sampling, token budgets, and server endpoints are in Advanced Settings.</p>
-          </section>
-          <section class="panel model-card">
-            <p class="eyebrow">Model</p>
-            <h2>${escapeHtml(TASK_CONFIG.title_generation.label)}</h2>
-            <p class="muted">Resolved: ${escapeHtml(titleRuntime.name || titleRuntime.reference || "-")}</p>
-            <div class="form-grid">
-              ${titleModel}
-            </div>
-            <p class="muted">Sampling, token budgets, and server endpoints are in Advanced Settings.</p>
+            <p class="muted">Per-task model alternatives and sampling are in Advanced Settings.</p>
           </section>
           <section class="panel">
             <p class="eyebrow">Model catalog</p>
@@ -2032,7 +1995,7 @@ HTML = r"""<!doctype html>
             <details class="details">
               <summary>Search Hugging Face</summary>
               <div class="form-grid">
-                <label class="field"><span>Query</span><input id="modelSearchQuery" type="text" placeholder="e.g. qwythos"><code>q</code></label>
+                <label class="field"><span>Query</span><input id="modelSearchQuery" type="text" placeholder="e.g. gemma"><code>q</code></label>
                 <label class="field"><span>Pipeline tag</span>
                   <select id="modelSearchPipeline">
                     <option value="">any</option>

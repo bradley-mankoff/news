@@ -84,7 +84,13 @@ MODEL_BACKEND_EXTERNAL = "external"
 SUPPORTED_MODEL_BACKENDS = (MODEL_BACKEND_MLX_LM, MODEL_BACKEND_MLX_VLM, MODEL_BACKEND_EXTERNAL)
 # Retained public alias for the Qwythos default backend; prefer MODEL_BACKEND_MLX_VLM.
 QWWYTHOS_MODEL_BACKEND = MODEL_BACKEND_MLX_VLM
-DEFAULT_MODEL_ALIAS = QWWYTHOS_9B_8BIT_MODEL_ALIAS
+# Standard Gemma 4 12B instruction model, MLX 4-bit distribution. The default
+# must be a repo id (never owner/repo/file.gguf): mlx-vlm rejects file-qualified
+# references with HFValidationError (issue #124).
+GEMMA_4_12B_IT_4BIT_MODEL_ALIAS = "gemma-4-12b-it-4bit"
+GEMMA_4_12B_IT_4BIT_MODEL_REPO = "mlx-community/gemma-4-12B-it-4bit"
+GEMMA_4_12B_IT_4BIT_MODEL_NAME = "Gemma 4 12B Instruct (4-bit)"
+DEFAULT_MODEL_ALIAS = GEMMA_4_12B_IT_4BIT_MODEL_ALIAS
 CODEX_TEST_MODEL_ALIAS = "gemma-e2b-tiny"
 CODEX_TEST_MODEL_NAME = "deadbydawn101/gemma-4-E2B-Heretic-Uncensored-mlx-4bit"
 MODEL_TASK_ARTICLE_SUMMARY = "article_summary"
@@ -116,17 +122,21 @@ VALID_SOURCE_MATCH_MODES = {
     SOURCE_MATCH_MODE_WIRE_ATTRIBUTION,
 }
 MODEL_ALIASES = {
-    QWWYTHOS_9B_4BIT_MODEL_ALIAS: QWWYTHOS_9B_4BIT_MODEL_REFERENCE,
-    QWWYTHOS_9B_8BIT_MODEL_ALIAS: QWWYTHOS_9B_8BIT_MODEL_REFERENCE,
-    f"https://huggingface.co/{QWWYTHOS_9B_4BIT_MODEL_REFERENCE}": QWWYTHOS_9B_4BIT_MODEL_REFERENCE,
-    f"https://hf.co/{QWWYTHOS_9B_4BIT_MODEL_REFERENCE}": QWWYTHOS_9B_4BIT_MODEL_REFERENCE,
-    f"https://huggingface.co/{QWWYTHOS_9B_8BIT_MODEL_REFERENCE}": QWWYTHOS_9B_8BIT_MODEL_REFERENCE,
-    f"https://hf.co/{QWWYTHOS_9B_8BIT_MODEL_REFERENCE}": QWWYTHOS_9B_8BIT_MODEL_REFERENCE,
+    GEMMA_4_12B_IT_4BIT_MODEL_ALIAS: GEMMA_4_12B_IT_4BIT_MODEL_REPO,
+    f"https://huggingface.co/{GEMMA_4_12B_IT_4BIT_MODEL_REPO}": GEMMA_4_12B_IT_4BIT_MODEL_REPO,
+    f"https://hf.co/{GEMMA_4_12B_IT_4BIT_MODEL_REPO}": GEMMA_4_12B_IT_4BIT_MODEL_REPO,
     CODEX_TEST_MODEL_ALIAS: CODEX_TEST_MODEL_NAME,
     f"https://huggingface.co/{CODEX_TEST_MODEL_NAME}": CODEX_TEST_MODEL_NAME,
     f"https://hf.co/{CODEX_TEST_MODEL_NAME}": CODEX_TEST_MODEL_NAME,
 }
-UNSUPPORTED_MODEL_REFERENCES: set[str] = set()
+# Qwythos GGUF aliases are NOT launchable by the managed mlx-vlm backend
+# (file-qualified GGUF refs raise HFValidationError) and are not validated for
+# any backend; stale configs fail fast with an actionable error instead of a
+# half-started server. Opt-in work tracked separately.
+UNSUPPORTED_MODEL_REFERENCES: set[str] = {
+    QWWYTHOS_9B_8BIT_MODEL_ALIAS,
+    QWWYTHOS_9B_4BIT_MODEL_ALIAS,
+}
 CODEX_RUNTIME_ENV_VARS = ("CODEX_SANDBOX", "CODEX_CI", "CODEX_THREAD_ID")
 REMOVED_TOPIC_ENV_VARS = (
     "NEWS_TOPIC_IDS",

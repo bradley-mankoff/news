@@ -16,8 +16,8 @@ from news_pipeline import config as config_module
 from news_pipeline.config import (
     ACTIVE_PRESET_ENV_VAR,
     CODEX_TEST_MODEL_ALIAS,
-    QWWYTHOS_9B_4BIT_MODEL_ALIAS,
-    QWWYTHOS_9B_4BIT_MODEL_REFERENCE,
+    GEMMA_4_12B_IT_4BIT_MODEL_ALIAS,
+    GEMMA_4_12B_IT_4BIT_MODEL_REPO,
     MODEL_TASK_ARTICLE_SUMMARY,
     MODEL_TASK_IMAGE_ART_DIRECTION,
     MODEL_TASK_STORY_DRAFTING,
@@ -43,7 +43,7 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
             RuntimeConfigRequest(
                 base_env={},
                 preset_id="dev",
-                overrides={"NEWS_MODEL": QWWYTHOS_9B_4BIT_MODEL_ALIAS},
+                overrides={"NEWS_MODEL": GEMMA_4_12B_IT_4BIT_MODEL_ALIAS},
                 materialize_outputs=False,
                 run_started_at=datetime(2026, 6, 14, 12, 0, 0),
             )
@@ -54,7 +54,7 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
     def test_preset_base_env_and_overrides_have_documented_precedence(self) -> None:
         resolution = resolve_runtime_config(
             RuntimeConfigRequest(
-                base_env={"NEWS_MODEL": QWWYTHOS_9B_4BIT_MODEL_ALIAS},
+                base_env={"NEWS_MODEL": GEMMA_4_12B_IT_4BIT_MODEL_ALIAS},
                 preset_id="dev",
                 overrides={"NEWS_SOURCE_SCOPE": "peripheral"},
                 materialize_outputs=False,
@@ -63,8 +63,8 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
         )
 
         self.assertEqual(resolution.config.preset_id, "dev")
-        self.assertEqual(resolution.config.model_reference, QWWYTHOS_9B_4BIT_MODEL_ALIAS)
-        self.assertEqual(resolution.config.model_name, QWWYTHOS_9B_4BIT_MODEL_REFERENCE)
+        self.assertEqual(resolution.config.model_reference, GEMMA_4_12B_IT_4BIT_MODEL_ALIAS)
+        self.assertEqual(resolution.config.model_name, GEMMA_4_12B_IT_4BIT_MODEL_REPO)
         self.assertEqual(resolution.config.model_backend, "mlx-vlm")
         self.assertIn("python -m mlx_vlm.server", resolution.config.model_server_command)
         self.assertEqual(resolution.config.source_scope, "peripheral")
@@ -73,6 +73,38 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
         self.assertEqual(resolution.command_env_delta["NEWS_SOURCE_SCOPE"], "peripheral")
         self.assertNotIn("NEWS_RECIPIENT_SCOPE", resolution.command_env_delta)
 
+    def test_default_model_resolves_to_launchable_gemma_4_12b(self) -> None:
+        config = load_runtime_config(
+            environ={},
+            overrides={},
+            materialize_outputs=False,
+            run_started_at=datetime(2026, 6, 14, 12, 0, 0),
+        )
+        # Default alias, resolved reference, backend.
+        self.assertEqual(config.model_reference, "gemma-4-12b-it-4bit")
+        self.assertEqual(config.model_name, "mlx-community/gemma-4-12B-it-4bit")
+        self.assertEqual(config.model_backend, "mlx-vlm")
+        # Generated server command uses the repo id, never a file-qualified path.
+        self.assertIn("--model mlx-community/gemma-4-12B-it-4bit", config.model_server_command)
+        self.assertNotIn(".gguf", config.model_server_command)
+        # One default model across all four LLM stages.
+        for task in ("article_summary", "story_drafting", "story_scale_screening", "title_generation"):
+            self.assertEqual(config.model_assignments[task].reference, "gemma-4-12b-it-4bit")
+        # No translation assignment; only default + the four stages.
+        self.assertEqual(
+            set(config.model_assignments),
+            {"default", "article_summary", "story_drafting",
+             "story_scale_screening", "title_generation"},
+        )
+
+    def test_qwythos_aliases_fail_fast_with_actionable_error(self) -> None:
+        with self.assertRaisesRegex(ValueError, "Unsupported model reference"):
+            load_runtime_config(
+                environ={},
+                overrides={"NEWS_MODEL": "qwythos-9b-8bit"},
+                materialize_outputs=False,
+            )
+
     def test_news_model_backend_external_override_for_default_model(self) -> None:
         resolution = resolve_runtime_config(
             RuntimeConfigRequest(
@@ -80,7 +112,7 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
                     "NEWS_MODEL_BACKEND": "external",
                     "NEWS_MODEL_BASE_URL": "https://api.example.com/v1",
                 },
-                overrides={"NEWS_MODEL": QWWYTHOS_9B_4BIT_MODEL_ALIAS},
+                overrides={"NEWS_MODEL": GEMMA_4_12B_IT_4BIT_MODEL_ALIAS},
                 materialize_outputs=False,
                 run_started_at=datetime(2026, 6, 14, 12, 0, 0),
             )
@@ -159,7 +191,7 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
     def test_context_env_drives_runtime_config_derivations(self) -> None:
         config = load_runtime_config(
             environ={"NEWS_TOTAL_ARTICLE_SUMMARY_CAP": "55"},
-            overrides={"NEWS_MODEL": "qwythos-9b-8bit"},
+            overrides={"NEWS_MODEL": "gemma-e2b-tiny"},
             materialize_outputs=False,
             run_started_at=datetime(2026, 6, 14, 12, 0, 0),
         )
@@ -310,8 +342,8 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
             environ={},
             overrides={
                 "NEWS_MODEL": CODEX_TEST_MODEL_ALIAS,
-                "NEWS_MODEL_ARTICLE_SUMMARY": QWWYTHOS_9B_4BIT_MODEL_ALIAS,
-                "NEWS_MODEL_STORY_DRAFTING": "qwythos-9b-8bit",
+                "NEWS_MODEL_ARTICLE_SUMMARY": GEMMA_4_12B_IT_4BIT_MODEL_ALIAS,
+                "NEWS_MODEL_STORY_DRAFTING": GEMMA_4_12B_IT_4BIT_MODEL_ALIAS,
             },
             materialize_outputs=False,
         )
@@ -319,15 +351,15 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
         self.assertEqual(config.model_assignments["default"].reference, CODEX_TEST_MODEL_ALIAS)
         self.assertEqual(
             config.model_assignments[MODEL_TASK_ARTICLE_SUMMARY].reference,
-            QWWYTHOS_9B_4BIT_MODEL_ALIAS,
+            GEMMA_4_12B_IT_4BIT_MODEL_ALIAS,
         )
         self.assertEqual(
             config.model_assignments[MODEL_TASK_ARTICLE_SUMMARY].name,
-            QWWYTHOS_9B_4BIT_MODEL_REFERENCE,
+            GEMMA_4_12B_IT_4BIT_MODEL_REPO,
         )
         self.assertEqual(
             config.model_assignments[MODEL_TASK_STORY_DRAFTING].reference,
-            "qwythos-9b-8bit",
+            GEMMA_4_12B_IT_4BIT_MODEL_ALIAS,
         )
         self.assertNotEqual(
             config.model_assignments["default"].reference,
@@ -343,8 +375,8 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
             environ={},
             overrides={
                 "NEWS_MODEL": CODEX_TEST_MODEL_ALIAS,
-                "NEWS_MODEL_STORY_SCALE_SCREENING": QWWYTHOS_9B_4BIT_MODEL_ALIAS,
-                "NEWS_MODEL_TITLE_GENERATION": "qwythos-9b-8bit",
+                "NEWS_MODEL_STORY_SCALE_SCREENING": GEMMA_4_12B_IT_4BIT_MODEL_ALIAS,
+                "NEWS_MODEL_TITLE_GENERATION": GEMMA_4_12B_IT_4BIT_MODEL_ALIAS,
             },
             materialize_outputs=False,
         )
@@ -361,15 +393,15 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
         )
         self.assertEqual(
             config.model_assignments[MODEL_TASK_STORY_SCALE_SCREENING].reference,
-            QWWYTHOS_9B_4BIT_MODEL_ALIAS,
+            GEMMA_4_12B_IT_4BIT_MODEL_ALIAS,
         )
         self.assertEqual(
             config.model_assignments[MODEL_TASK_STORY_SCALE_SCREENING].name,
-            QWWYTHOS_9B_4BIT_MODEL_REFERENCE,
+            GEMMA_4_12B_IT_4BIT_MODEL_REPO,
         )
         self.assertEqual(
             config.model_assignments[MODEL_TASK_TITLE_GENERATION].reference,
-            "qwythos-9b-8bit",
+            GEMMA_4_12B_IT_4BIT_MODEL_ALIAS,
         )
         self.assertNotEqual(
             config.model_assignments["default"].reference,
@@ -724,7 +756,7 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
         with patch.dict(
             os.environ,
             {
-                "NEWS_MODEL": QWWYTHOS_9B_4BIT_MODEL_ALIAS,
+                "NEWS_MODEL": GEMMA_4_12B_IT_4BIT_MODEL_ALIAS,
             },
             clear=True,
         ):
@@ -746,7 +778,7 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
         )
         config_two = load_runtime_config(
             materialize_outputs=False,
-            environ={**shared_env, "NEWS_MODEL": QWWYTHOS_9B_4BIT_MODEL_ALIAS},
+            environ={**shared_env, "NEWS_MODEL": GEMMA_4_12B_IT_4BIT_MODEL_ALIAS},
         )
 
         self.assertEqual(config_one.model_server_settings, config_two.model_server_settings)

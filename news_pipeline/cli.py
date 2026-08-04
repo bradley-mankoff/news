@@ -226,7 +226,7 @@ def _parse_models_search_args(args: list[str]) -> tuple[str, str | None, int, bo
             f"Unknown search task {pipeline_tag!r}. Valid tasks: {valid}"
         )
     if not query.strip():
-        raise ValueError("models search requires --query (e.g. --query qwythos).")
+        raise ValueError("models search requires --query (e.g. --query gemma).")
     return query, pipeline_tag, limit, as_json
 
 

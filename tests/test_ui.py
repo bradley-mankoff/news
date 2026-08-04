@@ -455,8 +455,8 @@ class UITests(unittest.TestCase):
             self.assertEqual(payload["sources"]["total"], 1)
             self.assertEqual(payload["recipients"]["total"], 1)
             # Model catalog keys are local-only (offline) additions.
-            self.assertEqual(len(payload["model_catalog"]), 3)
-            self.assertEqual(payload["model_catalog"][0]["alias"], "qwythos-9b-8bit")
+            self.assertEqual(len(payload["model_catalog"]), 2)
+            self.assertEqual(payload["model_catalog"][0]["alias"], "gemma-4-12b-it-4bit")
             self.assertIn("factual_extraction", payload["model_recommendation_tasks"])
             self.assertEqual(len(payload["model_recommendation_tasks"]), 7)
 

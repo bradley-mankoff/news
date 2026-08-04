@@ -49,7 +49,7 @@ class ModelCatalogTests(unittest.TestCase):
             )
 
     def test_catalog_entries_are_complete(self) -> None:
-        self.assertEqual(len(model_catalog.CATALOG_MODELS), 3)
+        self.assertEqual(len(model_catalog.CATALOG_MODELS), 2)
         for entry in model_catalog.CATALOG_MODELS.values():
             self.assertTrue(entry.alias)
             self.assertTrue(entry.reference)
@@ -72,7 +72,21 @@ class ModelCatalogTests(unittest.TestCase):
         self.assertEqual(model_catalog.DEFAULT_CATALOG_MODEL_ALIAS, config.DEFAULT_MODEL_ALIAS)
         default = model_catalog.CATALOG_MODELS[model_catalog.DEFAULT_CATALOG_MODEL_ALIAS]
         self.assertEqual(default.backend, "mlx-vlm")
-        self.assertEqual(default.context_length, 1_000_000)
+        self.assertEqual(default.reference, "mlx-community/gemma-4-12B-it-4bit")
+        self.assertEqual(default.context_length, 262_144)
+        self.assertNotIn(".gguf", default.reference)
+
+    def test_default_catalog_entry_is_repo_id_not_gguf_file(self) -> None:
+        default = model_catalog.CATALOG_MODELS[model_catalog.DEFAULT_CATALOG_MODEL_ALIAS]
+        self.assertEqual(default.alias, "gemma-4-12b-it-4bit")
+        self.assertEqual(default.reference, "mlx-community/gemma-4-12B-it-4bit")
+        self.assertEqual(default.hf_repo, "mlx-community/gemma-4-12B-it-4bit")
+        self.assertEqual(default.backend, "mlx-vlm")
+        self.assertNotIn(".gguf", default.reference)
+        self.assertNotIn("qwythos", model_catalog.CATALOG_MODELS)
+        for entry in model_catalog.CATALOG_MODELS.values():
+            self.assertNotIn("/", entry.reference.removeprefix(entry.hf_repo).lstrip("/"))
+            # i.e. reference == hf_repo exactly (no file suffix)
 
     def test_recommendations_cover_all_tasks(self) -> None:
         for task in model_catalog.MODEL_RECOMMENDATION_TASKS:
@@ -102,26 +116,26 @@ class ModelCatalogTests(unittest.TestCase):
 
     def test_list_model_catalog_is_json_ready(self) -> None:
         records = model_catalog.list_model_catalog()
-        self.assertEqual(len(records), 3)
+        self.assertEqual(len(records), 2)
         for record in records:
             self.assertIsInstance(record, dict)
             self.assertTrue(record["hf_url"].startswith("https://huggingface.co/"))
             self.assertIn("task_notes", record)
             self.assertIn("is_default", record)
         defaults = [record for record in records if record["is_default"]]
-        self.assertEqual([record["alias"] for record in defaults], ["qwythos-9b-8bit"])
+        self.assertEqual([record["alias"] for record in defaults], ["gemma-4-12b-it-4bit"])
 
     def test_runtime_fit_matrix(self) -> None:
-        curated_qwythos = "huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF"
+        curated_gemma = "mlx-community/gemma-4-12B-it-4bit"
         cases = [
             # (info dict, expected status)
             (
-                {"id": curated_qwythos, "tags": ["gguf", "mlx"], "library_name": "mlx", "pipeline_tag": "image-text-to-text"},
+                {"id": curated_gemma, "tags": ["mlx"], "library_name": "mlx", "pipeline_tag": "image-text-to-text"},
                 model_catalog.RUNTIME_FIT_MANAGED_MLX_VLM,
             ),
             (
-                {"id": "huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-Q8_0.gguf", "tags": ["gguf"], "library_name": "mlx", "pipeline_tag": "image-text-to-text"},
-                model_catalog.RUNTIME_FIT_MANAGED_MLX_VLM,
+                {"id": "someone/arbitrary-file.gguf", "tags": ["gguf", "mlx"], "library_name": "mlx", "pipeline_tag": "image-text-to-text"},
+                model_catalog.RUNTIME_FIT_EXTERNAL_ONLY,
             ),
             (
                 {"id": "deadbydawn101/gemma-4-E2B-Heretic-Uncensored-mlx-4bit", "tags": ["mlx"], "library_name": "mlx", "pipeline_tag": "text-generation"},
@@ -204,7 +218,7 @@ class ModelCatalogTests(unittest.TestCase):
         self.assertEqual(kwargs["expand"], model_catalog.HF_SEARCH_EXPAND)
 
     def test_search_in_catalog_flag_and_empty_results(self) -> None:
-        curated = "huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF"
+        curated = "mlx-community/gemma-4-12B-it-4bit"
         empty_api = MagicMock()
         empty_api.list_models.return_value = iter([])
         with patch("huggingface_hub.HfApi", return_value=empty_api):
@@ -212,10 +226,10 @@ class ModelCatalogTests(unittest.TestCase):
 
         fake_api = MagicMock()
         fake_api.list_models.return_value = iter(
-            [_fake_model_info(id=curated, tags=["gguf", "mlx"], library_name="mlx", pipeline_tag="image-text-to-text")]
+            [_fake_model_info(id=curated, tags=["mlx"], library_name="mlx", pipeline_tag="image-text-to-text")]
         )
         with patch("huggingface_hub.HfApi", return_value=fake_api):
-            item = model_catalog.search_huggingface_models("qwythos")[0]
+            item = model_catalog.search_huggingface_models("gemma")[0]
         self.assertTrue(item["in_catalog"])
         self.assertEqual(item["runtime_fit"]["status"], model_catalog.RUNTIME_FIT_MANAGED_MLX_VLM)
 

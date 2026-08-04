@@ -257,17 +257,17 @@ class CliTests(unittest.TestCase):
         code, stdout, stderr = self._invoke(["models", "catalog"])
 
         self.assertEqual(code, 0)
-        self.assertIn("qwythos-9b-8bit", stdout)
-        self.assertIn("qwythos-9b-4bit", stdout)
+        self.assertIn("gemma-4-12b-it-4bit", stdout)
         self.assertIn("gemma-e2b-tiny", stdout)
+        self.assertNotIn("qwythos", stdout)
         self.assertIn("huggingface.co", stdout)
 
         code, stdout, stderr = self._invoke(["models", "catalog", "--json"])
 
         self.assertEqual(code, 0)
         entries = json.loads(stdout)
-        self.assertEqual(len(entries), 3)
-        self.assertEqual(entries[0]["alias"], "qwythos-9b-8bit")
+        self.assertEqual(len(entries), 2)
+        self.assertEqual(entries[0]["alias"], "gemma-4-12b-it-4bit")
         self.assertTrue(entries[0]["is_default"])
 
     def test_models_catalog_rejects_unexpected_args(self) -> None:

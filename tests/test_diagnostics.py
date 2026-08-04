@@ -115,6 +115,7 @@ class DiagnosticsTests(unittest.TestCase):
             self.assertIn("duplicate=2", summary_markdown)
             self.assertIn("skipped=0", summary_markdown)
             self.assertIn("summary_json: ", summary_markdown)
+            self.assertIn("- Source languages: {'en': 4}", summary_markdown)
 
             review_markdown = diagnostics.to_run_review_markdown(
                 report_body="Daily News Summary\n==================\n\nA useful report."
@@ -129,6 +130,7 @@ class DiagnosticsTests(unittest.TestCase):
                 "| Title Generation model | title_ref (title_model) [mlx-vlm] @ http://localhost:9090 |",
                 review_markdown,
             )
+            self.assertIn("| Source languages | {'en': 4} |", review_markdown)
             self.assertIn("## Top-Level KPIs", review_markdown)
             self.assertIn("## Funnel Stats", review_markdown)
             self.assertIn("## Source Health", review_markdown)
@@ -141,6 +143,7 @@ class DiagnosticsTests(unittest.TestCase):
 
             details_markdown = diagnostics.to_markdown()
             self.assertIn("# Daily News Run Details", details_markdown)
+            self.assertIn("- Source languages: {'en': 4}", details_markdown)
             self.assertIn(
                 "- Story Scale Screening model: scale_ref (scale_model) [external] @ https://api.example.com",
                 details_markdown,
@@ -287,6 +290,7 @@ class DiagnosticsTests(unittest.TestCase):
             settings={
                 "preset_id": "daily",
                 "source_scope": "all",
+                "source_languages": {"en": 4},
                 "recipient_scope": "vip",
                 "url_reuse_blocking_enabled": True,
                 "output_dir": str(root / "daily_outputs"),

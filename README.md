@@ -239,7 +239,7 @@ applies any explicit shell/UI overrides on top.
 
 ```bash
 uv run news run --preset NAME
-NEWS_MODEL=qwythos-9b-8bit NEWS_IMAGE_ENABLED=1 uv run news run
+NEWS_MODEL=gemma-4-12b-it-4bit NEWS_IMAGE_ENABLED=1 uv run news run
 ```
 
 Key Run Settings:
@@ -288,16 +288,16 @@ Run Preset's `env` map.
 
 ```bash
 NEWS_MODEL=gemma-e2b-tiny uv run news run
-NEWS_MODEL=qwythos-9b-8bit uv run news run --preset NAME
-NEWS_MODEL=qwythos-9b-4bit uv run news run --preset NAME
+NEWS_MODEL=gemma-4-12b-it-4bit uv run news run --preset NAME
+NEWS_MODEL=gemma-4-12b-it-4bit uv run news run --preset NAME
 ```
 
 Task-specific model assignments inherit from `NEWS_MODEL` unless you set them
 ```bash
 NEWS_MODEL_ARTICLE_SUMMARY=gemma-e2b-tiny uv run news run
-NEWS_MODEL_STORY_DRAFTING=qwythos-9b-8bit uv run news run --preset NAME
+NEWS_MODEL_STORY_DRAFTING=gemma-4-12b-it-4bit uv run news run --preset NAME
 NEWS_MODEL_STORY_SCALE_SCREENING=gemma-e2b-tiny uv run news run
-NEWS_MODEL_TITLE_GENERATION=qwythos-9b-8bit uv run news run --preset NAME
+NEWS_MODEL_TITLE_GENERATION=gemma-4-12b-it-4bit uv run news run --preset NAME
 ```
 Every actual LLM stage has its own assignment: Article Summarization, Story
 Drafting, Story Scale Screening, and Title Generation. Two stages inherit by
@@ -309,8 +309,11 @@ is no `NEWS_MODEL_IMAGE_ART_DIRECTION` env var.
 Built-in aliases:
 
 - `gemma-e2b-tiny`: [`deadbydawn101/gemma-4-E2B-Heretic-Uncensored-mlx-4bit`](https://huggingface.co/deadbydawn101/gemma-4-E2B-Heretic-Uncensored-mlx-4bit) (Codex-safe test model)
-- `qwythos-9b-4bit`: [`huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF`](https://huggingface.co/huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF) ([`...Q4_K.gguf`](https://huggingface.co/huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF/blob/main/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-Q4_K.gguf))
-- `qwythos-9b-8bit`: [`huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF`](https://huggingface.co/huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF) ([`...Q8_0.gguf`](https://huggingface.co/huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF/blob/main/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-Q8_0.gguf)) (default)
+- `gemma-4-12b-it-4bit`: [`mlx-community/gemma-4-12B-it-4bit`](https://huggingface.co/mlx-community/gemma-4-12B-it-4bit) (default; the standard Gemma 4 12B instruction model, 256K-token context)
+
+The legacy `qwythos-9b-*` aliases are **unsupported**: mlx-vlm cannot launch
+file-qualified GGUF references, so stale configs fail fast with an actionable
+error instead of a half-started server.
 
 Each model page shows Hugging Face's native Hardware Compatibility panel
 (GGUF/MLX quantizations) — the UI model picker links directly to it.
@@ -324,15 +327,13 @@ translation — rather than parameter count or popularity:
 
 ```bash
 uv run news models catalog
-uv run news models search --query qwythos --task text-generation --limit 5
+uv run news models search --query gemma --task text-generation --limit 5
 ```
 
-Curated models (3):
+Curated models (2):
 
-- `qwythos-9b-8bit` — mlx-vlm, 1M-token context, default model
-  ([Hugging Face](https://huggingface.co/huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF))
-- `qwythos-9b-4bit` — mlx-vlm, 1M-token context
-  ([Hugging Face](https://huggingface.co/huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF))
+- `gemma-4-12b-it-4bit` — mlx-vlm, 256K-token context, default model
+  ([Hugging Face](https://huggingface.co/mlx-community/gemma-4-12B-it-4bit))
 - `gemma-e2b-tiny` — mlx-lm, Codex-safe test model
   ([Hugging Face](https://huggingface.co/deadbydawn101/gemma-4-E2B-Heretic-Uncensored-mlx-4bit))
 
@@ -352,7 +353,9 @@ Initially supported runtimes (recorded in
 - `external` — any OpenAI-compatible endpoint.
 
 Managed cross-platform GGUF via `llama.cpp` is **not** initially supported;
-GGUF files run through `mlx-vlm` on Apple Silicon.
+GGUF files are not launchable by any managed backend (file-qualified GGUF
+references raise `HFValidationError` in `mlx-vlm`), so curated defaults are
+MLX repo ids and GGUF repos are `external_only` for the model picker.
 
 The default model's backend is inferred from the model reference unless
 `NEWS_MODEL_BACKEND` is set to `mlx-lm`, `mlx-vlm`, or `external` (any other
@@ -380,7 +383,7 @@ run the pipeline, and stop the managed server when the run exits. To keep a
 server warm manually, print the matching command and run it in another terminal:
 
 ```bash
-NEWS_MODEL=qwythos-9b-8bit uv run news model-server-command
+NEWS_MODEL=gemma-4-12b-it-4bit uv run news model-server-command
 ```
 
 If Article Summarization, Story Drafting, Story Scale Screening, or Title
@@ -512,7 +515,7 @@ uv run news run --preset dev
 The `dev` preset:
 
 - Uses `gemma-e2b-tiny` (the smallest model — the only one we keep for
-  local testing now that the 12b/26b gemma slots are filled by Qwythos).
+  local testing now that the standard Gemma 4 12B model is the default).
 - Sets `NEWS_SOURCE_SCOPE=core` (the narrowest source pool).
 - Sets `NEWS_RECIPIENT_SCOPE=primary` (sends only to the primary
   recipient).

@@ -313,7 +313,12 @@ class ConfigHelperTests(unittest.TestCase):
             config_module.resolve_model_name(""),
             config_module.resolve_model_name(config_module.DEFAULT_MODEL_ALIAS),
         )
-        self.assertEqual(config_module.resolve_model_name(config_module.QWWYTHOS_9B_4BIT_MODEL_ALIAS), config_module.QWWYTHOS_9B_4BIT_MODEL_REFERENCE)
+        self.assertEqual(
+            config_module.resolve_model_name(config_module.GEMMA_4_12B_IT_4BIT_MODEL_ALIAS),
+            config_module.GEMMA_4_12B_IT_4BIT_MODEL_REPO,
+        )
+        with self.assertRaisesRegex(ValueError, "Unsupported model reference"):
+            config_module.resolve_model_name("qwythos-9b-8bit")
         with patch.object(config_module, "UNSUPPORTED_MODEL_REFERENCES", {"blocked"}):
             with self.assertRaisesRegex(ValueError, "Unsupported model reference"):
                 config_module.resolve_model_name("blocked")
@@ -409,33 +414,31 @@ class ConfigHelperTests(unittest.TestCase):
             set(config_module.UNSUPPORTED_MODEL_REFERENCES) & set(config_module.MODEL_ALIASES),
             set(),
         )
-        # hf_model_page_url: alias, .gguf reference, URL keys, MLX repo,
-        # external id and empty input.
-        qwythos_page = f"https://huggingface.co/{config_module.QWWYTHOS_REPO}"
+        # hf_model_page_url: alias, URL keys, MLX repo, external id and empty input.
+        gemma_page = f"https://huggingface.co/{config_module.GEMMA_4_12B_IT_4BIT_MODEL_REPO}"
         self.assertEqual(
-            config_module.hf_model_page_url(config_module.QWWYTHOS_9B_4BIT_MODEL_ALIAS),
-            qwythos_page,
+            config_module.hf_model_page_url(config_module.GEMMA_4_12B_IT_4BIT_MODEL_ALIAS),
+            gemma_page,
         )
         self.assertEqual(
-            config_module.hf_model_page_url(config_module.QWWYTHOS_9B_4BIT_MODEL_REFERENCE),
-            qwythos_page,
+            config_module.hf_model_page_url(f"https://hf.co/{config_module.GEMMA_4_12B_IT_4BIT_MODEL_REPO}"),
+            gemma_page,
         )
         self.assertEqual(
-            config_module.hf_model_page_url(f"https://hf.co/{config_module.QWWYTHOS_9B_4BIT_MODEL_REFERENCE}"),
-            qwythos_page,
+            config_module.hf_model_page_url(f"https://huggingface.co/{config_module.GEMMA_4_12B_IT_4BIT_MODEL_REPO}"),
+            gemma_page,
         )
         self.assertEqual(
-            config_module.hf_model_page_url(f"https://huggingface.co/{config_module.QWWYTHOS_9B_4BIT_MODEL_REFERENCE}"),
-            qwythos_page,
-        )
-        self.assertEqual(
-            config_module.hf_model_page_url(f"  https://hf.co/{config_module.QWWYTHOS_9B_4BIT_MODEL_REFERENCE}  "),
-            qwythos_page,
+            config_module.hf_model_page_url(f"  https://hf.co/{config_module.GEMMA_4_12B_IT_4BIT_MODEL_REPO}  "),
+            gemma_page,
         )
         self.assertEqual(
             config_module.hf_model_page_url(config_module.CODEX_TEST_MODEL_ALIAS),
             f"https://huggingface.co/{config_module.CODEX_TEST_MODEL_NAME}",
         )
+        # The unsupported Qwythos aliases and their GGUF references have no page.
+        self.assertIsNone(config_module.hf_model_page_url(config_module.QWWYTHOS_9B_4BIT_MODEL_ALIAS))
+        self.assertIsNone(config_module.hf_model_page_url(config_module.QWWYTHOS_9B_4BIT_MODEL_REFERENCE))
         self.assertIsNone(config_module.hf_model_page_url("gpt-4o-mini"))
         self.assertIsNone(config_module.hf_model_page_url("openai/gpt-4o"))
         self.assertIsNone(config_module.hf_model_page_url("foo.gguf"))
@@ -459,6 +462,15 @@ class ConfigHelperTests(unittest.TestCase):
             url = config_module.hf_model_page_url(alias)
             self.assertIsNotNone(url, alias)
             self.assertIn(url, docs_text, f"{alias} page URL missing from README/SETTINGS")
+
+    def test_default_model_knob_points_at_gemma_and_hides_qwythos(self) -> None:
+        registry = config_module.runtime_knob_registry()
+        knob = next(k for k in registry if k["env"] == "NEWS_MODEL")
+        self.assertEqual(knob["default"], "gemma-4-12b-it-4bit")
+        self.assertIn("gemma-4-12b-it-4bit", knob["options"])
+        self.assertNotIn("qwythos-9b-8bit", knob["options"])
+        # prod preset now launches gemma
+        self.assertEqual(config_module.run_preset_env("prod")["NEWS_MODEL"], "gemma-4-12b-it-4bit")
 
     def test_yaml_scope_and_runtime_config_helpers_cover_edge_branches(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
