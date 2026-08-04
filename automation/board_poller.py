@@ -16,6 +16,9 @@ between lanes. Contract:
   Blocked with a comment; when the deps ship it returns to Todo automatically
   (and dispatches on the next poll). A dependency that closes without shipping
   posts a re-scope notice on each dependent, once per episode.
+- Runnable label: the configured `runnable` label marks open issues in Todo
+  whose dependencies are all in Done; it is removed as soon as eligibility
+  ends.
 - Verdict gate: the ship PR is merged (and the issue closed) only when the
   review run completed AND its final comment carries `VERDICT: approve`.
   Any other verdict (or none) holds the ship in In Review with a notice.
@@ -350,6 +353,97 @@ def dep_gate(deps: list[int], dep_lanes: dict[int, str], dep_states: dict[int, s
 
 def fmt_deps(nums: list[int]) -> str:
     return ", ".join(f"#{n}" for n in nums)
+
+
+def issue_is_runnable(content: dict, status: str,
+                      number_lane: dict[int, str],
+                      number_state: dict[int, str],
+                      todo_lane: str | None,
+                      done_lane: str | None) -> bool:
+    """Whether an open issue is ready to dispatch from the Todo lane."""
+    if (
+        content.get("__typename") != "Issue"
+        or content.get("state") != "OPEN"
+        or not todo_lane
+        or status != todo_lane
+        or not done_lane
+    ):
+        return False
+    unsatisfied, _ = dep_gate(
+        parse_dep_refs(content.get("body") or ""),
+        number_lane,
+        number_state,
+        done_lane,
+    )
+    return not unsatisfied
+
+
+def sync_runnable_labels(cfg: dict, env: dict, items: list[dict],
+                         number_lane: dict[int, str],
+                         number_state: dict[int, str],
+                         todo_lane: str | None,
+                         done_lane: str | None) -> None:
+    """Keep the dispatch-eligible label aligned with board state."""
+    label = cfg.get("runnable_label")
+    if not label:
+        return
+    if DRY_RUN:
+        log(f"[dry-run] ensure label {label!r} exists")
+    else:
+        try:
+            created = gh(
+                ["label", "create", label, "-R", cfg["repo"],
+                 "--color", "0e8a16",
+                 "--description", "Todo issue with satisfied dependencies",
+                 "--force"],
+                env,
+            )
+        except Exception as exc:
+            log(f"RUNNABLE LABEL ENSURE FAILED: {exc}")
+            return
+        if created.returncode != 0:
+            log(f"RUNNABLE LABEL ENSURE FAILED: "
+                f"{created.stderr.strip()[:200]}")
+            return
+
+    for item in items:
+        content = item.get("content") or {}
+        if content.get("__typename") != "Issue":
+            continue
+        if content.get("repository", {}).get("nameWithOwner") != cfg["repo"]:
+            continue
+        number = content["number"]
+        present = label in {
+            node["name"] for node in (content.get("labels") or {}).get("nodes", [])
+        }
+        desired = issue_is_runnable(
+            content,
+            item["status"],
+            number_lane,
+            number_state,
+            todo_lane,
+            done_lane,
+        )
+        if present == desired:
+            continue
+        action = "--add-label" if desired else "--remove-label"
+        if DRY_RUN:
+            log(f"[dry-run] {action} {label} issue={number}")
+            continue
+        try:
+            updated = gh(
+                ["issue", "edit", str(number), "-R", cfg["repo"],
+                 action, label],
+                env,
+            )
+        except Exception as exc:
+            log(f"RUNNABLE LABEL UPDATE FAILED issue={number}: {exc}")
+            continue
+        if updated.returncode != 0:
+            log(f"RUNNABLE LABEL UPDATE FAILED issue={number}: "
+                f"{updated.stderr.strip()[:200]}")
+            continue
+        log(f"RUNNABLE LABEL {'ADDED' if desired else 'REMOVED'} issue={number}")
 
 
 # ─── Deferred-work guard ────────────────────────────────────────────────
@@ -1029,6 +1123,10 @@ def create_deferred_issue(cfg: dict, env: dict, issue_number: int,
         + f"**What and why:** {item['description'] or 'TBD.'}\n\n"
         + (f"**Reason deferred:** {item['reason']}\n\n" if item["reason"] else "")
         + f"Context: source issue #{issue_number} ({source_title}).\n\n"
+        + "## Ownership\n\n"
+        + "Files/areas: declare before moving this issue to Todo.\n\n"
+        + "## Depends on\n\n"
+        + "None.\n\n"
         + "Acceptance criteria to be filled when this is planned."
     )
     if supersedes is not None:
@@ -1262,6 +1360,16 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
             continue
         number_lane[content["number"]] = item["status"]
         number_state[content["number"]] = content.get("state") or ""
+
+    sync_runnable_labels(
+        cfg,
+        env,
+        items,
+        number_lane,
+        number_state,
+        todo_lane_name,
+        done_lane_name,
+    )
 
     seen: set[str] = set()
     # Items dispatched in THIS poll: their run rows appear in `archon workflow
