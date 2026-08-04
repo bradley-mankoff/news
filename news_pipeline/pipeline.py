@@ -3947,6 +3947,31 @@ def _finish_run_diagnostics(diagnostics: RunDiagnostics, config: RuntimeConfig) 
     _active_run_finalizer(diagnostics, config).finish()
 
 
+def _record_report_diagnostics(
+    diagnostics: RunDiagnostics,
+    *,
+    path: str,
+    prompt_label: str,
+    recipient_list: List[str],
+    token_stats: dict[str, Any],
+    reference_reports: List[article_summary_records_stage.ArticleSummaryRecord | str],
+    citation_sources: list[dict[str, Any]],
+    citation_groups: list[dict[str, Any]],
+    image_art_diagnostics: dict[str, Any] | None,
+) -> None:
+    diagnostics.record_report(
+        path=path,
+        prompt_label=prompt_label,
+        recipient_count=len(recipient_list),
+        recipients=recipient_list,
+        token_stats=token_stats,
+        reference_report_count=len(reference_reports),
+        citation_source_count=len(citation_sources),
+        citation_group_count=len(citation_groups),
+        image_art=image_art_diagnostics,
+    )
+
+
 def _model_auth_headers() -> dict[str, str]:
     """Authorization headers for OpenAI-compatible endpoint requests.
 
@@ -4883,17 +4908,16 @@ def _run_pipeline() -> None:
                 for key, value in image_art.items()
                 if key not in {"data_uri", "image_prompt"}
             }
-        diagnostics.record_report(
+        _record_report_diagnostics(
+            diagnostics,
             path=LATEST_RUN_MARKDOWN_PATH,
             prompt_label=prompt_label,
-            recipient_count=len(recipient_list),
-            recipients=recipient_list,
+            recipient_list=recipient_list,
             token_stats=token_stats,
-            reference_report_count=len(reference_reports),
-            citation_source_count=len(citation_sources),
-            citation_group_count=len(citation_groups),
-            synthesis_dataset_artifacts=synthesis_dataset_artifacts,
-            image_art=image_art_diagnostics,
+            reference_reports=reference_reports,
+            citation_sources=citation_sources,
+            citation_groups=citation_groups,
+            image_art_diagnostics=image_art_diagnostics,
         )
 
         progress_tracker.set_final_step("email", 5)

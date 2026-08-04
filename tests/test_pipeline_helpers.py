@@ -2377,3 +2377,34 @@ class PipelineHelperTests(unittest.TestCase):
             ),
             "One two three four five six seven eight nine ten eleven",
         )
+
+    def test_report_recording_for_nonempty_synthesis(self) -> None:
+        diagnostics = pipeline.RunDiagnostics(
+            run_started_at="2026-08-03T19:04:38",
+            settings={},
+        )
+        pipeline._record_report_diagnostics(
+            diagnostics,
+            path="/tmp/latest_run.md",
+            prompt_label="default prompt",
+            recipient_list=["reader@example.com", "editor@example.com"],
+            token_stats={
+                "primary_dataset": "synthetic dataset text",
+                "included_report_keys": ["a1"],
+            },
+            reference_reports=["reference"],
+            citation_sources=[{"title": "Alpha"}],
+            citation_groups=[{"group": "g1"}],
+            image_art_diagnostics={"final_image_path": "/tmp/art.png"},
+        )
+        self.assertEqual(len(diagnostics.reports), 1)
+        report = diagnostics.reports[0]
+        self.assertEqual(report["path"], "/tmp/latest_run.md")
+        self.assertEqual(report["prompt_label"], "default prompt")
+        self.assertEqual(report["recipient_count"], 2)
+        self.assertEqual(report["recipients"], ["reader@example.com", "editor@example.com"])
+        self.assertEqual(report["reference_report_count"], 1)
+        self.assertEqual(report["citation_source_count"], 1)
+        self.assertEqual(report["citation_group_count"], 1)
+        self.assertEqual(report["image_art"], {"final_image_path": "/tmp/art.png"})
+        self.assertNotIn("synthesis_dataset_artifacts", report)
