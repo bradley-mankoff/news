@@ -2405,7 +2405,7 @@ HTML = r"""<!doctype html>
       renderModelTuningControls("title_generation");
       renderPromptProfilePanel();
       refreshModelKnobLinks();
-      preview("run").catch(() => {});
+      previewQuietly("run");
     }
     function setKnobEnv(env) {
       document.querySelectorAll("[data-env]").forEach(el => {
@@ -2535,6 +2535,16 @@ HTML = r"""<!doctype html>
       const data = await api("/api/preview", { method: "POST", body: JSON.stringify(requestBody(action)) });
       $("previewPane").textContent = data.command_text + (data.runtime_error ? `\n\nPreview error: ${data.runtime_error}` : "");
       return data;
+    }
+    async function previewQuietly(action="run") {
+      // Auto-refresh path: surface failures inline in the preview pane instead
+      // of discarding them, so a rejected config never silently freezes the
+      // preview on stale content while the user is editing.
+      try {
+        await preview(action);
+      } catch (err) {
+        $("previewPane").textContent = `Preview unavailable: ${err.message}`;
+      }
     }
     async function runAction(action="run") {
       const data = await api("/api/run", { method: "POST", body: JSON.stringify(requestBody(action)) });
@@ -2872,7 +2882,7 @@ HTML = r"""<!doctype html>
         renderModelTuningControls("title_generation");
         renderPromptProfilePanel();
         refreshModelKnobLinks();
-        preview("run").catch(() => {});
+        previewQuietly("run");
       };
       $("resetDefaultsBtn").onclick = () => {
         document.querySelectorAll("[data-env]").forEach(el => {
@@ -2887,18 +2897,18 @@ HTML = r"""<!doctype html>
         renderModelTuningControls("title_generation");
         renderPromptProfilePanel();
         refreshModelKnobLinks();
-        preview("run").catch(() => {});
+        previewQuietly("run");
       };
       $("promptProfileSelect").onchange = () => {
         renderPromptProfilePanel();
-        preview("run").catch(() => {});
+        previewQuietly("run");
       };
       $("restorePromptProfileBtn").onclick = () => {
         const el = document.querySelector('[data-env="NEWS_PROMPT_PROFILE"]');
         if (el) el.value = "";
         document.querySelectorAll("[data-env^='NEWS_PROMPT_OVERRIDE_']").forEach(editor => { editor.value = ""; });
         renderPromptProfilePanel();
-        preview("run").catch(() => {});
+        previewQuietly("run");
       };
       $("comparePromptProfileBtn").onclick = () => comparePromptProfiles().catch(err => setStatus(err.message, "bad"));
       $("sourceSearch").oninput = renderSources;
@@ -2915,13 +2925,13 @@ HTML = r"""<!doctype html>
         const modelSelect = $(meta.modelSelectId);
         if (modelSelect) modelSelect.onchange = () => {
           renderModelTuningControls(meta.runtimeKey);
-          preview("run").catch(() => {});
+          previewQuietly("run");
         };
         const tuningSelect = $(meta.presetSelectId);
         if (tuningSelect) tuningSelect.onchange = () => {
           const preset = state.modelTuningPresets.find(item => item.id === tuningSelect.value) || null;
           if (preset) loadModelTuningEditor(meta.runtimeKey, preset);
-          preview("run").catch(() => {});
+          previewQuietly("run");
         };
         $(meta.saveButtonId).onclick = () => saveModelTuningPreset(meta.runtimeKey).catch(err => setStatus(err.message, "bad"));
         $(meta.renameButtonId).onclick = () => renameModelTuningPreset(meta.runtimeKey).catch(err => setStatus(err.message, "bad"));
@@ -2972,7 +2982,7 @@ HTML = r"""<!doctype html>
       }
       $("sourceOptions").classList.add("hidden");
       $("actionSelect").onchange();
-      await preview("run").catch(() => {});
+      await previewQuietly("run");
     }
     init().catch(err => setStatus(err.message, "bad"));
   </script>

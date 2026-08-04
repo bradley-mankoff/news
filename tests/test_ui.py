@@ -752,8 +752,10 @@ class UITests(unittest.TestCase):
         self.assertEqual(preview["removed_topic_env_vars"], ["NEWS_TOPIC_IDS"])
 
     def test_preview_rejects_different_task_model_on_managed_base_url(self) -> None:
-        # Regression for #113: the preview must report the incompatible
+        # Regression for #113: the preview must raise on the incompatible
         # model/base-URL combination instead of showing a clean command.
+        # build_command re-raises the config ValueError, which the /api/preview
+        # route serializes via _send_error_json for the browser.
         with patch.dict(os.environ, {"NEWS_MODEL": CODEX_TEST_MODEL_ALIAS}, clear=True):
             with self.assertRaisesRegex(
                 ValueError,
