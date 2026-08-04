@@ -2415,10 +2415,6 @@ HTML = r"""<!doctype html>
       refreshModelKnobLinks();
       preview("run").catch(() => {});
     }
-      renderPromptProfilePanel();
-      refreshModelKnobLinks();
-      previewQuietly("run");
-    }
     function setKnobEnv(env) {
       document.querySelectorAll("[data-env]").forEach(el => {
         const val = env[el.dataset.env] || "";
@@ -2955,9 +2951,9 @@ HTML = r"""<!doctype html>
           setStatus(`Run ${active.run_id} is active (${active.status}).`, "warn");
         }
       } catch (_err) { /* runs endpoint is best-effort at boot */ }
-      updateRunControls();
       renderTabs();
       renderRunSetup();
+      updateRunControls();
       renderAdvancedPanels();
       renderAdvancedKnobs();
       renderStats();

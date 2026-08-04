@@ -153,6 +153,19 @@ class UITests(unittest.TestCase):
         self.assertLess(
             boot.index("renderAdvancedPanels();"), boot.index("renderAdvancedKnobs();")
         )
+    def test_reset_all_overrides_has_no_stray_statements(self) -> None:
+        html = ui_module.HTML
+        reset = html.split("function resetAllOverrides()", 1)[1].split(
+            "function setKnobEnv", 1
+        )[0]
+        self.assertIn('preview("run").catch(() => {});', reset)
+        self.assertNotIn('previewQuietly("run");\n    }\n', reset)
+    def test_run_controls_update_after_run_setup_renders(self) -> None:
+        html = ui_module.HTML
+        boot = html.split("async function init()", 1)[1].split("init().catch", 1)[0]
+        self.assertLess(boot.index("renderRunSetup();"), boot.index("updateRunControls();"))
+
+
 
     def test_run_setup_single_default_model_card(self) -> None:
         html = ui_module.HTML
