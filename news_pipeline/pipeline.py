@@ -96,9 +96,7 @@ from .config import (
     RuntimeConfig,
     DEFAULT_TITLE_GENERATION_MAX_TOKENS,
     MODEL_BACKEND_EXTERNAL,
-    MODEL_TASK_ARTICLE_SUMMARY,
     MODEL_TASK_IMAGE_ART_DIRECTION,
-    MODEL_TASK_STORY_DRAFTING,
     MODEL_TASK_STORY_SCALE_SCREENING,
     MODEL_TASK_TITLE_GENERATION,
     configured_model_api_key,
@@ -2516,22 +2514,18 @@ def _normalized_model_task(task: str) -> str:
     return clean_task or "default"
 
 
+# image_art_direction is produced by the same LLM call as title_generation
+# (generate_image_art_brief); it inherits that assignment by design.
+# story_discovery has no LLM stage (TF-IDF/embedding clustering); it inherits default.
+_TASK_MODEL_ASSIGNMENT_ALIASES = {
+    MODEL_TASK_IMAGE_ART_DIRECTION: MODEL_TASK_TITLE_GENERATION,
+}
+
+
 def _task_model_assignment(task: str):
     normalized_task = _normalized_model_task(task)
-    if normalized_task == MODEL_TASK_ARTICLE_SUMMARY:
-        return MODEL_ASSIGNMENTS[MODEL_TASK_ARTICLE_SUMMARY]
-    if normalized_task == MODEL_TASK_STORY_DRAFTING:
-        return MODEL_ASSIGNMENTS[MODEL_TASK_STORY_DRAFTING]
-    if normalized_task == MODEL_TASK_STORY_SCALE_SCREENING:
-        return MODEL_ASSIGNMENTS[MODEL_TASK_STORY_SCALE_SCREENING]
-    if normalized_task == MODEL_TASK_TITLE_GENERATION:
-        return MODEL_ASSIGNMENTS[MODEL_TASK_TITLE_GENERATION]
-    # image_art_direction is produced by the same LLM call as title_generation
-    # (generate_image_art_brief); it inherits that assignment by design.
-    if normalized_task == MODEL_TASK_IMAGE_ART_DIRECTION:
-        return MODEL_ASSIGNMENTS[MODEL_TASK_TITLE_GENERATION]
-    # story_discovery has no LLM stage (TF-IDF/embedding clustering); it inherits default.
-    return MODEL_ASSIGNMENTS["default"]
+    resolved_task = _TASK_MODEL_ASSIGNMENT_ALIASES.get(normalized_task, normalized_task)
+    return MODEL_ASSIGNMENTS.get(resolved_task, MODEL_ASSIGNMENTS["default"])
 
 
 def build_chat_model(max_tokens: int, *, task: str = "default") -> ChatOpenAI:
@@ -3023,7 +3017,6 @@ def maybe_email_report(
                 f"[email] Image attachment read failed ({type(error).__name__}: {error}); "
                 "sending email without attached image."
             )
-            html_image_art = image_art
 
     def build_message(recipient_email: str, recipient_name: str) -> EmailMessage:
         first_name = _extract_first_name(recipient_name or recipient_email)
