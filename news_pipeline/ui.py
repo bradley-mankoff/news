@@ -1480,10 +1480,7 @@ HTML = r"""<!doctype html>
         renameButtonId: "article_tuning_rename",
         deleteButtonId: "article_tuning_delete",
         modelMaxTokensId: "article_model_max_input_tokens",
-        maxTokensField: "article_summary_max_tokens",
-        maxTokensLabel: "Article summary max tokens",
         taskMaxTokensEnv: "NEWS_ARTICLE_SUMMARY_MAX_TOKENS",
-        taskMaxTokensLabel: "Article summary max tokens",
         taskSamplingPrefix: "NEWS_MODEL_ARTICLE_SUMMARY",
         runtimeKey: "article_summary"
       },
@@ -1503,10 +1500,7 @@ HTML = r"""<!doctype html>
         renameButtonId: "story_tuning_rename",
         deleteButtonId: "story_tuning_delete",
         modelMaxTokensId: null,
-        maxTokensField: "story_drafting_max_tokens",
-        maxTokensLabel: "Story drafting max tokens",
         taskMaxTokensEnv: "NEWS_STORY_DRAFTING_MAX_TOKENS",
-        taskMaxTokensLabel: "Story drafting max tokens",
         taskSamplingPrefix: "NEWS_MODEL_STORY_DRAFTING",
         runtimeKey: "story_drafting"
       },
@@ -1526,10 +1520,7 @@ HTML = r"""<!doctype html>
         renameButtonId: "scale_tuning_rename",
         deleteButtonId: "scale_tuning_delete",
         modelMaxTokensId: null,
-        maxTokensField: "story_scale_screening_max_tokens",
-        maxTokensLabel: "Scale screening max tokens",
         taskMaxTokensEnv: "NEWS_STORY_SCALE_SCREENING_MAX_TOKENS",
-        taskMaxTokensLabel: "Scale screening max tokens",
         taskSamplingPrefix: "NEWS_MODEL_STORY_SCALE_SCREENING",
         runtimeKey: "story_scale_screening"
       },
@@ -1549,10 +1540,7 @@ HTML = r"""<!doctype html>
         renameButtonId: "title_tuning_rename",
         deleteButtonId: "title_tuning_delete",
         modelMaxTokensId: null,
-        maxTokensField: "title_generation_max_tokens",
-        maxTokensLabel: "Title generation max tokens",
         taskMaxTokensEnv: "NEWS_TITLE_GENERATION_MAX_TOKENS",
-        taskMaxTokensLabel: "Title generation max tokens",
         taskSamplingPrefix: "NEWS_MODEL_TITLE_GENERATION",
         runtimeKey: "title_generation"
       }
