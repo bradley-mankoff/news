@@ -527,6 +527,23 @@ class ConfigHelperTests(unittest.TestCase):
             self.assertIsNotNone(url, alias)
             self.assertIn(url, docs_text, f"{alias} page URL missing from README/SETTINGS")
 
+    def test_mlx_vlm_floor_is_gemma_4_capable(self) -> None:
+        """The managed mlx-vlm backend must be able to load the default
+        gemma4_unified model type (issue #124): floor >= 0.6.4 in both
+        pyproject.toml and uv.lock."""
+        import tomllib
+
+        repo_root = Path(__file__).resolve().parents[1]
+        pyproject = tomllib.loads((repo_root / "pyproject.toml").read_text(encoding="utf-8"))
+        mlx_vlm_dep = next(
+            d for d in pyproject["project"]["dependencies"] if d.startswith("mlx-vlm")
+        )
+        self.assertIn(">=0.6.4", mlx_vlm_dep)
+        lock = tomllib.loads((repo_root / "uv.lock").read_text(encoding="utf-8"))
+        mlx_vlm = next(p for p in lock["package"] if p["name"] == "mlx-vlm")
+        major, minor = (int(x) for x in mlx_vlm["version"].split(".")[:2])
+        self.assertGreaterEqual((major, minor), (0, 6), mlx_vlm["version"])
+
     def test_default_model_knob_points_at_gemma_and_hides_qwythos(self) -> None:
         registry = config_module.runtime_knob_registry()
         knob = next(k for k in registry if k["env"] == "NEWS_MODEL")
