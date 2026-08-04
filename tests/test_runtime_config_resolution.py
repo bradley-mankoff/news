@@ -560,6 +560,21 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
                 materialize_outputs=False,
             )
 
+    def test_managed_default_rejects_task_model_on_trailing_slash_base_url(self) -> None:
+        # Regression for #113: URL spelling variants (trailing slash) of the
+        # shared base URL must still trip the early rejection instead of
+        # falling through to the old mid-run failure.
+        with self.assertRaisesRegex(ValueError, "Managed model server cannot serve"):
+            load_runtime_config(
+                environ={},
+                overrides={
+                    "NEWS_MODEL": CODEX_TEST_MODEL_ALIAS,
+                    "NEWS_MODEL_ARTICLE_SUMMARY": QWWYTHOS_9B_4BIT_MODEL_ALIAS,
+                    "NEWS_MODEL_ARTICLE_SUMMARY_BASE_URL": "http://127.0.0.1:8080/v1/",
+                },
+                materialize_outputs=False,
+            )
+
     def test_external_backend_allows_different_task_models_on_shared_base_url(self) -> None:
         # External OpenAI-compatible endpoints can serve multiple models; the
         # managed-server restriction does not apply.
