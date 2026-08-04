@@ -1451,6 +1451,7 @@ HTML = r"""<!doctype html>
         deleteButtonId: "article_tuning_delete",
         modelMaxTokensId: "article_model_max_input_tokens",
         taskMaxTokensEnv: "NEWS_ARTICLE_SUMMARY_MAX_TOKENS",
+        taskMaxTokensLabel: "Article summary max tokens",
         taskSamplingPrefix: "NEWS_MODEL_ARTICLE_SUMMARY",
         runtimeKey: "article_summary"
       },
@@ -1471,6 +1472,7 @@ HTML = r"""<!doctype html>
         deleteButtonId: "story_tuning_delete",
         modelMaxTokensId: null,
         taskMaxTokensEnv: "NEWS_STORY_DRAFTING_MAX_TOKENS",
+        taskMaxTokensLabel: "Story drafting max tokens",
         taskSamplingPrefix: "NEWS_MODEL_STORY_DRAFTING",
         runtimeKey: "story_drafting"
       },
@@ -1491,6 +1493,7 @@ HTML = r"""<!doctype html>
         deleteButtonId: "scale_tuning_delete",
         modelMaxTokensId: null,
         taskMaxTokensEnv: "NEWS_STORY_SCALE_SCREENING_MAX_TOKENS",
+        taskMaxTokensLabel: "Scale screening max tokens",
         taskSamplingPrefix: "NEWS_MODEL_STORY_SCALE_SCREENING",
         runtimeKey: "story_scale_screening"
       },
@@ -1511,6 +1514,7 @@ HTML = r"""<!doctype html>
         deleteButtonId: "title_tuning_delete",
         modelMaxTokensId: null,
         taskMaxTokensEnv: "NEWS_TITLE_GENERATION_MAX_TOKENS",
+        taskMaxTokensLabel: "Title generation max tokens",
         taskSamplingPrefix: "NEWS_MODEL_TITLE_GENERATION",
         runtimeKey: "title_generation"
       }
@@ -1878,47 +1882,6 @@ HTML = r"""<!doctype html>
       const storyModel = knobField("NEWS_MODEL_STORY_DRAFTING", "Story model", { emptyLabel: "default: qwythos-9b-8bit" });
       const scaleModel = knobField("NEWS_MODEL_STORY_SCALE_SCREENING", "Scale screening model", { emptyLabel: "default: qwythos-9b-8bit" });
       const titleModel = knobField("NEWS_MODEL_TITLE_GENERATION", "Title generation model", { emptyLabel: "default: qwythos-9b-8bit" });
-      const sharedModelTokens = knobField("NEWS_MODEL_MAX_INPUT_TOKENS", "Shared model input cap");
-      const articleTokenCap = knobField("NEWS_ARTICLE_SUMMARY_MAX_TOKENS", "Article summary max tokens");
-      const storyTokenCap = knobField("NEWS_STORY_DRAFTING_MAX_TOKENS", "Story drafting max tokens");
-      const scaleTokenCap = knobField("NEWS_STORY_SCALE_SCREENING_MAX_TOKENS", "Scale screening max tokens");
-      const titleTokenCap = knobField("NEWS_TITLE_GENERATION_MAX_TOKENS", "Title generation max tokens");
-      const articleBaseUrl = knobField("NEWS_MODEL_ARTICLE_SUMMARY_BASE_URL", "Base URL");
-      const storyBaseUrl = knobField("NEWS_MODEL_STORY_DRAFTING_BASE_URL", "Base URL");
-      const scaleBaseUrl = knobField("NEWS_MODEL_STORY_SCALE_SCREENING_BASE_URL", "Base URL");
-      const titleBaseUrl = knobField("NEWS_MODEL_TITLE_GENERATION_BASE_URL", "Base URL");
-      const articleSampling = [
-        knobField("NEWS_MODEL_ARTICLE_SUMMARY_TEMPERATURE", "Temperature"),
-        knobField("NEWS_MODEL_ARTICLE_SUMMARY_TOP_P", "Top P"),
-        knobField("NEWS_MODEL_ARTICLE_SUMMARY_TOP_K", "Top K"),
-        knobField("NEWS_MODEL_ARTICLE_SUMMARY_MIN_P", "Min P"),
-        knobField("NEWS_MODEL_ARTICLE_SUMMARY_PRESENCE_PENALTY", "Presence penalty"),
-        knobField("NEWS_MODEL_ARTICLE_SUMMARY_REPETITION_PENALTY", "Repetition penalty")
-      ].join("");
-      const storySampling = [
-        knobField("NEWS_MODEL_STORY_DRAFTING_TEMPERATURE", "Temperature"),
-        knobField("NEWS_MODEL_STORY_DRAFTING_TOP_P", "Top P"),
-        knobField("NEWS_MODEL_STORY_DRAFTING_TOP_K", "Top K"),
-        knobField("NEWS_MODEL_STORY_DRAFTING_MIN_P", "Min P"),
-        knobField("NEWS_MODEL_STORY_DRAFTING_PRESENCE_PENALTY", "Presence penalty"),
-        knobField("NEWS_MODEL_STORY_DRAFTING_REPETITION_PENALTY", "Repetition penalty")
-      ].join("");
-      const scaleSampling = [
-        knobField("NEWS_MODEL_STORY_SCALE_SCREENING_TEMPERATURE", "Temperature"),
-        knobField("NEWS_MODEL_STORY_SCALE_SCREENING_TOP_P", "Top P"),
-        knobField("NEWS_MODEL_STORY_SCALE_SCREENING_TOP_K", "Top K"),
-        knobField("NEWS_MODEL_STORY_SCALE_SCREENING_MIN_P", "Min P"),
-        knobField("NEWS_MODEL_STORY_SCALE_SCREENING_PRESENCE_PENALTY", "Presence penalty"),
-        knobField("NEWS_MODEL_STORY_SCALE_SCREENING_REPETITION_PENALTY", "Repetition penalty")
-      ].join("");
-      const titleSampling = [
-        knobField("NEWS_MODEL_TITLE_GENERATION_TEMPERATURE", "Temperature"),
-        knobField("NEWS_MODEL_TITLE_GENERATION_TOP_P", "Top P"),
-        knobField("NEWS_MODEL_TITLE_GENERATION_TOP_K", "Top K"),
-        knobField("NEWS_MODEL_TITLE_GENERATION_MIN_P", "Min P"),
-        knobField("NEWS_MODEL_TITLE_GENERATION_PRESENCE_PENALTY", "Presence penalty"),
-        knobField("NEWS_MODEL_TITLE_GENERATION_REPETITION_PENALTY", "Repetition penalty")
-      ].join("");
       $("runSetupMount").innerHTML = `
         <div class="banner panel">
           <div class="banner-copy">
@@ -2143,7 +2106,7 @@ HTML = r"""<!doctype html>
             <label class="field"><span>Display name</span><input id="${meta.nameInputId}"><code>name</code></label>
             <label class="field"><span>Description</span><textarea id="${meta.descriptionInputId}"></textarea><code>description</code></label>
             ${sharedCap}
-            ${knobField(meta.taskMaxTokensEnv, task === "article_summary" ? "Article summary max tokens" : task === "story_drafting" ? "Story drafting max tokens" : task === "story_scale_screening" ? "Scale screening max tokens" : "Title generation max tokens")}
+            ${knobField(meta.taskMaxTokensEnv, meta.taskMaxTokensLabel)}
             ${knobField(meta.baseUrlEnv, "Base URL")}
             ${samplingFields(meta.taskSamplingPrefix)}
           </div>
@@ -2262,20 +2225,8 @@ HTML = r"""<!doctype html>
       const sharedMax = valueByEnv("NEWS_MODEL_MAX_INPUT_TOKENS");
       if (sharedMax) tuning.model_max_input_tokens = sharedMax;
       const taskMax = valueByEnv(meta.taskMaxTokensEnv);
-      if (taskMax) {
-        if (task === "article_summary") tuning.article_summary_max_tokens = taskMax;
-        if (task === "story_drafting") tuning.story_drafting_max_tokens = taskMax;
-        if (task === "story_scale_screening") tuning.story_scale_screening_max_tokens = taskMax;
-        if (task === "title_generation") tuning.title_generation_max_tokens = taskMax;
-      }
-      const samplingFields = [
-        ["temperature", `${meta.taskSamplingPrefix}_TEMPERATURE`],
-        ["top_p", `${meta.taskSamplingPrefix}_TOP_P`],
-        ["top_k", `${meta.taskSamplingPrefix}_TOP_K`],
-        ["min_p", `${meta.taskSamplingPrefix}_MIN_P`],
-        ["presence_penalty", `${meta.taskSamplingPrefix}_PRESENCE_PENALTY`],
-        ["repetition_penalty", `${meta.taskSamplingPrefix}_REPETITION_PENALTY`]
-      ];
+      if (taskMax) tuning[`${meta.runtimeKey}_max_tokens`] = taskMax;
+      const samplingFields = SAMPLING_FIELDS.map(([suffix]) => [suffix.toLowerCase(), `${meta.taskSamplingPrefix}_${suffix}`]);
       samplingFields.forEach(([key, env]) => {
         const raw = valueByEnv(env);
         if (raw) tuning[key] = raw;
@@ -2306,11 +2257,10 @@ HTML = r"""<!doctype html>
       if (preset) {
         const tuning = preset.tuning || {};
         if (tuning.model_max_input_tokens) setControlValue("NEWS_MODEL_MAX_INPUT_TOKENS", tuning.model_max_input_tokens);
-        if (task === "article_summary" && tuning.article_summary_max_tokens) setControlValue("NEWS_ARTICLE_SUMMARY_MAX_TOKENS", tuning.article_summary_max_tokens);
-        if (task === "story_drafting" && tuning.story_drafting_max_tokens) setControlValue("NEWS_STORY_DRAFTING_MAX_TOKENS", tuning.story_drafting_max_tokens);
-        if (task === "story_scale_screening" && tuning.story_scale_screening_max_tokens) setControlValue("NEWS_STORY_SCALE_SCREENING_MAX_TOKENS", tuning.story_scale_screening_max_tokens);
-        if (task === "title_generation" && tuning.title_generation_max_tokens) setControlValue("NEWS_TITLE_GENERATION_MAX_TOKENS", tuning.title_generation_max_tokens);
-        [["temperature","TEMPERATURE"],["top_p","TOP_P"],["top_k","TOP_K"],["min_p","MIN_P"],["presence_penalty","PRESENCE_PENALTY"],["repetition_penalty","REPETITION_PENALTY"]].forEach(([field, suffix]) => {
+        const taskMaxTokens = tuning[`${meta.runtimeKey}_max_tokens`];
+        if (taskMaxTokens) setControlValue(meta.taskMaxTokensEnv, taskMaxTokens);
+        SAMPLING_FIELDS.forEach(([suffix]) => {
+          const field = suffix.toLowerCase();
           if (tuning[field] !== undefined && tuning[field] !== null && tuning[field] !== "") {
             setControlValue(`${meta.taskSamplingPrefix}_${suffix}`, tuning[field]);
           }
