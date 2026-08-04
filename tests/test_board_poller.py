@@ -11,6 +11,7 @@ from automation.board_poller import (
     conflict_episode_action,
     dedupe_deferred,
     dep_gate,
+    issue_is_runnable,
     develop_conflict_action,
     fetch_project,
     find_unchecked_criteria,
@@ -27,6 +28,7 @@ from automation.board_poller import (
     run_status_for,
     sync_local_develop,
     try_merge_base_into_head,
+    sync_runnable_labels,
 )
 
 
@@ -194,6 +196,65 @@ class DepGateTest(unittest.TestCase):
         self.assertEqual(
             dep_gate([5], {5: "Todo"}, {5: "OPEN"}, "Done"), ([5], []))
 
+
+
+class RunnableLabelTest(unittest.TestCase):
+    def _issue(self, number, status, body="", labels=None, state="OPEN"):
+        return {
+            "id": f"item-{number}",
+            "status": status,
+            "content": {
+                "__typename": "Issue",
+                "number": number,
+                "state": state,
+                "body": body,
+                "repository": {"nameWithOwner": "r"},
+                "labels": {"nodes": [{"name": name} for name in (labels or [])]},
+            },
+        }
+
+    def test_only_open_todo_issue_with_satisfied_deps_is_runnable(self):
+        issue = self._issue(8, "Todo", "Depends on: #7")
+        self.assertTrue(issue_is_runnable(
+            issue["content"], issue["status"],
+            {7: "Done"}, {7: "CLOSED"}, "Todo", "Done"))
+        self.assertFalse(issue_is_runnable(
+            issue["content"], "In Progress",
+            {7: "Done"}, {7: "CLOSED"}, "Todo", "Done"))
+        self.assertFalse(issue_is_runnable(
+            issue["content"], issue["status"],
+            {7: "Todo"}, {7: "OPEN"}, "Todo", "Done"))
+
+    @patch("automation.board_poller.gh")
+    def test_sync_adds_and_removes_label(self, gh):
+        gh.return_value = subprocess.CompletedProcess([], 0, stdout="", stderr="")
+        items = [
+            self._issue(8, "Todo"),
+            self._issue(9, "In Progress", labels=["runnable"]),
+        ]
+        sync_runnable_labels(
+            {"repo": "r", "runnable_label": "runnable"},
+            {},
+            items,
+            {8: "Todo", 9: "In Progress"},
+            {8: "OPEN", 9: "OPEN"},
+            "Todo",
+            "Done",
+        )
+        commands = [call.args[0] for call in gh.call_args_list]
+        self.assertIn(
+            ["label", "create", "runnable", "-R", "r", "--color", "0e8a16",
+             "--description", "Todo issue with satisfied dependencies", "--force"],
+            commands,
+        )
+        self.assertIn(
+            ["issue", "edit", "8", "-R", "r", "--add-label", "runnable"],
+            commands,
+        )
+        self.assertIn(
+            ["issue", "edit", "9", "-R", "r", "--remove-label", "runnable"],
+            commands,
+        )
 
 class ParseVerdictTest(unittest.TestCase):
     def test_approve(self):

@@ -40,15 +40,22 @@ The repo runs a fully automated agentic loop driven by the GitHub project board
 - **Slicing convention:** slice issues as tracer bullets — narrow, end-to-end
   vertical slices (schema → API → UI → tests), each demoable and sized to one
   context window — and keep parallel runs merge-safe by declaring file/area
-  ownership in the plan. Two issues may run in parallel only when their
-  planned file sets are disjoint; overlapping ownership means the later one
-  declares `Depends on: #<earlier>`. Any set of issues with satisfied
-  dependencies can be triggered together.
+  ownership in the plan. Ownership may be function- or component-level when
+  two changes truly touch different parts of one file. Two issues may run in
+  parallel only when their planned ownership areas are disjoint; overlapping
+  ownership means the later one declares `Depends on: #<earlier>`. Any set of
+  issues with satisfied dependencies can be triggered together.
 - A `Depends on: #N` line (one line; `#42, #57` for several) gates dispatch:
   an issue dragged to `Todo` with an unsatisfied dependency moves to `Blocked`
-  with a comment and returns to `Todo` (auto-dispatch) when the
-  dependency ships. `Blocked` is exclusively dependency gating; `Needs Input`
-  is exclusively NEEDS INPUT questions.
+  with a comment and returns to `Todo` (auto-dispatch) when the dependency
+  ships. `Blocked` is exclusively dependency gating; `Needs Input` is
+  exclusively NEEDS INPUT questions.
+- `priority: critical` is the human queue-priority label for production
+  blockers. Filter the project by that label to bubble critical bugs above
+  normal backlog work; labels do not change the board's manual card order.
+- `runnable` is maintained by the poller: it marks open issues in `Todo` whose
+  declared dependencies are all in `Done`, and is removed when the issue is
+  blocked, dispatched, closed, or otherwise leaves `Todo`.
 - Moving an issue into `Todo` triggers an Archon workflow (label-aware: `bug`
   → `archon-fix-github-issue`, `feature`/`enhancement` → `archon-idea-to-pr`,
   default → `archon-fix-github-issue`), and the poller moves the issue to
