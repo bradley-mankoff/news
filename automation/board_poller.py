@@ -373,6 +373,9 @@ def parse_deferred_work(body: str) -> list[dict] | None:
         **Skip:** <reason>     (never-to-be-done — do not create)
     Returns None when the section is absent; [] when the section is present
     but empty or `*None.*` (the contract's explicit "nothing deferred" form).
+    Indented fields: `**Links to:** #N` (already tracked — the model judged it
+    covered), `**Supersedes:** #N` (closed issue — create a new one referencing
+    it), `**Skip:** <reason>` (never-to-be-done — do not create).
     """
     m = DEFERRED_SECTION_RE.search(body or "")
     if not m:

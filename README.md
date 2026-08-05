@@ -81,7 +81,7 @@ The repo runs a fully automated agentic loop driven by the GitHub project board
    CRITICAL/HIGH findings. It runs on the final diff — including anything you
    changed during testing.
 
-The workflows are the stock Archon 0.7.0 pi-usable set, curated in the archon
+The workflows are the stock Archon 0.6.0 pi-usable set, curated in the archon
 home (`workflows/`); claude-only workflows are archived, not discovered. Full
 inventory: `docs/archon-workflows.md`.
 
@@ -128,10 +128,6 @@ human, by design:
 - `automation/move_item.py` — move an issue to a lane from the CLI.
 - `automation/create_issue.py` — create an issue and land it on the board in
   the default lane in one step.
-- `automation/board_health.py` — read-only board health report: stale runs,
-  unknown blockers, unsatisfied dependencies (exit 0 always).
-- `automation/deploy.sh` — re-apply local archon workflow edits and restart
-  the board poller after a deploy or archon reinstall.
 - `automation/apply_workflow_edits.py` — idempotently re-apply the local
   archon workflow edits (completion-comment nodes with the Deferred-work
   contract, `report-verdict`, `archon-fix-ship-conflicts`) after an archon
@@ -203,7 +199,7 @@ Run with a saved preset or explicit overrides:
 
 ```bash
 uv run news run --preset NAME
-NEWS_SOURCE_SCOPE=peripheral NEWS_RECIPIENT_SCOPE=primary uv run news run
+NEWS_SOURCE_SCOPE=peripheral NEWS_RECIPIENT_SCOPE=bradley uv run news run
 ```
 
 Useful utility commands:
@@ -246,7 +242,7 @@ Key Run Settings:
 
 - `NEWS_SOURCE_SCOPE=core|peripheral`: `peripheral` includes both core and
   peripheral sources.
-- `NEWS_RECIPIENT_SCOPE=primary|all`: send to the primary recipient only or all active
+- `NEWS_RECIPIENT_SCOPE=bradley|all`: send to the primary recipient only or all active
   configured recipients.
 - `NEWS_BLOCK_REUSED_URLS=0|1`: every run records URL history; only `1` makes
   previously recorded URLs block future reuse.
@@ -277,12 +273,11 @@ NEWS_PROMPT_PROFILE=facts-only uv run news run
 
 Built-in profiles: `balanced` (default), `consensus-and-contradiction`,
 `playful`, `facts-only`, `explain-like-im-five`. The UI's "Editorial approach"
-panel selects a profile, edits per-stage prompts (defaults visible), and
-restores defaults per stage or globally. Per-stage edits are stored in
-`NEWS_PROMPT_OVERRIDE_<TASK>` env vars and layer on top of the selected
-profile (override wins). The full per-task prompt templates and diffs against
-`balanced` are under Advanced Settings. Profiles can also be pinned inside a
-Run Preset's `env` map.
+panel selects a profile, edits per-stage prompts (defaults visible), restores
+defaults per stage or globally, and shows per-task diffs against `balanced`.
+Per-stage edits are stored in `NEWS_PROMPT_OVERRIDE_<TASK>` env vars and layer
+on top of the selected profile (override wins). Profiles can also be pinned
+inside a Run Preset's `env` map.
 
 ### Model Selection
 
@@ -516,7 +511,7 @@ The `dev` preset:
 - Uses `gemma-e2b-tiny` (the smallest model — the only one we keep for
   local testing now that the standard Gemma 4 12B model is the default).
 - Sets `NEWS_SOURCE_SCOPE=core` (the narrowest source pool).
-- Sets `NEWS_RECIPIENT_SCOPE=primary` (sends only to the primary
+- Sets `NEWS_RECIPIENT_SCOPE=bradley` (sends only to the primary
   recipient).
 - Disables image generation and URL reuse blocking.
 - Sets `NEWS_MIN_ARTICLES_PER_STORY=2` and relaxes story drafting guards.

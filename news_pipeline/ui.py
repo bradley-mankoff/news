@@ -1402,7 +1402,6 @@ HTML = r"""<!doctype html>
     // be listed here so renderAdvancedKnobs() omits it from the raw override
     // list; otherwise the env appears twice and collectEnv() gets two inputs.
     const SURFACED_ENVS = new Set([
-      "NEWS_MODEL",  // dedicated "Default model" knob in Run Setup; suppress the Advanced-tab duplicate
       "NEWS_SOURCE_SCOPE",
       "NEWS_RECIPIENT_SCOPE",
       "NEWS_PROMPT_PROFILE",  // has a dedicated panel control; suppress the Advanced-tab duplicate
@@ -1411,6 +1410,10 @@ HTML = r"""<!doctype html>
       "NEWS_PROMPT_OVERRIDE_STORY_DRAFTING",        // the Advanced-tab duplicates
       "NEWS_PROMPT_OVERRIDE_TITLE_GENERATION",
       "NEWS_PROMPT_OVERRIDE_IMAGE_ART_DIRECTION",
+      "NEWS_MODEL_ARTICLE_SUMMARY",
+      "NEWS_MODEL_STORY_DRAFTING",
+      "NEWS_MODEL_STORY_SCALE_SCREENING",
+      "NEWS_MODEL_TITLE_GENERATION",
       "NEWS_MODEL_ARTICLE_SUMMARY_TUNING_PRESET",
       "NEWS_MODEL_STORY_DRAFTING_TUNING_PRESET",
       "NEWS_MODEL_STORY_SCALE_SCREENING_TUNING_PRESET",
@@ -1463,6 +1466,7 @@ HTML = r"""<!doctype html>
       "NEWS_STORY_SCALE_SCREENING_ENABLED",
       "NEWS_RELAX_STORY_DRAFTING_GUARDS"
     ]);
+
     const TASK_CONFIG = {
       article_summary: {
         label: "Article Summarization",
@@ -1480,6 +1484,8 @@ HTML = r"""<!doctype html>
         renameButtonId: "article_tuning_rename",
         deleteButtonId: "article_tuning_delete",
         modelMaxTokensId: "article_model_max_input_tokens",
+        maxTokensField: "article_summary_max_tokens",
+        maxTokensLabel: "Article summary max tokens",
         taskMaxTokensEnv: "NEWS_ARTICLE_SUMMARY_MAX_TOKENS",
         taskSamplingPrefix: "NEWS_MODEL_ARTICLE_SUMMARY",
         runtimeKey: "article_summary"
@@ -1500,6 +1506,8 @@ HTML = r"""<!doctype html>
         renameButtonId: "story_tuning_rename",
         deleteButtonId: "story_tuning_delete",
         modelMaxTokensId: null,
+        maxTokensField: "story_drafting_max_tokens",
+        maxTokensLabel: "Story drafting max tokens",
         taskMaxTokensEnv: "NEWS_STORY_DRAFTING_MAX_TOKENS",
         taskSamplingPrefix: "NEWS_MODEL_STORY_DRAFTING",
         runtimeKey: "story_drafting"
@@ -1520,6 +1528,8 @@ HTML = r"""<!doctype html>
         renameButtonId: "scale_tuning_rename",
         deleteButtonId: "scale_tuning_delete",
         modelMaxTokensId: null,
+        maxTokensField: "story_scale_screening_max_tokens",
+        maxTokensLabel: "Scale screening max tokens",
         taskMaxTokensEnv: "NEWS_STORY_SCALE_SCREENING_MAX_TOKENS",
         taskSamplingPrefix: "NEWS_MODEL_STORY_SCALE_SCREENING",
         runtimeKey: "story_scale_screening"
@@ -1540,6 +1550,8 @@ HTML = r"""<!doctype html>
         renameButtonId: "title_tuning_rename",
         deleteButtonId: "title_tuning_delete",
         modelMaxTokensId: null,
+        maxTokensField: "title_generation_max_tokens",
+        maxTokensLabel: "Title generation max tokens",
         taskMaxTokensEnv: "NEWS_TITLE_GENERATION_MAX_TOKENS",
         taskSamplingPrefix: "NEWS_MODEL_TITLE_GENERATION",
         runtimeKey: "title_generation"
@@ -1894,7 +1906,10 @@ HTML = r"""<!doctype html>
     function renderRunSetup() {
       const schema = state.schema || {};
       const runtime = schema.runtime || {};
-      const defaultRuntime = runtime.model ? runtime.model : {};
+      const articleRuntime = runtime.model && runtime.model.article_summary ? runtime.model.article_summary : {};
+      const storyRuntime = runtime.model && runtime.model.story_drafting ? runtime.model.story_drafting : {};
+      const scaleRuntime = runtime.model && runtime.model.story_scale_screening ? runtime.model.story_scale_screening : {};
+      const titleRuntime = runtime.model && runtime.model.title_generation ? runtime.model.title_generation : {};
       const runtimeError = schema.runtime_error || "";
       const actionOptions = (schema.actions || []).map(action => `<option value="${escapeHtml(action)}"${action === "run" ? " selected" : ""}>${escapeHtml(action)}</option>`).join("");
       const promptProfileOptions = (schema.prompt_profiles || []).map(p => `<option value="${escapeHtml(p.id)}"${currentControlValue("NEWS_PROMPT_PROFILE") === p.id ? " selected" : ""}>${escapeHtml(p.name)}</option>`).join("");
@@ -1907,7 +1922,10 @@ HTML = r"""<!doctype html>
         primary: "Primary-only",
         all: "All"
       };
-      const defaultModel = knobField("NEWS_MODEL", "Default model", { emptyLabel: "default: gemma-4-12b-it-4bit" });
+      const articleModel = knobField("NEWS_MODEL_ARTICLE_SUMMARY", "Article model", { emptyLabel: "default: gemma-4-12b-it-4bit" });
+      const storyModel = knobField("NEWS_MODEL_STORY_DRAFTING", "Story model", { emptyLabel: "default: gemma-4-12b-it-4bit" });
+      const scaleModel = knobField("NEWS_MODEL_STORY_SCALE_SCREENING", "Scale screening model", { emptyLabel: "default: gemma-4-12b-it-4bit" });
+      const titleModel = knobField("NEWS_MODEL_TITLE_GENERATION", "Title generation model", { emptyLabel: "default: gemma-4-12b-it-4bit" });
       const sharedModelTokens = knobField("NEWS_MODEL_MAX_INPUT_TOKENS", "Shared model input cap");
       const articleTokenCap = knobField("NEWS_ARTICLE_SUMMARY_MAX_TOKENS", "Article summary max tokens");
       const storyTokenCap = knobField("NEWS_STORY_DRAFTING_MAX_TOKENS", "Story drafting max tokens");
@@ -1949,6 +1967,7 @@ HTML = r"""<!doctype html>
         knobField("NEWS_MODEL_TITLE_GENERATION_PRESENCE_PENALTY", "Presence penalty"),
         knobField("NEWS_MODEL_TITLE_GENERATION_REPETITION_PENALTY", "Repetition penalty")
       ].join("");
+
       $("runSetupMount").innerHTML = `
         <div class="banner panel">
           <div class="banner-copy">
@@ -2012,12 +2031,39 @@ HTML = r"""<!doctype html>
           </section>
           <section class="panel model-card">
             <p class="eyebrow">Model</p>
-            <h2>Default model</h2>
-            <p class="muted">Resolved: ${escapeHtml(defaultRuntime.name || defaultRuntime.reference || "-")}</p>
+            <h2>${escapeHtml(TASK_CONFIG.article_summary.label)}</h2>
+            <p class="muted">Resolved: ${escapeHtml(articleRuntime.name || articleRuntime.reference || "-")}</p>
             <div class="form-grid">
-              ${defaultModel}
+              ${articleModel}
             </div>
-            <p class="muted">Per-task model alternatives and sampling are in Advanced Settings.</p>
+            <p class="muted">Sampling, token budgets, and server endpoints are in Advanced Settings.</p>
+          </section>
+          <section class="panel model-card">
+            <p class="eyebrow">Model</p>
+            <h2>${escapeHtml(TASK_CONFIG.story_drafting.label)}</h2>
+            <p class="muted">Resolved: ${escapeHtml(storyRuntime.name || storyRuntime.reference || "-")}</p>
+            <div class="form-grid">
+              ${storyModel}
+            </div>
+            <p class="muted">Sampling, token budgets, and server endpoints are in Advanced Settings.</p>
+          </section>
+          <section class="panel model-card">
+            <p class="eyebrow">Model</p>
+            <h2>${escapeHtml(TASK_CONFIG.story_scale_screening.label)}</h2>
+            <p class="muted">Resolved: ${escapeHtml(scaleRuntime.name || scaleRuntime.reference || "-")}</p>
+            <div class="form-grid">
+              ${scaleModel}
+            </div>
+            <p class="muted">Sampling, token budgets, and server endpoints are in Advanced Settings.</p>
+          </section>
+          <section class="panel model-card">
+            <p class="eyebrow">Model</p>
+            <h2>${escapeHtml(TASK_CONFIG.title_generation.label)}</h2>
+            <p class="muted">Resolved: ${escapeHtml(titleRuntime.name || titleRuntime.reference || "-")}</p>
+            <div class="form-grid">
+              ${titleModel}
+            </div>
+            <p class="muted">Sampling, token budgets, and server endpoints are in Advanced Settings.</p>
           </section>
           <section class="panel">
             <p class="eyebrow">Model catalog</p>
@@ -2055,6 +2101,7 @@ HTML = r"""<!doctype html>
             </details>
           </section>
           <section class="panel">
+
             <details class="details">
               <summary>Utilities</summary>
               <div class="form-grid">
@@ -2097,10 +2144,10 @@ HTML = r"""<!doctype html>
         </div>
       `;
       renderPresetSummary();
-      renderModelTuningPanels();
       decorateEnvHints($("runSetupMount"));
       renderPromptProfilePanel();
       renderModelCatalogPanel();
+
       $("actionSelect").value = "run";
       $("sourceOptions").classList.add("hidden");
       $("actionSelect").onchange = () => {
@@ -2149,7 +2196,7 @@ HTML = r"""<!doctype html>
             <label class="field"><span>Display name</span><input id="${meta.nameInputId}"><code>name</code></label>
             <label class="field"><span>Description</span><textarea id="${meta.descriptionInputId}"></textarea><code>description</code></label>
             ${sharedCap}
-            ${knobField(meta.taskMaxTokensEnv, TASK_MAX_TOKENS_LABELS[task] || "Max tokens")}
+            ${knobField(meta.taskMaxTokensEnv, meta.maxTokensLabel)}
             ${knobField(meta.baseUrlEnv, "Base URL")}
             ${samplingFields(meta.taskSamplingPrefix)}
           </div>
@@ -2284,7 +2331,7 @@ HTML = r"""<!doctype html>
       const sharedMax = valueByEnv("NEWS_MODEL_MAX_INPUT_TOKENS");
       if (sharedMax) tuning.model_max_input_tokens = sharedMax;
       const taskMax = valueByEnv(meta.taskMaxTokensEnv);
-      if (taskMax) tuning[`${meta.runtimeKey}_max_tokens`] = taskMax;
+      if (taskMax) tuning[meta.maxTokensField] = taskMax;
       const samplingFields = SAMPLING_FIELDS.map(([suffix]) => [suffix.toLowerCase(), `${meta.taskSamplingPrefix}_${suffix}`]);
       samplingFields.forEach(([key, env]) => {
         const raw = valueByEnv(env);
@@ -2316,8 +2363,7 @@ HTML = r"""<!doctype html>
       if (preset) {
         const tuning = preset.tuning || {};
         if (tuning.model_max_input_tokens) setControlValue("NEWS_MODEL_MAX_INPUT_TOKENS", tuning.model_max_input_tokens);
-        const taskMaxTokens = tuning[`${meta.runtimeKey}_max_tokens`];
-        if (taskMaxTokens) setControlValue(meta.taskMaxTokensEnv, taskMaxTokens);
+        if (tuning[meta.maxTokensField]) setControlValue(meta.taskMaxTokensEnv, tuning[meta.maxTokensField]);
         SAMPLING_FIELDS.forEach(([suffix]) => {
           const field = suffix.toLowerCase();
           if (tuning[field] !== undefined && tuning[field] !== null && tuning[field] !== "") {
@@ -2408,23 +2454,7 @@ HTML = r"""<!doctype html>
       state.selectedRunPresetId = preset.id || "";
       setKnobEnv(preset.env || {});
       renderPresetSummary();
-      renderModelTuningPanels();
-      renderPromptProfilePanel();
-      refreshModelKnobLinks();
-      preview("run").catch(() => {});
-    }
-    function resetAllOverrides() {
-      document.querySelectorAll("[data-env]").forEach(el => {
-        if (el.type === "checkbox") el.checked = false;
-        else el.value = "";
-      });
-      state.selectedRunPresetId = "";
-      renderPresetSummary();
-      renderModelTuningPanels();
-      renderPromptProfilePanel();
-      refreshModelKnobLinks();
-      preview("run").catch(() => {});
-    }
+      renderTaskTuningControls();
       renderPromptProfilePanel();
       refreshModelKnobLinks();
       previewQuietly("run");
@@ -2482,7 +2512,7 @@ HTML = r"""<!doctype html>
     async function loadModelTuningPresets() {
       const data = await api("/api/model-tuning-presets");
       state.modelTuningPresets = data.presets || [];
-      renderModelTuningPanels();
+      renderTaskTuningControls();
     }
     function renderAdvancedKnobs() {
       const search = value("knobSearch").toLowerCase();
@@ -2980,7 +3010,7 @@ HTML = r"""<!doctype html>
       renderStats();
       renderRunPresetDrawer();
       renderPresetSummary();
-      renderModelTuningPanels();
+      renderTaskTuningControls();
       wireEvents();
       document.addEventListener("change", (event) => {
         const el = event.target;

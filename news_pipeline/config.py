@@ -476,9 +476,11 @@ def _configured_model_assignments(
         model_concurrency=model_concurrency,
     )
 
+    task_env_suffixes = {
+        task: task.upper() for task, _, _ in MODEL_TASK_KNOB_SPECS
+    }
     task_entries = {}
-    for task, _, _ in MODEL_TASK_KNOB_SPECS:
-        env_suffix = task.upper()
+    for task, env_suffix in task_env_suffixes.items():
         reference = _str_env(f"NEWS_MODEL_{env_suffix}", default_reference) or default_reference
         base_url = _str_env(
             f"NEWS_MODEL_{env_suffix}_BASE_URL",
@@ -1366,6 +1368,10 @@ def runtime_knob_registry() -> list[dict[str, Any]]:
         _runtime_knob("Pipeline Budget", "Component overlap suppress", "NEWS_STORY_COMPONENT_OVERLAP_SUPPRESS_THRESHOLD", "number", minimum=0, maximum=1, step=0.01, advanced=True),
         _runtime_knob("Model Server Settings", "Model concurrency", "NEWS_MODEL_CONCURRENCY", "number", default=DEFAULT_PIPELINE_CONCURRENCY, minimum=1, step=1, advanced=True),
         _runtime_knob("Model Server Settings", "Model base URL", "NEWS_MODEL_BASE_URL", default="http://127.0.0.1:8080/v1"),
+        _runtime_knob("Model Server Settings", "Article Summarization base URL", "NEWS_MODEL_ARTICLE_SUMMARY_BASE_URL", default="http://127.0.0.1:8080/v1"),
+        _runtime_knob("Model Server Settings", "Story Drafting base URL", "NEWS_MODEL_STORY_DRAFTING_BASE_URL", default="http://127.0.0.1:8080/v1"),
+        _runtime_knob("Model Server Settings", "Story Scale Screening base URL", "NEWS_MODEL_STORY_SCALE_SCREENING_BASE_URL", default="http://127.0.0.1:8080/v1"),
+        _runtime_knob("Model Server Settings", "Title Generation base URL", "NEWS_MODEL_TITLE_GENERATION_BASE_URL", default="http://127.0.0.1:8080/v1"),
         _runtime_knob("Model Server Settings", "Server prefill step size", "NEWS_MODEL_SERVER_PREFILL_STEP_SIZE", "number", minimum=1, step=1),
         _runtime_knob("Model Server Settings", "Server prompt cache size", "NEWS_MODEL_SERVER_PROMPT_CACHE_SIZE", "number", minimum=0, step=1),
         _runtime_knob("Model Server Settings", "Server prompt cache bytes", "NEWS_MODEL_SERVER_PROMPT_CACHE_BYTES"),
@@ -1972,6 +1978,7 @@ def _build_runtime_config(
             f"Prompt profile {prompt_profile_id!r} violates pipeline-owned output contracts: "
             + "; ".join(profile_violations)
         )
+
     tracked_urls_filename = "tracked_urls.txt"
     blocking_urls_filename = "blocking_urls.txt"
     run_used_urls_filename = (

@@ -268,6 +268,31 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
                 materialize_outputs=False,
             )
 
+    def test_profile_violating_contracts_fails_config_resolution(self) -> None:
+        # A profile whose editorial instructions contain pipeline-owned
+        # contract language must fail fast at config resolution instead of
+        # silently weakening the parsers/retries/citation renderers mid-run.
+        # All other slots stay valid (balanced strings) so the failure is
+        # specifically the blocklisted drafting sentence.
+        bad_profile = PromptProfile(
+            id="bad",
+            name="Bad",
+            description="Violates the drafting output contract.",
+            prompts={
+                **prompt_catalog.PROMPT_PROFILES["balanced"].prompts,
+                "story_drafting": "Return exactly this format: and nothing else.",
+            },
+        )
+        with patch(
+            "news_pipeline.prompt_catalog.PROMPT_PROFILES",
+            {**prompt_catalog.PROMPT_PROFILES, "bad": bad_profile},
+        ):
+            with self.assertRaisesRegex(ValueError, "violates pipeline-owned output contracts"):
+                load_runtime_config(
+                    environ={},
+                    overrides={"NEWS_PROMPT_PROFILE": "bad"},
+                    materialize_outputs=False,
+                )
     def test_prompt_override_envs_resolve_into_runtime_config(self) -> None:
         config = load_runtime_config(
             environ={},
@@ -297,31 +322,7 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
             materialize_outputs=False,
         )
         self.assertEqual(unset.prompt_instruction_overrides, {})
-    def test_profile_violating_contracts_fails_config_resolution(self) -> None:
-        # A profile whose editorial instructions contain pipeline-owned
-        # contract language must fail fast at config resolution instead of
-        # silently weakening the parsers/retries/citation renderers mid-run.
-        # All other slots stay valid (balanced strings) so the failure is
-        # specifically the blocklisted drafting sentence.
-        bad_profile = PromptProfile(
-            id="bad",
-            name="Bad",
-            description="Violates the drafting output contract.",
-            prompts={
-                **prompt_catalog.PROMPT_PROFILES["balanced"].prompts,
-                "story_drafting": "Return exactly this format: and nothing else.",
-            },
-        )
-        with patch(
-            "news_pipeline.prompt_catalog.PROMPT_PROFILES",
-            {**prompt_catalog.PROMPT_PROFILES, "bad": bad_profile},
-        ):
-            with self.assertRaisesRegex(ValueError, "violates pipeline-owned output contracts"):
-                load_runtime_config(
-                    environ={},
-                    overrides={"NEWS_PROMPT_PROFILE": "bad"},
-                    materialize_outputs=False,
-                )
+
 
     def test_removed_topic_env_vars_reported_and_rejected(self) -> None:
         with self.assertRaisesRegex(ValueError, "NEWS_TOPIC_IDS"):
