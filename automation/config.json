@@ -6,6 +6,7 @@
   "default_lane": "Backlog",
   "poll_interval_seconds": 45,
   "state_file": "automation/state.json",
+  "max_concurrent_workflows": 10,
   "runnable_label": "runnable",
   "deferred_work": {
     "enabled": true,
