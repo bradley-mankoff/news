@@ -144,6 +144,14 @@ RUNNABLE_GUIDANCE_RE = re.compile(
     r"(?:python3?|pytest|uv|news|npm|pnpm|yarn|curl|make)\b",
     re.M,
 )
+SHELL_FENCE_LANGUAGES = frozenset(
+    {"", "bash", "sh", "shell", "zsh", "console", "terminal"}
+)
+SHELL_COMMAND_RE = re.compile(
+    r"^[ \t]*(?:\$[ \t]*)?(?:[\w.-]+/)*"
+    r"(?:python3?|pytest|uv|news|npm|pnpm|yarn|curl|make)\b"
+)
+SHELL_INLINE_COMMENT_RE = re.compile(r"[ \t]+#[ \t].*$")
 
 
 def log(msg: str) -> None:
@@ -646,10 +654,35 @@ def extract_test_guidance(comments: list[dict]) -> str | None:
     return validation_fallback
 
 
+def sanitize_test_guidance(guidance: str | None) -> str | None:
+    """Make copied shell commands safe to paste in shells with comments off."""
+    if not guidance:
+        return None
+    lines = []
+    in_shell_fence = False
+    for line in guidance.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("```"):
+            if in_shell_fence:
+                in_shell_fence = False
+            else:
+                parts = stripped[3:].strip().split(maxsplit=1)
+                language = parts[0].casefold() if parts else ""
+                in_shell_fence = language in SHELL_FENCE_LANGUAGES
+            lines.append(line)
+            continue
+        if in_shell_fence or SHELL_COMMAND_RE.match(line):
+            line = SHELL_INLINE_COMMENT_RE.sub("", line).rstrip()
+        lines.append(line)
+    cleaned = "\n".join(lines).strip()
+    return cleaned or None
+
+
 def build_ready_for_review_comment(issue_number: int, base: str,
                                    pr_number: int | None,
                                    guidance: str | None) -> str:
     """Build the human-facing test handoff posted when work reaches Ready."""
+    guidance = sanitize_test_guidance(guidance)
     if pr_number:
         status = f"Develop PR #{pr_number} was merged into `{base}`."
     else:
