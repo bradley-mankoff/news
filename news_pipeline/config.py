@@ -28,8 +28,10 @@ from .prompt_catalog import (
     DEFAULT_PROMPT_PROFILE_ID,
     PROMPT_PROFILE_ENV_VAR,
     PROMPT_PROFILE_IDS,
+    PROMPT_TASK_OVERRIDE_ENV_VARS,
     get_prompt_profile,
 )
+from .prompt_contracts import validate_editorial_instructions
 
 
 
@@ -234,6 +236,7 @@ class RuntimeConfig:
     run_used_urls_path: Path
     preset_id: str
     prompt_profile_id: str
+    prompt_instruction_overrides: dict[str, str]
     source_scope: str
     recipient_scope: str
     url_reuse_blocking_enabled: bool
@@ -345,6 +348,15 @@ MODEL_TUNING_PRESET_ENV_VARS = {
     MODEL_TASK_TITLE_GENERATION: "NEWS_MODEL_TITLE_GENERATION_TUNING_PRESET",
 }
 MODEL_REASONING_SAMPLING_ENV_PREFIX = "NEWS_MODEL_REASONING"
+# Per-task model knobs share env shapes NEWS_MODEL_<TASK>[_TUNING_PRESET|_BASE_URL]
+# and NEWS_<TASK>_MAX_TOKENS (env suffix = task name upper-cased). Columns:
+# task, label prefix for the model/preset/base-URL knobs, max-tokens knob label.
+MODEL_TASK_KNOB_SPECS: tuple[tuple[str, str, str], ...] = (
+    (MODEL_TASK_ARTICLE_SUMMARY, "Article Summarization", "Article summary max tokens"),
+    (MODEL_TASK_STORY_DRAFTING, "Story Drafting", "Story drafting max tokens"),
+    (MODEL_TASK_STORY_SCALE_SCREENING, "Story Scale Screening", "Story scale screening max tokens"),
+    (MODEL_TASK_TITLE_GENERATION, "Title Generation", "Title generation max tokens"),
+)
 
 
 def _empty_model_sampling_map() -> dict[str, ModelSamplingSettings]:
@@ -447,10 +459,7 @@ def _configured_model_assignments(
     )
 
     task_env_suffixes = {
-        MODEL_TASK_ARTICLE_SUMMARY: "ARTICLE_SUMMARY",
-        MODEL_TASK_STORY_DRAFTING: "STORY_DRAFTING",
-        MODEL_TASK_STORY_SCALE_SCREENING: "STORY_SCALE_SCREENING",
-        MODEL_TASK_TITLE_GENERATION: "TITLE_GENERATION",
+        task: task.upper() for task, _, _ in MODEL_TASK_KNOB_SPECS
     }
     task_entries = {}
     for task, env_suffix in task_env_suffixes.items():
@@ -1206,6 +1215,16 @@ def runtime_knob_registry() -> list[dict[str, Any]]:
             default=DEFAULT_PROMPT_PROFILE_ID,
             options=list(PROMPT_PROFILE_IDS),
         ),
+        *[
+            _runtime_knob(
+                "Run Settings",
+                f"Prompt override ({task.replace('_', ' ')})",
+                env_var,
+                "text",
+                advanced=True,
+            )
+            for task, env_var in PROMPT_TASK_OVERRIDE_ENV_VARS.items()
+        ],
         _runtime_knob("Run Settings", "Relax story drafting guards", "NEWS_RELAX_STORY_DRAFTING_GUARDS", "bool", advanced=True),
         _runtime_knob("Run Settings", "Embedding model", "NEWS_EMBEDDING_MODEL", default="all-mpnet-base-v2", advanced=True),
         _runtime_knob("Run Settings", "Token encoding", "NEWS_TOKEN_ENCODING", default="o200k_base", advanced=True),
@@ -1250,6 +1269,45 @@ def runtime_knob_registry() -> list[dict[str, Any]]:
         _runtime_knob("Model Server Settings", "Server prompt cache bytes", "NEWS_MODEL_SERVER_PROMPT_CACHE_BYTES"),
         _runtime_knob("Model Server Settings", "Server max tokens", "NEWS_MODEL_SERVER_MAX_TOKENS", "number", minimum=1, step=1),
     ]
+    for task, task_label, max_tokens_label in MODEL_TASK_KNOB_SPECS:
+        env_suffix = task.upper()
+        knobs.append(
+            _runtime_knob(
+                "Model Selection",
+                f"{task_label} model",
+                f"NEWS_MODEL_{env_suffix}",
+                "select",
+                options=sorted(MODEL_ALIASES),
+                option_links=model_links,
+            )
+        )
+        knobs.append(
+            _runtime_knob(
+                "Model Tuning",
+                f"{task_label} tuning preset",
+                f"NEWS_MODEL_{env_suffix}_TUNING_PRESET",
+                "select",
+                options=tuning_presets,
+            )
+        )
+        knobs.append(
+            _runtime_knob(
+                "Model Tuning",
+                max_tokens_label,
+                f"NEWS_{env_suffix}_MAX_TOKENS",
+                "number",
+                minimum=1,
+                step=1,
+            )
+        )
+        knobs.append(
+            _runtime_knob(
+                "Model Server Settings",
+                f"{task_label} base URL",
+                f"NEWS_MODEL_{env_suffix}_BASE_URL",
+                default="http://127.0.0.1:8080/v1",
+            )
+        )
     sampling_suffixes = [
         ("TEMPERATURE", "Temperature", "number", 0, 2, 0.01),
         ("TOP_P", "Top P", "number", 0, 1, 0.01),
@@ -1796,6 +1854,23 @@ def _build_runtime_config(
     prompt_profile_id = _str_env(PROMPT_PROFILE_ENV_VAR, DEFAULT_PROMPT_PROFILE_ID) or DEFAULT_PROMPT_PROFILE_ID
     # Resolved once at import time in pipeline.py; fails fast on unknown ids.
     get_prompt_profile(prompt_profile_id)
+    # Per-stage prompt overrides (NEWS_PROMPT_OVERRIDE_<TASK>): non-empty
+    # values only; empty-but-present counts as unset like sibling knobs.
+    prompt_instruction_overrides = {
+        task: value
+        for task, env_var in PROMPT_TASK_OVERRIDE_ENV_VARS.items()
+        if (value := _str_env(env_var, "").strip())
+    }
+    # Editorial sentences must never weaken the pipeline-owned output contracts
+    # (parsers, retries, citation renderers, sanitizers depend on them); a
+    # violating profile fails fast at config resolution, not mid-run.
+    profile_violations = validate_editorial_instructions(get_prompt_profile(prompt_profile_id).prompts)
+    if profile_violations:
+        raise ValueError(
+            f"Prompt profile {prompt_profile_id!r} violates pipeline-owned output contracts: "
+            + "; ".join(profile_violations)
+        )
+
     tracked_urls_filename = "tracked_urls.txt"
     blocking_urls_filename = "blocking_urls.txt"
     run_used_urls_filename = (
@@ -1882,6 +1957,7 @@ def _build_runtime_config(
         run_used_urls_path=run_output_dir / run_used_urls_filename,
         preset_id=preset_id,
         prompt_profile_id=prompt_profile_id,
+        prompt_instruction_overrides=prompt_instruction_overrides,
         source_scope=source_scope,
         recipient_scope=recipient_scope,
         url_reuse_blocking_enabled=url_reuse_blocking_enabled,

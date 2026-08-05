@@ -5,8 +5,9 @@ the five LLM prompt stages (article summary, story scale screening, story
 drafting, title generation, image art direction). The machine-required output
 contracts (``DATABASE_ENTRY:`` blocks, ``Headline:``/``Main story:``/
 ``Contradictions:`` format, ``[[S1]]`` citation markers, strict JSON for image
-art, retry correction messages, scale label vocabulary) stay hardcoded in the
-stage modules. Profiles only swap the editorial sentences.
+art, retry correction messages, scale label vocabulary) live in
+``news_pipeline/prompt_contracts.py`` (ADR 0011); profiles only swap the
+editorial sentences.
 
 This module is deliberately stdlib-only (``dataclasses``, ``difflib``,
 ``typing``) so that ``config.py`` can import it without creating an import
@@ -30,6 +31,14 @@ PROMPT_TASKS = (
 
 DEFAULT_PROMPT_PROFILE_ID = "balanced"
 PROMPT_PROFILE_ENV_VAR = "NEWS_PROMPT_PROFILE"
+
+PROMPT_OVERRIDE_ENV_PREFIX = "NEWS_PROMPT_OVERRIDE_"
+# Maps each prompt task to its per-stage override env var. These env vars
+# carry user edits made in the UI's Editorial approach panel and layer on
+# top of the selected profile (override wins per task).
+PROMPT_TASK_OVERRIDE_ENV_VARS: dict[str, str] = {
+    task: f"{PROMPT_OVERRIDE_ENV_PREFIX}{task.upper()}" for task in PROMPT_TASKS
+}
 
 # Mirrors the keys of PROMPT_PROFILES; feeds the config knob options (UI
 # selector). Keep in sync with the PROMPT_PROFILES dict keys (drift-guard:
@@ -214,9 +223,19 @@ def get_prompt_profile(profile_id: str) -> PromptProfile:
     return profile
 
 
-def resolve_prompt_instructions(profile_id: str | None = None) -> dict[str, str]:
-    """Return the per-task instruction map for a profile (default: balanced)."""
-    return dict(get_prompt_profile(profile_id or DEFAULT_PROMPT_PROFILE_ID).prompts)
+def resolve_prompt_instructions(
+    profile_id: str | None = None,
+    overrides: dict[str, str] | None = None,
+) -> dict[str, str]:
+    """Return the per-task instruction map for a profile (default: balanced),
+    with non-empty per-task overrides layered on top (override wins)."""
+    instructions = dict(
+        get_prompt_profile(profile_id or DEFAULT_PROMPT_PROFILE_ID).prompts
+    )
+    for task, value in (overrides or {}).items():
+        if task in PROMPT_TASKS and value is not None and str(value).strip():
+            instructions[task] = str(value)
+    return instructions
 
 
 def compare_prompt_profiles(
