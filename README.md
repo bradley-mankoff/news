@@ -333,7 +333,7 @@ Curated models (2):
 
 - `gemma-4-12b-it-4bit` — mlx-vlm, 256K-token context, default model
   ([Hugging Face](https://huggingface.co/mlx-community/gemma-4-12B-it-4bit))
-- `gemma-e2b-tiny` — mlx-lm, Codex-safe test model
+- `gemma-e2b-tiny` — mlx-vlm, Codex-safe test model
   ([Hugging Face](https://huggingface.co/deadbydawn101/gemma-4-E2B-Heretic-Uncensored-mlx-4bit))
 
 Hugging Face search results carry runtime-fit verdicts (`managed_mlx_lm`,
