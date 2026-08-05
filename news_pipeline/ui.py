@@ -2691,6 +2691,7 @@ HTML = r"""<!doctype html>
       document.querySelectorAll("#sourceTable tr[data-key]").forEach(row => row.onclick = () => editSource(row.dataset.key));
     }
     function sourceInput(field, src) {
+      const val = src[field] ?? "";
       if (["can_enrich_coverage","strict_source_match"].includes(field)) {
         return `<label>${field}<select id="source_${field}"><option value=""></option><option value="false" ${val === false ? "selected" : ""}>false</option><option value="true" ${val === true ? "selected" : ""}>true</option></select></label>`;
       }

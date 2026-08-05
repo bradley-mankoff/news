@@ -139,6 +139,23 @@ class UITests(unittest.TestCase):
         self.assertIn('decorateEnvHints($("advancedPanels"))', html)
         self.assertIn('decorateEnvHints($("knobContainer"))', html)
 
+    def test_source_editor_reads_values_from_source_records(self) -> None:
+        html = ui_module.HTML
+        source_input = html.split("function sourceInput(field, src)", 1)[1].split(
+            "function editSource", 1
+        )[0]
+        # The renderer must establish a field value before any branch uses it.
+        # Nullish coalescing preserves meaningful false boolean values.
+        self.assertIn('const val = src[field] ?? "";', source_input)
+        for fragment in (
+            "val === false",
+            'val === "core"',
+            'val === "feed_label"',
+            "${val}",
+            "String(val)",
+        ):
+            self.assertIn(fragment, source_input)
+
     def test_advanced_settings_gate_holds_all_knobs(self) -> None:
         html = ui_module.HTML
         # Advanced tab hosts the moved panels; Run Setup no longer does.
