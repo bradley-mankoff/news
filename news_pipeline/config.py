@@ -89,6 +89,10 @@ CODEX_TEST_MODEL_ALIAS = "gemma-e2b-tiny"
 CODEX_TEST_MODEL_NAME = "deadbydawn101/gemma-4-E2B-Heretic-Uncensored-mlx-4bit"
 MODEL_TASK_ARTICLE_SUMMARY = "article_summary"
 MODEL_TASK_STORY_DRAFTING = "story_drafting"
+MODEL_TASK_STORY_SCALE_SCREENING = "story_scale_screening"
+MODEL_TASK_TITLE_GENERATION = "title_generation"
+MODEL_TASK_IMAGE_ART_DIRECTION = "image_art_direction"
+MODEL_TASK_STORY_DISCOVERY = "story_discovery"
 GEMMA_4_ARTICLE_SUMMARY_CAP = 40
 CORE_SOURCE_TIER = "core"
 PERIPHERAL_SOURCE_TIER = "peripheral"
@@ -173,6 +177,8 @@ class ModelTuningSettings:
     model_max_input_tokens: int | None = None
     article_summary_max_tokens: int | None = None
     story_drafting_max_tokens: int | None = None
+    story_scale_screening_max_tokens: int | None = None
+    title_generation_max_tokens: int | None = None
     task_sampling: dict[str, ModelSamplingSettings] = field(default_factory=dict)
 
 
@@ -317,34 +323,52 @@ DEFAULT_ARTICLE_TEXT_TOKEN_LIMIT = 4500
 DEFAULT_MODEL_MAX_INPUT_TOKENS = 6000
 DEFAULT_ARTICLE_SUMMARY_MAX_TOKENS = 1000
 DEFAULT_STORY_DRAFTING_MAX_TOKENS = 1800
+# Mirrors story_selection.STORY_SCALE_VALIDATION_MAX_TOKENS; keep in sync.
+DEFAULT_STORY_SCALE_SCREENING_MAX_TOKENS = 3000
+DEFAULT_TITLE_GENERATION_MAX_TOKENS = 700
 DEFAULT_MODEL_SERVER_PREFILL_STEP_SIZE = 512
 DEFAULT_MODEL_SERVER_PROMPT_CACHE_SIZE = 2
 DEFAULT_MODEL_SERVER_PROMPT_CACHE_BYTES = "512MB"
 DEFAULT_MODEL_SERVER_MAX_TOKENS = 1800
+# Retained for compatibility: story_discovery has no LLM stage, but legacy
+# NEWS_MODEL_STORY_DISCOVERY_* env vars must keep resolving. Do not remove.
 MODEL_TASK_SAMPLING_ENV_PREFIXES = {
     "default": "NEWS_MODEL",
-    "story_discovery": "NEWS_MODEL_STORY_DISCOVERY",
-    "story_scale_screening": "NEWS_MODEL_STORY_SCALE_SCREENING",
+    MODEL_TASK_STORY_DISCOVERY: "NEWS_MODEL_STORY_DISCOVERY",
+    MODEL_TASK_STORY_SCALE_SCREENING: "NEWS_MODEL_STORY_SCALE_SCREENING",
     MODEL_TASK_ARTICLE_SUMMARY: "NEWS_MODEL_ARTICLE_SUMMARY",
     MODEL_TASK_STORY_DRAFTING: "NEWS_MODEL_STORY_DRAFTING",
-    "title_generation": "NEWS_MODEL_TITLE_GENERATION",
+    MODEL_TASK_TITLE_GENERATION: "NEWS_MODEL_TITLE_GENERATION",
 }
 MODEL_TUNING_PRESET_ENV_VARS = {
     "default": "NEWS_MODEL_TUNING_PRESET",
     MODEL_TASK_ARTICLE_SUMMARY: "NEWS_MODEL_ARTICLE_SUMMARY_TUNING_PRESET",
     MODEL_TASK_STORY_DRAFTING: "NEWS_MODEL_STORY_DRAFTING_TUNING_PRESET",
+    MODEL_TASK_STORY_SCALE_SCREENING: "NEWS_MODEL_STORY_SCALE_SCREENING_TUNING_PRESET",
+    MODEL_TASK_TITLE_GENERATION: "NEWS_MODEL_TITLE_GENERATION_TUNING_PRESET",
 }
 MODEL_REASONING_SAMPLING_ENV_PREFIX = "NEWS_MODEL_REASONING"
+# Per-task model knobs share env shapes NEWS_MODEL_<TASK>[_TUNING_PRESET|_BASE_URL]
+# and NEWS_<TASK>_MAX_TOKENS (env suffix = task name upper-cased). Columns:
+# task, label prefix for the model/preset/base-URL knobs, max-tokens knob label.
+MODEL_TASK_KNOB_SPECS: tuple[tuple[str, str, str], ...] = (
+    (MODEL_TASK_ARTICLE_SUMMARY, "Article Summarization", "Article summary max tokens"),
+    (MODEL_TASK_STORY_DRAFTING, "Story Drafting", "Story drafting max tokens"),
+    (MODEL_TASK_STORY_SCALE_SCREENING, "Story Scale Screening", "Story scale screening max tokens"),
+    (MODEL_TASK_TITLE_GENERATION, "Title Generation", "Title generation max tokens"),
+)
 
 
 def _empty_model_sampling_map() -> dict[str, ModelSamplingSettings]:
+    # Keys mirror MODEL_TASK_SAMPLING_ENV_PREFIXES; story_discovery stays for
+    # legacy env-var compatibility (see comment on that map). Do not remove.
     return {
         "default": ModelSamplingSettings(),
-        "story_discovery": ModelSamplingSettings(),
-        "story_scale_screening": ModelSamplingSettings(),
+        MODEL_TASK_STORY_DISCOVERY: ModelSamplingSettings(),
+        MODEL_TASK_STORY_SCALE_SCREENING: ModelSamplingSettings(),
         MODEL_TASK_ARTICLE_SUMMARY: ModelSamplingSettings(),
         MODEL_TASK_STORY_DRAFTING: ModelSamplingSettings(),
-        "title_generation": ModelSamplingSettings(),
+        MODEL_TASK_TITLE_GENERATION: ModelSamplingSettings(),
         "reasoning": ModelSamplingSettings(),
     }
 
@@ -390,6 +414,33 @@ def _configured_pipeline_budget() -> PipelineBudget:
     )
 
 
+def _task_assignment_entry(
+    task: str,
+    *,
+    reference: str,
+    base_url: str,
+    presets: dict[str, dict[str, Any]],
+    model_concurrency: int,
+) -> TaskModelAssignment:
+    name = resolve_model_name(reference)
+    backend = infer_model_backend(reference)
+    tuning = _configured_model_tuning(reference, task=task, presets=presets)
+    return TaskModelAssignment(
+        task=task,
+        reference=reference,
+        name=name,
+        backend=backend,
+        base_url=base_url,
+        server_command=build_model_server_command(
+            name,
+            _configured_model_server_settings(base_url),
+            backend=backend,
+            model_concurrency=model_concurrency,
+        ),
+        tuning=tuning,
+    )
+
+
 def _configured_model_assignments(
     *,
     default_reference: str,
@@ -400,49 +451,30 @@ def _configured_model_assignments(
 ) -> dict[str, TaskModelAssignment]:
     default_name = resolve_model_name(default_reference)
     default_backend = _configured_model_backend(default_reference)
-    article_summary_reference = _str_env("NEWS_MODEL_ARTICLE_SUMMARY", default_reference) or default_reference
-    article_summary_base_url = _str_env(
-        "NEWS_MODEL_ARTICLE_SUMMARY_BASE_URL",
-        default_server_settings.base_url,
-    ) or default_server_settings.base_url
-    story_drafting_reference = _str_env("NEWS_MODEL_STORY_DRAFTING", default_reference) or default_reference
-    story_drafting_base_url = _str_env(
-        "NEWS_MODEL_STORY_DRAFTING_BASE_URL",
-        default_server_settings.base_url,
-    ) or default_server_settings.base_url
-
-    article_summary_tuning = _configured_model_tuning(
-        article_summary_reference,
-        task=MODEL_TASK_ARTICLE_SUMMARY,
-        presets=presets,
-    )
-    story_drafting_tuning = _configured_model_tuning(
-        story_drafting_reference,
-        task=MODEL_TASK_STORY_DRAFTING,
-        presets=presets,
-    )
     default_server_command = build_model_server_command(
         default_name,
         default_server_settings,
         backend=default_backend,
         model_concurrency=model_concurrency,
     )
-    article_summary_name = resolve_model_name(article_summary_reference)
-    article_summary_backend = infer_model_backend(article_summary_reference)
-    article_summary_server_command = build_model_server_command(
-        article_summary_name,
-        _configured_model_server_settings(article_summary_base_url),
-        backend=article_summary_backend,
-        model_concurrency=model_concurrency,
-    )
-    story_drafting_name = resolve_model_name(story_drafting_reference)
-    story_drafting_backend = infer_model_backend(story_drafting_reference)
-    story_drafting_server_command = build_model_server_command(
-        story_drafting_name,
-        _configured_model_server_settings(story_drafting_base_url),
-        backend=story_drafting_backend,
-        model_concurrency=model_concurrency,
-    )
+
+    task_env_suffixes = {
+        task: task.upper() for task, _, _ in MODEL_TASK_KNOB_SPECS
+    }
+    task_entries = {}
+    for task, env_suffix in task_env_suffixes.items():
+        reference = _str_env(f"NEWS_MODEL_{env_suffix}", default_reference) or default_reference
+        base_url = _str_env(
+            f"NEWS_MODEL_{env_suffix}_BASE_URL",
+            default_server_settings.base_url,
+        ) or default_server_settings.base_url
+        task_entries[task] = _task_assignment_entry(
+            task,
+            reference=reference,
+            base_url=base_url,
+            presets=presets,
+            model_concurrency=model_concurrency,
+        )
     return {
         "default": TaskModelAssignment(
             task="default",
@@ -453,24 +485,7 @@ def _configured_model_assignments(
             server_command=default_server_command,
             tuning=default_tuning,
         ),
-        MODEL_TASK_ARTICLE_SUMMARY: TaskModelAssignment(
-            task=MODEL_TASK_ARTICLE_SUMMARY,
-            reference=article_summary_reference,
-            name=article_summary_name,
-            backend=article_summary_backend,
-            base_url=article_summary_base_url,
-            server_command=article_summary_server_command,
-            tuning=article_summary_tuning,
-        ),
-        MODEL_TASK_STORY_DRAFTING: TaskModelAssignment(
-            task=MODEL_TASK_STORY_DRAFTING,
-            reference=story_drafting_reference,
-            name=story_drafting_name,
-            backend=story_drafting_backend,
-            base_url=story_drafting_base_url,
-            server_command=story_drafting_server_command,
-            tuning=story_drafting_tuning,
-        ),
+        **task_entries,
     }
 
 
@@ -478,7 +493,13 @@ def _optional_int_env(name: str, environ: Mapping[str, str] | None = None) -> in
     raw = (environ or _active_env()).get(name)
     if raw is None or not raw.strip():
         return None
-    return int(raw.strip())
+    try:
+        return int(raw.strip())
+    except ValueError:
+        raise ValueError(
+            f"Invalid integer value for {name!r}: {raw.strip()!r}. "
+            "Expected a whole number (e.g. 700)."
+        ) from None
 
 
 def _optional_float_env(name: str, environ: Mapping[str, str] | None = None) -> float | None:
@@ -536,6 +557,16 @@ def _merge_model_tuning_settings(
             if overlay.story_drafting_max_tokens is not None
             else base.story_drafting_max_tokens
         ),
+        story_scale_screening_max_tokens=(
+            overlay.story_scale_screening_max_tokens
+            if overlay.story_scale_screening_max_tokens is not None
+            else base.story_scale_screening_max_tokens
+        ),
+        title_generation_max_tokens=(
+            overlay.title_generation_max_tokens
+            if overlay.title_generation_max_tokens is not None
+            else base.title_generation_max_tokens
+        ),
         task_sampling=task_sampling,
     )
 
@@ -546,6 +577,8 @@ def _base_model_tuning(model_reference: str) -> ModelTuningSettings:
         model_max_input_tokens=DEFAULT_MODEL_MAX_INPUT_TOKENS,
         article_summary_max_tokens=DEFAULT_ARTICLE_SUMMARY_MAX_TOKENS,
         story_drafting_max_tokens=DEFAULT_STORY_DRAFTING_MAX_TOKENS,
+        story_scale_screening_max_tokens=DEFAULT_STORY_SCALE_SCREENING_MAX_TOKENS,
+        title_generation_max_tokens=DEFAULT_TITLE_GENERATION_MAX_TOKENS,
         task_sampling=_empty_model_sampling_map(),
     )
     model_default_tuning = MODEL_SPECIFIC_TUNING_DEFAULTS.get(resolved_name)
@@ -561,6 +594,14 @@ def _task_max_tokens_field(task: str) -> str:
         return "article_summary_max_tokens"
     if task == MODEL_TASK_STORY_DRAFTING:
         return "story_drafting_max_tokens"
+    if task == MODEL_TASK_STORY_SCALE_SCREENING:
+        return "story_scale_screening_max_tokens"
+    if task == MODEL_TASK_TITLE_GENERATION:
+        return "title_generation_max_tokens"
+    # image_art_direction is produced by the same LLM call as title_generation
+    # (generate_image_art_brief); it inherits that task's token cap by design.
+    if task == MODEL_TASK_IMAGE_ART_DIRECTION:
+        return "title_generation_max_tokens"
     raise ValueError(f"Unsupported model tuning task {task!r}.")
 
 
@@ -630,13 +671,22 @@ def _apply_model_tuning_preset(
             "model_max_input_tokens",
             "article_summary_max_tokens",
             "story_drafting_max_tokens",
+            "story_scale_screening_max_tokens",
+            "title_generation_max_tokens",
         }:
             raise ValueError(
                 f"Unsupported tuning field {key!r} in model tuning preset {preset_id!r}."
             )
-        coerced_value = _coerce_optional_int_value(value)
-        if coerced_value is not None:
-            updates[field_name] = coerced_value
+        try:
+            coerced_value = _coerce_optional_int_value(value)
+        except (TypeError, ValueError):
+            coerced_value = None
+        if coerced_value is None:
+            raise ValueError(
+                f"Model tuning preset {preset_id!r} field {key!r} must be a number, "
+                f"got {value!r}."
+            )
+        updates[field_name] = coerced_value
 
     task_sampling[assignment_task] = target_sampling
     updates["task_sampling"] = task_sampling
@@ -706,6 +756,8 @@ def _apply_model_tuning_env_overrides(tuning: ModelTuningSettings) -> ModelTunin
     model_max_input_tokens = _optional_int_env("NEWS_MODEL_MAX_INPUT_TOKENS")
     article_summary_max_tokens = _optional_int_env("NEWS_ARTICLE_SUMMARY_MAX_TOKENS")
     story_drafting_max_tokens = _optional_int_env("NEWS_STORY_DRAFTING_MAX_TOKENS")
+    story_scale_screening_max_tokens = _optional_int_env("NEWS_STORY_SCALE_SCREENING_MAX_TOKENS")
+    title_generation_max_tokens = _optional_int_env("NEWS_TITLE_GENERATION_MAX_TOKENS")
     return ModelTuningSettings(
         model_max_input_tokens=(
             tuning.model_max_input_tokens
@@ -721,6 +773,16 @@ def _apply_model_tuning_env_overrides(tuning: ModelTuningSettings) -> ModelTunin
             tuning.story_drafting_max_tokens
             if story_drafting_max_tokens is None
             else story_drafting_max_tokens
+        ),
+        story_scale_screening_max_tokens=(
+            tuning.story_scale_screening_max_tokens
+            if story_scale_screening_max_tokens is None
+            else story_scale_screening_max_tokens
+        ),
+        title_generation_max_tokens=(
+            tuning.title_generation_max_tokens
+            if title_generation_max_tokens is None
+            else title_generation_max_tokens
         ),
         task_sampling=task_sampling,
     )
@@ -1171,12 +1233,18 @@ def runtime_knob_registry() -> list[dict[str, Any]]:
         _runtime_knob("Model Selection", "Model backend", "NEWS_MODEL_BACKEND", "select", options=sorted(SUPPORTED_MODEL_BACKENDS)),
         _runtime_knob("Model Selection", "Article Summarization model", "NEWS_MODEL_ARTICLE_SUMMARY", "select", options=sorted(MODEL_ALIASES), option_links=model_links),
         _runtime_knob("Model Selection", "Story Drafting model", "NEWS_MODEL_STORY_DRAFTING", "select", options=sorted(MODEL_ALIASES), option_links=model_links),
+        _runtime_knob("Model Selection", "Story Scale Screening model", "NEWS_MODEL_STORY_SCALE_SCREENING", "select", options=sorted(MODEL_ALIASES), option_links=model_links),
+        _runtime_knob("Model Selection", "Title Generation model", "NEWS_MODEL_TITLE_GENERATION", "select", options=sorted(MODEL_ALIASES), option_links=model_links),
         _runtime_knob("Model Tuning", "Default tuning preset", "NEWS_MODEL_TUNING_PRESET", "select", options=tuning_presets),
         _runtime_knob("Model Tuning", "Article Summarization tuning preset", "NEWS_MODEL_ARTICLE_SUMMARY_TUNING_PRESET", "select", options=tuning_presets),
         _runtime_knob("Model Tuning", "Story Drafting tuning preset", "NEWS_MODEL_STORY_DRAFTING_TUNING_PRESET", "select", options=tuning_presets),
+        _runtime_knob("Model Tuning", "Story Scale Screening tuning preset", "NEWS_MODEL_STORY_SCALE_SCREENING_TUNING_PRESET", "select", options=tuning_presets),
+        _runtime_knob("Model Tuning", "Title Generation tuning preset", "NEWS_MODEL_TITLE_GENERATION_TUNING_PRESET", "select", options=tuning_presets),
         _runtime_knob("Model Tuning", "Model input cap", "NEWS_MODEL_MAX_INPUT_TOKENS", "number", minimum=1, step=1),
         _runtime_knob("Model Tuning", "Article summary max tokens", "NEWS_ARTICLE_SUMMARY_MAX_TOKENS", "number", minimum=1, step=1),
         _runtime_knob("Model Tuning", "Story drafting max tokens", "NEWS_STORY_DRAFTING_MAX_TOKENS", "number", minimum=1, step=1),
+        _runtime_knob("Model Tuning", "Story scale screening max tokens", "NEWS_STORY_SCALE_SCREENING_MAX_TOKENS", "number", minimum=1, step=1),
+        _runtime_knob("Model Tuning", "Title generation max tokens", "NEWS_TITLE_GENERATION_MAX_TOKENS", "number", minimum=1, step=1),
         _runtime_knob("Pipeline Budget", "Article text token limit", "NEWS_ARTICLE_TEXT_TOKEN_LIMIT", "number", minimum=1, step=1),
         _runtime_knob("Pipeline Budget", "Total article summary cap", "NEWS_TOTAL_ARTICLE_SUMMARY_CAP", "number", minimum=0, step=1),
         _runtime_knob("Pipeline Budget", "Recent window hours", "NEWS_RECENT_WINDOW_HOURS", "number", minimum=1, step=1),
@@ -1195,11 +1263,52 @@ def runtime_knob_registry() -> list[dict[str, Any]]:
         _runtime_knob("Model Server Settings", "Model base URL", "NEWS_MODEL_BASE_URL", default="http://127.0.0.1:8080/v1"),
         _runtime_knob("Model Server Settings", "Article Summarization base URL", "NEWS_MODEL_ARTICLE_SUMMARY_BASE_URL", default="http://127.0.0.1:8080/v1"),
         _runtime_knob("Model Server Settings", "Story Drafting base URL", "NEWS_MODEL_STORY_DRAFTING_BASE_URL", default="http://127.0.0.1:8080/v1"),
+        _runtime_knob("Model Server Settings", "Story Scale Screening base URL", "NEWS_MODEL_STORY_SCALE_SCREENING_BASE_URL", default="http://127.0.0.1:8080/v1"),
+        _runtime_knob("Model Server Settings", "Title Generation base URL", "NEWS_MODEL_TITLE_GENERATION_BASE_URL", default="http://127.0.0.1:8080/v1"),
         _runtime_knob("Model Server Settings", "Server prefill step size", "NEWS_MODEL_SERVER_PREFILL_STEP_SIZE", "number", minimum=1, step=1),
         _runtime_knob("Model Server Settings", "Server prompt cache size", "NEWS_MODEL_SERVER_PROMPT_CACHE_SIZE", "number", minimum=0, step=1),
         _runtime_knob("Model Server Settings", "Server prompt cache bytes", "NEWS_MODEL_SERVER_PROMPT_CACHE_BYTES"),
         _runtime_knob("Model Server Settings", "Server max tokens", "NEWS_MODEL_SERVER_MAX_TOKENS", "number", minimum=1, step=1),
     ]
+    for task, task_label, max_tokens_label in MODEL_TASK_KNOB_SPECS:
+        env_suffix = task.upper()
+        knobs.append(
+            _runtime_knob(
+                "Model Selection",
+                f"{task_label} model",
+                f"NEWS_MODEL_{env_suffix}",
+                "select",
+                options=sorted(MODEL_ALIASES),
+                option_links=model_links,
+            )
+        )
+        knobs.append(
+            _runtime_knob(
+                "Model Tuning",
+                f"{task_label} tuning preset",
+                f"NEWS_MODEL_{env_suffix}_TUNING_PRESET",
+                "select",
+                options=tuning_presets,
+            )
+        )
+        knobs.append(
+            _runtime_knob(
+                "Model Tuning",
+                max_tokens_label,
+                f"NEWS_{env_suffix}_MAX_TOKENS",
+                "number",
+                minimum=1,
+                step=1,
+            )
+        )
+        knobs.append(
+            _runtime_knob(
+                "Model Server Settings",
+                f"{task_label} base URL",
+                f"NEWS_MODEL_{env_suffix}_BASE_URL",
+                default="http://127.0.0.1:8080/v1",
+            )
+        )
     sampling_suffixes = [
         ("TEMPERATURE", "Temperature", "number", 0, 2, 0.01),
         ("TOP_P", "Top P", "number", 0, 1, 0.01),
@@ -1762,6 +1871,7 @@ def _build_runtime_config(
             f"Prompt profile {prompt_profile_id!r} violates pipeline-owned output contracts: "
             + "; ".join(profile_violations)
         )
+
     tracked_urls_filename = "tracked_urls.txt"
     blocking_urls_filename = "blocking_urls.txt"
     run_used_urls_filename = (

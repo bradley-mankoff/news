@@ -28,8 +28,12 @@ because they belong to different concepts that are not named separately.
 
 - Run Settings: every user-controllable value that shapes one Run Session.
 - Run Preset: a saved Run Settings overlay in `config/run_presets.yaml`.
-- Task Model Assignment: the model selected for a model-using task, such as
-  Article Summarization or Story Drafting.
+- Task Model Assignment: the model selected for a model-using task. Every
+  actual LLM stage has its own assignment: Article Summarization, Story
+  Drafting, Story Scale Screening, and Title Generation. Image Art Direction
+  inherits the Title Generation assignment (one shared LLM call produces both
+  outputs), and Story Discovery has no LLM stage (embedding/TF-IDF clustering)
+  so it inherits the default model.
 - Model Defaults: model or backend defaults used when no explicit Model Tuning
   is configured.
 - Model Tuning: explicit inference settings for a selected model, such as
@@ -51,8 +55,8 @@ for Run Settings. It should stop inferring size-class model profiles from
 
 Model selection should be explicit through Task Model Assignment. A default run
 may keep one model for all model-using tasks, but callers should be able to
-select separate models for Article Summarization and Story Drafting without
-forking the rest of the run.
+select separate models for Article Summarization, Story Drafting, Story Scale
+Screening, and Title Generation without forking the rest of the run.
 
 Model Tuning should be explicit and user-owned. If a Hugging Face model page
 documents recommended inference settings, the repo may carry those as named

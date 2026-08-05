@@ -5,6 +5,7 @@ import base64
 import contextlib
 import copy
 import importlib.util
+import json
 import sys
 import tempfile
 import types
@@ -23,7 +24,7 @@ from datetime import datetime
 
 import news_pipeline.pipeline as pipeline
 from news_pipeline.article_summary_records import ArticleSummaryRecord
-from news_pipeline.config import ModelSamplingSettings
+from news_pipeline.config import ModelSamplingSettings, MODEL_TASK_STORY_SCALE_SCREENING, MODEL_TASK_TITLE_GENERATION
 
 
 class PipelineHelperTests(unittest.TestCase):
@@ -1496,6 +1497,46 @@ class PipelineHelperTests(unittest.TestCase):
             )[0]
         )
 
+    def test_task_model_assignment_resolves_all_stages_and_inheritance(self) -> None:
+        fake_assignments = {
+            "default": object(),
+            "article_summary": object(),
+            "story_drafting": object(),
+            "story_scale_screening": object(),
+            "title_generation": object(),
+        }
+        with patch.object(pipeline, "MODEL_ASSIGNMENTS", fake_assignments):
+            self.assertIs(
+                pipeline._task_model_assignment("article_summary"),
+                fake_assignments["article_summary"],
+            )
+            self.assertIs(
+                pipeline._task_model_assignment("story_drafting"),
+                fake_assignments["story_drafting"],
+            )
+            self.assertIs(
+                pipeline._task_model_assignment("story_scale_screening"),
+                fake_assignments["story_scale_screening"],
+            )
+            self.assertIs(
+                pipeline._task_model_assignment("title_generation"),
+                fake_assignments["title_generation"],
+            )
+            # image_art_direction shares the title_generation LLM call.
+            self.assertIs(
+                pipeline._task_model_assignment("image_art_direction"),
+                fake_assignments["title_generation"],
+            )
+            # story_discovery has no LLM stage; it inherits default.
+            self.assertIs(
+                pipeline._task_model_assignment("story_discovery"),
+                fake_assignments["default"],
+            )
+            # Unknown tasks also fall back to default (never a KeyError).
+            self.assertIs(
+                pipeline._task_model_assignment("analysis"),
+                fake_assignments["default"],
+            )
 
     def test_model_email_and_art_helpers(self) -> None:
         fake_assignment = SimpleNamespace(
@@ -1624,7 +1665,9 @@ class PipelineHelperTests(unittest.TestCase):
                 pipeline.smtplib,
                 "SMTP_SSL",
                 return_value=fake_smtp_ssl,
-            ), patch("builtins.open", side_effect=OSError("boom")):
+            ), patch("builtins.open", side_effect=OSError("boom")), patch.object(
+                pipeline.progress_tracker, "warning"
+            ) as warning:
                 pipeline.maybe_email_report(
                     "Daily Brief",
                     "Body text",
@@ -1639,6 +1682,8 @@ class PipelineHelperTests(unittest.TestCase):
         self.assertTrue(fake_smtp_ssl.started_tls is False)
         self.assertEqual(fake_smtp_ssl.logged_in, ("user", "secret"))
         self.assertEqual(len(fake_smtp_ssl.messages), 1)
+        warning.assert_called_once()
+        self.assertIn("Image attachment read failed", warning.call_args[0][0])
 
         self.assertEqual(pipeline._first_sentences("One. Two. Three.", max_sentences=2, max_chars=100), "One. Two.")
         self.assertEqual(pipeline._first_sentences("", max_sentences=2, max_chars=100), "")
@@ -1873,7 +1918,71 @@ class PipelineHelperTests(unittest.TestCase):
             selection_ctor.call_args.kwargs["prompt_instructions"],
             pipeline.PROMPT_INSTRUCTIONS["story_scale_screening"],
         )
+        self.assertEqual(
+            selection_ctor.call_args.kwargs["story_scale_screening_max_tokens"],
+            pipeline.MODEL_ASSIGNMENTS[MODEL_TASK_STORY_SCALE_SCREENING]
+            .tuning.story_scale_screening_max_tokens,
+        )
 
+    def test_story_selection_runtime_receives_scale_screening_token_cap(self) -> None:
+        # The tuned cap must reach the runtime constructor; a regression that
+        # threads the wrong field or hardcodes the cap would silently ignore
+        # NEWS_STORY_SCALE_SCREENING_MAX_TOKENS for every default run.
+        fake_assignments = {
+            MODEL_TASK_STORY_SCALE_SCREENING: SimpleNamespace(
+                tuning=SimpleNamespace(story_scale_screening_max_tokens=2600)
+            ),
+        }
+        with patch.object(pipeline, "MODEL_ASSIGNMENTS", fake_assignments), patch.object(
+            pipeline.story_selection_stage, "StorySelectionRuntime"
+        ) as selection_ctor:
+            pipeline._story_selection_runtime()
+        self.assertEqual(
+            selection_ctor.call_args.kwargs["story_scale_screening_max_tokens"],
+            2600,
+        )
+
+        # Fallback branch: unset tuning value falls back to the stage default.
+        fake_assignments[MODEL_TASK_STORY_SCALE_SCREENING] = SimpleNamespace(
+            tuning=SimpleNamespace(story_scale_screening_max_tokens=None)
+        )
+        with patch.object(pipeline, "MODEL_ASSIGNMENTS", fake_assignments), patch.object(
+            pipeline.story_selection_stage, "StorySelectionRuntime"
+        ) as selection_ctor:
+            pipeline._story_selection_runtime()
+        self.assertEqual(
+            selection_ctor.call_args.kwargs["story_scale_screening_max_tokens"],
+            pipeline.story_selection_stage.STORY_SCALE_VALIDATION_MAX_TOKENS,
+        )
+
+    def test_generate_image_art_brief_uses_tuned_title_generation_max_tokens(self) -> None:
+        captured: dict[str, object] = {}
+
+        def fake_build_chat_model(max_tokens, task="title_generation", **_kwargs):
+            captured["max_tokens"] = max_tokens
+            return object()
+
+        with patch.object(pipeline, "build_chat_model", side_effect=fake_build_chat_model), patch.object(
+            pipeline,
+            "invoke_with_retries",
+            return_value=AIMessage(content=json.dumps(
+                {"image_prompt": "A scene", "overlay_headline": "Today"}
+            )),
+        ), patch.object(
+            pipeline, "_safe_json_extract", side_effect=lambda s: s, create=True
+        ):
+            # Default path: tuned value (700) is used.
+            pipeline.generate_image_art_brief("Summary text", "Report title")
+            self.assertEqual(captured["max_tokens"], 700)
+
+            # Custom cap reaches the LLM call.
+            fake_assignments = dict(pipeline.MODEL_ASSIGNMENTS)
+            fake_assignments[MODEL_TASK_TITLE_GENERATION] = SimpleNamespace(
+                tuning=SimpleNamespace(title_generation_max_tokens=1200)
+            )
+            with patch.object(pipeline, "MODEL_ASSIGNMENTS", fake_assignments):
+                pipeline.generate_image_art_brief("Summary text", "Report title")
+            self.assertEqual(captured["max_tokens"], 1200)
 
     def test_image_rendering_and_image_art_helpers(self) -> None:
         with patch("PIL.ImageFont.truetype", return_value="truetype-font"), patch(
@@ -2272,3 +2381,72 @@ class PipelineHelperTests(unittest.TestCase):
             ),
             "One two three four five six seven eight nine ten eleven",
         )
+
+    def test_report_recording_for_nonempty_synthesis(self) -> None:
+        diagnostics = pipeline.RunDiagnostics(
+            run_started_at="2026-08-03T19:04:38",
+            settings={},
+        )
+        token_stats = {
+            "primary_dataset": "synthetic dataset text",
+            "included_report_keys": ["a1"],
+        }
+        pipeline._record_report_diagnostics(
+            diagnostics,
+            path="/tmp/latest_run.md",
+            prompt_label="default prompt",
+            recipient_list=["reader@example.com", "editor@example.com"],
+            token_stats=token_stats,
+            reference_reports=["reference"],
+            citation_sources=[{"title": "Alpha"}],
+            citation_groups=[{"group": "g1"}],
+            image_art_diagnostics={"final_image_path": "/tmp/art.png"},
+        )
+        self.assertEqual(len(diagnostics.reports), 1)
+        report = diagnostics.reports[0]
+        self.assertEqual(report["path"], "/tmp/latest_run.md")
+        self.assertEqual(report["prompt_label"], "default prompt")
+        self.assertEqual(report["recipient_count"], 2)
+        self.assertEqual(report["recipients"], ["reader@example.com", "editor@example.com"])
+        self.assertEqual(report["reference_report_count"], 1)
+        self.assertEqual(report["citation_source_count"], 1)
+        self.assertEqual(report["citation_group_count"], 1)
+        self.assertEqual(report["token_stats"], token_stats)
+        self.assertEqual(report["image_art"], {"final_image_path": "/tmp/art.png"})
+        self.assertNotIn("synthesis_dataset_artifacts", report)
+
+    def test_report_recording_for_missing_image_art_and_empty_lists(self) -> None:
+        # image_art_diagnostics is None whenever image generation produced
+        # nothing (the failure path operators inspect most), and citation /
+        # reference lists can legitimately be empty for reports without
+        # citation markers.
+        diagnostics = pipeline.RunDiagnostics(
+            run_started_at="2026-08-03T19:04:38",
+            settings={},
+        )
+        pipeline._record_report_diagnostics(
+            diagnostics,
+            path="/tmp/latest_run.md",
+            prompt_label="default prompt",
+            recipient_list=[],
+            token_stats={},
+            reference_reports=[],
+            citation_sources=[],
+            citation_groups=[],
+            image_art_diagnostics=None,
+        )
+        self.assertEqual(len(diagnostics.reports), 1)
+        report = diagnostics.reports[0]
+        self.assertEqual(report["recipient_count"], 0)
+        self.assertEqual(report["recipients"], [])
+        self.assertEqual(report["reference_report_count"], 0)
+        self.assertEqual(report["citation_source_count"], 0)
+        self.assertEqual(report["citation_group_count"], 0)
+        self.assertIsNone(report["image_art"])
+
+    def test_no_stale_synthesis_dataset_artifacts_reference_in_pipeline(self) -> None:
+        # Regression guard for the NameError fixed in #127: the stale
+        # identifier must never reappear anywhere in production pipeline code,
+        # or report finalization would crash again at runtime.
+        source = Path(pipeline.__file__).read_text(encoding="utf-8")
+        self.assertNotIn("synthesis_dataset_artifacts", source)

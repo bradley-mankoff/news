@@ -27,12 +27,17 @@ between lanes. Contract:
   finishes with the PR still conflicting posts a human-help comment once.
 - Deferred-work guard: implementation completion records carry a `## Deferred
   work` section (one bullet per deferred item; contract enforced by the
-  completion-comment nodes). When a run completes, the poller dedupes each item
-  against open/closed issue titles, creates a Backlog issue (boarded) when no
-  tracking issue exists, links existing ones, and comments the linkage on the
-  source issue. Deferral language or unchecked acceptance criteria without the
-  section post a verification comment instead (never auto-create from prose).
-  Idempotent via per-run state markers; retried next poll on failure.
+  completion-comment nodes). The completion-comment node is the dedupe judge:
+  it consults open/closed issue titles + initial bodies and repo context
+  (HANDOFF.md, ADRs) and stamps each item `**Links to:** #N` (already tracked),
+  `**Supersedes:** #N` (closed — create a new one referencing it), `**Skip:**`
+  (never-to-be-done), or leaves it bare (create). The poller executes
+  mechanically: links, creates (boarded in the default lane), skips, and
+  comments the linkage on the source issue; an exact-title safety check links
+  but never creates. Deferral language or unchecked acceptance criteria
+  without the section post a verification comment instead (never auto-create
+  from prose). Idempotent via per-run state markers; retried next poll on
+  failure.
 - Dispatch = `archon workflow run <wf> --branch <branch> "<msg>"` executed in
   the repo root as a detached child (`subprocess.Popen` + `start_new_session`).
   `--detach` is NOT used — the archon-pi build's detached-child spawn is broken
@@ -51,6 +56,7 @@ mutations (no dispatch, no lane moves, no comments, no merges, no state write).
 import json
 import os
 import re
+import socket
 import subprocess
 import sys
 import time
@@ -132,6 +138,107 @@ def gh(args: list[str], env: dict, timeout: int = 90) -> subprocess.CompletedPro
     return subprocess.run(
         ["gh", *args], capture_output=True, text=True, timeout=timeout, env=env
     )
+
+
+# --- Local develop sync (keep the dev UI on the latest integration code) --
+#
+# Develop merges happen server-side via the GitHub API, so the local checkout
+# never learns about them on its own. After every successful develop merge the
+# poller refreshes the local checkout (fetch + fast-forward only) and restarts
+# the control-panel UI if it is running, so the dev loop is: merge lands ->
+# local code + UI are already current when the issue moves to Ready for Review.
+# Never destructive: dirty trees, non-develop branches, and unpushed local
+# commits all skip with a logged reason instead of forcing.
+
+UI_HOST = "127.0.0.1"
+UI_PORT = 8766
+UI_LOG_PATH = "/tmp/news-ui.log"
+
+
+def _port_open(host: str, port: int, timeout: float = 0.5) -> bool:
+    """True when something accepts TCP connections on host:port."""
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
+def _ui_running() -> bool:
+    return _port_open(UI_HOST, UI_PORT)
+
+
+def _restart_ui() -> bool:
+    """Kill a running news UI and relaunch it; True when the port comes back."""
+    subprocess.run(["pkill", "-f", "news ui"], capture_output=True, text=True)
+    time.sleep(1)
+    news_bin = ROOT / ".venv" / "bin" / "news"
+    if not news_bin.exists():
+        log(f"LOCAL SYNC: cannot restart UI - missing {news_bin}")
+        return False
+    with open(UI_LOG_PATH, "a") as out:
+        subprocess.Popen(
+            [str(news_bin), "ui", "--host", UI_HOST, "--port", str(UI_PORT)],
+            stdout=out, stderr=subprocess.STDOUT,
+            start_new_session=True, cwd=str(ROOT),
+        )
+    deadline = time.monotonic() + 30
+    while time.monotonic() < deadline:
+        if _port_open(UI_HOST, UI_PORT):
+            return True
+        time.sleep(1)
+    return False
+
+
+def sync_local_develop() -> str:
+    """Refresh the local develop checkout and UI after a remote merge.
+
+    Fast-forward only: skips (never forces) when the tree is dirty, the
+    checked-out branch is not develop, or local develop has unpushed
+    commits. Restarts the control-panel UI only when it is running.
+    Returns a one-line summary for the poller log.
+    """
+    if DRY_RUN:
+        return "LOCAL SYNC: dry-run (no fetch/merge/restart)"
+    r = subprocess.run(["git", "fetch", "origin"], capture_output=True,
+                       text=True, timeout=90, cwd=str(ROOT))
+    if r.returncode != 0:
+        return f"LOCAL SYNC FAILED: git fetch: {r.stderr.strip()[:200]}"
+    branch = subprocess.run(["git", "rev-parse", "--abbrev-ref", "HEAD"],
+                            capture_output=True, text=True, timeout=30,
+                            cwd=str(ROOT))
+    if branch.returncode != 0 or branch.stdout.strip() != "develop":
+        return (f"LOCAL SYNC SKIP: not on develop "
+                f"(branch={branch.stdout.strip() or '?'!r})")
+    dirty = subprocess.run(["git", "status", "--porcelain"],
+                           capture_output=True, text=True, timeout=30,
+                           cwd=str(ROOT))
+    dirty_files = [ln for ln in dirty.stdout.splitlines() if ln.strip()]
+    if dirty_files:
+        return f"LOCAL SYNC SKIP: working tree dirty ({len(dirty_files)} file(s))"
+    ahead = subprocess.run(["git", "rev-list", "--count", "origin/develop..HEAD"],
+                           capture_output=True, text=True, timeout=30,
+                           cwd=str(ROOT))
+    if ahead.returncode == 0 and ahead.stdout.strip() != "0":
+        n = ahead.stdout.strip()
+        return (f"LOCAL SYNC SKIP: local develop has {n} unpushed commit(s); "
+                "sync blocked until they are pushed (fast-forward only)")
+    behind = subprocess.run(["git", "rev-list", "--count", "HEAD..origin/develop"],
+                            capture_output=True, text=True, timeout=30,
+                            cwd=str(ROOT))
+    if behind.returncode == 0 and behind.stdout.strip() == "0":
+        return "LOCAL SYNC: develop already up to date"
+    m = subprocess.run(["git", "merge", "--ff-only", "origin/develop"],
+                       capture_output=True, text=True, timeout=90, cwd=str(ROOT))
+    if m.returncode != 0:
+        return f"LOCAL SYNC FAILED: fast-forward merge: {m.stderr.strip()[:200]}"
+    merged = (m.stdout.strip() or f"{behind.stdout.strip()} commit(s)").splitlines()[-1]
+    if not _ui_running():
+        return f"LOCAL SYNC: develop updated ({merged}); UI not running, left as is"
+    if _restart_ui():
+        return f"LOCAL SYNC: develop updated ({merged}); UI restarted"
+    return (f"LOCAL SYNC WARNING: develop updated ({merged}) but UI restart "
+            f"failed - see {UI_LOG_PATH}")
 
 
 def graphql(cfg: dict, env: dict, cursor: str | None) -> dict:
@@ -263,6 +370,9 @@ def parse_deferred_work(body: str) -> list[dict] | None:
         **Label:** <optional; must already exist in the repo>
     Returns None when the section is absent; [] when the section is present
     but empty or `*None.*` (the contract's explicit "nothing deferred" form).
+    Indented fields: `**Links to:** #N` (already tracked — the model judged it
+    covered), `**Supersedes:** #N` (closed issue — create a new one referencing
+    it), `**Skip:** <reason>` (never-to-be-done — do not create).
     """
     m = DEFERRED_SECTION_RE.search(body or "")
     if not m:
@@ -279,14 +389,24 @@ def parse_deferred_work(body: str) -> list[dict] | None:
         if not lines:
             continue
         item = {"title": lines[0].strip(),
-                "description": "", "reason": "", "label": ""}
+                "description": "", "reason": "", "label": "",
+                "links_to": None, "supersedes": None, "skip": ""}
         for line in lines[1:]:
-            fm = re.match(r"^\s*\*\*(\w+):\*\*\s*(.*)$", line)
-            if fm:
-                key = fm.group(1).lower()
-                val = fm.group(2).strip()
-                if key in item and val:
-                    item[key] = val
+            fm = re.match(r"^\s*\*\*([\w ]+?):\*\*\s*(.*)$", line)
+            if not fm:
+                continue
+            key = fm.group(1).strip().lower()
+            val = fm.group(2).strip()
+            if key == "links to":
+                m = re.search(r"#?(\d+)", val)
+                item["links_to"] = int(m.group(1)) if m else None
+            elif key == "supersedes":
+                m = re.search(r"#?(\d+)", val)
+                item["supersedes"] = int(m.group(1)) if m else None
+            elif key == "skip":
+                item["skip"] = val
+            elif key in item and val:
+                item[key] = val
         if item["title"]:
             items.append(item)
     return items
@@ -299,13 +419,18 @@ def normalize_title(title: str) -> str:
 
 def dedupe_deferred(item: dict, open_issues: list[dict],
                     closed_issues: list[dict]) -> tuple[str, int | None]:
-    """Where a deferred item's tracking issue stands.
+    """Safety net for deferred items the model did not link itself.
+
+    The completion-comment node is the real judge (it consults issue titles +
+    initial bodies and repo context and stamps each item with `Links to:` /
+    `Supersedes:` / `Skip:`). This exact-title check only ever LINKS or adds a
+    reference — it can never create an issue the model would not have wanted.
 
     Returns:
       ("link", n)        an OPEN issue with the same normalized title exists
       ("create-ref", n)  only a CLOSED issue matches — create a new one
-                          referencing #n (the work still needs tracking)
-      ("create", None)   no existing issue — create one
+                          referencing #n
+      ("create", None)   no exact match — create
     """
     target = normalize_title(item.get("title") or "")
     if not target:
@@ -893,6 +1018,26 @@ def reconcile_deferred_work(cfg: dict, env: dict, issue_number: int,
     lane = cfg.get("default_lane", "Backlog")
     lines: list[str] = []
     for item in items:
+        if item.get("skip"):
+            lines.append(f"- **{item['title']}** \u2014 skipped ({item['skip']})")
+            continue
+        if item.get("links_to") is not None:
+            target = item["links_to"]
+            if any(i.get("number") == target for i in open_issues):
+                lines.append(f"- **{item['title']}** \u2192 already tracked in #{target}")
+            else:
+                log(f"DEFERRED: '{item['title']}' links to #{target}, which is not "
+                    "an open issue; creating fresh")
+                created = create_deferred_issue(
+                    cfg, env, issue_number, pr_number, source_title, item, lane,
+                    project_id, field_id, status_options)
+                if created is None:
+                    log(f"DEFERRED RETRY issue={issue_number}: create failed for "
+                        f"'{item['title']}'")
+                    return False
+                if created:
+                    lines.append(f"- **{item['title']}** \u2192 #{created} (created, {lane})")
+            continue
         action, ref = dedupe_deferred(item, open_issues, closed_issues)
         if action == "link":
             lines.append(f"- **{item['title']}** \u2192 already tracked in #{ref}")
@@ -1233,6 +1378,8 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
                     log(f"left item={item_id} in {in_progress_name} (develop merge failed)")
                     rec.pop("dispatch_msg", None)
                     continue
+                if merge_ok:
+                    log(sync_local_develop())
                 # Deferred-work guard: anything deferred by this run must be
                 # tracked as an issue before the item moves to Ready for Review.
                 dw_cfg = cfg.get("deferred_work") or {}
@@ -1474,6 +1621,9 @@ def main() -> int:
 
     state_path = ROOT / cfg["state_file"]
     state = json.loads(state_path.read_text()) if state_path.exists() else {}
+
+    if not DRY_RUN:
+        log(sync_local_develop())
 
     once = "--once" in sys.argv or DRY_RUN
     consecutive_failures = 0

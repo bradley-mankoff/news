@@ -48,10 +48,17 @@ The repo runs a fully automated agentic loop driven by the GitHub project board
   `**Label:**` — enforced by the workflow-side `completion-comment` nodes, which
   must trace the original issue ask (every criterion, described behavior, or
   named component in the issue body that the run did NOT ship is deferred work
-  and must be listed). When a run completes, the poller dedupes each item
-  against open/closed issue titles (open match → link; closed match → new
-  issue referencing it; no match → create), boards new issues in the default
-  lane, and comments the linkage on the source issue. Deferral language or
+  and must be listed). The node also judges each item against a size bar:
+  only independently schedulable deliverables are spawned as issues; small
+  chores, test/doc tweaks, and review findings belonging to the parent are
+  stamped `**Skip:**` (preserved in the record, not the backlog). It then
+  dedupes by consulting all open/closed issue titles + initial bodies and repo
+  context (HANDOFF.md, ADRs) and stamps each item `**Links to:** #N` (already
+  tracked), `**Supersedes:** #N` (closed — new issue referencing it),
+  `**Skip:** <reason>`, or leaves it bare. When a run completes, the poller
+  executes mechanically: links, creates (boarded in the default lane),
+  skips, and comments the linkage on the source issue (an exact-title safety
+  check links but never creates). Deferral language or
   unchecked acceptance criteria (`- [ ]`) without the section post a
   verification comment instead — never an auto-created issue from prose.
 - Moving an issue into `In Review` makes the poller open the ship PR
@@ -74,7 +81,7 @@ The repo runs a fully automated agentic loop driven by the GitHub project board
    CRITICAL/HIGH findings. It runs on the final diff — including anything you
    changed during testing.
 
-The workflows are the stock Archon 0.7.0 pi-usable set, curated in the archon
+The workflows are the stock Archon 0.6.0 pi-usable set, curated in the archon
 home (`workflows/`); claude-only workflows are archived, not discovered. Full
 inventory: `docs/archon-workflows.md`.
 
@@ -121,10 +128,6 @@ human, by design:
 - `automation/move_item.py` — move an issue to a lane from the CLI.
 - `automation/create_issue.py` — create an issue and land it on the board in
   the default lane in one step.
-- `automation/board_health.py` — read-only board health report: stale runs,
-  unknown blockers, unsatisfied dependencies (exit 0 always).
-- `automation/deploy.sh` — re-apply local archon workflow edits and restart
-  the board poller after a deploy or archon reinstall.
 - `automation/apply_workflow_edits.py` — idempotently re-apply the local
   archon workflow edits (completion-comment nodes with the Deferred-work
   contract, `report-verdict`, `archon-fix-ship-conflicts`) after an archon
@@ -196,7 +199,7 @@ Run with a saved preset or explicit overrides:
 
 ```bash
 uv run news run --preset NAME
-NEWS_SOURCE_SCOPE=peripheral NEWS_RECIPIENT_SCOPE=primary uv run news run
+NEWS_SOURCE_SCOPE=peripheral NEWS_RECIPIENT_SCOPE=bradley uv run news run
 ```
 
 Useful utility commands:
@@ -239,15 +242,19 @@ Key Run Settings:
 
 - `NEWS_SOURCE_SCOPE=core|peripheral`: `peripheral` includes both core and
   peripheral sources.
-- `NEWS_RECIPIENT_SCOPE=primary|all`: send to the primary recipient only or all active
+- `NEWS_RECIPIENT_SCOPE=bradley|all`: send to the primary recipient only or all active
   configured recipients.
 - `NEWS_BLOCK_REUSED_URLS=0|1`: every run records URL history; only `1` makes
   previously recorded URLs block future reuse.
 - `NEWS_IMAGE_ENABLED=0|1`: report image generation, default off unless a
   preset enables it.
 - `NEWS_MODEL`: default model selection only. Task models are assigned
-  separately with `NEWS_MODEL_ARTICLE_SUMMARY` and
-  `NEWS_MODEL_STORY_DRAFTING`.
+  separately with `NEWS_MODEL_ARTICLE_SUMMARY`, `NEWS_MODEL_STORY_DRAFTING`,
+  `NEWS_MODEL_STORY_SCALE_SCREENING`, and `NEWS_MODEL_TITLE_GENERATION`.
+  Stages with no LLM call of their own inherit a task model: image art
+  direction runs on the Title Generation model (one shared LLM call), and
+  story discovery has no LLM stage (embedding/TF-IDF clustering) so it
+  inherits the default model.
 - `NEWS_MODEL_BACKEND`: optional backend override for the default model
   (`mlx-lm`, `mlx-vlm`, or `external`; inferred from the model reference
   otherwise — see [Runtime Matrix](#runtime-matrix)).
@@ -284,42 +291,21 @@ Task-specific model assignments inherit from `NEWS_MODEL` unless you set them
 ```bash
 NEWS_MODEL_ARTICLE_SUMMARY=gemma-e2b-tiny uv run news run
 NEWS_MODEL_STORY_DRAFTING=qwythos-9b-8bit uv run news run --preset NAME
+NEWS_MODEL_STORY_SCALE_SCREENING=gemma-e2b-tiny uv run news run
+NEWS_MODEL_TITLE_GENERATION=qwythos-9b-8bit uv run news run --preset NAME
 ```
+Every actual LLM stage has its own assignment: Article Summarization, Story
+Drafting, Story Scale Screening, and Title Generation. Two stages inherit by
+design: `image_art_direction` shares the Title Generation LLM call (one prompt
+produces both the art direction and the overlay headline, so it runs on the
+Title Generation model), and `story_discovery` has no LLM stage — it is
+algorithmic embedding/TF-IDF clustering and inherits the default model. There
+is no `NEWS_MODEL_IMAGE_ART_DIRECTION` env var.
 Built-in aliases:
 
-- `gemma-e2b-tiny`: [`deadbydawn101/gemma-4-E2B-Heretic-Uncensored-mlx-4bit`](https://huggingface.co/deadbydawn101/gemma-4-E2B-Heretic-Uncensored-mlx-4bit) (Codex-safe test model)
-- `qwythos-9b-4bit`: [`huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF`](https://huggingface.co/huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF) ([`...Q4_K.gguf`](https://huggingface.co/huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF/blob/main/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-Q4_K.gguf))
-- `qwythos-9b-8bit`: [`huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF`](https://huggingface.co/huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF) ([`...Q8_0.gguf`](https://huggingface.co/huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF/blob/main/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-Q8_0.gguf)) (default)
-
-Each model page shows Hugging Face's native Hardware Compatibility panel
-(GGUF/MLX quantizations) — the UI model picker links directly to it.
-
-### Model Catalog
-
-The Model Catalog is the code-owned registry of models verified for the
-supported backends, with recommendations per task — factual extraction,
-structured output, synthesis, citation fidelity, speed, context length, and
-translation — rather than parameter count or popularity:
-
-```bash
-uv run news models catalog
-uv run news models search --query qwythos --task text-generation --limit 5
-```
-
-Curated models (3):
-
-- `qwythos-9b-8bit` — mlx-vlm, 1M-token context, default model
-  ([Hugging Face](https://huggingface.co/huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF))
-- `qwythos-9b-4bit` — mlx-vlm, 1M-token context
-  ([Hugging Face](https://huggingface.co/huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF))
-- `gemma-e2b-tiny` — mlx-vlm, Codex-safe test model
-  ([Hugging Face](https://huggingface.co/deadbydawn101/gemma-4-E2B-Heretic-Uncensored-mlx-4bit))
-
-Hugging Face search results carry runtime-fit verdicts (`managed_mlx_lm`,
-`managed_mlx_vlm`, or `external_only`) so unlaunchable repos are never picked
-for a managed backend (ADR 0010 runtime matrix); hardware fitting itself lives
-on the Hugging Face model page. The UI's "Model catalog" panel shows curated
-cards, task recommendations, and search with the same verdicts.
+- `gemma-e2b-tiny`: `deadbydawn101/gemma-4-E2B-Heretic-Uncensored-mlx-4bit` (Codex-safe test model)
+- `qwythos-9b-4bit`: `huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-Q4_K.gguf`
+- `qwythos-9b-8bit`: `huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-Q8_0.gguf` (default)
 
 ### Runtime Matrix
 
@@ -351,7 +337,8 @@ fails fast instead of waiting out the readiness deadline.
 `news model-server-command` reports that no managed server command exists for
 the external backend. Per-task models can also use external endpoints by
 giving that task a distinct base URL (`NEWS_MODEL_ARTICLE_SUMMARY_BASE_URL`,
-`NEWS_MODEL_STORY_DRAFTING_BASE_URL`).
+`NEWS_MODEL_STORY_DRAFTING_BASE_URL`, `NEWS_MODEL_STORY_SCALE_SCREENING_BASE_URL`,
+`NEWS_MODEL_TITLE_GENERATION_BASE_URL`).
 
 Normal report runs start the matching local MLX server, wait until it is ready,
 run the pipeline, and stop the managed server when the run exits. To keep a
@@ -361,7 +348,8 @@ server warm manually, print the matching command and run it in another terminal:
 NEWS_MODEL=qwythos-9b-8bit uv run news model-server-command
 ```
 
-If Article Summarization or Story Drafting uses a different model, give that
+If Article Summarization, Story Drafting, Story Scale Screening, or Title
+Generation uses a different model, give that
 task a matching base URL or run it on an externally managed server. The current
 runtime supports one managed local server per shared model/base URL; it does not
 automatically coordinate multiple local servers for one run.
@@ -377,6 +365,8 @@ Use these env vars to select a preset:
 - `NEWS_MODEL_TUNING_PRESET`
 - `NEWS_MODEL_ARTICLE_SUMMARY_TUNING_PRESET`
 - `NEWS_MODEL_STORY_DRAFTING_TUNING_PRESET`
+- `NEWS_MODEL_STORY_SCALE_SCREENING_TUNING_PRESET`
+- `NEWS_MODEL_TITLE_GENERATION_TUNING_PRESET`
 
 Precedence is:
 
@@ -386,7 +376,8 @@ Precedence is:
 4. Explicit `NEWS_` tuning overrides.
 
 Direct tuning overrides still win, such as `NEWS_MODEL_MAX_INPUT_TOKENS`,
-`NEWS_ARTICLE_SUMMARY_MAX_TOKENS`, `NEWS_STORY_DRAFTING_MAX_TOKENS`, and
+`NEWS_ARTICLE_SUMMARY_MAX_TOKENS`, `NEWS_STORY_DRAFTING_MAX_TOKENS`,
+`NEWS_STORY_SCALE_SCREENING_MAX_TOKENS`, `NEWS_TITLE_GENERATION_MAX_TOKENS`, and
 sampling env vars like `NEWS_MODEL_ARTICLE_SUMMARY_TEMPERATURE`.
 
 ### Pipeline Budget
@@ -403,6 +394,8 @@ configuration:
 - `NEWS_MODEL_BASE_URL`
 - `NEWS_MODEL_ARTICLE_SUMMARY_BASE_URL`
 - `NEWS_MODEL_STORY_DRAFTING_BASE_URL`
+- `NEWS_MODEL_STORY_SCALE_SCREENING_BASE_URL`
+- `NEWS_MODEL_TITLE_GENERATION_BASE_URL`
 - `NEWS_MODEL_SERVER_PREFILL_STEP_SIZE`
 - `NEWS_MODEL_SERVER_PROMPT_CACHE_SIZE`
 - `NEWS_MODEL_SERVER_PROMPT_CACHE_BYTES`
@@ -486,7 +479,7 @@ The `dev` preset:
 - Uses `gemma-e2b-tiny` (the smallest model — the only one we keep for
   local testing now that the 12b/26b gemma slots are filled by Qwythos).
 - Sets `NEWS_SOURCE_SCOPE=core` (the narrowest source pool).
-- Sets `NEWS_RECIPIENT_SCOPE=primary` (sends only to the primary
+- Sets `NEWS_RECIPIENT_SCOPE=bradley` (sends only to the primary
   recipient).
 - Disables image generation and URL reuse blocking.
 - Sets `NEWS_MIN_ARTICLES_PER_STORY=2` and relaxes story drafting guards.

@@ -121,6 +121,14 @@ class DiagnosticsTests(unittest.TestCase):
             )
             self.assertIn("# Latest News Run Review", review_markdown)
             self.assertIn("## Run Settings", review_markdown)
+            self.assertIn(
+                "| Story Scale Screening model | scale_ref (scale_model) [external] @ https://api.example.com |",
+                review_markdown,
+            )
+            self.assertIn(
+                "| Title Generation model | title_ref (title_model) [mlx-vlm] @ http://localhost:9090 |",
+                review_markdown,
+            )
             self.assertIn("## Top-Level KPIs", review_markdown)
             self.assertIn("## Funnel Stats", review_markdown)
             self.assertIn("## Source Health", review_markdown)
@@ -133,6 +141,26 @@ class DiagnosticsTests(unittest.TestCase):
 
             details_markdown = diagnostics.to_markdown()
             self.assertIn("# Daily News Run Details", details_markdown)
+            self.assertIn(
+                "- Story Scale Screening model: scale_ref (scale_model) [external] @ https://api.example.com",
+                details_markdown,
+            )
+            self.assertIn(
+                "- Title Generation model: title_ref (title_model) [mlx-vlm] @ http://localhost:9090",
+                details_markdown,
+            )
+            self.assertIn(
+                "- Image art direction uses the Title Generation model; Story Discovery has no LLM stage (inherits default).",
+                details_markdown,
+            )
+            self.assertIn(
+                "story_scale_screening=external",
+                _model_backend_value(diagnostics.settings),
+            )
+            self.assertIn(
+                "title_generation=mlx-vlm",
+                _model_backend_value(diagnostics.settings),
+            )
             self.assertIn("## Source Funnel", details_markdown)
             self.assertIn("## Story Clustering", details_markdown)
             self.assertIn("## Story Drafting", details_markdown)
@@ -282,6 +310,18 @@ class DiagnosticsTests(unittest.TestCase):
                         "name": "draft_model",
                         "backend": "openai",
                         "base_url": "https://api.example.com",
+                    },
+                    "story_scale_screening": {
+                        "reference": "scale_ref",
+                        "name": "scale_model",
+                        "backend": "external",
+                        "base_url": "https://api.example.com",
+                    },
+                    "title_generation": {
+                        "reference": "title_ref",
+                        "name": "title_model",
+                        "backend": "mlx-vlm",
+                        "base_url": "http://localhost:9090",
                     },
                 },
                 "model_max_input_tokens": 2048,
