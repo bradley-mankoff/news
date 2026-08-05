@@ -160,18 +160,16 @@ def _runtime_snapshot(
             )
         )
         config = resolution.config
-        missing = [
-            task
-            for task in (
-                "article_summary",
-                "story_drafting",
-                "story_scale_screening",
-                "title_generation",
-            )
-            if task not in config.model_assignments
-        ]
+        task_keys = (
+            "article_summary",
+            "story_drafting",
+            "story_scale_screening",
+            "title_generation",
+        )
+        missing = [task for task in task_keys if task not in config.model_assignments]
         if missing:
             raise KeyError(f"runtime config missing model assignments for tasks: {missing}")
+        assignments = _json_ready(config.model_assignments)
         return {
             "preset_id": config.preset_id or "custom",
             "prompt_profile_id": config.prompt_profile_id,
@@ -196,11 +194,11 @@ def _runtime_snapshot(
                 "article_summary_concurrency": config.article_summary_concurrency,
                 "story_synthesis_concurrency": config.story_synthesis_concurrency,
                 "server_command": config.model_server_command,
-                "assignments": _json_ready(config.model_assignments),
-                "article_summary": _json_ready(config.model_assignments["article_summary"]),
-                "story_drafting": _json_ready(config.model_assignments["story_drafting"]),
-                "story_scale_screening": _json_ready(config.model_assignments["story_scale_screening"]),
-                "title_generation": _json_ready(config.model_assignments["title_generation"]),
+                "assignments": assignments,
+                "article_summary": assignments["article_summary"],
+                "story_drafting": assignments["story_drafting"],
+                "story_scale_screening": assignments["story_scale_screening"],
+                "title_generation": assignments["title_generation"],
                 "tuning": _json_ready(config.model_tuning),
                 "pipeline_budget": _json_ready(config.pipeline_budget),
                 "server_settings": _json_ready(config.model_server_settings),
@@ -1235,6 +1233,29 @@ HTML = r"""<!doctype html>
       cursor: help;
       background: #fff;
     }
+    .env-info:focus-visible {
+      outline: 2px solid var(--blue);
+      outline-offset: 2px;
+    }
+    .env-tooltip {
+      /* Fixed (not absolute): escapes clipping ancestors and keeps the JS
+         viewport clamping in positionEnvTooltip() viewport-relative. */
+      position: fixed;
+      z-index: 60;
+      display: block;
+      max-width: min(320px, calc(100vw - 16px));
+      /* Tall hints stay readable on short viewports. */
+      max-height: calc(100vh - 16px);
+      overflow-y: auto;
+      padding: 8px 10px;
+      background: #111827;
+      color: #e8edf7;
+      border-radius: 8px;
+      font-size: 12px;
+      line-height: 1.45;
+      box-shadow: 0 10px 30px rgba(20, 26, 38, 0.35);
+      pointer-events: none;
+    }
     .stack { display: grid; gap: 14px; }
     .eyebrow { margin: 0 0 4px; text-transform: uppercase; letter-spacing: 0.12em; font-size: 11px; color: var(--muted); }
     .banner {
@@ -1463,7 +1484,6 @@ HTML = r"""<!doctype html>
       "NEWS_STORY_SCALE_SCREENING_ENABLED",
       "NEWS_RELAX_STORY_DRAFTING_GUARDS"
     ]);
-
     const TASK_CONFIG = {
       article_summary: {
         label: "Article Summarization",
@@ -1704,10 +1724,7 @@ HTML = r"""<!doctype html>
     }
     function knobField(env, label, options={}) {
       const knob = knobByEnv(env);
-      if (!knob) {
-        console.warn(`knobField: env ${env} not in schema.knobs; field omitted`);
-        return "";
-      }
+      if (!knob) return "";
       return `<label class="field"><span>${escapeHtml(label)}</span>${inputForKnob(knob, options)}<code>${escapeHtml(env)}</code></label>`;
     }
     function knobHint(name) {
@@ -1720,14 +1737,101 @@ HTML = r"""<!doctype html>
       if (name.endsWith("_REPETITION_PENALTY")) return "Penalty for repeated token patterns in model output.";
       return "Runtime setting passed through to the pipeline or local utility command.";
     }
+    let envTipSeq = 0; // document-unique tooltip ids across all decorator runs
+    function positionEnvTooltip(icon, tooltip) {
+      const GUTTER = 8; // viewport-safe margin on every edge
+      const r = icon.getBoundingClientRect();
+      const t = tooltip.getBoundingClientRect();
+      let top = r.bottom + GUTTER;
+      // Flip above the icon when the tooltip would overflow the viewport bottom.
+      if (top + t.height > window.innerHeight - GUTTER) top = Math.max(GUTTER, r.top - t.height - GUTTER);
+      // Center on the icon, clamped to keep a GUTTER margin on narrow viewports.
+      const desiredLeft = r.left + r.width / 2 - t.width / 2;
+      const maxLeft = Math.max(GUTTER, window.innerWidth - t.width - GUTTER);
+      const left = Math.min(Math.max(GUTTER, desiredLeft), maxLeft);
+      tooltip.style.top = `${top}px`;
+      tooltip.style.left = `${left}px`;
+    }
+    // Live tooltips (tooltip -> icon) shared by the delegated scroll/resize
+    // handlers below: one global listener pair instead of one per tooltip, so
+    // knob-search re-renders can never accumulate document/window listeners.
+    const liveTooltips = new Map();
+    // Shared iteration for the delegated scroll/resize handlers: prunes
+    // entries whose icon was re-rendered away (e.g. knob search), then runs
+    // the handler on the remaining (icon, tooltip) pairs.
+    function forEachLiveTooltip(handler) {
+      liveTooltips.forEach((icon, tooltip) => {
+        if (!icon.isConnected) { liveTooltips.delete(tooltip); return; }
+        handler(icon, tooltip);
+      });
+    }
+    function hideTooltipsOnScroll() {
+      forEachLiveTooltip((icon, tooltip) => {
+        // Hide only when the trigger actually left the viewport: Tab-focus
+        // scroll-into-view also fires scroll, and hiding then would swallow
+        // the tooltip on the keyboard path this feature exists for.
+        const r = icon.getBoundingClientRect();
+        if (r.bottom < 0 || r.top > window.innerHeight || r.right < 0 || r.left > window.innerWidth) {
+          tooltip.classList.add("hidden");
+        }
+      });
+    }
+    function repositionOpenTooltips() {
+      forEachLiveTooltip((icon, tooltip) => {
+        if (!tooltip.classList.contains("hidden")) positionEnvTooltip(icon, tooltip);
+      });
+    }
+    // Capture phase: scroll events don't bubble, so this is the only way to
+    // catch scrolling inside nested containers (Advanced panels, knob list).
+    document.addEventListener("scroll", hideTooltipsOnScroll, true);
+    window.addEventListener("resize", repositionOpenTooltips);
+    function attachEnvTooltip(icon, tooltip) {
+      const show = () => {
+        tooltip.classList.remove("hidden");
+        positionEnvTooltip(icon, tooltip);
+        liveTooltips.set(tooltip, icon);
+      };
+      const hide = () => {
+        tooltip.classList.add("hidden");
+        liveTooltips.delete(tooltip);
+      };
+      icon.addEventListener("mouseenter", show);
+      icon.addEventListener("mouseleave", hide);
+      icon.addEventListener("focus", show);
+      icon.addEventListener("blur", hide);
+      icon.addEventListener("keydown", ev => {
+        // Escape dismisses; Enter/Space activate like a real button (and
+        // preventDefault keeps Space from scrolling the page).
+        if (ev.key === "Escape") { ev.preventDefault(); hide(); }
+        else if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); show(); }
+      });
+    }
     function decorateEnvHints(root=document) {
       root.querySelectorAll(".field code, .knob code").forEach(code => {
-        const name = code.textContent.trim();
-        const label = code.closest("label") || code.closest(".field") || code.closest(".knob");
-        const titleTarget = label && (label.querySelector("span") || label);
-        if (!name || !titleTarget || titleTarget.querySelector(".env-info")) return;
-        const tip = `${name}: ${knobHint(name)}`;
-        titleTarget.insertAdjacentHTML("beforeend", `<span class="env-info" title="${escapeHtml(tip)}" aria-label="${escapeHtml(tip)}">i</span>`);
+        try {
+          const name = code.textContent.trim();
+          const label = code.closest("label") || code.closest(".field") || code.closest(".knob");
+          const titleTarget = label && (label.querySelector("span") || label);
+          // Idempotency guard: each label is decorated at most once across the
+          // three call sites; re-runs must not duplicate tooltips or listeners.
+          if (!name || !titleTarget || titleTarget.querySelector(".env-info")) return;
+          const tip = `${name}: ${knobHint(name)}`;
+          // envTipSeq keeps ids unique document-wide across decorator runs.
+          const tipId = `env-tip-${++envTipSeq}`;
+          titleTarget.insertAdjacentHTML("beforeend",
+            `<span class="env-info" tabindex="0" role="button" aria-label="Help for ${escapeHtml(name)}" aria-describedby="${tipId}">i</span>` +
+            `<span id="${tipId}" class="env-tooltip hidden" role="tooltip">${escapeHtml(tip)}</span>`);
+          const icon = titleTarget.querySelector(".env-info");
+          const tipEl = document.getElementById(tipId);
+          if (!icon || !tipEl) {
+            console.warn(`decorateEnvHints: tooltip nodes missing for "${name}" (id=${tipId})`);
+            return;
+          }
+          attachEnvTooltip(icon, tipEl);
+        } catch (err) {
+          // One bad hint must never abort the rest of the page's init.
+          console.error(`decorateEnvHints: skipping tooltip for "${code.textContent.trim()}"`, err);
+        }
       });
     }
     function renderKnobLinks(env) {
@@ -2589,13 +2693,14 @@ HTML = r"""<!doctype html>
       document.querySelectorAll("#sourceTable tr[data-key]").forEach(row => row.onclick = () => editSource(row.dataset.key));
     }
     function sourceInput(field, src) {
+      const val = src[field] ?? "";
       if (["can_enrich_coverage","strict_source_match"].includes(field)) {
-        return `<label>${field}<select id="source_${field}"><option value=""></option><option value="false" ${src === false ? "selected" : ""}>false</option><option value="true" ${src === true ? "selected" : ""}>true</option></select></label>`;
+        return `<label>${field}<select id="source_${field}"><option value=""></option><option value="false" ${val === false ? "selected" : ""}>false</option><option value="true" ${val === true ? "selected" : ""}>true</option></select></label>`;
       }
-      if (field === "tier") return `<label>${field}<select id="source_${field}"><option></option><option ${src === "core" ? "selected" : ""}>core</option><option ${src === "peripheral" ? "selected" : ""}>peripheral</option></select></label>`;
-      if (field === "source_match_mode") return `<label>${field}<select id="source_${field}"><option></option><option ${src === "feed_label" ? "selected" : ""}>feed_label</option><option ${src === "wire_attribution" ? "selected" : ""}>wire_attribution</option></select></label>`;
-      if (["nations","source_match_aliases","notes"].includes(field)) return `<label>${field}<textarea id="source_${field}">${src}</textarea></label>`;
-      return `<label>${field}<input id="source_${field}" value="${String(src).replaceAll("&","&amp;").replaceAll('"',"&quot;")}"></label>`;
+      if (field === "tier") return `<label>${field}<select id="source_${field}"><option></option><option ${val === "core" ? "selected" : ""}>core</option><option ${val === "peripheral" ? "selected" : ""}>peripheral</option></select></label>`;
+      if (field === "source_match_mode") return `<label>${field}<select id="source_${field}"><option></option><option ${val === "feed_label" ? "selected" : ""}>feed_label</option><option ${val === "wire_attribution" ? "selected" : ""}>wire_attribution</option></select></label>`;
+      if (["nations","source_match_aliases","notes"].includes(field)) return `<label>${field}<textarea id="source_${field}">${val}</textarea></label>`;
+      return `<label>${field}<input id="source_${field}" value="${String(val).replaceAll("&","&amp;").replaceAll('"',"&quot;")}"></label>`;
     }
     function editSource(key) {
       const src = state.sources.find(item => item.key === key) || {};
@@ -2918,12 +3023,9 @@ HTML = r"""<!doctype html>
           if (preset) loadModelTuningEditor(meta.runtimeKey, preset);
           previewQuietly("run");
         };
-        const saveBtn = $(meta.saveButtonId);
-        if (saveBtn) saveBtn.onclick = () => saveModelTuningPreset(meta.runtimeKey).catch(err => setStatus(err.message, "bad"));
-        const renameBtn = $(meta.renameButtonId);
-        if (renameBtn) renameBtn.onclick = () => renameModelTuningPreset(meta.runtimeKey).catch(err => setStatus(err.message, "bad"));
-        const deleteBtn = $(meta.deleteButtonId);
-        if (deleteBtn) deleteBtn.onclick = () => deleteModelTuningPreset(meta.runtimeKey).catch(err => setStatus(err.message, "bad"));
+        $(meta.saveButtonId).onclick = () => saveModelTuningPreset(meta.runtimeKey).catch(err => setStatus(err.message, "bad"));
+        $(meta.renameButtonId).onclick = () => renameModelTuningPreset(meta.runtimeKey).catch(err => setStatus(err.message, "bad"));
+        $(meta.deleteButtonId).onclick = () => deleteModelTuningPreset(meta.runtimeKey).catch(err => setStatus(err.message, "bad"));
       });
     }
     function applySelectedPresetFromState() {
@@ -2944,10 +3046,6 @@ HTML = r"""<!doctype html>
       } catch (_err) { /* runs endpoint is best-effort at boot */ }
       updateRunControls();
       renderTabs();
-      // Order matters: renderAdvancedPanels() must run before
-      // renderModelTuningControls() (tuning <select>s) and wireEvents()
-      // (button handlers), and before renderAdvancedKnobs() (SURFACED_ENVS
-      // suppression reads the rendered dedicated knobs).
       renderRunSetup();
       renderAdvancedPanels();
       renderAdvancedKnobs();
