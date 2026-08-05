@@ -2639,7 +2639,8 @@ HTML = r"""<!doctype html>
         btn.disabled = active;
         btn.title = active ? "A run is already active; stop it or wait for it to finish." : "";
       });
-      $("stopBtn").disabled = !active;
+      const stopBtn = $("stopBtn");
+      if (stopBtn) stopBtn.disabled = !active;
     }
     async function previewQuietly(action="run") {
       // Auto-refresh path: surface failures inline in the preview pane instead
