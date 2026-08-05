@@ -12,8 +12,7 @@ Common Run Settings:
 
 Model selection:
     NEWS_MODEL=gemma-e2b-tiny uv run news run --preset NAME
-    NEWS_MODEL=qwythos-9b-8bit uv run news run --preset NAME
-    NEWS_MODEL=qwythos-9b-4bit uv run news run --preset NAME
+    NEWS_MODEL=gemma-4-12b-it-4bit uv run news run --preset NAME
 
     NEWS_MODEL accepts either a friendly alias above or a full model repo/name.
     Task-specific model assignments inherit it unless overridden.
@@ -101,6 +100,9 @@ from .config import (
     MODEL_TASK_TITLE_GENERATION,
     configured_model_api_key,
     ensure_codex_safe_model_reference,
+    is_managed_model_backend,
+    managed_model_conflict_message,
+    same_model_endpoint,
     is_gemma_4_model_reference,
     load_recipients,
     load_runtime_config,
@@ -2532,14 +2534,25 @@ def build_chat_model(max_tokens: int, *, task: str = "default") -> ChatOpenAI:
     ensure_codex_safe_model_reference(MODEL_REFERENCE)
     normalized_task = _normalized_model_task(task)
     assignment = _task_model_assignment(normalized_task)
-    if MANAGED_MODEL_SERVER_ACTIVE:
-        if assignment.base_url == MODEL_BASE_URL:
+    if (
+        MANAGED_MODEL_SERVER_ACTIVE
+        # Config resolution already rejects this combination for managed
+        # backends; this guard is a backstop for callers that bypass config
+        # resolution. It stays gated on the runtime context flag because the
+        # check only applies while a managed server is actually running.
+        and is_managed_model_backend(MODEL_BACKEND)
+    ):
+        if same_model_endpoint(assignment.base_url, MODEL_BASE_URL):
             if assignment.name != MODEL_NAME:
                 raise RuntimeError(
-                    "Managed model server cannot serve multiple different models from the same base URL. "
-                    f"Task {normalized_task!r} wants {assignment.reference!r} ({assignment.name!r}) "
-                    f"but the managed main model is {MODEL_REFERENCE!r} ({MODEL_NAME!r}) at {MODEL_BASE_URL}. "
-                    "Set a per-task base URL or run that task against an external server."
+                    managed_model_conflict_message(
+                        task=normalized_task,
+                        reference=assignment.reference,
+                        name=assignment.name,
+                        model_reference=MODEL_REFERENCE,
+                        model_name=MODEL_NAME,
+                        model_base_url=MODEL_BASE_URL,
+                    )
                 )
             _ensure_main_model_server_ready()
             _raise_if_managed_model_server_exited()
@@ -3833,6 +3846,14 @@ def _new_run_diagnostics(source_count: int) -> RunDiagnostics:
         settings={
             "preset_id": PRESET_ID or "custom",
             "source_scope": SOURCE_SCOPE,
+            "source_languages": dict(
+                sorted(
+                    Counter(
+                        feed.get("language") or "en"
+                        for feed in SOURCE_FEEDS.values()
+                    ).items()
+                )
+            ),
             "recipient_scope": RECIPIENT_SCOPE,
             "url_reuse_blocking_enabled": URL_REUSE_BLOCKING_ENABLED,
             "relaxed_story_drafting_guards": RELAXED_STORY_DRAFTING_GUARDS,

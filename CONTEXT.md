@@ -6,7 +6,7 @@ This project builds and sends a daily news report from configured sources. It ow
 - `README.md` is the human runbook for setup, CLI/UI commands, run settings, model choices, and PR review flow.
 - `docs/adr/` records architecture decisions that should not be re-litigated without new evidence.
 - `config/sources.yaml` is the editable Source Catalog.
-- `config/recipients.yaml` is the recipient list.
+- `config/recipients.yaml` is the delivery-recipients list (Delivery Profile input).
 - `config/run_presets.yaml` stores saved Run Settings overlays.
 - `config/model_tuning_presets.yaml` stores explicit model/task tuning overlays.
 - `output/history/` contains durable run history artifacts.
@@ -14,6 +14,20 @@ This project builds and sends a daily news report from configured sources. It ow
 
 ## Run Session
 A Run Session is one execution of the daily news run. It owns the run's config snapshot, output paths, progress, diagnostics, run logs, and managed model server lifecycle.
+
+## Daily News Application
+The Daily News Application is the product surface. It supports local desktop review of the generated report and optional automation; it is desktop-first, with the report rendered for review before any delivery step.
+
+## Daily News Report
+The Daily News Report is the generated artifact. A completed report is complete and reviewable even when no delivery is configured.
+
+## Delivery Profile
+A Delivery Profile is an optional policy controlling whether to send, the owner recipient, additional recipients, and transport configuration.
+
+## Automation
+Automation is a scheduled Run Session with an optional Delivery Profile.
+(This is a product concept — scheduled daily runs — and is distinct from the
+repo's board automation in `automation/`, which drives the GitHub project board.)
 
 ## Article Collection Funnel
 The Article Collection Funnel fetches configured sources, scrapes articles, rejects source mismatches, dedupes URLs, records Source Run diagnostics, persists candidate URL history, and yields fresh article candidates.

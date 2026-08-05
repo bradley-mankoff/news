@@ -73,7 +73,6 @@ RUN_OUTPUT_TIMESTAMP_RE = re.compile(r"\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}")
 QWWYTHOS_REPO = "huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF"
 QWWYTHOS_Q4K_FILENAME = "Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-Q4_K.gguf"
 QWWYTHOS_Q8_FILENAME = "Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-Q8_0.gguf"
-QWWYTHOS_MMPROJ_FILENAME = "mmproj-model-bf16.gguf"
 QWWYTHOS_9B_4BIT_MODEL_ALIAS = "qwythos-9b-4bit"
 QWWYTHOS_9B_4BIT_MODEL_REFERENCE = f"{QWWYTHOS_REPO}/{QWWYTHOS_Q4K_FILENAME}"
 QWWYTHOS_9B_8BIT_MODEL_ALIAS = "qwythos-9b-8bit"
@@ -82,9 +81,15 @@ MODEL_BACKEND_MLX_LM = "mlx-lm"
 MODEL_BACKEND_MLX_VLM = "mlx-vlm"
 MODEL_BACKEND_EXTERNAL = "external"
 SUPPORTED_MODEL_BACKENDS = (MODEL_BACKEND_MLX_LM, MODEL_BACKEND_MLX_VLM, MODEL_BACKEND_EXTERNAL)
-# Retained public alias for the Qwythos default backend; prefer MODEL_BACKEND_MLX_VLM.
+# Legacy identifier retained for API compatibility; Qwythos is no longer the
+# default. Always use MODEL_BACKEND_MLX_VLM directly.
 QWWYTHOS_MODEL_BACKEND = MODEL_BACKEND_MLX_VLM
-DEFAULT_MODEL_ALIAS = QWWYTHOS_9B_8BIT_MODEL_ALIAS
+# Standard Gemma 4 12B instruction model, MLX 4-bit distribution. The default
+# must be a repo id (never owner/repo/file.gguf): mlx-vlm rejects file-qualified
+# references with HFValidationError (issue #124).
+GEMMA_4_12B_IT_4BIT_MODEL_ALIAS = "gemma-4-12b-it-4bit"
+GEMMA_4_12B_IT_4BIT_MODEL_REPO = "mlx-community/gemma-4-12B-it-4bit"
+DEFAULT_MODEL_ALIAS = GEMMA_4_12B_IT_4BIT_MODEL_ALIAS
 CODEX_TEST_MODEL_ALIAS = "gemma-e2b-tiny"
 CODEX_TEST_MODEL_NAME = "deadbydawn101/gemma-4-E2B-Heretic-Uncensored-mlx-4bit"
 MODEL_TASK_ARTICLE_SUMMARY = "article_summary"
@@ -116,17 +121,30 @@ VALID_SOURCE_MATCH_MODES = {
     SOURCE_MATCH_MODE_WIRE_ATTRIBUTION,
 }
 MODEL_ALIASES = {
-    QWWYTHOS_9B_4BIT_MODEL_ALIAS: QWWYTHOS_9B_4BIT_MODEL_REFERENCE,
-    QWWYTHOS_9B_8BIT_MODEL_ALIAS: QWWYTHOS_9B_8BIT_MODEL_REFERENCE,
-    f"https://huggingface.co/{QWWYTHOS_9B_4BIT_MODEL_REFERENCE}": QWWYTHOS_9B_4BIT_MODEL_REFERENCE,
-    f"https://hf.co/{QWWYTHOS_9B_4BIT_MODEL_REFERENCE}": QWWYTHOS_9B_4BIT_MODEL_REFERENCE,
-    f"https://huggingface.co/{QWWYTHOS_9B_8BIT_MODEL_REFERENCE}": QWWYTHOS_9B_8BIT_MODEL_REFERENCE,
-    f"https://hf.co/{QWWYTHOS_9B_8BIT_MODEL_REFERENCE}": QWWYTHOS_9B_8BIT_MODEL_REFERENCE,
+    GEMMA_4_12B_IT_4BIT_MODEL_ALIAS: GEMMA_4_12B_IT_4BIT_MODEL_REPO,
+    f"https://huggingface.co/{GEMMA_4_12B_IT_4BIT_MODEL_REPO}": GEMMA_4_12B_IT_4BIT_MODEL_REPO,
+    f"https://hf.co/{GEMMA_4_12B_IT_4BIT_MODEL_REPO}": GEMMA_4_12B_IT_4BIT_MODEL_REPO,
     CODEX_TEST_MODEL_ALIAS: CODEX_TEST_MODEL_NAME,
     f"https://huggingface.co/{CODEX_TEST_MODEL_NAME}": CODEX_TEST_MODEL_NAME,
     f"https://hf.co/{CODEX_TEST_MODEL_NAME}": CODEX_TEST_MODEL_NAME,
 }
-UNSUPPORTED_MODEL_REFERENCES: set[str] = set()
+# Qwythos GGUF references are NOT launchable by the managed mlx-vlm backend
+# (file-qualified GGUF refs raise HFValidationError) and are not validated for
+# any backend; stale configs fail fast with an actionable error instead of a
+# half-started server. The set covers every form the old docs published
+# (friendly aliases, raw owner/repo/file.gguf references, and their
+# https://huggingface.co/... / https://hf.co/... URL forms) so legacy configs
+# fail before launch. Opt-in work tracked separately.
+UNSUPPORTED_MODEL_REFERENCES: set[str] = {
+    QWWYTHOS_9B_8BIT_MODEL_ALIAS,
+    QWWYTHOS_9B_4BIT_MODEL_ALIAS,
+    QWWYTHOS_9B_8BIT_MODEL_REFERENCE,
+    QWWYTHOS_9B_4BIT_MODEL_REFERENCE,
+    f"https://huggingface.co/{QWWYTHOS_9B_8BIT_MODEL_REFERENCE}",
+    f"https://hf.co/{QWWYTHOS_9B_8BIT_MODEL_REFERENCE}",
+    f"https://huggingface.co/{QWWYTHOS_9B_4BIT_MODEL_REFERENCE}",
+    f"https://hf.co/{QWWYTHOS_9B_4BIT_MODEL_REFERENCE}",
+}
 CODEX_RUNTIME_ENV_VARS = ("CODEX_SANDBOX", "CODEX_CI", "CODEX_THREAD_ID")
 REMOVED_TOPIC_ENV_VARS = (
     "NEWS_TOPIC_IDS",
@@ -458,11 +476,9 @@ def _configured_model_assignments(
         model_concurrency=model_concurrency,
     )
 
-    task_env_suffixes = {
-        task: task.upper() for task, _, _ in MODEL_TASK_KNOB_SPECS
-    }
     task_entries = {}
-    for task, env_suffix in task_env_suffixes.items():
+    for task, _, _ in MODEL_TASK_KNOB_SPECS:
+        env_suffix = task.upper()
         reference = _str_env(f"NEWS_MODEL_{env_suffix}", default_reference) or default_reference
         base_url = _str_env(
             f"NEWS_MODEL_{env_suffix}_BASE_URL",
@@ -531,6 +547,11 @@ def _merge_model_sampling_settings(
     )
 
 
+def _merge_optional_value(base_value: int | None, overlay_value: int | None) -> int | None:
+    """Return overlay_value when set (not None); otherwise base_value."""
+    return overlay_value if overlay_value is not None else base_value
+
+
 def _merge_model_tuning_settings(
     base: ModelTuningSettings,
     overlay: ModelTuningSettings,
@@ -542,30 +563,21 @@ def _merge_model_tuning_settings(
             overlay_sampling,
         )
     return ModelTuningSettings(
-        model_max_input_tokens=(
-            overlay.model_max_input_tokens
-            if overlay.model_max_input_tokens is not None
-            else base.model_max_input_tokens
+        model_max_input_tokens=_merge_optional_value(
+            base.model_max_input_tokens, overlay.model_max_input_tokens
         ),
-        article_summary_max_tokens=(
-            overlay.article_summary_max_tokens
-            if overlay.article_summary_max_tokens is not None
-            else base.article_summary_max_tokens
+        article_summary_max_tokens=_merge_optional_value(
+            base.article_summary_max_tokens, overlay.article_summary_max_tokens
         ),
-        story_drafting_max_tokens=(
-            overlay.story_drafting_max_tokens
-            if overlay.story_drafting_max_tokens is not None
-            else base.story_drafting_max_tokens
+        story_drafting_max_tokens=_merge_optional_value(
+            base.story_drafting_max_tokens, overlay.story_drafting_max_tokens
         ),
-        story_scale_screening_max_tokens=(
-            overlay.story_scale_screening_max_tokens
-            if overlay.story_scale_screening_max_tokens is not None
-            else base.story_scale_screening_max_tokens
+        story_scale_screening_max_tokens=_merge_optional_value(
+            base.story_scale_screening_max_tokens,
+            overlay.story_scale_screening_max_tokens,
         ),
-        title_generation_max_tokens=(
-            overlay.title_generation_max_tokens
-            if overlay.title_generation_max_tokens is not None
-            else base.title_generation_max_tokens
+        title_generation_max_tokens=_merge_optional_value(
+            base.title_generation_max_tokens, overlay.title_generation_max_tokens
         ),
         task_sampling=task_sampling,
     )
@@ -587,22 +599,23 @@ def _base_model_tuning(model_reference: str) -> ModelTuningSettings:
     return tuning
 
 
-def _task_max_tokens_field(task: str) -> str:
-    if task == "default":
-        return "model_max_input_tokens"
-    if task == MODEL_TASK_ARTICLE_SUMMARY:
-        return "article_summary_max_tokens"
-    if task == MODEL_TASK_STORY_DRAFTING:
-        return "story_drafting_max_tokens"
-    if task == MODEL_TASK_STORY_SCALE_SCREENING:
-        return "story_scale_screening_max_tokens"
-    if task == MODEL_TASK_TITLE_GENERATION:
-        return "title_generation_max_tokens"
+_TASK_MAX_TOKENS_FIELDS: dict[str, str] = {
+    "default": "model_max_input_tokens",
+    MODEL_TASK_ARTICLE_SUMMARY: "article_summary_max_tokens",
+    MODEL_TASK_STORY_DRAFTING: "story_drafting_max_tokens",
+    MODEL_TASK_STORY_SCALE_SCREENING: "story_scale_screening_max_tokens",
+    MODEL_TASK_TITLE_GENERATION: "title_generation_max_tokens",
     # image_art_direction is produced by the same LLM call as title_generation
     # (generate_image_art_brief); it inherits that task's token cap by design.
-    if task == MODEL_TASK_IMAGE_ART_DIRECTION:
-        return "title_generation_max_tokens"
-    raise ValueError(f"Unsupported model tuning task {task!r}.")
+    MODEL_TASK_IMAGE_ART_DIRECTION: "title_generation_max_tokens",
+}
+
+
+def _task_max_tokens_field(task: str) -> str:
+    try:
+        return _TASK_MAX_TOKENS_FIELDS[task]
+    except KeyError:
+        raise ValueError(f"Unsupported model tuning task {task!r}.") from None
 
 
 def _selected_model_tuning_preset_id(task: str) -> str:
@@ -639,6 +652,94 @@ def _validate_model_tuning_preset_scope(
             f"Model tuning preset {preset_id!r} expects task {preset_task!r}, "
             f"but configured task is {assignment_task!r}."
         )
+
+
+def is_managed_model_backend(backend: str) -> bool:
+    """A managed backend serves exactly one model at the default base URL."""
+    return backend != MODEL_BACKEND_EXTERNAL
+
+
+def same_model_endpoint(left: str, right: str) -> bool:
+    """True when two base URLs denote the same model endpoint.
+
+    Comparison tolerates the spelling variants users actually produce:
+    trailing slashes on the path, scheme/host case differences, default
+    ports, and userinfo in the authority. A genuinely different path still
+    compares unequal, and an empty URL never matches a real one.
+    """
+
+    def _canonical(url: str) -> tuple[Any, ...]:
+        parsed = urlparse(url or "")
+        scheme = (parsed.scheme or "").lower()
+        host = (parsed.hostname or "").lower()
+        try:
+            port = parsed.port
+        except ValueError:  # malformed port; treat as distinct
+            port = None
+        if port is None:
+            port = 443 if scheme == "https" else 80 if scheme == "http" else None
+        return (scheme, host, port, parsed.path.rstrip("/"))
+
+    return bool(left) == bool(right) and _canonical(left) == _canonical(right)
+
+
+def managed_model_conflict_message(
+    *,
+    task: str,
+    reference: str,
+    name: str,
+    model_reference: str,
+    model_name: str,
+    model_base_url: str,
+) -> str:
+    """The actionable rejection message for a managed-server model conflict.
+
+    Shared by config resolution (ValueError) and the build_chat_model runtime
+    backstop (RuntimeError) so both funnels report the exact same wording.
+    """
+    return (
+        "Managed model server cannot serve multiple different models from the same base URL. "
+        f"Task {task!r} wants {reference!r} ({name!r}) "
+        f"but the managed main model is {model_reference!r} ({model_name!r}) at {model_base_url}. "
+        "Set a per-task base URL or run that task against an external server."
+    )
+
+
+def _validate_managed_model_assignments(
+    model_assignments: dict[str, TaskModelAssignment],
+    *,
+    model_reference: str,
+    model_name: str,
+    model_base_url: str,
+    model_backend: str,
+) -> None:
+    """Reject task models that cannot share the managed server's base URL.
+
+    A managed local server (any non-external default backend) serves exactly
+    one model at the default base URL. A task assignment that resolves to the
+    same base URL with a different model name cannot be served by that server;
+    it previously failed only mid-run in build_chat_model, after source
+    collection. External endpoints can serve multiple models, so the managed
+    path is the only one validated here.
+    """
+    if not is_managed_model_backend(model_backend):
+        return
+    for task, assignment in model_assignments.items():
+        # The default assignment defines the compared values (model_name,
+        # model_base_url), so it always matches; skip it.
+        if task == "default":
+            continue
+        if same_model_endpoint(assignment.base_url, model_base_url) and assignment.name != model_name:
+            raise ValueError(
+                managed_model_conflict_message(
+                    task=task,
+                    reference=assignment.reference,
+                    name=assignment.name,
+                    model_reference=model_reference,
+                    model_name=model_name,
+                    model_base_url=model_base_url,
+                )
+            )
 
 
 def _apply_model_tuning_preset(
@@ -753,36 +854,26 @@ def _apply_model_tuning_env_overrides(tuning: ModelTuningSettings) -> ModelTunin
         tuning.task_sampling.get("reasoning", ModelSamplingSettings()),
         prefix=MODEL_REASONING_SAMPLING_ENV_PREFIX,
     )
-    model_max_input_tokens = _optional_int_env("NEWS_MODEL_MAX_INPUT_TOKENS")
-    article_summary_max_tokens = _optional_int_env("NEWS_ARTICLE_SUMMARY_MAX_TOKENS")
-    story_drafting_max_tokens = _optional_int_env("NEWS_STORY_DRAFTING_MAX_TOKENS")
-    story_scale_screening_max_tokens = _optional_int_env("NEWS_STORY_SCALE_SCREENING_MAX_TOKENS")
-    title_generation_max_tokens = _optional_int_env("NEWS_TITLE_GENERATION_MAX_TOKENS")
     return ModelTuningSettings(
-        model_max_input_tokens=(
-            tuning.model_max_input_tokens
-            if model_max_input_tokens is None
-            else model_max_input_tokens
+        model_max_input_tokens=_merge_optional_value(
+            tuning.model_max_input_tokens,
+            _optional_int_env("NEWS_MODEL_MAX_INPUT_TOKENS"),
         ),
-        article_summary_max_tokens=(
-            tuning.article_summary_max_tokens
-            if article_summary_max_tokens is None
-            else article_summary_max_tokens
+        article_summary_max_tokens=_merge_optional_value(
+            tuning.article_summary_max_tokens,
+            _optional_int_env("NEWS_ARTICLE_SUMMARY_MAX_TOKENS"),
         ),
-        story_drafting_max_tokens=(
-            tuning.story_drafting_max_tokens
-            if story_drafting_max_tokens is None
-            else story_drafting_max_tokens
+        story_drafting_max_tokens=_merge_optional_value(
+            tuning.story_drafting_max_tokens,
+            _optional_int_env("NEWS_STORY_DRAFTING_MAX_TOKENS"),
         ),
-        story_scale_screening_max_tokens=(
-            tuning.story_scale_screening_max_tokens
-            if story_scale_screening_max_tokens is None
-            else story_scale_screening_max_tokens
+        story_scale_screening_max_tokens=_merge_optional_value(
+            tuning.story_scale_screening_max_tokens,
+            _optional_int_env("NEWS_STORY_SCALE_SCREENING_MAX_TOKENS"),
         ),
-        title_generation_max_tokens=(
-            tuning.title_generation_max_tokens
-            if title_generation_max_tokens is None
-            else title_generation_max_tokens
+        title_generation_max_tokens=_merge_optional_value(
+            tuning.title_generation_max_tokens,
+            _optional_int_env("NEWS_TITLE_GENERATION_MAX_TOKENS"),
         ),
         task_sampling=task_sampling,
     )
@@ -1006,13 +1097,27 @@ def _bounded_env_float(
 
 
 def resolve_model_name(model_reference: str) -> str:
-    """Resolve a friendly model alias to the Hugging Face repo loaded by mlx."""
+    """Resolve a friendly model alias to the Hugging Face repo loaded by mlx.
+
+    Raises ValueError for references in UNSUPPORTED_MODEL_REFERENCES (the
+    legacy qwythos-9b-* aliases, raw GGUF references, and their URL forms) so
+    stale configs fail before launch.
+    """
     clean_reference = (model_reference or "").strip()
     if not clean_reference:
         clean_reference = DEFAULT_MODEL_ALIAS
     if clean_reference in UNSUPPORTED_MODEL_REFERENCES:
-        raise ValueError(f"Unsupported model reference: {clean_reference}")
+        raise ValueError(
+            f"Unsupported model reference: {clean_reference}. This reference "
+            f"was removed; the default is now {DEFAULT_MODEL_ALIAS} "
+            f"({GEMMA_4_12B_IT_4BIT_MODEL_REPO}). Set NEWS_MODEL to the new "
+            "alias, or use NEWS_MODEL_BACKEND=external with an "
+            "OpenAI-compatible endpoint (NEWS_MODEL_BASE_URL) for legacy models."
+        )
     return MODEL_ALIASES.get(clean_reference, clean_reference)
+
+
+HF_URL_PREFIXES = ("https://huggingface.co/", "https://hf.co/")
 
 
 def hf_model_page_url(model_choice: str) -> str | None:
@@ -1032,14 +1137,19 @@ def hf_model_page_url(model_choice: str) -> str | None:
         resolved = resolve_model_name(clean)
     except ValueError:
         return None
+    # Only URLs derived from known MODEL_ALIASES values are emitted;
+    # anything else (external ids, unknown URLs) yields None so callers
+    # render a muted note instead of a broken link.
     if resolved not in MODEL_ALIASES.values():
-        return None
-    # Defense in depth: URL-shaped alias values would double-prefix below,
-    # so never emit them (the drift-guard test pins the same invariant).
-    if resolved.startswith(("http://", "https://")):
-        return None
+        if not any(resolved.startswith(prefix) for prefix in HF_URL_PREFIXES):
+            return None
+        prefix = next(prefix for prefix in HF_URL_PREFIXES if resolved.startswith(prefix))
+        resolved = resolved[len(prefix):]
+        if resolved not in MODEL_ALIASES.values():
+            return None
     repo = resolved
-    # GGUF references are repo + "/" + file; the page lives at the repo.
+    # No GGUF aliases exist today (issue #124); this branch is a defensive
+    # guard in case a file-qualified reference is ever re-added.
     if repo.endswith(".gguf") and "/" in repo:
         repo = repo.rsplit("/", 1)[0]
     if "/" not in repo:  # external/unknown ids have no HF repo page
@@ -1109,6 +1219,13 @@ def _configured_model_reference() -> str:
 
 
 def infer_model_backend(model_reference: str) -> str:
+    """Infer the managed backend for a model reference.
+
+    The retained "qwythos" branch only matches raw references that are not in
+    UNSUPPORTED_MODEL_REFERENCES (aliases, GGUF refs, and URL forms all fail
+    fast in resolve_model_name); it exists for legacy/external configs
+    (issue #124 Deviation 3).
+    """
     resolved_name = resolve_model_name(model_reference).lower()
     if "qwythos" in resolved_name or "gemma-4" in resolved_name or "gemma4" in resolved_name:
         return MODEL_BACKEND_MLX_VLM
@@ -1150,6 +1267,8 @@ def _default_story_synthesis_concurrency(model_reference: str) -> int:
     if is_codex_test_model_reference(model_reference):
         return 2
     resolved_name = resolve_model_name(model_reference).lower()
+    # Retained legacy branch (issue #124 Deviation 3): raw Qwythos references
+    # not covered by UNSUPPORTED_MODEL_REFERENCES still route to mlx-vlm.
     if "qwythos" in resolved_name or is_gemma_4_model_reference(model_reference):
         return 1
     return DEFAULT_STORY_SYNTHESIS_CONCURRENCY
@@ -1191,9 +1310,8 @@ def _runtime_knob(
         "advanced": advanced,
         "secret": secret,
         # option_links maps each offered option -> {"page": url, "hardware":
-        # url} for the three model-choice knobs; the drift-guard test pins
-        # that its keys cover `options` exactly. Non-model knobs omit it and
-        # fall back to {}.
+        # url} for model-choice knobs; the drift-guard test pins that its
+        # keys cover `options` exactly, and non-model knobs pass {}.
         "option_links": option_links or {},
     }
 
@@ -1230,20 +1348,8 @@ def runtime_knob_registry() -> list[dict[str, Any]]:
         _runtime_knob("Run Settings", "Token encoding", "NEWS_TOKEN_ENCODING", default="o200k_base", advanced=True),
         _runtime_knob("Model Selection", "Default model", "NEWS_MODEL", "select", default=DEFAULT_MODEL_ALIAS, options=sorted(MODEL_ALIASES), option_links=model_links),
         _runtime_knob("Model Selection", "Model backend", "NEWS_MODEL_BACKEND", "select", options=sorted(SUPPORTED_MODEL_BACKENDS)),
-        _runtime_knob("Model Selection", "Article Summarization model", "NEWS_MODEL_ARTICLE_SUMMARY", "select", options=sorted(MODEL_ALIASES), option_links=model_links),
-        _runtime_knob("Model Selection", "Story Drafting model", "NEWS_MODEL_STORY_DRAFTING", "select", options=sorted(MODEL_ALIASES), option_links=model_links),
-        _runtime_knob("Model Selection", "Story Scale Screening model", "NEWS_MODEL_STORY_SCALE_SCREENING", "select", options=sorted(MODEL_ALIASES), option_links=model_links),
-        _runtime_knob("Model Selection", "Title Generation model", "NEWS_MODEL_TITLE_GENERATION", "select", options=sorted(MODEL_ALIASES), option_links=model_links),
         _runtime_knob("Model Tuning", "Default tuning preset", "NEWS_MODEL_TUNING_PRESET", "select", options=tuning_presets),
-        _runtime_knob("Model Tuning", "Article Summarization tuning preset", "NEWS_MODEL_ARTICLE_SUMMARY_TUNING_PRESET", "select", options=tuning_presets),
-        _runtime_knob("Model Tuning", "Story Drafting tuning preset", "NEWS_MODEL_STORY_DRAFTING_TUNING_PRESET", "select", options=tuning_presets),
-        _runtime_knob("Model Tuning", "Story Scale Screening tuning preset", "NEWS_MODEL_STORY_SCALE_SCREENING_TUNING_PRESET", "select", options=tuning_presets),
-        _runtime_knob("Model Tuning", "Title Generation tuning preset", "NEWS_MODEL_TITLE_GENERATION_TUNING_PRESET", "select", options=tuning_presets),
         _runtime_knob("Model Tuning", "Model input cap", "NEWS_MODEL_MAX_INPUT_TOKENS", "number", minimum=1, step=1),
-        _runtime_knob("Model Tuning", "Article summary max tokens", "NEWS_ARTICLE_SUMMARY_MAX_TOKENS", "number", minimum=1, step=1),
-        _runtime_knob("Model Tuning", "Story drafting max tokens", "NEWS_STORY_DRAFTING_MAX_TOKENS", "number", minimum=1, step=1),
-        _runtime_knob("Model Tuning", "Story scale screening max tokens", "NEWS_STORY_SCALE_SCREENING_MAX_TOKENS", "number", minimum=1, step=1),
-        _runtime_knob("Model Tuning", "Title generation max tokens", "NEWS_TITLE_GENERATION_MAX_TOKENS", "number", minimum=1, step=1),
         _runtime_knob("Pipeline Budget", "Article text token limit", "NEWS_ARTICLE_TEXT_TOKEN_LIMIT", "number", minimum=1, step=1),
         _runtime_knob("Pipeline Budget", "Total article summary cap", "NEWS_TOTAL_ARTICLE_SUMMARY_CAP", "number", minimum=0, step=1),
         _runtime_knob("Pipeline Budget", "Recent window hours", "NEWS_RECENT_WINDOW_HOURS", "number", minimum=1, step=1),
@@ -1260,10 +1366,6 @@ def runtime_knob_registry() -> list[dict[str, Any]]:
         _runtime_knob("Pipeline Budget", "Component overlap suppress", "NEWS_STORY_COMPONENT_OVERLAP_SUPPRESS_THRESHOLD", "number", minimum=0, maximum=1, step=0.01, advanced=True),
         _runtime_knob("Model Server Settings", "Model concurrency", "NEWS_MODEL_CONCURRENCY", "number", default=DEFAULT_PIPELINE_CONCURRENCY, minimum=1, step=1, advanced=True),
         _runtime_knob("Model Server Settings", "Model base URL", "NEWS_MODEL_BASE_URL", default="http://127.0.0.1:8080/v1"),
-        _runtime_knob("Model Server Settings", "Article Summarization base URL", "NEWS_MODEL_ARTICLE_SUMMARY_BASE_URL", default="http://127.0.0.1:8080/v1"),
-        _runtime_knob("Model Server Settings", "Story Drafting base URL", "NEWS_MODEL_STORY_DRAFTING_BASE_URL", default="http://127.0.0.1:8080/v1"),
-        _runtime_knob("Model Server Settings", "Story Scale Screening base URL", "NEWS_MODEL_STORY_SCALE_SCREENING_BASE_URL", default="http://127.0.0.1:8080/v1"),
-        _runtime_knob("Model Server Settings", "Title Generation base URL", "NEWS_MODEL_TITLE_GENERATION_BASE_URL", default="http://127.0.0.1:8080/v1"),
         _runtime_knob("Model Server Settings", "Server prefill step size", "NEWS_MODEL_SERVER_PREFILL_STEP_SIZE", "number", minimum=1, step=1),
         _runtime_knob("Model Server Settings", "Server prompt cache size", "NEWS_MODEL_SERVER_PROMPT_CACHE_SIZE", "number", minimum=0, step=1),
         _runtime_knob("Model Server Settings", "Server prompt cache bytes", "NEWS_MODEL_SERVER_PROMPT_CACHE_BYTES"),
@@ -1870,7 +1972,6 @@ def _build_runtime_config(
             f"Prompt profile {prompt_profile_id!r} violates pipeline-owned output contracts: "
             + "; ".join(profile_violations)
         )
-
     tracked_urls_filename = "tracked_urls.txt"
     blocking_urls_filename = "blocking_urls.txt"
     run_used_urls_filename = (
@@ -1938,6 +2039,13 @@ def _build_runtime_config(
     model_reference = default_model_assignment.reference
     model_name = default_model_assignment.name
     model_backend = default_model_assignment.backend
+    _validate_managed_model_assignments(
+        model_assignments,
+        model_reference=model_reference,
+        model_name=model_name,
+        model_base_url=model_base_url,
+        model_backend=model_backend,
+    )
     return RuntimeConfig(
         root_dir=ROOT_DIR,
         sources_path=sources_path,

@@ -64,7 +64,7 @@ verified; a follow-up agent should be able to continue from here without re-deri
 - [x] Decide the initially supported runtime matrix (ADR 0010, Accepted): MLX/MLX-VLM on Apple Silicon + external OpenAI-compatible endpoints; `llama.cpp` adapter deferred.
 - [x] Implement a Prompt Catalog and built-in Prompt Profiles.
 - [x] Refactor hard-coded prompt construction to compose editable editorial instructions with pipeline-owned protocol requirements.
-- [x] Add prompt-profile selection and per-stage prompt editing to the normal UI.
+- [x] Prompt-profile selection and per-stage prompt editing in the normal UI (PR #70, issue #27).
 - [x] Add `huggingface-hub` as a direct dependency (declared in `pyproject.toml`; API usage is tracked under the Model Catalog item above).
 
 
