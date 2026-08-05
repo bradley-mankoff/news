@@ -263,6 +263,45 @@ class UITests(unittest.TestCase):
         ):
             self.assertIn(f'"{env}"', surface)
 
+    def test_run_setup_model_cards_are_well_formed(self) -> None:
+        # Regression for the HIGH review finding: a post-rebase merge artifact
+        # left the Story Drafting card's .form-grid div unclosed and dropped
+        # the Story Scale Screening card's opening <section> tag, so the card
+        # rendered as an unstyled block and the hint paragraph landed inside
+        # the form-grid. All four model cards must have the canonical shape:
+        #   <section class="panel model-card"> … <div class="form-grid"> … </div>
+        #   <p class="muted">Advanced Settings hint</p> </section>
+        html = ui_module.HTML
+        run_setup = html.split("function renderRunSetup")[1].split("const SAMPLING_FIELDS")[0]
+        # Each of the four model cards opens with its own <section> tag
+        # (missing opener = the card content floats without .panel styling).
+        self.assertEqual(
+            run_setup.count('<section class="panel model-card">'), 4,
+            "each of the four model cards needs its own opening <section>",
+        )
+        # Every div inside Run Setup must be balanced (the artifact was an
+        # unclosed form-grid in the story-drafting card).
+        import re
+        self.assertEqual(
+            len(re.findall(r"<div(?:\s|>)", run_setup)),
+            run_setup.count("</div>"),
+            "unbalanced <div> tags inside renderRunSetup",
+        )
+        # The Advanced Settings hint must sit OUTSIDE the form-grid (a grid
+        # item, not a stray cell) and inside the card section. Pin the exact
+        # canonical sequence for the story-drafting card (the one that was
+        # malformed): model select -> close grid -> hint -> close section.
+        self.assertIn(
+            "${storyModel}\n            </div>\n            <p class=\"muted\">Sampling, token budgets, and server endpoints are in Advanced Settings.</p>\n          </section>",
+            run_setup,
+        )
+        # The scale-screening card must be a real model-card section, not a
+        # bare floating block (its opening tag was the dropped artifact).
+        self.assertIn(
+            '<section class="panel model-card">\n            <p class="eyebrow">Model</p>\n            <h2>${escapeHtml(TASK_CONFIG.story_scale_screening.label)}</h2>',
+            run_setup,
+        )
+
     def test_surfaced_envs_are_registered_and_composed(self) -> None:
         import re
 
@@ -286,7 +325,7 @@ class UITests(unittest.TestCase):
             self.assertIn(
                 f'"{env}"', surface, f"composed sampling env {env} not suppressed"
             )
-        # NEWS_ARTICLE_TEXT_TOKEN_LIMIT (a non-sampling dedicated env) must also be surfaced.
+        # NEWS_ARTICLE_TEXT_TOKEN_LIMIT (a dedicated env, not a sampling composition) must also be surfaced.
         self.assertIn('"NEWS_ARTICLE_TEXT_TOKEN_LIMIT"', surface)
 
     def test_every_dedicated_knob_env_is_surfaced(self) -> None:
@@ -340,13 +379,70 @@ class UITests(unittest.TestCase):
         )[0]
         self.assertIn("renderPromptProfilePanel();", advanced)
         # The tuning <select>s are created by renderAdvancedPanels(); if
-        # renderModelTuningControls() runs before it, the selects are missing
+        # renderTaskTuningControls() runs before it, the selects are missing
         # and the early return leaves the preset dropdowns permanently empty.
-        for call in re.findall(r'renderModelTuningControls\("[a-z_]+"\);', boot):
-            self.assertGreater(
-                boot.index(call), boot.index("renderAdvancedPanels();"),
-                f"{call} must run after renderAdvancedPanels() (selects must exist)",
-            )
+        self.assertGreater(
+            boot.index("renderTaskTuningControls();"),
+            boot.index("renderAdvancedPanels();"),
+            "renderTaskTuningControls() must run after renderAdvancedPanels()"
+            " (the tuning <select>s must exist)",
+        )
+
+    def test_prompt_override_editors_and_restore_buttons_in_html(self) -> None:
+        # The Editorial approach panel must expose editable per-stage editors
+        # bound to the override env vars, with per-stage restore buttons; the
+        # old read-only readout is gone. Assertions run on the HTML module
+        # constant (JS source), so the new JS lives in one obvious block.
+        self.assertIn("NEWS_PROMPT_OVERRIDE_ARTICLE_SUMMARY", ui_module.HTML)
+        self.assertIn("NEWS_PROMPT_OVERRIDE_STORY_SCALE_SCREENING", ui_module.HTML)
+        self.assertIn("NEWS_PROMPT_OVERRIDE_STORY_DRAFTING", ui_module.HTML)
+        self.assertIn("NEWS_PROMPT_OVERRIDE_TITLE_GENERATION", ui_module.HTML)
+        self.assertIn("NEWS_PROMPT_OVERRIDE_IMAGE_ART_DIRECTION", ui_module.HTML)
+        # All five override env vars are suppressed from the Advanced tab like
+        # NEWS_PROMPT_PROFILE itself (dedicated editors are the single surface).
+        surfaced_block = ui_module.HTML.split("const SURFACED_ENVS = new Set([", 1)[1].split("]);", 1)[0]
+        for env_var in (
+            "NEWS_PROMPT_OVERRIDE_ARTICLE_SUMMARY",
+            "NEWS_PROMPT_OVERRIDE_STORY_SCALE_SCREENING",
+            "NEWS_PROMPT_OVERRIDE_STORY_DRAFTING",
+            "NEWS_PROMPT_OVERRIDE_TITLE_GENERATION",
+            "NEWS_PROMPT_OVERRIDE_IMAGE_ART_DIRECTION",
+        ):
+            self.assertIn(env_var, surfaced_block)
+        # Editable textareas carry data-env and are not readonly.
+        self.assertIn(
+            'textarea data-env="${escapeHtml(PROMPT_OVERRIDE_ENVS[task])}" rows="4"',
+            ui_module.HTML,
+        )
+        self.assertIn('class="prompt-stage-restore"', ui_module.HTML)
+        self.assertNotIn('textarea readonly rows="3"', ui_module.HTML)
+
+    def test_prompt_override_editors_drop_stale_defaults_on_profile_switch(self) -> None:
+        # Regression for the HIGH finding: switching the prompt profile must
+        # NOT freeze the previous profile's text as per-stage overrides.
+        # livePromptOverrides() must diff editor values against BOTH the newly
+        # selected profile and the last-rendered profile (tracked via
+        # lastRenderedPromptProfileId), so stale defaults are dropped and only
+        # genuine edits survive. Assertions run on the HTML module constant
+        # (JS source), matching the drift-guard style of this file.
+        self.assertIn("let lastRenderedPromptProfileId = null;", ui_module.HTML)
+        self.assertIn(
+            "lastRenderedPromptProfileId = profile ? profile.id : null;",
+            ui_module.HTML,
+        )
+        self.assertIn(
+            "if (value === oldText || value === newText) return;",
+            ui_module.HTML,
+        )
+        # The last-rendered profile must be recorded AFTER the diff, since the
+        # editors still hold the previous render's text at that point.
+        self.assertIn(
+            "// The editors still hold the previous render's text at this point, so",
+            ui_module.HTML,
+        )
+        # Empty editors still mean "no override" (matches collectEnv's
+        # suppression of empty/unset override env vars).
+        self.assertIn("if (!value) return;", ui_module.HTML)
 
     def test_pure_helpers_and_schema_payload(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -654,7 +750,6 @@ class UITests(unittest.TestCase):
         # drift away from the server-side guard.
         self.assertIn("A run is already active", ui_module.HTML)
         self.assertIn("updateRunControls", ui_module.HTML)
-
     def test_crud_helpers_use_temp_files(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
