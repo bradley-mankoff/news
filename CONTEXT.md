@@ -1,6 +1,6 @@
 # Daily News Context
 
-This project builds and sends a daily news report from configured sources. It owns source collection, article filtering and summarization, story clustering and drafting, report generation, delivery, diagnostics, and durable run history.
+This project is a desktop-first Daily News Application. It generates a Daily News Report from configured sources and owns source collection, article filtering and summarization, story clustering and drafting, report generation, optional delivery, diagnostics, and durable run history.
 
 ## Context Map
 - `README.md` is the human runbook for setup, CLI/UI commands, run settings, model choices, and PR review flow.
@@ -18,11 +18,20 @@ A Run Session is one execution of the daily news run. It owns the run's config s
 ## Daily News Application
 The Daily News Application is the product surface. It supports local desktop review of the generated report and optional automation; it is desktop-first, with the report rendered for review before any delivery step.
 
+## Product Modes
+
+The Daily News Application supports three product modes:
+- **Interactive generation:** a user starts a Run Session and reviews the Daily News Report locally.
+- **Scheduled generation:** automation starts Run Sessions on a schedule; local report review remains available.
+- **Optional delivery:** a completed report may be sent by email to the owner or explicitly added recipients.
+
+A Run Session succeeds when report generation and durable artifacts complete. Email delivery is an independent, optional outcome; skipped or failed delivery is surfaced as delivery status and does not change the report outcome.
+
 ## Daily News Report
 The Daily News Report is the generated artifact. A completed report is complete and reviewable even when no delivery is configured.
 
 ## Delivery Profile
-A Delivery Profile is an optional policy controlling whether to send, the owner recipient, additional recipients, and transport configuration.
+A Delivery Profile is an optional policy controlling whether to send, the owner recipient, additional recipients, and transport configuration. It owns transport credentials; the owner is the first-class recipient for scheduled delivery. An email sender identity belongs to transport configuration, not the report domain; it may be the same address as the owner recipient.
 
 ## Automation
 Automation is a scheduled Run Session with an optional Delivery Profile.

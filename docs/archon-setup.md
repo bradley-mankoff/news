@@ -11,7 +11,7 @@ Archon workflow engine + stock Pi provider, no custom extensions.
 | Archon home (`ARCHON_HOME`) | `~/.local/share/archon-pi/archon-home` |
 | `archon` command | `~/.local/bin/archon` — a wrapper script that exports `ARCHON_HOME` + pi defaults and execs `archon-pi/bin/archon` (stock v0.7.0 binary) |
 | `archon-pi` command | shim with the same env + `doctor`/`ui` helpers |
-| Config | `archon-home/config.yaml`: `defaultAssistant: pi`, `assistants.pi.model: opencode-go/deepseek-v4-flash`, tiers small/medium/large → pi + opencode-go + effort max |
+| Config | `archon-home/config.yaml`: `defaultAssistant: pi`, `assistants.pi.model: opencode-go/deepseek-v4-flash`, tiers small/medium/large → pi + opencode-go + effort max; selected workflow nodes override with `opencode-go/gpt-5.6-luna` |
 | Curated workflows | `archon-home/workflows/` (15 pi-usable, override bundled by name) |
 | Archived workflows | `archon-home/workflows-archived/` (7 claude-only, not discovered) |
 | Database | `archon-home/archon.db` (SQLite) |
@@ -27,16 +27,22 @@ Archon workflow engine + stock Pi provider, no custom extensions.
 - **board poller** — launchd agent `com.bradley-mankoff.news-board-poller`
   (`launchctl list | grep news-board-poller`; log `automation/board_poller.log`;
   state `automation/state.json`).
+- The board poller enforces the committed
+  `automation/config.json:max_concurrent_workflows` limit (`10` here), counts
+  active/paused Archon runs before dispatching, reserves slots within a poll,
+  and holds dispatches if the status lookup fails.
 - **news UI** — `uv run news ui` on `http://127.0.0.1:8766` (see the `news-dev` skill).
 
 ## Execution model
 
-- Every workflow runs on `pi` / `opencode-go/deepseek-v4-flash` at max effort.
+- Unassigned workflow nodes run on `pi` / `opencode-go/deepseek-v4-flash` at max effort.
+- Planning, review, and vision-capable nodes explicitly run on
+  `pi` / `opencode-go/gpt-5.6-luna` at max effort.
 - A workflow's `provider:` pin is overridden when its `model:` resolves to a
   tier — the tier's provider wins (bundled workflows pinned to claude still run
-  on pi via the tiers).
+  on pi via the tiers). Explicit Luna nodes set `provider: pi`.
 - Tier-level `effort` does not route to pi; the curated workflows carry
-  workflow-level `effort: max` instead.
+  workflow-level `effort: max`, and Luna nodes also pin `effort: max`.
 
 ## Build quirks (learned the hard way)
 
