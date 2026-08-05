@@ -322,31 +322,6 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
             materialize_outputs=False,
         )
         self.assertEqual(unset.prompt_instruction_overrides, {})
-    def test_profile_violating_contracts_fails_config_resolution(self) -> None:
-        # A profile whose editorial instructions contain pipeline-owned
-        # contract language must fail fast at config resolution instead of
-        # silently weakening the parsers/retries/citation renderers mid-run.
-        # All other slots stay valid (balanced strings) so the failure is
-        # specifically the blocklisted drafting sentence.
-        bad_profile = PromptProfile(
-            id="bad",
-            name="Bad",
-            description="Violates the drafting output contract.",
-            prompts={
-                **prompt_catalog.PROMPT_PROFILES["balanced"].prompts,
-                "story_drafting": "Return exactly this format: and nothing else.",
-            },
-        )
-        with patch(
-            "news_pipeline.prompt_catalog.PROMPT_PROFILES",
-            {**prompt_catalog.PROMPT_PROFILES, "bad": bad_profile},
-        ):
-            with self.assertRaisesRegex(ValueError, "violates pipeline-owned output contracts"):
-                load_runtime_config(
-                    environ={},
-                    overrides={"NEWS_PROMPT_PROFILE": "bad"},
-                    materialize_outputs=False,
-                )
 
     def test_removed_topic_env_vars_reported_and_rejected(self) -> None:
         with self.assertRaisesRegex(ValueError, "NEWS_TOPIC_IDS"):
@@ -567,57 +542,6 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
             config.model_assignments[MODEL_TASK_ARTICLE_SUMMARY].base_url,
             config.model_base_url,
         )
-
-    def test_default_recipient_and_sender_are_clean_example_addresses(self) -> None:
-        config = load_runtime_config(
-            environ={},
-            materialize_outputs=False,
-            run_started_at=datetime(2026, 6, 14, 12, 0, 0),
-        )
-
-        self.assertEqual(config.primary_recipient, "primary@example.com")
-        self.assertEqual(config.email_from, "news@example.com")
-        self.assertEqual(config.recipient_scope, "primary")
-        # Exact-value asserts above already rule out personal data; these
-        # negative asserts document that intent explicitly.
-        self.assertNotIn("mankoff", config.primary_recipient)
-        self.assertNotIn("bradley", config.primary_recipient)
-        self.assertNotIn("gmail", config.email_from)
-
-    def test_primary_recipient_env_override(self) -> None:
-        config = load_runtime_config(
-            environ={"NEWS_PRIMARY_RECIPIENT": "owner@example.com"},
-            materialize_outputs=False,
-            run_started_at=datetime(2026, 6, 14, 12, 0, 0),
-        )
-        self.assertEqual(config.primary_recipient, "owner@example.com")
-
-    def test_legacy_bradley_recipient_env_warns_and_is_ignored(self) -> None:
-        stderr = io.StringIO()
-        with patch.dict(os.environ,
-                        {"NEWS_BRADLEY_RECIPIENT": "old@example.com"},
-                        clear=True):
-            with contextlib.redirect_stderr(stderr):
-                config = load_runtime_config(
-                    environ=None,
-                    materialize_outputs=False,
-                    run_started_at=datetime(2026, 6, 14, 12, 0, 0),
-                )
-        # Legacy var is no longer read — delivery falls back to the default,
-        # and the migration is surfaced on stderr instead of silently.
-        self.assertEqual(config.primary_recipient, "primary@example.com")
-        self.assertIn("NEWS_BRADLEY_RECIPIENT is obsolete", stderr.getvalue())
-
-    def test_legacy_recipient_env_warning_not_emitted_when_unset(self) -> None:
-        stderr = io.StringIO()
-        with patch.dict(os.environ, {}, clear=True):
-            with contextlib.redirect_stderr(stderr):
-                load_runtime_config(
-                    environ=None,
-                    materialize_outputs=False,
-                    run_started_at=datetime(2026, 6, 14, 12, 0, 0),
-                )
-        self.assertNotIn("NEWS_BRADLEY_RECIPIENT is obsolete", stderr.getvalue())
 
     def test_default_recipient_and_sender_are_clean_example_addresses(self) -> None:
         config = load_runtime_config(

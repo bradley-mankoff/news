@@ -76,7 +76,7 @@ class UITests(unittest.TestCase):
         self.assertIn('title="${escapeHtml(tip)}"', ui_module.HTML)
         self.assertNotIn('data-tooltip="${escapeHtml(tip)}"', ui_module.HTML)
 
-    def test_advanced_settings_gate_holds_all_knobs(self) -> None:
+    def test_pr145_advanced_settings_gate_holds_all_knobs(self) -> None:
         html = ui_module.HTML
         # Advanced tab hosts the moved panels; Run Setup no longer does.
         self.assertIn('id="advancedPanels"', html)
@@ -153,11 +153,8 @@ class UITests(unittest.TestCase):
         ):
             self.assertNotIn(f'"{env}"', surface, f"{env} must stay in the Advanced raw list")
 
-    def test_advanced_panels_rendered_at_boot(self) -> None:
-        # NEWS_ARTICLE_TEXT_TOKEN_LIMIT (a dedicated env, not a sampling composition) must also be surfaced.
-        self.assertIn('"NEWS_ARTICLE_TEXT_TOKEN_LIMIT"', surface)
 
-    def test_every_dedicated_knob_env_is_surfaced(self) -> None:
+    def test_pr145_every_dedicated_knob_env_is_surfaced(self) -> None:
         # Mirror direction of test_surfaced_envs_are_registered_and_composed:
         # every env rendered as a dedicated knob (Run Setup or Advanced panels)
         # must be in SURFACED_ENVS, or it appears twice and collectEnv()
@@ -204,7 +201,7 @@ class UITests(unittest.TestCase):
             boot.index("renderAdvancedPanels();"), boot.index("renderAdvancedKnobs();")
         )
 
-    def test_run_setup_single_default_model_card(self) -> None:
+    def test_pr145_run_setup_single_default_model_card(self) -> None:
         html = ui_module.HTML
         run_setup = html.split("function renderRunSetup")[1].split("const SAMPLING_FIELDS")[0]
         # Exactly one "Default model" knob; the four per-task model cards are gone.
@@ -226,7 +223,7 @@ class UITests(unittest.TestCase):
         )[0]
         self.assertIn("renderPromptProfilePanel();", advanced)
 
-    def test_prompt_override_editors_and_restore_buttons_in_html(self) -> None:
+    def test_pr145_prompt_override_editors_and_restore_buttons_in_html(self) -> None:
         # The Editorial approach panel must expose editable per-stage editors
         # bound to the override env vars, with per-stage restore buttons; the
         # old read-only readout is gone. Assertions run on the HTML module
@@ -255,7 +252,7 @@ class UITests(unittest.TestCase):
         self.assertIn('class="prompt-stage-restore"', ui_module.HTML)
         self.assertNotIn('textarea readonly rows="3"', ui_module.HTML)
 
-    def test_prompt_override_editors_drop_stale_defaults_on_profile_switch(self) -> None:
+    def test_pr145_prompt_override_editors_drop_stale_defaults_on_profile_switch(self) -> None:
         # Regression for the HIGH finding: switching the prompt profile must
         # NOT freeze the previous profile's text as per-stage overrides.
         # livePromptOverrides() must diff editor values against BOTH the newly

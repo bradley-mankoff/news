@@ -692,7 +692,7 @@ def _cp(returncode=0, stdout="", stderr=""):
     return subprocess.CompletedProcess([], returncode, stdout, stderr)
 
 
-class SyncLocalDevelopTest(unittest.TestCase):
+class PR145SyncLocalDevelopTest(unittest.TestCase):
     """Boundaries of the post-merge local sync: never destructive, restart
     only when the UI is running."""
 
@@ -822,6 +822,65 @@ class SyncLocalDevelopTest(unittest.TestCase):
         msg = self._run_with(plan)
         self.assertIn("LOCAL SYNC FAILED", msg)
         self.assertIn("fast-forward", msg)
+
+    def test_subprocess_exceptions_are_fail_closed(self):
+        for error in (
+            subprocess.TimeoutExpired(["git", "fetch"], 90),
+            OSError("git is unavailable"),
+        ):
+            with self.subTest(error=error):
+                def raise_error(*_args, **_kwargs):
+                    raise error
+
+                with patch("automation.board_poller.subprocess.run",
+                           side_effect=raise_error):
+                    msg = sync_local_develop()
+                self.assertIn("LOCAL SYNC FAILED", msg)
+                self.assertIn("fetch", msg)
+
+    def test_git_probe_failures_are_fail_closed(self):
+        cases = (
+            {"fetch": lambda: _cp(), "rev-parse": lambda: _cp(stdout="develop\n"),
+             "status": lambda: _cp(1, stderr="status failed")},
+            {"fetch": lambda: _cp(), "rev-parse": lambda: _cp(stdout="develop\n"),
+             "status": lambda: _cp(),
+             "rev-list": lambda: _cp(1, stderr="ahead failed")},
+            {"fetch": lambda: _cp(), "rev-parse": lambda: _cp(stdout="develop\n"),
+             "status": lambda: _cp(),
+             "rev-list": [lambda: _cp(stdout="0\n"),
+                           lambda: _cp(1, stderr="behind failed")]},
+        )
+        for plan in cases:
+            with self.subTest(plan=plan):
+                msg = self._run_with(plan)
+                self.assertIn("LOCAL SYNC FAILED", msg)
+
+    def test_sync_uses_exact_git_command_contract(self):
+        calls = []
+        responses = {
+            ("git", "fetch", "origin"): _cp(),
+            ("git", "rev-parse", "--abbrev-ref", "HEAD"): _cp(stdout="develop\n"),
+            ("git", "status", "--porcelain"): _cp(),
+            ("git", "rev-list", "--count", "origin/develop..HEAD"): _cp(stdout="0\n"),
+            ("git", "rev-list", "--count", "HEAD..origin/develop"): _cp(stdout="3\n"),
+            ("git", "merge", "--ff-only", "origin/develop"): _cp(stdout="Fast-forward\n"),
+        }
+
+        def fake_run(cmd, *args, **kwargs):
+            calls.append((cmd, kwargs))
+            return responses[tuple(cmd)]
+
+        with patch("automation.board_poller.subprocess.run", side_effect=fake_run), \
+                patch("automation.board_poller._ui_running", return_value=False):
+            msg = sync_local_develop()
+
+        self.assertIn("develop updated", msg)
+        self.assertEqual(
+            [cmd for cmd, _kwargs in calls],
+            [list(key) for key in responses],
+        )
+        self.assertTrue(all(kwargs["cwd"] == str(bp.ROOT) for _cmd, kwargs in calls))
+
 class IssueHasLabelTests(unittest.TestCase):
     """HIGH: a gh failure must return None (undetermined), never False —
     the caller defers instead of routing a blocked issue into the normal
@@ -1343,15 +1402,17 @@ class ReconcileDeferredWorkCreateTest(unittest.TestCase):
                           "  **Description:** Port the model layer.\n"
                           "  **Reason:** Packaging.\n")}
 
-    def _run(self, open_stdout="[]", closed_stdout="[]", rec=None):
+    def _run(self, open_stdout="[]", closed_stdout="[]", rec=None,
+             comments=None):
         rec = {} if rec is None else rec
         calls = []
+        comments = [self._deferred_comment()] if comments is None else comments
 
         def fake_gh(args, env, timeout=90):
             calls.append(args)
             if args[0:2] == ["issue", "view"]:
                 return _cp(stdout=json.dumps(
-                    {"title": "T", "comments": [self._deferred_comment()]}))
+                    {"title": "T", "comments": comments}))
             if args[0:2] == ["issue", "list"]:
                 state = args[args.index("--state") + 1]
                 return _cp(stdout=open_stdout if state == "open" else closed_stdout)
@@ -1402,9 +1463,26 @@ class ReconcileDeferredWorkCreateTest(unittest.TestCase):
         self.assertTrue(ok)
         creates = [a for a in calls if a[0:2] == ["issue", "create"]]
         self.assertEqual(len(creates), 1)
+        body = creates[0][creates[0].index("--body") + 1]
+        self.assertIn("Supersedes: #98", body)
         comments = [a for a in calls if a[0:2] == ["issue", "comment"]]
         self.assertEqual(len(comments), 1)
         self.assertIn("supersedes closed #98", comments[0][-1])
+
+    def test_explicit_supersedes_is_preserved_on_created_issue(self):
+        comments = [{"body": ("## Deferred work\n"
+                               "- **Title:** Rebuild deferred adapter\n"
+                               "  **Description:** Replace the old adapter.\n"
+                               "  **Supersedes:** #42\n")}]
+        ok, _rec, calls = self._run(
+            comments=comments,
+            closed_stdout=json.dumps([{"number": 42, "title": "Old adapter"}]),
+        )
+        self.assertTrue(ok)
+        creates = [a for a in calls if a[0:2] == ["issue", "create"]]
+        self.assertEqual(len(creates), 1)
+        body = creates[0][creates[0].index("--body") + 1]
+        self.assertIn("Supersedes: #42", body)
 
 class SyncLocalDevelopTest(unittest.TestCase):
     """Boundaries of the post-merge local sync: never destructive, restart

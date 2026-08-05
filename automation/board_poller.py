@@ -200,39 +200,51 @@ def sync_local_develop() -> str:
     """
     if DRY_RUN:
         return "LOCAL SYNC: dry-run (no fetch/merge/restart)"
-    r = subprocess.run(["git", "fetch", "origin"], capture_output=True,
-                       text=True, timeout=90, cwd=str(ROOT))
-    if r.returncode != 0:
-        return f"LOCAL SYNC FAILED: git fetch: {r.stderr.strip()[:200]}"
-    branch = subprocess.run(["git", "rev-parse", "--abbrev-ref", "HEAD"],
-                            capture_output=True, text=True, timeout=30,
-                            cwd=str(ROOT))
-    if branch.returncode != 0 or branch.stdout.strip() != "develop":
+
+    def run_git(args: list[str], timeout: int):
+        try:
+            result = subprocess.run(
+                ["git", *args], capture_output=True, text=True,
+                timeout=timeout, cwd=str(ROOT),
+            )
+        except (subprocess.TimeoutExpired, OSError) as exc:
+            return None, str(exc)
+        if result.returncode != 0:
+            detail = result.stderr.strip()[:200] or f"exit status {result.returncode}"
+            return None, detail
+        return result, None
+
+    fetch, error = run_git(["fetch", "origin"], 90)
+    if fetch is None:
+        return f"LOCAL SYNC FAILED: git fetch: {error}"
+    branch, error = run_git(["rev-parse", "--abbrev-ref", "HEAD"], 30)
+    if branch is None:
+        return f"LOCAL SYNC FAILED: git branch check: {error}"
+    if branch.stdout.strip() != "develop":
         return (f"LOCAL SYNC SKIP: not on develop "
                 f"(branch={branch.stdout.strip() or '?'!r})")
-    dirty = subprocess.run(["git", "status", "--porcelain"],
-                           capture_output=True, text=True, timeout=30,
-                           cwd=str(ROOT))
+    dirty, error = run_git(["status", "--porcelain"], 30)
+    if dirty is None:
+        return f"LOCAL SYNC FAILED: git status: {error}"
     dirty_files = [ln for ln in dirty.stdout.splitlines() if ln.strip()]
     if dirty_files:
         return f"LOCAL SYNC SKIP: working tree dirty ({len(dirty_files)} file(s))"
-    ahead = subprocess.run(["git", "rev-list", "--count", "origin/develop..HEAD"],
-                           capture_output=True, text=True, timeout=30,
-                           cwd=str(ROOT))
-    if ahead.returncode == 0 and ahead.stdout.strip() != "0":
+    ahead, error = run_git(["rev-list", "--count", "origin/develop..HEAD"], 30)
+    if ahead is None:
+        return f"LOCAL SYNC FAILED: git ahead check: {error}"
+    if ahead.stdout.strip() != "0":
         n = ahead.stdout.strip()
         return (f"LOCAL SYNC SKIP: local develop has {n} unpushed commit(s); "
                 "sync blocked until they are pushed (fast-forward only)")
-    behind = subprocess.run(["git", "rev-list", "--count", "HEAD..origin/develop"],
-                            capture_output=True, text=True, timeout=30,
-                            cwd=str(ROOT))
-    if behind.returncode == 0 and behind.stdout.strip() == "0":
+    behind, error = run_git(["rev-list", "--count", "HEAD..origin/develop"], 30)
+    if behind is None:
+        return f"LOCAL SYNC FAILED: git behind check: {error}"
+    if behind.stdout.strip() == "0":
         return "LOCAL SYNC: develop already up to date"
-    m = subprocess.run(["git", "merge", "--ff-only", "origin/develop"],
-                       capture_output=True, text=True, timeout=90, cwd=str(ROOT))
-    if m.returncode != 0:
-        return f"LOCAL SYNC FAILED: fast-forward merge: {m.stderr.strip()[:200]}"
-    merged = (m.stdout.strip() or f"{behind.stdout.strip()} commit(s)").splitlines()[-1]
+    merge, error = run_git(["merge", "--ff-only", "origin/develop"], 90)
+    if merge is None:
+        return f"LOCAL SYNC FAILED: fast-forward merge: {error}"
+    merged = (merge.stdout.strip() or f"{behind.stdout.strip()} commit(s)").splitlines()[-1]
     if not _ui_running():
         return f"LOCAL SYNC: develop updated ({merged}); UI not running, left as is"
     if _restart_ui():
@@ -922,7 +934,8 @@ def add_to_board(cfg: dict, env: dict, issue_number: int, lane: str,
 def create_deferred_issue(cfg: dict, env: dict, issue_number: int,
                           pr_number: int | None, source_title: str,
                           item: dict, lane: str, project_id: str,
-                          field_id: str, status_options: dict) -> int | None:
+                          field_id: str, status_options: dict,
+                          supersedes: int | None = None) -> int | None:
     """Create + board the tracking issue for one deferred item.
 
     Returns the new issue number, 0 in dry-run (simulated), or None on failure.
@@ -936,6 +949,8 @@ def create_deferred_issue(cfg: dict, env: dict, issue_number: int,
         + f"Context: source issue #{issue_number} ({source_title}).\n\n"
         + "Acceptance criteria to be filled when this is planned."
     )
+    if supersedes is not None:
+        body += f"\n\nSupersedes: #{supersedes}"
     cmd = ["issue", "create", "-R", cfg["repo"], "--title", title,
            "--body", body]
     label = item.get("label") or ""
@@ -1032,7 +1047,8 @@ def reconcile_deferred_work(cfg: dict, env: dict, issue_number: int,
                     "an open issue; creating fresh")
                 created = create_deferred_issue(
                     cfg, env, issue_number, pr_number, source_title, item, lane,
-                    project_id, field_id, status_options)
+                    project_id, field_id, status_options,
+                    supersedes=item.get("supersedes"))
                 if created is None:
                     log(f"DEFERRED RETRY issue={issue_number}: create failed for "
                         f"'{item['title']}'")
@@ -1044,18 +1060,21 @@ def reconcile_deferred_work(cfg: dict, env: dict, issue_number: int,
         if action == "link":
             lines.append(f"- **{item['title']}** \u2192 already tracked in #{ref}")
             continue
+        supersedes = item.get("supersedes")
+        if supersedes is None and action == "create-ref":
+            supersedes = ref
         created = create_deferred_issue(
             cfg, env, issue_number, pr_number, source_title, item, lane,
-            project_id, field_id, status_options)
+            project_id, field_id, status_options, supersedes=supersedes)
         if created is None:
             log(f"DEFERRED RETRY issue={issue_number}: create failed for "
                 f"'{item['title']}'")
             return False
         if created == 0:  # dry-run simulated
             continue
-        if action == "create-ref":
+        if supersedes is not None:
             lines.append(f"- **{item['title']}** \u2192 #{created} "
-                         f"(created; supersedes closed #{ref})")
+                         f"(created; supersedes closed #{supersedes})")
         else:
             lines.append(f"- **{item['title']}** \u2192 #{created} (created, {lane})")
     if lines:
