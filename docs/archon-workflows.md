@@ -5,23 +5,31 @@ Machine-local archon (archon-pi build, v0.7.0 = stock Archon) lives at
 
 ## Execution model
 
-- Provider: `pi` (the `pi` CLI); model `opencode-go/deepseek-v4-flash` at `effort: max`
-  (xhigh thinking) for every tier (`small`/`medium`/`large`) — configured in
-  `archon-home/config.yaml`.
+- Provider: `pi` (the `pi` CLI); unassigned nodes use
+  `opencode-go/deepseek-v4-flash` at `effort: max` via the `small`/`medium`/`large`
+  tiers in `archon-home/config.yaml`.
+- Planning, review, and vision-capable nodes use the explicit
+  `pi`/`opencode-go/gpt-5.6-luna` assignment at `effort: max`. This covers issue
+  investigation and plan creation, workflow design, both the In Progress
+  readiness-review blocks and the In Review `archon-smart-pr-review` verdict
+  path, full PR validation, browser reproduction/E2E, and the general fallback
+  agents.
 - Bundled workflow defaults are disabled (repo `.archon/config.yaml` →
   `defaults.loadDefaultWorkflows: false`). The usable set is the 15 files in
   `archon-home/workflows/`.
 - Provider pins on bundled workflows are **overridden when the node's `model:`
   resolves to a tier** — the tier's provider wins (dag-executor). E.g.
   `archon-fix-github-issue` declares `provider: claude, model: medium` but runs
-  entirely on pi/opencode-go via the `medium` tier. Only workflows pinned to claude
-  with **no tier model** stay claude-locked (archived below).
+  entirely on pi/opencode-go via the `medium` tier. Explicit Luna nodes set
+  `provider: pi` and bypass the tier.
+- Only workflows pinned to claude with **no tier model** stay claude-locked
+  (archived below).
 
 ## Usable workflows (pi/opencode-go)
 
 | Workflow | Intent |
 |---|---|
-| `archon-fix-github-issue` | Classify issue → investigate (bug) or plan (feature) → implement → validate → **draft PR** → smart review (code-review always + conditional error-handling/test-coverage/comment-quality/docs-impact) → self-fix → simplify → report on the issue. Leaves the PR draft — the human tests locally, then moves the issue to In Review. Local copy adds a `completion-comment` node: posts `## What shipped` / `## Decisions` / `## Acceptance criteria` (with evidence) on the issue. |
+| `archon-fix-github-issue` | Classify issue → investigate (bug) or plan (feature) → implement → validate → **draft PR** → smart review (code-review always + conditional error-handling/test-coverage/comment-quality/docs-impact) → self-fix → report on the issue. Leaves the PR draft — the human tests locally, then moves the issue to In Review. Local copy adds a `completion-comment` node: posts `## What shipped` / `## Decisions` / `## Acceptance criteria` / `## How to test` (with evidence) on the issue. |
 | `archon-idea-to-pr` | Feature idea/issue → plan → implement → validate → ready PR → comprehensive review block (5 parallel review agents) → synthesize → fix → summary comment. Local copy adds a `completion-comment` node with the same structured record as fix-github-issue. |
 | `archon-plan-to-pr` | Execute an existing plan file end to end (same review block as idea-to-pr). |
 | `archon-feature-development` | Implement from a plan file or a GitHub issue containing a plan. |
@@ -79,9 +87,11 @@ YAML is overwritten. If a workflow file is replaced, re-apply:
   (posts `VERDICT: <approve|request-changes|block>` on the PR).
 - `archon-fix-github-issue.yaml`: `completion-comment` node after `report`
   (posts the structured completion record on the issue, including the
-  `## Deferred work` section the board poller parses).
+  `## How to test` handoff and the `## Deferred work` section the board poller
+  parses).
 - `archon-idea-to-pr.yaml`: `completion-comment` node after `workflow-summary`
-  (same structured record + `## Deferred work` section).
+  (same structured record + `## How to test` handoff + `## Deferred work`
+  section).
 - Both implementation workflows: `sync-with-develop` node before the PR node
   (merges develop into the branch, resolves, validates) — `create-pr` /
   `finalize-pr` depend on it.

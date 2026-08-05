@@ -7,18 +7,23 @@ import unittest
 from unittest.mock import MagicMock, mock_open, patch
 
 from automation import board_poller as bp
+import automation.board_poller as board_poller
 from automation.board_poller import (
     branch_empty_vs_main,
+    build_ready_for_review_comment,
     conflict_episode_action,
     dedupe_deferred,
     dep_gate,
-    issue_is_runnable,
+    dispatch,
     develop_conflict_action,
+    extract_test_guidance,
+    fetch_active_workflow_count,
     fetch_project,
 
     find_unchecked_criteria,
     fmt_deps,
     has_deferral_language,
+    issue_is_runnable,
     match_issue_pr,
     merge_pr_to_base,
     normalize_title,
@@ -26,11 +31,13 @@ from automation.board_poller import (
     parse_deferred_work,
     parse_verdict,
     pick_workflow,
+    post_ready_for_review_comment,
+    prepare_dispatch_budget,
     reconcile_deferred_work,
     run_status_for,
     sync_local_develop,
-    try_merge_base_into_head,
     sync_runnable_labels,
+    try_merge_base_into_head,
 )
 
 
@@ -49,6 +56,7 @@ def _cfg() -> dict:
             "Todo": "todo",
             "In Progress": "in_progress",
             "Blocked": "blocked",
+            "Needs Input": "needs_input",
             "Ready for Review": "ready",
             "In Review": "review",
             "Done": "done",
@@ -90,6 +98,62 @@ ISOLATION_LIST = (
 )
 
 
+class DispatchCapacityTest(unittest.TestCase):
+    def test_active_workflow_count_ignores_terminal_runs(self):
+        result = subprocess.CompletedProcess(
+            ["archon"], 0,
+            json.dumps({"runs": [
+                {"status": "running"},
+                {"status": "paused"},
+                {"status": "completed"},
+            ]}),
+            "",
+        )
+        with patch("automation.board_poller.subprocess.run", return_value=result):
+            self.assertEqual(fetch_active_workflow_count({}), 2)
+
+    def test_active_workflow_count_fails_closed(self):
+        result = subprocess.CompletedProcess(["archon"], 1, "", "unavailable")
+        with patch("automation.board_poller.subprocess.run", return_value=result):
+            self.assertIsNone(fetch_active_workflow_count({}))
+
+    def test_budget_reserves_slots_after_existing_runs(self):
+        with (
+            patch.object(board_poller, "DRY_RUN", False),
+            patch.object(board_poller, "fetch_active_workflow_count", return_value=2),
+        ):
+            prepare_dispatch_budget({"max_concurrent_workflows": 3}, {})
+            self.assertEqual(board_poller._DISPATCH_BUDGET, 1)
+
+    def test_budget_holds_when_status_lookup_fails(self):
+        with (
+            patch.object(board_poller, "DRY_RUN", False),
+            patch.object(board_poller, "fetch_active_workflow_count", return_value=None),
+        ):
+            prepare_dispatch_budget({"max_concurrent_workflows": 3}, {})
+            self.assertEqual(board_poller._DISPATCH_BUDGET, 0)
+
+    def test_dispatch_holds_when_budget_is_exhausted(self):
+        with (
+            patch.object(board_poller, "DRY_RUN", False),
+            patch.object(board_poller, "_DISPATCH_BUDGET", 0),
+            patch("automation.board_poller.subprocess.Popen") as popen,
+        ):
+            self.assertFalse(dispatch({}, {}, "workflow", "branch", "message", "item", 7))
+            popen.assert_not_called()
+
+    def test_dispatch_consumes_reserved_slot(self):
+        with (
+            patch.object(board_poller, "DRY_RUN", False),
+            patch.object(board_poller, "_DISPATCH_BUDGET", 1),
+            patch("builtins.open", unittest.mock.mock_open()),
+            patch("automation.board_poller.subprocess.Popen") as popen,
+        ):
+            popen.return_value.pid = 123
+            self.assertTrue(dispatch({}, {}, "workflow", "branch", "message", "item", 7))
+            self.assertEqual(board_poller._DISPATCH_BUDGET, 0)
+
+
 class MatchIssuePrTest(unittest.TestCase):
     def _ship(self):
         return {"number": 51, "baseRefName": "main",
@@ -119,6 +183,23 @@ class MatchIssuePrTest(unittest.TestCase):
         pr = {"number": 9, "baseRefName": "main", "body": "Nothing here",
               "title": "Unrelated"}
         self.assertIsNone(match_issue_pr([pr], 21))
+    def test_incidental_issue_mention_is_not_a_link(self):
+        pr = {
+            "number": 153,
+            "baseRefName": "develop",
+            "body": "Issue #124 cleanup removed an old model reference.",
+            "title": "Anchor curated-match prefix (#92)",
+        }
+        self.assertIsNone(match_issue_pr([pr], 124))
+
+    def test_issue_link_line_with_following_text_is_accepted(self):
+        pr = {
+            "number": 11,
+            "baseRefName": "develop",
+            "body": "Issue: #21\n\nDetails follow.",
+            "title": "Implement the change",
+        }
+        self.assertEqual(match_issue_pr([pr], 21)["number"], 11)
 
 
 class ConflictEpisodeActionTest(unittest.TestCase):
@@ -138,6 +219,10 @@ class ConflictEpisodeActionTest(unittest.TestCase):
     def test_fix_run_pending_waits(self):
         self.assertEqual(
             conflict_episode_action("CONFLICTING", "m", "queued", True), "active")
+
+    def test_paused_fix_run_waits(self):
+        self.assertEqual(
+            conflict_episode_action("CONFLICTING", "m", "paused", True), "active")
 
     def test_fix_run_completed_still_conflicting(self):
         self.assertEqual(
@@ -191,7 +276,7 @@ class BranchEmptyVsMainTest(unittest.TestCase):
         self.assertEqual(develop_conflict_action(True, None, None), "dispatch")
 
     def test_resolver_active_waits(self):
-        for st in ("running", "pending", "queued", "scheduled"):
+        for st in ("running", "pending", "queued", "scheduled", "paused"):
             self.assertEqual(develop_conflict_action(True, "m", st), "active")
 
     def test_resolver_done_still_failing_needs_human(self):
@@ -349,6 +434,140 @@ class ParseVerdictTest(unittest.TestCase):
     def test_multiline_body(self):
         self.assertEqual(
             parse_verdict(["line one\nVERDICT: approve\nline three"]), "approve")
+
+
+class ReadyForReviewCommentTest(unittest.TestCase):
+    def test_explicit_guidance_wins_over_older_validation(self):
+        comments = [
+            {"body": "## Validation\n`pytest tests/test_old.py -q`"},
+            {"body": ("## How to test\n"
+                      "Run `news ui` and open http://localhost:8766.\n"
+                      "### Expected\nThe page loads.")},
+        ]
+        self.assertEqual(
+            extract_test_guidance(comments),
+            ("Run `news ui` and open http://localhost:8766.\n"
+             "### Expected\nThe page loads."),
+        )
+
+    def test_validation_backfills_older_completion_records(self):
+        comments = [
+            {"body": "### Validation\n```bash\npytest tests/test_model_catalog.py -q\n```"},
+            {"body": "### Validation\n✅ Tests (478 passed, 0 failed)."},
+            {"body": "## How to test\n*None.*"},
+        ]
+        self.assertEqual(
+            extract_test_guidance(comments),
+            "```bash\npytest tests/test_model_catalog.py -q\n```",
+        )
+
+    def test_build_includes_branch_pr_and_promotion_command(self):
+        body = build_ready_for_review_comment(
+            92, "develop", 153, "Run `pytest tests/test_model_catalog.py -q`."
+        )
+        self.assertIn("Develop PR #153 was merged into `develop`.", body)
+        self.assertIn("pytest tests/test_model_catalog.py -q", body)
+        self.assertIn(
+            'python3 automation/move_item.py 92 "In Review"', body)
+
+    def test_build_is_explicit_when_no_test_path_was_recorded(self):
+        body = build_ready_for_review_comment(7, "develop", None, None)
+        self.assertIn("no linked develop PR was available", body)
+        self.assertIn("No runnable issue-specific instructions", body)
+
+    @patch("automation.board_poller.gh")
+    def test_post_fetches_guidance_then_comments(self, gh):
+        gh.side_effect = [
+            subprocess.CompletedProcess(
+                [], 0, stdout=json.dumps({
+                    "comments": [{"body": "## How to test\nRun the focused check."}],
+                }), stderr=""),
+            subprocess.CompletedProcess([], 0, stdout="", stderr=""),
+        ]
+        with patch.object(board_poller, "DRY_RUN", False):
+            self.assertTrue(
+                post_ready_for_review_comment(
+                    {"repo": "o/r"}, {}, 7, "develop", 9))
+        self.assertEqual(gh.call_args_list[0].args[0][:2], ["issue", "view"])
+        comment_args = gh.call_args_list[1].args[0]
+        self.assertEqual(comment_args[:2], ["issue", "comment"])
+        self.assertIn("Run the focused check.", comment_args[-1])
+
+
+class ReadyForReviewTransitionTest(unittest.TestCase):
+    def test_completed_run_posts_handoff_after_develop_merge(self):
+        item_id = "item-92"
+        item = {
+            "id": item_id,
+            "status": "In Progress",
+            "content": {
+                "__typename": "Issue",
+                "number": 92,
+                "title": "Anchor curated-match prefix",
+                "url": "https://github.com/o/r/issues/92",
+                "body": "",
+                "state": "OPEN",
+                "repository": {"nameWithOwner": "o/r"},
+                "labels": {"nodes": []},
+            },
+        }
+        cfg = {
+            "repo": "o/r",
+            "state_file": "state.json",
+            "lanes": {
+                "Backlog": "backlog",
+                "Todo": "todo",
+                "In Progress": "in_progress",
+                "Ready for Review": "ready",
+                "In Review": "review",
+                "Done": "done",
+            },
+            "dispatch": {
+                "todo": {
+                    "complete_move_to": "Ready for Review",
+                    "merge_develop_base": "develop",
+                },
+                "review": {
+                    "merge_ship_on_approve": False,
+                    "ship_to": "main",
+                    "done_lane": "Done",
+                },
+            },
+            "deferred_work": {"enabled": True},
+        }
+        state = {
+            "_meta": {"snapshot_done": True},
+            item_id: {
+                "status": "In Progress",
+                "issue_number": 92,
+                "dispatch_msg": "run",
+            },
+        }
+        with (
+            patch.object(board_poller, "fetch_project",
+                         return_value=("p", "f", {"Ready for Review": "ready"}, [item])),
+            patch.object(board_poller, "prepare_dispatch_budget"),
+            patch.object(board_poller, "sync_runnable_labels"),
+            patch.object(board_poller, "fetch_runs_by_message",
+                         return_value={"run": "completed"}),
+            patch.object(board_poller, "issue_has_label", return_value=False),
+            patch.object(board_poller, "find_issue_pr",
+                         return_value=({"number": 153, "state": "OPEN",
+                                        "headRefName": "issue-92"}, True)),
+            patch.object(board_poller, "merge_pr_to_base",
+                         return_value=(True, "merged")),
+            patch.object(board_poller, "sync_local_develop",
+                         return_value="local sync skipped"),
+            patch.object(board_poller, "reconcile_deferred_work", return_value=True),
+            patch.object(board_poller, "move_to_lane", return_value=True) as move,
+            patch.object(board_poller, "post_ready_for_review_comment",
+                         return_value=True) as post,
+            patch.object(board_poller, "save_state"),
+        ):
+            board_poller.poll(cfg, {}, state)
+        move.assert_called_once_with(cfg, {}, "p", "item-92", "f", "ready")
+        post.assert_called_once_with(cfg, {}, 92, "develop", 153)
+        self.assertTrue(state[item_id]["ready_test_comment"])
 
 
 class ParseDeferredWorkTest(unittest.TestCase):

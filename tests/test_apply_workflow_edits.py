@@ -4,7 +4,12 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from automation.apply_workflow_edits import CONTRACT, ensure_contract, ensure_node
+from automation.apply_workflow_edits import (
+    CONTRACT,
+    TESTING_CONTRACT,
+    ensure_contract,
+    ensure_node,
+)
 
 
 class EnsureNodeTest(unittest.TestCase):
@@ -61,17 +66,22 @@ class EnsureContractTest(unittest.TestCase):
             path.write_text(self._node(), encoding="utf-8")
             note = ensure_contract(path, "completion-comment")
             self.assertEqual(
-                note, "added Deferred-work contract to completion-comment in wf.yaml")
+                note,
+                "added How-to-test and Deferred-work contracts to "
+                "completion-comment in wf.yaml")
             text = path.read_text()
+            self.assertIn("## How to test", text)
             self.assertIn("reads this section and creates a tracking issue", text)
-            self.assertLess(text.index(CONTRACT[:40]), text.index("The comment must be factual"))
+            self.assertLess(text.index(TESTING_CONTRACT[:40]),
+                            text.index("The comment must be factual"))
 
     def test_already_present_is_noop(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             path = Path(tmpdir) / "wf.yaml"
             path.write_text(self._node().replace(
                 "      Post a completion record.\n",
-                "      Post a completion record.\n" + CONTRACT), encoding="utf-8")
+                "      Post a completion record.\n"
+                + TESTING_CONTRACT + CONTRACT), encoding="utf-8")
             self.assertIsNone(ensure_contract(path, "completion-comment"))
 
     def test_missing_node_returns_none(self) -> None:
