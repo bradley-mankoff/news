@@ -4,6 +4,8 @@ import contextlib
 import http.client
 import json
 import os
+import re
+import subprocess
 import tempfile
 import threading
 import unittest
@@ -1327,3 +1329,4 @@ class UITests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
