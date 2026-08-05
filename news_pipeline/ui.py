@@ -1893,47 +1893,6 @@ HTML = r"""<!doctype html>
       const storyModel = knobField("NEWS_MODEL_STORY_DRAFTING", "Story model", { emptyLabel: "default: qwythos-9b-8bit" });
       const scaleModel = knobField("NEWS_MODEL_STORY_SCALE_SCREENING", "Scale screening model", { emptyLabel: "default: qwythos-9b-8bit" });
       const titleModel = knobField("NEWS_MODEL_TITLE_GENERATION", "Title generation model", { emptyLabel: "default: qwythos-9b-8bit" });
-      const sharedModelTokens = knobField("NEWS_MODEL_MAX_INPUT_TOKENS", "Shared model input cap");
-      const articleTokenCap = knobField("NEWS_ARTICLE_SUMMARY_MAX_TOKENS", "Article summary max tokens");
-      const storyTokenCap = knobField("NEWS_STORY_DRAFTING_MAX_TOKENS", "Story drafting max tokens");
-      const scaleTokenCap = knobField("NEWS_STORY_SCALE_SCREENING_MAX_TOKENS", "Scale screening max tokens");
-      const titleTokenCap = knobField("NEWS_TITLE_GENERATION_MAX_TOKENS", "Title generation max tokens");
-      const articleBaseUrl = knobField("NEWS_MODEL_ARTICLE_SUMMARY_BASE_URL", "Base URL");
-      const storyBaseUrl = knobField("NEWS_MODEL_STORY_DRAFTING_BASE_URL", "Base URL");
-      const scaleBaseUrl = knobField("NEWS_MODEL_STORY_SCALE_SCREENING_BASE_URL", "Base URL");
-      const titleBaseUrl = knobField("NEWS_MODEL_TITLE_GENERATION_BASE_URL", "Base URL");
-      const articleSampling = [
-        knobField("NEWS_MODEL_ARTICLE_SUMMARY_TEMPERATURE", "Temperature"),
-        knobField("NEWS_MODEL_ARTICLE_SUMMARY_TOP_P", "Top P"),
-        knobField("NEWS_MODEL_ARTICLE_SUMMARY_TOP_K", "Top K"),
-        knobField("NEWS_MODEL_ARTICLE_SUMMARY_MIN_P", "Min P"),
-        knobField("NEWS_MODEL_ARTICLE_SUMMARY_PRESENCE_PENALTY", "Presence penalty"),
-        knobField("NEWS_MODEL_ARTICLE_SUMMARY_REPETITION_PENALTY", "Repetition penalty")
-      ].join("");
-      const storySampling = [
-        knobField("NEWS_MODEL_STORY_DRAFTING_TEMPERATURE", "Temperature"),
-        knobField("NEWS_MODEL_STORY_DRAFTING_TOP_P", "Top P"),
-        knobField("NEWS_MODEL_STORY_DRAFTING_TOP_K", "Top K"),
-        knobField("NEWS_MODEL_STORY_DRAFTING_MIN_P", "Min P"),
-        knobField("NEWS_MODEL_STORY_DRAFTING_PRESENCE_PENALTY", "Presence penalty"),
-        knobField("NEWS_MODEL_STORY_DRAFTING_REPETITION_PENALTY", "Repetition penalty")
-      ].join("");
-      const scaleSampling = [
-        knobField("NEWS_MODEL_STORY_SCALE_SCREENING_TEMPERATURE", "Temperature"),
-        knobField("NEWS_MODEL_STORY_SCALE_SCREENING_TOP_P", "Top P"),
-        knobField("NEWS_MODEL_STORY_SCALE_SCREENING_TOP_K", "Top K"),
-        knobField("NEWS_MODEL_STORY_SCALE_SCREENING_MIN_P", "Min P"),
-        knobField("NEWS_MODEL_STORY_SCALE_SCREENING_PRESENCE_PENALTY", "Presence penalty"),
-        knobField("NEWS_MODEL_STORY_SCALE_SCREENING_REPETITION_PENALTY", "Repetition penalty")
-      ].join("");
-      const titleSampling = [
-        knobField("NEWS_MODEL_TITLE_GENERATION_TEMPERATURE", "Temperature"),
-        knobField("NEWS_MODEL_TITLE_GENERATION_TOP_P", "Top P"),
-        knobField("NEWS_MODEL_TITLE_GENERATION_TOP_K", "Top K"),
-        knobField("NEWS_MODEL_TITLE_GENERATION_MIN_P", "Min P"),
-        knobField("NEWS_MODEL_TITLE_GENERATION_PRESENCE_PENALTY", "Presence penalty"),
-        knobField("NEWS_MODEL_TITLE_GENERATION_REPETITION_PENALTY", "Repetition penalty")
-      ].join("");
 
       $("runSetupMount").innerHTML = `
         <div class="banner panel">
@@ -2581,12 +2540,12 @@ HTML = r"""<!doctype html>
     }
     function sourceInput(field, src) {
       if (["can_enrich_coverage","strict_source_match"].includes(field)) {
-        return `<label>${field}<select id="source_${field}"><option value=""></option><option value="false" ${val === false ? "selected" : ""}>false</option><option value="true" ${val === true ? "selected" : ""}>true</option></select></label>`;
+        return `<label>${field}<select id="source_${field}"><option value=""></option><option value="false" ${src === false ? "selected" : ""}>false</option><option value="true" ${src === true ? "selected" : ""}>true</option></select></label>`;
       }
-      if (field === "tier") return `<label>${field}<select id="source_${field}"><option></option><option ${val === "core" ? "selected" : ""}>core</option><option ${val === "peripheral" ? "selected" : ""}>peripheral</option></select></label>`;
-      if (field === "source_match_mode") return `<label>${field}<select id="source_${field}"><option></option><option ${val === "feed_label" ? "selected" : ""}>feed_label</option><option ${val === "wire_attribution" ? "selected" : ""}>wire_attribution</option></select></label>`;
-      if (["nations","source_match_aliases","notes"].includes(field)) return `<label>${field}<textarea id="source_${field}">${val}</textarea></label>`;
-      return `<label>${field}<input id="source_${field}" value="${String(val).replaceAll("&","&amp;").replaceAll('"',"&quot;")}"></label>`;
+      if (field === "tier") return `<label>${field}<select id="source_${field}"><option></option><option ${src === "core" ? "selected" : ""}>core</option><option ${src === "peripheral" ? "selected" : ""}>peripheral</option></select></label>`;
+      if (field === "source_match_mode") return `<label>${field}<select id="source_${field}"><option></option><option ${src === "feed_label" ? "selected" : ""}>feed_label</option><option ${src === "wire_attribution" ? "selected" : ""}>wire_attribution</option></select></label>`;
+      if (["nations","source_match_aliases","notes"].includes(field)) return `<label>${field}<textarea id="source_${field}">${src}</textarea></label>`;
+      return `<label>${field}<input id="source_${field}" value="${String(src).replaceAll("&","&amp;").replaceAll('"',"&quot;")}"></label>`;
     }
     function editSource(key) {
       const src = state.sources.find(item => item.key === key) || {};
