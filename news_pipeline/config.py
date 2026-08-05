@@ -1287,7 +1287,8 @@ def _runtime_knob(
         "secret": secret,
         # option_links maps each offered option -> {"page": url, "hardware":
         # url} for model-choice knobs; the drift-guard test pins that its
-        # keys cover `options` exactly, and non-model knobs pass {}.
+        # keys cover `options` exactly. Non-model knobs pass {} (the
+        # consumer falls back to {} when the key is omitted).
         "option_links": option_links or {},
     }
 

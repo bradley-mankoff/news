@@ -99,6 +99,8 @@ from .config import (
     MODEL_TASK_IMAGE_ART_DIRECTION,
     MODEL_TASK_STORY_SCALE_SCREENING,
     MODEL_TASK_TITLE_GENERATION,
+    MODEL_TASK_ARTICLE_SUMMARY,
+    MODEL_TASK_STORY_DRAFTING,
     configured_model_api_key,
     ensure_codex_safe_model_reference,
     is_managed_model_backend,

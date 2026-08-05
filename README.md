@@ -333,7 +333,7 @@ Curated models (3):
   ([Hugging Face](https://huggingface.co/huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF))
 - `qwythos-9b-4bit` — mlx-vlm, 1M-token context
   ([Hugging Face](https://huggingface.co/huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF))
-- `gemma-e2b-tiny` — mlx-lm, Codex-safe test model
+- `gemma-e2b-tiny` — mlx-vlm, Codex-safe test model
   ([Hugging Face](https://huggingface.co/deadbydawn101/gemma-4-E2B-Heretic-Uncensored-mlx-4bit))
 
 Hugging Face search results carry runtime-fit verdicts (`managed_mlx_lm`,
