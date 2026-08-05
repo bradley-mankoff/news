@@ -371,3 +371,4 @@ def main(argv: list[str] | None = None) -> int:
     print(f"Unknown command: {command}", file=sys.stderr)
     print(USAGE, file=sys.stderr)
     return 2
+

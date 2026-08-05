@@ -171,3 +171,4 @@ verified; a follow-up agent should be able to continue from here without re-deri
 4. Optional: mention the auto-sync in `README.md`/AGENTS.md dev-loop docs if the user
    wants the behavior documented for humans (not done this session — no doc changes were
    requested beyond this handoff).
+

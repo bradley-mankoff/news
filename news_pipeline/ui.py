@@ -3057,7 +3057,13 @@ HTML = r"""<!doctype html>
       document.addEventListener("change", (event) => {
         const el = event.target;
         if (el && el.matches && el.matches("select[data-env]")) {
-          renderKnobLinks(el.dataset.env);
+          // Only knobs that carry option_links have a .knob-links container;
+          // calling renderKnobLinks for every select would hit the
+          // missing-container console.warn on each non-model knob change.
+          const knob = knobByEnv(el.dataset.env);
+          if (knob && knob.option_links && Object.keys(knob.option_links).length) {
+            renderKnobLinks(el.dataset.env);
+          }
         }
       });
       await loadSources();
@@ -3117,3 +3123,4 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
