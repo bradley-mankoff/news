@@ -2567,12 +2567,12 @@ HTML = r"""<!doctype html>
     }
     function sourceInput(field, src) {
       if (["can_enrich_coverage","strict_source_match"].includes(field)) {
-        return `<label>${field}<select id="source_${field}"><option value=""></option><option value="false" ${val === false ? "selected" : ""}>false</option><option value="true" ${val === true ? "selected" : ""}>true</option></select></label>`;
+        return `<label>${field}<select id="source_${field}"><option value=""></option><option value="false" ${src === false ? "selected" : ""}>false</option><option value="true" ${src === true ? "selected" : ""}>true</option></select></label>`;
       }
-      if (field === "tier") return `<label>${field}<select id="source_${field}"><option></option><option ${val === "core" ? "selected" : ""}>core</option><option ${val === "peripheral" ? "selected" : ""}>peripheral</option></select></label>`;
-      if (field === "source_match_mode") return `<label>${field}<select id="source_${field}"><option></option><option ${val === "feed_label" ? "selected" : ""}>feed_label</option><option ${val === "wire_attribution" ? "selected" : ""}>wire_attribution</option></select></label>`;
-      if (["nations","source_match_aliases","notes"].includes(field)) return `<label>${field}<textarea id="source_${field}">${val}</textarea></label>`;
-      return `<label>${field}<input id="source_${field}" value="${String(val).replaceAll("&","&amp;").replaceAll('"',"&quot;")}"></label>`;
+      if (field === "tier") return `<label>${field}<select id="source_${field}"><option></option><option ${src === "core" ? "selected" : ""}>core</option><option ${src === "peripheral" ? "selected" : ""}>peripheral</option></select></label>`;
+      if (field === "source_match_mode") return `<label>${field}<select id="source_${field}"><option></option><option ${src === "feed_label" ? "selected" : ""}>feed_label</option><option ${src === "wire_attribution" ? "selected" : ""}>wire_attribution</option></select></label>`;
+      if (["nations","source_match_aliases","notes"].includes(field)) return `<label>${field}<textarea id="source_${field}">${src}</textarea></label>`;
+      return `<label>${field}<input id="source_${field}" value="${String(src).replaceAll("&","&amp;").replaceAll('"',"&quot;")}"></label>`;
     }
     function editSource(key) {
       const src = state.sources.find(item => item.key === key) || {};

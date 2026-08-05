@@ -4,6 +4,8 @@ import contextlib
 import http.client
 import json
 import os
+import re
+import subprocess
 import tempfile
 import threading
 import unittest
@@ -661,6 +663,54 @@ class UITests(unittest.TestCase):
         # drift away from the server-side guard.
         self.assertIn("A run is already active", ui_module.HTML)
         self.assertIn("updateRunControls", ui_module.HTML)
+    def test_embedded_script_parses(self) -> None:
+        # A SyntaxError in the served <script> discards the entire block:
+        # the whole UI silently dies with green Python tests (regression
+        # shipped once via a 4x-duplicated JS bundle). Parse the exact
+        # served script without executing it.
+        html = ui_module.HTML
+        script = html.split("<script>", 1)[1].split("</script>", 1)[0]
+        with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False) as f:
+            f.write(script)
+            path = f.name
+        try:
+            try:
+                node_probe = subprocess.run(
+                    ["node", "--version"], capture_output=True, text=True
+                )
+            except FileNotFoundError:
+                node_probe = None
+            with tempfile.TemporaryDirectory() as outdir:
+                command = ["node", "--check", path]
+                if node_probe is None or node_probe.returncode != 0:
+                    command = ["bun", "build", "--target", "browser",
+                               "--outdir", outdir, path]
+                try:
+                    result = subprocess.run(
+                        command, capture_output=True, text=True
+                    )
+                except FileNotFoundError:
+                    self.skipTest("a JavaScript parser is not available on PATH")
+        finally:
+            os.unlink(path)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_js_bundle_is_not_duplicated(self) -> None:
+        # Rebase/conflict-resolution once multiplied the JS tail 4x inside
+        # ui.HTML (dead payload + parse failure). Pin each function/const
+        # marker to exactly one occurrence so the bundle cannot regrow.
+        html = ui_module.HTML
+        for marker in (
+            "function setKnobEnv",
+            "function renderAdvancedKnobs",
+            "function wireEvents",
+            "function sourceInput",
+            "function applySelectedPresetFromState",
+            "const PROMPT_TASK_LABELS = {",
+            "const MODEL_TASK_LABELS = {",
+            "const RUNTIME_FIT_LABELS = {",
+        ):
+            self.assertEqual(html.count(marker), 1, marker)
     def test_crud_helpers_use_temp_files(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
