@@ -1730,7 +1730,10 @@ HTML = r"""<!doctype html>
     }
     function knobField(env, label, options={}) {
       const knob = knobByEnv(env);
-      if (!knob) return "";
+      if (!knob) {
+        console.warn(`knobField: env ${env} not in schema.knobs; field omitted`);
+        return "";
+      }
       return `<label class="field"><span>${escapeHtml(label)}</span>${inputForKnob(knob, options)}<code>${escapeHtml(env)}</code></label>`;
     }
     function knobHint(name) {
@@ -2105,7 +2108,6 @@ HTML = r"""<!doctype html>
       decorateEnvHints($("runSetupMount"));
       renderKnobLinks("NEWS_MODEL_ARTICLE_SUMMARY");
       renderKnobLinks("NEWS_MODEL_STORY_DRAFTING");
-      renderPromptProfilePanel();
       renderModelCatalogPanel();
       $("actionSelect").value = "run";
       $("sourceOptions").classList.add("hidden");
@@ -2160,13 +2162,20 @@ HTML = r"""<!doctype html>
         </section>`;
     }
     function renderAdvancedPanels() {
-      // Static container from the #advanced view; guard keeps this idempotent.
+      // #advancedPanels is a static container in the #advanced view. This guard
+      // only defends against a missing container; render once at boot — a
+      // re-render would reset in-progress edits and orphan the .onclick
+      // handlers wireEvents() assigns to these elements. The rendered-flag
+      // below keeps this idempotent.
       // Must run before renderModelTuningControls() so the tuning <select>s exist.
       const container = $("advancedPanels");
       if (!container) {
         console.error("renderAdvancedPanels: missing #advancedPanels container");
+        setStatus("Advanced settings could not be rendered (missing container).", "bad");
         return;
       }
+      if (container.dataset.rendered) return;
+      container.dataset.rendered = "1";
       container.innerHTML = `
         ${modelTuningPanel("article_summary")}
         ${modelTuningPanel("story_drafting")}
@@ -2939,9 +2948,12 @@ HTML = r"""<!doctype html>
           if (preset) loadModelTuningEditor(meta.runtimeKey, preset);
           previewQuietly("run");
         };
-        $(meta.saveButtonId).onclick = () => saveModelTuningPreset(meta.runtimeKey).catch(err => setStatus(err.message, "bad"));
-        $(meta.renameButtonId).onclick = () => renameModelTuningPreset(meta.runtimeKey).catch(err => setStatus(err.message, "bad"));
-        $(meta.deleteButtonId).onclick = () => deleteModelTuningPreset(meta.runtimeKey).catch(err => setStatus(err.message, "bad"));
+        const saveBtn = $(meta.saveButtonId);
+        if (saveBtn) saveBtn.onclick = () => saveModelTuningPreset(meta.runtimeKey).catch(err => setStatus(err.message, "bad"));
+        const renameBtn = $(meta.renameButtonId);
+        if (renameBtn) renameBtn.onclick = () => renameModelTuningPreset(meta.runtimeKey).catch(err => setStatus(err.message, "bad"));
+        const deleteBtn = $(meta.deleteButtonId);
+        if (deleteBtn) deleteBtn.onclick = () => deleteModelTuningPreset(meta.runtimeKey).catch(err => setStatus(err.message, "bad"));
       });
     }
     function applySelectedPresetFromState() {
@@ -2962,6 +2974,10 @@ HTML = r"""<!doctype html>
       } catch (_err) { /* runs endpoint is best-effort at boot */ }
       updateRunControls();
       renderTabs();
+      // Order matters: renderAdvancedPanels() must run before
+      // renderModelTuningControls() (tuning <select>s) and wireEvents()
+      // (button handlers), and before renderAdvancedKnobs() (SURFACED_ENVS
+      // suppression reads the rendered dedicated knobs).
       renderRunSetup();
       renderAdvancedPanels();
       renderAdvancedKnobs();
