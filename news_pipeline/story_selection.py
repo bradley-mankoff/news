@@ -23,7 +23,9 @@ from .story_records import (
     story_debug_record,
     story_rank_key,
 )
+from .config import MODEL_TASK_STORY_SCALE_SCREENING
 from .prompt_catalog import DEFAULT_PROMPT_INSTRUCTIONS
+from .prompt_contracts import STORY_SCALE_SCREENING_JSON_CONTRACT
 
 
 STORY_SCALE_VERDICTS = {
@@ -34,6 +36,8 @@ STORY_SCALE_VERDICTS = {
 STORY_SCALE_OBVIOUSLY_LARGE = "obviously_large_scale"
 STORY_SCALE_DEFAULT_VERDICT = "not_obvious"
 STORY_SCALE_OBVIOUSLY_SMALL = "obviously_small_scale"
+# Also the tuning default (config.DEFAULT_STORY_SCALE_SCREENING_MAX_TOKENS);
+# keep both in sync.
 STORY_SCALE_VALIDATION_MAX_TOKENS = 3000
 STORY_SCALE_VALIDATION_BATCH_SIZE = 8
 STORY_SCALE_VALIDATION_TEXT_CHARS = 900
@@ -76,6 +80,7 @@ class StorySelectionRuntime:
     report_reference_key: Callable[[str], str]
     progress_callback: Callable[[str, dict[str, Any]], None] | None = None
     prompt_instructions: str | None = None
+    story_scale_screening_max_tokens: int = STORY_SCALE_VALIDATION_MAX_TOKENS
 
 
 def _compact_gate_text(value: Any, max_chars: int) -> str:
@@ -264,10 +269,16 @@ def _global_scale_screening_prompt_messages(
             ).strip()
         )
 
-    # The JSON example below contains literal braces, so this template cannot be
-    # an f-string; use .format() instead and escape JSON braces as {{ }}.
+    # The JSON contract is injected as a .format() VALUE (inserted verbatim,
+    # never re-parsed), so its single braces are safe here; only the template
+    # itself must stay an f-string-free .format() block.
     # .format() must run after dedent() because the injected screening_guidance
     # is multi-line (byte-identity drift-guard: tests/test_prompt_catalog.py).
+    # User-entered guidance (prompt overrides) may contain literal braces.
+    # str.format() never re-parses substituted values, so the value is escaped
+    # before injection ({{ }}) and unescaped afterwards to keep user text
+    # byte-identical; the template's own JSON braces are already single { }
+    # by then, so the unescape touches only the injected guidance.
     system_prompt = SystemMessage(
         content=textwrap.dedent(
             """
@@ -294,19 +305,18 @@ def _global_scale_screening_prompt_messages(
 
             {screening_guidance}
 
-            Return only valid JSON as an array of objects:
-            [{{
-              "story_key":"...",
-              "scale":"obviously_large_scale|not_obvious|obviously_small_scale",
-              "scale_reason":"short scale reason"
-            }}]
+            {scale_contract}
             """
         ).format(
             screening_guidance=(
-                prompt_instructions
-                or DEFAULT_PROMPT_INSTRUCTIONS["story_scale_screening"]
-            )
-        ).strip()
+                (prompt_instructions
+                 or DEFAULT_PROMPT_INSTRUCTIONS["story_scale_screening"])
+                .replace("{", "{{")
+                .replace("}", "}}")
+            ),
+            scale_contract=STORY_SCALE_SCREENING_JSON_CONTRACT,
+        ).replace("{{", "{").replace("}}", "}").strip()
+
     )
     user_prompt = HumanMessage(
         content=(
@@ -417,8 +427,8 @@ def apply_global_story_scale_screening(
         try:
             response = runtime.invoke_with_retries(
                 runtime.build_chat_model(
-                    max_tokens=STORY_SCALE_VALIDATION_MAX_TOKENS,
-                    task="story_scale_screening",
+                    max_tokens=runtime.story_scale_screening_max_tokens,
+                    task=MODEL_TASK_STORY_SCALE_SCREENING,
                 ),
                 _global_scale_screening_prompt_messages(
                     batch,

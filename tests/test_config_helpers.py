@@ -39,23 +39,37 @@ class ConfigHelperTests(unittest.TestCase):
                 model_max_input_tokens=1,
                 article_summary_max_tokens=2,
                 story_drafting_max_tokens=3,
+                story_scale_screening_max_tokens=3000,
+                title_generation_max_tokens=700,
                 task_sampling={"default": base_sampling},
             ),
             ModelTuningSettings(
                 article_summary_max_tokens=20,
+                title_generation_max_tokens=900,  # overlay wins
                 task_sampling={"story_drafting": overlay_sampling},
             ),
         )
         self.assertEqual(merged_tuning.article_summary_max_tokens, 20)
         self.assertEqual(merged_tuning.task_sampling["story_drafting"].top_p, 0.8)
+        # Silent-drop prevention for the two new per-task fields: base value
+        # survives when the overlay leaves it unset, overlay wins when set.
+        self.assertEqual(merged_tuning.story_scale_screening_max_tokens, 3000)  # base survives
+        self.assertEqual(merged_tuning.title_generation_max_tokens, 900)        # overlay wins
 
         with patch.object(config_module, "resolve_model_name", return_value="patched-model"), patch.object(
             config_module,
             "MODEL_SPECIFIC_TUNING_DEFAULTS",
-            {"patched-model": ModelTuningSettings(model_max_input_tokens=123, task_sampling={"default": overlay_sampling})},
+            {"patched-model": ModelTuningSettings(
+                model_max_input_tokens=123,
+                story_scale_screening_max_tokens=3100,
+                title_generation_max_tokens=710,
+                task_sampling={"default": overlay_sampling},
+            )},
         ):
             tuned = config_module._base_model_tuning("anything")
         self.assertEqual(tuned.model_max_input_tokens, 123)
+        self.assertEqual(tuned.story_scale_screening_max_tokens, 3100)
+        self.assertEqual(tuned.title_generation_max_tokens, 710)
         self.assertEqual(tuned.task_sampling["default"].top_p, 0.8)
 
         self.assertEqual(config_module._task_max_tokens_field("default"), "model_max_input_tokens")
@@ -66,6 +80,18 @@ class ConfigHelperTests(unittest.TestCase):
         self.assertEqual(
             config_module._task_max_tokens_field(config_module.MODEL_TASK_STORY_DRAFTING),
             "story_drafting_max_tokens",
+        )
+        self.assertEqual(
+            config_module._task_max_tokens_field(config_module.MODEL_TASK_STORY_SCALE_SCREENING),
+            "story_scale_screening_max_tokens",
+        )
+        self.assertEqual(
+            config_module._task_max_tokens_field(config_module.MODEL_TASK_TITLE_GENERATION),
+            "title_generation_max_tokens",
+        )
+        self.assertEqual(
+            config_module._task_max_tokens_field(config_module.MODEL_TASK_IMAGE_ART_DIRECTION),
+            "title_generation_max_tokens",
         )
         with self.assertRaises(ValueError):
             config_module._task_max_tokens_field("bogus")
@@ -120,6 +146,22 @@ class ConfigHelperTests(unittest.TestCase):
         )
         self.assertEqual(story_tuning.story_drafting_max_tokens, 17)
         self.assertEqual(story_tuning.task_sampling["story_drafting"].temperature, 0.25)
+
+        scale_tuning = config_module._apply_model_tuning_preset(
+            ModelTuningSettings(task_sampling={}),
+            preset_id="sample",
+            preset={"tuning": {"max_tokens": 2500}},
+            assignment_task="story_scale_screening",
+        )
+        self.assertEqual(scale_tuning.story_scale_screening_max_tokens, 2500)
+
+        title_tuning = config_module._apply_model_tuning_preset(
+            ModelTuningSettings(task_sampling={}),
+            preset_id="sample",
+            preset={"tuning": {"max_tokens": 700}},
+            assignment_task="title_generation",
+        )
+        self.assertEqual(title_tuning.title_generation_max_tokens, 700)
 
         with self.assertRaises(ValueError):
             config_module._sampling_settings_from_mapping([("temperature", 0.1)])
@@ -297,6 +339,32 @@ class ConfigHelperTests(unittest.TestCase):
         self.assertEqual(knob["options"], ["one"])
         registry = config_module.runtime_knob_registry()
         self.assertTrue(any(knob["env"] == "NEWS_MODEL_CONCURRENCY" for knob in registry))
+        knob_envs = {knob["env"] for knob in registry}
+        for env in (
+            "NEWS_MODEL_STORY_SCALE_SCREENING",
+            "NEWS_MODEL_TITLE_GENERATION",
+            "NEWS_MODEL_STORY_SCALE_SCREENING_TUNING_PRESET",
+            "NEWS_MODEL_TITLE_GENERATION_TUNING_PRESET",
+            "NEWS_STORY_SCALE_SCREENING_MAX_TOKENS",
+            "NEWS_TITLE_GENERATION_MAX_TOKENS",
+            "NEWS_MODEL_STORY_SCALE_SCREENING_BASE_URL",
+            "NEWS_MODEL_TITLE_GENERATION_BASE_URL",
+        ):
+            self.assertIn(env, knob_envs)
+        for knob in registry:
+            if knob["env"] in {"NEWS_MODEL_STORY_SCALE_SCREENING", "NEWS_MODEL_TITLE_GENERATION"}:
+                self.assertEqual(knob["group"], "Model Selection")
+                self.assertEqual(knob["type"], "select")
+            if knob["env"] in {"NEWS_STORY_SCALE_SCREENING_MAX_TOKENS", "NEWS_TITLE_GENERATION_MAX_TOKENS"}:
+                self.assertEqual(knob["group"], "Model Tuning")
+                self.assertEqual(knob["type"], "number")
+                self.assertEqual(knob["min"], 1)
+            if knob["env"] in {"NEWS_MODEL_STORY_SCALE_SCREENING_BASE_URL", "NEWS_MODEL_TITLE_GENERATION_BASE_URL"}:
+                self.assertEqual(knob["group"], "Model Server Settings")
+        backend_knobs = [knob for knob in registry if knob["env"] == "NEWS_MODEL_BACKEND"]
+        self.assertEqual(len(backend_knobs), 1)
+        self.assertEqual(backend_knobs[0]["group"], "Model Selection")
+        self.assertEqual(backend_knobs[0]["options"], ["external", "mlx-lm", "mlx-vlm"])
         # Pin the Prompt Profile knob contract: select with catalog-backed
         # default and options (drift-guard for runtime_knob_registry).
         prompt_profile_knob = next(knob for knob in registry if knob["env"] == "NEWS_PROMPT_PROFILE")
@@ -324,6 +392,22 @@ class ConfigHelperTests(unittest.TestCase):
                 self.assertNotIn("https://huggingface.co/https://", link["page"], option)
                 self.assertEqual(link["hardware"], link["page"])
         self.assertEqual(backend_knobs[0]["option_links"], {})
+        # Pin the per-stage prompt override knobs contract: one text knob per
+        # task, hidden from non-advanced surfaces (advanced=True) exactly like
+        # the sampling knobs; the UI's SURFACED_ENVS suppresses them from the
+        # Advanced tab in favor of the dedicated Editorial approach editors.
+        override_knobs = [
+            knob for knob in registry
+            if knob["env"] in config_module.PROMPT_TASK_OVERRIDE_ENV_VARS.values()
+        ]
+        self.assertEqual(
+            {knob["env"] for knob in override_knobs},
+            set(config_module.PROMPT_TASK_OVERRIDE_ENV_VARS.values()),
+        )
+        for knob in override_knobs:
+            self.assertEqual(knob["type"], "text")
+            self.assertTrue(knob["advanced"])
+
         # Drift-guard: aliases must never land in the unsupported set, or the
         # registry build and hf_model_page_url's ValueError fallback break.
         self.assertEqual(

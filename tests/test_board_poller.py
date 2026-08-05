@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import json
 import subprocess
 import unittest
@@ -11,6 +12,7 @@ from automation.board_poller import (
     dedupe_deferred,
     dep_gate,
     fetch_project,
+
     find_unchecked_criteria,
     fmt_deps,
     has_deferral_language,
@@ -23,6 +25,7 @@ from automation.board_poller import (
     pick_workflow,
     reconcile_deferred_work,
     run_status_for,
+    sync_local_develop,
     try_merge_base_into_head,
 )
 
@@ -79,6 +82,7 @@ ISOLATION_LIST = (
     "  archon/task-issue-210\n"         # must NOT match issue 21 (\b boundary)
     "    Path: /tmp/news/worktrees/archon/task-issue-210\n"
     "    Type: task | Platform: cli | Last activity: 0d ago\n"
+
 )
 
 
@@ -260,10 +264,12 @@ class ParseDeferredWorkTest(unittest.TestCase):
             {"title": "Add llama.cpp/GGUF backend support",
              "description": "Port the model layer to llama.cpp.",
              "reason": "Packaging work beyond this decision.",
-             "label": "feature"},
+             "label": "feature",
+             "links_to": None, "supersedes": None, "skip": ""},
             {"title": "Extract shared readiness helper",
              "description": "Merge the two readiness loops.",
-             "reason": "", "label": ""},
+             "reason": "", "label": "",
+             "links_to": None, "supersedes": None, "skip": ""},
         ])
 
     def test_none_marker(self):
@@ -280,7 +286,8 @@ class ParseDeferredWorkTest(unittest.TestCase):
             "- **Title:** Not mine\n")
         self.assertEqual(parse_deferred_work(body), [
             {"title": "First", "description": "one",
-             "reason": "", "label": ""}])
+             "reason": "", "label": "",
+             "links_to": None, "supersedes": None, "skip": ""}])
 
     def test_case_insensitive_heading(self):
         body = "## DEFERRED WORK\n- **Title:** X\n"
@@ -293,6 +300,47 @@ class ParseDeferredWorkTest(unittest.TestCase):
         items = parse_deferred_work(body)
         self.assertEqual(len(items), 1)
         self.assertEqual(items[0]["title"], "Good one")
+
+    def test_links_to_field(self):
+        body = self._record(
+            "- **Title:** GGUF backend\n"
+            "  **Description:** port to llama.cpp\n"
+            "  **Links to:** #75\n")
+        item = parse_deferred_work(body)[0]
+        self.assertEqual(item["links_to"], 75)
+        self.assertIsNone(item["supersedes"])
+        self.assertEqual(item["skip"], "")
+
+    def test_links_to_bare_number(self):
+        body = self._record("- **Title:** X\n  **Links to:** 52\n")
+        self.assertEqual(parse_deferred_work(body)[0]["links_to"], 52)
+
+    def test_supersedes_field(self):
+        body = self._record("- **Title:** X\n  **Supersedes:** #9\n")
+        item = parse_deferred_work(body)[0]
+        self.assertEqual(item["supersedes"], 9)
+        self.assertIsNone(item["links_to"])
+
+    def test_skip_field(self):
+        body = self._record("- **Title:** X\n  **Skip:** HANDOFF forbids this\n")
+        item = parse_deferred_work(body)[0]
+        self.assertEqual(item["skip"], "HANDOFF forbids this")
+
+    def test_bare_item_has_no_stamps(self):
+        body = self._record("- **Title:** X\n  **Description:** d\n")
+        item = parse_deferred_work(body)[0]
+        self.assertIsNone(item["links_to"])
+        self.assertIsNone(item["supersedes"])
+        self.assertEqual(item["skip"], "")
+
+    def test_multiple_items_keep_stamps_separate(self):
+        body = self._record(
+            "- **Title:** A\n  **Links to:** #30\n"
+            "- **Title:** B\n  **Skip:** already covered\n")
+        a, b = parse_deferred_work(body)
+        self.assertEqual(a["links_to"], 30)
+        self.assertEqual(b["skip"], "already covered")
+        self.assertIsNone(b["links_to"])
 
 
 class DeferredDedupeTest(unittest.TestCase):
@@ -1227,6 +1275,138 @@ class ReconcileDeferredWorkCreateTest(unittest.TestCase):
         comments = [a for a in calls if a[0:2] == ["issue", "comment"]]
         self.assertEqual(len(comments), 1)
         self.assertIn("supersedes closed #98", comments[0][-1])
+
+class SyncLocalDevelopTest(unittest.TestCase):
+    """Boundaries of the post-merge local sync: never destructive, restart
+    only when the UI is running."""
+
+    def _fake_run(self, plan):
+        """Dispatch subprocess.run per git subcommand; anything unplanned fails."""
+        def fake_run(cmd, *args, **kwargs):
+            if cmd[0] == "git":
+                if cmd[1] == "rev-list":
+                    entries = plan["rev-list"]
+                    return entries.pop(0)() if isinstance(entries, list) else entries()
+                key = cmd[1] if cmd[1] in ("fetch", "rev-parse", "status",
+                                           "merge") else cmd[1]
+                return plan[key]()
+            if cmd[0] == "pkill":
+                return _cp()
+            raise AssertionError(f"unexpected command: {cmd}")
+        return fake_run
+
+    def _run_with(self, plan, ui_running=None, restart_ok=None):
+        patches = [patch("automation.board_poller.subprocess.run",
+                         side_effect=self._fake_run(plan))]
+        if ui_running is not None:
+            patches.append(patch("automation.board_poller._ui_running",
+                                 return_value=ui_running))
+        if restart_ok is not None:
+            patches.append(patch("automation.board_poller._restart_ui",
+                                 return_value=restart_ok))
+        with contextlib.ExitStack() as stack:
+            for p in patches:
+                stack.enter_context(p)
+            return sync_local_develop()
+
+    def test_dry_run_never_touches_git(self):
+        with patch("automation.board_poller.DRY_RUN", True), \
+                patch("automation.board_poller.subprocess.run",
+                      side_effect=AssertionError("must not run")) as m:
+            self.assertIn("dry-run", sync_local_develop())
+            m.assert_not_called()
+
+    def test_fetch_failure_is_loud(self):
+        msg = self._run_with({"fetch": lambda: _cp(1, stderr="boom")})
+        self.assertIn("LOCAL SYNC FAILED", msg)
+        self.assertIn("fetch", msg)
+
+    def test_not_on_develop_skips(self):
+        plan = {
+            "fetch": lambda: _cp(),
+            "rev-parse": lambda: _cp(stdout="main\n"),
+        }
+        msg = self._run_with(plan)
+        self.assertIn("LOCAL SYNC SKIP", msg)
+        self.assertIn("main", msg)
+
+    def test_dirty_tree_skips(self):
+        plan = {
+            "fetch": lambda: _cp(),
+            "rev-parse": lambda: _cp(stdout="develop\n"),
+            "status": lambda: _cp(stdout=" M automation/board_poller.py\n"),
+        }
+        msg = self._run_with(plan)
+        self.assertIn("LOCAL SYNC SKIP", msg)
+        self.assertIn("dirty", msg)
+
+    def test_unpushed_commits_skip(self):
+        plan = {
+            "fetch": lambda: _cp(),
+            "rev-parse": lambda: _cp(stdout="develop\n"),
+            "status": lambda: _cp(),
+            "rev-list": lambda: _cp(stdout="2\n"),
+        }
+        msg = self._run_with(plan)
+        self.assertIn("LOCAL SYNC SKIP", msg)
+        self.assertIn("2 unpushed", msg)
+
+    def test_up_to_date_is_a_noop(self):
+        plan = {
+            "fetch": lambda: _cp(),
+            "rev-parse": lambda: _cp(stdout="develop\n"),
+            "status": lambda: _cp(),
+            "rev-list": lambda: _cp(stdout="0\n"),
+        }
+        msg = self._run_with(plan)
+        self.assertIn("up to date", msg)
+
+    def test_behind_merges_and_skips_ui_when_not_running(self):
+        plan = {
+            "fetch": lambda: _cp(),
+            "rev-parse": lambda: _cp(stdout="develop\n"),
+            "status": lambda: _cp(),
+            "rev-list": [lambda: _cp(stdout="0\n"), lambda: _cp(stdout="3\n")],
+            "merge": lambda: _cp(stdout="Fast-forward\n 3 files changed\n"),
+        }
+        msg = self._run_with(plan, ui_running=False)
+        self.assertIn("develop updated", msg)
+        self.assertIn("UI not running", msg)
+
+    def test_behind_restarts_ui_when_running(self):
+        plan = {
+            "fetch": lambda: _cp(),
+            "rev-parse": lambda: _cp(stdout="develop\n"),
+            "status": lambda: _cp(),
+            "rev-list": [lambda: _cp(stdout="0\n"), lambda: _cp(stdout="3\n")],
+            "merge": lambda: _cp(stdout="Fast-forward\n 3 files changed\n"),
+        }
+        msg = self._run_with(plan, ui_running=True, restart_ok=True)
+        self.assertIn("UI restarted", msg)
+
+    def test_restart_failure_warns(self):
+        plan = {
+            "fetch": lambda: _cp(),
+            "rev-parse": lambda: _cp(stdout="develop\n"),
+            "status": lambda: _cp(),
+            "rev-list": [lambda: _cp(stdout="0\n"), lambda: _cp(stdout="3\n")],
+            "merge": lambda: _cp(stdout="Fast-forward\n 3 files changed\n"),
+        }
+        msg = self._run_with(plan, ui_running=True, restart_ok=False)
+        self.assertIn("LOCAL SYNC WARNING", msg)
+
+    def test_ff_only_merge_failure_is_loud(self):
+        plan = {
+            "fetch": lambda: _cp(),
+            "rev-parse": lambda: _cp(stdout="develop\n"),
+            "status": lambda: _cp(),
+            "rev-list": [lambda: _cp(stdout="0\n"), lambda: _cp(stdout="3\n")],
+            "merge": lambda: _cp(1, stderr="Not possible to fast-forward"),
+        }
+        msg = self._run_with(plan)
+        self.assertIn("LOCAL SYNC FAILED", msg)
+        self.assertIn("fast-forward", msg)
+
 
 
 if __name__ == "__main__":

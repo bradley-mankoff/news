@@ -24,7 +24,10 @@ Pipeline Budget, Model Server Settings, and Prompt Profile.
 |---|---|---|
 | `NEWS_PRESET` | _(none)_ | Selects a saved preset when `--preset NAME` is not used. |
 | `NEWS_PROMPT_PROFILE` | `balanced` | Editorial tone for the five LLM prompt stages. One of `balanced`, `consensus-and-contradiction`, `explain-like-im-five`, `facts-only`, `playful`. |
+| `NEWS_PROMPT_OVERRIDE_<TASK>` | _(unset)_ | Per-stage editorial override layered on top of `NEWS_PROMPT_PROFILE` (override wins). Tasks: `ARTICLE_SUMMARY`, `STORY_SCALE_SCREENING`, `STORY_DRAFTING`, `TITLE_GENERATION`, `IMAGE_ART_DIRECTION`. Unset/empty = use profile text. Editable from the UI's Editorial approach panel. |
 | `NEWS_MODEL` | `gemma-26b-moe` | Default friendly alias or full model repo/name. Task-specific model assignments inherit this value unless overridden. |
+| `NEWS_MODEL` | `gemma-26b-moe` | Default friendly alias or full model repo/name. Task-specific model assignments inherit this value unless overridden. Stages with no LLM call of their own (story discovery) inherit this value. |
+
 | `NEWS_SOURCE_SCOPE` | `core` | `core` selects active English core sources. `peripheral` selects core plus peripheral sources. |
 | `NEWS_RECIPIENT_SCOPE` | `primary` | `primary` sends to `NEWS_PRIMARY_RECIPIENT`. `all` sends to active configured recipients. |
 | `NEWS_PRIMARY_RECIPIENT` | `primary@example.com` | Single-recipient address used by primary-recipient-scoped runs. |
@@ -38,6 +41,8 @@ Pipeline Budget, Model Server Settings, and Prompt Profile.
 | `NEWS_TOTAL_ARTICLE_SUMMARY_CAP` | `40` | Pipeline Budget cap on articles sent to article summarization. |
 | `NEWS_ARTICLE_SUMMARY_MAX_TOKENS` | `1000` | Model Tuning token limit for each article summary. |
 | `NEWS_STORY_DRAFTING_MAX_TOKENS` | `1800` | Model Tuning token limit for story/newsletter synthesis. |
+| `NEWS_STORY_SCALE_SCREENING_MAX_TOKENS` | `3000` | Model Tuning token limit for each global story scale screening call. |
+| `NEWS_TITLE_GENERATION_MAX_TOKENS` | `700` | Model Tuning token limit for the title generation / image art direction call. |
 
 ## Renamed settings (migration note)
 
@@ -61,7 +66,7 @@ The `bradley` terminology was replaced with `primary` (issue #23):
 | `NEWS_MODEL_PRESENCE_PENALTY`, `NEWS_MODEL_REPETITION_PENALTY` | Default repetition controls. |
 | `NEWS_MODEL_REASONING_TEMPERATURE`, `NEWS_MODEL_REASONING_TOP_P`, `NEWS_MODEL_REASONING_TOP_K`, `NEWS_MODEL_REASONING_MIN_P` | Sampling settings for reasoning-heavy tasks. |
 | `NEWS_MODEL_REASONING_PRESENCE_PENALTY`, `NEWS_MODEL_REASONING_REPETITION_PENALTY` | Reasoning-task repetition controls. |
-| `NEWS_MODEL_STORY_DISCOVERY_*`, `NEWS_MODEL_STORY_SCALE_SCREENING_*`, `NEWS_MODEL_ARTICLE_SUMMARY_*`, `NEWS_MODEL_STORY_DRAFTING_*`, `NEWS_MODEL_TITLE_GENERATION_*` | Per-task sampling overrides using the same suffixes as the default sampling group. |
+| `NEWS_MODEL_STORY_DISCOVERY_*`, `NEWS_MODEL_STORY_SCALE_SCREENING_*`, `NEWS_MODEL_ARTICLE_SUMMARY_*`, `NEWS_MODEL_STORY_DRAFTING_*`, `NEWS_MODEL_TITLE_GENERATION_*` | Per-task sampling overrides using the same suffixes as the default sampling group. `NEWS_MODEL_STORY_DISCOVERY_*` is retained for compatibility: story discovery has no LLM stage (embedding/TF-IDF clustering), and image art direction shares the title generation stage, so there is no `NEWS_MODEL_IMAGE_ART_DIRECTION_*` group. |
 
 ## Models
 
@@ -78,6 +83,12 @@ Each model page shows Hugging Face's native Hardware Compatibility panel
 
 | Variable | Default | Description |
 |---|---|---|
+| `NEWS_MODEL_STORY_SCALE_SCREENING` | _(inherits `NEWS_MODEL`)_ | Model assignment for the global story scale screening LLM stage. |
+| `NEWS_MODEL_TITLE_GENERATION` | _(inherits `NEWS_MODEL`)_ | Model assignment for the title generation / image art direction LLM stage. |
+| `NEWS_MODEL_STORY_SCALE_SCREENING_BASE_URL` | `http://127.0.0.1:8080/v1` | Model server endpoint for story scale screening calls. |
+| `NEWS_MODEL_TITLE_GENERATION_BASE_URL` | `http://127.0.0.1:8080/v1` | Model server endpoint for title generation calls. |
+| `NEWS_MODEL_STORY_SCALE_SCREENING_TUNING_PRESET` | _(none)_ | Model Tuning Preset for the story scale screening stage. |
+| `NEWS_MODEL_TITLE_GENERATION_TUNING_PRESET` | _(none)_ | Model Tuning Preset for the title generation stage. |
 | `NEWS_MODEL_BASE_URL` | `http://127.0.0.1:8080/v1` | OpenAI-compatible local model endpoint. |
 | `NEWS_CODEX_TESTING` | `0` | `1` forces Codex-safe model references for model-related verification. |
 
