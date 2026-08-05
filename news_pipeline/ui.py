@@ -1463,6 +1463,7 @@ HTML = r"""<!doctype html>
       "NEWS_STORY_SCALE_SCREENING_ENABLED",
       "NEWS_RELAX_STORY_DRAFTING_GUARDS"
     ]);
+
     const TASK_CONFIG = {
       article_summary: {
         label: "Article Summarization",
@@ -1703,7 +1704,10 @@ HTML = r"""<!doctype html>
     }
     function knobField(env, label, options={}) {
       const knob = knobByEnv(env);
-      if (!knob) return "";
+      if (!knob) {
+        console.warn(`knobField: env ${env} not in schema.knobs; field omitted`);
+        return "";
+      }
       return `<label class="field"><span>${escapeHtml(label)}</span>${inputForKnob(knob, options)}<code>${escapeHtml(env)}</code></label>`;
     }
     function knobHint(name) {
@@ -2584,12 +2588,12 @@ HTML = r"""<!doctype html>
     }
     function sourceInput(field, src) {
       if (["can_enrich_coverage","strict_source_match"].includes(field)) {
-        return `<label>${field}<select id="source_${field}"><option value=""></option><option value="false" ${val === false ? "selected" : ""}>false</option><option value="true" ${val === true ? "selected" : ""}>true</option></select></label>`;
+        return `<label>${field}<select id="source_${field}"><option value=""></option><option value="false" ${src === false ? "selected" : ""}>false</option><option value="true" ${src === true ? "selected" : ""}>true</option></select></label>`;
       }
-      if (field === "tier") return `<label>${field}<select id="source_${field}"><option></option><option ${val === "core" ? "selected" : ""}>core</option><option ${val === "peripheral" ? "selected" : ""}>peripheral</option></select></label>`;
-      if (field === "source_match_mode") return `<label>${field}<select id="source_${field}"><option></option><option ${val === "feed_label" ? "selected" : ""}>feed_label</option><option ${val === "wire_attribution" ? "selected" : ""}>wire_attribution</option></select></label>`;
-      if (["nations","source_match_aliases","notes"].includes(field)) return `<label>${field}<textarea id="source_${field}">${val}</textarea></label>`;
-      return `<label>${field}<input id="source_${field}" value="${String(val).replaceAll("&","&amp;").replaceAll('"',"&quot;")}"></label>`;
+      if (field === "tier") return `<label>${field}<select id="source_${field}"><option></option><option ${src === "core" ? "selected" : ""}>core</option><option ${src === "peripheral" ? "selected" : ""}>peripheral</option></select></label>`;
+      if (field === "source_match_mode") return `<label>${field}<select id="source_${field}"><option></option><option ${src === "feed_label" ? "selected" : ""}>feed_label</option><option ${src === "wire_attribution" ? "selected" : ""}>wire_attribution</option></select></label>`;
+      if (["nations","source_match_aliases","notes"].includes(field)) return `<label>${field}<textarea id="source_${field}">${src}</textarea></label>`;
+      return `<label>${field}<input id="source_${field}" value="${String(src).replaceAll("&","&amp;").replaceAll('"',"&quot;")}"></label>`;
     }
     function editSource(key) {
       const src = state.sources.find(item => item.key === key) || {};
@@ -2912,9 +2916,12 @@ HTML = r"""<!doctype html>
           if (preset) loadModelTuningEditor(meta.runtimeKey, preset);
           previewQuietly("run");
         };
-        $(meta.saveButtonId).onclick = () => saveModelTuningPreset(meta.runtimeKey).catch(err => setStatus(err.message, "bad"));
-        $(meta.renameButtonId).onclick = () => renameModelTuningPreset(meta.runtimeKey).catch(err => setStatus(err.message, "bad"));
-        $(meta.deleteButtonId).onclick = () => deleteModelTuningPreset(meta.runtimeKey).catch(err => setStatus(err.message, "bad"));
+        const saveBtn = $(meta.saveButtonId);
+        if (saveBtn) saveBtn.onclick = () => saveModelTuningPreset(meta.runtimeKey).catch(err => setStatus(err.message, "bad"));
+        const renameBtn = $(meta.renameButtonId);
+        if (renameBtn) renameBtn.onclick = () => renameModelTuningPreset(meta.runtimeKey).catch(err => setStatus(err.message, "bad"));
+        const deleteBtn = $(meta.deleteButtonId);
+        if (deleteBtn) deleteBtn.onclick = () => deleteModelTuningPreset(meta.runtimeKey).catch(err => setStatus(err.message, "bad"));
       });
     }
     function applySelectedPresetFromState() {
@@ -2935,6 +2942,10 @@ HTML = r"""<!doctype html>
       } catch (_err) { /* runs endpoint is best-effort at boot */ }
       updateRunControls();
       renderTabs();
+      // Order matters: renderAdvancedPanels() must run before
+      // renderModelTuningControls() (tuning <select>s) and wireEvents()
+      // (button handlers), and before renderAdvancedKnobs() (SURFACED_ENVS
+      // suppression reads the rendered dedicated knobs).
       renderRunSetup();
       renderAdvancedPanels();
       renderAdvancedKnobs();

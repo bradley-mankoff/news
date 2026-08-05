@@ -515,6 +515,17 @@ class ConfigHelperTests(unittest.TestCase):
         with patch.object(config_module, "UNSUPPORTED_MODEL_REFERENCES", {"qwythos-9b-8bit"}):
             self.assertIsNone(config_module.hf_model_page_url("qwythos-9b-8bit"))
 
+    def test_hf_model_page_url_edge_cases_never_emit_broken_links(self) -> None:
+        """Malformed / defensive inputs to hf_model_page_url must all yield
+        None (the 'never emit a broken link' contract), never a URL."""
+        ref = config_module.QWWYTHOS_9B_4BIT_MODEL_REFERENCE
+        self.assertIsNone(config_module.hf_model_page_url(None))
+        self.assertIsNone(config_module.hf_model_page_url(f"https://huggingface.co/{ref}/"))
+        self.assertIsNone(
+            config_module.hf_model_page_url(f"https://huggingface.co/https://hf.co/{ref}")
+        )
+        self.assertIsNone(config_module.hf_model_page_url("HTTPS://HUGGINGFACE.CO/foo/bar"))
+
     def test_docs_drift_guard_links_match_model_aliases(self) -> None:
         """Every MODEL_ALIASES HF page URL must appear in README.md and
         SETTINGS.md (the docs hardcode the same URLs the UI renders)."""

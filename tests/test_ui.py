@@ -4,6 +4,8 @@ import contextlib
 import http.client
 import json
 import os
+import re
+import subprocess
 import tempfile
 import threading
 import unittest
@@ -95,6 +97,14 @@ class UITests(unittest.TestCase):
         self.assertEqual(advanced.count('id="comparePromptProfileBtn"'), 1)
         self.assertEqual(advanced.count('modelTuningPanel("article_summary")'), 1)
         self.assertEqual(advanced.count('modelTuningPanel("story_drafting")'), 1)
+        # NEWS_MODEL_MAX_INPUT_TOKENS is rendered once, guarded to article_summary
+        # only; dropping the ternary would duplicate the knob into both panels
+        # (two [data-env] inputs, collectEnv() last-wins).
+        tuning = html.split("function modelTuningPanel")[1].split("function renderAdvancedPanels")[0]
+        self.assertEqual(
+            tuning.count('task === "article_summary" ? knobField("NEWS_MODEL_MAX_INPUT_TOKENS", "Shared model input cap") : ""'),
+            1,
+        )
         # Dedicated envs are suppressed from the raw override list (no duplicates).
         surface = html.split("const SURFACED_ENVS")[1].split("const TASK_CONFIG")[0]
         for env in (
@@ -144,6 +154,46 @@ class UITests(unittest.TestCase):
             self.assertNotIn(f'"{env}"', surface, f"{env} must stay in the Advanced raw list")
 
     def test_advanced_panels_rendered_at_boot(self) -> None:
+        # NEWS_ARTICLE_TEXT_TOKEN_LIMIT (a dedicated env, not a sampling composition) must also be surfaced.
+        self.assertIn('"NEWS_ARTICLE_TEXT_TOKEN_LIMIT"', surface)
+
+    def test_every_dedicated_knob_env_is_surfaced(self) -> None:
+        # Mirror direction of test_surfaced_envs_are_registered_and_composed:
+        # every env rendered as a dedicated knob (Run Setup or Advanced panels)
+        # must be in SURFACED_ENVS, or it appears twice and collectEnv()
+        # silently last-wins the raw-list copy over the dedicated edit.
+        import re
+
+        html = ui_module.HTML
+        advanced = html.split("function renderAdvancedPanels")[1].split("function renderAdvancedKnobs")[0]
+        run_setup = html.split("function renderRunSetup")[1].split("const SAMPLING_FIELDS")[0]
+        dedicated = set(re.findall(r'knobField\("(NEWS_[A-Z_]+)"', advanced + run_setup))
+        # modelTuningPanel() also renders taskMaxTokensEnv/baseUrlEnv knobs at
+        # runtime from TASK_CONFIG; those data-driven envs must be surfaced too.
+        task_driven = set(re.findall(r'(?:taskMaxTokensEnv|baseUrlEnv): "(NEWS_[A-Z_]+)"', html))
+        surface = html.split("const SURFACED_ENVS")[1].split("const TASK_CONFIG")[0]
+        surfaced = {e.strip('"') for e in re.findall(r'"NEWS_[A-Z_]+"', surface)}
+        missing = (dedicated | task_driven) - surfaced
+        self.assertEqual(
+            missing, set(),
+            f"dedicated knob envs missing from SURFACED_ENVS: {missing}",
+        )
+
+    def test_sampling_knobs_rendered_in_advanced_panels(self) -> None:
+        # The 12 sampling envs are suppressed from the raw override list, so
+        # they must be rendered by the panels; pin the samplingFields() call
+        # site inside modelTuningPanel() so removing it cannot silently drop
+        # all 12 knobs while every manifest test still passes.
+        html = ui_module.HTML
+        tuning = html.split("function modelTuningPanel")[1].split("function renderAdvancedPanels")[0]
+        self.assertEqual(tuning.count("${samplingFields(meta.taskSamplingPrefix)}"), 1)
+        # samplingFields() must actually emit the composed envs as knobs.
+        sampling = html.split("function samplingFields")[1].split("function modelTuningPanel")[0]
+        self.assertIn('knobField(`${prefix}_${suffix}`, label)', sampling)
+
+    def test_advanced_panels_rendered_at_boot(self) -> None:
+        import re
+
         html = ui_module.HTML
         boot = html.split("async function init()")[1].split("init().catch")[0]
         self.assertIn("renderAdvancedPanels();", boot)
@@ -550,6 +600,54 @@ class UITests(unittest.TestCase):
         self.assertIn("A run is already active", ui_module.HTML)
         self.assertIn("updateRunControls", ui_module.HTML)
 
+    def test_embedded_script_parses(self) -> None:
+        # A SyntaxError in the served <script> discards the entire block:
+        # the whole UI silently dies with green Python tests (regression
+        # shipped once via a 4x-duplicated JS bundle). Parse the exact
+        # served script without executing it.
+        html = ui_module.HTML
+        script = html.split("<script>", 1)[1].split("</script>", 1)[0]
+        with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False) as f:
+            f.write(script)
+            path = f.name
+        try:
+            try:
+                node_probe = subprocess.run(
+                    ["node", "--version"], capture_output=True, text=True
+                )
+            except FileNotFoundError:
+                node_probe = None
+            with tempfile.TemporaryDirectory() as outdir:
+                command = ["node", "--check", path]
+                if node_probe is None or node_probe.returncode != 0:
+                    command = ["bun", "build", "--target", "browser",
+                               "--outdir", outdir, path]
+                try:
+                    result = subprocess.run(
+                        command, capture_output=True, text=True
+                    )
+                except FileNotFoundError:
+                    self.skipTest("a JavaScript parser is not available on PATH")
+        finally:
+            os.unlink(path)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_js_bundle_is_not_duplicated(self) -> None:
+        # Rebase/conflict-resolution once multiplied the JS tail 4x inside
+        # ui.HTML (dead payload + parse failure). Pin each function/const
+        # marker to exactly one occurrence so the bundle cannot regrow.
+        html = ui_module.HTML
+        for marker in (
+            "function setKnobEnv",
+            "function renderAdvancedKnobs",
+            "function wireEvents",
+            "function sourceInput",
+            "function applySelectedPresetFromState",
+            "const PROMPT_TASK_LABELS = {",
+            "const MODEL_TASK_LABELS = {",
+            "const RUNTIME_FIT_LABELS = {",
+        ):
+            self.assertEqual(html.count(marker), 1, marker)
     def test_crud_helpers_use_temp_files(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
