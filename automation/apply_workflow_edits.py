@@ -71,6 +71,9 @@ LUNA_NODES: dict[str, tuple[str, ...]] = {
 
 # The human-testing contract shared by both completion-comment nodes. The
 # board poller copies this section into the Ready for Review comment.
+TESTING_COMMAND_RULE = """      Keep copy-paste commands standalone: put explanations on
+      separate prose lines, never after a shell command using `#`.
+"""
 TESTING_CONTRACT = """      ## How to test
       Give concise, human-facing steps for the reviewer who will test this work after
       it is merged into `develop`.
@@ -81,8 +84,7 @@ TESTING_CONTRACT = """      ## How to test
         any observable smoke check; say what output means pass.
       - If no manual test is possible, write `Not manually testable — <reason>` and name
         the automated validation that is the best available evidence.
-      Do not write vague advice such as "test as appropriate".
-"""
+""" + TESTING_COMMAND_RULE
 
 # The Deferred-work contract shared by both completion-comment nodes. The
 # board poller parses the `## Deferred work` section (docs: README, Project
@@ -504,8 +506,9 @@ def ensure_contract(path: Path, node_id: str) -> str | None:
         return f"node {node_id} end not found in {path.name}"
     node = text[start:end]
     needs_testing = "      ## How to test" not in node
+    needs_shell_rule = "Keep copy-paste commands standalone" not in node
     needs_deferred = "reads this section and creates a tracking issue" not in node
-    if not needs_testing and not needs_deferred:
+    if not needs_testing and not needs_shell_rule and not needs_deferred:
         return None
     factual = text.find("The comment must be factual", start, end)
     if factual == -1:
@@ -516,6 +519,8 @@ def ensure_contract(path: Path, node_id: str) -> str | None:
     addition = ""
     if needs_testing:
         addition += TESTING_CONTRACT
+    elif needs_shell_rule:
+        addition += TESTING_COMMAND_RULE
     if needs_deferred:
         addition += CONTRACT
     text = text[:insertion] + addition + text[insertion:]
@@ -523,6 +528,8 @@ def ensure_contract(path: Path, node_id: str) -> str | None:
     added = []
     if needs_testing:
         added.append("How-to-test")
+    elif needs_shell_rule:
+        added.append("copy-paste command")
     if needs_deferred:
         added.append("Deferred-work")
     return f"added {' and '.join(added)} contracts to {node_id} in {path.name}"

@@ -470,6 +470,19 @@ class ReadyForReviewCommentTest(unittest.TestCase):
         self.assertIn(
             'python3 automation/move_item.py 92 "In Review"', body)
 
+    def test_build_removes_inline_shell_comments_from_commands(self):
+        body = build_ready_for_review_comment(
+            92,
+            "develop",
+            153,
+            "```bash\n"
+            ".venv/bin/python -m pytest tests/test_ui.py -q # integration consumers\n"
+            "```",
+        )
+        self.assertIn(
+            ".venv/bin/python -m pytest tests/test_ui.py -q", body)
+        self.assertNotIn("# integration consumers", body)
+
     def test_build_is_explicit_when_no_test_path_was_recorded(self):
         body = build_ready_for_review_comment(7, "develop", None, None)
         self.assertIn("no linked develop PR was available", body)

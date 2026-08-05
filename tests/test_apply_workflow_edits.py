@@ -6,6 +6,7 @@ from pathlib import Path
 
 from automation.apply_workflow_edits import (
     CONTRACT,
+    TESTING_COMMAND_RULE,
     TESTING_CONTRACT,
     ensure_contract,
     ensure_node,
@@ -83,6 +84,18 @@ class EnsureContractTest(unittest.TestCase):
                 "      Post a completion record.\n"
                 + TESTING_CONTRACT + CONTRACT), encoding="utf-8")
             self.assertIsNone(ensure_contract(path, "completion-comment"))
+
+    def test_updates_existing_testing_contract_with_command_rule(self) -> None:
+        legacy_testing = TESTING_CONTRACT.replace(TESTING_COMMAND_RULE, "")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "wf.yaml"
+            path.write_text(self._node().replace(
+                "      Post a completion record.\n",
+                "      Post a completion record.\n"
+                + legacy_testing + CONTRACT), encoding="utf-8")
+            note = ensure_contract(path, "completion-comment")
+            self.assertIn("copy-paste command", note)
+            self.assertIn("Keep copy-paste commands standalone", path.read_text())
 
     def test_missing_node_returns_none(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
