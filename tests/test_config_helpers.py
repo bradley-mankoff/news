@@ -236,6 +236,15 @@ class ConfigHelperTests(unittest.TestCase):
                 model_base_url="http://127.0.0.1:8080/v1",
                 model_backend="mlx-lm",
             )
+        # A loopback-alias spelling of the same endpoint still trips the guard.
+        with self.assertRaisesRegex(ValueError, "multiple different models"):
+            config_module._validate_managed_model_assignments(
+                {"article_summary": SimpleNamespace(base_url="http://localhost:8080/v1", reference="other", name="other")},
+                model_reference="main",
+                model_name="main",
+                model_base_url="http://127.0.0.1:8080/v1",
+                model_backend="mlx-lm",
+            )
 
     def test_same_model_endpoint_tolerates_spelling_variants(self) -> None:
         canonical = "http://127.0.0.1:8080/v1"
@@ -247,6 +256,14 @@ class ConfigHelperTests(unittest.TestCase):
         self.assertFalse(config_module.same_model_endpoint(canonical, "http://127.0.0.1:8081/v1"))
         self.assertFalse(config_module.same_model_endpoint(canonical, ""))
         self.assertTrue(config_module.same_model_endpoint("", ""))
+        # Loopback host aliases (Issue #134): localhost, 127.0.0.1, and ::1
+        # denote the same endpoint and must not bypass the conflict check.
+        self.assertTrue(config_module.same_model_endpoint("http://localhost:8080/v1", "http://127.0.0.1:8080/v1"))
+        self.assertTrue(config_module.same_model_endpoint("http://127.0.0.1:8080/v1", "http://localhost:8080/v1"))
+        self.assertTrue(config_module.same_model_endpoint("http://[::1]:8080/v1", "http://127.0.0.1:8080/v1"))
+        self.assertTrue(config_module.same_model_endpoint("HTTP://LOCALHOST:8080/v1", "http://127.0.0.1:8080/v1"))
+        self.assertFalse(config_module.same_model_endpoint("http://localhost:8080/v1", "http://127.0.0.1:9090/v1"))
+        self.assertFalse(config_module.same_model_endpoint("http://localhost:8080/v1", "http://localhost:8080/v2"))
 
     def test_runtime_model_and_env_helpers_cover_edge_branches(self) -> None:
         self.assertEqual(config_module.normalize_preset_id("  dev  "), "dev")

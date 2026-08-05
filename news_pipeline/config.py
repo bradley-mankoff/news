@@ -659,12 +659,21 @@ def is_managed_model_backend(backend: str) -> bool:
     return backend != MODEL_BACKEND_EXTERNAL
 
 
+# Host spellings that all denote the loopback interface. The managed local
+# server is reachable under any of them, so the endpoint comparison must
+# treat them as one host; otherwise an alias spelling bypasses the
+# managed-server conflict check (Issue #134).
+_LOOPBACK_HOST_ALIASES = frozenset({"localhost", "127.0.0.1", "::1"})
+_LOOPBACK_CANONICAL_HOST = "127.0.0.1"
+
+
 def same_model_endpoint(left: str, right: str) -> bool:
     """True when two base URLs denote the same model endpoint.
 
     Comparison tolerates the spelling variants users actually produce:
     trailing slashes on the path, scheme/host case differences, default
-    ports, and userinfo in the authority. A genuinely different path still
+    ports, userinfo in the authority, and loopback host aliases
+    (localhost vs 127.0.0.1 vs ::1). A genuinely different path still
     compares unequal, and an empty URL never matches a real one.
     """
 
@@ -672,6 +681,8 @@ def same_model_endpoint(left: str, right: str) -> bool:
         parsed = urlparse(url or "")
         scheme = (parsed.scheme or "").lower()
         host = (parsed.hostname or "").lower()
+        if host in _LOOPBACK_HOST_ALIASES:
+            host = _LOOPBACK_CANONICAL_HOST
         try:
             port = parsed.port
         except ValueError:  # malformed port; treat as distinct
