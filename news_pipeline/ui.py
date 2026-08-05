@@ -2044,6 +2044,7 @@ HTML = r"""<!doctype html>
             </details>
           </section>
           <section class="panel">
+
             <details class="details">
               <summary>Utilities</summary>
               <div class="form-grid">
@@ -2387,7 +2388,7 @@ HTML = r"""<!doctype html>
       renderModelTuningPanels();
       renderPromptProfilePanel();
       refreshModelKnobLinks();
-      preview("run").catch(() => {});
+      previewQuietly("run");
     }
     function resetAllOverrides() {
       document.querySelectorAll("[data-env]").forEach(el => {

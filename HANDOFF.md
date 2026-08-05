@@ -67,7 +67,6 @@ verified; a follow-up agent should be able to continue from here without re-deri
 - [x] Prompt-profile selection and per-stage prompt editing in the normal UI (PR #70, issue #27).
 - [x] Add `huggingface-hub` as a direct dependency (declared in `pyproject.toml`; API usage is tracked under the Model Catalog item above).
 
-
 ## Key Decisions
 - **The poller owns the sync, not a watcher or git hooks.** Hooks are a dead end
   (merges happen server-side via `gh pr merge`, no local git event fires); a separate
