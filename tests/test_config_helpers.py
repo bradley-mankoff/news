@@ -261,7 +261,18 @@ class ConfigHelperTests(unittest.TestCase):
         self.assertTrue(config_module.same_model_endpoint("http://localhost:8080/v1", "http://127.0.0.1:8080/v1"))
         self.assertTrue(config_module.same_model_endpoint("http://127.0.0.1:8080/v1", "http://localhost:8080/v1"))
         self.assertTrue(config_module.same_model_endpoint("http://[::1]:8080/v1", "http://127.0.0.1:8080/v1"))
+        self.assertTrue(config_module.same_model_endpoint("http://127.0.0.1:8080/v1", "http://[::1]:8080/v1"))
         self.assertTrue(config_module.same_model_endpoint("HTTP://LOCALHOST:8080/v1", "http://127.0.0.1:8080/v1"))
+        # A trailing-dot FQDN names the same host and stays loopback.
+        self.assertTrue(config_module.same_model_endpoint("http://localhost.:8080/v1", "http://127.0.0.1:8080/v1"))
+        # Exotic IPv6 loopback spellings urlparse returns verbatim:
+        # the uncompressed form of ::1 and the IPv4-mapped forms of
+        # 127.0.0.1 (dotted and hex) denote the same loopback interface.
+        self.assertTrue(config_module.same_model_endpoint("http://[0:0:0:0:0:0:0:1]:8080/v1", "http://127.0.0.1:8080/v1"))
+        self.assertTrue(config_module.same_model_endpoint("http://127.0.0.1:8080/v1", "http://[0:0:0:0:0:0:0:1]:8080/v1"))
+        self.assertTrue(config_module.same_model_endpoint("http://[::ffff:127.0.0.1]:8080/v1", "http://127.0.0.1:8080/v1"))
+        self.assertTrue(config_module.same_model_endpoint("http://127.0.0.1:8080/v1", "http://[::ffff:127.0.0.1]:8080/v1"))
+        self.assertTrue(config_module.same_model_endpoint("http://[::ffff:7f00:1]:8080/v1", "http://127.0.0.1:8080/v1"))
         self.assertFalse(config_module.same_model_endpoint("http://localhost:8080/v1", "http://127.0.0.1:9090/v1"))
         self.assertFalse(config_module.same_model_endpoint("http://localhost:8080/v1", "http://localhost:8080/v2"))
 
