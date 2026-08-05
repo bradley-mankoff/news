@@ -1617,17 +1617,20 @@ HTML = r"""<!doctype html>
         return;
       }
       const links = knob.option_links ? knob.option_links : {};
-      // An empty select means "use the backend default"; mirror that
-      // resolution so the default model's links show on initial load and
-      // after Clear overrides / Reset defaults. Do NOT pre-select the
-      // default here (that would change collectEnv() submission semantics).
+      // An empty select means "use the backend default". Only NEWS_MODEL
+      // carries a registered default (default=DEFAULT_MODEL_ALIAS), so the
+      // fallback below shows its links; the task knobs have no default and
+      // render no links when empty (the backend still resolves them to the
+      // default model at run time). Do NOT pre-select the default here (that
+      // would change collectEnv() submission semantics).
       const value = currentControlValue(env) || (knob.default !== undefined && knob.default !== null ? String(knob.default) : "");
       if (!value) { container.innerHTML = ""; return; }
       const entry = links[value];
       if (!entry) {
-        // Only fires for values set outside the offered options (external or
-        // typed-in ids) — drift-guard tests pin that every option has a link.
-        container.innerHTML = `<span class="muted">No Hugging Face page for this external model</span>`;
+        // Only fires for external ids injected via programmatic paths (saved
+        // env, preset apply, setControlValue) — drift-guard tests pin that
+        // every offered option has a link.
+        container.innerHTML = `<span class="muted">No Hugging Face page for this model reference</span>`;
         return;
       }
       // page and hardware are the same URL on purpose: HF's native Hardware
@@ -2756,7 +2759,13 @@ HTML = r"""<!doctype html>
       document.addEventListener("change", (event) => {
         const el = event.target;
         if (el && el.matches && el.matches("select[data-env]")) {
-          renderKnobLinks(el.dataset.env);
+          // Only knobs that carry option_links have a .knob-links container;
+          // calling renderKnobLinks for every select would hit the
+          // missing-container console.warn on each non-model knob change.
+          const knob = knobByEnv(el.dataset.env);
+          if (knob && knob.option_links && Object.keys(knob.option_links).length) {
+            renderKnobLinks(el.dataset.env);
+          }
         }
       });
       await loadSources();

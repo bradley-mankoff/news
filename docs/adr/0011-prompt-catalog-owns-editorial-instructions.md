@@ -1,4 +1,4 @@
-# ADR 0010: Prompt Catalog owns editorial instructions
+# ADR 0011: Prompt Catalog owns editorial instructions
 
 Status: Accepted
 
@@ -17,7 +17,7 @@ instruction sentences for article summary, story scale screening, story
 drafting, title generation, and image art direction. Machine-required output
 contracts (`DATABASE_ENTRY:` blocks, citation markers, strict JSON, retry
 messages, scale vocabulary) live in `news_pipeline/prompt_contracts.py` (ADR
-0011); stage modules compose prompts from those constants, and config
+0012); stage modules compose prompts from those constants, and config
 resolution validates that profile instructions never weaken them. `balanced` is
 the default profile and is byte-identical to the pre-catalog prompts.
 

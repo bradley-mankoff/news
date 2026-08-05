@@ -1,4 +1,4 @@
-# ADR 0011: Prompt contracts are pipeline-owned and validated
+# ADR 0012: Prompt contracts are pipeline-owned and validated
 
 Status: Accepted
 

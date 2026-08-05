@@ -36,49 +36,18 @@ CONTRACT = """      ## Deferred work
         reads this section and creates a tracking issue for every item);
       - NOT-Building / scope-limit exclusions that are future work (not "never");
       - skipped or blocked review findings that warrant follow-up.
-      Trace the ORIGINAL issue ask first (the issue body from the Inputs above): compare every
-      acceptance criterion, described behavior, and named component in the issue
-      body against what this run actually shipped. Anything from the issue that is
-      NOT done is deferred work and MUST be listed, even if you never mentioned it
-      anywhere else in this comment or the PR. If something from the issue is
-      genuinely superseded or abandoned, list it anyway and say so in the Reason.
-      DEDUPE — judge every item before finalizing the section. Fetch the existing
-      issues: `gh issue list -R bradley-mankoff/news --state open --limit 200
-      --json number,title,body` (and `--state closed` for the Supersedes check).
-      Read each candidate's TITLE and INITIAL DESCRIPTION (the body — never the
-      comments). Using the repo context (HANDOFF.md pending items, ADRs, this
-      issue) decide per item, and stamp the item accordingly:
-      - an open issue already covers the SAME deliverable (the same work, not
-        just the same topic or family) — including the issue being implemented
-        when the deferred item is part of ITS remaining scope, and any
-        HANDOFF.md/ADR item that already has a tracking issue:
-        add `**Links to:** #N`.
-      - a closed issue covered it (done or abandoned): add `**Supersedes:** #N`
-        (the poller creates a new issue referencing it).
-      - it is genuinely never-to-be-done (superseded by context; HANDOFF forbids
-        it): add `**Skip:** <one-line reason>`.
-      - otherwise leave the item bare — the poller creates the tracking issue.
-      If you are unsure whether an issue covers the same deliverable, treat them
-      as distinct (bare) — a new tracking issue is cheap and the human can merge.
-      SIZE BAR — not every finding deserves a tracking issue. Apply the
-      "would this ever be scheduled on its own?" test before stamping:
-      - small chores, test tweaks, doc fixes, and cleanups that a competent dev
-        would knock out in under ~an hour as part of the parent's follow-up are
-        NOT tracking issues: stamp `**Skip:** folded into #<parent> — <why>`.
-        The completion record preserves them; the backlog does not grow.
-      - review findings whose fix belongs with the parent issue's remaining
-        scope: same — Skip with the reason.
-      - only items that are genuine, independently schedulable deliverables —
-        features, subsystems, cross-cutting fixes, anything that gates other
-        work — get spawned (left bare).
-      Err toward Skip for small items (a backlog full of chores is worse than a
-      tiny task picked up later); err toward bare only for real deliverables.
+      Trace the ORIGINAL issue ask first (the issue body from the Inputs above):
+      compare every acceptance criterion, described behavior, and named component
+      in the issue body against what this run actually shipped. Anything from the
+      issue that is NOT done is deferred work and MUST be listed, even if you never
+      mentioned it anywhere else in this comment or the PR. If something from the
+      issue is genuinely superseded or abandoned, list it anyway and say so in the
+      Reason.
       Format, exactly — the poller parses this:
       - **Title:** <imperative title, ≤72 chars, self-contained and searchable>
         **Description:** <1-2 sentences; what "done" looks like>
         **Reason:** <why deferred now>
         **Label:** <optional; must already exist in the repo, e.g. enhancement>
-        **Links to:** #N    (or **Supersedes:** #N, or **Skip:** <reason> — optional)
       If nothing was deferred, write exactly: *None.*
 """
 

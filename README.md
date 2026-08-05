@@ -48,17 +48,10 @@ The repo runs a fully automated agentic loop driven by the GitHub project board
   `**Label:**` — enforced by the workflow-side `completion-comment` nodes, which
   must trace the original issue ask (every criterion, described behavior, or
   named component in the issue body that the run did NOT ship is deferred work
-  and must be listed). The node also judges each item against a size bar:
-  only independently schedulable deliverables are spawned as issues; small
-  chores, test/doc tweaks, and review findings belonging to the parent are
-  stamped `**Skip:**` (preserved in the record, not the backlog). It then
-  dedupes by consulting all open/closed issue titles + initial bodies and repo
-  context (HANDOFF.md, ADRs) and stamps each item `**Links to:** #N` (already
-  tracked), `**Supersedes:** #N` (closed — new issue referencing it),
-  `**Skip:** <reason>`, or leaves it bare. When a run completes, the poller
-  executes mechanically: links, creates (boarded in the default lane),
-  skips, and comments the linkage on the source issue (an exact-title safety
-  check links but never creates). Deferral language or
+  and must be listed). When a run completes, the poller dedupes each item
+  against open/closed issue titles (open match → link; closed match → new
+  issue referencing it; no match → create), boards new issues in the default
+  lane, and comments the linkage on the source issue. Deferral language or
   unchecked acceptance criteria (`- [ ]`) without the section post a
   verification comment instead — never an auto-created issue from prose.
 - Moving an issue into `In Review` makes the poller open the ship PR
@@ -314,7 +307,7 @@ Curated models (3):
   ([Hugging Face](https://huggingface.co/huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF))
 - `qwythos-9b-4bit` — mlx-vlm, 1M-token context
   ([Hugging Face](https://huggingface.co/huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF))
-- `gemma-e2b-tiny` — mlx-lm, Codex-safe test model
+- `gemma-e2b-tiny` — mlx-vlm, Codex-safe test model
   ([Hugging Face](https://huggingface.co/deadbydawn101/gemma-4-E2B-Heretic-Uncensored-mlx-4bit))
 
 Hugging Face search results carry runtime-fit verdicts (`managed_mlx_lm`,
