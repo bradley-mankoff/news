@@ -692,6 +692,195 @@ def _cp(returncode=0, stdout="", stderr=""):
     return subprocess.CompletedProcess([], returncode, stdout, stderr)
 
 
+class PR145SyncLocalDevelopTest(unittest.TestCase):
+    """Boundaries of the post-merge local sync: never destructive, restart
+    only when the UI is running."""
+
+    def _fake_run(self, plan):
+        """Dispatch subprocess.run per git subcommand; anything unplanned fails."""
+        def fake_run(cmd, *args, **kwargs):
+            if cmd[0] == "git":
+                if cmd[1] == "rev-list":
+                    entries = plan["rev-list"]
+                    return entries.pop(0)() if isinstance(entries, list) else entries()
+                key = cmd[1] if cmd[1] in ("fetch", "rev-parse", "status",
+                                           "merge") else cmd[1]
+                return plan[key]()
+            if cmd[0] == "pkill":
+                return _cp()
+            raise AssertionError(f"unexpected command: {cmd}")
+        return fake_run
+
+    def _run_with(self, plan, ui_running=None, restart_ok=None):
+        patches = [patch("automation.board_poller.subprocess.run",
+                         side_effect=self._fake_run(plan))]
+        if ui_running is not None:
+            patches.append(patch("automation.board_poller._ui_running",
+                                 return_value=ui_running))
+        if restart_ok is not None:
+            patches.append(patch("automation.board_poller._restart_ui",
+                                 return_value=restart_ok))
+        with contextlib.ExitStack() as stack:
+            for p in patches:
+                stack.enter_context(p)
+            return sync_local_develop()
+
+    def test_dry_run_never_touches_git(self):
+        with patch("automation.board_poller.DRY_RUN", True), \
+                patch("automation.board_poller.subprocess.run",
+                      side_effect=AssertionError("must not run")) as m:
+            self.assertIn("dry-run", sync_local_develop())
+            m.assert_not_called()
+
+    def test_fetch_failure_is_loud(self):
+        msg = self._run_with({"fetch": lambda: _cp(1, stderr="boom")})
+        self.assertIn("LOCAL SYNC FAILED", msg)
+        self.assertIn("fetch", msg)
+
+    def test_not_on_develop_skips(self):
+        plan = {
+            "fetch": lambda: _cp(),
+            "rev-parse": lambda: _cp(stdout="main\n"),
+        }
+        msg = self._run_with(plan)
+        self.assertIn("LOCAL SYNC SKIP", msg)
+        self.assertIn("main", msg)
+
+    def test_dirty_tree_skips(self):
+        plan = {
+            "fetch": lambda: _cp(),
+            "rev-parse": lambda: _cp(stdout="develop\n"),
+            "status": lambda: _cp(stdout=" M automation/board_poller.py\n"),
+        }
+        msg = self._run_with(plan)
+        self.assertIn("LOCAL SYNC SKIP", msg)
+        self.assertIn("dirty", msg)
+
+    def test_unpushed_commits_skip(self):
+        plan = {
+            "fetch": lambda: _cp(),
+            "rev-parse": lambda: _cp(stdout="develop\n"),
+            "status": lambda: _cp(),
+            "rev-list": lambda: _cp(stdout="2\n"),
+        }
+        msg = self._run_with(plan)
+        self.assertIn("LOCAL SYNC SKIP", msg)
+        self.assertIn("2 unpushed", msg)
+
+    def test_up_to_date_is_a_noop(self):
+        plan = {
+            "fetch": lambda: _cp(),
+            "rev-parse": lambda: _cp(stdout="develop\n"),
+            "status": lambda: _cp(),
+            "rev-list": lambda: _cp(stdout="0\n"),
+        }
+        msg = self._run_with(plan)
+        self.assertIn("up to date", msg)
+
+    def test_behind_merges_and_skips_ui_when_not_running(self):
+        plan = {
+            "fetch": lambda: _cp(),
+            "rev-parse": lambda: _cp(stdout="develop\n"),
+            "status": lambda: _cp(),
+            "rev-list": [lambda: _cp(stdout="0\n"), lambda: _cp(stdout="3\n")],
+            "merge": lambda: _cp(stdout="Fast-forward\n 3 files changed\n"),
+        }
+        msg = self._run_with(plan, ui_running=False)
+        self.assertIn("develop updated", msg)
+        self.assertIn("UI not running", msg)
+
+    def test_behind_restarts_ui_when_running(self):
+        plan = {
+            "fetch": lambda: _cp(),
+            "rev-parse": lambda: _cp(stdout="develop\n"),
+            "status": lambda: _cp(),
+            "rev-list": [lambda: _cp(stdout="0\n"), lambda: _cp(stdout="3\n")],
+            "merge": lambda: _cp(stdout="Fast-forward\n 3 files changed\n"),
+        }
+        msg = self._run_with(plan, ui_running=True, restart_ok=True)
+        self.assertIn("UI restarted", msg)
+
+    def test_restart_failure_warns(self):
+        plan = {
+            "fetch": lambda: _cp(),
+            "rev-parse": lambda: _cp(stdout="develop\n"),
+            "status": lambda: _cp(),
+            "rev-list": [lambda: _cp(stdout="0\n"), lambda: _cp(stdout="3\n")],
+            "merge": lambda: _cp(stdout="Fast-forward\n 3 files changed\n"),
+        }
+        msg = self._run_with(plan, ui_running=True, restart_ok=False)
+        self.assertIn("LOCAL SYNC WARNING", msg)
+
+    def test_ff_only_merge_failure_is_loud(self):
+        plan = {
+            "fetch": lambda: _cp(),
+            "rev-parse": lambda: _cp(stdout="develop\n"),
+            "status": lambda: _cp(),
+            "rev-list": [lambda: _cp(stdout="0\n"), lambda: _cp(stdout="3\n")],
+            "merge": lambda: _cp(1, stderr="Not possible to fast-forward"),
+        }
+        msg = self._run_with(plan)
+        self.assertIn("LOCAL SYNC FAILED", msg)
+        self.assertIn("fast-forward", msg)
+
+    def test_subprocess_exceptions_are_fail_closed(self):
+        for error in (
+            subprocess.TimeoutExpired(["git", "fetch"], 90),
+            OSError("git is unavailable"),
+        ):
+            with self.subTest(error=error):
+                def raise_error(*_args, **_kwargs):
+                    raise error
+
+                with patch("automation.board_poller.subprocess.run",
+                           side_effect=raise_error):
+                    msg = sync_local_develop()
+                self.assertIn("LOCAL SYNC FAILED", msg)
+                self.assertIn("fetch", msg)
+
+    def test_git_probe_failures_are_fail_closed(self):
+        cases = (
+            {"fetch": lambda: _cp(), "rev-parse": lambda: _cp(stdout="develop\n"),
+             "status": lambda: _cp(1, stderr="status failed")},
+            {"fetch": lambda: _cp(), "rev-parse": lambda: _cp(stdout="develop\n"),
+             "status": lambda: _cp(),
+             "rev-list": lambda: _cp(1, stderr="ahead failed")},
+            {"fetch": lambda: _cp(), "rev-parse": lambda: _cp(stdout="develop\n"),
+             "status": lambda: _cp(),
+             "rev-list": [lambda: _cp(stdout="0\n"),
+                           lambda: _cp(1, stderr="behind failed")]},
+        )
+        for plan in cases:
+            with self.subTest(plan=plan):
+                msg = self._run_with(plan)
+                self.assertIn("LOCAL SYNC FAILED", msg)
+
+    def test_sync_uses_exact_git_command_contract(self):
+        calls = []
+        responses = {
+            ("git", "fetch", "origin"): _cp(),
+            ("git", "rev-parse", "--abbrev-ref", "HEAD"): _cp(stdout="develop\n"),
+            ("git", "status", "--porcelain"): _cp(),
+            ("git", "rev-list", "--count", "origin/develop..HEAD"): _cp(stdout="0\n"),
+            ("git", "rev-list", "--count", "HEAD..origin/develop"): _cp(stdout="3\n"),
+            ("git", "merge", "--ff-only", "origin/develop"): _cp(stdout="Fast-forward\n"),
+        }
+
+        def fake_run(cmd, *args, **kwargs):
+            calls.append((cmd, kwargs))
+            return responses[tuple(cmd)]
+
+        with patch("automation.board_poller.subprocess.run", side_effect=fake_run), \
+                patch("automation.board_poller._ui_running", return_value=False):
+            msg = sync_local_develop()
+
+        self.assertIn("develop updated", msg)
+        self.assertEqual(
+            [cmd for cmd, _kwargs in calls],
+            [list(key) for key in responses],
+        )
+        self.assertTrue(all(kwargs["cwd"] == str(bp.ROOT) for _cmd, kwargs in calls))
+
 class IssueHasLabelTests(unittest.TestCase):
     """HIGH: a gh failure must return None (undetermined), never False —
     the caller defers instead of routing a blocked issue into the normal
@@ -1213,15 +1402,17 @@ class ReconcileDeferredWorkCreateTest(unittest.TestCase):
                           "  **Description:** Port the model layer.\n"
                           "  **Reason:** Packaging.\n")}
 
-    def _run(self, open_stdout="[]", closed_stdout="[]", rec=None):
+    def _run(self, open_stdout="[]", closed_stdout="[]", rec=None,
+             comments=None):
         rec = {} if rec is None else rec
         calls = []
+        comments = [self._deferred_comment()] if comments is None else comments
 
         def fake_gh(args, env, timeout=90):
             calls.append(args)
             if args[0:2] == ["issue", "view"]:
                 return _cp(stdout=json.dumps(
-                    {"title": "T", "comments": [self._deferred_comment()]}))
+                    {"title": "T", "comments": comments}))
             if args[0:2] == ["issue", "list"]:
                 state = args[args.index("--state") + 1]
                 return _cp(stdout=open_stdout if state == "open" else closed_stdout)
@@ -1272,9 +1463,26 @@ class ReconcileDeferredWorkCreateTest(unittest.TestCase):
         self.assertTrue(ok)
         creates = [a for a in calls if a[0:2] == ["issue", "create"]]
         self.assertEqual(len(creates), 1)
+        body = creates[0][creates[0].index("--body") + 1]
+        self.assertIn("Supersedes: #98", body)
         comments = [a for a in calls if a[0:2] == ["issue", "comment"]]
         self.assertEqual(len(comments), 1)
         self.assertIn("supersedes closed #98", comments[0][-1])
+
+    def test_explicit_supersedes_is_preserved_on_created_issue(self):
+        comments = [{"body": ("## Deferred work\n"
+                               "- **Title:** Rebuild deferred adapter\n"
+                               "  **Description:** Replace the old adapter.\n"
+                               "  **Supersedes:** #42\n")}]
+        ok, _rec, calls = self._run(
+            comments=comments,
+            closed_stdout=json.dumps([{"number": 42, "title": "Old adapter"}]),
+        )
+        self.assertTrue(ok)
+        creates = [a for a in calls if a[0:2] == ["issue", "create"]]
+        self.assertEqual(len(creates), 1)
+        body = creates[0][creates[0].index("--body") + 1]
+        self.assertIn("Supersedes: #42", body)
 
 class SyncLocalDevelopTest(unittest.TestCase):
     """Boundaries of the post-merge local sync: never destructive, restart
