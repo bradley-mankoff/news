@@ -313,7 +313,8 @@ def _global_scale_screening_prompt_messages(
                  or DEFAULT_PROMPT_INSTRUCTIONS["story_scale_screening"])
                 .replace("{", "{{")
                 .replace("}", "}}")
-            )
+            ),
+            scale_contract=STORY_SCALE_SCREENING_JSON_CONTRACT,
         ).replace("{{", "{").replace("}}", "}").strip()
 
     )

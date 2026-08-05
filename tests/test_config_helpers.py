@@ -392,6 +392,22 @@ class ConfigHelperTests(unittest.TestCase):
                 self.assertNotIn("https://huggingface.co/https://", link["page"], option)
                 self.assertEqual(link["hardware"], link["page"])
         self.assertEqual(backend_knobs[0]["option_links"], {})
+        # Pin the per-stage prompt override knobs contract: one text knob per
+        # task, hidden from non-advanced surfaces (advanced=True) exactly like
+        # the sampling knobs; the UI's SURFACED_ENVS suppresses them from the
+        # Advanced tab in favor of the dedicated Editorial approach editors.
+        override_knobs = [
+            knob for knob in registry
+            if knob["env"] in config_module.PROMPT_TASK_OVERRIDE_ENV_VARS.values()
+        ]
+        self.assertEqual(
+            {knob["env"] for knob in override_knobs},
+            set(config_module.PROMPT_TASK_OVERRIDE_ENV_VARS.values()),
+        )
+        for knob in override_knobs:
+            self.assertEqual(knob["type"], "text")
+            self.assertTrue(knob["advanced"])
+
         # Drift-guard: aliases must never land in the unsupported set, or the
         # registry build and hf_model_page_url's ValueError fallback break.
         self.assertEqual(
@@ -459,23 +475,6 @@ class ConfigHelperTests(unittest.TestCase):
             url = config_module.hf_model_page_url(alias)
             self.assertIsNotNone(url, alias)
             self.assertIn(url, docs_text, f"{alias} page URL missing from README/SETTINGS")
-
-        # Pin the per-stage prompt override knobs contract: one text knob per
-        # task, hidden from non-advanced surfaces (advanced=True) exactly like
-        # the sampling knobs; the UI's SURFACED_ENVS suppresses them from the
-        # Advanced tab in favor of the dedicated Editorial approach editors.
-        override_knobs = [
-            knob for knob in registry
-            if knob["env"] in config_module.PROMPT_TASK_OVERRIDE_ENV_VARS.values()
-        ]
-        self.assertEqual(
-            {knob["env"] for knob in override_knobs},
-            set(config_module.PROMPT_TASK_OVERRIDE_ENV_VARS.values()),
-        )
-        for knob in override_knobs:
-            self.assertEqual(knob["type"], "text")
-            self.assertTrue(knob["advanced"])
-
 
     def test_yaml_scope_and_runtime_config_helpers_cover_edge_branches(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

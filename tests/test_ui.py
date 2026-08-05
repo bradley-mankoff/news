@@ -146,7 +146,13 @@ class UITests(unittest.TestCase):
         )
         prefixes = re.findall(r'taskSamplingPrefix: "(NEWS_MODEL_[A-Z_]+)"', html)
         composed = {f"{p}_{s}" for p in prefixes for s in suffixes}
-        self.assertEqual(len(composed), 12)
+        self.assertEqual(len(composed), 24)
+        for env in composed:
+            self.assertIn(
+                f'"{env}"', surface, f"composed sampling env {env} not suppressed"
+            )
+        # NEWS_ARTICLE_TEXT_TOKEN_LIMIT (the 13th dedicated env) must also be surfaced.
+        self.assertIn('"NEWS_ARTICLE_TEXT_TOKEN_LIMIT"', surface)
         for env in composed:
             self.assertIn(
                 f'"{env}"', surface, f"composed sampling env {env} not suppressed"
