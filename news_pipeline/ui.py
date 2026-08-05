@@ -1746,7 +1746,9 @@ HTML = r"""<!doctype html>
       // Flip above the icon when the tooltip would overflow the viewport bottom.
       if (top + t.height > window.innerHeight - GUTTER) top = Math.max(GUTTER, r.top - t.height - GUTTER);
       // Center on the icon, clamped to keep a GUTTER margin on narrow viewports.
-      const left = Math.min(Math.max(GUTTER, r.left + r.width / 2 - t.width / 2), Math.max(GUTTER, window.innerWidth - t.width - GUTTER));
+      const desiredLeft = r.left + r.width / 2 - t.width / 2;
+      const maxLeft = Math.max(GUTTER, window.innerWidth - t.width - GUTTER);
+      const left = Math.min(Math.max(GUTTER, desiredLeft), maxLeft);
       tooltip.style.top = `${top}px`;
       tooltip.style.left = `${left}px`;
     }
@@ -1754,10 +1756,17 @@ HTML = r"""<!doctype html>
     // handlers below: one global listener pair instead of one per tooltip, so
     // knob-search re-renders can never accumulate document/window listeners.
     const liveTooltips = new Map();
-    function hideTooltipsOnScroll() {
+    // Shared iteration for the delegated scroll/resize handlers: prunes
+    // entries whose icon was re-rendered away (e.g. knob search), then runs
+    // the handler on the remaining (icon, tooltip) pairs.
+    function forEachLiveTooltip(handler) {
       liveTooltips.forEach((icon, tooltip) => {
-        // Prune entries whose icon was re-rendered away (e.g. knob search).
         if (!icon.isConnected) { liveTooltips.delete(tooltip); return; }
+        handler(icon, tooltip);
+      });
+    }
+    function hideTooltipsOnScroll() {
+      forEachLiveTooltip((icon, tooltip) => {
         // Hide only when the trigger actually left the viewport: Tab-focus
         // scroll-into-view also fires scroll, and hiding then would swallow
         // the tooltip on the keyboard path this feature exists for.
@@ -1768,8 +1777,7 @@ HTML = r"""<!doctype html>
       });
     }
     function repositionOpenTooltips() {
-      liveTooltips.forEach((icon, tooltip) => {
-        if (!icon.isConnected) { liveTooltips.delete(tooltip); return; }
+      forEachLiveTooltip((icon, tooltip) => {
         if (!tooltip.classList.contains("hidden")) positionEnvTooltip(icon, tooltip);
       });
     }
