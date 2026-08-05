@@ -160,18 +160,16 @@ def _runtime_snapshot(
             )
         )
         config = resolution.config
-        missing = [
-            task
-            for task in (
-                "article_summary",
-                "story_drafting",
-                "story_scale_screening",
-                "title_generation",
-            )
-            if task not in config.model_assignments
-        ]
+        task_keys = (
+            "article_summary",
+            "story_drafting",
+            "story_scale_screening",
+            "title_generation",
+        )
+        missing = [task for task in task_keys if task not in config.model_assignments]
         if missing:
             raise KeyError(f"runtime config missing model assignments for tasks: {missing}")
+        assignments = _json_ready(config.model_assignments)
         return {
             "preset_id": config.preset_id or "custom",
             "prompt_profile_id": config.prompt_profile_id,
@@ -196,11 +194,11 @@ def _runtime_snapshot(
                 "article_summary_concurrency": config.article_summary_concurrency,
                 "story_synthesis_concurrency": config.story_synthesis_concurrency,
                 "server_command": config.model_server_command,
-                "assignments": _json_ready(config.model_assignments),
-                "article_summary": _json_ready(config.model_assignments["article_summary"]),
-                "story_drafting": _json_ready(config.model_assignments["story_drafting"]),
-                "story_scale_screening": _json_ready(config.model_assignments["story_scale_screening"]),
-                "title_generation": _json_ready(config.model_assignments["title_generation"]),
+                "assignments": assignments,
+                "article_summary": assignments["article_summary"],
+                "story_drafting": assignments["story_drafting"],
+                "story_scale_screening": assignments["story_scale_screening"],
+                "title_generation": assignments["title_generation"],
                 "tuning": _json_ready(config.model_tuning),
                 "pipeline_budget": _json_ready(config.pipeline_budget),
                 "server_settings": _json_ready(config.model_server_settings),
@@ -1484,7 +1482,6 @@ HTML = r"""<!doctype html>
     const TASK_CONFIG = {
       article_summary: {
         label: "Article Summarization",
-        prefix: "article",
         modelEnv: "NEWS_MODEL_ARTICLE_SUMMARY",
         presetEnv: "NEWS_MODEL_ARTICLE_SUMMARY_TUNING_PRESET",
         baseUrlEnv: "NEWS_MODEL_ARTICLE_SUMMARY_BASE_URL",
@@ -1493,18 +1490,15 @@ HTML = r"""<!doctype html>
         nameInputId: "article_tuning_name",
         descriptionInputId: "article_tuning_description",
         modelSelectId: "article_model",
-        baseUrlId: "article_base_url",
         saveButtonId: "article_tuning_save",
         renameButtonId: "article_tuning_rename",
         deleteButtonId: "article_tuning_delete",
-        modelMaxTokensId: "article_model_max_input_tokens",
         taskMaxTokensEnv: "NEWS_ARTICLE_SUMMARY_MAX_TOKENS",
         taskSamplingPrefix: "NEWS_MODEL_ARTICLE_SUMMARY",
         runtimeKey: "article_summary"
       },
       story_drafting: {
         label: "Story Writing",
-        prefix: "story",
         modelEnv: "NEWS_MODEL_STORY_DRAFTING",
         presetEnv: "NEWS_MODEL_STORY_DRAFTING_TUNING_PRESET",
         baseUrlEnv: "NEWS_MODEL_STORY_DRAFTING_BASE_URL",
@@ -1513,18 +1507,15 @@ HTML = r"""<!doctype html>
         nameInputId: "story_tuning_name",
         descriptionInputId: "story_tuning_description",
         modelSelectId: "story_model",
-        baseUrlId: "story_base_url",
         saveButtonId: "story_tuning_save",
         renameButtonId: "story_tuning_rename",
         deleteButtonId: "story_tuning_delete",
-        modelMaxTokensId: null,
         taskMaxTokensEnv: "NEWS_STORY_DRAFTING_MAX_TOKENS",
         taskSamplingPrefix: "NEWS_MODEL_STORY_DRAFTING",
         runtimeKey: "story_drafting"
       },
       story_scale_screening: {
         label: "Story Scale Screening",
-        prefix: "scale",
         modelEnv: "NEWS_MODEL_STORY_SCALE_SCREENING",
         presetEnv: "NEWS_MODEL_STORY_SCALE_SCREENING_TUNING_PRESET",
         baseUrlEnv: "NEWS_MODEL_STORY_SCALE_SCREENING_BASE_URL",
@@ -1533,18 +1524,15 @@ HTML = r"""<!doctype html>
         nameInputId: "scale_tuning_name",
         descriptionInputId: "scale_tuning_description",
         modelSelectId: "scale_model",
-        baseUrlId: "scale_base_url",
         saveButtonId: "scale_tuning_save",
         renameButtonId: "scale_tuning_rename",
         deleteButtonId: "scale_tuning_delete",
-        modelMaxTokensId: null,
         taskMaxTokensEnv: "NEWS_STORY_SCALE_SCREENING_MAX_TOKENS",
         taskSamplingPrefix: "NEWS_MODEL_STORY_SCALE_SCREENING",
         runtimeKey: "story_scale_screening"
       },
       title_generation: {
         label: "Title Generation",
-        prefix: "title",
         modelEnv: "NEWS_MODEL_TITLE_GENERATION",
         presetEnv: "NEWS_MODEL_TITLE_GENERATION_TUNING_PRESET",
         baseUrlEnv: "NEWS_MODEL_TITLE_GENERATION_BASE_URL",
@@ -1553,11 +1541,9 @@ HTML = r"""<!doctype html>
         nameInputId: "title_tuning_name",
         descriptionInputId: "title_tuning_description",
         modelSelectId: "title_model",
-        baseUrlId: "title_base_url",
         saveButtonId: "title_tuning_save",
         renameButtonId: "title_tuning_rename",
         deleteButtonId: "title_tuning_delete",
-        modelMaxTokensId: null,
         taskMaxTokensEnv: "NEWS_TITLE_GENERATION_MAX_TOKENS",
         taskSamplingPrefix: "NEWS_MODEL_TITLE_GENERATION",
         runtimeKey: "title_generation"
@@ -2262,12 +2248,6 @@ HTML = r"""<!doctype html>
       decorateEnvHints($("advancedPanels"));
       renderPromptProfilePanel();
     }
-    function renderTaskTuningControls() {
-      renderModelTuningControls("article_summary");
-      renderModelTuningControls("story_drafting");
-      renderModelTuningControls("story_scale_screening");
-      renderModelTuningControls("title_generation");
-    }
     function renderModelTuningControls(task, { preserveEditor = false } = {}) {
       const meta = TASK_CONFIG[task];
       if (!meta) return;
@@ -2463,10 +2443,6 @@ HTML = r"""<!doctype html>
       renderPromptProfilePanel();
       refreshModelKnobLinks();
       preview("run").catch(() => {});
-    }
-      renderPromptProfilePanel();
-      refreshModelKnobLinks();
-      previewQuietly("run");
     }
     function setKnobEnv(env) {
       document.querySelectorAll("[data-env]").forEach(el => {

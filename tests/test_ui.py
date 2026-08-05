@@ -839,6 +839,25 @@ class UITests(unittest.TestCase):
                     }
                 )
 
+    def test_preview_rejects_different_task_model_on_localhost_base_url_alias(self) -> None:
+        # Regression for #134: an alias spelling of the managed base URL must
+        # still raise in the preview instead of showing a clean command.
+        with patch.dict(os.environ, {"NEWS_MODEL": CODEX_TEST_MODEL_ALIAS}, clear=True):
+            with self.assertRaisesRegex(
+                ValueError,
+                r"Managed model server cannot serve multiple different models "
+                r"from the same base URL",
+            ):
+                preview_payload(
+                    {
+                        "action": "run",
+                        "env": {
+                            "NEWS_MODEL_ARTICLE_SUMMARY": GEMMA_4_12B_IT_4BIT_MODEL_ALIAS,
+                            "NEWS_MODEL_ARTICLE_SUMMARY_BASE_URL": "http://localhost:8080/v1",
+                        },
+                    }
+                )
+
     def test_run_record_and_manager_processes(self) -> None:
         record = RunRecord("run-1", ["news", "run"], {"PASSWORD": "secret", "VISIBLE": "ok"})
         record.append("line one\n")

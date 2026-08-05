@@ -1583,6 +1583,23 @@ class PipelineHelperTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "multiple different models"):
                 pipeline.build_chat_model(64, task="analysis")
 
+        # Issue #134: an alias-spelled base URL (localhost vs 127.0.0.1) is
+        # the same managed endpoint and must trip the runtime backstop too.
+        with patch.object(pipeline, "ensure_codex_safe_model_reference"), patch.object(
+            pipeline,
+            "_task_model_assignment",
+            return_value=SimpleNamespace(
+                base_url="http://localhost:8080/v1",
+                reference="other-model",
+                name="other-model",
+                tuning=fake_assignment.tuning,
+            ),
+        ), patch.object(pipeline, "MANAGED_MODEL_SERVER_ACTIVE", True), patch.object(
+            pipeline, "MODEL_BACKEND", "mlx-lm"
+        ):
+            with self.assertRaisesRegex(RuntimeError, "multiple different models"):
+                pipeline.build_chat_model(64, task="analysis")
+
         with patch.object(pipeline, "ensure_codex_safe_model_reference"), patch.object(
             pipeline, "_task_model_assignment", return_value=fake_assignment
         ), patch.object(pipeline, "MANAGED_MODEL_SERVER_ACTIVE", True), patch.object(
