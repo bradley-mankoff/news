@@ -62,10 +62,39 @@ class ModelCatalogTests(unittest.TestCase):
                 set(entry.task_notes).issubset(set(model_catalog.MODEL_RECOMMENDATION_TASKS)),
                 f"{entry.alias} task_notes use unknown tasks",
             )
-            self.assertTrue(
-                entry.reference.startswith(entry.hf_repo)
-                or entry.reference == entry.hf_repo,
-                f"{entry.alias} reference does not match hf_repo",
+            # Exact equality: runtime_fit_for_hf_model matches on hf_repo
+            # only (issue #92); a file-qualified or suffixed reference
+            # would silently break that invariant.
+            self.assertEqual(
+                entry.reference,
+                entry.hf_repo,
+                f"{entry.alias} reference must equal hf_repo (issue #92)",
+            )
+
+    def test_catalog_backends_agree_with_runtime_inference(self) -> None:
+        # Drift-guard (ship-review finding, #146): the picker must never offer
+        # a curated card whose backend label disagrees with the backend the
+        # pipeline actually infers for it (HANDOFF: "Model picker must validate
+        # runtime support").
+        for entry in model_catalog.CATALOG_MODELS.values():
+            self.assertEqual(
+                config.infer_model_backend(entry.alias),
+                entry.backend,
+                f"{entry.alias} backend label {entry.backend!r} disagrees with "
+                f"config.infer_model_backend()",
+            )
+            fit = model_catalog.runtime_fit_for_hf_model(
+                {"id": entry.hf_repo, "tags": [], "library_name": "", "pipeline_tag": None}
+            )
+            expected_fit = (
+                model_catalog.RUNTIME_FIT_MANAGED_MLX_VLM
+                if entry.backend == "mlx-vlm"
+                else model_catalog.RUNTIME_FIT_MANAGED_MLX_LM
+            )
+            self.assertEqual(
+                fit["status"],
+                expected_fit,
+                f"{entry.alias} curated fit verdict disagrees with its backend label",
             )
 
     def test_default_catalog_model_is_the_default_alias(self) -> None:
@@ -138,8 +167,8 @@ class ModelCatalogTests(unittest.TestCase):
                 model_catalog.RUNTIME_FIT_EXTERNAL_ONLY,
             ),
             (
-                {"id": "deadbydawn101/gemma-4-E2B-Heretic-Uncensored-mlx-4bit", "tags": ["mlx"], "library_name": "mlx", "pipeline_tag": "text-generation"},
-                model_catalog.RUNTIME_FIT_MANAGED_MLX_LM,
+                {"id": "deadbydawn101/gemma-4-E2B-Heretic-Uncensored-mlx-4bit", "tags": ["mlx", "vision"], "library_name": "mlx", "pipeline_tag": "image-text-to-text"},
+                model_catalog.RUNTIME_FIT_MANAGED_MLX_VLM,
             ),
             (
                 {"id": "someone/arbitrary-gguf", "tags": ["gguf", "text-generation"], "library_name": "transformers", "pipeline_tag": "text-generation"},
@@ -164,6 +193,41 @@ class ModelCatalogTests(unittest.TestCase):
             (
                 {"id": "someone/transformers-other", "tags": ["safetensors"], "library_name": "transformers", "pipeline_tag": "audio-classification"},
                 model_catalog.RUNTIME_FIT_EXTERNAL_ONLY,
+            ),
+            # Org-id false positives (issue #92): a bare org id must never
+            # match a curated entry, even when it is the org prefix of one.
+            # huihui-ai is the historical pin from the PR #73 report (the
+            # Qwythos-era reference lived under that org); mlx-community is
+            # the live org-prefix collision with the current default repo.
+            (
+                {"id": "huihui-ai", "tags": [], "library_name": "unknown", "pipeline_tag": None},
+                model_catalog.RUNTIME_FIT_EXTERNAL_ONLY,
+            ),
+            (
+                {"id": "mlx-community", "tags": [], "library_name": "unknown", "pipeline_tag": None},
+                model_catalog.RUNTIME_FIT_EXTERNAL_ONLY,
+            ),
+            # Org-id false positive for the mlx-lm curated entry (issue #92):
+            # deadbydawn101 is the org of gemma-e2b-tiny, not curated.
+            (
+                {"id": "deadbydawn101", "tags": [], "library_name": "unknown", "pipeline_tag": None},
+                model_catalog.RUNTIME_FIT_EXTERNAL_ONLY,
+            ),
+            # Prefix-collision sibling (issue #92): a repo whose name merely
+            # starts with a curated repo's name must not match the curated
+            # entry (which would yield MANAGED_MLX_VLM here); the generic MLX
+            # heuristic verdict is the expected, correct outcome.
+            (
+                {"id": "mlx-community/gemma-4-12B-it-4bit-other", "tags": ["mlx"], "library_name": "mlx", "pipeline_tag": "text-generation"},
+                model_catalog.RUNTIME_FIT_MANAGED_MLX_LM,
+            ),
+            # Prefix-collision sibling of the mlx-vlm curated entry (issue
+            # #92): the curated and generic-MLX verdicts coincide here, so
+            # this row pins behavior; the deadbydawn101 org-id row above is
+            # the discriminating guard for the mlx-vlm entry.
+            (
+                {"id": "deadbydawn101/gemma-4-E2B-Heretic-Uncensored-mlx-4bit-other", "tags": ["mlx"], "library_name": "mlx", "pipeline_tag": "text-generation"},
+                model_catalog.RUNTIME_FIT_MANAGED_MLX_LM,
             ),
             (
                 {"id": "someone/unknown", "tags": [], "library_name": "unknown", "pipeline_tag": None},
@@ -232,6 +296,16 @@ class ModelCatalogTests(unittest.TestCase):
             item = model_catalog.search_huggingface_models("gemma")[0]
         self.assertTrue(item["in_catalog"])
         self.assertEqual(item["runtime_fit"]["status"], model_catalog.RUNTIME_FIT_MANAGED_MLX_VLM)
+
+        # Org-id search result must not be flagged as in-catalog (issue #92).
+        org_api = MagicMock()
+        org_api.list_models.return_value = iter(
+            [_fake_model_info(id="mlx-community", tags=[], library_name="unknown", pipeline_tag=None)]
+        )
+        with patch("huggingface_hub.HfApi", return_value=org_api):
+            org_item = model_catalog.search_huggingface_models("mlx-community")[0]
+        self.assertFalse(org_item["in_catalog"])
+        self.assertEqual(org_item["runtime_fit"]["status"], model_catalog.RUNTIME_FIT_EXTERNAL_ONLY)
 
     def test_search_error_propagates(self) -> None:
         fake_api = SimpleNamespace(list_models=lambda **kwargs: (_ for _ in ()).throw(OSError("network down")))

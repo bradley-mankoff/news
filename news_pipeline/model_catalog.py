@@ -129,12 +129,13 @@ CATALOG_MODELS: dict[str, CatalogModel] = {
         alias="gemma-e2b-tiny",
         reference="deadbydawn101/gemma-4-E2B-Heretic-Uncensored-mlx-4bit",
         name="Gemma E2B Tiny",
-        backend="mlx-lm",
+        backend="mlx-vlm",
         hf_repo="deadbydawn101/gemma-4-E2B-Heretic-Uncensored-mlx-4bit",
         context_length=None,
         description=(
-            "Codex-safe test model: tiny 4-bit MLX Gemma for fast runs and "
-            "automated verification, served by the managed mlx-lm backend."
+            "Codex-safe test model: tiny 4-bit MLX Gemma VLM for fast runs and "
+            "automated verification, served by the managed mlx-vlm backend "
+            "(HF metadata: image-text-to-text)."
         ),
         task_notes={
             "speed": MODEL_RECOMMENDATION_TASK_NOTES["speed"],
@@ -247,7 +248,14 @@ def runtime_fit_for_hf_model(info: Mapping[str, Any]) -> dict[str, str]:
     pipeline_tag = str(info.get("pipeline_tag") or "").lower()
 
     for model in CATALOG_MODELS.values():
-        if repo_id == model.hf_repo or repo_id == model.reference:
+        # Match on hf_repo only (issue #92): the reference clause was
+        # redundant because reference == hf_repo for every curated entry
+        # (drift-guard: test_catalog_entries_are_complete), so hf_repo
+        # equality is the complete, anchored match. The org-id false positive
+        # came from the earlier prefix match on reference (removed in the
+        # #124 follow-up 0f982ef); the org-id cases in the runtime-fit matrix
+        # pin it as regression guards.
+        if repo_id == model.hf_repo:
             if model.backend == "mlx-vlm":
                 return {
                     "status": RUNTIME_FIT_MANAGED_MLX_VLM,

@@ -333,7 +333,7 @@ Curated models (2):
 
 - `gemma-4-12b-it-4bit` — mlx-vlm, 256K-token context, default model
   ([Hugging Face](https://huggingface.co/mlx-community/gemma-4-12B-it-4bit))
-- `gemma-e2b-tiny` — mlx-lm, Codex-safe test model
+- `gemma-e2b-tiny` — mlx-vlm, Codex-safe test model
   ([Hugging Face](https://huggingface.co/deadbydawn101/gemma-4-E2B-Heretic-Uncensored-mlx-4bit))
 
 Hugging Face search results carry runtime-fit verdicts (`managed_mlx_lm`,
@@ -355,39 +355,6 @@ Managed cross-platform GGUF via `llama.cpp` is **not** initially supported;
 GGUF files are not launchable by any managed backend (file-qualified GGUF
 references raise `HFValidationError` in `mlx-vlm`), so curated defaults are
 MLX repo ids and GGUF repos are `external_only` for the model picker.
-
-The default model's backend is inferred from the model reference unless
-`NEWS_MODEL_BACKEND` is set to `mlx-lm`, `mlx-vlm`, or `external` (any other
-value fails fast). To run the default model against an external
-OpenAI-compatible endpoint — no managed server is started; the pipeline waits
-for and probes the endpoint:
-
-```bash
-NEWS_MODEL_BACKEND=external NEWS_MODEL_BASE_URL=https://api.example.com/v1 NEWS_MODEL=<server-model-id> uv run news run
-```
-
-Authenticated endpoints are supported by setting `NEWS_MODEL_API_KEY`; it is
-sent as a `Bearer` token on `/models` and `/chat/completions` requests (unset
-sends no credentials). An endpoint that rejects the request with HTTP 401/403
-fails fast instead of waiting out the readiness deadline.
-
-`news model-server-command` reports that no managed server command exists for
-the external backend. Per-task models can also use external endpoints by
-giving that task a distinct base URL (`NEWS_MODEL_ARTICLE_SUMMARY_BASE_URL`,
-`NEWS_MODEL_STORY_DRAFTING_BASE_URL`, `NEWS_MODEL_STORY_SCALE_SCREENING_BASE_URL`,
-`NEWS_MODEL_TITLE_GENERATION_BASE_URL`).
-
-### Runtime Matrix
-
-Initially supported runtimes (recorded in
-[`docs/adr/0010-runtime-matrix.md`](docs/adr/0010-runtime-matrix.md)):
-
-- `mlx-lm` — managed local MLX language-model server on Apple Silicon.
-- `mlx-vlm` — managed local MLX vision-language-model server on Apple Silicon.
-- `external` — any OpenAI-compatible endpoint.
-
-Managed cross-platform GGUF via `llama.cpp` is **not** initially supported;
-GGUF files run through `mlx-vlm` on Apple Silicon.
 
 The default model's backend is inferred from the model reference unless
 `NEWS_MODEL_BACKEND` is set to `mlx-lm`, `mlx-vlm`, or `external` (any other
