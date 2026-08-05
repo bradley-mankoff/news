@@ -1694,7 +1694,10 @@ HTML = r"""<!doctype html>
     }
     function knobField(env, label, options={}) {
       const knob = knobByEnv(env);
-      if (!knob) return "";
+      if (!knob) {
+        console.warn(`knobField: env ${env} not in schema.knobs; field omitted`);
+        return "";
+      }
       return `<label class="field"><span>${escapeHtml(label)}</span>${inputForKnob(knob, options)}<code>${escapeHtml(env)}</code></label>`;
     }
     function knobHint(name) {
@@ -2007,8 +2010,10 @@ HTML = r"""<!doctype html>
             <p class="muted">Resolved: ${escapeHtml(storyRuntime.name || storyRuntime.reference || "-")}</p>
             <div class="form-grid">
               ${storyModel}
+            </div>
             <p class="muted">Sampling, token budgets, and server endpoints are in Advanced Settings.</p>
           </section>
+          <section class="panel model-card">
             <p class="eyebrow">Model</p>
             <h2>${escapeHtml(TASK_CONFIG.story_scale_screening.label)}</h2>
             <p class="muted">Resolved: ${escapeHtml(scaleRuntime.name || scaleRuntime.reference || "-")}</p>
@@ -2062,39 +2067,7 @@ HTML = r"""<!doctype html>
             </details>
           </section>
           <section class="panel">
-            <details class="details">
-              <summary>Utilities</summary>
-              <div class="form-grid">
-                <label class="field"><span>Action</span><select id="actionSelect">${actionOptions}</select><code>command action</code></label>
-              </div>
-              <div id="sourceOptions">
-                <div class="form-grid">
-                  <label class="field"><span>Limit</span><input id="opt_limit" type="number" min="1"><code>--limit</code></label>
-                  <label class="field"><span>Recent days</span><input id="opt_recent_days" type="number" min="1" value="7"><code>--recent-days</code></label>
-                  <label class="field"><span>Timeout</span><input id="opt_timeout" type="number" min="1"><code>--timeout</code></label>
-                  <label class="field"><span>Concurrency</span><input id="opt_concurrency" type="number" min="1"><code>--concurrency</code></label>
-                  <label class="field"><span>Section</span><select id="opt_section"><option value=""></option><option>sources</option><option>all</option></select><code>--section</code></label>
-                  <label class="field"><span>Language model</span><input id="opt_language_model"><code>--language-model</code></label>
-                  <label class="field"><span>Language samples</span><input id="opt_language_samples" type="number" min="1"><code>--language-samples</code></label>
-                  <label class="field"><span>Min language confidence</span><input id="opt_min_language_confidence" type="number" step="0.01" min="0" max="1"><code>--min-language-confidence</code></label>
-                </div>
-                <div class="toolbar">
-                  <label><input id="opt_probe_articles" type="checkbox"> Probe articles</label>
-                  <label><input id="opt_prune_unscrapable" type="checkbox"> Prune unscrapable</label>
-                  <label><input id="opt_only_failures" type="checkbox"> Only failures</label>
-                  <label><input id="opt_write_languages" type="checkbox"> Write languages</label>
-                  <label><input id="opt_overwrite_languages" type="checkbox"> Overwrite languages</label>
-                  <label><input id="opt_json" type="checkbox"> JSON</label>
-                </div>
-                <div class="toolbar">
-                  <button id="utilityPreviewBtn">Preview utility</button>
-                  <button id="utilityRunBtn" class="primary">Run utility</button>
-                </div>
-              </div>
-            </details>
-          </section>
-          </section>
-          <section class="panel">
+
             <details class="details">
               <summary>Utilities</summary>
               <div class="form-grid">
@@ -2137,11 +2110,10 @@ HTML = r"""<!doctype html>
         </div>
       `;
       renderPresetSummary();
-      renderTaskTuningControls();
+
       decorateEnvHints($("runSetupMount"));
       renderKnobLinks("NEWS_MODEL_ARTICLE_SUMMARY");
       renderKnobLinks("NEWS_MODEL_STORY_DRAFTING");
-      renderPromptProfilePanel();
       renderModelCatalogPanel();
 
       $("actionSelect").value = "run";
@@ -2198,13 +2170,20 @@ HTML = r"""<!doctype html>
         </section>`;
     }
     function renderAdvancedPanels() {
-      // Static container from the #advanced view; guard keeps this idempotent.
+      // #advancedPanels is a static container in the #advanced view. This guard
+      // only defends against a missing container; render once at boot — a
+      // re-render would reset in-progress edits and orphan the .onclick
+      // handlers wireEvents() assigns to these elements. The rendered-flag
+      // below keeps this idempotent.
       // Must run before renderModelTuningControls() so the tuning <select>s exist.
       const container = $("advancedPanels");
       if (!container) {
         console.error("renderAdvancedPanels: missing #advancedPanels container");
+        setStatus("Advanced settings could not be rendered (missing container).", "bad");
         return;
       }
+      if (container.dataset.rendered) return;
+      container.dataset.rendered = "1";
       container.innerHTML = `
         ${modelTuningPanel("article_summary")}
         ${modelTuningPanel("story_drafting")}
@@ -2956,9 +2935,12 @@ HTML = r"""<!doctype html>
           if (preset) loadModelTuningEditor(meta.runtimeKey, preset);
           preview("run").catch(() => {});
         };
-        $(meta.saveButtonId).onclick = () => saveModelTuningPreset(meta.runtimeKey).catch(err => setStatus(err.message, "bad"));
-        $(meta.renameButtonId).onclick = () => renameModelTuningPreset(meta.runtimeKey).catch(err => setStatus(err.message, "bad"));
-        $(meta.deleteButtonId).onclick = () => deleteModelTuningPreset(meta.runtimeKey).catch(err => setStatus(err.message, "bad"));
+        const saveBtn = $(meta.saveButtonId);
+        if (saveBtn) saveBtn.onclick = () => saveModelTuningPreset(meta.runtimeKey).catch(err => setStatus(err.message, "bad"));
+        const renameBtn = $(meta.renameButtonId);
+        if (renameBtn) renameBtn.onclick = () => renameModelTuningPreset(meta.runtimeKey).catch(err => setStatus(err.message, "bad"));
+        const deleteBtn = $(meta.deleteButtonId);
+        if (deleteBtn) deleteBtn.onclick = () => deleteModelTuningPreset(meta.runtimeKey).catch(err => setStatus(err.message, "bad"));
       });
     }
     function applySelectedPresetFromState() {
@@ -2970,6 +2952,10 @@ HTML = r"""<!doctype html>
     async function init() {
       state.schema = await api("/api/schema");
       renderTabs();
+      // Order matters: renderAdvancedPanels() must run before
+      // renderModelTuningControls() (tuning <select>s) and wireEvents()
+      // (button handlers), and before renderAdvancedKnobs() (SURFACED_ENVS
+      // suppression reads the rendered dedicated knobs).
       renderRunSetup();
       renderAdvancedPanels();
       renderAdvancedKnobs();

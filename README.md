@@ -274,10 +274,6 @@ defaults per stage or globally, and shows per-task diffs against `balanced`.
 Per-stage edits are stored in `NEWS_PROMPT_OVERRIDE_<TASK>` env vars and layer
 on top of the selected profile (override wins). Profiles can also be pinned
 inside a Run Preset's `env` map.
-templates and diffs against
-`balanced` are under Advanced Settings. Profiles can also be pinned inside a
-Run Preset's `env` map.
-
 
 ### Model Selection
 

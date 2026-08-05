@@ -119,6 +119,14 @@ class UITests(unittest.TestCase):
         self.assertEqual(advanced.count('id="comparePromptProfileBtn"'), 1)
         self.assertEqual(advanced.count('modelTuningPanel("article_summary")'), 1)
         self.assertEqual(advanced.count('modelTuningPanel("story_drafting")'), 1)
+        # NEWS_MODEL_MAX_INPUT_TOKENS is rendered once, guarded to article_summary
+        # only; dropping the ternary would duplicate the knob into both panels
+        # (two [data-env] inputs, collectEnv() last-wins).
+        tuning = html.split("function modelTuningPanel")[1].split("function renderAdvancedPanels")[0]
+        self.assertEqual(
+            tuning.count('task === "article_summary" ? knobField("NEWS_MODEL_MAX_INPUT_TOKENS", "Shared model input cap") : ""'),
+            1,
+        )
         # Dedicated envs are suppressed from the raw override list (no duplicates).
         surface = html.split("const SURFACED_ENVS")[1].split("const TASK_CONFIG")[0]
         for env in (
@@ -127,6 +135,45 @@ class UITests(unittest.TestCase):
             "NEWS_MODEL_STORY_DRAFTING_REPETITION_PENALTY",
         ):
             self.assertIn(f'"{env}"', surface)
+
+    def test_run_setup_model_cards_are_well_formed(self) -> None:
+        # Regression for the HIGH review finding: a post-rebase merge artifact
+        # left the Story Drafting card's .form-grid div unclosed and dropped
+        # the Story Scale Screening card's opening <section> tag, so the card
+        # rendered as an unstyled block and the hint paragraph landed inside
+        # the form-grid. All four model cards must have the canonical shape:
+        #   <section class="panel model-card"> … <div class="form-grid"> … </div>
+        #   <p class="muted">Advanced Settings hint</p> </section>
+        html = ui_module.HTML
+        run_setup = html.split("function renderRunSetup")[1].split("const SAMPLING_FIELDS")[0]
+        # Each of the four model cards opens with its own <section> tag
+        # (missing opener = the card content floats without .panel styling).
+        self.assertEqual(
+            run_setup.count('<section class="panel model-card">'), 4,
+            "each of the four model cards needs its own opening <section>",
+        )
+        # Every div inside Run Setup must be balanced (the artifact was an
+        # unclosed form-grid in the story-drafting card).
+        import re
+        self.assertEqual(
+            len(re.findall(r"<div(?:\s|>)", run_setup)),
+            run_setup.count("</div>"),
+            "unbalanced <div> tags inside renderRunSetup",
+        )
+        # The Advanced Settings hint must sit OUTSIDE the form-grid (a grid
+        # item, not a stray cell) and inside the card section. Pin the exact
+        # canonical sequence for the story-drafting card (the one that was
+        # malformed): model select -> close grid -> hint -> close section.
+        self.assertIn(
+            "${storyModel}\n            </div>\n            <p class=\"muted\">Sampling, token budgets, and server endpoints are in Advanced Settings.</p>\n          </section>",
+            run_setup,
+        )
+        # The scale-screening card must be a real model-card section, not a
+        # bare floating block (its opening tag was the dropped artifact).
+        self.assertIn(
+            '<section class="panel model-card">\n            <p class="eyebrow">Model</p>\n            <h2>${escapeHtml(TASK_CONFIG.story_scale_screening.label)}</h2>',
+            run_setup,
+        )
 
     def test_surfaced_envs_are_registered_and_composed(self) -> None:
         import re
@@ -151,16 +198,46 @@ class UITests(unittest.TestCase):
             self.assertIn(
                 f'"{env}"', surface, f"composed sampling env {env} not suppressed"
             )
-        # NEWS_ARTICLE_TEXT_TOKEN_LIMIT (the 13th dedicated env) must also be surfaced.
-        self.assertIn('"NEWS_ARTICLE_TEXT_TOKEN_LIMIT"', surface)
-        for env in composed:
-            self.assertIn(
-                f'"{env}"', surface, f"composed sampling env {env} not suppressed"
-            )
-        # NEWS_ARTICLE_TEXT_TOKEN_LIMIT (the 13th dedicated env) must also be surfaced.
+        # NEWS_ARTICLE_TEXT_TOKEN_LIMIT (a dedicated env, not a sampling composition) must also be surfaced.
         self.assertIn('"NEWS_ARTICLE_TEXT_TOKEN_LIMIT"', surface)
 
+    def test_every_dedicated_knob_env_is_surfaced(self) -> None:
+        # Mirror direction of test_surfaced_envs_are_registered_and_composed:
+        # every env rendered as a dedicated knob (Run Setup or Advanced panels)
+        # must be in SURFACED_ENVS, or it appears twice and collectEnv()
+        # silently last-wins the raw-list copy over the dedicated edit.
+        import re
+
+        html = ui_module.HTML
+        advanced = html.split("function renderAdvancedPanels")[1].split("function renderAdvancedKnobs")[0]
+        run_setup = html.split("function renderRunSetup")[1].split("const SAMPLING_FIELDS")[0]
+        dedicated = set(re.findall(r'knobField\("(NEWS_[A-Z_]+)"', advanced + run_setup))
+        # modelTuningPanel() also renders taskMaxTokensEnv/baseUrlEnv knobs at
+        # runtime from TASK_CONFIG; those data-driven envs must be surfaced too.
+        task_driven = set(re.findall(r'(?:taskMaxTokensEnv|baseUrlEnv): "(NEWS_[A-Z_]+)"', html))
+        surface = html.split("const SURFACED_ENVS")[1].split("const TASK_CONFIG")[0]
+        surfaced = {e.strip('"') for e in re.findall(r'"NEWS_[A-Z_]+"', surface)}
+        missing = (dedicated | task_driven) - surfaced
+        self.assertEqual(
+            missing, set(),
+            f"dedicated knob envs missing from SURFACED_ENVS: {missing}",
+        )
+
+    def test_sampling_knobs_rendered_in_advanced_panels(self) -> None:
+        # The 12 sampling envs are suppressed from the raw override list, so
+        # they must be rendered by the panels; pin the samplingFields() call
+        # site inside modelTuningPanel() so removing it cannot silently drop
+        # all 12 knobs while every manifest test still passes.
+        html = ui_module.HTML
+        tuning = html.split("function modelTuningPanel")[1].split("function renderAdvancedPanels")[0]
+        self.assertEqual(tuning.count("${samplingFields(meta.taskSamplingPrefix)}"), 1)
+        # samplingFields() must actually emit the composed envs as knobs.
+        sampling = html.split("function samplingFields")[1].split("function modelTuningPanel")[0]
+        self.assertIn('knobField(`${prefix}_${suffix}`, label)', sampling)
+
     def test_advanced_panels_rendered_at_boot(self) -> None:
+        import re
+
         html = ui_module.HTML
         boot = html.split("async function init()")[1].split("init().catch")[0]
         self.assertIn("renderAdvancedPanels();", boot)
@@ -174,6 +251,15 @@ class UITests(unittest.TestCase):
             "function renderAdvancedKnobs"
         )[0]
         self.assertIn("renderPromptProfilePanel();", advanced)
+        # The tuning <select>s are created by renderAdvancedPanels(); if
+        # renderTaskTuningControls() runs before it, the selects are missing
+        # and the early return leaves the preset dropdowns permanently empty.
+        self.assertGreater(
+            boot.index("renderTaskTuningControls();"),
+            boot.index("renderAdvancedPanels();"),
+            "renderTaskTuningControls() must run after renderAdvancedPanels()"
+            " (the tuning <select>s must exist)",
+        )
 
     def test_prompt_override_editors_and_restore_buttons_in_html(self) -> None:
         # The Editorial approach panel must expose editable per-stage editors
@@ -230,7 +316,6 @@ class UITests(unittest.TestCase):
         # Empty editors still mean "no override" (matches collectEnv's
         # suppression of empty/unset override env vars).
         self.assertIn("if (!value) return;", ui_module.HTML)
-
 
     def test_pure_helpers_and_schema_payload(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
