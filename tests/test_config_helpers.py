@@ -415,10 +415,12 @@ class ConfigHelperTests(unittest.TestCase):
                 self.assertEqual(knob["min"], 1)
             if knob["env"] in {"NEWS_MODEL_STORY_SCALE_SCREENING_BASE_URL", "NEWS_MODEL_TITLE_GENERATION_BASE_URL"}:
                 self.assertEqual(knob["group"], "Model Server Settings")
+
         backend_knobs = [knob for knob in registry if knob["env"] == "NEWS_MODEL_BACKEND"]
         self.assertEqual(len(backend_knobs), 1)
         self.assertEqual(backend_knobs[0]["group"], "Model Selection")
         self.assertEqual(backend_knobs[0]["options"], ["external", "mlx-lm", "mlx-vlm"])
+
         # Pin the Prompt Profile knob contract: select with catalog-backed
         # default and options (drift-guard for runtime_knob_registry).
         prompt_profile_knob = next(knob for knob in registry if knob["env"] == "NEWS_PROMPT_PROFILE")
