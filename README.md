@@ -185,6 +185,11 @@ Model Tuning Presets, run source utilities, and edit `config/sources.yaml` or
 `config/recipients.yaml`. Source and recipient edits write those YAML files
 directly.
 
+The main Run Setup view is prompt-first: routing, editorial prompt profile, and
+task model selection. Model tuning, pipeline budgets, clustering thresholds,
+server settings, full prompt templates, and raw environment overrides live
+under Advanced Settings.
+
 ## CLI
 
 Run with a saved preset or explicit overrides:
