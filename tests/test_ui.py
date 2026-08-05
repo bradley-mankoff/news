@@ -97,6 +97,14 @@ class UITests(unittest.TestCase):
         self.assertEqual(advanced.count('id="comparePromptProfileBtn"'), 1)
         self.assertEqual(advanced.count('modelTuningPanel("article_summary")'), 1)
         self.assertEqual(advanced.count('modelTuningPanel("story_drafting")'), 1)
+        # NEWS_MODEL_MAX_INPUT_TOKENS is rendered once, guarded to article_summary
+        # only; dropping the ternary would duplicate the knob into both panels
+        # (two [data-env] inputs, collectEnv() last-wins).
+        tuning = html.split("function modelTuningPanel")[1].split("function renderAdvancedPanels")[0]
+        self.assertEqual(
+            tuning.count('task === "article_summary" ? knobField("NEWS_MODEL_MAX_INPUT_TOKENS", "Shared model input cap") : ""'),
+            1,
+        )
         # Dedicated envs are suppressed from the raw override list (no duplicates).
         surface = html.split("const SURFACED_ENVS")[1].split("const TASK_CONFIG")[0]
         for env in (
@@ -131,16 +139,61 @@ class UITests(unittest.TestCase):
             )
         # NEWS_ARTICLE_TEXT_TOKEN_LIMIT (the 13th dedicated env) must also be surfaced.
         self.assertIn('"NEWS_ARTICLE_TEXT_TOKEN_LIMIT"', surface)
+        # NEWS_MODEL has a dedicated "Default model" knob in Run Setup, so it
+        # must be suppressed from the Advanced raw list (no duplicate inputs).
         self.assertIn('"NEWS_MODEL"', surface)
+        # The four per-task model envs moved OUT of Run Setup into Advanced,
+        # so they must NOT be suppressed: each appears exactly once, in the
+        # Advanced raw override list.
         for env in (
             "NEWS_MODEL_ARTICLE_SUMMARY",
             "NEWS_MODEL_STORY_DRAFTING",
             "NEWS_MODEL_STORY_SCALE_SCREENING",
             "NEWS_MODEL_TITLE_GENERATION",
         ):
-            self.assertNotIn(f'"{env}"', surface)
+            self.assertNotIn(f'"{env}"', surface, f"{env} must stay in the Advanced raw list")
 
     def test_advanced_panels_rendered_at_boot(self) -> None:
+        # NEWS_ARTICLE_TEXT_TOKEN_LIMIT (a dedicated env, not a sampling composition) must also be surfaced.
+        self.assertIn('"NEWS_ARTICLE_TEXT_TOKEN_LIMIT"', surface)
+
+    def test_every_dedicated_knob_env_is_surfaced(self) -> None:
+        # Mirror direction of test_surfaced_envs_are_registered_and_composed:
+        # every env rendered as a dedicated knob (Run Setup or Advanced panels)
+        # must be in SURFACED_ENVS, or it appears twice and collectEnv()
+        # silently last-wins the raw-list copy over the dedicated edit.
+        import re
+
+        html = ui_module.HTML
+        advanced = html.split("function renderAdvancedPanels")[1].split("function renderAdvancedKnobs")[0]
+        run_setup = html.split("function renderRunSetup")[1].split("const SAMPLING_FIELDS")[0]
+        dedicated = set(re.findall(r'knobField\("(NEWS_[A-Z_]+)"', advanced + run_setup))
+        # modelTuningPanel() also renders taskMaxTokensEnv/baseUrlEnv knobs at
+        # runtime from TASK_CONFIG; those data-driven envs must be surfaced too.
+        task_driven = set(re.findall(r'(?:taskMaxTokensEnv|baseUrlEnv): "(NEWS_[A-Z_]+)"', html))
+        surface = html.split("const SURFACED_ENVS")[1].split("const TASK_CONFIG")[0]
+        surfaced = {e.strip('"') for e in re.findall(r'"NEWS_[A-Z_]+"', surface)}
+        missing = (dedicated | task_driven) - surfaced
+        self.assertEqual(
+            missing, set(),
+            f"dedicated knob envs missing from SURFACED_ENVS: {missing}",
+        )
+
+    def test_sampling_knobs_rendered_in_advanced_panels(self) -> None:
+        # The 12 sampling envs are suppressed from the raw override list, so
+        # they must be rendered by the panels; pin the samplingFields() call
+        # site inside modelTuningPanel() so removing it cannot silently drop
+        # all 12 knobs while every manifest test still passes.
+        html = ui_module.HTML
+        tuning = html.split("function modelTuningPanel")[1].split("function renderAdvancedPanels")[0]
+        self.assertEqual(tuning.count("${samplingFields(meta.taskSamplingPrefix)}"), 1)
+        # samplingFields() must actually emit the composed envs as knobs.
+        sampling = html.split("function samplingFields")[1].split("function modelTuningPanel")[0]
+        self.assertIn('knobField(`${prefix}_${suffix}`, label)', sampling)
+
+    def test_advanced_panels_rendered_at_boot(self) -> None:
+        import re
+
         html = ui_module.HTML
         boot = html.split("async function init()")[1].split("init().catch")[0]
         self.assertIn("renderAdvancedPanels();", boot)
@@ -151,6 +204,27 @@ class UITests(unittest.TestCase):
             boot.index("renderAdvancedPanels();"), boot.index("renderAdvancedKnobs();")
         )
 
+    def test_run_setup_single_default_model_card(self) -> None:
+        html = ui_module.HTML
+        run_setup = html.split("function renderRunSetup")[1].split("const SAMPLING_FIELDS")[0]
+        # Exactly one "Default model" knob; the four per-task model cards are gone.
+        self.assertEqual(run_setup.count('knobField("NEWS_MODEL", "Default model"'), 1)
+        for env in (
+            "NEWS_MODEL_ARTICLE_SUMMARY",
+            "NEWS_MODEL_STORY_DRAFTING",
+            "NEWS_MODEL_STORY_SCALE_SCREENING",
+            "NEWS_MODEL_TITLE_GENERATION",
+        ):
+            self.assertNotIn(f'knobField("{env}"', run_setup)
+        # The readout binds to the top-level runtime.model {name, reference}.
+        self.assertIn("defaultRuntime.name || defaultRuntime.reference", run_setup)
+        # A failed runtime snapshot renders a visible banner, not a silent "-".
+        self.assertIn("const runtimeError = schema.runtime_error || \"\";", run_setup)
+        self.assertIn("Configuration error: ${escapeHtml(runtimeError)}", run_setup)
+        advanced = html.split("function renderAdvancedPanels")[1].split(
+            "function renderAdvancedKnobs"
+        )[0]
+        self.assertIn("renderPromptProfilePanel();", advanced)
 
     def test_prompt_override_editors_and_restore_buttons_in_html(self) -> None:
         # The Editorial approach panel must expose editable per-stage editors

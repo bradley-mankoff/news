@@ -5,6 +5,7 @@ Project goal: build, review, and send a daily news report from configured source
 ## Route
 - Need setup, commands, UI usage, PR review flow, or operational runbook -> `README.md`.
 - Need project vocabulary, business rules, or architecture context -> `CONTEXT.md`.
+- Need domain concept vocabulary or the checked-in knowledge bundle -> `knowledge/` (OKF v0.2; conformance checked by `tests/test_okf.py`).
 - Need accepted architectural decisions -> `docs/adr/`.
 - Need source definitions -> `config/sources.yaml`.
 - Need recipient definitions -> `config/recipients.yaml`.

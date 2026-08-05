@@ -1467,7 +1467,6 @@ HTML = r"""<!doctype html>
     const TASK_CONFIG = {
       article_summary: {
         label: "Article Summarization",
-        prefix: "article",
         modelEnv: "NEWS_MODEL_ARTICLE_SUMMARY",
         presetEnv: "NEWS_MODEL_ARTICLE_SUMMARY_TUNING_PRESET",
         baseUrlEnv: "NEWS_MODEL_ARTICLE_SUMMARY_BASE_URL",
@@ -1476,20 +1475,15 @@ HTML = r"""<!doctype html>
         nameInputId: "article_tuning_name",
         descriptionInputId: "article_tuning_description",
         modelSelectId: "article_model",
-        baseUrlId: "article_base_url",
         saveButtonId: "article_tuning_save",
         renameButtonId: "article_tuning_rename",
         deleteButtonId: "article_tuning_delete",
-        modelMaxTokensId: "article_model_max_input_tokens",
-        maxTokensField: "article_summary_max_tokens",
-        maxTokensLabel: "Article summary max tokens",
         taskMaxTokensEnv: "NEWS_ARTICLE_SUMMARY_MAX_TOKENS",
         taskSamplingPrefix: "NEWS_MODEL_ARTICLE_SUMMARY",
         runtimeKey: "article_summary"
       },
       story_drafting: {
         label: "Story Writing",
-        prefix: "story",
         modelEnv: "NEWS_MODEL_STORY_DRAFTING",
         presetEnv: "NEWS_MODEL_STORY_DRAFTING_TUNING_PRESET",
         baseUrlEnv: "NEWS_MODEL_STORY_DRAFTING_BASE_URL",
@@ -1498,20 +1492,15 @@ HTML = r"""<!doctype html>
         nameInputId: "story_tuning_name",
         descriptionInputId: "story_tuning_description",
         modelSelectId: "story_model",
-        baseUrlId: "story_base_url",
         saveButtonId: "story_tuning_save",
         renameButtonId: "story_tuning_rename",
         deleteButtonId: "story_tuning_delete",
-        modelMaxTokensId: null,
-        maxTokensField: "story_drafting_max_tokens",
-        maxTokensLabel: "Story drafting max tokens",
         taskMaxTokensEnv: "NEWS_STORY_DRAFTING_MAX_TOKENS",
         taskSamplingPrefix: "NEWS_MODEL_STORY_DRAFTING",
         runtimeKey: "story_drafting"
       },
       story_scale_screening: {
         label: "Story Scale Screening",
-        prefix: "scale",
         modelEnv: "NEWS_MODEL_STORY_SCALE_SCREENING",
         presetEnv: "NEWS_MODEL_STORY_SCALE_SCREENING_TUNING_PRESET",
         baseUrlEnv: "NEWS_MODEL_STORY_SCALE_SCREENING_BASE_URL",
@@ -1520,20 +1509,15 @@ HTML = r"""<!doctype html>
         nameInputId: "scale_tuning_name",
         descriptionInputId: "scale_tuning_description",
         modelSelectId: "scale_model",
-        baseUrlId: "scale_base_url",
         saveButtonId: "scale_tuning_save",
         renameButtonId: "scale_tuning_rename",
         deleteButtonId: "scale_tuning_delete",
-        modelMaxTokensId: null,
-        maxTokensField: "story_scale_screening_max_tokens",
-        maxTokensLabel: "Scale screening max tokens",
         taskMaxTokensEnv: "NEWS_STORY_SCALE_SCREENING_MAX_TOKENS",
         taskSamplingPrefix: "NEWS_MODEL_STORY_SCALE_SCREENING",
         runtimeKey: "story_scale_screening"
       },
       title_generation: {
         label: "Title Generation",
-        prefix: "title",
         modelEnv: "NEWS_MODEL_TITLE_GENERATION",
         presetEnv: "NEWS_MODEL_TITLE_GENERATION_TUNING_PRESET",
         baseUrlEnv: "NEWS_MODEL_TITLE_GENERATION_BASE_URL",
@@ -1542,13 +1526,9 @@ HTML = r"""<!doctype html>
         nameInputId: "title_tuning_name",
         descriptionInputId: "title_tuning_description",
         modelSelectId: "title_model",
-        baseUrlId: "title_base_url",
         saveButtonId: "title_tuning_save",
         renameButtonId: "title_tuning_rename",
         deleteButtonId: "title_tuning_delete",
-        modelMaxTokensId: null,
-        maxTokensField: "title_generation_max_tokens",
-        maxTokensLabel: "Title generation max tokens",
         taskMaxTokensEnv: "NEWS_TITLE_GENERATION_MAX_TOKENS",
         taskSamplingPrefix: "NEWS_MODEL_TITLE_GENERATION",
         runtimeKey: "title_generation"
@@ -1902,6 +1882,8 @@ HTML = r"""<!doctype html>
     }
     function renderRunSetup() {
       const schema = state.schema || {};
+      const runtime = schema.runtime || {};
+      const defaultRuntime = runtime.model ? runtime.model : {};
       const runtimeError = schema.runtime_error || "";
       const actionOptions = (schema.actions || []).map(action => `<option value="${escapeHtml(action)}"${action === "run" ? " selected" : ""}>${escapeHtml(action)}</option>`).join("");
       const promptProfileOptions = (schema.prompt_profiles || []).map(p => `<option value="${escapeHtml(p.id)}"${currentControlValue("NEWS_PROMPT_PROFILE") === p.id ? " selected" : ""}>${escapeHtml(p.name)}</option>`).join("");
@@ -1915,7 +1897,47 @@ HTML = r"""<!doctype html>
         all: "All"
       };
       const defaultModel = knobField("NEWS_MODEL", "Default model", { emptyLabel: "default: gemma-4-12b-it-4bit" });
-
+      const sharedModelTokens = knobField("NEWS_MODEL_MAX_INPUT_TOKENS", "Shared model input cap");
+      const articleTokenCap = knobField("NEWS_ARTICLE_SUMMARY_MAX_TOKENS", "Article summary max tokens");
+      const storyTokenCap = knobField("NEWS_STORY_DRAFTING_MAX_TOKENS", "Story drafting max tokens");
+      const scaleTokenCap = knobField("NEWS_STORY_SCALE_SCREENING_MAX_TOKENS", "Scale screening max tokens");
+      const titleTokenCap = knobField("NEWS_TITLE_GENERATION_MAX_TOKENS", "Title generation max tokens");
+      const articleBaseUrl = knobField("NEWS_MODEL_ARTICLE_SUMMARY_BASE_URL", "Base URL");
+      const storyBaseUrl = knobField("NEWS_MODEL_STORY_DRAFTING_BASE_URL", "Base URL");
+      const scaleBaseUrl = knobField("NEWS_MODEL_STORY_SCALE_SCREENING_BASE_URL", "Base URL");
+      const titleBaseUrl = knobField("NEWS_MODEL_TITLE_GENERATION_BASE_URL", "Base URL");
+      const articleSampling = [
+        knobField("NEWS_MODEL_ARTICLE_SUMMARY_TEMPERATURE", "Temperature"),
+        knobField("NEWS_MODEL_ARTICLE_SUMMARY_TOP_P", "Top P"),
+        knobField("NEWS_MODEL_ARTICLE_SUMMARY_TOP_K", "Top K"),
+        knobField("NEWS_MODEL_ARTICLE_SUMMARY_MIN_P", "Min P"),
+        knobField("NEWS_MODEL_ARTICLE_SUMMARY_PRESENCE_PENALTY", "Presence penalty"),
+        knobField("NEWS_MODEL_ARTICLE_SUMMARY_REPETITION_PENALTY", "Repetition penalty")
+      ].join("");
+      const storySampling = [
+        knobField("NEWS_MODEL_STORY_DRAFTING_TEMPERATURE", "Temperature"),
+        knobField("NEWS_MODEL_STORY_DRAFTING_TOP_P", "Top P"),
+        knobField("NEWS_MODEL_STORY_DRAFTING_TOP_K", "Top K"),
+        knobField("NEWS_MODEL_STORY_DRAFTING_MIN_P", "Min P"),
+        knobField("NEWS_MODEL_STORY_DRAFTING_PRESENCE_PENALTY", "Presence penalty"),
+        knobField("NEWS_MODEL_STORY_DRAFTING_REPETITION_PENALTY", "Repetition penalty")
+      ].join("");
+      const scaleSampling = [
+        knobField("NEWS_MODEL_STORY_SCALE_SCREENING_TEMPERATURE", "Temperature"),
+        knobField("NEWS_MODEL_STORY_SCALE_SCREENING_TOP_P", "Top P"),
+        knobField("NEWS_MODEL_STORY_SCALE_SCREENING_TOP_K", "Top K"),
+        knobField("NEWS_MODEL_STORY_SCALE_SCREENING_MIN_P", "Min P"),
+        knobField("NEWS_MODEL_STORY_SCALE_SCREENING_PRESENCE_PENALTY", "Presence penalty"),
+        knobField("NEWS_MODEL_STORY_SCALE_SCREENING_REPETITION_PENALTY", "Repetition penalty")
+      ].join("");
+      const titleSampling = [
+        knobField("NEWS_MODEL_TITLE_GENERATION_TEMPERATURE", "Temperature"),
+        knobField("NEWS_MODEL_TITLE_GENERATION_TOP_P", "Top P"),
+        knobField("NEWS_MODEL_TITLE_GENERATION_TOP_K", "Top K"),
+        knobField("NEWS_MODEL_TITLE_GENERATION_MIN_P", "Min P"),
+        knobField("NEWS_MODEL_TITLE_GENERATION_PRESENCE_PENALTY", "Presence penalty"),
+        knobField("NEWS_MODEL_TITLE_GENERATION_REPETITION_PENALTY", "Repetition penalty")
+      ].join("");
       $("runSetupMount").innerHTML = `
         <div class="banner panel">
           <div class="banner-copy">
@@ -1980,7 +2002,7 @@ HTML = r"""<!doctype html>
           <section class="panel model-card">
             <p class="eyebrow">Model</p>
             <h2>Default model</h2>
-            <p class="muted">Resolved from the runtime configuration.</p>
+            <p class="muted">Resolved: ${escapeHtml(defaultRuntime.name || defaultRuntime.reference || "-")}</p>
             <div class="form-grid">
               ${defaultModel}
             </div>
@@ -2065,10 +2087,10 @@ HTML = r"""<!doctype html>
         </div>
       `;
       renderPresetSummary();
+      renderModelTuningPanels();
       decorateEnvHints($("runSetupMount"));
       renderPromptProfilePanel();
       renderModelCatalogPanel();
-
       $("actionSelect").value = "run";
       $("sourceOptions").classList.add("hidden");
       $("actionSelect").onchange = () => {
@@ -2117,7 +2139,7 @@ HTML = r"""<!doctype html>
             <label class="field"><span>Display name</span><input id="${meta.nameInputId}"><code>name</code></label>
             <label class="field"><span>Description</span><textarea id="${meta.descriptionInputId}"></textarea><code>description</code></label>
             ${sharedCap}
-            ${knobField(meta.taskMaxTokensEnv, meta.maxTokensLabel)}
+            ${knobField(meta.taskMaxTokensEnv, TASK_MAX_TOKENS_LABELS[task] || "Max tokens")}
             ${knobField(meta.baseUrlEnv, "Base URL")}
             ${samplingFields(meta.taskSamplingPrefix)}
           </div>
@@ -2129,20 +2151,13 @@ HTML = r"""<!doctype html>
         </section>`;
     }
     function renderAdvancedPanels() {
-      // #advancedPanels is a static container in the #advanced view. This guard
-      // only defends against a missing container; render once at boot — a
-      // re-render would reset in-progress edits and orphan the .onclick
-      // handlers wireEvents() assigns to these elements. The rendered-flag
-      // below keeps this idempotent.
+      // Static container from the #advanced view; guard keeps this idempotent.
       // Must run before renderModelTuningControls() so the tuning <select>s exist.
       const container = $("advancedPanels");
       if (!container) {
         console.error("renderAdvancedPanels: missing #advancedPanels container");
-        setStatus("Advanced settings could not be rendered (missing container).", "bad");
         return;
       }
-      if (container.dataset.rendered) return;
-      container.dataset.rendered = "1";
       container.innerHTML = `
         ${modelTuningPanel("article_summary")}
         ${modelTuningPanel("story_drafting")}
@@ -2190,12 +2205,6 @@ HTML = r"""<!doctype html>
       `;
       decorateEnvHints($("advancedPanels"));
       renderPromptProfilePanel();
-    }
-    function renderTaskTuningControls() {
-      renderModelTuningControls("article_summary");
-      renderModelTuningControls("story_drafting");
-      renderModelTuningControls("story_scale_screening");
-      renderModelTuningControls("title_generation");
     }
     function renderModelTuningControls(task, { preserveEditor = false } = {}) {
       const meta = TASK_CONFIG[task];
@@ -2252,7 +2261,7 @@ HTML = r"""<!doctype html>
       const sharedMax = valueByEnv("NEWS_MODEL_MAX_INPUT_TOKENS");
       if (sharedMax) tuning.model_max_input_tokens = sharedMax;
       const taskMax = valueByEnv(meta.taskMaxTokensEnv);
-      if (taskMax) tuning[meta.maxTokensField] = taskMax;
+      if (taskMax) tuning[`${meta.runtimeKey}_max_tokens`] = taskMax;
       const samplingFields = SAMPLING_FIELDS.map(([suffix]) => [suffix.toLowerCase(), `${meta.taskSamplingPrefix}_${suffix}`]);
       samplingFields.forEach(([key, env]) => {
         const raw = valueByEnv(env);
@@ -2284,7 +2293,8 @@ HTML = r"""<!doctype html>
       if (preset) {
         const tuning = preset.tuning || {};
         if (tuning.model_max_input_tokens) setControlValue("NEWS_MODEL_MAX_INPUT_TOKENS", tuning.model_max_input_tokens);
-        if (tuning[meta.maxTokensField]) setControlValue(meta.taskMaxTokensEnv, tuning[meta.maxTokensField]);
+        const taskMaxTokens = tuning[`${meta.runtimeKey}_max_tokens`];
+        if (taskMaxTokens) setControlValue(meta.taskMaxTokensEnv, taskMaxTokens);
         SAMPLING_FIELDS.forEach(([suffix]) => {
           const field = suffix.toLowerCase();
           if (tuning[field] !== undefined && tuning[field] !== null && tuning[field] !== "") {
@@ -2375,10 +2385,22 @@ HTML = r"""<!doctype html>
       state.selectedRunPresetId = preset.id || "";
       setKnobEnv(preset.env || {});
       renderPresetSummary();
-      renderTaskTuningControls();
+      renderModelTuningPanels();
       renderPromptProfilePanel();
       refreshModelKnobLinks();
       previewQuietly("run");
+    }
+    function resetAllOverrides() {
+      document.querySelectorAll("[data-env]").forEach(el => {
+        if (el.type === "checkbox") el.checked = false;
+        else el.value = "";
+      });
+      state.selectedRunPresetId = "";
+      renderPresetSummary();
+      renderModelTuningPanels();
+      renderPromptProfilePanel();
+      refreshModelKnobLinks();
+      preview("run").catch(() => {});
     }
     function setKnobEnv(env) {
       document.querySelectorAll("[data-env]").forEach(el => {
@@ -2433,7 +2455,7 @@ HTML = r"""<!doctype html>
     async function loadModelTuningPresets() {
       const data = await api("/api/model-tuning-presets");
       state.modelTuningPresets = data.presets || [];
-      renderTaskTuningControls();
+      renderModelTuningPanels();
     }
     function renderAdvancedKnobs() {
       const search = value("knobSearch").toLowerCase();
@@ -2931,7 +2953,7 @@ HTML = r"""<!doctype html>
       renderStats();
       renderRunPresetDrawer();
       renderPresetSummary();
-      renderTaskTuningControls();
+      renderModelTuningPanels();
       wireEvents();
       document.addEventListener("change", (event) => {
         const el = event.target;

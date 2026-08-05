@@ -248,7 +248,14 @@ def runtime_fit_for_hf_model(info: Mapping[str, Any]) -> dict[str, str]:
     pipeline_tag = str(info.get("pipeline_tag") or "").lower()
 
     for model in CATALOG_MODELS.values():
-        if repo_id == model.hf_repo or repo_id == model.reference:
+        # Match on hf_repo only (issue #92): the reference clause was
+        # redundant because reference == hf_repo for every curated entry
+        # (drift-guard: test_catalog_entries_are_complete), so hf_repo
+        # equality is the complete, anchored match. The org-id false positive
+        # came from the earlier prefix match on reference (removed in the
+        # #124 follow-up 0f982ef); the org-id cases in the runtime-fit matrix
+        # pin it as regression guards.
+        if repo_id == model.hf_repo:
             if model.backend == "mlx-vlm":
                 return {
                     "status": RUNTIME_FIT_MANAGED_MLX_VLM,
