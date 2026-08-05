@@ -129,6 +129,14 @@ class UITests(unittest.TestCase):
             )
         # NEWS_ARTICLE_TEXT_TOKEN_LIMIT (the 13th dedicated env) must also be surfaced.
         self.assertIn('"NEWS_ARTICLE_TEXT_TOKEN_LIMIT"', surface)
+        self.assertIn('"NEWS_MODEL"', surface)
+        for env in (
+            "NEWS_MODEL_ARTICLE_SUMMARY",
+            "NEWS_MODEL_STORY_DRAFTING",
+            "NEWS_MODEL_STORY_SCALE_SCREENING",
+            "NEWS_MODEL_TITLE_GENERATION",
+        ):
+            self.assertNotIn(f'"{env}"', surface)
 
     def test_advanced_panels_rendered_at_boot(self) -> None:
         html = ui_module.HTML
@@ -247,44 +255,49 @@ class UITests(unittest.TestCase):
         ):
             self.assertIn(f'"{env}"', surface)
 
-    def test_run_setup_model_cards_are_well_formed(self) -> None:
-        # Regression for the HIGH review finding: a post-rebase merge artifact
-        # left the Story Drafting card's .form-grid div unclosed and dropped
-        # the Story Scale Screening card's opening <section> tag, so the card
-        # rendered as an unstyled block and the hint paragraph landed inside
-        # the form-grid. All four model cards must have the canonical shape:
-        #   <section class="panel model-card"> … <div class="form-grid"> … </div>
-        #   <p class="muted">Advanced Settings hint</p> </section>
+    def test_run_setup_single_default_model_card(self) -> None:
         html = ui_module.HTML
         run_setup = html.split("function renderRunSetup")[1].split("const SAMPLING_FIELDS")[0]
-        # Each of the four model cards opens with its own <section> tag
-        # (missing opener = the card content floats without .panel styling).
         self.assertEqual(
-            run_setup.count('<section class="panel model-card">'), 4,
-            "each of the four model cards needs its own opening <section>",
+            run_setup.count('<section class="panel model-card">'), 1,
+            "Run Setup should expose only the default model card",
         )
-        # Every div inside Run Setup must be balanced (the artifact was an
-        # unclosed form-grid in the story-drafting card).
+        self.assertIn('knobField("NEWS_MODEL", "Default model"', run_setup)
+        for env in (
+            "NEWS_MODEL_ARTICLE_SUMMARY",
+            "NEWS_MODEL_STORY_DRAFTING",
+            "NEWS_MODEL_STORY_SCALE_SCREENING",
+            "NEWS_MODEL_TITLE_GENERATION",
+        ):
+            self.assertNotIn(f'knobField("{env}"', run_setup)
+        self.assertIn(
+            "Per-task model alternatives and sampling are in Advanced Settings.",
+            run_setup,
+        )
         import re
         self.assertEqual(
             len(re.findall(r"<div(?:\s|>)", run_setup)),
             run_setup.count("</div>"),
             "unbalanced <div> tags inside renderRunSetup",
         )
-        # The Advanced Settings hint must sit OUTSIDE the form-grid (a grid
-        # item, not a stray cell) and inside the card section. Pin the exact
-        # canonical sequence for the story-drafting card (the one that was
-        # malformed): model select -> close grid -> hint -> close section.
-        self.assertIn(
-            "${storyModel}\n            </div>\n            <p class=\"muted\">Sampling, token budgets, and server endpoints are in Advanced Settings.</p>\n          </section>",
-            run_setup,
+
+    def test_every_dedicated_knob_env_is_surfaced(self) -> None:
+        import re
+
+        html = ui_module.HTML
+        advanced = html.split("function renderAdvancedPanels")[1].split(
+            "function renderAdvancedKnobs"
+        )[0]
+        run_setup = html.split("function renderRunSetup")[1].split(
+            "const SAMPLING_FIELDS"
+        )[0]
+        dedicated = set(re.findall(r'knobField\("(NEWS_[A-Z_]+)"', advanced + run_setup))
+        task_driven = set(
+            re.findall(r'(?:taskMaxTokensEnv|baseUrlEnv): "(NEWS_[A-Z_]+)"', html)
         )
-        # The scale-screening card must be a real model-card section, not a
-        # bare floating block (its opening tag was the dropped artifact).
-        self.assertIn(
-            '<section class="panel model-card">\n            <p class="eyebrow">Model</p>\n            <h2>${escapeHtml(TASK_CONFIG.story_scale_screening.label)}</h2>',
-            run_setup,
-        )
+        surface = html.split("const SURFACED_ENVS")[1].split("const TASK_CONFIG")[0]
+        surfaced = {env.strip('"') for env in re.findall(r'"NEWS_[A-Z_]+"', surface)}
+        self.assertEqual((dedicated | task_driven) - surfaced, set())
 
     def test_prompt_override_editors_and_restore_buttons_in_html(self) -> None:
         # The Editorial approach panel must expose editable per-stage editors
