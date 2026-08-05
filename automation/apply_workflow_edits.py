@@ -7,8 +7,10 @@ workflows") after an archon reinstall replaces the bundled YAMLs:
   - `completion-comment` node (with the `## Deferred work` contract the board
     poller parses) in archon-fix-github-issue.yaml and archon-idea-to-pr.yaml
   - `report-verdict` node in archon-smart-pr-review.yaml
-  - Luna Max (`opencode-go/gpt-5.6-luna`, `effort: max`) on planning, review,
-    and vision-capable nodes; unassigned nodes use DeepSeek V4 Flash via tiers
+  - Rigorous nodes use Pi's OpenAI Codex OAuth model (`provider: pi`,
+    `model: openai-codex/gpt-5.6-luna`, `effort: max`), matching the current
+    ChatGPT/Codex session model. Routine nodes use DeepSeek V4 Flash through
+    the Pi tier at `effort: max`.
   - the full archon-fix-ship-conflicts.yaml (inline prompt node, no DB
     commands)
 
@@ -28,15 +30,17 @@ ARCHON_HOME = Path(os.environ.get("ARCHON_HOME",
                                   "~/.local/share/archon-pi/archon-home")).expanduser()
 WORKFLOWS = ARCHON_HOME / "workflows"
 
-LUNA_PROVIDER = "pi"
-LUNA_MODEL = "opencode-go/gpt-5.6-luna"
-LUNA_EFFORT = "max"
+MODEL_PROVIDER = "pi"
+MODEL_ID = "openai-codex/gpt-5.6-luna"
+MODEL_EFFORT = "max"
 
-# Explicit high-capability assignments. All other AI nodes inherit the
+# Explicit rigorous assignments. All other AI nodes inherit the
 # DeepSeek V4 Flash tier/default from archon-home/config.yaml.
-LUNA_NODES: dict[str, tuple[str, ...]] = {
+RIGOROUS_NODES: dict[str, tuple[str, ...]] = {
     "archon-assist.yaml": ("assist",),
     "archon-pi-default.yaml": ("agent",),
+    "archon-fix-develop-conflicts.yaml": ("resolve",),
+    "archon-fix-ship-conflicts.yaml": ("resolve",),
     "archon-comprehensive-pr-review.yaml": (
         "scope", "code-review", "error-handling", "test-coverage",
         "comment-quality", "docs-impact", "synthesize", "implement-fixes",
@@ -48,9 +52,13 @@ LUNA_NODES: dict[str, tuple[str, ...]] = {
         "investigate", "plan", "review-scope", "review-classify",
         "code-review", "error-handling", "test-coverage", "comment-quality",
         "docs-impact", "synthesize", "self-fix",
+        "completion-comment",
     ),
-    "archon-idea-to-pr.yaml": ("create-plan", "plan-setup", "confirm-plan"),
+    "archon-idea-to-pr.yaml": (
+        "create-plan", "plan-setup", "confirm-plan", "completion-comment",
+    ),
     "archon-issue-review-full.yaml": ("investigate",),
+    "archon-resolve-conflicts.yaml": ("resolve",),
     "archon-plan-to-pr.yaml": ("plan-setup", "confirm-plan"),
     "archon-review-block.yaml": (
         "review-scope", "spec-review", "code-review", "error-handling",
@@ -611,8 +619,8 @@ def ensure_spec_review(path: Path) -> str | None:
     return "added spec-review node to archon-review-block.yaml"
 
 
-def ensure_luna_models(path: Path, node_ids: tuple[str, ...]) -> str | None:
-    """Pin selected AI nodes to the vision-capable Luna Max model."""
+def ensure_rigorous_models(path: Path, node_ids: tuple[str, ...]) -> str | None:
+    """Pin selected AI nodes to Pi's OpenAI Codex OAuth model at maximum effort."""
     text = path.read_text()
     original = text
     missing: list[str] = []
@@ -625,37 +633,37 @@ def ensure_luna_models(path: Path, node_ids: tuple[str, ...]) -> str | None:
         block_end = node.end() + following.start() if following else len(text)
         block = text[node.start():block_end]
         body = re.sub(
-            r"(?m)^    (?:provider|model|effort):[^\n]*\n",
+            r"(?m)^    (?:provider|model|effort|modelReasoningEffort):[^\n]*\n",
             "",
             block[len(node.group(0)):],
         )
         replacement = (
             node.group(0)
-            + f"    provider: {LUNA_PROVIDER}\n"
-            + f"    model: {LUNA_MODEL}\n"
-            + f"    effort: {LUNA_EFFORT}\n"
+            + f"    provider: {MODEL_PROVIDER}\n"
+            + f"    model: {MODEL_ID}\n"
+            + f"    effort: {MODEL_EFFORT}\n"
             + body
         )
         text = text[:node.start()] + replacement + text[block_end:]
 
     if text != original:
         path.write_text(text)
-        note = f"pinned Luna Max nodes in {path.name}"
+        note = f"pinned rigorous Pi Codex nodes in {path.name}"
     else:
         note = None
     if missing:
         suffix = f" (missing nodes: {', '.join(missing)})"
-        return (note or f"checked Luna Max nodes in {path.name}") + suffix
+        return (note or f"checked rigorous Pi Codex nodes in {path.name}") + suffix
     return note
 
 
-def apply_luna_models(changed: list[str]) -> None:
-    for fname, node_ids in LUNA_NODES.items():
+def apply_rigorous_models(changed: list[str]) -> None:
+    for fname, node_ids in RIGOROUS_NODES.items():
         path = WORKFLOWS / fname
         if not path.exists():
-            changed.append(f"MISSING {fname} for Luna assignments (workflows dir: {WORKFLOWS})")
+            changed.append(f"MISSING {fname} for rigorous Pi Codex assignments (workflows dir: {WORKFLOWS})")
             continue
-        note = ensure_luna_models(path, node_ids)
+        note = ensure_rigorous_models(path, node_ids)
         if note:
             changed.append(note)
 
@@ -721,7 +729,6 @@ def main() -> int:
     if note:
         changed.append(note)
 
-    apply_luna_models(changed)
 
     ship = WORKFLOWS / "archon-fix-ship-conflicts.yaml"
     if not ship.exists():
@@ -738,6 +745,7 @@ def main() -> int:
     elif "name: archon-fix-develop-conflicts" not in develop.read_text():
         changed.append("archon-fix-develop-conflicts.yaml exists but looks wrong — "
                        "check its contents manually")
+    apply_rigorous_models(changed)
 
     if changed:
         print("\n".join(f"- {c}" for c in changed))
