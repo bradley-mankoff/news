@@ -4,6 +4,8 @@ import contextlib
 import http.client
 import json
 import os
+import re
+import subprocess
 import tempfile
 import threading
 import unittest
@@ -397,6 +399,43 @@ class UITests(unittest.TestCase):
         ):
             self.assertIn(env, js_source)
             self.assertIn(env, knob_envs)
+
+    def test_embedded_script_parses(self) -> None:
+        # A SyntaxError in the served <script> discards the entire block:
+        # the whole UI silently dies with green Python tests (regression
+        # shipped once via a 4x-duplicated JS bundle). Parse the exact
+        # served script with node --check to catch the class.
+        html = ui_module.HTML
+        script = html.split("<script>", 1)[1].split("</script>", 1)[0]
+        with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False) as f:
+            f.write(script)
+            path = f.name
+        try:
+            result = subprocess.run(
+                ["node", "--check", path], capture_output=True, text=True
+            )
+        except FileNotFoundError:
+            self.skipTest("node is not available on PATH")
+        finally:
+            os.unlink(path)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_js_bundle_is_not_duplicated(self) -> None:
+        # Rebase/conflict-resolution once multiplied the JS tail 4x inside
+        # ui.HTML (dead payload + parse failure). Pin each function/const
+        # marker to exactly one occurrence so the bundle cannot regrow.
+        html = ui_module.HTML
+        for marker in (
+            "function setKnobEnv",
+            "function renderAdvancedKnobs",
+            "function wireEvents",
+            "function sourceInput",
+            "function applySelectedPresetFromState",
+            "const PROMPT_TASK_LABELS = {",
+            "const MODEL_TASK_LABELS = {",
+            "const RUNTIME_FIT_LABELS = {",
+        ):
+            self.assertEqual(html.count(marker), 1, marker)
 
     def test_crud_helpers_use_temp_files(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
