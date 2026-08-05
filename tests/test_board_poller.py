@@ -38,7 +38,6 @@ from automation.board_poller import (
     sync_local_develop,
     sync_runnable_labels,
     try_merge_base_into_head,
-    sync_runnable_labels,
 )
 
 
