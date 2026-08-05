@@ -16,13 +16,14 @@ from news_pipeline import config as config_module
 from news_pipeline.config import (
     ACTIVE_PRESET_ENV_VAR,
     CODEX_TEST_MODEL_ALIAS,
-    QWWYTHOS_9B_4BIT_MODEL_ALIAS,
-    QWWYTHOS_9B_4BIT_MODEL_REFERENCE,
+    GEMMA_4_12B_IT_4BIT_MODEL_ALIAS,
+    GEMMA_4_12B_IT_4BIT_MODEL_REPO,
     MODEL_TASK_ARTICLE_SUMMARY,
     MODEL_TASK_IMAGE_ART_DIRECTION,
     MODEL_TASK_STORY_DRAFTING,
     MODEL_TASK_STORY_SCALE_SCREENING,
     MODEL_TASK_TITLE_GENERATION,
+    QWWYTHOS_9B_4BIT_MODEL_REFERENCE,
     ModelSamplingSettings,
     ModelServerSettings,
     PRESET_ENV_VAR,
@@ -43,7 +44,7 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
             RuntimeConfigRequest(
                 base_env={},
                 preset_id="dev",
-                overrides={"NEWS_MODEL": QWWYTHOS_9B_4BIT_MODEL_ALIAS},
+                overrides={"NEWS_MODEL": GEMMA_4_12B_IT_4BIT_MODEL_ALIAS},
                 materialize_outputs=False,
                 run_started_at=datetime(2026, 6, 14, 12, 0, 0),
             )
@@ -54,7 +55,7 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
     def test_preset_base_env_and_overrides_have_documented_precedence(self) -> None:
         resolution = resolve_runtime_config(
             RuntimeConfigRequest(
-                base_env={"NEWS_MODEL": QWWYTHOS_9B_4BIT_MODEL_ALIAS},
+                base_env={"NEWS_MODEL": GEMMA_4_12B_IT_4BIT_MODEL_ALIAS},
                 preset_id="dev",
                 overrides={"NEWS_SOURCE_SCOPE": "peripheral"},
                 materialize_outputs=False,
@@ -63,8 +64,8 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
         )
 
         self.assertEqual(resolution.config.preset_id, "dev")
-        self.assertEqual(resolution.config.model_reference, QWWYTHOS_9B_4BIT_MODEL_ALIAS)
-        self.assertEqual(resolution.config.model_name, QWWYTHOS_9B_4BIT_MODEL_REFERENCE)
+        self.assertEqual(resolution.config.model_reference, GEMMA_4_12B_IT_4BIT_MODEL_ALIAS)
+        self.assertEqual(resolution.config.model_name, GEMMA_4_12B_IT_4BIT_MODEL_REPO)
         self.assertEqual(resolution.config.model_backend, "mlx-vlm")
         self.assertIn("python -m mlx_vlm.server", resolution.config.model_server_command)
         self.assertEqual(resolution.config.source_scope, "peripheral")
@@ -73,6 +74,59 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
         self.assertEqual(resolution.command_env_delta["NEWS_SOURCE_SCOPE"], "peripheral")
         self.assertNotIn("NEWS_RECIPIENT_SCOPE", resolution.command_env_delta)
 
+    def test_default_model_resolves_to_launchable_gemma_4_12b(self) -> None:
+        config = load_runtime_config(
+            environ={},
+            overrides={},
+            materialize_outputs=False,
+            run_started_at=datetime(2026, 6, 14, 12, 0, 0),
+        )
+        # Default alias, resolved reference, backend.
+        self.assertEqual(config.model_reference, "gemma-4-12b-it-4bit")
+        self.assertEqual(config.model_name, "mlx-community/gemma-4-12B-it-4bit")
+        self.assertEqual(config.model_backend, "mlx-vlm")
+        # Generated server command uses the repo id, never a file-qualified path.
+        self.assertIn("--model mlx-community/gemma-4-12B-it-4bit", config.model_server_command)
+        self.assertNotIn(".gguf", config.model_server_command)
+        # One default model across all four LLM stages.
+        for task in ("article_summary", "story_drafting", "story_scale_screening", "title_generation"):
+            self.assertEqual(config.model_assignments[task].reference, "gemma-4-12b-it-4bit")
+        # No translation assignment; only default + the four stages.
+        self.assertEqual(
+            set(config.model_assignments),
+            {"default", "article_summary", "story_drafting",
+             "story_scale_screening", "title_generation"},
+        )
+
+    def test_qwythos_aliases_fail_fast_with_actionable_error(self) -> None:
+        # The error message must name the replacement so stale configs are
+        # self-serviceable (issue acceptance criterion).
+        with self.assertRaisesRegex(
+            ValueError,
+            r"Unsupported model reference: qwythos-9b-8bit.*gemma-4-12b-it-4bit",
+        ):
+            load_runtime_config(
+                environ={},
+                overrides={"NEWS_MODEL": "qwythos-9b-8bit"},
+                materialize_outputs=False,
+            )
+
+    def test_raw_qwythos_gguf_references_fail_fast_too(self) -> None:
+        # Raw owner/repo/file.gguf references and their URL forms (the values
+        # the old SETTINGS.md published as "Resolved model") fail fast like
+        # the aliases instead of half-starting an mlx-vlm server (issue #124).
+        for stale in (
+            QWWYTHOS_9B_4BIT_MODEL_REFERENCE,
+            f"https://huggingface.co/{QWWYTHOS_9B_4BIT_MODEL_REFERENCE}",
+            f"https://hf.co/{QWWYTHOS_9B_4BIT_MODEL_REFERENCE}",
+        ):
+            with self.assertRaisesRegex(ValueError, "Unsupported model reference"):
+                load_runtime_config(
+                    environ={},
+                    overrides={"NEWS_MODEL": stale},
+                    materialize_outputs=False,
+                )
+
     def test_news_model_backend_external_override_for_default_model(self) -> None:
         resolution = resolve_runtime_config(
             RuntimeConfigRequest(
@@ -80,7 +134,7 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
                     "NEWS_MODEL_BACKEND": "external",
                     "NEWS_MODEL_BASE_URL": "https://api.example.com/v1",
                 },
-                overrides={"NEWS_MODEL": QWWYTHOS_9B_4BIT_MODEL_ALIAS},
+                overrides={"NEWS_MODEL": GEMMA_4_12B_IT_4BIT_MODEL_ALIAS},
                 materialize_outputs=False,
                 run_started_at=datetime(2026, 6, 14, 12, 0, 0),
             )
@@ -159,7 +213,7 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
     def test_context_env_drives_runtime_config_derivations(self) -> None:
         config = load_runtime_config(
             environ={"NEWS_TOTAL_ARTICLE_SUMMARY_CAP": "55"},
-            overrides={"NEWS_MODEL": "qwythos-9b-8bit"},
+            overrides={"NEWS_MODEL": "gemma-e2b-tiny"},
             materialize_outputs=False,
             run_started_at=datetime(2026, 6, 14, 12, 0, 0),
         )
@@ -214,7 +268,6 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
                 materialize_outputs=False,
             )
 
-
     def test_prompt_override_envs_resolve_into_runtime_config(self) -> None:
         config = load_runtime_config(
             environ={},
@@ -244,8 +297,31 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
             materialize_outputs=False,
         )
         self.assertEqual(unset.prompt_instruction_overrides, {})
-
-
+    def test_profile_violating_contracts_fails_config_resolution(self) -> None:
+        # A profile whose editorial instructions contain pipeline-owned
+        # contract language must fail fast at config resolution instead of
+        # silently weakening the parsers/retries/citation renderers mid-run.
+        # All other slots stay valid (balanced strings) so the failure is
+        # specifically the blocklisted drafting sentence.
+        bad_profile = PromptProfile(
+            id="bad",
+            name="Bad",
+            description="Violates the drafting output contract.",
+            prompts={
+                **prompt_catalog.PROMPT_PROFILES["balanced"].prompts,
+                "story_drafting": "Return exactly this format: and nothing else.",
+            },
+        )
+        with patch(
+            "news_pipeline.prompt_catalog.PROMPT_PROFILES",
+            {**prompt_catalog.PROMPT_PROFILES, "bad": bad_profile},
+        ):
+            with self.assertRaisesRegex(ValueError, "violates pipeline-owned output contracts"):
+                load_runtime_config(
+                    environ={},
+                    overrides={"NEWS_PROMPT_PROFILE": "bad"},
+                    materialize_outputs=False,
+                )
 
     def test_removed_topic_env_vars_reported_and_rejected(self) -> None:
         with self.assertRaisesRegex(ValueError, "NEWS_TOPIC_IDS"):
@@ -288,9 +364,9 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
             environ={},
             overrides={
                 "NEWS_MODEL": CODEX_TEST_MODEL_ALIAS,
-                "NEWS_MODEL_ARTICLE_SUMMARY": QWWYTHOS_9B_4BIT_MODEL_ALIAS,
+                "NEWS_MODEL_ARTICLE_SUMMARY": GEMMA_4_12B_IT_4BIT_MODEL_ALIAS,
                 "NEWS_MODEL_ARTICLE_SUMMARY_BASE_URL": "http://127.0.0.1:8090/v1",
-                "NEWS_MODEL_STORY_DRAFTING": "qwythos-9b-8bit",
+                "NEWS_MODEL_STORY_DRAFTING": GEMMA_4_12B_IT_4BIT_MODEL_ALIAS,
                 "NEWS_MODEL_STORY_DRAFTING_BASE_URL": "http://127.0.0.1:8091/v1",
             },
             materialize_outputs=False,
@@ -299,11 +375,11 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
         self.assertEqual(config.model_assignments["default"].reference, CODEX_TEST_MODEL_ALIAS)
         self.assertEqual(
             config.model_assignments[MODEL_TASK_ARTICLE_SUMMARY].reference,
-            QWWYTHOS_9B_4BIT_MODEL_ALIAS,
+            GEMMA_4_12B_IT_4BIT_MODEL_ALIAS,
         )
         self.assertEqual(
             config.model_assignments[MODEL_TASK_ARTICLE_SUMMARY].name,
-            QWWYTHOS_9B_4BIT_MODEL_REFERENCE,
+            GEMMA_4_12B_IT_4BIT_MODEL_REPO,
         )
         self.assertEqual(
             config.model_assignments[MODEL_TASK_ARTICLE_SUMMARY].base_url,
@@ -315,7 +391,7 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
         )
         self.assertEqual(
             config.model_assignments[MODEL_TASK_STORY_DRAFTING].reference,
-            "qwythos-9b-8bit",
+            GEMMA_4_12B_IT_4BIT_MODEL_ALIAS,
         )
         self.assertNotEqual(
             config.model_assignments["default"].reference,
@@ -331,9 +407,9 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
             environ={},
             overrides={
                 "NEWS_MODEL": CODEX_TEST_MODEL_ALIAS,
-                "NEWS_MODEL_STORY_SCALE_SCREENING": QWWYTHOS_9B_4BIT_MODEL_ALIAS,
+                "NEWS_MODEL_STORY_SCALE_SCREENING": GEMMA_4_12B_IT_4BIT_MODEL_ALIAS,
                 "NEWS_MODEL_STORY_SCALE_SCREENING_BASE_URL": "http://127.0.0.1:8090/v1",
-                "NEWS_MODEL_TITLE_GENERATION": "qwythos-9b-8bit",
+                "NEWS_MODEL_TITLE_GENERATION": GEMMA_4_12B_IT_4BIT_MODEL_ALIAS,
                 "NEWS_MODEL_TITLE_GENERATION_BASE_URL": "http://127.0.0.1:8091/v1",
             },
             materialize_outputs=False,
@@ -351,15 +427,15 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
         )
         self.assertEqual(
             config.model_assignments[MODEL_TASK_STORY_SCALE_SCREENING].reference,
-            QWWYTHOS_9B_4BIT_MODEL_ALIAS,
+            GEMMA_4_12B_IT_4BIT_MODEL_ALIAS,
         )
         self.assertEqual(
             config.model_assignments[MODEL_TASK_STORY_SCALE_SCREENING].name,
-            QWWYTHOS_9B_4BIT_MODEL_REFERENCE,
+            GEMMA_4_12B_IT_4BIT_MODEL_REPO,
         )
         self.assertEqual(
             config.model_assignments[MODEL_TASK_TITLE_GENERATION].reference,
-            "qwythos-9b-8bit",
+            GEMMA_4_12B_IT_4BIT_MODEL_ALIAS,
         )
         self.assertNotEqual(
             config.model_assignments["default"].reference,
@@ -405,7 +481,7 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
                 environ={},
                 overrides={
                     "NEWS_MODEL": CODEX_TEST_MODEL_ALIAS,
-                    "NEWS_MODEL_ARTICLE_SUMMARY": QWWYTHOS_9B_4BIT_MODEL_ALIAS,
+                    "NEWS_MODEL_ARTICLE_SUMMARY": GEMMA_4_12B_IT_4BIT_MODEL_ALIAS,
                 },
                 materialize_outputs=False,
             )
@@ -419,7 +495,7 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
                 environ={},
                 overrides={
                     "NEWS_MODEL": CODEX_TEST_MODEL_ALIAS,
-                    "NEWS_MODEL_ARTICLE_SUMMARY": QWWYTHOS_9B_4BIT_MODEL_ALIAS,
+                    "NEWS_MODEL_ARTICLE_SUMMARY": GEMMA_4_12B_IT_4BIT_MODEL_ALIAS,
                     "NEWS_MODEL_ARTICLE_SUMMARY_BASE_URL": "http://127.0.0.1:8080/v1/",
                 },
                 materialize_outputs=False,
@@ -434,7 +510,7 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
                 "NEWS_MODEL_BACKEND": "external",
                 "NEWS_MODEL_BASE_URL": "https://api.example.com/v1",
                 "NEWS_MODEL": CODEX_TEST_MODEL_ALIAS,
-                "NEWS_MODEL_ARTICLE_SUMMARY": QWWYTHOS_9B_4BIT_MODEL_ALIAS,
+                "NEWS_MODEL_ARTICLE_SUMMARY": GEMMA_4_12B_IT_4BIT_MODEL_ALIAS,
             },
             materialize_outputs=False,
         )
@@ -466,57 +542,6 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
             config.model_assignments[MODEL_TASK_ARTICLE_SUMMARY].base_url,
             config.model_base_url,
         )
-
-    def test_default_recipient_and_sender_are_clean_example_addresses(self) -> None:
-        config = load_runtime_config(
-            environ={},
-            materialize_outputs=False,
-            run_started_at=datetime(2026, 6, 14, 12, 0, 0),
-        )
-
-        self.assertEqual(config.primary_recipient, "primary@example.com")
-        self.assertEqual(config.email_from, "news@example.com")
-        self.assertEqual(config.recipient_scope, "primary")
-        # Exact-value asserts above already rule out personal data; these
-        # negative asserts document that intent explicitly.
-        self.assertNotIn("mankoff", config.primary_recipient)
-        self.assertNotIn("bradley", config.primary_recipient)
-        self.assertNotIn("gmail", config.email_from)
-
-    def test_primary_recipient_env_override(self) -> None:
-        config = load_runtime_config(
-            environ={"NEWS_PRIMARY_RECIPIENT": "owner@example.com"},
-            materialize_outputs=False,
-            run_started_at=datetime(2026, 6, 14, 12, 0, 0),
-        )
-        self.assertEqual(config.primary_recipient, "owner@example.com")
-
-    def test_legacy_bradley_recipient_env_warns_and_is_ignored(self) -> None:
-        stderr = io.StringIO()
-        with patch.dict(os.environ,
-                        {"NEWS_BRADLEY_RECIPIENT": "old@example.com"},
-                        clear=True):
-            with contextlib.redirect_stderr(stderr):
-                config = load_runtime_config(
-                    environ=None,
-                    materialize_outputs=False,
-                    run_started_at=datetime(2026, 6, 14, 12, 0, 0),
-                )
-        # Legacy var is no longer read — delivery falls back to the default,
-        # and the migration is surfaced on stderr instead of silently.
-        self.assertEqual(config.primary_recipient, "primary@example.com")
-        self.assertIn("NEWS_BRADLEY_RECIPIENT is obsolete", stderr.getvalue())
-
-    def test_legacy_recipient_env_warning_not_emitted_when_unset(self) -> None:
-        stderr = io.StringIO()
-        with patch.dict(os.environ, {}, clear=True):
-            with contextlib.redirect_stderr(stderr):
-                load_runtime_config(
-                    environ=None,
-                    materialize_outputs=False,
-                    run_started_at=datetime(2026, 6, 14, 12, 0, 0),
-                )
-        self.assertNotIn("NEWS_BRADLEY_RECIPIENT is obsolete", stderr.getvalue())
 
     def test_default_recipient_and_sender_are_clean_example_addresses(self) -> None:
         config = load_runtime_config(
@@ -842,7 +867,7 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
         with patch.dict(
             os.environ,
             {
-                "NEWS_MODEL": QWWYTHOS_9B_4BIT_MODEL_ALIAS,
+                "NEWS_MODEL": GEMMA_4_12B_IT_4BIT_MODEL_ALIAS,
             },
             clear=True,
         ):
@@ -864,7 +889,7 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
         )
         config_two = load_runtime_config(
             materialize_outputs=False,
-            environ={**shared_env, "NEWS_MODEL": QWWYTHOS_9B_4BIT_MODEL_ALIAS},
+            environ={**shared_env, "NEWS_MODEL": GEMMA_4_12B_IT_4BIT_MODEL_ALIAS},
         )
 
         self.assertEqual(config_one.model_server_settings, config_two.model_server_settings)

@@ -6,7 +6,7 @@ This project builds and sends a daily news report from configured sources. It ow
 - `README.md` is the human runbook for setup, CLI/UI commands, run settings, model choices, and PR review flow.
 - `docs/adr/` records architecture decisions that should not be re-litigated without new evidence.
 - `config/sources.yaml` is the editable Source Catalog.
-- `config/recipients.yaml` is the recipient list.
+- `config/recipients.yaml` is the delivery-recipients list (Delivery Profile input).
 - `config/run_presets.yaml` stores saved Run Settings overlays.
 - `config/model_tuning_presets.yaml` stores explicit model/task tuning overlays.
 - `output/history/` contains durable run history artifacts.
@@ -14,6 +14,20 @@ This project builds and sends a daily news report from configured sources. It ow
 
 ## Run Session
 A Run Session is one execution of the daily news run. It owns the run's config snapshot, output paths, progress, diagnostics, run logs, and managed model server lifecycle.
+
+## Daily News Application
+The Daily News Application is the product surface. It supports local desktop review of the generated report and optional automation; it is desktop-first, with the report rendered for review before any delivery step.
+
+## Daily News Report
+The Daily News Report is the generated artifact. A completed report is complete and reviewable even when no delivery is configured.
+
+## Delivery Profile
+A Delivery Profile is an optional policy controlling whether to send, the owner recipient, additional recipients, and transport configuration.
+
+## Automation
+Automation is a scheduled Run Session with an optional Delivery Profile.
+(This is a product concept — scheduled daily runs — and is distinct from the
+repo's board automation in `automation/`, which drives the GitHub project board.)
 
 ## Article Collection Funnel
 The Article Collection Funnel fetches configured sources, scrapes articles, rejects source mismatches, dedupes URLs, records Source Run diagnostics, persists candidate URL history, and yields fresh article candidates.
@@ -26,7 +40,6 @@ Runtime Config Resolution turns base environment values, saved run presets, and 
 
 ## Model Configuration Vocabulary
 Run Settings are the whole set of user-controllable values for one Run Session. A Run Preset is a saved Run Settings overlay in `config/run_presets.yaml`. Task Model Assignment chooses which model handles a model-using task: Article Summarization, Story Drafting, Story Scale Screening, and Title Generation each have their own assignment; Image Art Direction shares the Title Generation model (one shared LLM call) and Story Discovery has no LLM stage (embedding/TF-IDF clustering), so it inherits the default model. Model Tuning is explicit inference settings for a selected model. Model Defaults are backend/model defaults used when no Model Tuning is set. Pipeline Budget covers non-model limits such as article caps, story caps, text truncation, and recency windows. Model Server Settings are adapter settings for the local OpenAI-compatible model server. Model Backend is the runtime that serves a model: managed local MLX (`mlx-lm`/`mlx-vlm`) or an external OpenAI-compatible endpoint (`external`); the default model's backend comes from `NEWS_MODEL_BACKEND` (validated closed set) or is inferred from the model reference, while per-task models always use inference. Model Catalog: the code-owned curated registry of models verified for the supported backends, with per-task recommendations (factual extraction, structured output, synthesis, citation fidelity, speed, context length, translation). Hugging Face search surfaces live metadata and runtime-fit verdicts; the catalog never promises hardware fitting beyond linking to HF model pages. A Prompt Profile is a bundle of per-task editorial instructions from the built-in Prompt Catalog, selected by `NEWS_PROMPT_PROFILE`; profiles swap editorial sentences only, never the machine-required output contracts.
-
 ## Article Summary Record
 An Article Summary Record is the normalized result of summarizing one retained article. It owns article title, source, published time, URL, Article ID, story assignment, summary prose, and Markdown compatibility rendering for downstream report and history adapters.
 

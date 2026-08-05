@@ -368,9 +368,6 @@ def parse_deferred_work(body: str) -> list[dict] | None:
         **Description:** <1-2 sentences>
         **Reason:** <why deferred now>
         **Label:** <optional; must already exist in the repo>
-        **Links to:** #N       (already tracked — the model judged it covered)
-        **Supersedes:** #N     (closed issue — create a new one referencing it)
-        **Skip:** <reason>     (never-to-be-done — do not create)
     Returns None when the section is absent; [] when the section is present
     but empty or `*None.*` (the contract's explicit "nothing deferred" form).
     Indented fields: `**Links to:** #N` (already tracked — the model judged it
@@ -436,13 +433,14 @@ def dedupe_deferred(item: dict, open_issues: list[dict],
       ("create", None)   no exact match — create
     """
     target = normalize_title(item.get("title") or "")
-    if target:
-        for iss in open_issues:
-            if normalize_title(iss.get("title") or "") == target:
-                return "link", iss["number"]
-        for iss in closed_issues:
-            if normalize_title(iss.get("title") or "") == target:
-                return "create-ref", iss["number"]
+    if not target:
+        return "create", None
+    for iss in open_issues:
+        if normalize_title(iss.get("title") or "") == target:
+            return "link", iss["number"]
+    for iss in closed_issues:
+        if normalize_title(iss.get("title") or "") == target:
+            return "create-ref", iss["number"]
     return "create", None
 
 
