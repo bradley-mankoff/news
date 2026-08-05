@@ -160,18 +160,16 @@ def _runtime_snapshot(
             )
         )
         config = resolution.config
-        missing = [
-            task
-            for task in (
-                "article_summary",
-                "story_drafting",
-                "story_scale_screening",
-                "title_generation",
-            )
-            if task not in config.model_assignments
-        ]
+        task_keys = (
+            "article_summary",
+            "story_drafting",
+            "story_scale_screening",
+            "title_generation",
+        )
+        missing = [task for task in task_keys if task not in config.model_assignments]
         if missing:
             raise KeyError(f"runtime config missing model assignments for tasks: {missing}")
+        assignments = _json_ready(config.model_assignments)
         return {
             "preset_id": config.preset_id or "custom",
             "prompt_profile_id": config.prompt_profile_id,
@@ -196,11 +194,11 @@ def _runtime_snapshot(
                 "article_summary_concurrency": config.article_summary_concurrency,
                 "story_synthesis_concurrency": config.story_synthesis_concurrency,
                 "server_command": config.model_server_command,
-                "assignments": _json_ready(config.model_assignments),
-                "article_summary": _json_ready(config.model_assignments["article_summary"]),
-                "story_drafting": _json_ready(config.model_assignments["story_drafting"]),
-                "story_scale_screening": _json_ready(config.model_assignments["story_scale_screening"]),
-                "title_generation": _json_ready(config.model_assignments["title_generation"]),
+                "assignments": assignments,
+                "article_summary": assignments["article_summary"],
+                "story_drafting": assignments["story_drafting"],
+                "story_scale_screening": assignments["story_scale_screening"],
+                "title_generation": assignments["title_generation"],
                 "tuning": _json_ready(config.model_tuning),
                 "pipeline_budget": _json_ready(config.pipeline_budget),
                 "server_settings": _json_ready(config.model_server_settings),
