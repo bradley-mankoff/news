@@ -1751,7 +1751,8 @@ HTML = r"""<!doctype html>
       const entry = links[value];
       if (!entry) {
         // Only fires for values set outside the offered options (external or
-        // typed-in ids) — drift-guard tests pin that every option has a link.
+        // typed-in ids, e.g. saved env / preset apply / setControlValue) —
+        // drift-guard tests pin that every option has a link.
         container.innerHTML = `<span class="muted">No Hugging Face page for this external model</span>`;
         return;
       }
@@ -2400,7 +2401,7 @@ HTML = r"""<!doctype html>
       renderModelTuningPanels();
       renderPromptProfilePanel();
       refreshModelKnobLinks();
-      preview("run").catch(() => {});
+      previewQuietly("run");
     }
     function setKnobEnv(env) {
       document.querySelectorAll("[data-env]").forEach(el => {
