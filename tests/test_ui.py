@@ -70,9 +70,72 @@ class _Sample:
 
 
 class UITests(unittest.TestCase):
-    def test_env_info_tooltips_use_native_titles(self) -> None:
-        self.assertIn('title="${escapeHtml(tip)}"', ui_module.HTML)
-        self.assertNotIn('data-tooltip="${escapeHtml(tip)}"', ui_module.HTML)
+    def test_env_info_tooltips_are_focusable_and_announced(self) -> None:
+        html = ui_module.HTML
+        # Trigger is keyboard-reachable with an accessible name and ARIA wiring.
+        self.assertIn('tabindex="0" role="button" aria-label="Help for ${escapeHtml(name)}" aria-describedby="${tipId}"', html)
+        # A real tooltip surface exists (not native-title-only).
+        self.assertIn('class="env-tooltip hidden" role="tooltip"', html)
+        self.assertIn('${escapeHtml(tip)}', html)
+        self.assertNotIn('title="${escapeHtml(tip)}"', html)
+        # Keyboard focus must be visible: :focus-visible outline on the trigger.
+        self.assertIn(".env-info:focus-visible {", html)
+        self.assertIn("outline: 2px solid var(--blue);", html)
+        # Idempotency guard: each label is decorated at most once, so re-runs
+        # cannot inject duplicate tooltips or duplicate event listeners.
+        self.assertIn('titleTarget.querySelector(".env-info")) return;', html)
+        # The trigger's aria-describedby and the tooltip's id share ONE counter
+        # expression — duplicate ids would break aria-describedby resolution.
+        self.assertEqual(html.count('aria-describedby="${tipId}"'), 1)
+        self.assertEqual(html.count('id="${tipId}"'), 1)
+
+    def test_env_info_tooltip_show_hide_and_escape_handlers(self) -> None:
+        html = ui_module.HTML
+        self.assertIn('icon.addEventListener("mouseenter", show)', html)
+        self.assertIn('icon.addEventListener("focus", show)', html)
+        self.assertIn('icon.addEventListener("blur", hide)', html)
+        self.assertIn('icon.addEventListener("keydown", ev => {', html)
+        self.assertIn('ev.key === "Escape"', html)
+        self.assertIn('ev.preventDefault(); hide();', html)
+        # Button semantics: Enter/Space activate the trigger (preventDefault
+        # keeps Space from scrolling the page).
+        self.assertIn('ev.key === "Enter" || ev.key === " "', html)
+        self.assertIn('ev.preventDefault(); show();', html)
+        # Scroll (capture-phase, catches nested scroll containers) hides an
+        # open tooltip once its trigger leaves the viewport, so it never
+        # floats detached from its icon.
+        self.assertIn('document.addEventListener("scroll", hideTooltipsOnScroll, true)', html)
+        # Resize repositions only open tooltips; hidden ones stay inert.
+        self.assertIn('if (!tooltip.classList.contains("hidden")) positionEnvTooltip(icon, tooltip);', html)
+        # Delegated listeners are registered exactly once — per-icon global
+        # registration would leak on knob-search re-renders.
+        self.assertEqual(html.count('document.addEventListener("scroll"'), 1)
+        self.assertEqual(html.count('window.addEventListener("resize"'), 1)
+
+    def test_env_info_tooltip_positioning_avoids_viewport_clipping(self) -> None:
+        html = ui_module.HTML
+        # Fixed positioning escapes the Advanced Settings scroll container.
+        self.assertIn("position: fixed;", html)
+        # GUTTER keeps a viewport-safe margin on every edge.
+        self.assertIn("const GUTTER = 8;", html)
+        # Flip above the icon when the tooltip would overflow the viewport bottom.
+        self.assertIn("top + t.height > window.innerHeight - GUTTER", html)
+        self.assertIn("r.top - t.height - GUTTER", html)
+        # Centered horizontally, clamped to the viewport edges.
+        self.assertIn("window.innerWidth - t.width - GUTTER", html)
+        # Tall hints stay readable on short viewports.
+        self.assertIn("max-height: calc(100vh - 16px);", html)
+        self.assertIn("overflow-y: auto;", html)
+
+    def test_env_info_tooltips_cover_run_setup_and_advanced_settings(self) -> None:
+        html = ui_module.HTML
+        # Exact explanatory text for one Run Setup setting and one Advanced-only setting.
+        self.assertIn('NEWS_RECIPIENT_SCOPE: "Chooses whether this run targets only the primary recipient or all active recipients."', html)
+        self.assertIn('NEWS_MAX_STORIES: "Maximum number of final stories selected for the report."', html)
+        # All three surfaces run the decorator.
+        self.assertIn('decorateEnvHints($("runSetupMount"))', html)
+        self.assertIn('decorateEnvHints($("advancedPanels"))', html)
+        self.assertIn('decorateEnvHints($("knobContainer"))', html)
 
     def test_advanced_settings_gate_holds_all_knobs(self) -> None:
         html = ui_module.HTML
