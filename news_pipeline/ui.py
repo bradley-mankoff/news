@@ -735,20 +735,48 @@ class RunRecord:
                 "line_count": len(self.lines),
             }
 
+    def is_active(self) -> bool:
+        with self.lock:
+            return self.status in {"starting", "running", "stopping"}
+
+
+class RunAlreadyActiveError(RuntimeError):
+    """Raised when a run is requested while another run is still active."""
+
 
 class RunManager:
     def __init__(self):
         self.runs: dict[str, RunRecord] = {}
         self.lock = threading.Lock()
 
+    def active(self) -> RunRecord | None:
+        with self.lock:
+            for record in self.runs.values():
+                if record.is_active():
+                    return record
+            return None
+
     def start(self, body: dict[str, Any]) -> RunRecord:
         command, env = build_command(body)
         run_id = uuid.uuid4().hex[:12]
         record = RunRecord(run_id, command, env)
         with self.lock:
+            for existing in self.runs.values():
+                if existing.is_active():
+                    raise RunAlreadyActiveError(
+                        f"A run is already active ({existing.run_id}, status {existing.status}); "
+                        f"stop it or wait for it to finish before starting another."
+                    )
             self.runs[run_id] = record
         thread = threading.Thread(target=self._run_process, args=(record,), daemon=True)
-        thread.start()
+        try:
+            thread.start()
+        except Exception as exc:
+            with self.lock:
+                record.status = "failed"
+                record.returncode = -1
+                record.append(f"[ui] failed to start thread: {exc}\n")
+            raise
         return record
 
     def get(self, run_id: str) -> RunRecord | None:
@@ -924,7 +952,11 @@ class NewsUIHandler(BaseHTTPRequestHandler):
             if parsed.path == "/api/preview":
                 self._send_json(preview_payload(body))
             elif parsed.path == "/api/run":
-                record = RUN_MANAGER.start(body)
+                try:
+                    record = RUN_MANAGER.start(body)
+                except RunAlreadyActiveError as exc:
+                    self._send_error_json(exc, status=HTTPStatus.CONFLICT)
+                    return
                 self._send_json(record.snapshot(), status=HTTPStatus.ACCEPTED)
             elif parsed.path == "/api/presets":
                 self._send_json(upsert_preset(body, append_only=True), status=HTTPStatus.CREATED)
@@ -1161,6 +1193,7 @@ HTML = r"""<!doctype html>
     .warn { color: var(--gold); }
     .bad { color: var(--red); }
     .good { color: var(--green); }
+    button:disabled { opacity: .55; cursor: not-allowed; }
     #status:empty { display: none; }
     .hidden { display: none !important; }
     pre {
@@ -1368,7 +1401,8 @@ HTML = r"""<!doctype html>
     // Every env rendered as a dedicated knob (Run Setup or Advanced panels) must
     // be listed here so renderAdvancedKnobs() omits it from the raw override
     // list; otherwise the env appears twice and collectEnv() gets two inputs.
-        const SURFACED_ENVS = new Set([
+    const SURFACED_ENVS = new Set([
+      "NEWS_MODEL",  // dedicated "Default model" knob in Run Setup; suppress the Advanced-tab duplicate
       "NEWS_SOURCE_SCOPE",
       "NEWS_RECIPIENT_SCOPE",
       "NEWS_PROMPT_PROFILE",  // dedicated select in Run Setup; suppress the raw-list duplicate
@@ -1377,10 +1411,6 @@ HTML = r"""<!doctype html>
       "NEWS_PROMPT_OVERRIDE_STORY_DRAFTING",        // the Advanced-tab duplicates
       "NEWS_PROMPT_OVERRIDE_TITLE_GENERATION",
       "NEWS_PROMPT_OVERRIDE_IMAGE_ART_DIRECTION",
-      "NEWS_MODEL_ARTICLE_SUMMARY",
-      "NEWS_MODEL_STORY_DRAFTING",
-      "NEWS_MODEL_STORY_SCALE_SCREENING",
-      "NEWS_MODEL_TITLE_GENERATION",
       "NEWS_MODEL_ARTICLE_SUMMARY_TUNING_PRESET",
       "NEWS_MODEL_STORY_DRAFTING_TUNING_PRESET",
       "NEWS_MODEL_STORY_SCALE_SCREENING_TUNING_PRESET",
@@ -1437,7 +1467,6 @@ HTML = r"""<!doctype html>
     const TASK_CONFIG = {
       article_summary: {
         label: "Article Summarization",
-        prefix: "article",
         modelEnv: "NEWS_MODEL_ARTICLE_SUMMARY",
         presetEnv: "NEWS_MODEL_ARTICLE_SUMMARY_TUNING_PRESET",
         baseUrlEnv: "NEWS_MODEL_ARTICLE_SUMMARY_BASE_URL",
@@ -1446,20 +1475,15 @@ HTML = r"""<!doctype html>
         nameInputId: "article_tuning_name",
         descriptionInputId: "article_tuning_description",
         modelSelectId: "article_model",
-        baseUrlId: "article_base_url",
         saveButtonId: "article_tuning_save",
         renameButtonId: "article_tuning_rename",
         deleteButtonId: "article_tuning_delete",
-        modelMaxTokensId: "article_model_max_input_tokens",
-        maxTokensField: "article_summary_max_tokens",
-        maxTokensLabel: "Article summary max tokens",
         taskMaxTokensEnv: "NEWS_ARTICLE_SUMMARY_MAX_TOKENS",
         taskSamplingPrefix: "NEWS_MODEL_ARTICLE_SUMMARY",
         runtimeKey: "article_summary"
       },
       story_drafting: {
         label: "Story Writing",
-        prefix: "story",
         modelEnv: "NEWS_MODEL_STORY_DRAFTING",
         presetEnv: "NEWS_MODEL_STORY_DRAFTING_TUNING_PRESET",
         baseUrlEnv: "NEWS_MODEL_STORY_DRAFTING_BASE_URL",
@@ -1468,20 +1492,15 @@ HTML = r"""<!doctype html>
         nameInputId: "story_tuning_name",
         descriptionInputId: "story_tuning_description",
         modelSelectId: "story_model",
-        baseUrlId: "story_base_url",
         saveButtonId: "story_tuning_save",
         renameButtonId: "story_tuning_rename",
         deleteButtonId: "story_tuning_delete",
-        modelMaxTokensId: null,
-        maxTokensField: "story_drafting_max_tokens",
-        maxTokensLabel: "Story drafting max tokens",
         taskMaxTokensEnv: "NEWS_STORY_DRAFTING_MAX_TOKENS",
         taskSamplingPrefix: "NEWS_MODEL_STORY_DRAFTING",
         runtimeKey: "story_drafting"
       },
       story_scale_screening: {
         label: "Story Scale Screening",
-        prefix: "scale",
         modelEnv: "NEWS_MODEL_STORY_SCALE_SCREENING",
         presetEnv: "NEWS_MODEL_STORY_SCALE_SCREENING_TUNING_PRESET",
         baseUrlEnv: "NEWS_MODEL_STORY_SCALE_SCREENING_BASE_URL",
@@ -1490,20 +1509,15 @@ HTML = r"""<!doctype html>
         nameInputId: "scale_tuning_name",
         descriptionInputId: "scale_tuning_description",
         modelSelectId: "scale_model",
-        baseUrlId: "scale_base_url",
         saveButtonId: "scale_tuning_save",
         renameButtonId: "scale_tuning_rename",
         deleteButtonId: "scale_tuning_delete",
-        modelMaxTokensId: null,
-        maxTokensField: "story_scale_screening_max_tokens",
-        maxTokensLabel: "Scale screening max tokens",
         taskMaxTokensEnv: "NEWS_STORY_SCALE_SCREENING_MAX_TOKENS",
         taskSamplingPrefix: "NEWS_MODEL_STORY_SCALE_SCREENING",
         runtimeKey: "story_scale_screening"
       },
       title_generation: {
         label: "Title Generation",
-        prefix: "title",
         modelEnv: "NEWS_MODEL_TITLE_GENERATION",
         presetEnv: "NEWS_MODEL_TITLE_GENERATION_TUNING_PRESET",
         baseUrlEnv: "NEWS_MODEL_TITLE_GENERATION_BASE_URL",
@@ -1512,13 +1526,9 @@ HTML = r"""<!doctype html>
         nameInputId: "title_tuning_name",
         descriptionInputId: "title_tuning_description",
         modelSelectId: "title_model",
-        baseUrlId: "title_base_url",
         saveButtonId: "title_tuning_save",
         renameButtonId: "title_tuning_rename",
         deleteButtonId: "title_tuning_delete",
-        modelMaxTokensId: null,
-        maxTokensField: "title_generation_max_tokens",
-        maxTokensLabel: "Title generation max tokens",
         taskMaxTokensEnv: "NEWS_TITLE_GENERATION_MAX_TOKENS",
         taskSamplingPrefix: "NEWS_MODEL_TITLE_GENERATION",
         runtimeKey: "title_generation"
@@ -1732,20 +1742,17 @@ HTML = r"""<!doctype html>
         return;
       }
       const links = knob.option_links ? knob.option_links : {};
-      // An empty select means "use the backend default". Only NEWS_MODEL
-      // carries a registered default (default=DEFAULT_MODEL_ALIAS), so the
-      // fallback below shows its links; the task knobs have no default and
-      // render no links when empty (the backend still resolves them to the
-      // default model at run time). Do NOT pre-select the default here (that
-      // would change collectEnv() submission semantics).
+      // An empty select means "use the backend default"; mirror that
+      // resolution so the default model's links show on initial load and
+      // after Clear overrides / Reset defaults. Do NOT pre-select the
+      // default here (that would change collectEnv() submission semantics).
       const value = currentControlValue(env) || (knob.default !== undefined && knob.default !== null ? String(knob.default) : "");
       if (!value) { container.innerHTML = ""; return; }
       const entry = links[value];
       if (!entry) {
-        // Only fires for external ids injected via programmatic paths (saved
-        // env, preset apply, setControlValue) — drift-guard tests pin that
-        // every offered option has a link.
-        container.innerHTML = `<span class="muted">No Hugging Face page for this model reference</span>`;
+        // Only fires for values set outside the offered options (external or
+        // typed-in ids) — drift-guard tests pin that every option has a link.
+        container.innerHTML = `<span class="muted">No Hugging Face page for this external model</span>`;
         return;
       }
       // page and hardware are the same URL on purpose: HF's native Hardware
@@ -1763,6 +1770,8 @@ HTML = r"""<!doctype html>
       renderKnobLinks("NEWS_MODEL");
       renderKnobLinks("NEWS_MODEL_ARTICLE_SUMMARY");
       renderKnobLinks("NEWS_MODEL_STORY_DRAFTING");
+      renderKnobLinks("NEWS_MODEL_STORY_SCALE_SCREENING");
+      renderKnobLinks("NEWS_MODEL_TITLE_GENERATION");
     }
     function renderTabs() {
       $("tabs").innerHTML = `<button id="navToggle" class="nav-toggle" title="Collapse navigation" aria-label="Collapse navigation"><span class="collapse-icon">${icons.chevronLeft}</span><span class="expand-icon">${icons.chevronRight}</span></button>` +
@@ -1874,10 +1883,8 @@ HTML = r"""<!doctype html>
     function renderRunSetup() {
       const schema = state.schema || {};
       const runtime = schema.runtime || {};
-      const articleRuntime = runtime.model && runtime.model.article_summary ? runtime.model.article_summary : {};
-      const storyRuntime = runtime.model && runtime.model.story_drafting ? runtime.model.story_drafting : {};
-      const scaleRuntime = runtime.model && runtime.model.story_scale_screening ? runtime.model.story_scale_screening : {};
-      const titleRuntime = runtime.model && runtime.model.title_generation ? runtime.model.title_generation : {};
+      const defaultRuntime = runtime.model ? runtime.model : {};
+      const runtimeError = schema.runtime_error || "";
       const actionOptions = (schema.actions || []).map(action => `<option value="${escapeHtml(action)}"${action === "run" ? " selected" : ""}>${escapeHtml(action)}</option>`).join("");
       const promptProfileOptions = (schema.prompt_profiles || []).map(p => `<option value="${escapeHtml(p.id)}"${currentControlValue("NEWS_PROMPT_PROFILE") === p.id ? " selected" : ""}>${escapeHtml(p.name)}</option>`).join("");
       const sourceToolHidden = !["check-sources", "prune-sources", "source-languages"].includes(value("actionSelect"));
@@ -1889,11 +1896,48 @@ HTML = r"""<!doctype html>
         primary: "Primary-only",
         all: "All"
       };
-      const articleModel = knobField("NEWS_MODEL_ARTICLE_SUMMARY", "Article model", { emptyLabel: "default: qwythos-9b-8bit" });
-      const storyModel = knobField("NEWS_MODEL_STORY_DRAFTING", "Story model", { emptyLabel: "default: qwythos-9b-8bit" });
-      const scaleModel = knobField("NEWS_MODEL_STORY_SCALE_SCREENING", "Scale screening model", { emptyLabel: "default: qwythos-9b-8bit" });
-      const titleModel = knobField("NEWS_MODEL_TITLE_GENERATION", "Title generation model", { emptyLabel: "default: qwythos-9b-8bit" });
-
+      const defaultModel = knobField("NEWS_MODEL", "Default model", { emptyLabel: "default: gemma-4-12b-it-4bit" });
+      const sharedModelTokens = knobField("NEWS_MODEL_MAX_INPUT_TOKENS", "Shared model input cap");
+      const articleTokenCap = knobField("NEWS_ARTICLE_SUMMARY_MAX_TOKENS", "Article summary max tokens");
+      const storyTokenCap = knobField("NEWS_STORY_DRAFTING_MAX_TOKENS", "Story drafting max tokens");
+      const scaleTokenCap = knobField("NEWS_STORY_SCALE_SCREENING_MAX_TOKENS", "Scale screening max tokens");
+      const titleTokenCap = knobField("NEWS_TITLE_GENERATION_MAX_TOKENS", "Title generation max tokens");
+      const articleBaseUrl = knobField("NEWS_MODEL_ARTICLE_SUMMARY_BASE_URL", "Base URL");
+      const storyBaseUrl = knobField("NEWS_MODEL_STORY_DRAFTING_BASE_URL", "Base URL");
+      const scaleBaseUrl = knobField("NEWS_MODEL_STORY_SCALE_SCREENING_BASE_URL", "Base URL");
+      const titleBaseUrl = knobField("NEWS_MODEL_TITLE_GENERATION_BASE_URL", "Base URL");
+      const articleSampling = [
+        knobField("NEWS_MODEL_ARTICLE_SUMMARY_TEMPERATURE", "Temperature"),
+        knobField("NEWS_MODEL_ARTICLE_SUMMARY_TOP_P", "Top P"),
+        knobField("NEWS_MODEL_ARTICLE_SUMMARY_TOP_K", "Top K"),
+        knobField("NEWS_MODEL_ARTICLE_SUMMARY_MIN_P", "Min P"),
+        knobField("NEWS_MODEL_ARTICLE_SUMMARY_PRESENCE_PENALTY", "Presence penalty"),
+        knobField("NEWS_MODEL_ARTICLE_SUMMARY_REPETITION_PENALTY", "Repetition penalty")
+      ].join("");
+      const storySampling = [
+        knobField("NEWS_MODEL_STORY_DRAFTING_TEMPERATURE", "Temperature"),
+        knobField("NEWS_MODEL_STORY_DRAFTING_TOP_P", "Top P"),
+        knobField("NEWS_MODEL_STORY_DRAFTING_TOP_K", "Top K"),
+        knobField("NEWS_MODEL_STORY_DRAFTING_MIN_P", "Min P"),
+        knobField("NEWS_MODEL_STORY_DRAFTING_PRESENCE_PENALTY", "Presence penalty"),
+        knobField("NEWS_MODEL_STORY_DRAFTING_REPETITION_PENALTY", "Repetition penalty")
+      ].join("");
+      const scaleSampling = [
+        knobField("NEWS_MODEL_STORY_SCALE_SCREENING_TEMPERATURE", "Temperature"),
+        knobField("NEWS_MODEL_STORY_SCALE_SCREENING_TOP_P", "Top P"),
+        knobField("NEWS_MODEL_STORY_SCALE_SCREENING_TOP_K", "Top K"),
+        knobField("NEWS_MODEL_STORY_SCALE_SCREENING_MIN_P", "Min P"),
+        knobField("NEWS_MODEL_STORY_SCALE_SCREENING_PRESENCE_PENALTY", "Presence penalty"),
+        knobField("NEWS_MODEL_STORY_SCALE_SCREENING_REPETITION_PENALTY", "Repetition penalty")
+      ].join("");
+      const titleSampling = [
+        knobField("NEWS_MODEL_TITLE_GENERATION_TEMPERATURE", "Temperature"),
+        knobField("NEWS_MODEL_TITLE_GENERATION_TOP_P", "Top P"),
+        knobField("NEWS_MODEL_TITLE_GENERATION_TOP_K", "Top K"),
+        knobField("NEWS_MODEL_TITLE_GENERATION_MIN_P", "Min P"),
+        knobField("NEWS_MODEL_TITLE_GENERATION_PRESENCE_PENALTY", "Presence penalty"),
+        knobField("NEWS_MODEL_TITLE_GENERATION_REPETITION_PENALTY", "Repetition penalty")
+      ].join("");
       $("runSetupMount").innerHTML = `
         <div class="banner panel">
           <div class="banner-copy">
@@ -1910,6 +1954,7 @@ HTML = r"""<!doctype html>
           </div>
         </div>
         <div class="stack">
+          ${runtimeError ? `<p class="bad" style="margin:0 0 8px">Configuration error: ${escapeHtml(runtimeError)}</p>` : ""}
           <section class="panel">
             <p class="eyebrow">Routing</p>
             <h2>Recipients and sources</h2>
@@ -1956,39 +2001,12 @@ HTML = r"""<!doctype html>
           </section>
           <section class="panel model-card">
             <p class="eyebrow">Model</p>
-            <h2>${escapeHtml(TASK_CONFIG.article_summary.label)}</h2>
-            <p class="muted">Resolved: ${escapeHtml(articleRuntime.name || articleRuntime.reference || "-")}</p>
+            <h2>Default model</h2>
+            <p class="muted">Resolved: ${escapeHtml(defaultRuntime.name || defaultRuntime.reference || "-")}</p>
             <div class="form-grid">
-              ${articleModel}
+              ${defaultModel}
             </div>
-            <p class="muted">Sampling, token budgets, and server endpoints are in Advanced Settings.</p>
-          </section>
-          <section class="panel model-card">
-            <p class="eyebrow">Model</p>
-            <h2>${escapeHtml(TASK_CONFIG.story_drafting.label)}</h2>
-            <p class="muted">Resolved: ${escapeHtml(storyRuntime.name || storyRuntime.reference || "-")}</p>
-            <div class="form-grid">
-              ${storyModel}
-            </div>
-            <p class="muted">Sampling, token budgets, and server endpoints are in Advanced Settings.</p>
-          </section>
-          <section class="panel model-card">
-            <p class="eyebrow">Model</p>
-            <h2>${escapeHtml(TASK_CONFIG.story_scale_screening.label)}</h2>
-            <p class="muted">Resolved: ${escapeHtml(scaleRuntime.name || scaleRuntime.reference || "-")}</p>
-            <div class="form-grid">
-              ${scaleModel}
-            </div>
-            <p class="muted">Sampling, token budgets, and server endpoints are in Advanced Settings.</p>
-          </section>
-          <section class="panel model-card">
-            <p class="eyebrow">Model</p>
-            <h2>${escapeHtml(TASK_CONFIG.title_generation.label)}</h2>
-            <p class="muted">Resolved: ${escapeHtml(titleRuntime.name || titleRuntime.reference || "-")}</p>
-            <div class="form-grid">
-              ${titleModel}
-            </div>
-            <p class="muted">Sampling, token budgets, and server endpoints are in Advanced Settings.</p>
+            <p class="muted">Per-task model alternatives and sampling are in Advanced Settings.</p>
           </section>
           <section class="panel">
             <p class="eyebrow">Model catalog</p>
@@ -2007,7 +2025,7 @@ HTML = r"""<!doctype html>
             <details class="details">
               <summary>Search Hugging Face</summary>
               <div class="form-grid">
-                <label class="field"><span>Query</span><input id="modelSearchQuery" type="text" placeholder="e.g. qwythos"><code>q</code></label>
+                <label class="field"><span>Query</span><input id="modelSearchQuery" type="text" placeholder="e.g. gemma"><code>q</code></label>
                 <label class="field"><span>Pipeline tag</span>
                   <select id="modelSearchPipeline">
                     <option value="">any</option>
@@ -2026,7 +2044,6 @@ HTML = r"""<!doctype html>
             </details>
           </section>
           <section class="panel">
-
             <details class="details">
               <summary>Utilities</summary>
               <div class="form-grid">
@@ -2069,12 +2086,10 @@ HTML = r"""<!doctype html>
         </div>
       `;
       renderPresetSummary();
-
+      renderModelTuningPanels();
       decorateEnvHints($("runSetupMount"));
-      renderKnobLinks("NEWS_MODEL_ARTICLE_SUMMARY");
-      renderKnobLinks("NEWS_MODEL_STORY_DRAFTING");
+      renderPromptProfilePanel();
       renderModelCatalogPanel();
-
       $("actionSelect").value = "run";
       $("sourceOptions").classList.add("hidden");
       $("actionSelect").onchange = () => {
@@ -2089,6 +2104,13 @@ HTML = r"""<!doctype html>
         }
       };
     }
+    // Knob labels for each task's per-task max-tokens env (modelTuningPanel).
+    const TASK_MAX_TOKENS_LABELS = {
+      article_summary: "Article summary max tokens",
+      story_drafting: "Story drafting max tokens",
+      story_scale_screening: "Scale screening max tokens",
+      title_generation: "Title generation max tokens"
+    };
     const SAMPLING_FIELDS = [
       ["TEMPERATURE", "Temperature"],
       ["TOP_P", "Top P"],
@@ -2116,8 +2138,7 @@ HTML = r"""<!doctype html>
             <label class="field"><span>Display name</span><input id="${meta.nameInputId}"><code>name</code></label>
             <label class="field"><span>Description</span><textarea id="${meta.descriptionInputId}"></textarea><code>description</code></label>
             ${sharedCap}
-            ${knobField(meta.taskMaxTokensEnv, meta.maxTokensLabel)}
-
+            ${knobField(meta.taskMaxTokensEnv, TASK_MAX_TOKENS_LABELS[task] || "Max tokens")}
             ${knobField(meta.baseUrlEnv, "Base URL")}
             ${samplingFields(meta.taskSamplingPrefix)}
           </div>
@@ -2129,23 +2150,18 @@ HTML = r"""<!doctype html>
         </section>`;
     }
     function renderAdvancedPanels() {
-      // #advancedPanels is a static container in the #advanced view. This guard
-      // only defends against a missing container; render once at boot — a
-      // re-render would reset in-progress edits and orphan the .onclick
-      // handlers wireEvents() assigns to these elements. The rendered-flag
-      // below keeps this idempotent.
+      // Static container from the #advanced view; guard keeps this idempotent.
       // Must run before renderModelTuningControls() so the tuning <select>s exist.
       const container = $("advancedPanels");
       if (!container) {
         console.error("renderAdvancedPanels: missing #advancedPanels container");
-        setStatus("Advanced settings could not be rendered (missing container).", "bad");
         return;
       }
-      if (container.dataset.rendered) return;
-      container.dataset.rendered = "1";
       container.innerHTML = `
         ${modelTuningPanel("article_summary")}
         ${modelTuningPanel("story_drafting")}
+        ${modelTuningPanel("story_scale_screening")}
+        ${modelTuningPanel("title_generation")}
         <section class="panel">
           <p class="eyebrow">Budgets</p>
           <h2>Run budgets and quotas</h2>
@@ -2189,12 +2205,6 @@ HTML = r"""<!doctype html>
       decorateEnvHints($("advancedPanels"));
       renderPromptProfilePanel();
     }
-    function renderTaskTuningControls() {
-      renderModelTuningControls("article_summary");
-      renderModelTuningControls("story_drafting");
-      renderModelTuningControls("story_scale_screening");
-      renderModelTuningControls("title_generation");
-    }
     function renderModelTuningControls(task, { preserveEditor = false } = {}) {
       const meta = TASK_CONFIG[task];
       if (!meta) return;
@@ -2233,6 +2243,9 @@ HTML = r"""<!doctype html>
         loadModelTuningEditor(task, preset, { refresh: false });
       }
     }
+    function renderModelTuningPanels() {
+      Object.keys(TASK_CONFIG).forEach(task => renderModelTuningControls(task));
+    }
     function filteredModelTuningPresets(task, selectedModel, resolvedName) {
       const matches = state.modelTuningPresets.filter(preset => {
         const modelOk = !preset.model || preset.model === selectedModel || preset.model === resolvedName;
@@ -2247,15 +2260,8 @@ HTML = r"""<!doctype html>
       const sharedMax = valueByEnv("NEWS_MODEL_MAX_INPUT_TOKENS");
       if (sharedMax) tuning.model_max_input_tokens = sharedMax;
       const taskMax = valueByEnv(meta.taskMaxTokensEnv);
-      if (taskMax) tuning[meta.maxTokensField] = taskMax;
-      const samplingFields = [
-        ["temperature", `${meta.taskSamplingPrefix}_TEMPERATURE`],
-        ["top_p", `${meta.taskSamplingPrefix}_TOP_P`],
-        ["top_k", `${meta.taskSamplingPrefix}_TOP_K`],
-        ["min_p", `${meta.taskSamplingPrefix}_MIN_P`],
-        ["presence_penalty", `${meta.taskSamplingPrefix}_PRESENCE_PENALTY`],
-        ["repetition_penalty", `${meta.taskSamplingPrefix}_REPETITION_PENALTY`]
-      ];
+      if (taskMax) tuning[`${meta.runtimeKey}_max_tokens`] = taskMax;
+      const samplingFields = SAMPLING_FIELDS.map(([suffix]) => [suffix.toLowerCase(), `${meta.taskSamplingPrefix}_${suffix}`]);
       samplingFields.forEach(([key, env]) => {
         const raw = valueByEnv(env);
         if (raw) tuning[key] = raw;
@@ -2286,8 +2292,10 @@ HTML = r"""<!doctype html>
       if (preset) {
         const tuning = preset.tuning || {};
         if (tuning.model_max_input_tokens) setControlValue("NEWS_MODEL_MAX_INPUT_TOKENS", tuning.model_max_input_tokens);
-        if (tuning[meta.maxTokensField]) setControlValue(meta.taskMaxTokensEnv, tuning[meta.maxTokensField]);
-        [["temperature","TEMPERATURE"],["top_p","TOP_P"],["top_k","TOP_K"],["min_p","MIN_P"],["presence_penalty","PRESENCE_PENALTY"],["repetition_penalty","REPETITION_PENALTY"]].forEach(([field, suffix]) => {
+        const taskMaxTokens = tuning[`${meta.runtimeKey}_max_tokens`];
+        if (taskMaxTokens) setControlValue(meta.taskMaxTokensEnv, taskMaxTokens);
+        SAMPLING_FIELDS.forEach(([suffix]) => {
+          const field = suffix.toLowerCase();
           if (tuning[field] !== undefined && tuning[field] !== null && tuning[field] !== "") {
             setControlValue(`${meta.taskSamplingPrefix}_${suffix}`, tuning[field]);
           }
@@ -2376,10 +2384,21 @@ HTML = r"""<!doctype html>
       state.selectedRunPresetId = preset.id || "";
       setKnobEnv(preset.env || {});
       renderPresetSummary();
-      renderTaskTuningControls();
+      renderModelTuningPanels();
       renderPromptProfilePanel();
       refreshModelKnobLinks();
-
+      preview("run").catch(() => {});
+    }
+    function resetAllOverrides() {
+      document.querySelectorAll("[data-env]").forEach(el => {
+        if (el.type === "checkbox") el.checked = false;
+        else el.value = "";
+      });
+      state.selectedRunPresetId = "";
+      renderPresetSummary();
+      renderModelTuningPanels();
+      renderPromptProfilePanel();
+      refreshModelKnobLinks();
       preview("run").catch(() => {});
     }
     function setKnobEnv(env) {
@@ -2435,7 +2454,7 @@ HTML = r"""<!doctype html>
     async function loadModelTuningPresets() {
       const data = await api("/api/model-tuning-presets");
       state.modelTuningPresets = data.presets || [];
-      renderTaskTuningControls();
+      renderModelTuningPanels();
     }
     function renderAdvancedKnobs() {
       const search = value("knobSearch").toLowerCase();
@@ -2508,9 +2527,34 @@ HTML = r"""<!doctype html>
       $("previewPane").textContent = data.command_text + (data.runtime_error ? `\n\nPreview error: ${data.runtime_error}` : "");
       return data;
     }
+    function updateRunControls() {
+      const active = Boolean(state.activeRun);
+      ["runBtn", "utilityRunBtn"].forEach(id => {
+        const btn = $(id);
+        if (!btn) return;
+        btn.disabled = active;
+        btn.title = active ? "A run is already active; stop it or wait for it to finish." : "";
+      });
+      $("stopBtn").disabled = !active;
+    }
+    async function previewQuietly(action="run") {
+      // Auto-refresh path: surface failures inline in the preview pane instead
+      // of discarding them, so a rejected config never silently freezes the
+      // preview on stale content while the user is editing.
+      try {
+        await preview(action);
+      } catch (err) {
+        $("previewPane").textContent = `Preview unavailable: ${err.message}`;
+      }
+    }
     async function runAction(action="run") {
+      if (state.activeRun) {
+        setStatus(`A run is already active (${state.activeRun}); stop it or wait for it to finish.`, "warn");
+        return;
+      }
       const data = await api("/api/run", { method: "POST", body: JSON.stringify(requestBody(action)) });
       state.activeRun = data.run_id;
+      updateRunControls();
       $("logPane").textContent = "";
       const events = new EventSource(`/api/runs/${data.run_id}/events`);
       events.onmessage = event => {
@@ -2521,6 +2565,11 @@ HTML = r"""<!doctype html>
       events.addEventListener("status", event => {
         const payload = JSON.parse(event.data);
         $("logPane").textContent += `\n[ui] ${payload.status}\n`;
+        if (payload.status === "completed" || payload.status === "failed") {
+          state.activeRun = null;
+          updateRunControls();
+          setStatus(`Run ${payload.run_id} ${payload.status}.`, payload.status === "completed" ? "muted" : "bad");
+        }
         events.close();
       });
     }
@@ -2831,42 +2880,18 @@ HTML = r"""<!doctype html>
       $("savePresetEditorBtn").onclick = () => savePresetEditor().catch(err => setStatus(err.message, "bad"));
       $("deletePresetBtn").onclick = () => deleteSelectedPreset().catch(err => setStatus(err.message, "bad"));
       $("knobSearch").oninput = renderAdvancedKnobs;
-      $("clearKnobsBtn").onclick = () => {
-        document.querySelectorAll("[data-env]").forEach(el => {
-          if (el.type === "checkbox") el.checked = false;
-          else el.value = "";
-        });
-        state.selectedRunPresetId = "";
-        renderPresetSummary();
-        renderTaskTuningControls();
-        renderPromptProfilePanel();
-        refreshModelKnobLinks();
-
-        preview("run").catch(() => {});
-      };
-      $("resetDefaultsBtn").onclick = () => {
-        document.querySelectorAll("[data-env]").forEach(el => {
-          if (el.type === "checkbox") el.checked = false;
-          else el.value = "";
-        });
-        state.selectedRunPresetId = "";
-        renderPresetSummary();
-        renderTaskTuningControls();
-        renderPromptProfilePanel();
-        refreshModelKnobLinks();
-
-        preview("run").catch(() => {});
-      };
+      $("clearKnobsBtn").onclick = resetAllOverrides;
+      $("resetDefaultsBtn").onclick = resetAllOverrides;
       $("promptProfileSelect").onchange = () => {
         renderPromptProfilePanel();
-        preview("run").catch(() => {});
+        previewQuietly("run");
       };
       $("restorePromptProfileBtn").onclick = () => {
         const el = document.querySelector('[data-env="NEWS_PROMPT_PROFILE"]');
         if (el) el.value = "";
         document.querySelectorAll("[data-env^='NEWS_PROMPT_OVERRIDE_']").forEach(editor => { editor.value = ""; });
         renderPromptProfilePanel();
-        preview("run").catch(() => {});
+        previewQuietly("run");
       };
       $("comparePromptProfileBtn").onclick = () => comparePromptProfiles().catch(err => setStatus(err.message, "bad"));
       $("sourceSearch").oninput = renderSources;
@@ -2883,13 +2908,13 @@ HTML = r"""<!doctype html>
         const modelSelect = $(meta.modelSelectId);
         if (modelSelect) modelSelect.onchange = () => {
           renderModelTuningControls(meta.runtimeKey);
-          preview("run").catch(() => {});
+          previewQuietly("run");
         };
         const tuningSelect = $(meta.presetSelectId);
         if (tuningSelect) tuningSelect.onchange = () => {
           const preset = state.modelTuningPresets.find(item => item.id === tuningSelect.value) || null;
           if (preset) loadModelTuningEditor(meta.runtimeKey, preset);
-          preview("run").catch(() => {});
+          previewQuietly("run");
         };
         const saveBtn = $(meta.saveButtonId);
         if (saveBtn) saveBtn.onclick = () => saveModelTuningPreset(meta.runtimeKey).catch(err => setStatus(err.message, "bad"));
@@ -2907,6 +2932,15 @@ HTML = r"""<!doctype html>
     }
     async function init() {
       state.schema = await api("/api/schema");
+      try {
+        const runsData = await api("/api/runs");
+        const active = (runsData.runs || []).find(run => ["starting", "running", "stopping"].includes(run.status));
+        if (active) {
+          state.activeRun = active.run_id;
+          setStatus(`Run ${active.run_id} is active (${active.status}).`, "warn");
+        }
+      } catch (_err) { /* runs endpoint is best-effort at boot */ }
+      updateRunControls();
       renderTabs();
       // Order matters: renderAdvancedPanels() must run before
       // renderModelTuningControls() (tuning <select>s) and wireEvents()
@@ -2918,18 +2952,12 @@ HTML = r"""<!doctype html>
       renderStats();
       renderRunPresetDrawer();
       renderPresetSummary();
-      renderTaskTuningControls();
+      renderModelTuningPanels();
       wireEvents();
       document.addEventListener("change", (event) => {
         const el = event.target;
         if (el && el.matches && el.matches("select[data-env]")) {
-          // Only knobs that carry option_links have a .knob-links container;
-          // calling renderKnobLinks for every select would hit the
-          // missing-container console.warn on each non-model knob change.
-          const knob = knobByEnv(el.dataset.env);
-          if (knob && knob.option_links && Object.keys(knob.option_links).length) {
-            renderKnobLinks(el.dataset.env);
-          }
+          renderKnobLinks(el.dataset.env);
         }
       });
       await loadSources();
@@ -2950,7 +2978,7 @@ HTML = r"""<!doctype html>
       }
       $("sourceOptions").classList.add("hidden");
       $("actionSelect").onchange();
-      await preview("run").catch(() => {});
+      await preview("run").catch(err => setStatus(err.message, "bad"));
     }
     init().catch(err => setStatus(err.message, "bad"));
   </script>

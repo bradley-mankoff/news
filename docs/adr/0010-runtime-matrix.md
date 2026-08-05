@@ -24,8 +24,10 @@ Today the managed runtime is Apple-Silicon-only MLX/MLX-VLM:
   and raises "Model server endpoint is already in use" instead of using it.
 - `MANAGED_MODEL_SERVER_EXTERNAL` (`news_pipeline/pipeline.py`) is a pre-wired
   flag that is never set — the external-mode hook exists but is unused.
-- GGUF is currently loadable only through `mlx-vlm` (Qwythos aliases); there is
-  no `llama.cpp` adapter and no managed cross-platform GGUF path.
+- GGUF is not loadable by any managed backend: `mlx-vlm` rejects
+  file-qualified GGUF references (`owner/repo/file.gguf`) with
+  `HFValidationError` (issue #124), and there is no `llama.cpp` adapter and
+  no managed cross-platform GGUF path.
 
 ## Decision
 
@@ -34,7 +36,12 @@ The initially supported runtime matrix is exactly:
 1. **`mlx-lm`** — managed local MLX language-model server on Apple Silicon
    (`darwin` + `arm64`, matching the pyproject markers).
 2. **`mlx-vlm`** — managed local MLX vision-language-model server on Apple
-   Silicon (same platform constraint).
+   Silicon (same platform constraint). Requires `mlx-vlm>=0.6.4,<0.7.0` to
+   launch Gemma 4 models (`gemma4_unified` model type, issue #124); the upper
+   bound is a deliberate 0.x-semver guard — mlx-vlm is pre-1.0, so minor
+   releases may break the managed-server contract, and the 0.6.10 cascade
+   (`mlx>=0.32.0`, `transformers>=5.14.0`) does not resolve against the
+   current lock. Revisit the bound when a newer release is triaged.
 3. **`external`** — any OpenAI-compatible endpoint, declared for the default
    model with `NEWS_MODEL_BACKEND=external` plus `NEWS_MODEL_BASE_URL`, or for
    a task model via that task's `_BASE_URL` env var (distinct base URL).
@@ -44,10 +51,12 @@ The initially supported runtime matrix is exactly:
 listing the valid options. When unset, the backend is inferred from the model
 reference as before.
 
-**Not initially supported:** managed cross-platform GGUF via `llama.cpp`. GGUF
-files keep working only through `mlx-vlm` on Apple Silicon. A real `llama.cpp`
-adapter is a deliberate later addition and requires its own issue; nothing in
-this ADR should be read as promising it.
+**Not initially supported:** managed cross-platform GGUF via `llama.cpp`.
+GGUF files are not launchable by any managed backend (`mlx-vlm` rejects
+file-qualified references with `HFValidationError`); curated defaults are MLX
+repo ids, and GGUF repos are `external_only` for the model picker. A real
+`llama.cpp` adapter is a deliberate later addition and requires its own issue;
+nothing in this ADR should be read as promising it.
 
 ## Consequences
 

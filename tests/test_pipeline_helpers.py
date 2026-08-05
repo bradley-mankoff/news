@@ -768,6 +768,22 @@ class PipelineHelperTests(unittest.TestCase):
             self.assertEqual(session.model_call_stats["calls"]["demo"], 2)
             self.assertEqual(session.run_log_files, [run_log])
 
+    def test_new_run_diagnostics_reports_source_languages(self) -> None:
+        with patch.object(
+            pipeline,
+            "SOURCE_FEEDS",
+            {
+                "Alpha": {"name": "Alpha", "language": "en"},
+                "Beta": {"name": "Beta", "language": "de"},
+                "Gamma": {"name": "Gamma"},  # no language key -> "en"
+            },
+        ):
+            diagnostics = pipeline._new_run_diagnostics(3)
+        self.assertEqual(
+            diagnostics.settings["source_languages"],
+            {"de": 1, "en": 2},  # sorted keys, missing language defaults to "en"
+        )
+
     def test_rendering_and_finalizer_helpers(self) -> None:
         record = ArticleSummaryRecord(
             title="Headline",
@@ -1561,13 +1577,17 @@ class PipelineHelperTests(unittest.TestCase):
                 name="other-model",
                 tuning=fake_assignment.tuning,
             ),
-        ), patch.object(pipeline, "MANAGED_MODEL_SERVER_ACTIVE", True):
+        ), patch.object(pipeline, "MANAGED_MODEL_SERVER_ACTIVE", True), patch.object(
+            pipeline, "MODEL_BACKEND", "mlx-lm"
+        ):
             with self.assertRaisesRegex(RuntimeError, "multiple different models"):
                 pipeline.build_chat_model(64, task="analysis")
 
         with patch.object(pipeline, "ensure_codex_safe_model_reference"), patch.object(
             pipeline, "_task_model_assignment", return_value=fake_assignment
         ), patch.object(pipeline, "MANAGED_MODEL_SERVER_ACTIVE", True), patch.object(
+            pipeline, "MODEL_BACKEND", "mlx-lm"
+        ), patch.object(
             pipeline, "_ensure_main_model_server_ready"
         ) as ready, patch.object(pipeline, "_raise_if_managed_model_server_exited") as exited, patch.object(
             pipeline, "ChatOpenAI", return_value="chat-model"
@@ -1575,6 +1595,29 @@ class PipelineHelperTests(unittest.TestCase):
             self.assertEqual(pipeline.build_chat_model(64, task="analysis"), "chat-model")
         ready.assert_called_once()
         exited.assert_called_once()
+
+        # External backends serve multiple models from one base URL: the
+        # managed-server restriction (and its health gates) must not apply
+        # even while the managed-server context is active.
+        with patch.object(pipeline, "ensure_codex_safe_model_reference"), patch.object(
+            pipeline,
+            "_task_model_assignment",
+            return_value=SimpleNamespace(
+                base_url=pipeline.MODEL_BASE_URL,
+                reference="other-model",
+                name="other-model",
+                tuning=fake_assignment.tuning,
+            ),
+        ), patch.object(pipeline, "MANAGED_MODEL_SERVER_ACTIVE", True), patch.object(
+            pipeline, "MODEL_BACKEND", pipeline.MODEL_BACKEND_EXTERNAL
+        ), patch.object(
+            pipeline, "_ensure_main_model_server_ready"
+        ) as ready, patch.object(pipeline, "_raise_if_managed_model_server_exited") as exited, patch.object(
+            pipeline, "ChatOpenAI", return_value="chat-model"
+        ):
+            self.assertEqual(pipeline.build_chat_model(64, task="analysis"), "chat-model")
+        ready.assert_not_called()
+        exited.assert_not_called()
 
         with patch.object(pipeline.progress_tracker, "detail") as detail:
             pipeline.maybe_email_report("Title", "Body", "Synthesis", [], [], [])

@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import tempfile
 import textwrap
+import tomllib
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -193,6 +194,60 @@ class ConfigHelperTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Unknown model tuning preset"):
             config_module._configured_model_tuning("model", preset_id="missing", presets={})
 
+    def test_validate_managed_model_assignments_covers_branches(self) -> None:
+        # The default assignment defines the compared values (model_name,
+        # model_base_url), so it always matches and is skipped.
+        config_module._validate_managed_model_assignments(
+            {
+                "default": SimpleNamespace(base_url="http://127.0.0.1:8080/v1", reference="main", name="main"),
+                "article_summary": SimpleNamespace(base_url="http://127.0.0.1:8080/v1", reference="main", name="main"),
+            },
+            model_reference="main",
+            model_name="main",
+            model_base_url="http://127.0.0.1:8080/v1",
+            model_backend="mlx-lm",
+        )  # no raise: default skip + same-name task
+        # External backends serve multiple models: early return, no raise.
+        config_module._validate_managed_model_assignments(
+            {"article_summary": SimpleNamespace(base_url="http://127.0.0.1:8080/v1", reference="other", name="other")},
+            model_reference="main",
+            model_name="main",
+            model_base_url="http://127.0.0.1:8080/v1",
+            model_backend="external",
+        )
+        # Multiple violating tasks: first-error-wins by dict order.
+        with self.assertRaisesRegex(ValueError, "Task 'article_summary'"):
+            config_module._validate_managed_model_assignments(
+                {
+                    "article_summary": SimpleNamespace(base_url="http://127.0.0.1:8080/v1", reference="other", name="other"),
+                    "story_drafting": SimpleNamespace(base_url="http://127.0.0.1:8080/v1", reference="third", name="third"),
+                },
+                model_reference="main",
+                model_name="main",
+                model_base_url="http://127.0.0.1:8080/v1",
+                model_backend="mlx-lm",
+            )
+        # A trailing-slash spelling of the same endpoint still trips the guard.
+        with self.assertRaisesRegex(ValueError, "multiple different models"):
+            config_module._validate_managed_model_assignments(
+                {"article_summary": SimpleNamespace(base_url="http://127.0.0.1:8080/v1/", reference="other", name="other")},
+                model_reference="main",
+                model_name="main",
+                model_base_url="http://127.0.0.1:8080/v1",
+                model_backend="mlx-lm",
+            )
+
+    def test_same_model_endpoint_tolerates_spelling_variants(self) -> None:
+        canonical = "http://127.0.0.1:8080/v1"
+        self.assertTrue(config_module.same_model_endpoint(canonical, canonical + "/"))
+        self.assertTrue(config_module.same_model_endpoint(canonical, "HTTP://127.0.0.1:8080/v1"))
+        self.assertTrue(config_module.same_model_endpoint(canonical, "http://127.0.0.1:8080/v1"))
+        self.assertTrue(config_module.same_model_endpoint("http://127.0.0.1:80/v1", "http://127.0.0.1/v1"))
+        self.assertFalse(config_module.same_model_endpoint(canonical, "http://127.0.0.1:8080/v2"))
+        self.assertFalse(config_module.same_model_endpoint(canonical, "http://127.0.0.1:8081/v1"))
+        self.assertFalse(config_module.same_model_endpoint(canonical, ""))
+        self.assertTrue(config_module.same_model_endpoint("", ""))
+
     def test_runtime_model_and_env_helpers_cover_edge_branches(self) -> None:
         self.assertEqual(config_module.normalize_preset_id("  dev  "), "dev")
         self.assertTrue(config_module._bool_env("FLAG", False, {"FLAG": "yes"}))
@@ -313,7 +368,22 @@ class ConfigHelperTests(unittest.TestCase):
             config_module.resolve_model_name(""),
             config_module.resolve_model_name(config_module.DEFAULT_MODEL_ALIAS),
         )
-        self.assertEqual(config_module.resolve_model_name(config_module.QWWYTHOS_9B_4BIT_MODEL_ALIAS), config_module.QWWYTHOS_9B_4BIT_MODEL_REFERENCE)
+        self.assertEqual(
+            config_module.resolve_model_name(config_module.GEMMA_4_12B_IT_4BIT_MODEL_ALIAS),
+            config_module.GEMMA_4_12B_IT_4BIT_MODEL_REPO,
+        )
+        with self.assertRaisesRegex(ValueError, "Unsupported model reference"):
+            config_module.resolve_model_name("qwythos-9b-8bit")
+        # Raw GGUF references and their URL forms fail fast too (all forms the
+        # old docs published as "Resolved model").
+        for unsupported in (
+            config_module.QWWYTHOS_9B_8BIT_MODEL_REFERENCE,
+            config_module.QWWYTHOS_9B_4BIT_MODEL_REFERENCE,
+            f"https://huggingface.co/{config_module.QWWYTHOS_9B_4BIT_MODEL_REFERENCE}",
+            f"https://hf.co/{config_module.QWWYTHOS_9B_4BIT_MODEL_REFERENCE}",
+        ):
+            with self.assertRaisesRegex(ValueError, "Unsupported model reference"):
+                config_module.resolve_model_name(unsupported)
         with patch.object(config_module, "UNSUPPORTED_MODEL_REFERENCES", {"blocked"}):
             with self.assertRaisesRegex(ValueError, "Unsupported model reference"):
                 config_module.resolve_model_name("blocked")
@@ -339,10 +409,6 @@ class ConfigHelperTests(unittest.TestCase):
         self.assertEqual(knob["options"], ["one"])
         registry = config_module.runtime_knob_registry()
         self.assertTrue(any(knob["env"] == "NEWS_MODEL_CONCURRENCY" for knob in registry))
-        backend_knobs = [knob for knob in registry if knob["env"] == "NEWS_MODEL_BACKEND"]
-        self.assertEqual(len(backend_knobs), 1)
-        self.assertEqual(backend_knobs[0]["group"], "Model Selection")
-        self.assertEqual(backend_knobs[0]["options"], ["external", "mlx-lm", "mlx-vlm"])
         knob_envs = {knob["env"] for knob in registry}
         for env in (
             "NEWS_MODEL_STORY_SCALE_SCREENING",
@@ -365,6 +431,10 @@ class ConfigHelperTests(unittest.TestCase):
                 self.assertEqual(knob["min"], 1)
             if knob["env"] in {"NEWS_MODEL_STORY_SCALE_SCREENING_BASE_URL", "NEWS_MODEL_TITLE_GENERATION_BASE_URL"}:
                 self.assertEqual(knob["group"], "Model Server Settings")
+        backend_knobs = [knob for knob in registry if knob["env"] == "NEWS_MODEL_BACKEND"]
+        self.assertEqual(len(backend_knobs), 1)
+        self.assertEqual(backend_knobs[0]["group"], "Model Selection")
+        self.assertEqual(backend_knobs[0]["options"], ["external", "mlx-lm", "mlx-vlm"])
         # Pin the Prompt Profile knob contract: select with catalog-backed
         # default and options (drift-guard for runtime_knob_registry).
         prompt_profile_knob = next(knob for knob in registry if knob["env"] == "NEWS_PROMPT_PROFILE")
@@ -403,55 +473,37 @@ class ConfigHelperTests(unittest.TestCase):
                 self.assertNotIn("https://huggingface.co/https://", link["page"], option)
                 self.assertEqual(link["hardware"], link["page"])
         self.assertEqual(backend_knobs[0]["option_links"], {})
-        # Pin the per-stage prompt override knobs contract: one text knob per
-        # task, hidden from non-advanced surfaces (advanced=True) exactly like
-        # the sampling knobs; the UI's SURFACED_ENVS suppresses them from the
-        # Advanced tab in favor of the dedicated Editorial approach editors.
-        override_knobs = [
-            knob for knob in registry
-            if knob["env"] in config_module.PROMPT_TASK_OVERRIDE_ENV_VARS.values()
-        ]
-        self.assertEqual(
-            {knob["env"] for knob in override_knobs},
-            set(config_module.PROMPT_TASK_OVERRIDE_ENV_VARS.values()),
-        )
-        for knob in override_knobs:
-            self.assertEqual(knob["type"], "text")
-            self.assertTrue(knob["advanced"])
-
         # Drift-guard: aliases must never land in the unsupported set, or the
         # registry build and hf_model_page_url's ValueError fallback break.
         self.assertEqual(
             set(config_module.UNSUPPORTED_MODEL_REFERENCES) & set(config_module.MODEL_ALIASES),
             set(),
         )
-        # hf_model_page_url: alias, .gguf reference, URL keys, MLX repo,
-        # external id and empty input.
-        qwythos_page = f"https://huggingface.co/{config_module.QWWYTHOS_REPO}"
+        # hf_model_page_url: alias, URL keys, MLX repo, external id and empty input.
+        gemma_page = f"https://huggingface.co/{config_module.GEMMA_4_12B_IT_4BIT_MODEL_REPO}"
         self.assertEqual(
-            config_module.hf_model_page_url(config_module.QWWYTHOS_9B_4BIT_MODEL_ALIAS),
-            qwythos_page,
+            config_module.hf_model_page_url(config_module.GEMMA_4_12B_IT_4BIT_MODEL_ALIAS),
+            gemma_page,
         )
         self.assertEqual(
-            config_module.hf_model_page_url(config_module.QWWYTHOS_9B_4BIT_MODEL_REFERENCE),
-            qwythos_page,
+            config_module.hf_model_page_url(f"https://hf.co/{config_module.GEMMA_4_12B_IT_4BIT_MODEL_REPO}"),
+            gemma_page,
         )
         self.assertEqual(
-            config_module.hf_model_page_url(f"https://hf.co/{config_module.QWWYTHOS_9B_4BIT_MODEL_REFERENCE}"),
-            qwythos_page,
+            config_module.hf_model_page_url(f"https://huggingface.co/{config_module.GEMMA_4_12B_IT_4BIT_MODEL_REPO}"),
+            gemma_page,
         )
         self.assertEqual(
-            config_module.hf_model_page_url(f"https://huggingface.co/{config_module.QWWYTHOS_9B_4BIT_MODEL_REFERENCE}"),
-            qwythos_page,
-        )
-        self.assertEqual(
-            config_module.hf_model_page_url(f"  https://hf.co/{config_module.QWWYTHOS_9B_4BIT_MODEL_REFERENCE}  "),
-            qwythos_page,
+            config_module.hf_model_page_url(f"  https://hf.co/{config_module.GEMMA_4_12B_IT_4BIT_MODEL_REPO}  "),
+            gemma_page,
         )
         self.assertEqual(
             config_module.hf_model_page_url(config_module.CODEX_TEST_MODEL_ALIAS),
             f"https://huggingface.co/{config_module.CODEX_TEST_MODEL_NAME}",
         )
+        # The unsupported Qwythos aliases and their GGUF references have no page.
+        self.assertIsNone(config_module.hf_model_page_url(config_module.QWWYTHOS_9B_4BIT_MODEL_ALIAS))
+        self.assertIsNone(config_module.hf_model_page_url(config_module.QWWYTHOS_9B_4BIT_MODEL_REFERENCE))
         self.assertIsNone(config_module.hf_model_page_url("gpt-4o-mini"))
         self.assertIsNone(config_module.hf_model_page_url("openai/gpt-4o"))
         self.assertIsNone(config_module.hf_model_page_url("foo.gguf"))
@@ -486,6 +538,39 @@ class ConfigHelperTests(unittest.TestCase):
             url = config_module.hf_model_page_url(alias)
             self.assertIsNotNone(url, alias)
             self.assertIn(url, docs_text, f"{alias} page URL missing from README/SETTINGS")
+
+    def test_mlx_vlm_floor_is_gemma_4_capable(self) -> None:
+        """The managed mlx-vlm backend must be able to load the default
+        gemma4_unified model type (issue #124): floor >= 0.6.4 in both
+        pyproject.toml and uv.lock."""
+        repo_root = Path(__file__).resolve().parents[1]
+        pyproject = tomllib.loads((repo_root / "pyproject.toml").read_text(encoding="utf-8"))
+        mlx_vlm_dep = next(
+            (d for d in pyproject["project"]["dependencies"] if d.startswith("mlx-vlm")),
+            None,
+        )
+        self.assertIsNotNone(
+            mlx_vlm_dep, "mlx-vlm missing from pyproject.toml dependencies"
+        )
+        # Exact specifier token: >=0.6.4 must appear as its own clause (a
+        # floor like >=0.6.40 would otherwise match a substring check).
+        self.assertIn(
+            "mlx-vlm>=0.6.4", mlx_vlm_dep.split(";")[0].split(","), mlx_vlm_dep
+        )
+        lock = tomllib.loads((repo_root / "uv.lock").read_text(encoding="utf-8"))
+        mlx_vlm = next((p for p in lock["package"] if p["name"] == "mlx-vlm"), None)
+        self.assertIsNotNone(mlx_vlm, "mlx-vlm missing from uv.lock packages")
+        major, minor, patch = (int(x) for x in mlx_vlm["version"].split(".")[:3])
+        self.assertGreaterEqual((major, minor, patch), (0, 6, 4), mlx_vlm["version"])
+
+    def test_default_model_knob_points_at_gemma_and_hides_qwythos(self) -> None:
+        registry = config_module.runtime_knob_registry()
+        knob = next(k for k in registry if k["env"] == "NEWS_MODEL")
+        self.assertEqual(knob["default"], "gemma-4-12b-it-4bit")
+        self.assertIn("gemma-4-12b-it-4bit", knob["options"])
+        self.assertNotIn("qwythos-9b-8bit", knob["options"])
+        # prod preset now launches gemma
+        self.assertEqual(config_module.run_preset_env("prod")["NEWS_MODEL"], "gemma-4-12b-it-4bit")
 
     def test_yaml_scope_and_runtime_config_helpers_cover_edge_branches(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -745,8 +830,12 @@ class ConfigHelperTests(unittest.TestCase):
             config_module._default_story_synthesis_concurrency("some-other-model"),
             config_module.DEFAULT_STORY_SYNTHESIS_CONCURRENCY,
         )
-        self.assertEqual(config_module.infer_model_backend(config_module.QWWYTHOS_9B_4BIT_MODEL_REFERENCE), "mlx-vlm")
         self.assertEqual(config_module.infer_model_backend("other-model"), "mlx-lm")
+        # Legacy raw Qwythos references fail fast like the aliases (issue #124);
+        # the retained "qwythos" routing branch only serves non-listed raw ids.
+        with self.assertRaisesRegex(ValueError, "Unsupported model reference"):
+            config_module.infer_model_backend(config_module.QWWYTHOS_9B_4BIT_MODEL_REFERENCE)
+        self.assertEqual(config_module.infer_model_backend("someone/qwythos-other-raw-id"), "mlx-vlm")
 
         with patch.dict(os.environ, {config_module.PRESET_ENV_VAR: "sample"}, clear=True):
             self.assertEqual(config_module._configured_preset_id(), "sample")

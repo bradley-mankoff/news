@@ -269,9 +269,10 @@ def _global_scale_screening_prompt_messages(
             ).strip()
         )
 
-    # The JSON contract is injected as a .format() VALUE (inserted verbatim,
-    # never re-parsed), so its single braces are safe here; only the template
-    # itself must stay an f-string-free .format() block.
+    # The JSON contract and screening guidance are injected as .format() VALUES
+    # (inserted verbatim, never re-parsed as templates), so their single braces
+    # are safe here; only the template itself must stay an f-string-free
+    # .format() block.
     # .format() must run after dedent() because the injected screening_guidance
     # is multi-line (byte-identity drift-guard: tests/test_prompt_catalog.py).
     # User-entered guidance (prompt overrides) may contain literal braces.
@@ -279,6 +280,9 @@ def _global_scale_screening_prompt_messages(
     # before injection ({{ }}) and unescaped afterwards to keep user text
     # byte-identical; the template's own JSON braces are already single { }
     # by then, so the unescape touches only the injected guidance.
+    screening_guidance = (
+        prompt_instructions or DEFAULT_PROMPT_INSTRUCTIONS["story_scale_screening"]
+    ).replace("{", "{{").replace("}", "}}")
     system_prompt = SystemMessage(
         content=textwrap.dedent(
             """
@@ -308,15 +312,9 @@ def _global_scale_screening_prompt_messages(
             {scale_contract}
             """
         ).format(
-            screening_guidance=(
-                (prompt_instructions
-                 or DEFAULT_PROMPT_INSTRUCTIONS["story_scale_screening"])
-                .replace("{", "{{")
-                .replace("}", "}}")
-            ),
+            screening_guidance=screening_guidance,
             scale_contract=STORY_SCALE_SCREENING_JSON_CONTRACT,
         ).replace("{{", "{").replace("}}", "}").strip()
-
     )
     user_prompt = HumanMessage(
         content=(

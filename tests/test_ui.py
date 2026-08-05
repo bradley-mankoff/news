@@ -19,6 +19,7 @@ from unittest.mock import patch
 import yaml
 
 from news_pipeline import ui as ui_module
+from news_pipeline.config import CODEX_TEST_MODEL_ALIAS, GEMMA_4_12B_IT_4BIT_MODEL_ALIAS
 from news_pipeline.ui import (
     DEFAULT_HOST,
     DEFAULT_PORT,
@@ -74,6 +75,156 @@ class UITests(unittest.TestCase):
     def test_env_info_tooltips_use_native_titles(self) -> None:
         self.assertIn('title="${escapeHtml(tip)}"', ui_module.HTML)
         self.assertNotIn('data-tooltip="${escapeHtml(tip)}"', ui_module.HTML)
+
+    def test_advanced_settings_gate_holds_all_knobs(self) -> None:
+        html = ui_module.HTML
+        # Advanced tab hosts the moved panels; Run Setup no longer does.
+        self.assertIn('id="advancedPanels"', html)
+        self.assertIn("function renderAdvancedPanels", html)
+        self.assertIn("function modelTuningPanel", html)
+        run_setup = html.split("function renderRunSetup")[1].split("const SAMPLING_FIELDS")[0]
+        self.assertNotIn("Run budgets and quotas", run_setup)
+        self.assertNotIn("Optional run settings", run_setup)
+        self.assertNotIn("article_tuning_preset", run_setup)
+        self.assertNotIn("promptProfileReadouts", run_setup)
+        self.assertNotIn("promptProfileCompare", run_setup)
+        self.assertNotIn("<summary>Model tuning</summary>", html)
+        # Moved panels exist exactly once, inside renderAdvancedPanels.
+        advanced = html.split("function renderAdvancedPanels")[1].split("function renderAdvancedKnobs")[0]
+        self.assertEqual(advanced.count("Run budgets and quotas"), 1)
+        self.assertEqual(advanced.count("Optional run settings"), 1)
+        self.assertEqual(advanced.count('id="promptProfileReadouts"'), 1)
+        self.assertEqual(advanced.count('id="comparePromptProfileBtn"'), 1)
+        self.assertEqual(advanced.count('modelTuningPanel("article_summary")'), 1)
+        self.assertEqual(advanced.count('modelTuningPanel("story_drafting")'), 1)
+        # NEWS_MODEL_MAX_INPUT_TOKENS is rendered once, guarded to article_summary
+        # only; dropping the ternary would duplicate the knob into both panels
+        # (two [data-env] inputs, collectEnv() last-wins).
+        tuning = html.split("function modelTuningPanel")[1].split("function renderAdvancedPanels")[0]
+        self.assertEqual(
+            tuning.count('task === "article_summary" ? knobField("NEWS_MODEL_MAX_INPUT_TOKENS", "Shared model input cap") : ""'),
+            1,
+        )
+        # Dedicated envs are suppressed from the raw override list (no duplicates).
+        surface = html.split("const SURFACED_ENVS")[1].split("const TASK_CONFIG")[0]
+        for env in (
+            "NEWS_ARTICLE_TEXT_TOKEN_LIMIT",
+            "NEWS_MODEL_ARTICLE_SUMMARY_TEMPERATURE",
+            "NEWS_MODEL_STORY_DRAFTING_REPETITION_PENALTY",
+        ):
+            self.assertIn(f'"{env}"', surface)
+
+    def test_surfaced_envs_are_registered_and_composed(self) -> None:
+        import re
+
+        html = ui_module.HTML
+        surface = html.split("const SURFACED_ENVS")[1].split("const TASK_CONFIG")[0]
+        surfaced = re.findall(r'"NEWS_[A-Z_]+"', surface)
+        # No duplicates in the suppression manifest.
+        self.assertEqual(len(surfaced), len(set(surfaced)))
+        # No typos: every surfaced env must be a real registered knob.
+        registry = {knob["env"] for knob in build_knob_registry()}
+        self.assertEqual([e for e in surfaced if e.strip('"') not in registry], [])
+        # The 12 sampling envs are exactly prefix x suffix compositions, all surfaced.
+        suffixes = re.findall(
+            r'\["([A-Z_]+)", "',
+            html.split("const SAMPLING_FIELDS")[1].split("function samplingFields")[0],
+        )
+        prefixes = re.findall(r'taskSamplingPrefix: "(NEWS_MODEL_[A-Z_]+)"', html)
+        composed = {f"{p}_{s}" for p in prefixes for s in suffixes}
+        self.assertEqual(len(composed), 24)
+        for env in composed:
+            self.assertIn(
+                f'"{env}"', surface, f"composed sampling env {env} not suppressed"
+            )
+        # NEWS_ARTICLE_TEXT_TOKEN_LIMIT (the 13th dedicated env) must also be surfaced.
+        self.assertIn('"NEWS_ARTICLE_TEXT_TOKEN_LIMIT"', surface)
+        # NEWS_MODEL has a dedicated "Default model" knob in Run Setup, so it
+        # must be suppressed from the Advanced raw list (no duplicate inputs).
+        self.assertIn('"NEWS_MODEL"', surface)
+        # The four per-task model envs moved OUT of Run Setup into Advanced,
+        # so they must NOT be suppressed: each appears exactly once, in the
+        # Advanced raw override list.
+        for env in (
+            "NEWS_MODEL_ARTICLE_SUMMARY",
+            "NEWS_MODEL_STORY_DRAFTING",
+            "NEWS_MODEL_STORY_SCALE_SCREENING",
+            "NEWS_MODEL_TITLE_GENERATION",
+        ):
+            self.assertNotIn(f'"{env}"', surface, f"{env} must stay in the Advanced raw list")
+
+    def test_advanced_panels_rendered_at_boot(self) -> None:
+        # NEWS_ARTICLE_TEXT_TOKEN_LIMIT (a dedicated env, not a sampling composition) must also be surfaced.
+        self.assertIn('"NEWS_ARTICLE_TEXT_TOKEN_LIMIT"', surface)
+
+    def test_every_dedicated_knob_env_is_surfaced(self) -> None:
+        # Mirror direction of test_surfaced_envs_are_registered_and_composed:
+        # every env rendered as a dedicated knob (Run Setup or Advanced panels)
+        # must be in SURFACED_ENVS, or it appears twice and collectEnv()
+        # silently last-wins the raw-list copy over the dedicated edit.
+        import re
+
+        html = ui_module.HTML
+        advanced = html.split("function renderAdvancedPanels")[1].split("function renderAdvancedKnobs")[0]
+        run_setup = html.split("function renderRunSetup")[1].split("const SAMPLING_FIELDS")[0]
+        dedicated = set(re.findall(r'knobField\("(NEWS_[A-Z_]+)"', advanced + run_setup))
+        # modelTuningPanel() also renders taskMaxTokensEnv/baseUrlEnv knobs at
+        # runtime from TASK_CONFIG; those data-driven envs must be surfaced too.
+        task_driven = set(re.findall(r'(?:taskMaxTokensEnv|baseUrlEnv): "(NEWS_[A-Z_]+)"', html))
+        surface = html.split("const SURFACED_ENVS")[1].split("const TASK_CONFIG")[0]
+        surfaced = {e.strip('"') for e in re.findall(r'"NEWS_[A-Z_]+"', surface)}
+        missing = (dedicated | task_driven) - surfaced
+        self.assertEqual(
+            missing, set(),
+            f"dedicated knob envs missing from SURFACED_ENVS: {missing}",
+        )
+
+    def test_sampling_knobs_rendered_in_advanced_panels(self) -> None:
+        # The 12 sampling envs are suppressed from the raw override list, so
+        # they must be rendered by the panels; pin the samplingFields() call
+        # site inside modelTuningPanel() so removing it cannot silently drop
+        # all 12 knobs while every manifest test still passes.
+        html = ui_module.HTML
+        tuning = html.split("function modelTuningPanel")[1].split("function renderAdvancedPanels")[0]
+        self.assertEqual(tuning.count("${samplingFields(meta.taskSamplingPrefix)}"), 1)
+        # samplingFields() must actually emit the composed envs as knobs.
+        sampling = html.split("function samplingFields")[1].split("function modelTuningPanel")[0]
+        self.assertIn('knobField(`${prefix}_${suffix}`, label)', sampling)
+
+    def test_advanced_panels_rendered_at_boot(self) -> None:
+        import re
+
+        html = ui_module.HTML
+        boot = html.split("async function init()")[1].split("init().catch")[0]
+        self.assertIn("renderAdvancedPanels();", boot)
+        self.assertLess(
+            boot.index("renderRunSetup();"), boot.index("renderAdvancedPanels();")
+        )
+        self.assertLess(
+            boot.index("renderAdvancedPanels();"), boot.index("renderAdvancedKnobs();")
+        )
+
+    def test_run_setup_single_default_model_card(self) -> None:
+        html = ui_module.HTML
+        run_setup = html.split("function renderRunSetup")[1].split("const SAMPLING_FIELDS")[0]
+        # Exactly one "Default model" knob; the four per-task model cards are gone.
+        self.assertEqual(run_setup.count('knobField("NEWS_MODEL", "Default model"'), 1)
+        for env in (
+            "NEWS_MODEL_ARTICLE_SUMMARY",
+            "NEWS_MODEL_STORY_DRAFTING",
+            "NEWS_MODEL_STORY_SCALE_SCREENING",
+            "NEWS_MODEL_TITLE_GENERATION",
+        ):
+            self.assertNotIn(f'knobField("{env}"', run_setup)
+        # The readout binds to the top-level runtime.model {name, reference}.
+        self.assertIn("defaultRuntime.name || defaultRuntime.reference", run_setup)
+        # A failed runtime snapshot renders a visible banner, not a silent "-".
+        self.assertIn("const runtimeError = schema.runtime_error || \"\";", run_setup)
+        self.assertIn("Configuration error: ${escapeHtml(runtimeError)}", run_setup)
+        advanced = html.split("function renderAdvancedPanels")[1].split(
+            "function renderAdvancedKnobs"
+        )[0]
+        self.assertIn("renderPromptProfilePanel();", advanced)
 
     def test_prompt_override_editors_and_restore_buttons_in_html(self) -> None:
         # The Editorial approach panel must expose editable per-stage editors
@@ -136,243 +287,11 @@ class UITests(unittest.TestCase):
         self.assertIn("refreshModelKnobLinks", ui_module.HTML)
         self.assertIn("knob-links", ui_module.HTML)
         self.assertIn('rel="noopener noreferrer"', ui_module.HTML)
-        self.assertIn("No Hugging Face page for this model reference", ui_module.HTML)
+        self.assertIn("No Hugging Face page for this external model", ui_module.HTML)
         self.assertIn("Native Hardware Compatibility panel", ui_module.HTML)
         self.assertIn("escapeHtml(entry.page)", ui_module.HTML)
         self.assertIn("escapeHtml(entry.hardware)", ui_module.HTML)
         self.assertIn('data-links-for="${escapeHtml(knob.env)}"', ui_module.HTML)
-        # Pin the remaining renderKnobLinks branches.
-        self.assertIn("Links unavailable", ui_module.HTML)
-        self.assertIn('container.innerHTML = ""', ui_module.HTML)
-        # Pin the delegated change-listener wiring: every select[data-env]
-        # change must re-render its links, guarded to knobs that carry
-        # option_links (otherwise non-model knobs trip the
-        # missing-container console.warn on every interaction).
-        self.assertIn('document.addEventListener("change"', ui_module.HTML)
-        self.assertIn('el.matches("select[data-env]")', ui_module.HTML)
-        self.assertIn(
-            "option_links",
-            ui_module.HTML.split('document.addEventListener("change"')[1],
-        )
-
-    def test_advanced_settings_gate_holds_all_knobs(self) -> None:
-        html = ui_module.HTML
-        # Advanced tab hosts the moved panels; Run Setup no longer does.
-        self.assertIn('id="advancedPanels"', html)
-        self.assertIn("function renderAdvancedPanels", html)
-        self.assertIn("function modelTuningPanel", html)
-        run_setup = html.split("function renderRunSetup")[1].split("const SAMPLING_FIELDS")[0]
-        self.assertNotIn("Run budgets and quotas", run_setup)
-        self.assertNotIn("Optional run settings", run_setup)
-        self.assertNotIn("article_tuning_preset", run_setup)
-        self.assertNotIn("promptProfileReadouts", run_setup)
-        self.assertNotIn("promptProfileCompare", run_setup)
-        self.assertNotIn("<summary>Model tuning</summary>", html)
-        # Moved panels exist exactly once, inside renderAdvancedPanels.
-        advanced = html.split("function renderAdvancedPanels")[1].split("function renderAdvancedKnobs")[0]
-        self.assertEqual(advanced.count("Run budgets and quotas"), 1)
-        self.assertEqual(advanced.count("Optional run settings"), 1)
-        self.assertEqual(advanced.count('id="promptProfileReadouts"'), 1)
-        self.assertEqual(advanced.count('id="comparePromptProfileBtn"'), 1)
-        self.assertEqual(advanced.count('modelTuningPanel("article_summary")'), 1)
-        self.assertEqual(advanced.count('modelTuningPanel("story_drafting")'), 1)
-        # NEWS_MODEL_MAX_INPUT_TOKENS is rendered once, guarded to article_summary
-        # only; dropping the ternary would duplicate the knob into both panels
-        # (two [data-env] inputs, collectEnv() last-wins).
-        tuning = html.split("function modelTuningPanel")[1].split("function renderAdvancedPanels")[0]
-        self.assertEqual(
-            tuning.count('task === "article_summary" ? knobField("NEWS_MODEL_MAX_INPUT_TOKENS", "Shared model input cap") : ""'),
-            1,
-        )
-        # Dedicated envs are suppressed from the raw override list (no duplicates).
-        surface = html.split("const SURFACED_ENVS")[1].split("const TASK_CONFIG")[0]
-        for env in (
-            "NEWS_ARTICLE_TEXT_TOKEN_LIMIT",
-            "NEWS_MODEL_ARTICLE_SUMMARY_TEMPERATURE",
-            "NEWS_MODEL_STORY_DRAFTING_REPETITION_PENALTY",
-        ):
-            self.assertIn(f'"{env}"', surface)
-
-    def test_run_setup_model_cards_are_well_formed(self) -> None:
-        # Regression for the HIGH review finding: a post-rebase merge artifact
-        # left the Story Drafting card's .form-grid div unclosed and dropped
-        # the Story Scale Screening card's opening <section> tag, so the card
-        # rendered as an unstyled block and the hint paragraph landed inside
-        # the form-grid. All four model cards must have the canonical shape:
-        #   <section class="panel model-card"> … <div class="form-grid"> … </div>
-        #   <p class="muted">Advanced Settings hint</p> </section>
-        html = ui_module.HTML
-        run_setup = html.split("function renderRunSetup")[1].split("const SAMPLING_FIELDS")[0]
-        # Each of the four model cards opens with its own <section> tag
-        # (missing opener = the card content floats without .panel styling).
-        self.assertEqual(
-            run_setup.count('<section class="panel model-card">'), 4,
-            "each of the four model cards needs its own opening <section>",
-        )
-        # Every div inside Run Setup must be balanced (the artifact was an
-        # unclosed form-grid in the story-drafting card).
-        import re
-        self.assertEqual(
-            len(re.findall(r"<div(?:\s|>)", run_setup)),
-            run_setup.count("</div>"),
-            "unbalanced <div> tags inside renderRunSetup",
-        )
-        # The Advanced Settings hint must sit OUTSIDE the form-grid (a grid
-        # item, not a stray cell) and inside the card section. Pin the exact
-        # canonical sequence for the story-drafting card (the one that was
-        # malformed): model select -> close grid -> hint -> close section.
-        self.assertIn(
-            "${storyModel}\n            </div>\n            <p class=\"muted\">Sampling, token budgets, and server endpoints are in Advanced Settings.</p>\n          </section>",
-            run_setup,
-        )
-        # The scale-screening card must be a real model-card section, not a
-        # bare floating block (its opening tag was the dropped artifact).
-        self.assertIn(
-            '<section class="panel model-card">\n            <p class="eyebrow">Model</p>\n            <h2>${escapeHtml(TASK_CONFIG.story_scale_screening.label)}</h2>',
-            run_setup,
-        )
-
-    def test_surfaced_envs_are_registered_and_composed(self) -> None:
-        import re
-
-        html = ui_module.HTML
-        surface = html.split("const SURFACED_ENVS")[1].split("const TASK_CONFIG")[0]
-        surfaced = re.findall(r'"NEWS_[A-Z_]+"', surface)
-        # No duplicates in the suppression manifest.
-        self.assertEqual(len(surfaced), len(set(surfaced)))
-        # No typos: every surfaced env must be a real registered knob.
-        registry = {knob["env"] for knob in build_knob_registry()}
-        self.assertEqual([e for e in surfaced if e.strip('"') not in registry], [])
-        # The 12 sampling envs are exactly prefix x suffix compositions, all surfaced.
-        suffixes = re.findall(
-            r'\["([A-Z_]+)", "',
-            html.split("const SAMPLING_FIELDS")[1].split("function samplingFields")[0],
-        )
-        prefixes = re.findall(r'taskSamplingPrefix: "(NEWS_MODEL_[A-Z_]+)"', html)
-        composed = {f"{p}_{s}" for p in prefixes for s in suffixes}
-        self.assertEqual(len(composed), 24)
-        for env in composed:
-            self.assertIn(
-                f'"{env}"', surface, f"composed sampling env {env} not suppressed"
-            )
-        # NEWS_ARTICLE_TEXT_TOKEN_LIMIT (a dedicated env, not a sampling composition) must also be surfaced.
-        self.assertIn('"NEWS_ARTICLE_TEXT_TOKEN_LIMIT"', surface)
-
-    def test_every_dedicated_knob_env_is_surfaced(self) -> None:
-        # Mirror direction of test_surfaced_envs_are_registered_and_composed:
-        # every env rendered as a dedicated knob (Run Setup or Advanced panels)
-        # must be in SURFACED_ENVS, or it appears twice and collectEnv()
-        # silently last-wins the raw-list copy over the dedicated edit.
-        import re
-
-        html = ui_module.HTML
-        advanced = html.split("function renderAdvancedPanels")[1].split("function renderAdvancedKnobs")[0]
-        run_setup = html.split("function renderRunSetup")[1].split("const SAMPLING_FIELDS")[0]
-        dedicated = set(re.findall(r'knobField\("(NEWS_[A-Z_]+)"', advanced + run_setup))
-        # modelTuningPanel() also renders taskMaxTokensEnv/baseUrlEnv knobs at
-        # runtime from TASK_CONFIG; those data-driven envs must be surfaced too.
-        task_driven = set(re.findall(r'(?:taskMaxTokensEnv|baseUrlEnv): "(NEWS_[A-Z_]+)"', html))
-        surface = html.split("const SURFACED_ENVS")[1].split("const TASK_CONFIG")[0]
-        surfaced = {e.strip('"') for e in re.findall(r'"NEWS_[A-Z_]+"', surface)}
-        missing = (dedicated | task_driven) - surfaced
-        self.assertEqual(
-            missing, set(),
-            f"dedicated knob envs missing from SURFACED_ENVS: {missing}",
-        )
-
-    def test_sampling_knobs_rendered_in_advanced_panels(self) -> None:
-        # The 12 sampling envs are suppressed from the raw override list, so
-        # they must be rendered by the panels; pin the samplingFields() call
-        # site inside modelTuningPanel() so removing it cannot silently drop
-        # all 12 knobs while every manifest test still passes.
-        html = ui_module.HTML
-        tuning = html.split("function modelTuningPanel")[1].split("function renderAdvancedPanels")[0]
-        self.assertEqual(tuning.count("${samplingFields(meta.taskSamplingPrefix)}"), 1)
-        # samplingFields() must actually emit the composed envs as knobs.
-        sampling = html.split("function samplingFields")[1].split("function modelTuningPanel")[0]
-        self.assertIn('knobField(`${prefix}_${suffix}`, label)', sampling)
-
-    def test_advanced_panels_rendered_at_boot(self) -> None:
-        import re
-
-        html = ui_module.HTML
-        boot = html.split("async function init()")[1].split("init().catch")[0]
-        self.assertIn("renderAdvancedPanels();", boot)
-        self.assertLess(
-            boot.index("renderRunSetup();"), boot.index("renderAdvancedPanels();")
-        )
-        self.assertLess(
-            boot.index("renderAdvancedPanels();"), boot.index("renderAdvancedKnobs();")
-        )
-        advanced = html.split("function renderAdvancedPanels")[1].split(
-            "function renderAdvancedKnobs"
-        )[0]
-        self.assertIn("renderPromptProfilePanel();", advanced)
-        # The tuning <select>s are created by renderAdvancedPanels(); if
-        # renderTaskTuningControls() runs before it, the selects are missing
-        # and the early return leaves the preset dropdowns permanently empty.
-        self.assertGreater(
-            boot.index("renderTaskTuningControls();"),
-            boot.index("renderAdvancedPanels();"),
-            "renderTaskTuningControls() must run after renderAdvancedPanels()"
-            " (the tuning <select>s must exist)",
-        )
-
-    def test_prompt_override_editors_and_restore_buttons_in_html(self) -> None:
-        # The Editorial approach panel must expose editable per-stage editors
-        # bound to the override env vars, with per-stage restore buttons; the
-        # old read-only readout is gone. Assertions run on the HTML module
-        # constant (JS source), so the new JS lives in one obvious block.
-        self.assertIn("NEWS_PROMPT_OVERRIDE_ARTICLE_SUMMARY", ui_module.HTML)
-        self.assertIn("NEWS_PROMPT_OVERRIDE_STORY_SCALE_SCREENING", ui_module.HTML)
-        self.assertIn("NEWS_PROMPT_OVERRIDE_STORY_DRAFTING", ui_module.HTML)
-        self.assertIn("NEWS_PROMPT_OVERRIDE_TITLE_GENERATION", ui_module.HTML)
-        self.assertIn("NEWS_PROMPT_OVERRIDE_IMAGE_ART_DIRECTION", ui_module.HTML)
-        # All five override env vars are suppressed from the Advanced tab like
-        # NEWS_PROMPT_PROFILE itself (dedicated editors are the single surface).
-        surfaced_block = ui_module.HTML.split("const SURFACED_ENVS = new Set([", 1)[1].split("]);", 1)[0]
-        for env_var in (
-            "NEWS_PROMPT_OVERRIDE_ARTICLE_SUMMARY",
-            "NEWS_PROMPT_OVERRIDE_STORY_SCALE_SCREENING",
-            "NEWS_PROMPT_OVERRIDE_STORY_DRAFTING",
-            "NEWS_PROMPT_OVERRIDE_TITLE_GENERATION",
-            "NEWS_PROMPT_OVERRIDE_IMAGE_ART_DIRECTION",
-        ):
-            self.assertIn(env_var, surfaced_block)
-        # Editable textareas carry data-env and are not readonly.
-        self.assertIn(
-            'textarea data-env="${escapeHtml(PROMPT_OVERRIDE_ENVS[task])}" rows="4"',
-            ui_module.HTML,
-        )
-        self.assertIn('class="prompt-stage-restore"', ui_module.HTML)
-        self.assertNotIn('textarea readonly rows="3"', ui_module.HTML)
-
-    def test_prompt_override_editors_drop_stale_defaults_on_profile_switch(self) -> None:
-        # Regression for the HIGH finding: switching the prompt profile must
-        # NOT freeze the previous profile's text as per-stage overrides.
-        # livePromptOverrides() must diff editor values against BOTH the newly
-        # selected profile and the last-rendered profile (tracked via
-        # lastRenderedPromptProfileId), so stale defaults are dropped and only
-        # genuine edits survive. Assertions run on the HTML module constant
-        # (JS source), matching the drift-guard style of this file.
-        self.assertIn("let lastRenderedPromptProfileId = null;", ui_module.HTML)
-        self.assertIn(
-            "lastRenderedPromptProfileId = profile ? profile.id : null;",
-            ui_module.HTML,
-        )
-        self.assertIn(
-            "if (value === oldText || value === newText) return;",
-            ui_module.HTML,
-        )
-        # The last-rendered profile must be recorded AFTER the diff, since the
-        # editors still hold the previous render's text at that point.
-        self.assertIn(
-            "// The editors still hold the previous render's text at this point, so",
-            ui_module.HTML,
-        )
-        # Empty editors still mean "no override" (matches collectEnv's
-        # suppression of empty/unset override env vars).
-        self.assertIn("if (!value) return;", ui_module.HTML)
 
     def test_pure_helpers_and_schema_payload(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -618,8 +537,8 @@ class UITests(unittest.TestCase):
             self.assertEqual(payload["sources"]["total"], 1)
             self.assertEqual(payload["recipients"]["total"], 1)
             # Model catalog keys are local-only (offline) additions.
-            self.assertEqual(len(payload["model_catalog"]), 3)
-            self.assertEqual(payload["model_catalog"][0]["alias"], "qwythos-9b-8bit")
+            self.assertEqual(len(payload["model_catalog"]), 2)
+            self.assertEqual(payload["model_catalog"][0]["alias"], "gemma-4-12b-it-4bit")
             self.assertIn("factual_extraction", payload["model_recommendation_tasks"])
             self.assertEqual(len(payload["model_recommendation_tasks"]), 7)
 
@@ -673,6 +592,13 @@ class UITests(unittest.TestCase):
         ):
             self.assertIn(env, js_source)
             self.assertIn(env, knob_envs)
+
+    def test_ui_js_has_active_run_guard_text(self) -> None:
+        # The embedded JS rejects a second run client-side and reflects the
+        # active-run state in the controls; pin the copy so it cannot silently
+        # drift away from the server-side guard.
+        self.assertIn("A run is already active", ui_module.HTML)
+        self.assertIn("updateRunControls", ui_module.HTML)
 
     def test_embedded_script_parses(self) -> None:
         # A SyntaxError in the served <script> discards the entire block:
@@ -961,6 +887,26 @@ class UITests(unittest.TestCase):
         self.assertEqual(preview["runtime_error"], "preview error")
         self.assertEqual(preview["removed_topic_env_vars"], ["NEWS_TOPIC_IDS"])
 
+    def test_preview_rejects_different_task_model_on_managed_base_url(self) -> None:
+        # Regression for #113: the preview must raise on the incompatible
+        # model/base-URL combination instead of showing a clean command.
+        # build_command re-raises the config ValueError, which the /api/preview
+        # route serializes via _send_error_json for the browser.
+        with patch.dict(os.environ, {"NEWS_MODEL": CODEX_TEST_MODEL_ALIAS}, clear=True):
+            with self.assertRaisesRegex(
+                ValueError,
+                r"Managed model server cannot serve multiple different models "
+                r"from the same base URL",
+            ):
+                preview_payload(
+                    {
+                        "action": "run",
+                        "env": {
+                            "NEWS_MODEL_ARTICLE_SUMMARY": GEMMA_4_12B_IT_4BIT_MODEL_ALIAS,
+                        },
+                    }
+                )
+
     def test_run_record_and_manager_processes(self) -> None:
         record = RunRecord("run-1", ["news", "run"], {"PASSWORD": "secret", "VISIBLE": "ok"})
         record.append("line one\n")
@@ -1026,6 +972,35 @@ class UITests(unittest.TestCase):
         manager.runs[running_record.run_id] = running_record
         stopped = manager.stop(running_record.run_id)
         self.assertEqual(stopped["status"], "stopping")
+
+    def test_run_manager_rejects_overlapping_start(self) -> None:
+        class _FakeThread:
+            def __init__(self, target, args, daemon):
+                self.target = target
+                self.args = args
+                self.daemon = daemon
+                self.started = False
+
+            def start(self) -> None:
+                self.started = True
+
+        manager = RunManager()
+        with patch.object(ui_module, "build_command", return_value=(["news", "run"], {})), patch.object(
+            ui_module, "uuid"
+        ) as uuid_module, patch.object(ui_module.threading, "Thread", _FakeThread):
+            uuid_module.uuid4.return_value.hex = "a" * 16
+            first = manager.start({"action": "run"})
+            self.assertIs(manager.active(), first)
+            with self.assertRaisesRegex(ui_module.RunAlreadyActiveError, "already active"):
+                manager.start({"action": "run"})
+            self.assertEqual(len(manager.runs), 1)
+
+            # A completed run must not block the next start.
+            first.status = "completed"
+            uuid_module.uuid4.return_value.hex = "b" * 16
+            second = manager.start({"action": "run"})
+            self.assertEqual(second.run_id, "bbbbbbbbbbbb")
+            self.assertIs(manager.active(), second)
 
     def test_http_routes_and_entrypoints(self) -> None:
         with patch.object(
@@ -1228,6 +1203,39 @@ class UITests(unittest.TestCase):
         handler.end_headers = lambda: None
         handler.do_GET()
         return state["status"], state["headers"], handler.wfile.getvalue().decode("utf-8")  # type: ignore[attr-defined]
+
+    def test_http_run_rejects_second_start_with_conflict(self) -> None:
+        class _FakeThread:
+            def __init__(self, target, args, daemon):
+                self.started = False
+
+            def start(self) -> None:
+                self.started = True
+
+        def invoke(method: str, path: str, body: str | None = None) -> tuple[int, dict[str, str], str]:
+            payload = (body or "").encode("utf-8")
+            handler = object.__new__(ui_module.NewsUIHandler)
+            state: dict[str, Any] = {"status": None, "headers": {}}
+            handler.path = path
+            handler.headers = {"Content-Length": str(len(payload))}
+            handler.rfile = BytesIO(payload)  # type: ignore[assignment]
+            handler.wfile = BytesIO()  # type: ignore[assignment]
+            handler.send_response = lambda status: state.__setitem__("status", status)
+            handler.send_header = lambda name, value: state["headers"].__setitem__(name, value)
+            handler.end_headers = lambda: None
+            getattr(handler, method)()
+            return state["status"], state["headers"], handler.wfile.getvalue().decode("utf-8")  # type: ignore[attr-defined]
+
+        with patch.object(ui_module, "build_command", return_value=(["uv", "run", "news", "run"], {})), patch.object(
+            ui_module, "uuid"
+        ) as uuid_module, patch.object(ui_module.threading, "Thread", _FakeThread):
+            uuid_module.uuid4.return_value.hex = "c" * 16
+            status, _, body = invoke("do_POST", "/api/run", body=json.dumps({"action": "run"}))
+            self.assertEqual(status, 202)
+            self.assertEqual(json.loads(body)["run_id"], "cccccccccccc")
+            status, _, body = invoke("do_POST", "/api/run", body=json.dumps({"action": "run"}))
+            self.assertEqual(status, 409)
+            self.assertIn("already active", json.loads(body)["error"])
 
     def test_models_search_endpoint_error_and_success(self) -> None:
         fake_models = [
