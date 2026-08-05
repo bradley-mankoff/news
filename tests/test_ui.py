@@ -70,9 +70,39 @@ class _Sample:
 
 
 class UITests(unittest.TestCase):
-    def test_env_info_tooltips_use_native_titles(self) -> None:
-        self.assertIn('title="${escapeHtml(tip)}"', ui_module.HTML)
-        self.assertNotIn('data-tooltip="${escapeHtml(tip)}"', ui_module.HTML)
+    def test_env_info_tooltips_are_focusable_and_announced(self) -> None:
+        html = ui_module.HTML
+        # Trigger is keyboard-reachable with an accessible name and ARIA wiring.
+        self.assertIn('tabindex="0" role="button" aria-label="Help for ${escapeHtml(name)}" aria-describedby="${tipId}"', html)
+        # A real tooltip surface exists (not native-title-only).
+        self.assertIn('class="env-tooltip hidden" role="tooltip"', html)
+        self.assertIn('${escapeHtml(tip)}', html)
+        self.assertNotIn('title="${escapeHtml(tip)}"', html)
+
+    def test_env_info_tooltip_show_hide_and_escape_handlers(self) -> None:
+        html = ui_module.HTML
+        self.assertIn('icon.addEventListener("mouseenter", show)', html)
+        self.assertIn('icon.addEventListener("focus", show)', html)
+        self.assertIn('icon.addEventListener("blur", hide)', html)
+        self.assertIn('icon.addEventListener("keydown", ev => {', html)
+        self.assertIn('ev.key === "Escape"', html)
+
+    def test_env_info_tooltip_positioning_avoids_viewport_clipping(self) -> None:
+        html = ui_module.HTML
+        # Fixed positioning escapes the Advanced Settings scroll container.
+        self.assertIn('.env-tooltip {\n      position: fixed;', html)
+        self.assertIn('window.innerWidth - t.width - 8', html)
+        self.assertIn('r.top - t.height - 8', html)
+
+    def test_env_info_tooltips_cover_run_setup_and_advanced_settings(self) -> None:
+        html = ui_module.HTML
+        # Exact explanatory text for one Run Setup setting and one Advanced-only setting.
+        self.assertIn('NEWS_RECIPIENT_SCOPE: "Chooses whether this run targets only the primary recipient or all active recipients."', html)
+        self.assertIn('NEWS_MAX_STORIES: "Maximum number of final stories selected for the report."', html)
+        # Both surfaces run the decorator.
+        self.assertIn('decorateEnvHints($("runSetupMount"))', html)
+        self.assertIn('decorateEnvHints($("advancedPanels"))', html)
+        self.assertIn('decorateEnvHints($("knobContainer"))', html)
 
     def test_advanced_settings_gate_holds_all_knobs(self) -> None:
         html = ui_module.HTML

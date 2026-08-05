@@ -1235,6 +1235,24 @@ HTML = r"""<!doctype html>
       cursor: help;
       background: #fff;
     }
+    .env-info:focus-visible {
+      outline: 2px solid var(--blue);
+      outline-offset: 2px;
+    }
+    .env-tooltip {
+      position: fixed;
+      z-index: 60;
+      display: block;
+      max-width: min(320px, calc(100vw - 16px));
+      padding: 8px 10px;
+      background: #111827;
+      color: #e8edf7;
+      border-radius: 8px;
+      font-size: 12px;
+      line-height: 1.45;
+      box-shadow: 0 10px 30px rgba(20, 26, 38, 0.35);
+      pointer-events: none;
+    }
     .stack { display: grid; gap: 14px; }
     .eyebrow { margin: 0 0 4px; text-transform: uppercase; letter-spacing: 0.12em; font-size: 11px; color: var(--muted); }
     .banner {
@@ -1728,6 +1746,32 @@ HTML = r"""<!doctype html>
       if (name.endsWith("_REPETITION_PENALTY")) return "Penalty for repeated token patterns in model output.";
       return "Runtime setting passed through to the pipeline or local utility command.";
     }
+    let envTipSeq = 0;
+    function positionEnvTooltip(icon, tooltip) {
+      const r = icon.getBoundingClientRect();
+      const t = tooltip.getBoundingClientRect();
+      let top = r.bottom + 8;
+      if (top + t.height > window.innerHeight - 8) top = Math.max(8, r.top - t.height - 8);
+      const left = Math.min(Math.max(8, r.left + r.width / 2 - t.width / 2), Math.max(8, window.innerWidth - t.width - 8));
+      tooltip.style.top = `${top}px`;
+      tooltip.style.left = `${left}px`;
+    }
+    function attachEnvTooltip(icon, tooltip) {
+      const show = () => {
+        tooltip.classList.remove("hidden");
+        positionEnvTooltip(icon, tooltip);
+      };
+      const hide = () => tooltip.classList.add("hidden");
+      icon.addEventListener("mouseenter", show);
+      icon.addEventListener("mouseleave", hide);
+      icon.addEventListener("focus", show);
+      icon.addEventListener("blur", hide);
+      icon.addEventListener("keydown", ev => {
+        if (ev.key === "Escape") { ev.preventDefault(); hide(); }
+      });
+      document.addEventListener("scroll", hide, true);
+      window.addEventListener("resize", () => { if (!tooltip.classList.contains("hidden")) positionEnvTooltip(icon, tooltip); });
+    }
     function decorateEnvHints(root=document) {
       root.querySelectorAll(".field code, .knob code").forEach(code => {
         const name = code.textContent.trim();
@@ -1735,7 +1779,12 @@ HTML = r"""<!doctype html>
         const titleTarget = label && (label.querySelector("span") || label);
         if (!name || !titleTarget || titleTarget.querySelector(".env-info")) return;
         const tip = `${name}: ${knobHint(name)}`;
-        titleTarget.insertAdjacentHTML("beforeend", `<span class="env-info" title="${escapeHtml(tip)}" aria-label="${escapeHtml(tip)}">i</span>`);
+        const tipId = `env-tip-${++envTipSeq}`;
+        titleTarget.insertAdjacentHTML("beforeend",
+          `<span class="env-info" tabindex="0" role="button" aria-label="Help for ${escapeHtml(name)}" aria-describedby="${tipId}">i</span>` +
+          `<span id="${tipId}" class="env-tooltip hidden" role="tooltip">${escapeHtml(tip)}</span>`);
+        const icon = titleTarget.querySelector(".env-info");
+        attachEnvTooltip(icon, document.getElementById(tipId));
       });
     }
     function renderKnobLinks(env) {
