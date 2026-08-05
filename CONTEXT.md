@@ -26,6 +26,8 @@ A Delivery Profile is an optional policy controlling whether to send, the owner 
 
 ## Automation
 Automation is a scheduled Run Session with an optional Delivery Profile.
+(This is a product concept — scheduled daily runs — and is distinct from the
+repo's board automation in `automation/`, which drives the GitHub project board.)
 
 ## Article Collection Funnel
 The Article Collection Funnel fetches configured sources, scrapes articles, rejects source mismatches, dedupes URLs, records Source Run diagnostics, persists candidate URL history, and yields fresh article candidates.

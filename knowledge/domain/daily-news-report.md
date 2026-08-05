@@ -1,7 +1,7 @@
 ---
 type: Domain Concept
 title: Daily News Report
-description: The rendered newsletter body assembled from selected story and article records for configured recipients.
+description: The rendered newsletter body assembled from selected story and article records, optionally delivered to configured recipients.
 tags: [daily-news, report, delivery]
 status: stable
 generated: {by: openai-codex/gpt-5.6, at: 2026-07-27T00:00:00Z}
@@ -23,7 +23,8 @@ sources:
 # Definition
 
 The **Daily News Report** is the user-facing Markdown newsletter body produced
-from selected story/article records and delivered to configured recipients. It
+from selected story/article records and optionally delivered to configured
+recipients. It
 is preserved verbatim by the latest-run review, Beehiiv paste adapter, and the
 `report.md` concept in an OKF Run Bundle. A completed report is complete and
 reviewable without any delivery configuration; delivery outcome is tracked
