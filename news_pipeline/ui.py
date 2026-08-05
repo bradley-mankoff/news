@@ -1405,7 +1405,7 @@ HTML = r"""<!doctype html>
       "NEWS_MODEL",  // dedicated "Default model" knob in Run Setup; suppress the Advanced-tab duplicate
       "NEWS_SOURCE_SCOPE",
       "NEWS_RECIPIENT_SCOPE",
-      "NEWS_PROMPT_PROFILE",  // has a dedicated panel control; suppress the Advanced-tab duplicate
+      "NEWS_PROMPT_PROFILE",  // dedicated select in Run Setup; suppress the raw-list duplicate
       "NEWS_PROMPT_OVERRIDE_ARTICLE_SUMMARY",       // dedicated per-stage editors in the
       "NEWS_PROMPT_OVERRIDE_STORY_SCALE_SCREENING", // Editorial approach panel; suppress
       "NEWS_PROMPT_OVERRIDE_STORY_DRAFTING",        // the Advanced-tab duplicates
