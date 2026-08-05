@@ -41,6 +41,10 @@ between lanes. Contract:
   without the section post a verification comment instead (never auto-create
   from prose). Idempotent via per-run state markers; retried next poll on
   failure.
+- Ready-for-Review handoff: after the completed implementation PR is merged into
+  `develop`, the poller posts a bottom-of-issue comment with the workflow's
+  `## How to test` guidance (or an explicit fallback when none was recorded).
+  Failed comment posts are retried for issues already in Ready for Review.
 - Dispatch = `archon workflow run <wf> --branch <branch> --detach "<msg>"`
   executed in the repo root.
 
@@ -68,6 +72,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 
 DRY_RUN = "--dry-run" in sys.argv
+ACTIVE_WORKFLOW_STATUSES = frozenset(
+    {"running", "pending", "queued", "scheduled", "paused"}
+)
+_DISPATCH_BUDGET: int | None = None
 
 QUERY = """
 query($login: String!, $number: Int!, $statusField: String!, $cursor: String) {
@@ -122,6 +130,20 @@ mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $optionId: String!) {
 """
 
 VERDICT_VALUES = ("approve", "request-changes", "block")
+
+READY_TEST_HEADINGS = (
+    "How to test",
+    "Human testing",
+    "Test instructions",
+    "Test plan",
+)
+VALIDATION_HEADINGS = ("Validation", "Verification")
+NONE_GUIDANCE_RE = re.compile(r"^[*_\s]*(?:none|n/?a|not applicable)\.?[*_\s]*$", re.I)
+RUNNABLE_GUIDANCE_RE = re.compile(
+    r"```|^[ \t]*(?:\$[ \t]*)?"
+    r"(?:python3?|pytest|uv|news|npm|pnpm|yarn|curl|make)\b",
+    re.M,
+)
 
 
 def log(msg: str) -> None:
@@ -573,6 +595,104 @@ def parse_verdict(bodies: list[str]) -> str | None:
     return verdict
 
 
+def markdown_section(body: str, heading: str) -> str | None:
+    """Return the body of a Markdown section, including nested subsections."""
+    lines = (body or "").splitlines()
+    start = None
+    level = None
+    for index, line in enumerate(lines):
+        match = re.match(r"^(#{2,6})[ \t]+(.+?)[ \t]*$", line)
+        if (match
+                and match.group(2).strip().casefold() == heading.casefold()):
+            start = index
+            level = len(match.group(1))
+            break
+    if start is None or level is None:
+        return None
+    end = len(lines)
+    for index in range(start + 1, len(lines)):
+        match = re.match(r"^(#{2,6})[ \t]+", lines[index])
+        if match and len(match.group(1)) <= level:
+            end = index
+            break
+    section = "\n".join(lines[start + 1:end]).strip()
+    return section or None
+
+
+def extract_test_guidance(comments: list[dict]) -> str | None:
+    """Find human-test guidance in issue comments.
+
+    New completion records use ``How to test``. Older records may only have a
+    ``Validation`` section. For those legacy sections, prefer a recorded
+    command over a newer summary that only reports pass/fail totals.
+    """
+    for comment in reversed(comments or []):
+        body = comment.get("body") or ""
+        for heading in READY_TEST_HEADINGS:
+            section = markdown_section(body, heading)
+            if section and not NONE_GUIDANCE_RE.fullmatch(section):
+                return section
+
+    validation_fallback = None
+    for comment in reversed(comments or []):
+        body = comment.get("body") or ""
+        for heading in VALIDATION_HEADINGS:
+            section = markdown_section(body, heading)
+            if not section or NONE_GUIDANCE_RE.fullmatch(section):
+                continue
+            validation_fallback = validation_fallback or section
+            if RUNNABLE_GUIDANCE_RE.search(section):
+                return section
+    return validation_fallback
+
+
+def build_ready_for_review_comment(issue_number: int, base: str,
+                                   pr_number: int | None,
+                                   guidance: str | None) -> str:
+    """Build the human-facing test handoff posted when work reaches Ready."""
+    if pr_number:
+        status = f"Develop PR #{pr_number} was merged into `{base}`."
+    else:
+        status = (
+            f"The implementation run completed, but no linked develop PR was "
+            f"available to include here. Verify the current `{base}` checkout "
+            "before testing."
+        )
+    lines = [
+        "<!-- news:ready-for-review-test -->",
+        "## Ready for Review — how to test",
+        "",
+        status,
+        "",
+        "### Steps",
+        "1. In a clean checkout, update the integration branch:",
+        "   ```bash",
+        f"   git switch {base}",
+        f"   git pull --ff-only origin {base}",
+        "   ```",
+        "2. Run the issue-specific checks below and exercise every acceptance "
+        "criterion in this issue.",
+        "",
+        "### Issue-specific checks",
+    ]
+    if guidance:
+        lines.append(guidance)
+    else:
+        lines.extend([
+            "No runnable issue-specific instructions were recorded by the "
+            "implementation workflow.",
+            f"Test the acceptance criteria in this issue against `{base}`. If "
+            "there is no manual path, review the focused automated checks in "
+            f"the implementation PR for issue #{issue_number}.",
+        ])
+    lines.extend([
+        "",
+        "When it works, move the issue to In Review:",
+        f"`python3 automation/move_item.py {issue_number} \"In Review\"`",
+    ])
+    return "\n".join(lines)
+
+
 def match_issue_pr(prs: list[dict], issue_number: int,
                    base: str | None = None) -> dict | None:
     """First PR whose body or title references the issue; optional base filter.
@@ -582,8 +702,8 @@ def match_issue_pr(prs: list[dict], issue_number: int,
     the develop-merge passes never grab the ship PR and retarget it.
     """
     pat = re.compile(
-        rf"(?:\b(?:fix(?:es)?|clos(?:es|e)|resolv(?:es|e))\s+#{issue_number}\b)"
-        rf"|(?:\bissue\s*:?\s*#{issue_number}\b)", re.I
+        rf"(?im)^[ \t]*(?:fix(?:es)?|clos(?:es|e)|resolv(?:es|e)|issue)"
+        rf"\s*:?[ \t]*#{issue_number}\b(?=\s*(?:$|[.,:)\]]))"
     )
     for pr in prs:
         if base and pr.get("baseRefName") != base:
@@ -593,7 +713,7 @@ def match_issue_pr(prs: list[dict], issue_number: int,
     for pr in prs:
         if base and pr.get("baseRefName") != base:
             continue
-        if f"#{issue_number}" in (pr.get("title") or ""):
+        if re.search(rf"\(#{issue_number}\)\s*$", pr.get("title") or ""):
             return pr
     return None
 
@@ -609,6 +729,7 @@ def find_issue_pr(cfg: dict, env: dict, issue_number: int,
     "no PR exists" and advance; they should retry on the next poll.
     """
     r = gh(["pr", "list", "-R", cfg["repo"], "--state", state,
+            "--limit", "200",
             "--json", "number,title,body,headRefName,baseRefName,state"], env)
     if r.returncode != 0:
         log(f"find_issue_pr: gh pr list failed for issue #{issue_number}: "
@@ -791,6 +912,45 @@ def comment_issue(cfg: dict, env: dict, issue_number: int, body: str) -> bool:
             "--body", body], env)
     return r.returncode == 0
 
+def fetch_issue_comments(cfg: dict, env: dict,
+                         issue_number: int) -> list[dict] | None:
+    """Fetch issue comments, returning None only when GitHub lookup fails."""
+    r = gh(["issue", "view", str(issue_number), "-R", cfg["repo"],
+            "--json", "comments"], env)
+    if r.returncode != 0:
+        log(f"READY TEST FETCH FAILED issue #{issue_number}: "
+            f"{r.stderr.strip()[:200]}")
+        return None
+    try:
+        data = json.loads(r.stdout)
+    except ValueError as exc:
+        log(f"READY TEST PARSE FAILED issue #{issue_number}: {exc}")
+        return None
+    comments = data.get("comments") if isinstance(data, dict) else None
+    if not isinstance(comments, list):
+        log(f"READY TEST PARSE FAILED issue #{issue_number}: comments is not a list")
+        return None
+    return comments
+
+
+def post_ready_for_review_comment(cfg: dict, env: dict, issue_number: int,
+                                  base: str, pr_number: int | None = None) -> bool:
+    """Post the test handoff after an issue reaches Ready for Review."""
+    if DRY_RUN:
+        return comment_issue(
+            cfg, env, issue_number,
+            build_ready_for_review_comment(issue_number, base, pr_number, None),
+        )
+    comments = fetch_issue_comments(cfg, env, issue_number)
+    if comments is None:
+        return False
+    guidance = extract_test_guidance(comments)
+    body = build_ready_for_review_comment(issue_number, base, pr_number, guidance)
+    ok = comment_issue(cfg, env, issue_number, body)
+    if not ok:
+        log(f"READY TEST COMMENT FAILED issue #{issue_number}")
+    return ok
+
 
 def issue_has_label(cfg: dict, env: dict, issue_number: int, label: str) -> bool:
     r = gh(["issue", "view", str(issue_number), "-R", cfg["repo"], "--json", "labels",
@@ -827,6 +987,8 @@ def resume_issue(cfg: dict, env: dict, branch: str, wf: str,
     if DRY_RUN:
         log(f"[dry-run] RESUME issue={issue_number} branch={branch} wf={wf}")
         return True, "dry-run"
+    if not _dispatch_slot_available(wf, issue_number):
+        return False, "Archon workflow capacity is full"
     full_branch = resolve_worktree_branch(env, issue_number) or branch
     r = gh(["issue", "view", str(issue_number), "-R", cfg["repo"], "--json", "comments",
             "-q", ".comments[-1].body"], env)
@@ -844,10 +1006,74 @@ def resume_issue(cfg: dict, env: dict, branch: str, wf: str,
     except OSError as exc:
         log(f"RESUME FAILED issue={issue_number}: {exc}")
         return False, msg
+    _consume_dispatch_slot()
     gh(["issue", "edit", str(issue_number), "-R", cfg["repo"],
         "--remove-label", "needs-input"], env)
     log(f"RESUMED issue={issue_number} branch={full_branch} wf={wf} pid={proc.pid}")
     return True, msg
+def fetch_active_workflow_count(env: dict) -> int | None:
+    """Return active Archon runs, or None when the status lookup is unusable."""
+    try:
+        result = subprocess.run(
+            ["archon", "workflow", "status", "--json"],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            env=env,
+            cwd=str(ROOT),
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if result.returncode != 0:
+        return None
+    try:
+        data = json.loads(result.stdout)
+    except (TypeError, ValueError):
+        return None
+    runs = data.get("runs") if isinstance(data, dict) else data
+    if not isinstance(runs, list):
+        return None
+    return sum(
+        1 for run in runs
+        if isinstance(run, dict)
+        and (run.get("status") or "").lower() in ACTIVE_WORKFLOW_STATUSES
+    )
+
+
+def prepare_dispatch_budget(cfg: dict, env: dict) -> None:
+    """Reserve this poll's dispatch slots from Archon's conversation cap."""
+    global _DISPATCH_BUDGET
+    if DRY_RUN:
+        _DISPATCH_BUDGET = None
+        return
+    try:
+        limit = max(0, int(cfg.get("max_concurrent_workflows", 10)))
+    except (TypeError, ValueError):
+        limit = 10
+    active = fetch_active_workflow_count(env)
+    if active is None:
+        _DISPATCH_BUDGET = 0
+        log("DISPATCH HOLD: active Archon workflow count unavailable")
+        return
+    _DISPATCH_BUDGET = max(0, limit - active)
+    if _DISPATCH_BUDGET == 0:
+        log(f"DISPATCH HOLD: Archon workflow capacity reached ({limit})")
+
+
+def _dispatch_slot_available(wf: str, number: int) -> bool:
+    if _DISPATCH_BUDGET is not None and _DISPATCH_BUDGET <= 0:
+        log(f"DISPATCH DEFERRED issue={number} wf={wf}: "
+            "Archon workflow capacity is full")
+        return False
+    return True
+
+
+def _consume_dispatch_slot() -> None:
+    global _DISPATCH_BUDGET
+    if _DISPATCH_BUDGET is not None:
+        _DISPATCH_BUDGET -= 1
+
+
 
 
 def dispatch(cfg: dict, env: dict, wf: str, branch: str, message: str,
@@ -863,6 +1089,8 @@ def dispatch(cfg: dict, env: dict, wf: str, branch: str, message: str,
     if DRY_RUN:
         log(f"[dry-run] DISPATCH wf={wf} branch={branch} issue={number}")
         return True
+    if not _dispatch_slot_available(wf, number):
+        return False
     log_path = ROOT / "automation" / "archon-runs.log"
     try:
         with open(log_path, "a") as out:
@@ -874,6 +1102,7 @@ def dispatch(cfg: dict, env: dict, wf: str, branch: str, message: str,
     except OSError as exc:
         log(f"DISPATCH FAILED item={item_id} wf={wf}: {exc}")
         return False
+    _consume_dispatch_slot()
     log(f"DISPATCHED item={item_id} issue={number} wf={wf} branch={branch} pid={proc.pid}")
     return True
 
@@ -972,7 +1201,7 @@ def conflict_episode_action(mergeable: str, fix_msg: str | None,
         # (async spawn), or the status lookup failed — never escalate on
         # unknown state; wait for a positive terminal status.
         return "active"
-    if fix_status in ("running", "pending", "queued", "scheduled"):
+    if fix_status in ACTIVE_WORKFLOW_STATUSES:
         return "active"
     return "failed"
 
@@ -1246,19 +1475,21 @@ def develop_conflict_action(mech_tried: bool, fix_msg: str | None,
         return "mech"
     if not fix_msg:
         return "dispatch"
-    if fix_status in ("running", "pending", "queued", "scheduled"):
+    if fix_status in ACTIVE_WORKFLOW_STATUSES:
         return "active"
     return "failed"
 
 
 def poll(cfg: dict, env: dict, state: dict) -> None:
     project_id, field_id, status_options, items = fetch_project(cfg, env)
+    prepare_dispatch_budget(cfg, env)
     first_run = not state.get("_meta", {}).get("snapshot_done")
 
     lane_names = {v: k for k, v in cfg["lanes"].items()}
     done_lane_name = lane_names.get("done")
     todo_lane_name = lane_names.get("todo")
     blocked_lane_name = lane_names.get("blocked")
+    ready_lane_name = lane_names.get("ready")
 
     # Issue number -> lane / open-state on this board, for the dep gate.
     number_lane: dict[int, str] = {}
@@ -1421,7 +1652,11 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
 
         rec = state.get(item_id, {})
         rec["status"] = status_val
+        if prev != status_val and status_val != ready_lane_name:
+            rec.pop("ready_test_comment", None)
         if dispatched_msg:
+            rec.pop("ready_test_comment", None)
+            rec.pop("develop_pr", None)
             rec["dispatch_msg"] = dispatched_msg
             rec["issue_number"] = content["number"]
             rec["wf"] = dispatched_wf
@@ -1645,6 +1880,17 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
                 if option_id and move_to_lane(
                         cfg, env, project_id, item_id, field_id, option_id):
                     rec.pop("dispatch_msg", None)
+                    if complete_move_to == ready_lane_name and issue_number:
+                        if pr_num is not None:
+                            rec["develop_pr"] = pr_num
+                        posted = post_ready_for_review_comment(
+                            cfg, env, issue_number, merge_base or "develop", pr_num)
+                        if posted:
+                            rec["ready_test_comment"] = True
+                            log(f"READY TEST COMMENTED issue={issue_number}")
+                        else:
+                            rec.pop("ready_test_comment", None)
+                            log(f"READY TEST COMMENT DEFERRED issue={issue_number}")
                     log(f"MOVED item={item_id} -> {complete_move_to} (run completed)")
                 elif option_id is None:
                     log(f"MOVE SKIPPED item={item_id}: lane '{complete_move_to}' not on board")
@@ -1653,6 +1899,38 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
             elif run_status in ("failed", "cancelled"):
                 log(f"RUN {run_status.upper()} item={item_id}; left in {in_progress_name}")
                 rec.pop("dispatch_msg", None)
+
+    # Ready-lane recheck: a comment failure must not strand the issue without
+    # its handoff. This also backfills issues that reached Ready before this
+    # behavior was deployed.
+    if ready_lane_name and not first_run:
+        ready_base = cfg["dispatch"]["todo"].get("merge_develop_base", "develop")
+        for item in items:
+            content = item.get("content") or {}
+            if content.get("__typename") != "Issue":
+                continue
+            if content.get("repository", {}).get("nameWithOwner") != cfg["repo"]:
+                continue
+            if item["status"] != ready_lane_name:
+                continue
+            item_id = item["id"]
+            rec = state.get(item_id, {})
+            if rec.get("ready_test_comment"):
+                continue
+            issue_number = content["number"]
+            pr_number = rec.get("develop_pr")
+            if pr_number is None:
+                pr, _ = find_issue_pr(cfg, env, issue_number, base=ready_base)
+                if pr:
+                    pr_number = pr.get("number")
+            if post_ready_for_review_comment(
+                    cfg, env, issue_number, ready_base, pr_number):
+                rec["issue_number"] = issue_number
+                if pr_number is not None:
+                    rec["develop_pr"] = pr_number
+                rec["ready_test_comment"] = True
+                state[item_id] = rec
+                log(f"READY TEST COMMENTED issue={issue_number} (recheck)")
 
     # Review completion: merge the ship PR to its base (main) and move the
     # item to Done ONLY when the review run finished AND its verdict approves.
@@ -1761,7 +2039,7 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
             review_active = bool(
                 rmsg and runs_by_msg
                 and run_status_for(runs_by_msg, rmsg)
-                in ("running", "pending", "queued", "scheduled"))
+                in ACTIVE_WORKFLOW_STATUSES)
             if review_active:
                 continue
             fix_msg = rec.get("conflict_fix_msg")

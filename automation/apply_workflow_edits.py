@@ -7,6 +7,8 @@ workflows") after an archon reinstall replaces the bundled YAMLs:
   - `completion-comment` node (with the `## Deferred work` contract the board
     poller parses) in archon-fix-github-issue.yaml and archon-idea-to-pr.yaml
   - `report-verdict` node in archon-smart-pr-review.yaml
+  - Luna Max (`opencode-go/gpt-5.6-luna`, `effort: max`) on planning, review,
+    and vision-capable nodes; unassigned nodes use DeepSeek V4 Flash via tiers
   - the full archon-fix-ship-conflicts.yaml (inline prompt node, no DB
     commands)
 
@@ -18,12 +20,69 @@ Usage: python3 automation/apply_workflow_edits.py
 """
 
 import os
+import re
 import sys
 from pathlib import Path
 
 ARCHON_HOME = Path(os.environ.get("ARCHON_HOME",
                                   "~/.local/share/archon-pi/archon-home")).expanduser()
 WORKFLOWS = ARCHON_HOME / "workflows"
+
+LUNA_PROVIDER = "pi"
+LUNA_MODEL = "opencode-go/gpt-5.6-luna"
+LUNA_EFFORT = "max"
+
+# Explicit high-capability assignments. All other AI nodes inherit the
+# DeepSeek V4 Flash tier/default from archon-home/config.yaml.
+LUNA_NODES: dict[str, tuple[str, ...]] = {
+    "archon-assist.yaml": ("assist",),
+    "archon-pi-default.yaml": ("agent",),
+    "archon-comprehensive-pr-review.yaml": (
+        "scope", "code-review", "error-handling", "test-coverage",
+        "comment-quality", "docs-impact", "synthesize", "implement-fixes",
+    ),
+    "archon-create-issue.yaml": (
+        "investigate", "reproduce", "report-failure", "draft-issue",
+    ),
+    "archon-fix-github-issue.yaml": (
+        "investigate", "plan", "review-scope", "review-classify",
+        "code-review", "error-handling", "test-coverage", "comment-quality",
+        "docs-impact", "synthesize", "self-fix",
+    ),
+    "archon-idea-to-pr.yaml": ("create-plan", "plan-setup", "confirm-plan"),
+    "archon-issue-review-full.yaml": ("investigate",),
+    "archon-plan-to-pr.yaml": ("plan-setup", "confirm-plan"),
+    "archon-review-block.yaml": (
+        "review-scope", "spec-review", "code-review", "error-handling",
+        "test-coverage", "comment-quality", "docs-impact", "synthesize",
+        "implement-fixes",
+    ),
+    "archon-smart-pr-review.yaml": (
+        "scope", "classify", "code-review", "error-handling", "test-coverage",
+        "comment-quality", "docs-impact", "synthesize", "implement-fixes",
+        "report-verdict",
+    ),
+    "archon-validate-pr.yaml": (
+        "code-review-main", "code-review-feature", "classify-testability",
+        "e2e-test-main", "e2e-test-feature", "final-report",
+    ),
+    "archon-workflow-builder.yaml": ("extract-intent", "generate-yaml"),
+}
+
+# The human-testing contract shared by both completion-comment nodes. The
+# board poller copies this section into the Ready for Review comment.
+TESTING_CONTRACT = """      ## How to test
+      Give concise, human-facing steps for the reviewer who will test this work after
+      it is merged into `develop`.
+      - Start with exact commands, URLs, or setup when a runnable path exists.
+      - For UI/API/CLI changes, state the action, expected result, and which acceptance
+        criterion each step exercises.
+      - For library/config/automation-only changes, name the focused test command and
+        any observable smoke check; say what output means pass.
+      - If no manual test is possible, write `Not manually testable — <reason>` and name
+        the automated validation that is the best available evidence.
+      Do not write vague advice such as "test as appropriate".
+"""
 
 # The Deferred-work contract shared by both completion-comment nodes. The
 # board poller parses the `## Deferred work` section (docs: README, Project
@@ -127,7 +186,7 @@ FIX_NODE = """  - id: completion-comment
       command output. If the issue has no explicit criteria, list the criteria the work
       satisfied, with evidence.
 
-""" + CONTRACT + """
+""" + TESTING_CONTRACT + CONTRACT + """
       The comment must be factual; never claim a criterion is met without citable evidence.
     depends_on: [report]
     context: fresh
@@ -169,7 +228,7 @@ IDEA_NODE = """  - id: completion-comment
       command output. If the issue has no explicit criteria, list the criteria the work
       satisfied, with evidence.
 
-""" + CONTRACT + """
+""" + TESTING_CONTRACT + CONTRACT + """
       The comment must be factual; never claim a criterion is met without citable evidence.
     depends_on: [workflow-summary]
     context: fresh
@@ -435,22 +494,38 @@ def ensure_node(path: Path, node_id: str, node_text: str,
 
 
 def ensure_contract(path: Path, node_id: str) -> str | None:
-    """Insert CONTRACT into an existing completion-comment node if missing."""
+    """Insert completion-comment contracts into an existing node if missing."""
     text = path.read_text()
     start = text.find(f"- id: {node_id}")
     if start == -1:
         return None  # node insertion is handled separately
-    if "reads this section and creates a tracking issue" in text[start:]:
-        return None
     end = text.find("context: fresh", start)
     if end == -1:
         return f"node {node_id} end not found in {path.name}"
+    node = text[start:end]
+    needs_testing = "      ## How to test" not in node
+    needs_deferred = "reads this section and creates a tracking issue" not in node
+    if not needs_testing and not needs_deferred:
+        return None
     factual = text.find("The comment must be factual", start, end)
     if factual == -1:
         return f"node {node_id} insertion point not found in {path.name}"
-    text = text[:factual] + CONTRACT + "\n" + text[factual:]
+    insertion = text.find("      ## Deferred work", start, end)
+    if insertion == -1:
+        insertion = factual
+    addition = ""
+    if needs_testing:
+        addition += TESTING_CONTRACT
+    if needs_deferred:
+        addition += CONTRACT
+    text = text[:insertion] + addition + text[insertion:]
     path.write_text(text)
-    return f"added Deferred-work contract to {node_id} in {path.name}"
+    added = []
+    if needs_testing:
+        added.append("How-to-test")
+    if needs_deferred:
+        added.append("Deferred-work")
+    return f"added {' and '.join(added)} contracts to {node_id} in {path.name}"
 
 
 
@@ -528,6 +603,58 @@ def ensure_spec_review(path: Path) -> str | None:
     path.write_text(text)
     return "added spec-review node to archon-review-block.yaml"
 
+
+def ensure_luna_models(path: Path, node_ids: tuple[str, ...]) -> str | None:
+    """Pin selected AI nodes to the vision-capable Luna Max model."""
+    text = path.read_text()
+    original = text
+    missing: list[str] = []
+    for node_id in node_ids:
+        node = re.search(rf"(?m)^  - id: {re.escape(node_id)}[ \t]*\n", text)
+        if node is None:
+            missing.append(node_id)
+            continue
+        following = re.search(r"(?m)^  - id: ", text[node.end():])
+        block_end = node.end() + following.start() if following else len(text)
+        block = text[node.start():block_end]
+        body = re.sub(
+            r"(?m)^    (?:provider|model|effort):[^\n]*\n",
+            "",
+            block[len(node.group(0)):],
+        )
+        replacement = (
+            node.group(0)
+            + f"    provider: {LUNA_PROVIDER}\n"
+            + f"    model: {LUNA_MODEL}\n"
+            + f"    effort: {LUNA_EFFORT}\n"
+            + body
+        )
+        text = text[:node.start()] + replacement + text[block_end:]
+
+    if text != original:
+        path.write_text(text)
+        note = f"pinned Luna Max nodes in {path.name}"
+    else:
+        note = None
+    if missing:
+        suffix = f" (missing nodes: {', '.join(missing)})"
+        return (note or f"checked Luna Max nodes in {path.name}") + suffix
+    return note
+
+
+def apply_luna_models(changed: list[str]) -> None:
+    for fname, node_ids in LUNA_NODES.items():
+        path = WORKFLOWS / fname
+        if not path.exists():
+            changed.append(f"MISSING {fname} for Luna assignments (workflows dir: {WORKFLOWS})")
+            continue
+        note = ensure_luna_models(path, node_ids)
+        if note:
+            changed.append(note)
+
+
+
+
 def main() -> int:
     changed: list[str] = []
     for fname, node_id, node_text, anchor in (
@@ -586,6 +713,8 @@ def main() -> int:
     note = ensure_spec_review(WORKFLOWS / "archon-review-block.yaml")
     if note:
         changed.append(note)
+
+    apply_luna_models(changed)
 
     ship = WORKFLOWS / "archon-fix-ship-conflicts.yaml"
     if not ship.exists():

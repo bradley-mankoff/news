@@ -36,6 +36,10 @@ The repo runs a fully automated agentic loop driven by the GitHub project board
   workflow PRs target it); every issue works on its own branch
   (`archon/task-issue-<N>`) in an isolated worktree, so issues in `Todo` run in
   parallel.
+- The poller caps concurrent Archon workflows at `max_concurrent_workflows`
+  (currently `10`, matching `MAX_CONCURRENT_CONVERSATIONS`). It counts active
+  and paused runs before dispatching, reserves slots for dispatches made in the
+  current poll, and holds new dispatches when the status lookup is unavailable.
 - Creating an issue lands it in `Backlog`; nothing starts from `Backlog`.
 - **Slicing convention:** slice issues as tracer bullets — narrow, end-to-end
   vertical slices (schema → API → UI → tests), each demoable and sized to one
@@ -61,8 +65,10 @@ The repo runs a fully automated agentic loop driven by the GitHub project board
   default → `archon-fix-github-issue`), and the poller moves the issue to
   `In Progress`.
 - When the dispatched run completes, the poller marks the PR ready and merges
-  it into `develop`, then moves the issue to `Ready for Review` — the human
-  tests the integration branch from there.
+  it into `develop`, then moves the issue to `Ready for Review`. It posts a
+  final handoff comment at the bottom of the issue with the recorded
+  issue-specific test steps (or an explicit no-runnable-path fallback).
+  The human tests the integration branch from there.
 - **Develop conflicts auto-fix:** implementation workflows sync with `develop`
   before opening their PR (parallel runs progressively absorb each other); a
   PR that still conflicts at merge time is resolved automatically — the
@@ -122,8 +128,9 @@ Everything else in the loop is automated (dispatch, merges, lanes, deferred
 issue creation, conflict auto-fix). These are the only actions that need a
 human, by design:
 
-- **Test + promote:** when an issue lands in `Ready for Review`, test the
-  integration branch; when it works, move it to `In Review` with
+- **Test + promote:** when an issue lands in `Ready for Review`, follow the
+  bottom-of-issue test handoff comment against the integration branch; when it
+  works, move it to `In Review` with
   `python3 automation/move_item.py <N> "In Review"`.
 - **Answer Needs Input:** an issue in `Needs Input` carries a `NEEDS INPUT:`
   comment (with `needs-input` label) — answer on the issue, then drag it back
