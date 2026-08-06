@@ -7,6 +7,7 @@ from datetime import datetime
 from pathlib import Path
 from unittest.mock import patch
 
+from news_pipeline import ui as ui_module
 from news_pipeline.diagnostics import RunDiagnostics
 from news_pipeline.history_store import connect
 from news_pipeline.run_finalizer import RunFinalizer, RunFinalizerAdapters, RunFinalizerConfig
@@ -203,6 +204,17 @@ class RunFinalizerTests(unittest.TestCase):
             with connect(paths["history_db"]) as con:
                 self.assertEqual(con.execute("SELECT status FROM runs").fetchone()[0], "failed")
 
+            review_paths = {
+                "output_dir": paths["latest_details"].parent,
+                "history_db": paths["history_db"],
+                "latest_run_markdown": paths["latest_markdown"],
+                "latest_run_details": paths["latest_details"],
+            }
+            with patch.object(ui_module, "_review_paths", return_value=review_paths):
+                payload = ui_module.latest_review_payload()
+            self.assertEqual(payload["run_status"], "failed")
+            self.assertEqual(payload["report_status"], "not_generated")
+
     def test_finish_continues_after_independent_writer_failures(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             finalizer, paths, progress = self._finalizer(tmpdir)
@@ -222,6 +234,61 @@ class RunFinalizerTests(unittest.TestCase):
             self.assertTrue(paths["latest_details"].exists())
             self.assertTrue(paths["latest_markdown"].exists())
             self.assertIn("Run history write failed: history down", progress.warnings)
+
+    def test_finish_keeps_completed_report_with_skipped_delivery(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            finalizer, paths, _progress = self._finalizer(tmpdir)
+            finalizer.diagnostics.record_delivery(
+                "skipped: not_configured",
+                recipients=[],
+                reason="missing configuration: NEWS_EMAIL_FROM",
+            )
+            finalizer.record_report_body("Daily News Summary\n\nA useful report.")
+            finalizer.diagnostics.event("completed")
+
+            finalizer.finish()
+
+            review = paths["latest_markdown"].read_text(encoding="utf-8")
+            self.assertIn("A useful report.", review)
+            self.assertIn("| Delivery | skipped: not_configured |", review)
+            details = json.loads(paths["latest_details"].read_text(encoding="utf-8"))
+            self.assertEqual(details["delivery"]["status"], "skipped: not_configured")
+            with connect(paths["history_db"]) as con:
+                self.assertEqual(
+                    con.execute("SELECT status FROM runs").fetchone()[0],
+                    "completed",
+                )
+                self.assertEqual(
+                    con.execute("SELECT delivery_status FROM runs").fetchone()[0],
+                    "skipped: not_configured",
+                )
+
+    def test_finish_keeps_completed_report_with_failed_delivery(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            finalizer, paths, _progress = self._finalizer(tmpdir)
+            finalizer.diagnostics.record_delivery(
+                "failed",
+                recipients=["reader@example.com"],
+                error_type="RuntimeError",
+                error_message="smtp down",
+            )
+            finalizer.record_report_body("Daily News Summary\n\nA useful report.")
+            finalizer.diagnostics.event("completed")
+
+            finalizer.finish()
+
+            review = paths["latest_markdown"].read_text(encoding="utf-8")
+            self.assertIn("A useful report.", review)
+            self.assertIn("| Delivery | failed |", review)
+            with connect(paths["history_db"]) as con:
+                self.assertEqual(
+                    con.execute("SELECT status FROM runs").fetchone()[0],
+                    "completed",
+                )
+                self.assertEqual(
+                    con.execute("SELECT delivery_status FROM runs").fetchone()[0],
+                    "failed",
+                )
 
     def _finalizer(self, tmpdir: str) -> tuple[RunFinalizer, dict[str, Path], _Progress]:
         root = Path(tmpdir)

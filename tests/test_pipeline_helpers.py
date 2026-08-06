@@ -25,6 +25,7 @@ from datetime import datetime
 import news_pipeline.pipeline as pipeline
 from news_pipeline.article_summary_records import ArticleSummaryRecord
 from news_pipeline.config import ModelSamplingSettings, MODEL_TASK_STORY_SCALE_SCREENING, MODEL_TASK_TITLE_GENERATION
+from news_pipeline.diagnostics import RunDiagnostics, run_status_from_events
 
 
 class PipelineHelperTests(unittest.TestCase):
@@ -1758,6 +1759,323 @@ class PipelineHelperTests(unittest.TestCase):
             "Big news",
         )
         self.assertEqual(pipeline._sanitize_overlay_headline("", "Fallback"), "Fallback")
+
+    def test_maybe_email_report_returns_normalized_delivery_outcome(self) -> None:
+        # Missing configuration -> skipped: not_configured result, no send.
+        with patch.object(pipeline, "EMAIL_FROM", ""), patch.object(
+            pipeline, "SMTP_HOST", ""
+        ), patch.object(pipeline, "SMTP_USERNAME", ""), patch.object(
+            pipeline, "SMTP_PASSWORD", ""
+        ), patch.object(pipeline.progress_tracker, "detail") as detail:
+            result = pipeline.maybe_email_report(
+                "Title", "Body", "Synthesis", [], ["reader@example.com"], ["Reader"]
+            )
+        self.assertEqual(result["status"], "skipped: not_configured")
+        self.assertEqual(result["recipients"], ["reader@example.com"])
+        self.assertIn("missing configuration", result["reason"])
+        self.assertEqual(result["error_type"], "")
+        self.assertEqual(result["error_message"], "")
+        self.assertIn("Missing configuration", detail.call_args[0][0])
+
+        class FakeSMTP:
+            def __init__(self, *args, **kwargs) -> None:  # noqa: ANN002, ANN003
+                self.messages = []
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):  # noqa: ANN001, ANN002, ANN003
+                return False
+
+            def starttls(self) -> None:
+                return None
+
+            def login(self, username: str, password: str) -> None:
+                return None
+
+            def send_message(self, message) -> None:  # noqa: ANN001
+                self.messages.append(message)
+
+        with patch.object(pipeline, "EMAIL_FROM", "from@example.com"), patch.object(
+            pipeline, "SMTP_HOST", "smtp.example.com"
+        ), patch.object(pipeline, "SMTP_USERNAME", "user"), patch.object(
+            pipeline, "SMTP_PASSWORD", "secret"
+        ), patch.object(pipeline, "SMTP_PORT", 587), patch.object(
+            pipeline, "SMTP_USE_SSL", False
+        ), patch.object(
+            pipeline, "build_report_html", return_value="<html>report</html>"
+        ), patch.object(
+            pipeline,
+            "build_unsubscribe_url",
+            return_value="https://example.com/unsubscribe?token=abc",
+        ), patch.object(pipeline.smtplib, "SMTP", return_value=FakeSMTP()), patch.object(
+            pipeline.progress_tracker, "detail"
+        ):
+            result = pipeline.maybe_email_report(
+                "Daily Brief",
+                "Body text",
+                "Synthesis text",
+                [],
+                ["reader@example.com"],
+                ["Reader"],
+            )
+        self.assertEqual(result["status"], "sent")
+        self.assertEqual(result["recipients"], ["reader@example.com"])
+        self.assertEqual(result["error_type"], "")
+
+    def test_attempt_email_delivery_isolates_transport_failures(self) -> None:
+        diagnostics = RunDiagnostics(
+            run_started_at="2026-06-01T10:00:00",
+            settings={},
+            events=[{"at": "2026-06-01T10:01:00", "label": "completed"}],
+        )
+
+        def explode(*_args, **_kwargs) -> dict[str, Any]:
+            raise RuntimeError("smtp down")
+
+        with patch.object(pipeline, "maybe_email_report", side_effect=explode), patch.object(
+            pipeline.progress_tracker, "warning"
+        ) as warning:
+            result = pipeline._attempt_email_delivery(
+                diagnostics,
+                report_title="Title",
+                report_body="Body",
+                synthesis_body="Synthesis",
+                final_reports=[],
+                recipient_list=["reader@example.com"],
+                recipient_names=["Reader"],
+            )
+
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["recipients"], ["reader@example.com"])
+        self.assertEqual(result["reason"], "delivery failed after report construction")
+        self.assertEqual(result["error_type"], "RuntimeError")
+        self.assertEqual(result["error_message"], "smtp down")
+        self.assertEqual(diagnostics.delivery["status"], "failed")
+        warning.assert_called_once()
+        self.assertIn("Delivery failed", warning.call_args[0][0])
+        # The run outcome stays completed; no failed run event is added, so
+        # the surrounding report-finalization path can continue normally.
+        self.assertEqual(run_status_from_events(diagnostics.events), "completed")
+        self.assertFalse(any(event["label"] == "failed" for event in diagnostics.events))
+
+    def test_attempt_email_delivery_records_success_result(self) -> None:
+        diagnostics = RunDiagnostics(
+            run_started_at="2026-06-01T10:00:00",
+            settings={},
+        )
+        with patch.object(
+            pipeline,
+            "maybe_email_report",
+            return_value={
+                "status": "sent",
+                "recipients": ["reader@example.com"],
+                "reason": "",
+                "error_type": "",
+                "error_message": "",
+            },
+        ):
+            result = pipeline._attempt_email_delivery(
+                diagnostics,
+                report_title="Title",
+                report_body="Body",
+                synthesis_body="Synthesis",
+                final_reports=[],
+                recipient_list=["reader@example.com"],
+                recipient_names=["Reader"],
+            )
+        self.assertEqual(result["status"], "sent")
+        self.assertEqual(diagnostics.delivery["status"], "sent")
+
+    def test_run_pipeline_with_no_recipients_finishes_local_report(self) -> None:
+        diagnostics = RunDiagnostics(
+            run_started_at="2026-06-01T10:00:00",
+            settings={},
+        )
+        finalizer = MagicMock()
+        article = {"article_id": "article-1", "url": "https://example.com/article"}
+        story_record = {"story_key": "story-1", "article_ids": ["article-1"]}
+        story_draft = {"story_key": "story-1", "article_ids": ["article-1"]}
+        final_report = {"article_id": "article-1", "summary": "A useful summary."}
+        progress = MagicMock()
+        finish = MagicMock()
+
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(patch.object(pipeline, "_new_run_diagnostics", return_value=diagnostics))
+            stack.enter_context(patch.object(pipeline, "_active_run_finalizer", return_value=finalizer))
+            stack.enter_context(
+                patch.object(
+                    pipeline,
+                    "collect_article_candidates",
+                    return_value=SimpleNamespace(article_candidates=[article]),
+                )
+            )
+            stack.enter_context(
+                patch.object(
+                    pipeline.story_clustering_stage,
+                    "organize_article_targets_into_global_stories",
+                    return_value=(
+                        [article],
+                        [story_record],
+                        {"story_count": 1, "included_count": 1, "dropped_count": 0},
+                    ),
+                )
+            )
+            stack.enter_context(
+                patch.object(
+                    pipeline,
+                    "_budget_article_targets_for_summary",
+                    return_value=(
+                        [article],
+                        [story_record],
+                        {"candidate_count": 1, "included_count": 1, "dropped_count": 0},
+                    ),
+                )
+            )
+            stack.enter_context(
+                patch.object(
+                    pipeline.article_summarization_stage,
+                    "run_article_summary_pass",
+                    return_value=[final_report],
+                )
+            )
+            stack.enter_context(
+                patch.object(
+                    pipeline.story_drafting_stage,
+                    "draft_story_clusters_from_article_summaries",
+                    return_value=(
+                        [story_draft],
+                        {
+                            "story_drafts_generated": 1,
+                            "story_drafts_rejected": 0,
+                            "story_blocks_requested": 1,
+                        },
+                    ),
+                )
+            )
+            stack.enter_context(
+                patch.object(
+                    pipeline,
+                    "_dedupe_story_drafts_for_global_selection",
+                    return_value=([story_draft], {"before": 1, "after": 1, "dropped": 0}),
+                )
+            )
+            stack.enter_context(
+                patch.object(
+                    pipeline.story_selection_stage,
+                    "apply_global_story_scale_screening",
+                    return_value=([story_draft], {"enabled": False, "kept_count": 1, "dropped_count": 0}),
+                )
+            )
+            stack.enter_context(
+                patch.object(
+                    pipeline.story_selection_stage,
+                    "select_global_story_drafts",
+                    return_value=(
+                        [story_draft],
+                        {
+                            "story_count": 1,
+                            "selected_story_count": 1,
+                            "article_overlap_dedup": {},
+                        },
+                    ),
+                )
+            )
+            stack.enter_context(
+                patch.object(
+                    pipeline.story_selection_stage,
+                    "build_story_assigned_article_reports",
+                    return_value=([final_report], {"selected_unique_article_count": 1}),
+                )
+            )
+            stack.enter_context(
+                patch.object(pipeline.story_drafting_stage, "report_article_id", return_value="article-1")
+            )
+            stack.enter_context(
+                patch.object(pipeline, "_report_entry_debug_records", side_effect=lambda entries: list(entries))
+            )
+            stack.enter_context(
+                patch.object(
+                    pipeline.story_selection_stage,
+                    "build_precomputed_global_story_synthesis",
+                    return_value=("Synthesis", {}, {"attempts": []}),
+                )
+            )
+            stack.enter_context(
+                patch.object(pipeline, "clean_synthesis_for_publication", return_value="Synthesis")
+            )
+            stack.enter_context(patch.object(pipeline, "generate_report_image_art", return_value=None))
+            stack.enter_context(
+                patch.object(
+                    pipeline,
+                    "build_report_body",
+                    return_value="Daily News Summary\n\nA useful report.",
+                )
+            )
+            stack.enter_context(patch.object(pipeline, "load_recipient_config", return_value={}))
+            stack.enter_context(patch.object(pipeline, "get_active_recipient_config", return_value={}))
+            stack.enter_context(patch.object(pipeline, "_finish_run_diagnostics", finish))
+            stack.enter_context(patch.object(pipeline, "record_activity_snapshot"))
+            stack.enter_context(patch.object(pipeline, "sync_assistant_context_latest_output"))
+            stack.enter_context(patch.object(pipeline, "MAX_STORIES", 1))
+            stack.enter_context(patch.object(pipeline, "MANAGED_MODEL_SERVER_ACTIVE", False))
+            stack.enter_context(patch.object(pipeline, "progress_tracker", progress))
+            pipeline._run_pipeline()
+
+        self.assertEqual(diagnostics.delivery["status"], "skipped: not_configured")
+        self.assertEqual(run_status_from_events(diagnostics.events), "completed")
+        self.assertFalse(any(event["label"] == "completed_without_recipients" for event in diagnostics.events))
+        self.assertEqual(len(diagnostics.reports), 1)
+        finalizer.record_report_body.assert_called_once_with(
+            "Daily News Summary\n\nA useful report."
+        )
+        finish.assert_called_once_with(diagnostics, pipeline.CONFIG)
+
+    def test_complete_pipeline_run_persists_report_after_delivery_failure(self) -> None:
+        diagnostics = RunDiagnostics(
+            run_started_at="2026-06-01T10:00:00",
+            settings={},
+        )
+        finalizer = MagicMock()
+        calls: list[str] = []
+        finalizer.record_report_body.side_effect = lambda _body: calls.append("record_report")
+        real_attempt = pipeline._attempt_email_delivery
+
+        def attempt_delivery(*args, **kwargs):  # noqa: ANN001
+            calls.append("delivery")
+            return real_attempt(*args, **kwargs)
+
+        with patch.object(pipeline, "maybe_email_report", side_effect=RuntimeError("smtp down")), patch.object(
+            pipeline, "_attempt_email_delivery", side_effect=attempt_delivery
+        ), patch.object(
+            pipeline, "_active_run_finalizer", return_value=finalizer
+        ), patch.object(
+            pipeline,
+            "_finish_run_diagnostics",
+            side_effect=lambda *_args, **_kwargs: calls.append("finish"),
+        ), patch.object(
+            pipeline, "sync_assistant_context_latest_output"
+        ), patch.object(pipeline.progress_tracker, "warning"):
+            pipeline._complete_pipeline_run(
+                diagnostics,
+                pipeline.CONFIG,
+                report_body="Daily News Summary\n\nA useful report.",
+                delivery_context={
+                    "report_title": "Daily News Summary",
+                    "report_body": "Daily News Summary\n\nA useful report.",
+                    "synthesis_body": "A useful report.",
+                    "final_reports": [],
+                    "recipient_list": ["reader@example.com"],
+                    "recipient_names": ["Reader"],
+                },
+            )
+
+        self.assertEqual(diagnostics.delivery["status"], "failed")
+        self.assertEqual(run_status_from_events(diagnostics.events), "completed")
+        self.assertEqual(calls, ["delivery", "record_report", "finish"])
+        finalizer.record_report_body.assert_called_once_with(
+            "Daily News Summary\n\nA useful report."
+        )
         enforced_prompt = pipeline._enforce_text_free_image_prompt("")
         self.assertIn("Hard constraints:", enforced_prompt)
         self.assertIn("readable headline will be rendered later by code", enforced_prompt)

@@ -11,7 +11,7 @@ import yaml
 
 from news_pipeline.article_summary_records import ArticleSummaryRecord
 from news_pipeline.diagnostics import RunDiagnostics
-from news_pipeline.okf import write_okf_run_bundle
+from news_pipeline.okf import OKFRunBundleSerializer, okf_run_bundle_path, write_okf_run_bundle
 from news_pipeline.story_records import StoryRecord
 
 
@@ -511,6 +511,29 @@ class OKFRunBundleTests(unittest.TestCase):
             self.assertNotIn("unsafe", story_text)
             self.assertNotIn("bad_float", story_text)
             self.assertNotIn("_internal", story_text)
+
+    def test_public_bundle_path_helper_matches_serializer_and_sanitizes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            history_db = root / "output" / "history" / "news_history.duckdb"
+            diagnostics = self._diagnostics("completed")
+            serializer = OKFRunBundleSerializer(
+                history_db,
+                run_id="2026-06-01_10-00-00",
+                diagnostics=diagnostics,
+            )
+            self.assertEqual(
+                okf_run_bundle_path(history_db, "2026-06-01_10-00-00"),
+                serializer.bundle_path,
+            )
+            self.assertEqual(
+                okf_run_bundle_path(history_db, "../evil/run"),
+                root / "output" / "history" / "okf" / "evil-run",
+            )
+            self.assertEqual(
+                okf_run_bundle_path(history_db, ""),
+                root / "output" / "history" / "okf" / "unknown-run",
+            )
 
     @staticmethod
     def _diagnostics(event_label: str | None) -> RunDiagnostics:

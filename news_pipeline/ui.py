@@ -40,6 +40,9 @@ from .config import (
     RuntimeConfigRequest,
     runtime_knob_registry,
 )
+from .diagnostics import _duration_label, run_status_from_events
+from .history_store import get_run_details, list_recent_run_summaries
+from .okf import okf_run_bundle_path
 from .source_catalog import (
     DeleteSources,
     UpsertSource,
@@ -284,6 +287,144 @@ def _recipient_summary() -> dict[str, Any]:
         return {"path": str(path), "total": len(recipients), "paused": paused, "error": None}
     except Exception as exc:
         return {"path": str(path), "total": 0, "paused": 0, "error": str(exc)}
+
+
+def _review_paths() -> dict[str, Path]:
+    """Resolve the read-only review artifacts without a runtime snapshot."""
+    output_dir = _config_path_from_env("NEWS_OUTPUT_DIR", "output/daily_outputs")
+    history_db = _config_path_from_env("NEWS_HISTORY_DB", "output/history/news_history.duckdb")
+    return {
+        "output_dir": output_dir,
+        "history_db": history_db,
+        "latest_run_markdown": output_dir / "latest_run.md",
+        "latest_run_details": output_dir / "latest_run_details.json",
+    }
+
+
+def _delivery_status_label(delivery: dict[str, Any]) -> str:
+    status = str((delivery or {}).get("status") or "").strip()
+    return status or "not recorded"
+
+
+def _report_generated_from_details(details: dict[str, Any]) -> bool:
+    explicit = details.get("report_generated")
+    if isinstance(explicit, bool):
+        return explicit
+    reports = details.get("reports")
+    if isinstance(reports, list):
+        return bool(reports)
+    try:
+        return int(details.get("report_count") or 0) > 0
+    except (TypeError, ValueError):
+        return False
+
+
+def _run_id_from_started_at(started_at: str) -> str:
+    if not started_at:
+        return ""
+    return started_at.replace("T", "_").replace(":", "-")[:19]
+
+
+def latest_review_payload() -> dict[str, Any]:
+    """Combine the rolling ``latest_run.md``/details into one JSON payload.
+
+    Tolerant read: a missing DuckDB, details file, or review file degrades to
+    a visible empty/error state instead of failing UI boot.
+    """
+    paths = _review_paths()
+    payload: dict[str, Any] = {
+        "run_id": "",
+        "run_started_at": "",
+        "run_status": "unknown",
+        "report_status": "not_generated",
+        "delivery_status": "not recorded",
+        "delivery": {},
+        "preset_id": "custom",
+        "duration_label": "",
+        "report_text": "",
+        "error": None,
+        "paths": {key: str(value) for key, value in paths.items()},
+    }
+    try:
+        details: dict[str, Any] = {}
+        if paths["latest_run_details"].exists():
+            parsed = json.loads(
+                paths["latest_run_details"].read_text(encoding="utf-8") or "{}"
+            )
+            if isinstance(parsed, dict):
+                details = parsed
+        events = details.get("events") if isinstance(details.get("events"), list) else []
+        settings = details.get("settings") if isinstance(details.get("settings"), dict) else {}
+        started_at = str(details.get("run_started_at") or "")
+        run_status = run_status_from_events(events)
+        delivery = details.get("delivery") if isinstance(details.get("delivery"), dict) else {}
+        report_text = ""
+        if paths["latest_run_markdown"].exists():
+            report_text = paths["latest_run_markdown"].read_text(
+                encoding="utf-8", errors="replace"
+            )
+        payload.update(
+            {
+                "run_id": _run_id_from_started_at(started_at),
+                "run_started_at": started_at,
+                "run_status": run_status,
+                "report_status": (
+                    "available"
+                    if run_status == "completed"
+                    and _report_generated_from_details(details)
+                    and report_text.strip()
+                    else (
+                        "unavailable"
+                        if run_status == "completed"
+                        and _report_generated_from_details(details)
+                        else "not_generated"
+                    )
+                ),
+                "delivery_status": _delivery_status_label(delivery),
+                "delivery": delivery,
+                "preset_id": str(settings.get("preset_id") or "custom"),
+                "duration_label": _duration_label(started_at, events),
+                "report_text": report_text,
+            }
+        )
+    except Exception as exc:
+        payload["error"] = str(exc)
+    return payload
+
+
+def recent_history_payload(limit: int = 20) -> dict[str, Any]:
+    """Return durable recent-run summaries, degrading errors to a field."""
+    paths = _review_paths()
+    try:
+        summaries = list_recent_run_summaries(paths["history_db"], limit=limit)
+        return {"runs": summaries, "path": str(paths["history_db"]), "error": None}
+    except Exception as exc:
+        return {"runs": [], "path": str(paths["history_db"]), "error": str(exc)}
+
+
+def run_detail_payload(run_id: str) -> dict[str, Any] | None:
+    """Return one decoded run from durable history, or ``None`` when absent."""
+    return get_run_details(_review_paths()["history_db"], run_id)
+
+
+def read_historical_report(run_id: str) -> str | None:
+    """Return the stable OKF ``report.md`` text for one run, or ``None``.
+
+    Only runs present in durable history are readable, and the resolved report
+    path must stay inside the run's OKF bundle root; there is no arbitrary
+    path-based report route.
+    """
+    paths = _review_paths()
+    details = get_run_details(paths["history_db"], run_id)
+    if details is None or details.get("report_status") != "available":
+        return None
+    okf_root = okf_run_bundle_path(paths["history_db"], run_id)
+    report_path = (okf_root / "report.md").resolve()
+    if not report_path.is_relative_to(okf_root.resolve()):
+        return None
+    if not report_path.is_file():
+        return None
+    return report_path.read_text(encoding="utf-8", errors="replace")
 
 
 def schema_payload() -> dict[str, Any]:
@@ -928,6 +1069,42 @@ class NewsUIHandler(BaseHTTPRequestHandler):
                 self._send_json(list_recipients())
             elif parsed.path == "/api/runs":
                 self._send_json({"runs": RUN_MANAGER.list()})
+            elif parsed.path == "/api/history":
+                params = parse_qs(parsed.query)
+                raw_limit = (params.get("limit") or [""])[0]
+                try:
+                    limit = int(raw_limit) if raw_limit else 20
+                except ValueError:
+                    limit = 20
+                self._send_json(recent_history_payload(limit))
+            elif parsed.path.startswith("/api/history/") and parsed.path.endswith("/report"):
+                parts = parsed.path.split("/")
+                if len(parts) < 5:
+                    self._send_json({"error": "Run not found."}, status=HTTPStatus.NOT_FOUND)
+                    return
+                run_id = parts[3]
+                report_text = read_historical_report(run_id)
+                if report_text is None:
+                    self._send_json(
+                        {"error": "Report not available for this run."},
+                        status=HTTPStatus.NOT_FOUND,
+                    )
+                    return
+                body = report_text.encode("utf-8")
+                self.send_response(HTTPStatus.OK)
+                self.send_header("Content-Type", "text/plain; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            elif parsed.path.startswith("/api/history/"):
+                run_id = parsed.path.split("/")[3]
+                details = run_detail_payload(run_id)
+                if details is None:
+                    self._send_json({"error": "Run not found."}, status=HTTPStatus.NOT_FOUND)
+                else:
+                    self._send_json(details)
+            elif parsed.path == "/api/review/latest":
+                self._send_json(latest_review_payload())
             elif parsed.path.startswith("/api/runs/") and parsed.path.endswith("/events"):
                 run_id = parsed.path.split("/")[3]
                 self._stream_run_events(run_id)
@@ -1191,6 +1368,32 @@ HTML = r"""<!doctype html>
     .warn { color: var(--gold); }
     .bad { color: var(--red); }
     .good { color: var(--green); }
+    .badge {
+      display: inline-block;
+      padding: 2px 9px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 600;
+      border: 1px solid var(--line);
+      background: #fff;
+      color: var(--muted);
+      white-space: nowrap;
+    }
+    .badge.good { color: var(--green); border-color: #b9d8cf; background: #f2faf7; }
+    .badge.warn { color: var(--gold); border-color: #e2cf9f; background: #fdf8ec; }
+    .badge.bad { color: var(--red); border-color: #e5b4b4; background: #fdf2f2; }
+    .badge.blue { color: var(--blue); border-color: #b9cfe4; background: #f2f7fc; }
+    .badge-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+    .review-report {
+      min-height: 200px;
+      max-height: 60vh;
+      background: #fffdf8;
+      color: var(--ink);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 14px;
+      white-space: pre-wrap;
+    }
     button:disabled { opacity: .55; cursor: not-allowed; }
     #status:empty { display: none; }
     .hidden { display: none !important; }
@@ -1332,6 +1535,10 @@ HTML = r"""<!doctype html>
     <nav id="tabs"></nav>
     <section id="runSetup" class="view active">
       <div id="runSetupMount"></div>
+    </section>
+    <section id="review" class="view">
+      <div id="reviewMount"></div>
+      <div id="historyMount"></div>
     </section>
     <section id="advanced" class="view">
       <div id="advancedPanels" class="stack"></div>
@@ -1561,7 +1768,12 @@ HTML = r"""<!doctype html>
       sources: [],
       recipients: [],
       activeRun: null,
-      selectedRunPresetId: ""
+      selectedRunPresetId: "",
+      latestReview: null,
+      history: [],
+      historyError: null,
+      selectedRunId: null,
+      selectedRun: null
     };
     const icons = {
       chevronLeft: `<svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg>`,
@@ -1569,10 +1781,12 @@ HTML = r"""<!doctype html>
       gear: `<svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.05.05a2 2 0 1 1-2.83 2.83l-.05-.05A1.7 1.7 0 0 0 15 19.4a1.7 1.7 0 0 0-1 .6 1.7 1.7 0 0 0-.4 1.1V21a2 2 0 1 1-4 0v-.08A1.7 1.7 0 0 0 8.6 19.4a1.7 1.7 0 0 0-1.88.34l-.05.05a2 2 0 1 1-2.83-2.83l.05-.05A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-.6-1 1.7 1.7 0 0 0-1.1-.4H3a2 2 0 1 1 0-4h.08A1.7 1.7 0 0 0 4.6 8.6a1.7 1.7 0 0 0-.34-1.88l-.05-.05a2 2 0 1 1 2.83-2.83l.05.05A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-.6 1.7 1.7 0 0 0 .4-1.1V3a2 2 0 1 1 4 0v.08A1.7 1.7 0 0 0 15 4.6a1.7 1.7 0 0 0 1.88-.34l.05-.05a2 2 0 1 1 2.83 2.83l-.05.05A1.7 1.7 0 0 0 19.4 9c.36.24.72.47 1 .6.34.16.72.2 1.1.2h.5a2 2 0 1 1 0 4h-.08A1.7 1.7 0 0 0 20.4 14c-.28.13-.64.36-1 .6Z"/></svg>`,
       microscope: `<svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 18h8"/><path d="M3 22h18"/><path d="M14 22a7 7 0 0 0 7-7"/><path d="M9 14h2"/><path d="M8 6h4"/><path d="m9 6 6 6"/><path d="m11 4 6 6"/><path d="M12 6 9 9"/><path d="m17 10-3 3"/></svg>`,
       newspaper: `<svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 1.5 17V5.5H18A2.5 2.5 0 0 1 20.5 8v11.5Z"/><path d="M20.5 8H23v9a2.5 2.5 0 0 1-2.5 2.5"/><path d="M5 9h8"/><path d="M5 13h10"/><path d="M5 17h6"/></svg>`,
+      book: `<svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 7v14"/><path d="M3 18a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h5a4 4 0 0 1 4 4 4 4 0 0 1 4-4h5a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-6a3 3 0 0 0-3 3 3 3 0 0 0-3-3z"/></svg>`,
       person: `<svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21a8 8 0 0 0-16 0"/><circle cx="12" cy="7" r="4"/></svg>`
     };
     const tabs = [
       ["runSetup", "Run Setup", "gear"],
+      ["review", "Report Review", "book"],
       ["advanced", "Advanced Settings", "microscope"],
       ["sources", "Sources", "newspaper"],
       ["recipients", "Recipients", "person"]
@@ -2676,7 +2890,211 @@ HTML = r"""<!doctype html>
           setStatus(`Run ${payload.run_id} ${payload.status}.`, payload.status === "completed" ? "muted" : "bad");
         }
         events.close();
+        if (payload.status === "completed" || payload.status === "failed") {
+          refreshReviewData();
+        }
       });
+    }
+    function badgeClass(status) {
+      if (!status) return "";
+      if (status === "completed" || status === "available" || status === "sent") return "good";
+      if (status === "failed" || status === "unavailable") return "bad";
+      if (status.startsWith("skipped") || status === "aborted" || status === "not_generated") return "warn";
+      return "";
+    }
+    function deliveryLabel(status) {
+      return status || "not recorded";
+    }
+    function renderBadges(runStatus, reportStatus, deliveryStatus) {
+      return `<div class="badge-row">` +
+        `<span class="badge ${badgeClass(runStatus)}">run: ${escapeHtml(runStatus || "unknown")}</span>` +
+        `<span class="badge ${badgeClass(reportStatus)}">report: ${escapeHtml(reportStatus || "unavailable")}</span>` +
+        `<span class="badge ${badgeClass(deliveryStatus)}">delivery: ${escapeHtml(deliveryLabel(deliveryStatus))}</span>` +
+        `</div>`;
+    }
+    async function loadReview() {
+      try {
+        state.latestReview = await api("/api/review/latest");
+      } catch (err) {
+        state.latestReview = { error: err.message, report_status: "unavailable" };
+      }
+      renderReview();
+    }
+    function renderReview() {
+      const review = state.latestReview || {};
+      const delivery = review.delivery || {};
+      const reportStatus = review.report_status || "unavailable";
+      const runStatus = review.run_status || "unknown";
+      const deliveryStatus = review.delivery_status || "not recorded";
+      const deliveryMeta = [
+        delivery.reason ? `reason: ${delivery.reason}` : "",
+        delivery.error_type ? `${delivery.error_type}: ${delivery.error_message}` : ""
+      ].filter(Boolean).join(" · ");
+      $("reviewMount").innerHTML = `
+        <div class="banner panel">
+          <div class="banner-copy">
+            <p class="eyebrow">Report Review</p>
+            <h2>Latest run review</h2>
+            <p class="muted">Read-only view of the current report; run, report, and delivery status are separate.</p>
+          </div>
+          <div class="banner-actions">
+            <button id="refreshReviewBtn">Refresh</button>
+          </div>
+        </div>
+        ${review.error ? `<p class="bad" style="margin:0 0 8px">${escapeHtml(review.error)}</p>` : ""}
+        <div class="stack">
+          <section class="panel">
+            <p class="eyebrow">Status</p>
+            <h2>Outcomes</h2>
+            ${renderBadges(runStatus, reportStatus, deliveryStatus)}
+            <div class="form-grid" style="margin-top:12px">
+              <div class="field"><span>Run id</span><code>${escapeHtml(review.run_id || "—")}</code></div>
+              <div class="field"><span>Started</span><code>${escapeHtml(review.run_started_at || "—")}</code></div>
+              <div class="field"><span>Preset</span><code>${escapeHtml(review.preset_id || "custom")}</code></div>
+              <div class="field"><span>Duration</span><code>${escapeHtml(review.duration_label || "—")}</code></div>
+            </div>
+            ${deliveryMeta ? `<p class="muted" style="margin:10px 0 0">${escapeHtml(deliveryMeta)}</p>` : ""}
+          </section>
+          <section class="panel">
+            <div class="toolbar"><h2 style="margin-right:auto">Report</h2></div>
+            <pre id="reviewReportPane" class="review-report"></pre>
+          </section>
+        </div>
+      `;
+      $("refreshReviewBtn").onclick = () => refreshReviewData();
+      const pane = $("reviewReportPane");
+      if (reportStatus === "available") {
+        pane.textContent = review.report_text || "(empty report)";
+      } else if (runStatus === "failed" || runStatus === "aborted") {
+        pane.textContent = "No report was generated for this run.";
+      } else {
+        pane.textContent = "No completed report is available yet. Run the pipeline from Run Setup to generate one.";
+      }
+    }
+    async function loadHistory() {
+      try {
+        const data = await api("/api/history");
+        state.history = data.runs || [];
+        state.historyError = data.error || null;
+      } catch (err) {
+        state.history = [];
+        state.historyError = err.message;
+      }
+      renderHistory();
+    }
+    function renderHistory() {
+      const rows = state.history || [];
+      $("historyMount").innerHTML = `
+        <section class="panel">
+          <div class="toolbar">
+            <h2 style="margin-right:auto">Recent runs</h2>
+            <button id="refreshHistoryBtn">Refresh</button>
+          </div>
+          ${state.historyError ? `<p class="bad" style="margin:0 0 8px">${escapeHtml(state.historyError)}</p>` : ""}
+          ${rows.length
+            ? `<div class="table-wrap"><table id="historyTable">
+                <thead><tr><th>Run</th><th>Started</th><th>Status</th><th>Report</th><th>Delivery</th><th>Preset</th></tr></thead>
+                <tbody>${rows.map(run => `
+                  <tr data-run-id="${escapeHtml(run.run_id)}">
+                    <td><code>${escapeHtml(run.run_id)}</code></td>
+                    <td>${escapeHtml(run.run_started_at || "—")}</td>
+                    <td><span class="badge ${badgeClass(run.run_status)}">${escapeHtml(run.run_status || "unknown")}</span></td>
+                    <td><span class="badge ${badgeClass(run.report_status)}">${escapeHtml(run.report_status || "unavailable")}</span></td>
+                    <td><span class="badge ${badgeClass(run.delivery_status)}">${escapeHtml(deliveryLabel(run.delivery_status))}</span></td>
+                    <td>${escapeHtml(run.preset_id || "custom")}</td>
+                  </tr>`).join("")}
+                </tbody>
+              </table></div>`
+            : `<p class="muted">No runs recorded yet. Completed and failed sessions appear here from durable history.</p>`}
+        </section>
+        <section class="panel">
+          <p class="eyebrow">Run detail</p>
+          <h2>Selected run</h2>
+          <div id="runDetail"></div>
+        </section>
+      `;
+      $("refreshHistoryBtn").onclick = () => loadHistory();
+      document.querySelectorAll("#historyTable tr[data-run-id]").forEach(row => {
+        row.onclick = () => selectRun(row.dataset.runId);
+      });
+      if (state.selectedRunId) {
+        const stillThere = rows.some(run => run.run_id === state.selectedRunId);
+        if (!stillThere) state.selectedRunId = null;
+      }
+      renderRunDetail();
+    }
+    async function selectRun(runId) {
+      state.selectedRunId = runId;
+      try {
+        state.selectedRun = await api(`/api/history/${encodeURIComponent(runId)}`);
+      } catch (err) {
+        state.selectedRun = null;
+        setStatus(err.message, "bad");
+      }
+      renderRunDetail();
+    }
+    function renderRunDetail() {
+      const container = $("runDetail");
+      if (!container) return;
+      if (!state.selectedRun) {
+        container.innerHTML = `<p class="muted">Select a run above to inspect its metadata and open its OKF report.</p>`;
+        return;
+      }
+      const run = state.selectedRun;
+      const delivery = run.delivery || {};
+      const deliveryMeta = [
+        delivery.reason ? `reason: ${delivery.reason}` : "",
+        delivery.error_type ? `${delivery.error_type}: ${delivery.error_message}` : ""
+      ].filter(Boolean).join(" · ");
+      container.innerHTML = `
+        <div class="form-grid">
+          <div class="field"><span>Run id</span><code>${escapeHtml(run.run_id || "—")}</code></div>
+          <div class="field"><span>Started</span><code>${escapeHtml(run.run_started_at || "—")}</code></div>
+          <div class="field"><span>Completed</span><code>${escapeHtml(run.run_completed_at || "—")}</code></div>
+          <div class="field"><span>Preset</span><code>${escapeHtml(run.preset_id || "custom")}</code></div>
+          <div class="field"><span>Duration</span><code>${escapeHtml(run.duration_label || "—")}</code></div>
+          <div class="field"><span>Model</span><code>${escapeHtml(run.model_name || run.model || "—")}</code></div>
+          <div class="field"><span>Artifacts</span><code>${run.artifacts ? run.artifacts.length : 0} recorded</code></div>
+          <div class="field"><span>OKF bundle</span><code>${escapeHtml(run.okf_path || "—")}</code></div>
+        </div>
+        ${renderBadges(run.run_status, run.report_status, run.delivery_status)}
+        ${deliveryMeta ? `<p class="muted" style="margin:10px 0 0">${escapeHtml(deliveryMeta)}</p>` : ""}
+        <div class="toolbar" style="margin-top:12px">
+          <button id="openReportBtn" ${run.report_status === "available" ? "" : "disabled"}>Open report</button>
+        </div>
+        <pre id="selectedReportPane" class="review-report"></pre>
+      `;
+      const pane = $("selectedReportPane");
+      if (run.report_status === "available") {
+        pane.textContent = "Loading report…";
+        openHistoricalReport(run.run_id)
+          .then(text => { pane.textContent = text; })
+          .catch(err => { pane.textContent = `Report unavailable: ${err.message}`; });
+      } else if (run.report_status === "unavailable") {
+        pane.textContent = "This run completed but its OKF report artifact is missing.";
+      } else {
+        pane.textContent = "No report was generated for this run.";
+      }
+    }
+    async function openHistoricalReport(runId) {
+      const res = await fetch(`/api/history/${encodeURIComponent(runId)}/report`);
+      if (!res.ok) {
+        let message = `Report unavailable (${res.status})`;
+        try {
+          const data = await res.json();
+          if (data && data.error) message = data.error;
+        } catch (_err) { /* non-JSON error body */ }
+        throw new Error(message);
+      }
+      return res.text();
+    }
+    function refreshReviewData() {
+      return Promise.all([loadReview(), loadHistory()]).then(() => {
+        const review = state.latestReview || {};
+        if (review.report_status === "available") {
+          showTab("review");
+        }
+      }).catch(() => {});
     }
     async function loadSources() {
       const data = await api("/api/sources");
@@ -3060,6 +3478,8 @@ HTML = r"""<!doctype html>
       });
       await loadSources();
       await loadRecipients();
+      await loadReview();
+      await loadHistory();
       state.presets = (state.schema.presets && state.schema.presets.presets) || [];
       state.modelTuningPresets = (state.schema.model_tuning_presets && state.schema.model_tuning_presets.presets) || [];
       if (state.schema.runtime && state.schema.runtime.preset_id && state.schema.runtime.preset_id !== "custom") {

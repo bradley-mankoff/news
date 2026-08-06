@@ -84,6 +84,54 @@ class HistoryStoreHelperTests(unittest.TestCase):
         history_module._ensure_columns(fake_con, "runs", {"missing": "VARCHAR"})
         self.assertTrue(any("ALTER TABLE runs ADD COLUMN missing VARCHAR" in sql for sql, _ in fake_con.calls))
 
+    def test_delivery_and_report_status_helpers_cover_edge_branches(self) -> None:
+        self.assertEqual(history_module._delivery_status_label(None), "not recorded")
+        self.assertEqual(history_module._delivery_status_label(""), "not recorded")
+        self.assertEqual(
+            history_module._delivery_status_label("skipped: not_configured"),
+            "skipped: not_configured",
+        )
+
+        missing_root = Path("/tmp/missing/okf/run")
+        self.assertEqual(
+            history_module._report_status_for("failed", missing_root),
+            "not_generated",
+        )
+        self.assertEqual(
+            history_module._report_status_for("aborted", missing_root),
+            "not_generated",
+        )
+        self.assertEqual(
+            history_module._report_status_for("completed", missing_root),
+            "not_generated",
+        )
+        self.assertEqual(
+            history_module._report_status_for("completed", missing_root, report_count=1),
+            "unavailable",
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir) / "okf" / "run"
+            root.mkdir(parents=True)
+            (root / "report.md").write_text("body", encoding="utf-8")
+            self.assertEqual(
+                history_module._report_status_for("completed", root),
+                "not_generated",
+            )
+            self.assertEqual(
+                history_module._report_status_for("completed", root, report_count=1),
+                "available",
+            )
+            self.assertEqual(
+                history_module._report_status_for("failed", root, report_count=1),
+                "not_generated",
+            )
+
+        self.assertEqual(history_module._loads(None), {})
+        self.assertEqual(history_module._loads(""), {})
+        self.assertEqual(history_module._loads("not json"), {})
+        self.assertEqual(history_module._loads({"status": "sent"}), {"status": "sent"})
+        self.assertEqual(history_module._loads('{"status": "sent"}'), {"status": "sent"})
+
     def test_insert_and_upsert_helpers_cover_edge_branches(self) -> None:
         class FakeCon:
             def __init__(self) -> None:

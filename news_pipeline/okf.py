@@ -123,8 +123,7 @@ class OKFRunBundleSerializer:
 
     @property
     def bundle_path(self) -> Path:
-        run_component = _safe_run_component(self.run_id)
-        return self.history_db_path.parent / "okf" / run_component
+        return okf_run_bundle_path(self.history_db_path, self.run_id)
 
     def write(self) -> Path:
         """Build in a sibling staging directory, then replace the run bundle."""
@@ -459,6 +458,17 @@ class OKFRunBundleSerializer:
         finally:
             if backup is not None:
                 _remove_tree(backup)
+
+
+def okf_run_bundle_path(history_db_path: Path, run_id: str) -> Path:
+    """Return the stable OKF Run Bundle directory for one run id.
+
+    Public path helper so UI/review readers resolve historical reports with
+    the same ``_safe_run_component`` sanitation rule the serializer uses;
+    callers must still validate the resolved report path before reading.
+    """
+    run_component = _safe_run_component(str(run_id or ""))
+    return Path(history_db_path).parent / "okf" / run_component
 
 
 def write_okf_run_bundle(

@@ -2993,7 +2993,15 @@ def maybe_email_report(
     image_art: dict[str, Any] | None = None,
     citation_sources: list[dict[str, Any]] | None = None,
     citation_groups: list[dict[str, Any]] | None = None,
-) -> None:
+) -> dict[str, Any]:
+    """Send the completed report by email and return the normalized outcome.
+
+    The returned mapping uses the ADR 0012 delivery vocabulary
+    (``sent`` or ``skipped: not_configured`` here; ``failed`` is recorded by
+    ``_attempt_email_delivery`` when the transport raises) and never contains
+    SMTP passwords, secrets, or full tracebacks. Delivery outcomes are
+    independent from the Run Session outcome.
+    """
     missing = []
     if not recipients:
         missing.append("recipient list")
@@ -3008,7 +3016,13 @@ def maybe_email_report(
 
     if missing:
         progress_tracker.detail(f"[email] Skipping email. Missing configuration: {', '.join(missing)}")
-        return
+        return {
+            "status": "skipped: not_configured",
+            "recipients": list(recipients),
+            "reason": f"missing configuration: {', '.join(missing)}",
+            "error_type": "",
+            "error_message": "",
+        }
 
     # Read the image attachment once up front; a read failure degrades the
     # email to no attached image (delivery must not depend on an attachment)
@@ -3083,6 +3097,83 @@ def maybe_email_report(
                 smtp.send_message(build_message(recipient_email, recipient_name))
 
     progress_tracker.detail(f"[email] Sent report to {', '.join(recipients)}")
+    return {
+        "status": "sent",
+        "recipients": list(recipients),
+        "reason": "",
+        "error_type": "",
+        "error_message": "",
+    }
+
+
+def _attempt_email_delivery(
+    diagnostics: RunDiagnostics,
+    *,
+    report_title: str,
+    report_body: str,
+    synthesis_body: str,
+    final_reports: List[article_summary_records_stage.ArticleSummaryRecord | str],
+    recipient_list: list[str],
+    recipient_names: list[str],
+    image_art: dict[str, Any] | None = None,
+    citation_sources: list[dict[str, Any]] | None = None,
+    citation_groups: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Run optional email delivery and record its outcome independently.
+
+    Delivery exceptions are isolated at this boundary: a failed send records a
+    ``failed`` delivery result and a progress warning, then returns normally so
+    the already-constructed report body, ``completed`` event, and finalizer
+    still run. Report construction itself stays outside this helper's ``try``.
+    """
+    try:
+        result = maybe_email_report(
+            report_title,
+            report_body,
+            synthesis_body,
+            final_reports,
+            recipient_list,
+            recipient_names,
+            image_art,
+            citation_sources,
+            citation_groups,
+        )
+    except Exception as error:
+        result = {
+            "status": "failed",
+            "recipients": list(recipient_list),
+            "reason": "delivery failed after report construction",
+            "error_type": type(error).__name__,
+            "error_message": str(error),
+        }
+        progress_tracker.warning(
+            f"[email] Delivery failed ({type(error).__name__}: {error}); "
+            "the completed report remains available for review."
+        )
+    diagnostics.record_delivery(**result)
+    return result
+
+
+def _complete_pipeline_run(
+    diagnostics: RunDiagnostics,
+    config: RuntimeConfig,
+    *,
+    report_body: str,
+    delivery_context: dict[str, Any] | None = None,
+) -> None:
+    """Complete a run after report construction, isolating optional delivery.
+
+    Delivery is deliberately attempted before the completed event and durable
+    finalization so its outcome is persisted alongside the generated report,
+    while delivery failures remain independent from the run outcome.
+    """
+    if delivery_context is not None:
+        _attempt_email_delivery(diagnostics, **delivery_context)
+    diagnostics.event("completed")
+    _active_run_finalizer(diagnostics, config).record_report_body(report_body)
+    _finish_run_diagnostics(diagnostics, config)
+    sync_assistant_context_latest_output(config)
+
 
 def _first_sentences(text: str, max_sentences: int = 2, max_chars: int = 520) -> str:
     clean_text = re.sub(r"\s+", " ", strip_model_artifacts(text or "")).strip()
@@ -4852,10 +4943,9 @@ def _run_pipeline() -> None:
     ]
 
     if not recipient_list:
-        progress_tracker.step("finalize", "No recipients configured; stopping after summaries.")
-        diagnostics.event("completed_without_recipients")
-        _finish_run_diagnostics(diagnostics, CONFIG)
-        return
+        progress_tracker.detail(
+            "No recipients configured; continuing with local report review."
+        )
 
     prompt_label = "default prompt"
     progress_tracker.start_meter(
@@ -4873,6 +4963,7 @@ def _run_pipeline() -> None:
         f"news_report_{timestamp}_{MODEL_REPORT_LABEL}_default_prompt.txt",
     )
     report_body = ""
+    delivery_context: dict[str, Any] | None = None
     progress_tracker.set_final_step("synthesis", 2)
     story_drafting, token_stats, synthesis_debug = (
         story_selection_stage.build_precomputed_global_story_synthesis(
@@ -4956,23 +5047,25 @@ def _run_pipeline() -> None:
         )
 
         progress_tracker.set_final_step("email", 5)
-        maybe_email_report(
-            report_title,
-            report_body,
-            synthesis_body,
-            reference_reports,
-            recipient_list,
-            recipient_names,
-            image_art,
-            citation_sources,
-            citation_groups,
-        )
+        delivery_context = {
+            "report_title": report_title,
+            "report_body": report_body,
+            "synthesis_body": synthesis_body,
+            "final_reports": reference_reports,
+            "recipient_list": recipient_list,
+            "recipient_names": recipient_names,
+            "image_art": image_art,
+            "citation_sources": citation_sources,
+            "citation_groups": citation_groups,
+        }
 
         if token_stats:
             progress_tracker.detail(f"Final synthesis token stats for {', '.join(recipient_list)}: {token_stats}")
         progress_tracker.detail("Finished report. Final prose will be embedded in latest_run.md.")
 
-    diagnostics.event("completed")
-    _active_run_finalizer(diagnostics, CONFIG).record_report_body(report_body)
-    _finish_run_diagnostics(diagnostics, CONFIG)
-    sync_assistant_context_latest_output(CONFIG)
+    _complete_pipeline_run(
+        diagnostics,
+        CONFIG,
+        report_body=report_body,
+        delivery_context=delivery_context,
+    )
