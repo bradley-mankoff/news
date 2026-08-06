@@ -306,6 +306,19 @@ def _delivery_status_label(delivery: dict[str, Any]) -> str:
     return status or "not recorded"
 
 
+def _report_generated_from_details(details: dict[str, Any]) -> bool:
+    explicit = details.get("report_generated")
+    if isinstance(explicit, bool):
+        return explicit
+    reports = details.get("reports")
+    if isinstance(reports, list):
+        return bool(reports)
+    try:
+        return int(details.get("report_count") or 0) > 0
+    except (TypeError, ValueError):
+        return False
+
+
 def _run_id_from_started_at(started_at: str) -> str:
     if not started_at:
         return ""
@@ -357,8 +370,15 @@ def latest_review_payload() -> dict[str, Any]:
                 "run_status": run_status,
                 "report_status": (
                     "available"
-                    if report_text.strip()
-                    else ("unavailable" if run_status == "completed" else "not_generated")
+                    if run_status == "completed"
+                    and _report_generated_from_details(details)
+                    and report_text.strip()
+                    else (
+                        "unavailable"
+                        if run_status == "completed"
+                        and _report_generated_from_details(details)
+                        else "not_generated"
+                    )
                 ),
                 "delivery_status": _delivery_status_label(delivery),
                 "delivery": delivery,
@@ -395,7 +415,8 @@ def read_historical_report(run_id: str) -> str | None:
     path-based report route.
     """
     paths = _review_paths()
-    if get_run_details(paths["history_db"], run_id) is None:
+    details = get_run_details(paths["history_db"], run_id)
+    if details is None or details.get("report_status") != "available":
         return None
     okf_root = okf_run_bundle_path(paths["history_db"], run_id)
     report_path = (okf_root / "report.md").resolve()

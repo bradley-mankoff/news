@@ -1451,6 +1451,7 @@ class UITests(unittest.TestCase):
                     {
                         "run_started_at": "2026-06-01T10:00:00",
                         "settings": {"preset_id": "daily"},
+                        "report_generated": True,
                         "delivery": {
                             "status": "skipped: not_configured",
                             "recipients": [],
@@ -1527,6 +1528,7 @@ class UITests(unittest.TestCase):
                 settings={"preset_id": "daily"},
                 events=[{"at": "2026-06-01T10:00:30", "label": "completed"}],
             )
+            diagnostics.record_report(path="output/daily_outputs/latest_run.md")
             write_run_history(
                 db_path,
                 run_id="2026-06-01_10-00-00",
