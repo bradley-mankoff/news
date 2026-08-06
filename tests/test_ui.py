@@ -843,6 +843,54 @@ class UITests(unittest.TestCase):
             os.unlink(path)
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_preview_quietly_renders_api_error_in_preview_pane(self) -> None:
+        # Execute the exact embedded error handler with a minimal DOM shim so
+        # an empty catch or stale preview regression fails at behavior level.
+        script = ui_module.HTML.split("<script>", 1)[1].split("</script>", 1)[0]
+        start = script.index("async function previewQuietly")
+        end = script.index("async function runAction", start)
+        preview_quietly = script[start:end]
+        harness = f"""
+const assert = require("node:assert/strict");
+const previewPane = {{ textContent: "stale successful preview" }};
+function $(id) {{
+  if (id !== "previewPane") throw new Error(`unexpected element: ${{id}}`);
+  return previewPane;
+}}
+async function preview() {{
+  throw new Error("managed endpoint cannot serve different task models");
+}}
+{preview_quietly}
+(async () => {{
+  await previewQuietly("run");
+  assert.equal(
+    previewPane.textContent,
+    "Preview unavailable: managed endpoint cannot serve different task models",
+  );
+}})().catch(error => {{
+  console.error(error);
+  process.exitCode = 1;
+}});
+"""
+        with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False) as f:
+            f.write(harness)
+            path = f.name
+        try:
+            try:
+                node_probe = subprocess.run(
+                    ["node", "--version"], capture_output=True, text=True
+                )
+            except FileNotFoundError:
+                node_probe = None
+            if node_probe is None or node_probe.returncode != 0:
+                self.skipTest("node is not available on PATH")
+            result = subprocess.run(
+                ["node", path], capture_output=True, text=True, timeout=30
+            )
+        finally:
+            os.unlink(path)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_js_bundle_is_not_duplicated(self) -> None:
         # Rebase/conflict-resolution once multiplied the JS tail 4x inside
         # ui.HTML (dead payload + parse failure). Pin each function/const
