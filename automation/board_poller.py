@@ -1640,6 +1640,10 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
     # with the same message (re-dispatches reuse the message) and pop the
     # marker before the new run registers.
     fresh_dispatched: set[str] = set()
+    # Review-lane items already attempted in the main pass this poll; the
+    # recheck pass must not double-attempt them (a gh failure defers to the
+    # next poll, never a same-poll retry).
+    review_attempted: set[str] = set()
     for item in items:
         item_id = item["id"]
         seen.add(item_id)
@@ -1761,6 +1765,7 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
                     # reached main (empty ship PR) and logs failures so the
                     # recheck pass can retry.
                     rec = state.get(item_id, {})
+                    review_attempted.add(item_id)
                     result = ensure_ship_review(
                         cfg, env, item_id, content["number"], content["title"],
                         project_id, field_id, status_options, done_lane_name, rec)
@@ -1771,6 +1776,12 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
                     elif result == "shipped":
                         if done_lane_name:
                             status_val = done_lane_name
+                    else:
+                        # Deferred (gh failure or ship PR unavailable): keep
+                        # the recorded status so the lane is re-entered next
+                        # poll — never advance on uncertainty, and never
+                        # double-attempt within the same poll.
+                        continue
 
         rec = state.get(item_id, {})
         rec["status"] = status_val
@@ -1816,6 +1827,8 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
                 continue
             item_id = item["id"]
             if item_id in fresh_dispatched:
+                continue
+            if item_id in review_attempted:
                 continue
             rec = state.get(item_id, {})
             if rec.get("review_msg") or rec.get("review_held"):

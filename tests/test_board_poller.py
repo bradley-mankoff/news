@@ -99,6 +99,11 @@ ISOLATION_LIST = (
 
 
 class DispatchCapacityTest(unittest.TestCase):
+    def tearDown(self) -> None:
+        # The budget is a module global reset per poll; never leak a
+        # reserved/exhausted value into later tests.
+        board_poller._DISPATCH_BUDGET = None
+
     def test_active_workflow_count_ignores_terminal_runs(self):
         result = subprocess.CompletedProcess(
             ["archon"], 0,
@@ -1496,7 +1501,7 @@ class FindOrCreateShipPrTest(unittest.TestCase):
             pr = bp.find_or_create_ship_pr(
                 self._cfg(), {}, "head", "T", 5, "main")
         self.assertIsNone(pr)
-        self.assertTrue(any("pr create failed" in c[0][0]
+        self.assertTrue(any("SHIP PR CREATE FAILED" in c[0][0]
                             for c in log.call_args_list))
 
     def test_unparseable_stdout_logged_and_returns_none(self):
@@ -1542,6 +1547,7 @@ class PollFlowTest(unittest.TestCase):
         return ("project-1", "field-1",
                 {"Backlog": "o-backlog", "Todo": "o-todo",
                  "In Progress": "o-ip", "Blocked": "o-blocked",
+                 "Needs Input": "o-needs-input",
                  "Ready for Review": "o-ready", "In Review": "o-review",
                  "Done": "o-done"}, items)
 
@@ -1595,7 +1601,7 @@ class PollFlowTest(unittest.TestCase):
         self.assertTrue(any("REVIEW PREP DEFERRED" in c[0][0]
                             for c in log.call_args_list))
 
-    def test_needs_input_label_moves_completed_run_to_blocked(self):
+    def test_needs_input_label_moves_completed_run_to_needs_input(self):
         state = {"_meta": {"snapshot_done": True},
                  "item-5": {"status": "In Progress", "dispatch_msg": "run msg",
                             "issue_number": 5}}
@@ -1612,7 +1618,7 @@ class PollFlowTest(unittest.TestCase):
              patch("automation.board_poller.log"), \
              patch("automation.board_poller.save_state"):
             bp.poll(self._cfg(), {}, state)
-        self.assertTrue(any(c.args[5] == "o-blocked"
+        self.assertTrue(any(c.args[5] == "o-needs-input"
                             for c in move.call_args_list))
         find_pr.assert_not_called()      # no develop merge while blocked
         self.assertNotIn("dispatch_msg", state["item-5"])
