@@ -280,6 +280,50 @@ class ConfigHelperTests(unittest.TestCase):
             0,
         )
 
+    def test_model_tuning_preset_max_tokens_covers_all_fields_and_task_aliases(self) -> None:
+        canonical_fields = (
+            "model_max_input_tokens",
+            "article_summary_max_tokens",
+            "story_drafting_max_tokens",
+            "story_scale_screening_max_tokens",
+            "title_generation_max_tokens",
+        )
+        for field_name in canonical_fields:
+            for bad_value in (0, -1):
+                with self.subTest(field=field_name, value=bad_value):
+                    with self.assertRaisesRegex(
+                        ValueError,
+                        rf"sample.*{field_name}.*greater than zero",
+                    ) as ctx:
+                        config_module._apply_model_tuning_preset(
+                            ModelTuningSettings(task_sampling={}),
+                            preset_id="sample",
+                            preset={"tuning": {field_name: bad_value}},
+                            assignment_task="default",
+                        )
+                    self.assertIn(str(bad_value), str(ctx.exception))
+
+        task_fields = (
+            ("default", "model_max_input_tokens"),
+            (config_module.MODEL_TASK_ARTICLE_SUMMARY, "article_summary_max_tokens"),
+            (config_module.MODEL_TASK_STORY_DRAFTING, "story_drafting_max_tokens"),
+            (
+                config_module.MODEL_TASK_STORY_SCALE_SCREENING,
+                "story_scale_screening_max_tokens",
+            ),
+            (config_module.MODEL_TASK_TITLE_GENERATION, "title_generation_max_tokens"),
+            (config_module.MODEL_TASK_IMAGE_ART_DIRECTION, "title_generation_max_tokens"),
+        )
+        for assignment_task, field_name in task_fields:
+            with self.subTest(task=assignment_task):
+                tuning = config_module._apply_model_tuning_preset(
+                    ModelTuningSettings(task_sampling={}),
+                    preset_id="sample",
+                    preset={"tuning": {"max_tokens": 1}},
+                    assignment_task=assignment_task,
+                )
+                self.assertEqual(getattr(tuning, field_name), 1)
+
     def test_validate_managed_model_assignments_covers_branches(self) -> None:
         # The default assignment defines the compared values (model_name,
         # model_base_url), so it always matches and is skipped.

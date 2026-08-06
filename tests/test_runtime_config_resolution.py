@@ -861,6 +861,32 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
                 ):
                     load_runtime_config(materialize_outputs=False)
 
+    def test_model_tuning_blank_env_preserves_preset_value(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            preset_path = Path(tmpdir) / "model_tuning_presets.yaml"
+            preset_path.write_text(
+                textwrap.dedent(
+                    """\
+                    presets:
+                      default-cap:
+                        tuning:
+                          max_tokens: 1400
+                    """
+                ),
+                encoding="utf-8",
+            )
+
+            with patch.object(config_module, "MODEL_TUNING_PRESETS_PATH", preset_path):
+                config = load_runtime_config(
+                    environ={
+                        "NEWS_MODEL_TUNING_PRESET": "default-cap",
+                        "NEWS_MODEL_MAX_INPUT_TOKENS": "  ",
+                    },
+                    materialize_outputs=False,
+                )
+
+        self.assertEqual(config.model_tuning.model_max_input_tokens, 1400)
+
     def test_new_task_tuning_preset_applies_with_env_overrides(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             tmpdir_path = Path(tmpdir)
