@@ -342,33 +342,6 @@ for a managed backend (ADR 0010 runtime matrix); hardware fitting itself lives
 on the Hugging Face model page. The UI's "Model catalog" panel shows curated
 cards, task recommendations, and search with the same verdicts.
 
-### Model Catalog
-
-The Model Catalog is the code-owned registry of models verified for the
-supported backends, with recommendations per task — factual extraction,
-structured output, synthesis, citation fidelity, speed, context length, and
-translation — rather than parameter count or popularity:
-
-```bash
-uv run news models catalog
-uv run news models search --query qwythos --task text-generation --limit 5
-```
-
-Curated models (3):
-
-- `qwythos-9b-8bit` — mlx-vlm, 1M-token context, default model
-  ([Hugging Face](https://huggingface.co/huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF))
-- `qwythos-9b-4bit` — mlx-vlm, 1M-token context
-  ([Hugging Face](https://huggingface.co/huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF))
-- `gemma-e2b-tiny` — mlx-lm, Codex-safe test model
-  ([Hugging Face](https://huggingface.co/deadbydawn101/gemma-4-E2B-Heretic-Uncensored-mlx-4bit))
-
-Hugging Face search results carry runtime-fit verdicts (`managed_mlx_lm`,
-`managed_mlx_vlm`, or `external_only`) so unlaunchable repos are never picked
-for a managed backend (ADR 0010 runtime matrix); hardware fitting itself lives
-on the Hugging Face model page. The UI's "Model catalog" panel shows curated
-cards, task recommendations, and search with the same verdicts.
-
 ### Runtime Matrix
 
 Initially supported runtimes (recorded in
@@ -403,32 +376,6 @@ the external backend. Per-task models can also use external endpoints by
 giving that task a distinct base URL (`NEWS_MODEL_ARTICLE_SUMMARY_BASE_URL`,
 `NEWS_MODEL_STORY_DRAFTING_BASE_URL`, `NEWS_MODEL_STORY_SCALE_SCREENING_BASE_URL`,
 `NEWS_MODEL_TITLE_GENERATION_BASE_URL`).
-
-### Runtime Matrix
-
-Initially supported runtimes (recorded in
-[`docs/adr/0010-runtime-matrix.md`](docs/adr/0010-runtime-matrix.md)):
-
-- `mlx-lm` — managed local MLX language-model server on Apple Silicon.
-- `mlx-vlm` — managed local MLX vision-language-model server on Apple Silicon.
-- `external` — any OpenAI-compatible endpoint.
-
-Managed cross-platform GGUF via `llama.cpp` is **not** initially supported;
-GGUF files run through `mlx-vlm` on Apple Silicon.
-
-The backend is inferred from the model reference unless `NEWS_MODEL_BACKEND` is
-set to `mlx-lm`, `mlx-vlm`, or `external` (any other value fails fast). To run
-the default model against an external OpenAI-compatible endpoint — no managed
-server is started; the pipeline waits for and probes the endpoint:
-
-```bash
-NEWS_MODEL_BACKEND=external NEWS_MODEL_BASE_URL=https://api.example.com/v1 NEWS_MODEL=<server-model-id> uv run news run
-```
-
-`news model-server-command` reports that no managed server command exists for
-the external backend. Per-task models can also use external endpoints by
-giving that task a distinct base URL (`NEWS_MODEL_ARTICLE_SUMMARY_BASE_URL`,
-`NEWS_MODEL_STORY_DRAFTING_BASE_URL`).
 
 Normal report runs start the matching local MLX server, wait until it is ready,
 run the pipeline, and stop the managed server when the run exits. To keep a

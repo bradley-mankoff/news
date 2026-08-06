@@ -323,37 +323,6 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
         )
         self.assertEqual(unset.prompt_instruction_overrides, {})
 
-    def test_prompt_override_envs_resolve_into_runtime_config(self) -> None:
-        config = load_runtime_config(
-            environ={},
-            overrides={"NEWS_PROMPT_OVERRIDE_STORY_DRAFTING": "Write shorter."},
-            materialize_outputs=False,
-        )
-
-        self.assertEqual(
-            config.prompt_instruction_overrides,
-            {"story_drafting": "Write shorter."},
-        )
-
-    def test_prompt_overrides_empty_and_whitespace_count_as_unset(self) -> None:
-        config = load_runtime_config(
-            environ={},
-            overrides={
-                "NEWS_PROMPT_OVERRIDE_ARTICLE_SUMMARY": "",
-                "NEWS_PROMPT_OVERRIDE_TITLE_GENERATION": "   ",
-            },
-            materialize_outputs=False,
-        )
-
-        self.assertEqual(config.prompt_instruction_overrides, {})
-        unset = load_runtime_config(
-            environ={},
-            overrides={},
-            materialize_outputs=False,
-        )
-        self.assertEqual(unset.prompt_instruction_overrides, {})
-
-
     def test_removed_topic_env_vars_reported_and_rejected(self) -> None:
         with self.assertRaisesRegex(ValueError, "NEWS_TOPIC_IDS"):
             load_runtime_config(
@@ -556,21 +525,6 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
                     "NEWS_MODEL": CODEX_TEST_MODEL_ALIAS,
                     "NEWS_MODEL_ARTICLE_SUMMARY": GEMMA_4_12B_IT_4BIT_MODEL_ALIAS,
                     "NEWS_MODEL_ARTICLE_SUMMARY_BASE_URL": "http://127.0.0.1:8080/v1",
-                },
-                materialize_outputs=False,
-            )
-
-    def test_managed_default_rejects_task_model_on_trailing_slash_base_url(self) -> None:
-        # Regression for #113: URL spelling variants (trailing slash) of the
-        # shared base URL must still trip the early rejection instead of
-        # falling through to the old mid-run failure.
-        with self.assertRaisesRegex(ValueError, "Managed model server cannot serve"):
-            load_runtime_config(
-                environ={},
-                overrides={
-                    "NEWS_MODEL": CODEX_TEST_MODEL_ALIAS,
-                    "NEWS_MODEL_ARTICLE_SUMMARY": QWWYTHOS_9B_4BIT_MODEL_ALIAS,
-                    "NEWS_MODEL_ARTICLE_SUMMARY_BASE_URL": "http://127.0.0.1:8080/v1/",
                 },
                 materialize_outputs=False,
             )
