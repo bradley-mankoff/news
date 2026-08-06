@@ -10,6 +10,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterable
 
+from . import run_log
 from .diagnostics import RunDiagnostics, run_status_from_events
 from .okf import okf_run_bundle_path
 
@@ -967,11 +968,15 @@ def _insert_run_log(con: Any, run_id: str, run_log_path: str) -> None:
     path = Path(run_log_path)
     if not path.exists():
         return
-    content = path.read_text(encoding="utf-8", errors="replace")
+    raw = path.read_text(encoding="utf-8", errors="replace")
+    # Store the concise normalized projection: CR/ANSI artifacts are removed
+    # and consecutive meter snapshots are collapsed. The byte count describes
+    # exactly what is stored, not the pre-normalization source file size.
+    content = run_log.normalize_file_text(raw)
     row = {
         "run_id": run_id,
         "path": str(path),
-        "byte_count": path.stat().st_size,
+        "byte_count": len(content.encode("utf-8")),
         "content": content,
         "imported_at": datetime.now().isoformat(timespec="seconds"),
     }

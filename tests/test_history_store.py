@@ -139,6 +139,43 @@ class HistoryStoreTests(unittest.TestCase):
             "failed",
         )
 
+    def test_run_logs_projection_is_normalized_and_byte_count_matches(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "history.duckdb"
+            log_path = Path(tmpdir) / "run_log_2026-06-01_10-00-00.log"
+            log_path.write_text(
+                "\r[3/9 clustering] [###-----------------] 1000/200000 steps\033[K\n"
+                "[3/9 clustering] [##------------------] 2000/200000 steps\033[K\n"
+                "[3/9 clustering] [#-------------------] 3000/200000 steps\033[K\n"
+                "WARNING: low coverage\n"
+                "[3/9 clustering] [####################] 200000/200000 steps\n"
+                "Traceback (most recent call last):\n"
+                "RuntimeError: synthetic failure\n",
+                encoding="utf-8",
+            )
+            diagnostics = self._diagnostics("2026-06-01T10:00:00", preset_id="daily")
+            write_run_history(
+                db_path,
+                run_id="2026-06-01_10-00-00",
+                diagnostics=diagnostics,
+                run_log_path=str(log_path),
+                export_csv=False,
+            )
+
+            with connect(db_path) as con:
+                row = con.execute("SELECT path, byte_count, content FROM run_logs").fetchone()
+            self.assertEqual(row[0], str(log_path))
+            self.assertNotIn("\r", row[2])
+            self.assertNotIn("\033", row[2])
+            self.assertNotIn("2000/200000 steps", row[2])
+            self.assertIn("1000/200000 steps", row[2])
+            self.assertIn("3000/200000 steps", row[2])
+            self.assertIn("200000/200000 steps", row[2])
+            self.assertIn("WARNING: low coverage", row[2])
+            self.assertIn("Traceback (most recent call last):", row[2])
+            self.assertIn("RuntimeError: synthetic failure", row[2])
+            self.assertEqual(row[1], len(row[2].encode("utf-8")))
+
     def test_failed_run_history_status(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / "history.duckdb"

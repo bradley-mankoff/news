@@ -21,6 +21,7 @@ from urllib.parse import parse_qs, urlparse
 
 import yaml
 
+from . import run_log
 from .config import (
     MODEL_TUNING_PRESETS_PATH,
     REMOVED_TOPIC_ENV_VARS,
@@ -852,15 +853,37 @@ class RunRecord:
         self.command = command
         self.env = env
         self.started_at = time.time()
-        self.lines: list[str] = []
+        # Normalized structured events (message/progress) in arrival order.
+        # Progress snapshots replace the previous snapshot of the same stage
+        # in place, so the event history stays bounded by meaningful messages
+        # plus one line per active stage.
+        self.events: list[dict[str, Any]] = []
+        self._progress_index: dict[str, int] = {}
         self.status = "starting"
+        self.stop_requested = False
         self.returncode: int | None = None
         self.process: subprocess.Popen[str] | None = None
         self.lock = threading.Lock()
 
     def append(self, line: str) -> None:
         with self.lock:
-            self.lines.append(line)
+            for event in run_log.parse_stream(line):
+                if event.kind == "progress":
+                    self._append_progress(event)
+                else:
+                    self.events.append(event.to_dict())
+
+    def _append_progress(self, event: run_log.RunLogEvent) -> None:
+        payload = event.to_dict()
+        index = self._progress_index.get(event.stage or "")
+        if index is not None:
+            if self.events[index].get("line") == payload["line"]:
+                return  # exact duplicate snapshot
+            payload["replace"] = True
+            self.events[index] = payload
+        else:
+            self._progress_index[event.stage or ""] = len(self.events)
+            self.events.append(payload)
 
     def snapshot(self) -> dict[str, Any]:
         with self.lock:
@@ -871,7 +894,7 @@ class RunRecord:
                 "started_at": self.started_at,
                 "status": self.status,
                 "returncode": self.returncode,
-                "line_count": len(self.lines),
+                "line_count": len(self.events),
             }
 
     def is_active(self) -> bool:
@@ -934,7 +957,9 @@ class RunManager:
         if process and process.poll() is None:
             process.terminate()
             record.append("[ui] terminate requested\n")
-            record.status = "stopping"
+            with record.lock:
+                record.status = "stopping"
+                record.stop_requested = True
         return record.snapshot()
 
     def _run_process(self, record: RunRecord) -> None:
@@ -956,7 +981,13 @@ class RunManager:
             for line in process.stdout:
                 record.append(line)
             record.returncode = process.wait()
-            record.status = "completed" if record.returncode == 0 else "failed"
+            # Resolve the final status while holding the record lock so the
+            # stop() race cannot mislabel a terminate-requested child.
+            with record.lock:
+                if record.stop_requested:
+                    record.status = "stopped"
+                else:
+                    record.status = "completed" if record.returncode == 0 else "failed"
             record.append(f"[ui] process exited with code {record.returncode}\n")
         except Exception as exc:
             record.status = "failed"
@@ -1198,13 +1229,13 @@ class NewsUIHandler(BaseHTTPRequestHandler):
         index = 0
         while True:
             with record.lock:
-                lines = record.lines[index:]
-                index = len(record.lines)
+                events = record.events[index:]
+                index = len(record.events)
                 status = record.status
-                done = status in {"completed", "failed"}
+                done = status in {"completed", "failed", "stopped"}
             try:
-                for line in lines:
-                    payload = json.dumps({"line": line, "status": status})
+                for event in events:
+                    payload = json.dumps({**event, "status": status})
                     self.wfile.write(f"data: {payload}\n\n".encode("utf-8"))
                 self.wfile.flush()
             except (BrokenPipeError, ConnectionResetError):
@@ -1407,7 +1438,13 @@ HTML = r"""<!doctype html>
       border-radius: 8px;
       white-space: pre-wrap;
     }
-    #logPane { min-height: 280px; max-height: 52vh; }
+    #logPane {
+      min-height: 280px;
+      max-height: 52vh;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+      font-size: 13px;
+      line-height: 1.55;
+    }
     .knob-group { margin-bottom: 18px; }
     .knobs { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 10px; }
     .knob { border: 1px solid var(--line); border-radius: 14px; padding: 10px; background: #fff; box-shadow: 0 6px 16px rgba(36, 44, 60, 0.05); }
@@ -2399,7 +2436,7 @@ HTML = r"""<!doctype html>
           </section>
           <section class="panel">
             <div class="toolbar"><h2 style="margin-right:auto">Run log</h2><button id="stopBtn" class="danger">Stop</button></div>
-            <pre id="logPane"></pre>
+            <pre id="logPane" role="log" aria-live="polite" aria-label="Run log"></pre>
           </section>
         </div>
       `;
@@ -2866,6 +2903,77 @@ HTML = r"""<!doctype html>
         $("previewPane").textContent = `Preview unavailable: ${err.message}`;
       }
     }
+    // Run log rendering: one mutable progress row per active stage, plain
+    // message rows appended, and a restrained spinner while a stage is live.
+    // Glyphs are decoration only: numeric counts and status words stay in
+    // every line so the log reads fine when glyphs are unavailable.
+    const SPINNER_GLYPHS = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+    const TERMINAL_GLYPHS = { completed: "✓", failed: "✗", stopped: "■" };
+    const TERMINAL_STATUSES = ["completed", "failed", "stopped"];
+    const logState = { rows: [], progressByStage: new Map(), spinnerIndex: 0, spinnerTimer: null };
+    function resetLog() {
+      stopSpinner();
+      logState.rows = [];
+      logState.progressByStage = new Map();
+      logState.spinnerIndex = 0;
+      $("logPane").textContent = "";
+    }
+    function stopSpinner() {
+      if (logState.spinnerTimer !== null) {
+        clearInterval(logState.spinnerTimer);
+        logState.spinnerTimer = null;
+      }
+    }
+    function renderLog() {
+      const pane = $("logPane");
+      const rows = [];
+      for (const row of logState.rows) {
+        let text = row.text;
+        if (row.stage) {
+          if (row.live) {
+            text = `${SPINNER_GLYPHS[logState.spinnerIndex % SPINNER_GLYPHS.length]} ${text}`;
+          } else if (row.complete) {
+            text = `✓ ${text}`;
+          }
+        }
+        rows.push(text);
+      }
+      pane.textContent = rows.join("\n");
+      pane.scrollTop = pane.scrollHeight;
+    }
+    function startSpinner() {
+      stopSpinner();
+      logState.spinnerTimer = setInterval(() => {
+        logState.spinnerIndex += 1;
+        renderLog();
+      }, 160);
+    }
+    function appendLogEvent(payload) {
+      const parts = String(payload.line || "").split("\n");
+      for (const line of parts) {
+        if (!line) continue;
+        if (payload.kind === "progress" && payload.stage) {
+          const index = logState.progressByStage.get(payload.stage);
+          const live = !payload.complete;
+          const complete = Boolean(payload.complete);
+          if (index !== undefined) {
+            if (logState.rows[index].text === line) continue; // defensive duplicate
+            logState.rows[index].text = line;
+            logState.rows[index].live = live;
+            logState.rows[index].complete = complete;
+          } else {
+            logState.progressByStage.set(payload.stage, logState.rows.length);
+            logState.rows.push({ stage: payload.stage, text: line, live: live, complete: complete });
+          }
+        } else {
+          logState.rows.push({ stage: null, text: line });
+        }
+      }
+      renderLog();
+    }
+    function terminalGlyph(status) {
+      return TERMINAL_GLYPHS[status] || "•";
+    }
     async function runAction(action="run") {
       if (state.activeRun) {
         setStatus(`A run is already active (${state.activeRun}); stop it or wait for it to finish.`, "warn");
@@ -2874,23 +2982,23 @@ HTML = r"""<!doctype html>
       const data = await api("/api/run", { method: "POST", body: JSON.stringify(requestBody(action)) });
       state.activeRun = data.run_id;
       updateRunControls();
-      $("logPane").textContent = "";
+      resetLog();
+      startSpinner();
       const events = new EventSource(`/api/runs/${data.run_id}/events`);
       events.onmessage = event => {
-        const payload = JSON.parse(event.data);
-        $("logPane").textContent += payload.line;
-        $("logPane").scrollTop = $("logPane").scrollHeight;
+        appendLogEvent(JSON.parse(event.data));
       };
       events.addEventListener("status", event => {
         const payload = JSON.parse(event.data);
-        $("logPane").textContent += `\n[ui] ${payload.status}\n`;
-        if (payload.status === "completed" || payload.status === "failed") {
+        stopSpinner();
+        appendLogEvent({ line: `${terminalGlyph(payload.status)} [ui] ${payload.status}` });
+        if (TERMINAL_STATUSES.includes(payload.status)) {
           state.activeRun = null;
           updateRunControls();
-          setStatus(`Run ${payload.run_id} ${payload.status}.`, payload.status === "completed" ? "muted" : "bad");
+          setStatus(`Run ${payload.run_id} ${payload.status}.`, payload.status === "failed" ? "bad" : "muted");
         }
         events.close();
-        if (payload.status === "completed" || payload.status === "failed") {
+        if (TERMINAL_STATUSES.includes(payload.status)) {
           refreshReviewData();
         }
       });

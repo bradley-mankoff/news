@@ -1352,6 +1352,63 @@ class PipelineHelperTests(unittest.TestCase):
                 def poll(self) -> int:
                     return self.returncode
 
+    def test_run_logging_writes_concise_normalized_progress(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            run_log = root / "run.log"
+            latest_log = root / "latest.log"
+            with patch.object(pipeline, "RUN_LOG_PATH", str(run_log)), patch.object(
+                pipeline,
+                "LATEST_RUN_LOG_PATH",
+                str(latest_log),
+            ):
+                with pipeline.run_logging():
+                    tracker = pipeline.ProgressTracker(stream=StringIO())
+                    tracker.step("setup", "Initializing")
+                    tracker.start_story_clustering(200_000, detail="Clustering.")
+                    for done in range(1_000, 200_001, 1_000):
+                        tracker.story_clustering_progress(
+                            "similarity_pair",
+                            {
+                                "phase": "pairwise similarity",
+                                "done": done,
+                                "total": 200_000,
+                                "linked_pairs": done // 10_000,
+                            },
+                        )
+                    tracker.finish_meter(detail="47 story groups")
+                    # Forced intermediate snapshots stay pending and are
+                    # flushed when a message closes the meter without finish.
+                    tracker.start_meter("model", total=3, unit="steps", detail="Checking model server.")
+                    tracker.update_meter(done=1, detail="Starting managed model server.", force=True)
+                    tracker.update_meter(done=2, detail="Checking model generation.", force=True)
+                    tracker.step("model", "Model server ready.")
+                    tracker.warning("careful")
+                    pipeline._write_run_log("first line\rsecond line\nthird\033[K line")
+            text = run_log.read_text(encoding="utf-8")
+            self.assertNotIn("\r", text)
+            self.assertNotIn("\033", text)
+            # Initial and final snapshots are kept; intermediates suppressed.
+            self.assertIn("0/200000 steps", text)
+            self.assertIn("200000/200000 steps", text)
+            self.assertNotIn("50000/200000 steps", text)
+            # Forced intermediate (2/3) flushed on the stage transition.
+            self.assertIn("0/3 steps", text)
+            self.assertIn("2/3 steps", text)
+            self.assertNotIn("1/3 steps", text)
+            # CR overwrite keeps only the newest segment; ANSI is stripped.
+            self.assertIn("second line", text)
+            self.assertNotIn("first line", text)
+            self.assertIn("third line", text)
+            self.assertIn("WARNING: careful", text)
+            self.assertIn("Model server ready.", text)
+            self.assertIn("Run log saved:", text)
+            self.assertIn("Rolling run log saved:", text)
+            self.assertEqual(
+                run_log.read_text(encoding="utf-8"),
+                latest_log.read_text(encoding="utf-8"),
+            )
+            self.assertIsNone(pipeline.RUN_LOG_WRITER)
 
 
     def test_unsubscribe_google_news_and_source_match_branch_helpers(self) -> None:

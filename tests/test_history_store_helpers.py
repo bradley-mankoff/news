@@ -195,10 +195,34 @@ class HistoryStoreHelperTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmpdir:
             path = Path(tmpdir) / "run_log_2026-06-01_10-00-00.log"
-            path.write_text("log line", encoding="utf-8")
+            path.write_text(
+                "\r[3/9 clustering] [###-----------------] 1000/200000 steps\033[K\n"
+                "[3/9 clustering] [##------------------] 2000/200000 steps\033[K\n"
+                "[3/9 clustering] [#-------------------] 3000/200000 steps\033[K\n"
+                "WARNING: low coverage\n"
+                "[3/9 clustering] [####################] 200000/200000 steps\n"
+                "Traceback (most recent call last):\n"
+                "RuntimeError: synthetic failure\n",
+                encoding="utf-8",
+            )
             fake_con = FakeCon()
             history_module._insert_run_log(fake_con, "2026-06-01_10-00-00", str(path))
-            self.assertTrue(any(sql.startswith("INSERT INTO run_logs") for sql, _ in fake_con.calls))
+            params = next(
+                params for sql, params in fake_con.calls if sql.startswith("INSERT INTO run_logs")
+            )
+            row = dict(zip(("run_id", "path", "byte_count", "content", "imported_at"), params))
+            self.assertEqual(row["run_id"], "2026-06-01_10-00-00")
+            self.assertEqual(row["path"], str(path))
+            self.assertNotIn("\r", row["content"])
+            self.assertNotIn("\033", row["content"])
+            self.assertNotIn("2000/200000 steps", row["content"])
+            self.assertIn("1000/200000 steps", row["content"])
+            self.assertIn("3000/200000 steps", row["content"])
+            self.assertIn("200000/200000 steps", row["content"])
+            self.assertIn("WARNING: low coverage", row["content"])
+            self.assertIn("Traceback (most recent call last):", row["content"])
+            self.assertIn("RuntimeError: synthetic failure", row["content"])
+            self.assertEqual(row["byte_count"], len(row["content"].encode("utf-8")))
             fake_con = FakeCon()
             history_module._insert_run_log(fake_con, "2026-06-01_10-00-00", str(path.parent / "missing.log"))
             self.assertFalse(any(sql.startswith("INSERT INTO run_logs") for sql, _ in fake_con.calls))
@@ -364,7 +388,14 @@ class HistoryStoreHelperTests(unittest.TestCase):
                 "https://example.com/selected\n",
                 encoding="utf-8",
             )
-            (run_dir / "run_log_2026-06-01_10-00-00.log").write_text("log line", encoding="utf-8")
+            (run_dir / "run_log_2026-06-01_10-00-00.log").write_text(
+                "\r[3/9 clustering] [###-----------------] 1000/200000 steps\033[K\n"
+                "[3/9 clustering] [##------------------] 2000/200000 steps\033[K\n"
+                "[3/9 clustering] [#-------------------] 3000/200000 steps\033[K\n"
+                "WARNING: low coverage\n"
+                "[3/9 clustering] [####################] 200000/200000 steps\n",
+                encoding="utf-8",
+            )
             (run_dir / "news_report_2026-06-01_10-00-00.txt").write_text("report", encoding="utf-8")
             (run_dir / "news_report_2026-06-01_10-00-00_primary_dataset.txt").write_text("dataset", encoding="utf-8")
             (run_dir / "news_report_2026-06-01_10-00-00_image_prompt.txt").write_text("prompt", encoding="utf-8")
@@ -435,6 +466,15 @@ class HistoryStoreHelperTests(unittest.TestCase):
                 self.assertGreater(con.execute("SELECT COUNT(*) FROM run_articles").fetchone()[0], 0)
                 self.assertGreater(con.execute("SELECT COUNT(*) FROM article_summaries").fetchone()[0], 0)
                 self.assertGreater(con.execute("SELECT COUNT(*) FROM artifacts").fetchone()[0], 0)
+                log_row = con.execute("SELECT byte_count, content FROM run_logs").fetchone()
+                self.assertNotIn("\r", log_row[1])
+                self.assertNotIn("\033", log_row[1])
+                self.assertNotIn("2000/200000 steps", log_row[1])
+                self.assertIn("1000/200000 steps", log_row[1])
+                self.assertIn("3000/200000 steps", log_row[1])
+                self.assertIn("200000/200000 steps", log_row[1])
+                self.assertIn("WARNING: low coverage", log_row[1])
+                self.assertEqual(log_row[0], len(log_row[1].encode("utf-8")))
 
 
             with patch.object(
