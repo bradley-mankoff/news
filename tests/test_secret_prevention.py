@@ -41,10 +41,15 @@ UPSTREAM_ENTRY = "gitleaks git --pre-commit --redact --staged --verbose"
 _TOKEN = "AKIA" + "ABCDEFGHIJKLMNOP"
 
 
+def _safe_diagnostic(text: str) -> str:
+    """Keep the assembled fixture out of test failure output."""
+    return text.replace(_TOKEN, "REDACTED")
+
+
 def _git(tmpdir: Path, *args: str) -> subprocess.CompletedProcess:
     r = subprocess.run(["git", "-C", str(tmpdir), *args], capture_output=True, text=True)
     if r.returncode != 0:
-        raise AssertionError(f"git {' '.join(args)} failed: {r.stderr.strip()}")
+        raise AssertionError(f"git {' '.join(args)} failed: {_safe_diagnostic(r.stderr.strip())}")
     return r
 
 
@@ -84,6 +89,12 @@ class PreCommitConfigTests(unittest.TestCase):
 
 
 class SecretPreventionHookTests(unittest.TestCase):
+    def test_secret_diagnostics_redact_fixture(self) -> None:
+        self.assertEqual(
+            _safe_diagnostic(f"hook output: {_TOKEN}"),
+            "hook output: REDACTED",
+        )
+
     def test_commit_with_staged_secret_is_rejected_and_redacted(self) -> None:
         pre_commit = _pre_commit_binary()
         with tempfile.TemporaryDirectory() as tmp:
@@ -101,7 +112,7 @@ class SecretPreventionHookTests(unittest.TestCase):
                 [pre_commit, "install"], cwd=tmpdir, env=env,
                 capture_output=True, text=True, timeout=300,
             )
-            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertEqual(r.returncode, 0, _safe_diagnostic(r.stderr))
 
             (tmpdir / "notes.txt").write_text(
                 f"temporary api key: {_TOKEN}\n", encoding="utf-8"
@@ -125,18 +136,23 @@ class SecretPreventionHookTests(unittest.TestCase):
             combined = r.stdout + r.stderr
 
             # Rejected: non-zero exit, no commit created, secret redacted.
-            self.assertNotEqual(r.returncode, 0, combined)
+            safe_combined = _safe_diagnostic(combined)
+            self.assertNotEqual(r.returncode, 0, "secret commit unexpectedly succeeded")
             after = subprocess.run(
                 ["git", "-C", str(tmpdir), "rev-parse", "--verify", "HEAD"],
                 capture_output=True, text=True,
             )
-            self.assertEqual((after.returncode, after.stdout), (before.returncode, before.stdout))
-            self.assertIn("REDACTED", combined)
-            self.assertNotIn(_TOKEN, combined)
+            self.assertEqual(
+                (after.returncode, after.stdout),
+                (before.returncode, before.stdout),
+                "rejected commit unexpectedly changed HEAD",
+            )
+            self.assertIn("REDACTED", combined, safe_combined)
+            self.assertNotIn(_TOKEN, combined, safe_combined)
 
             # No history was created, and nothing else captured the token.
             log = _git(tmpdir, "log", "--all", "--format=%B")
-            self.assertNotIn(_TOKEN, log.stdout)
+            self.assertNotIn(_TOKEN, log.stdout, _safe_diagnostic(log.stdout))
             for rel in _git(ROOT, "ls-files").stdout.splitlines():
                 path = ROOT / rel
                 if path.is_file():

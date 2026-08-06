@@ -78,8 +78,14 @@ a `Finding:`/`Secret: REDACTED` block and aborts the commit.
 ## Manual Commands
 
 ```bash
-# Scan the whole working tree (not just staged changes) with the pinned version
+# Run the configured staged-only prevention hook against the current index.
+uv run pre-commit run gitleaks
+
+# --all-files does not override Gitleaks' explicit --staged mode.
 uv run pre-commit run gitleaks --all-files
+
+# Scan the working tree and history with the separate audit control.
+uv run python automation/security_audit.py
 
 # Validate the config file
 uv run pre-commit validate-config
@@ -94,8 +100,11 @@ Detector improvements arrive in new Gitleaks releases. To update:
 
 1. Check the upstream release: https://github.com/gitleaks/gitleaks/releases
 2. Bump `rev:` in `.pre-commit-config.yaml` to the new tag.
-3. Run `uv run pre-commit validate-config` and
-   `uv run pre-commit run gitleaks --all-files`.
+3. Run `uv run pre-commit validate-config` and exercise the staged-only hook
+   with an appropriate staged synthetic fixture using
+   `uv run pre-commit run gitleaks`. Use
+   `uv run python automation/security_audit.py` for working-tree/history
+   coverage.
 4. Update the pinned revision reference in `tests/test_secret_prevention.py`
    and re-run the test suite.
 5. Commit the bump as its own change so the release notes stay visible.
