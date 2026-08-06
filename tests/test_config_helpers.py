@@ -198,31 +198,20 @@ class ConfigHelperTests(unittest.TestCase):
         # Preset path: the max_tokens shorthand resolves by assignment task and
         # then must be positive; the error names the preset id, original key,
         # and the offending value.
-        for bad_value in (0, -1):
-            with self.subTest(preset_key="max_tokens", value=bad_value):
-                with self.assertRaisesRegex(
-                    ValueError,
-                    r"sample.*max_tokens.*greater than zero",
-                ) as ctx:
-                    config_module._apply_model_tuning_preset(
-                        ModelTuningSettings(task_sampling={}),
-                        preset_id="sample",
-                        preset={"tuning": {"max_tokens": bad_value}},
-                        assignment_task="story_drafting",
-                    )
-                self.assertIn(str(bad_value), str(ctx.exception))
-            with self.subTest(preset_key="story_drafting_max_tokens", value=bad_value):
-                with self.assertRaisesRegex(
-                    ValueError,
-                    r"sample.*story_drafting_max_tokens.*greater than zero",
-                ) as ctx:
-                    config_module._apply_model_tuning_preset(
-                        ModelTuningSettings(task_sampling={}),
-                        preset_id="sample",
-                        preset={"tuning": {"story_drafting_max_tokens": bad_value}},
-                        assignment_task="story_drafting",
-                    )
-                self.assertIn(str(bad_value), str(ctx.exception))
+        for preset_key in ("max_tokens", "story_drafting_max_tokens"):
+            for bad_value in (0, -1):
+                with self.subTest(preset_key=preset_key, value=bad_value):
+                    with self.assertRaisesRegex(
+                        ValueError,
+                        rf"sample.*{preset_key}.*greater than zero",
+                    ) as ctx:
+                        config_module._apply_model_tuning_preset(
+                            ModelTuningSettings(task_sampling={}),
+                            preset_id="sample",
+                            preset={"tuning": {preset_key: bad_value}},
+                            assignment_task="story_drafting",
+                        )
+                    self.assertIn(str(bad_value), str(ctx.exception))
 
         # Valid positive boundary: max_tokens=1 resolves through the task alias
         # and survives unchanged (not replaced by a default).
