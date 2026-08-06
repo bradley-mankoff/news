@@ -1009,6 +1009,50 @@ class UITests(unittest.TestCase):
         self.assertEqual(record.snapshot()["line_count"], 3)
         self.assertEqual(record.events[0]["line"], meter_final)
 
+    def test_sse_delivers_progress_replacement_after_cursor_advances(self) -> None:
+        record = RunRecord("run-sse", ["news", "run"], {})
+        meter_a = "[3/9 clustering] [###-----------------] 1000/200000 steps"
+        meter_b = "[3/9 clustering] [####----------------] 10000/200000 steps"
+        record.append(meter_a + "\n")
+        with record.lock:
+            record.status = "running"
+
+        class _Writer:
+            def __init__(self) -> None:
+                self.parts: list[str] = []
+                self.replaced = False
+
+            def write(self, data: bytes) -> int:
+                text = data.decode("utf-8")
+                self.parts.append(text)
+                if meter_a in text and not self.replaced:
+                    self.replaced = True
+                    record.append(meter_b + "\n")
+                    with record.lock:
+                        record.status = "completed"
+                return len(data)
+
+            def flush(self) -> None:
+                return None
+
+        handler = object.__new__(ui_module.NewsUIHandler)
+        handler.path = "/api/runs/run-sse/events"
+        handler.headers = {}
+        handler.rfile = BytesIO(b"")
+        writer = _Writer()
+        handler.wfile = writer  # type: ignore[assignment]
+        handler.send_response = lambda *_args, **_kwargs: None
+        handler.send_header = lambda *_args, **_kwargs: None
+        handler.end_headers = lambda: None
+        with patch.object(ui_module.RUN_MANAGER, "get", return_value=record), patch.object(
+            ui_module.time, "sleep", return_value=None
+        ):
+            handler._stream_run_events(record.run_id)
+
+        self.assertTrue(any(meter_a in part for part in writer.parts))
+        self.assertTrue(any(meter_b in part for part in writer.parts))
+        self.assertTrue(any('"replace": true' in part for part in writer.parts))
+
     def test_stop_requested_process_resolves_to_stopped(self) -> None:
         class _StoppableProcess:
             def __init__(self) -> None:
@@ -1039,7 +1083,7 @@ class UITests(unittest.TestCase):
         self.assertIn("[ui] terminate requested", record.events[0]["line"])
         self.assertIn("[ui] process exited with code -15", record.events[-1]["line"])
 
-    def test_stop_after_exit_does_not_relabel_finished_run(self) -> None:
+    def test_stop_after_worker_has_marked_exit_does_not_relabel_finished_run(self) -> None:
         class _FinishedProcess:
             def poll(self) -> int:
                 return 0
@@ -1047,10 +1091,74 @@ class UITests(unittest.TestCase):
         manager = RunManager()
         record = RunRecord("run-6", ["news", "run"], {})
         record.process = _FinishedProcess()
+        with record.lock:
+            record.status = "completed"
         manager.runs[record.run_id] = record
         snapshot = manager.stop(record.run_id)
-        self.assertEqual(snapshot["status"], "starting")
+        self.assertEqual(snapshot["status"], "completed")
         self.assertFalse(record.stop_requested)
+
+    def test_stop_before_process_start_is_honored(self) -> None:
+        class _StoppableProcess:
+            def __init__(self) -> None:
+                self.stdout = iter([])
+                self.terminated = False
+
+            def poll(self) -> int | None:
+                return -15 if self.terminated else None
+
+            def terminate(self) -> None:
+                self.terminated = True
+
+            def wait(self) -> int:
+                return -15
+
+        manager = RunManager()
+        record = RunRecord("run-before-start", ["news", "run"], {})
+        manager.runs[record.run_id] = record
+        self.assertEqual(manager.stop(record.run_id)["status"], "stopping")
+        process = _StoppableProcess()
+        with patch.object(ui_module.subprocess, "Popen", return_value=process):
+            manager._run_process(record)
+        self.assertTrue(process.terminated)
+        self.assertEqual(record.status, "stopped")
+        self.assertEqual(record.returncode, -15)
+
+    def test_stop_racing_process_exit_resolves_to_stopped(self) -> None:
+        wait_started = threading.Event()
+        release_wait = threading.Event()
+
+        class _RacingProcess:
+            def __init__(self) -> None:
+                self.stdout = iter([])
+                self.terminated = False
+
+            def poll(self) -> int | None:
+                return -15 if self.terminated else None
+
+            def terminate(self) -> None:
+                self.terminated = True
+
+            def wait(self) -> int:
+                wait_started.set()
+                release_wait.wait(timeout=2)
+                return -15
+
+        manager = RunManager()
+        record = RunRecord("run-race", ["news", "run"], {})
+        manager.runs[record.run_id] = record
+        process = _RacingProcess()
+        with patch.object(ui_module.subprocess, "Popen", return_value=process):
+            worker = threading.Thread(target=manager._run_process, args=(record,))
+            worker.start()
+            self.assertTrue(wait_started.wait(timeout=2))
+            self.assertEqual(manager.stop(record.run_id)["status"], "stopping")
+            release_wait.set()
+            worker.join(timeout=2)
+        self.assertFalse(worker.is_alive())
+        self.assertTrue(process.terminated)
+        self.assertEqual(record.status, "stopped")
+        self.assertEqual(record.returncode, -15)
 
     def test_unexpected_nonzero_exit_stays_failed(self) -> None:
         class _FailingProcess:
@@ -1069,6 +1177,38 @@ class UITests(unittest.TestCase):
             manager._run_process(record)
         self.assertEqual(record.status, "failed")
         self.assertEqual(record.returncode, 7)
+
+    def test_stream_failure_is_not_reported_as_spawn_failure_and_child_is_reaped(self) -> None:
+        class _BrokenOutput:
+            def __iter__(self):
+                raise RuntimeError("reader boom")
+                yield "unreachable"
+
+        class _LeakingProcess:
+            def __init__(self) -> None:
+                self.stdout = _BrokenOutput()
+                self.terminated = False
+
+            def poll(self) -> int | None:
+                return -15 if self.terminated else None
+
+            def terminate(self) -> None:
+                self.terminated = True
+
+            def wait(self) -> int:
+                return -15
+
+        manager = RunManager()
+        record = RunRecord("run-stream-error", ["news", "run"], {})
+        process = _LeakingProcess()
+        with patch.object(ui_module.subprocess, "Popen", return_value=process):
+            manager._run_process(record)
+        self.assertTrue(process.terminated)
+        self.assertEqual(record.status, "failed")
+        self.assertEqual(record.returncode, -15)
+        lines = [event["line"] for event in record.events]
+        self.assertTrue(any("process output failed: reader boom" in line for line in lines))
+        self.assertFalse(any("failed to start process" in line for line in lines))
 
     def test_run_manager_rejects_overlapping_start(self) -> None:
         class _FakeThread:
@@ -1698,6 +1838,7 @@ class UITests(unittest.TestCase):
         self.assertIn("function appendLogEvent(payload)", html)
         self.assertIn("function resetLog()", html)
         self.assertIn("function stopSpinner()", html)
+        self.assertIn("function finalizeRun(payload, events)", html)
         # Restrained spinner sequence and explicit terminal glyphs/statuses.
         self.assertIn("SPINNER_GLYPHS", html)
         self.assertIn('completed: "✓"', html)
@@ -1712,6 +1853,11 @@ class UITests(unittest.TestCase):
         self.assertIn("refreshReviewData();", html)
         self.assertIn("stopSpinner();", html)
         self.assertIn("TERMINAL_STATUSES.includes(payload.status)", html)
+        self.assertIn("events.onerror", html)
+        self.assertIn("pollRunStatus", html)
+        self.assertIn("Live run stream disconnected", html)
+        self.assertIn("Live run stream sent invalid data", html)
+        self.assertIn("Stop failed:", html)
         # No append-only raw rendering path remains.
         self.assertNotIn("textContent += payload.line", html)
         self.assertNotIn("textContent += \`\\n[ui] ", html)
