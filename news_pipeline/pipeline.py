@@ -3153,6 +3153,28 @@ def _attempt_email_delivery(
     diagnostics.record_delivery(**result)
     return result
 
+
+def _complete_pipeline_run(
+    diagnostics: RunDiagnostics,
+    config: RuntimeConfig,
+    *,
+    report_body: str,
+    delivery_context: dict[str, Any] | None = None,
+) -> None:
+    """Complete a run after report construction, isolating optional delivery.
+
+    Delivery is deliberately attempted before the completed event and durable
+    finalization so its outcome is persisted alongside the generated report,
+    while delivery failures remain independent from the run outcome.
+    """
+    if delivery_context is not None:
+        _attempt_email_delivery(diagnostics, **delivery_context)
+    diagnostics.event("completed")
+    _active_run_finalizer(diagnostics, config).record_report_body(report_body)
+    _finish_run_diagnostics(diagnostics, config)
+    sync_assistant_context_latest_output(config)
+
+
 def _first_sentences(text: str, max_sentences: int = 2, max_chars: int = 520) -> str:
     clean_text = re.sub(r"\s+", " ", strip_model_artifacts(text or "")).strip()
     if not clean_text:
@@ -4921,10 +4943,9 @@ def _run_pipeline() -> None:
     ]
 
     if not recipient_list:
-        progress_tracker.step("finalize", "No recipients configured; stopping after summaries.")
-        diagnostics.event("completed_without_recipients")
-        _finish_run_diagnostics(diagnostics, CONFIG)
-        return
+        progress_tracker.detail(
+            "No recipients configured; continuing with local report review."
+        )
 
     prompt_label = "default prompt"
     progress_tracker.start_meter(
@@ -4942,6 +4963,7 @@ def _run_pipeline() -> None:
         f"news_report_{timestamp}_{MODEL_REPORT_LABEL}_default_prompt.txt",
     )
     report_body = ""
+    delivery_context: dict[str, Any] | None = None
     progress_tracker.set_final_step("synthesis", 2)
     story_drafting, token_stats, synthesis_debug = (
         story_selection_stage.build_precomputed_global_story_synthesis(
@@ -5025,24 +5047,25 @@ def _run_pipeline() -> None:
         )
 
         progress_tracker.set_final_step("email", 5)
-        _attempt_email_delivery(
-            diagnostics,
-            report_title=report_title,
-            report_body=report_body,
-            synthesis_body=synthesis_body,
-            final_reports=reference_reports,
-            recipient_list=recipient_list,
-            recipient_names=recipient_names,
-            image_art=image_art,
-            citation_sources=citation_sources,
-            citation_groups=citation_groups,
-        )
+        delivery_context = {
+            "report_title": report_title,
+            "report_body": report_body,
+            "synthesis_body": synthesis_body,
+            "final_reports": reference_reports,
+            "recipient_list": recipient_list,
+            "recipient_names": recipient_names,
+            "image_art": image_art,
+            "citation_sources": citation_sources,
+            "citation_groups": citation_groups,
+        }
 
         if token_stats:
             progress_tracker.detail(f"Final synthesis token stats for {', '.join(recipient_list)}: {token_stats}")
         progress_tracker.detail("Finished report. Final prose will be embedded in latest_run.md.")
 
-    diagnostics.event("completed")
-    _active_run_finalizer(diagnostics, CONFIG).record_report_body(report_body)
-    _finish_run_diagnostics(diagnostics, CONFIG)
-    sync_assistant_context_latest_output(CONFIG)
+    _complete_pipeline_run(
+        diagnostics,
+        CONFIG,
+        report_body=report_body,
+        delivery_context=delivery_context,
+    )

@@ -103,6 +103,10 @@ class HistoryStoreHelperTests(unittest.TestCase):
         )
         self.assertEqual(
             history_module._report_status_for("completed", missing_root),
+            "not_generated",
+        )
+        self.assertEqual(
+            history_module._report_status_for("completed", missing_root, report_count=1),
             "unavailable",
         )
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -111,11 +115,15 @@ class HistoryStoreHelperTests(unittest.TestCase):
             (root / "report.md").write_text("body", encoding="utf-8")
             self.assertEqual(
                 history_module._report_status_for("completed", root),
+                "not_generated",
+            )
+            self.assertEqual(
+                history_module._report_status_for("completed", root, report_count=1),
                 "available",
             )
             self.assertEqual(
-                history_module._report_status_for("failed", root),
-                "available",
+                history_module._report_status_for("failed", root, report_count=1),
+                "not_generated",
             )
 
         self.assertEqual(history_module._loads(None), {})

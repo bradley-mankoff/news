@@ -728,7 +728,11 @@ def list_recent_run_summaries(db_path: Path, limit: int = 20) -> list[dict[str, 
                 "delivery_status": _delivery_status_label(row[9]),
                 "model": str(row[10] or ""),
                 "model_name": str(row[11] or ""),
-                "report_status": _report_status_for(run_status, okf_path),
+                "report_status": _report_status_for(
+                    run_status,
+                    okf_path,
+                    report_count=_int(row[8]),
+                ),
                 "artifact_count": _int(row[12]),
                 "okf_path": str(okf_path),
             }
@@ -801,7 +805,11 @@ def get_run_details(db_path: Path, run_id: str) -> dict[str, Any] | None:
         "recipient_count": _int(row[12]),
         "delivery_status": _delivery_status_label(row[13]),
         "delivery": delivery,
-        "report_status": _report_status_for(run_status, okf_path),
+        "report_status": _report_status_for(
+            run_status,
+            okf_path,
+            report_count=_int(row[11]),
+        ),
         "okf_path": str(okf_path),
         "settings": _loads(row[15]),
         "stats": _loads(row[16]),
@@ -1279,18 +1287,27 @@ def _delivery_status_label(value: Any) -> str:
     return status or "not recorded"
 
 
-def _report_status_for(run_status: str, okf_path: Path) -> str:
-    """Resolve report availability from the stable OKF bundle location.
+def _report_status_for(
+    run_status: str,
+    okf_path: Path,
+    *,
+    report_count: int = 0,
+) -> str:
+    """Resolve report availability from generation metadata and the OKF path.
 
-    ``available`` when the bundle report exists, ``unavailable`` for a
-    completed run whose artifact is missing, and ``not_generated`` for runs
-    that never completed (failed/aborted/unknown).
+    The OKF serializer writes a placeholder ``report.md`` even when report
+    generation produced no body.  A recorded report is therefore required
+    before the known artifact can be considered available.  Completed runs
+    with a recorded report whose artifact is missing remain ``unavailable``;
+    runs without a generated report are ``not_generated``.
     """
+    if run_status != "completed":
+        return "not_generated"
+    if not _int(report_count):
+        return "not_generated"
     if (okf_path / "report.md").is_file():
         return "available"
-    if run_status == "completed":
-        return "unavailable"
-    return "not_generated"
+    return "unavailable"
 
 
 def _loads(value: Any) -> Any:

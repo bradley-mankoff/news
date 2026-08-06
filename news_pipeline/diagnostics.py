@@ -128,6 +128,8 @@ class RunDiagnostics:
             "model_call_stats": self.model_call_stats,
             "activity_snapshots": self.activity_snapshots,
             "article_summary_count": self.article_summary_count,
+            "report_count": len(self.reports),
+            "report_generated": bool(self.reports),
             "reports": self.reports,
             "artifacts": self.artifacts,
             "delivery": self.delivery,

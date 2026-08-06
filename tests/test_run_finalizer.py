@@ -7,6 +7,7 @@ from datetime import datetime
 from pathlib import Path
 from unittest.mock import patch
 
+from news_pipeline import ui as ui_module
 from news_pipeline.diagnostics import RunDiagnostics
 from news_pipeline.history_store import connect
 from news_pipeline.run_finalizer import RunFinalizer, RunFinalizerAdapters, RunFinalizerConfig
@@ -202,6 +203,17 @@ class RunFinalizerTests(unittest.TestCase):
             self.assertEqual(details["events"][-1]["traceback"], "Traceback text")
             with connect(paths["history_db"]) as con:
                 self.assertEqual(con.execute("SELECT status FROM runs").fetchone()[0], "failed")
+
+            review_paths = {
+                "output_dir": paths["latest_details"].parent,
+                "history_db": paths["history_db"],
+                "latest_run_markdown": paths["latest_markdown"],
+                "latest_run_details": paths["latest_details"],
+            }
+            with patch.object(ui_module, "_review_paths", return_value=review_paths):
+                payload = ui_module.latest_review_payload()
+            self.assertEqual(payload["run_status"], "failed")
+            self.assertEqual(payload["report_status"], "not_generated")
 
     def test_finish_continues_after_independent_writer_failures(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
