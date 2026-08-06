@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from .diagnostics import RunDiagnostics, run_status_from_events
+from .okf import okf_run_bundle_path
 
 
 TIMESTAMP_RE = re.compile(r"(\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2})")
@@ -151,6 +152,8 @@ def _ensure_schema(con: Any) -> None:
             events_json VARCHAR,
             reports_json VARCHAR,
             artifacts_json VARCHAR,
+            delivery_status VARCHAR,
+            delivery_json VARCHAR,
             imported_from_path VARCHAR,
             imported_at VARCHAR
         )
@@ -161,6 +164,8 @@ def _ensure_schema(con: Any) -> None:
         "runs",
         {
             "preset_id": "VARCHAR",
+            "delivery_status": "VARCHAR",
+            "delivery_json": "VARCHAR",
         },
     )
     con.execute(
@@ -669,10 +674,144 @@ def _insert_run(con: Any, run_id: str, diagnostics: RunDiagnostics, *, imported_
         "events_json": _json(diagnostics.events),
         "reports_json": _json(diagnostics.reports),
         "artifacts_json": _json(diagnostics.artifacts),
+        "delivery_status": str((diagnostics.delivery or {}).get("status") or ""),
+        "delivery_json": _json(diagnostics.delivery or {}),
         "imported_from_path": imported_from_path,
         "imported_at": imported_at,
     }
     _insert_dict(con, "runs", row)
+
+
+def list_recent_run_summaries(db_path: Path, limit: int = 20) -> list[dict[str, Any]]:
+    """Return compact summaries for the most recent runs, newest first.
+
+    Selects only summary columns (never decoding the large JSON blobs for the
+    whole list) and caps the requested limit at 50. Each call opens a fresh
+    connection because the threaded UI must not share DuckDB state.
+    """
+    if not Path(db_path).exists():
+        return []
+    try:
+        bounded = max(1, min(int(limit), 50))
+    except (TypeError, ValueError):
+        bounded = 20
+    ensure_schema(db_path)
+    with connect(db_path) as con:
+        rows = con.execute(
+            """
+            SELECT run_id, run_started_at, run_completed_at, run_date, preset_id,
+                   status, abort_reason, duration_label, report_count,
+                   delivery_status, model, model_name,
+                   (SELECT COUNT(*) FROM artifacts a WHERE a.run_id = runs.run_id)
+            FROM runs
+            ORDER BY run_started_at DESC, run_id DESC
+            LIMIT ?
+            """,
+            [bounded],
+        ).fetchall()
+    summaries: list[dict[str, Any]] = []
+    for row in rows:
+        run_id = str(row[0] or "")
+        okf_path = okf_run_bundle_path(db_path, run_id)
+        run_status = str(row[5] or "unknown")
+        summaries.append(
+            {
+                "run_id": run_id,
+                "run_started_at": str(row[1] or ""),
+                "run_completed_at": str(row[2] or ""),
+                "run_date": str(row[3] or ""),
+                "preset_id": str(row[4] or "custom"),
+                "run_status": run_status,
+                "abort_reason": str(row[6] or ""),
+                "duration_label": str(row[7] or ""),
+                "report_count": _int(row[8]),
+                "delivery_status": _delivery_status_label(row[9]),
+                "model": str(row[10] or ""),
+                "model_name": str(row[11] or ""),
+                "report_status": _report_status_for(run_status, okf_path),
+                "artifact_count": _int(row[12]),
+                "okf_path": str(okf_path),
+            }
+        )
+    return summaries
+
+
+def get_run_details(db_path: Path, run_id: str) -> dict[str, Any] | None:
+    """Return decoded details for one run, or ``None`` when not found.
+
+    The detail read may decode the large JSON blobs because it selects a
+    single parameterized run. Report availability is resolved from the stable
+    OKF bundle path rather than cleaned staging report paths.
+    """
+    if not Path(db_path).exists():
+        return None
+    ensure_schema(db_path)
+    with connect(db_path) as con:
+        row = con.execute(
+            """
+            SELECT run_id, run_started_at, run_completed_at, run_date, preset_id,
+                   status, abort_reason, duration_seconds, duration_label,
+                   model, model_name, report_count, recipient_count,
+                   delivery_status, delivery_json, settings_json, stats_json,
+                   events_json, reports_json, artifacts_json,
+                   imported_from_path, imported_at
+            FROM runs
+            WHERE run_id = ?
+            """,
+            [str(run_id)],
+        ).fetchone()
+        if row is None:
+            return None
+        artifact_rows = con.execute(
+            """
+            SELECT name, path, family, imported
+            FROM artifacts
+            WHERE run_id = ?
+            ORDER BY name, path
+            """,
+            [str(run_id)],
+        ).fetchall()
+    okf_path = okf_run_bundle_path(db_path, str(row[0] or ""))
+    run_status = str(row[5] or "unknown")
+    delivery = _loads(row[14])
+    if not isinstance(delivery, dict):
+        delivery = {}
+    artifacts = [
+        {
+            "name": str(artifact_row[0] or ""),
+            "path": str(artifact_row[1] or ""),
+            "family": str(artifact_row[2] or ""),
+            "imported": bool(artifact_row[3]),
+        }
+        for artifact_row in artifact_rows
+    ]
+    return {
+        "run_id": str(row[0] or ""),
+        "run_started_at": str(row[1] or ""),
+        "run_completed_at": str(row[2] or ""),
+        "run_date": str(row[3] or ""),
+        "preset_id": str(row[4] or "custom"),
+        "run_status": run_status,
+        "abort_reason": str(row[6] or ""),
+        "duration_seconds": _int(row[7]),
+        "duration_label": str(row[8] or ""),
+        "model": str(row[9] or ""),
+        "model_name": str(row[10] or ""),
+        "report_count": _int(row[11]),
+        "recipient_count": _int(row[12]),
+        "delivery_status": _delivery_status_label(row[13]),
+        "delivery": delivery,
+        "report_status": _report_status_for(run_status, okf_path),
+        "okf_path": str(okf_path),
+        "settings": _loads(row[15]),
+        "stats": _loads(row[16]),
+        "events": _loads(row[17]),
+        "reports": _loads(row[18]),
+        "artifacts_json": _loads(row[19]),
+        "artifacts": artifacts,
+        "imported_from_path": str(row[20] or ""),
+        "imported_at": str(row[21] or ""),
+    }
 
 
 def _insert_sources(con: Any, run_id: str, source_runs: list[dict[str, Any]]) -> None:
@@ -916,6 +1055,7 @@ def _load_diagnostics_for_backfill(run_id: str, details_path: Path | None) -> Ru
             article_summary_count=_int(payload.get("article_summary_count")),
             reports=payload.get("reports") or [],
             artifacts=payload.get("artifacts") or {},
+            delivery=payload.get("delivery") or {},
         )
     return RunDiagnostics(
         run_started_at=_run_started_at_from_id(run_id),
@@ -1131,6 +1271,38 @@ def _history_scope(preset_id: str, url_reuse_blocking_enabled: bool) -> str:
     if url_reuse_blocking_enabled:
         return "global"
     return clean_preset
+
+
+def _delivery_status_label(value: Any) -> str:
+    """Return a display delivery status; old rows read ``not recorded``."""
+    status = str(value or "").strip()
+    return status or "not recorded"
+
+
+def _report_status_for(run_status: str, okf_path: Path) -> str:
+    """Resolve report availability from the stable OKF bundle location.
+
+    ``available`` when the bundle report exists, ``unavailable`` for a
+    completed run whose artifact is missing, and ``not_generated`` for runs
+    that never completed (failed/aborted/unknown).
+    """
+    if (okf_path / "report.md").is_file():
+        return "available"
+    if run_status == "completed":
+        return "unavailable"
+    return "not_generated"
+
+
+def _loads(value: Any) -> Any:
+    """Tolerant JSON decode for persisted structured columns."""
+    if value in (None, ""):
+        return {}
+    if isinstance(value, dict):
+        return value
+    try:
+        return json.loads(str(value))
+    except (TypeError, ValueError):
+        return {}
 
 
 def _run_started_at_from_id(run_id: str) -> str:

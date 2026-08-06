@@ -284,6 +284,76 @@ class DiagnosticsTests(unittest.TestCase):
             "N/A",
         )
 
+    def test_record_delivery_serializes_normalized_mapping(self) -> None:
+        diagnostics = RunDiagnostics(
+            run_started_at="2026-06-01T10:00:00",
+            settings={},
+            events=[{"at": "2026-06-01T10:01:00", "label": "completed"}],
+        )
+        diagnostics.record_delivery(
+            "sent",
+            recipients=["reader@example.com"],
+        )
+
+        self.assertEqual(
+            diagnostics.to_dict()["delivery"],
+            {
+                "status": "sent",
+                "recipients": ["reader@example.com"],
+                "reason": "",
+                "error_type": "",
+                "error_message": "",
+            },
+        )
+        self.assertEqual(run_status_from_events(diagnostics.events), "completed")
+
+        review_markdown = diagnostics.to_run_review_markdown(report_body="Body")
+        self.assertIn("| Delivery | sent |", review_markdown)
+        self.assertIn("## Delivery", review_markdown)
+        self.assertIn("| Recipients | reader@example.com |", review_markdown)
+
+        summary_markdown = diagnostics.to_summary_markdown()
+        self.assertIn("- Delivery: sent", summary_markdown)
+
+    def test_record_delivery_failed_keeps_run_status_and_adds_no_event(self) -> None:
+        diagnostics = RunDiagnostics(
+            run_started_at="2026-06-01T10:00:00",
+            settings={},
+            events=[{"at": "2026-06-01T10:01:00", "label": "completed"}],
+        )
+        diagnostics.record_delivery(
+            "failed",
+            recipients=["reader@example.com"],
+            reason="delivery failed after report construction",
+            error_type="SMTPException",
+            error_message="connection refused",
+        )
+
+        self.assertEqual(run_status_from_events(diagnostics.events), "completed")
+        self.assertFalse(any(event["label"] == "failed" for event in diagnostics.events))
+        self.assertEqual(
+            diagnostics.to_dict()["delivery"]["error_type"],
+            "SMTPException",
+        )
+        review_markdown = diagnostics.to_run_review_markdown()
+        self.assertIn("| Delivery | failed |", review_markdown)
+        self.assertIn("| Error | SMTPException: connection refused |", review_markdown)
+        details_markdown = diagnostics.to_markdown()
+        self.assertIn("- Delivery: failed", details_markdown)
+
+    def test_empty_delivery_remains_backward_compatible(self) -> None:
+        diagnostics = RunDiagnostics(
+            run_started_at="2026-06-01T10:00:00",
+            settings={},
+        )
+        self.assertEqual(diagnostics.to_dict()["delivery"], {})
+        review_markdown = diagnostics.to_run_review_markdown()
+        self.assertIn("| Delivery | not recorded |", review_markdown)
+        self.assertIn("| Recipients | none |", review_markdown)
+        self.assertIn("| Status | not recorded |", review_markdown)
+        summary_markdown = diagnostics.to_summary_markdown()
+        self.assertIn("- Delivery: not recorded", summary_markdown)
+
     def _populated_diagnostics(self, root: Path) -> RunDiagnostics:
         diagnostics = RunDiagnostics(
             run_started_at="2026-06-01T10:00:00",
