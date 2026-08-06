@@ -123,6 +123,86 @@ class FailedRunLoggingTests(unittest.TestCase):
                 self.assertEqual(run_id, timestamp)
                 self.assertEqual(status, "failed")
 
+    def test_failed_run_logs_are_concise_and_preserve_traceback(self) -> None:
+        timestamp = "2026-06-06_13-00-00"
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            output_dir = root / "daily_outputs"
+            run_output_dir = output_dir / ".staging" / timestamp
+            history_db_path = root / "history" / "news_history.duckdb"
+            latest_log = output_dir / "latest_run.log"
+            run_log = run_output_dir / f"run_log_{timestamp}.log"
+            latest_details = output_dir / "latest_run_details.json"
+            run_started_at = datetime(2026, 6, 6, 13, 0, 0)
+
+            test_config = replace(
+                pipeline.CONFIG,
+                run_started_at=run_started_at,
+                run_date="2026-06-06",
+                timestamp=timestamp,
+                output_dir=output_dir,
+                run_output_dir=run_output_dir,
+                run_staging_dir=run_output_dir,
+                latest_run_markdown_path=output_dir / "latest_run.md",
+                latest_run_log_path=latest_log,
+                latest_run_details_path=latest_details,
+                history_db_path=history_db_path,
+            )
+
+            def fail_during_clustering() -> None:
+                diagnostics = pipeline._new_run_diagnostics(1)
+                pipeline.ACTIVE_RUN_DIAGNOSTICS = diagnostics
+                pipeline.progress_tracker.start_story_clustering(200_000, detail="Clustering.")
+                for done in range(1_000, 200_001, 10_000):
+                    pipeline.progress_tracker.story_clustering_progress(
+                        "similarity_pair",
+                        {
+                            "phase": "pairwise similarity",
+                            "done": done,
+                            "total": 200_000,
+                            "linked_pairs": done // 10_000,
+                        },
+                    )
+                pipeline.progress_tracker.update_meter(done=150_000, force=True)
+                raise RuntimeError("synthetic clustering failure")
+
+            with redirect_stdout(StringIO()):
+                with self.assertRaisesRegex(RuntimeError, "synthetic clustering failure"):
+                    pipeline.RunSession(test_config).run(fail_during_clustering)
+
+            # The staging per-run log is cleaned up after history ingest (the
+            # existing dual-file lifecycle); the rolling log is the survivor.
+            self.assertFalse(run_log.exists())
+            text = latest_log.read_text(encoding="utf-8")
+            self.assertNotIn("\r", text)
+            self.assertNotIn("\033", text)
+            # Initial snapshot and the failure-flushed pending snapshot.
+            self.assertIn("0/200000 steps", text)
+            self.assertIn("150000/200000 steps", text)
+            # Intermediate meters and duplicates are suppressed.
+            self.assertNotIn("100000/200000 steps", text)
+            self.assertNotIn("70000/200000 steps", text)
+            # The failure path keeps the header, summary, and traceback.
+            self.assertIn("Daily news run failed", text)
+            self.assertIn("Traceback", text)
+            self.assertIn("RuntimeError: synthetic clustering failure", text)
+            self.assertIn("Run log saved:", text)
+
+            details = json.loads(latest_details.read_text(encoding="utf-8"))
+            self.assertEqual(details["events"][-1]["label"], "failed")
+            self.assertIn("synthetic clustering failure", details["events"][-1]["traceback"])
+
+            with connect(history_db_path) as con:
+                run_id, status = con.execute("SELECT run_id, status FROM runs").fetchone()
+                self.assertEqual(run_id, timestamp)
+                self.assertEqual(status, "failed")
+                log_row = con.execute("SELECT byte_count, content FROM run_logs").fetchone()
+                self.assertIn("Traceback", log_row[1])
+                self.assertNotIn("\r", log_row[1])
+                self.assertNotIn("\033", log_row[1])
+                self.assertIn("150000/200000 steps", log_row[1])
+                self.assertEqual(log_row[0], len(log_row[1].encode("utf-8")))
+
     def test_session_finalizer_survives_compat_global_drift(self) -> None:
         timestamp = "2026-06-06_11-00-00"
         with tempfile.TemporaryDirectory() as tmpdir:

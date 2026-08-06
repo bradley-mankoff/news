@@ -122,6 +122,7 @@ from .config import (
 
 )
 from .diagnostics import RunDiagnostics
+from . import run_log
 from .run_finalizer import RunFinalizer, RunFinalizerAdapters, RunFinalizerConfig
 from .article_collection import (
     ArticleCollectionAdapters,
@@ -990,6 +991,10 @@ LOW_COVERAGE_SYNTHESIS_PATTERNS = [
 
 RUN_LOG_FILE: TextIO | None = None
 RUN_LOG_FILES: list[TextIO] = []
+# Concise-writer state, scoped to the run_logging() lifecycle; None when no
+# run log is active (manual RUN_LOG_FILES handles in tests still write
+# through the normalized fallback path).
+RUN_LOG_WRITER: run_log.ConciseLogWriter | None = None
 ACTIVE_RUN_SESSION: "RunSession | None" = None
 _RUN_SESSION_LOCK = RLock()
 
@@ -1208,22 +1213,40 @@ class RunSession:
 
 
 def _clean_progress_message(message: str) -> str:
-    clean = re.sub(r"^\[progress\]\s*", "", str(message or "").strip())
-    clean = clean.replace("--- [EMAIL]:", "[email]").replace("--- [UNSUBSCRIBE]:", "[unsubscribe]")
-    return clean
+    """Compatibility cleaner; delegates to the shared run-log normalizer."""
+    return run_log.clean_line(message)
+
+
+def _write_run_log_line(line: str) -> None:
+    if not RUN_LOG_FILES:
+        return
+    for log_file in RUN_LOG_FILES:
+        log_file.write(f"{line.rstrip()}\n")
+    for log_file in RUN_LOG_FILES:
+        log_file.flush()
 
 
 def _write_run_log(message: str) -> None:
+    """Write one message to the active run log files, normalized.
+
+    Meter snapshots are classified by the shared run-log parser and routed
+    through the concise writer so intermediate and duplicate snapshots are
+    suppressed while stage starts, final counts, transitions, warnings,
+    retries, errors, and tracebacks are retained. Without an active writer
+    (manual test handles), the normalized fallback path appends directly.
+    """
     if not RUN_LOG_FILES:
         return
     timestamp_label = datetime.now().isoformat(timespec="seconds")
-    clean = _clean_progress_message(message).replace("\r", "\n").strip()
-    if not clean:
-        return
-    for log_file in RUN_LOG_FILES:
-        for line in clean.splitlines():
-            log_file.write(f"{timestamp_label} {line.rstrip()}\n")
-        log_file.flush()
+    for event in run_log.parse_stream(message):
+        line = f"{timestamp_label} {event.line}"
+        if RUN_LOG_WRITER is not None:
+            if event.kind == "progress":
+                RUN_LOG_WRITER.meter(event.stage or "", line, final=event.complete)
+            else:
+                RUN_LOG_WRITER.message(line)
+        else:
+            _write_run_log_line(line)
 
 
 class ProgressTracker:
@@ -1552,7 +1575,10 @@ class ProgressTracker:
             return
         stream = self._stream()
         effective_final = final or self.meter_done >= self.meter_total
-        stream.write("\r" + line + "\033[K")
+        # TTY streams keep the clear-line sequence for in-place mutable lines;
+        # piped streams must not emit ANSI control bytes into captured output.
+        clear_line = "\033[K" if stream.isatty() else ""
+        stream.write("\r" + line + clear_line)
         if final:
             stream.write("\n")
             self._line_active = False
@@ -1675,6 +1701,7 @@ def _story_selection_runtime() -> story_selection_stage.StorySelectionRuntime:
 def run_logging():
     global RUN_LOG_FILE
     global RUN_LOG_FILES
+    global RUN_LOG_WRITER
     for log_path in (RUN_LOG_PATH, LATEST_RUN_LOG_PATH):
         log_dir = os.path.dirname(log_path)
         if log_dir:
@@ -1686,6 +1713,7 @@ def run_logging():
     ) as latest_log_file:
         RUN_LOG_FILE = run_log_file
         RUN_LOG_FILES = [run_log_file, latest_log_file]
+        RUN_LOG_WRITER = run_log.ConciseLogWriter(write_line=_write_run_log_line)
         header = (
             "# Daily news run log\n"
             f"# Started: {RUN_STARTED_AT.isoformat(timespec='seconds')}\n"
@@ -1699,8 +1727,13 @@ def run_logging():
         try:
             yield
         finally:
+            # Keep the concise writer active through the final save lines so
+            # any pending meter snapshot is flushed before cleanup.
             _write_run_log(f"Run log saved: {RUN_LOG_PATH}")
             _write_run_log(f"Rolling run log saved: {LATEST_RUN_LOG_PATH}")
+            if RUN_LOG_WRITER is not None:
+                RUN_LOG_WRITER.flush()
+            RUN_LOG_WRITER = None
             RUN_LOG_FILES = []
             RUN_LOG_FILE = None
 

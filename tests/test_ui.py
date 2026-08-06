@@ -968,20 +968,107 @@ class UITests(unittest.TestCase):
             manager._run_process(success_record)
         self.assertEqual(success_record.status, "completed")
         self.assertEqual(success_record.returncode, 0)
-        self.assertIn("[ui] process exited with code 0\n", success_record.lines[-1])
+        self.assertIn("[ui] process exited with code 0", success_record.events[-1]["line"])
 
         failure_record = RunRecord("run-3", ["news", "run"], {})
         with patch.object(ui_module.subprocess, "Popen", side_effect=OSError("boom")):
             manager._run_process(failure_record)
         self.assertEqual(failure_record.status, "failed")
         self.assertEqual(failure_record.returncode, -1)
-        self.assertIn("failed to start process", failure_record.lines[-1])
+        self.assertIn("failed to start process", failure_record.events[-1]["line"])
 
         running_record = RunRecord("run-4", ["news", "run"], {})
         running_record.process = _SuccessProcess()
         manager.runs[running_record.run_id] = running_record
         stopped = manager.stop(running_record.run_id)
         self.assertEqual(stopped["status"], "stopping")
+
+    def test_run_record_normalizes_events_and_suppresses_duplicates(self) -> None:
+        record = RunRecord("run-1", ["news", "run"], {})
+        meter_a = "[3/9 clustering] [###-----------------] 1000/200000 steps"
+        meter_b = "[3/9 clustering] [####----------------] 10000/200000 steps"
+        meter_final = "[3/9 clustering] [####################] 200000/200000 steps"
+        record.append("\r" + meter_a + "\033[K\n")
+        record.append(meter_a + "\n")  # exact duplicate snapshot
+        record.append("WARNING: low coverage\n")
+        record.append(meter_b + "\n")
+        record.append(meter_final + "\n")
+        record.append("[7/9 story drafting] [####----------------] 12/47 stories\n")
+
+        self.assertEqual(
+            [event["kind"] for event in record.events],
+            ["progress", "message", "progress"],
+        )
+        # The clustering snapshot was replaced in place, never appended twice.
+        self.assertEqual(record.events[0]["line"], meter_final)
+        self.assertEqual(record.events[0]["stage"], "clustering")
+        self.assertEqual(record.events[0]["replace"], True)
+        self.assertEqual(record.events[0]["complete"], True)
+        self.assertEqual(record.events[1]["line"], "WARNING: low coverage")
+        self.assertEqual(record.events[2]["line"], "[7/9 story drafting] [####----------------] 12/47 stories")
+        self.assertEqual(record.snapshot()["line_count"], 3)
+        self.assertEqual(record.events[0]["line"], meter_final)
+
+    def test_stop_requested_process_resolves_to_stopped(self) -> None:
+        class _StoppableProcess:
+            def __init__(self) -> None:
+                self.stdout = iter([])
+                self.terminated = False
+
+            def wait(self) -> int:
+                return -15
+
+            def poll(self) -> int | None:
+                return None
+
+            def terminate(self) -> None:
+                self.terminated = True
+
+        manager = RunManager()
+        process = _StoppableProcess()
+        record = RunRecord("run-5", ["news", "run"], {})
+        record.process = process
+        manager.runs[record.run_id] = record
+        stopped = manager.stop(record.run_id)
+        self.assertEqual(stopped["status"], "stopping")
+        self.assertTrue(process.terminated)
+        with patch.object(ui_module.subprocess, "Popen", return_value=process):
+            manager._run_process(record)
+        self.assertEqual(record.status, "stopped")
+        self.assertEqual(record.returncode, -15)
+        self.assertIn("[ui] terminate requested", record.events[0]["line"])
+        self.assertIn("[ui] process exited with code -15", record.events[-1]["line"])
+
+    def test_stop_after_exit_does_not_relabel_finished_run(self) -> None:
+        class _FinishedProcess:
+            def poll(self) -> int:
+                return 0
+
+        manager = RunManager()
+        record = RunRecord("run-6", ["news", "run"], {})
+        record.process = _FinishedProcess()
+        manager.runs[record.run_id] = record
+        snapshot = manager.stop(record.run_id)
+        self.assertEqual(snapshot["status"], "starting")
+        self.assertFalse(record.stop_requested)
+
+    def test_unexpected_nonzero_exit_stays_failed(self) -> None:
+        class _FailingProcess:
+            def __init__(self) -> None:
+                self.stdout = iter([])
+
+            def wait(self) -> int:
+                return 7
+
+            def poll(self) -> int | None:
+                return None
+
+        manager = RunManager()
+        record = RunRecord("run-7", ["news", "run"], {})
+        with patch.object(ui_module.subprocess, "Popen", return_value=_FailingProcess()):
+            manager._run_process(record)
+        self.assertEqual(record.status, "failed")
+        self.assertEqual(record.returncode, 7)
 
     def test_run_manager_rejects_overlapping_start(self) -> None:
         class _FakeThread:
@@ -1142,7 +1229,7 @@ class UITests(unittest.TestCase):
 
             fake_record = SimpleNamespace(
                 lock=threading.Lock(),
-                lines=["run line\n"],
+                events=[{"line": "run line\n", "kind": "message"}],
                 status="completed",
                 snapshot=lambda: {"run_id": "run-1", "status": "completed"},
             )
@@ -1152,7 +1239,7 @@ class UITests(unittest.TestCase):
                 status, headers, body = invoke("do_GET", "/api/runs/run-1/events")
             self.assertEqual(status, 200)
             self.assertEqual(headers["Content-Type"], "text/event-stream")
-            self.assertIn("data: {\"line\": \"run line\\n\", \"status\": \"completed\"}", body)
+            self.assertIn('data: {"line": "run line\\n", "kind": "message", "status": "completed"}', body)
             self.assertIn("event: status", body)
 
             log_handler = object.__new__(ui_module.NewsUIHandler)
@@ -1367,7 +1454,7 @@ class UITests(unittest.TestCase):
 
         fake_running_record = SimpleNamespace(
             lock=threading.Lock(),
-            lines=["run line\n"],
+            events=[{"line": "run line\n", "kind": "message"}],
             status="running",
             snapshot=lambda: {"run_id": "run-1"},
         )
@@ -1379,7 +1466,7 @@ class UITests(unittest.TestCase):
 
         fake_done_record = SimpleNamespace(
             lock=threading.Lock(),
-            lines=[],
+            events=[],
             status="completed",
             snapshot=lambda: {"run_id": "run-1"},
         )
@@ -1391,7 +1478,7 @@ class UITests(unittest.TestCase):
 
         fake_sleep_record = SimpleNamespace(
             lock=threading.Lock(),
-            lines=[],
+            events=[],
             status="running",
             snapshot=lambda: {"run_id": "run-1"},
         )
@@ -1403,6 +1490,20 @@ class UITests(unittest.TestCase):
             with self.assertRaises(KeyboardInterrupt):
                 handler = make_handler(_Writer())
                 handler._stream_run_events("run-1")
+
+        fake_stopped_record = SimpleNamespace(
+            lock=threading.Lock(),
+            events=[{"line": "line one", "kind": "message"}],
+            status="stopped",
+            snapshot=lambda: {"run_id": "run-1", "status": "stopped"},
+        )
+        with patch.object(ui_module.RUN_MANAGER, "get", return_value=fake_stopped_record):
+            writer = _Writer()
+            handler = make_handler(writer)
+            handler._stream_run_events("run-1")
+        self.assertTrue(any(part.startswith("event: status") for part in writer.parts))
+        self.assertTrue(any("\"status\": \"stopped\"" in part for part in writer.parts))
+        self.assertTrue(any('data: {"line": "line one", "kind": "message", "status": "stopped"}' in part for part in writer.parts))
 
     def test_review_and_history_routes(self) -> None:
         with patch.object(
@@ -1587,6 +1688,38 @@ class UITests(unittest.TestCase):
                 self.assertIsNone(
                     ui_module.read_historical_report("2026-06-01_10-00-00/../..")
                 )
+
+    def test_run_log_renderer_contracts(self) -> None:
+        html = ui_module.HTML
+        # The log pane is an accessible live region rendered via textContent.
+        self.assertIn('<pre id="logPane" role="log" aria-live="polite"', html)
+        # Stage-keyed reducer replaces the active progress row in place.
+        self.assertIn("logState.progressByStage", html)
+        self.assertIn("function appendLogEvent(payload)", html)
+        self.assertIn("function resetLog()", html)
+        self.assertIn("function stopSpinner()", html)
+        # Restrained spinner sequence and explicit terminal glyphs/statuses.
+        self.assertIn("SPINNER_GLYPHS", html)
+        self.assertIn('completed: "✓"', html)
+        self.assertIn('failed: "✗"', html)
+        self.assertIn('stopped: "■"', html)
+        self.assertIn('["completed", "failed", "stopped"]', html)
+        # The spinner decorates, never replaces, the numeric progress text.
+        self.assertIn("SPINNER_GLYPHS[logState.spinnerIndex % SPINNER_GLYPHS.length]} ${text}", html)
+        # All three terminal statuses stop the spinner, close the stream,
+        # clear active controls, and refresh durable review data.
+        self.assertIn("events.close();", html)
+        self.assertIn("refreshReviewData();", html)
+        self.assertIn("stopSpinner();", html)
+        self.assertIn("TERMINAL_STATUSES.includes(payload.status)", html)
+        # No append-only raw rendering path remains.
+        self.assertNotIn("textContent += payload.line", html)
+        self.assertNotIn("textContent += \`\\n[ui] ", html)
+        # Run start clears and reinitializes the reducer state.
+        run_action = html.split("async function runAction")[1].split("events.addEventListener")[0]
+        self.assertIn("resetLog();", run_action)
+        self.assertIn("startSpinner();", run_action)
+        self.assertIn("new EventSource", run_action)
 
     def test_report_review_tab_contracts(self) -> None:
         html = ui_module.HTML

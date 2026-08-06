@@ -190,6 +190,12 @@ class OKFRunBundleTests(unittest.TestCase):
                 "Generated the [Daily News Report](report.md) and 2 story concept(s)",
                 log_text,
             )
+            # ADR 0008 boundary: log.md is a compact directory-update
+            # projection, never a raw run-log sink.
+            self.assertNotIn("[3/9 clustering]", log_text)
+            self.assertNotIn("200000/200000 steps", log_text)
+            self.assertNotIn("\r", log_text)
+            self.assertNotIn("\033", log_text)
             self.assertIn("Lifecycle status: **stable**.", root_body)
 
             article_paths = {
