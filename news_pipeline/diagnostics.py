@@ -23,6 +23,7 @@ class RunDiagnostics:
     article_summary_count: int = 0
     reports: list[dict[str, Any]] = field(default_factory=list)
     artifacts: dict[str, Any] = field(default_factory=dict)
+    delivery: dict[str, Any] = field(default_factory=dict)
 
     def event(self, label: str, **details: Any) -> None:
         self.events.append(
@@ -92,6 +93,31 @@ class RunDiagnostics:
     def record_artifact(self, name: str, path: str, **details: Any) -> None:
         self.artifacts[name] = {"path": path, **details}
 
+    def record_delivery(
+        self,
+        status: str,
+        *,
+        recipients: list[str] | None = None,
+        reason: str = "",
+        error_type: str = "",
+        error_message: str = "",
+    ) -> None:
+        """Record the optional delivery outcome independently from run status.
+
+        ``status`` is one of ``sent``, ``skipped: not_configured``,
+        ``skipped: user_disabled``, or ``failed``. The mapping never carries
+        SMTP passwords, secrets, or full delivery tracebacks, and recording a
+        delivery outcome never adds a run event: ``run_status_from_events``
+        keeps describing report/run generation only.
+        """
+        self.delivery = {
+            "status": str(status or "").strip(),
+            "recipients": [str(recipient) for recipient in (recipients or [])],
+            "reason": str(reason or ""),
+            "error_type": str(error_type or ""),
+            "error_message": str(error_message or ""),
+        }
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "run_started_at": self.run_started_at,
@@ -104,6 +130,7 @@ class RunDiagnostics:
             "article_summary_count": self.article_summary_count,
             "reports": self.reports,
             "artifacts": self.artifacts,
+            "delivery": self.delivery,
             "events": self.events,
         }
 
@@ -377,6 +404,7 @@ class RunDiagnostics:
                 f"- Recipients covered: {stats['recipient_count']}",
                 f"- Reports with generated images: {stats['reports_with_images']}",
                 f"- Image warnings: {stats['image_warnings']}",
+                f"- Delivery: {_delivery_status_label(self.delivery)}",
                 f"- Run URL log: {self.settings.get('run_used_urls_path')}",
             ]
         )
@@ -404,12 +432,15 @@ class RunDiagnostics:
         staging_dir = settings.get("run_staging_dir") or settings.get("output_dir") or "N/A"
         selected_story_label = f"{stats['selected_story_count']} of {settings.get('max_stories')}"
 
+        delivery_status = _delivery_status_label(self.delivery)
+
         lines = [
             "# Latest News Run Review",
             "",
             "| Run | Value |",
             "| --- | --- |",
             f"| Status | {_table_value(status)} |",
+            f"| Delivery | {_table_value(delivery_status)} |",
             f"| Started | {_table_value(self.run_started_at)} |",
             f"| Duration | {_table_value(stats['duration'])} |",
             f"| Preset | {_table_value(preset_id)} |",
@@ -516,6 +547,25 @@ class RunDiagnostics:
         if warnings:
             lines.extend(["", "## Warnings", ""])
             lines.extend(f"- {warning}" for warning in warnings)
+
+        lines.extend(["", "## Delivery", ""])
+        delivery = self.delivery or {}
+        lines.extend(
+            [
+                "| Field | Value |",
+                "| --- | --- |",
+                f"| Status | {_table_value(delivery_status)} |",
+                "| Recipients | "
+                f"{_table_value(', '.join(delivery.get('recipients') or []) or 'none')} |",
+                f"| Reason | {_table_value(delivery.get('reason') or '')} |",
+            ]
+        )
+        if delivery.get("error_type") or delivery.get("error_message"):
+            lines.append(
+                "| Error | "
+                f"{_table_value(delivery.get('error_type') or 'error')}: "
+                f"{_table_value(delivery.get('error_message') or '')} |"
+            )
 
         clean_report_body = str(report_body or "").strip()
         lines.extend(["", "## Final Report Preview", ""])
@@ -740,6 +790,7 @@ class RunDiagnostics:
             [
                 "## Outputs",
                 "",
+                f"- Delivery: {_delivery_status_label(self.delivery)}",
                 f"- Article budget included: {self.article_budget.get('included_count', 0)}",
                 f"- Article budget dropped: {self.article_budget.get('dropped_count', 0)}",
                 f"- Article summaries generated: {self.article_summary_count}",
@@ -982,6 +1033,12 @@ def run_status_from_events(events: list[dict[str, Any]]) -> str:
     if _last_event(events, "completed"):
         return "completed"
     return "unknown"
+
+
+def _delivery_status_label(delivery: dict[str, Any]) -> str:
+    """Return the normalized delivery status or ``not recorded`` when empty."""
+    status = str((delivery or {}).get("status") or "").strip()
+    return status or "not recorded"
 
 
 def _model_call_bucket(task_name: str) -> str:

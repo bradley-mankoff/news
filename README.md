@@ -260,6 +260,24 @@ Model Tuning Presets, run source utilities, and edit `config/sources.yaml` or
 `config/recipients.yaml`. Source and recipient edits write those YAML files
 directly.
 
+The **Report Review** tab is the read-only review surface for generated
+reports. It shows the current report from `latest_run.md`/`latest_run_details.json`
+(run id/time, run status, report status, preset/duration, and delivery status
+as separate badges), lists recent completed and failed sessions from durable
+DuckDB history, and can open a historical run's stable OKF `report.md`.
+Report text is rendered as escaped plain text. When a run finishes in the UI,
+the live stream closes and the review/history panels refresh automatically; a
+completed report navigates to Report Review, while a failed run without a
+report leaves you on Run Setup with the failure visible.
+
+Report-generation status and optional email delivery status are independent:
+a run with no sender/recipient/SMTP configuration finishes with delivery
+`skipped: not_configured`, and a delivery failure is recorded as delivery
+`failed` without failing the run or hiding the completed report. Runs recorded
+before delivery tracking show `not recorded`. The UI only reads known rolling
+and OKF artifacts; it never replaces or deletes DuckDB/CSV history or OKF
+bundles, and it exposes no arbitrary filesystem routes.
+
 The main Run Setup view is prompt-first: routing, editorial prompt profile, and
 default model selection. Per-task model selectors, model tuning, pipeline
 budgets, clustering thresholds, server settings, full prompt templates, and raw
@@ -540,10 +558,14 @@ Current run review files are written under `output/daily_outputs/`:
 
 - `latest_run.md`: latest human-readable report.
 - `latest_run.log`: latest captured terminal log.
-- `latest_run_details.json`: latest backend audit details.
+- `latest_run_details.json`: latest backend audit details (includes the
+  normalized delivery outcome when a delivery attempt was possible).
 
 Durable run history is written to `output/history/news_history.duckdb`, with CSV
-exports in `output/history/` for quick review. A run with a non-empty newsletter
+exports in `output/history/` for quick review. Each `runs` row carries the
+run status, report metadata, and an independent `delivery_status`/`delivery`
+record (`sent`, `skipped: not_configured`, `skipped: user_disabled`, or
+`failed`; older rows read as `not recorded`). A run with a non-empty newsletter
 body also writes paste-ready Markdown to `output/beehiiv/YYYY-MM-DD.md` for
 manual publication.
 

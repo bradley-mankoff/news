@@ -25,6 +25,7 @@ from datetime import datetime
 import news_pipeline.pipeline as pipeline
 from news_pipeline.article_summary_records import ArticleSummaryRecord
 from news_pipeline.config import ModelSamplingSettings, MODEL_TASK_STORY_SCALE_SCREENING, MODEL_TASK_TITLE_GENERATION
+from news_pipeline.diagnostics import RunDiagnostics, run_status_from_events
 
 
 class PipelineHelperTests(unittest.TestCase):
@@ -1758,6 +1759,133 @@ class PipelineHelperTests(unittest.TestCase):
             "Big news",
         )
         self.assertEqual(pipeline._sanitize_overlay_headline("", "Fallback"), "Fallback")
+
+    def test_maybe_email_report_returns_normalized_delivery_outcome(self) -> None:
+        # Missing configuration -> skipped: not_configured result, no send.
+        with patch.object(pipeline, "EMAIL_FROM", ""), patch.object(
+            pipeline, "SMTP_HOST", ""
+        ), patch.object(pipeline, "SMTP_USERNAME", ""), patch.object(
+            pipeline, "SMTP_PASSWORD", ""
+        ), patch.object(pipeline.progress_tracker, "detail") as detail:
+            result = pipeline.maybe_email_report(
+                "Title", "Body", "Synthesis", [], ["reader@example.com"], ["Reader"]
+            )
+        self.assertEqual(result["status"], "skipped: not_configured")
+        self.assertEqual(result["recipients"], ["reader@example.com"])
+        self.assertIn("missing configuration", result["reason"])
+        self.assertEqual(result["error_type"], "")
+        self.assertEqual(result["error_message"], "")
+        self.assertIn("Missing configuration", detail.call_args[0][0])
+
+        class FakeSMTP:
+            def __init__(self, *args, **kwargs) -> None:  # noqa: ANN002, ANN003
+                self.messages = []
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):  # noqa: ANN001, ANN002, ANN003
+                return False
+
+            def starttls(self) -> None:
+                return None
+
+            def login(self, username: str, password: str) -> None:
+                return None
+
+            def send_message(self, message) -> None:  # noqa: ANN001
+                self.messages.append(message)
+
+        with patch.object(pipeline, "EMAIL_FROM", "from@example.com"), patch.object(
+            pipeline, "SMTP_HOST", "smtp.example.com"
+        ), patch.object(pipeline, "SMTP_USERNAME", "user"), patch.object(
+            pipeline, "SMTP_PASSWORD", "secret"
+        ), patch.object(pipeline, "SMTP_PORT", 587), patch.object(
+            pipeline, "SMTP_USE_SSL", False
+        ), patch.object(
+            pipeline, "build_report_html", return_value="<html>report</html>"
+        ), patch.object(
+            pipeline,
+            "build_unsubscribe_url",
+            return_value="https://example.com/unsubscribe?token=abc",
+        ), patch.object(pipeline.smtplib, "SMTP", return_value=FakeSMTP()), patch.object(
+            pipeline.progress_tracker, "detail"
+        ):
+            result = pipeline.maybe_email_report(
+                "Daily Brief",
+                "Body text",
+                "Synthesis text",
+                [],
+                ["reader@example.com"],
+                ["Reader"],
+            )
+        self.assertEqual(result["status"], "sent")
+        self.assertEqual(result["recipients"], ["reader@example.com"])
+        self.assertEqual(result["error_type"], "")
+
+    def test_attempt_email_delivery_isolates_transport_failures(self) -> None:
+        diagnostics = RunDiagnostics(
+            run_started_at="2026-06-01T10:00:00",
+            settings={},
+            events=[{"at": "2026-06-01T10:01:00", "label": "completed"}],
+        )
+
+        def explode(*_args, **_kwargs) -> dict[str, Any]:
+            raise RuntimeError("smtp down")
+
+        with patch.object(pipeline, "maybe_email_report", side_effect=explode), patch.object(
+            pipeline.progress_tracker, "warning"
+        ) as warning:
+            result = pipeline._attempt_email_delivery(
+                diagnostics,
+                report_title="Title",
+                report_body="Body",
+                synthesis_body="Synthesis",
+                final_reports=[],
+                recipient_list=["reader@example.com"],
+                recipient_names=["Reader"],
+            )
+
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["recipients"], ["reader@example.com"])
+        self.assertEqual(result["reason"], "delivery failed after report construction")
+        self.assertEqual(result["error_type"], "RuntimeError")
+        self.assertEqual(result["error_message"], "smtp down")
+        self.assertEqual(diagnostics.delivery["status"], "failed")
+        warning.assert_called_once()
+        self.assertIn("Delivery failed", warning.call_args[0][0])
+        # The run outcome stays completed; no failed run event is added, so
+        # the surrounding report-finalization path can continue normally.
+        self.assertEqual(run_status_from_events(diagnostics.events), "completed")
+        self.assertFalse(any(event["label"] == "failed" for event in diagnostics.events))
+
+    def test_attempt_email_delivery_records_success_result(self) -> None:
+        diagnostics = RunDiagnostics(
+            run_started_at="2026-06-01T10:00:00",
+            settings={},
+        )
+        with patch.object(
+            pipeline,
+            "maybe_email_report",
+            return_value={
+                "status": "sent",
+                "recipients": ["reader@example.com"],
+                "reason": "",
+                "error_type": "",
+                "error_message": "",
+            },
+        ):
+            result = pipeline._attempt_email_delivery(
+                diagnostics,
+                report_title="Title",
+                report_body="Body",
+                synthesis_body="Synthesis",
+                final_reports=[],
+                recipient_list=["reader@example.com"],
+                recipient_names=["Reader"],
+            )
+        self.assertEqual(result["status"], "sent")
+        self.assertEqual(diagnostics.delivery["status"], "sent")
         enforced_prompt = pipeline._enforce_text_free_image_prompt("")
         self.assertIn("Hard constraints:", enforced_prompt)
         self.assertIn("readable headline will be rendered later by code", enforced_prompt)

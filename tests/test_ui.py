@@ -20,6 +20,8 @@ import yaml
 
 from news_pipeline import ui as ui_module
 from news_pipeline.config import CODEX_TEST_MODEL_ALIAS, GEMMA_4_12B_IT_4BIT_MODEL_ALIAS
+from news_pipeline.diagnostics import RunDiagnostics
+from news_pipeline.history_store import write_run_history
 from news_pipeline.ui import (
     DEFAULT_HOST,
     DEFAULT_PORT,
@@ -1672,6 +1674,210 @@ async function preview() {{
             with self.assertRaises(KeyboardInterrupt):
                 handler = make_handler(_Writer())
                 handler._stream_run_events("run-1")
+
+    def test_review_and_history_routes(self) -> None:
+        with patch.object(
+            ui_module,
+            "recent_history_payload",
+            return_value={"runs": [{"run_id": "r1"}], "error": None},
+        ), patch.object(
+            ui_module,
+            "latest_review_payload",
+            return_value={"report_status": "available", "report_text": "body"},
+        ), patch.object(
+            ui_module,
+            "run_detail_payload",
+            return_value={"run_id": "r1", "run_status": "completed"},
+        ), patch.object(
+            ui_module,
+            "read_historical_report",
+            return_value="# Report\n\nbody",
+        ):
+            status, _, body = self._invoke_get("/api/history")
+            self.assertEqual(status, 200)
+            self.assertEqual(json.loads(body)["runs"], [{"run_id": "r1"}])
+
+            status, _, body = self._invoke_get("/api/history?limit=5")
+            self.assertEqual(status, 200)
+            self.assertEqual(json.loads(body)["runs"], [{"run_id": "r1"}])
+
+            status, _, body = self._invoke_get("/api/history/r1")
+            self.assertEqual(status, 200)
+            self.assertEqual(json.loads(body)["run_status"], "completed")
+
+            status, _, body = self._invoke_get("/api/review/latest")
+            self.assertEqual(status, 200)
+            self.assertEqual(json.loads(body)["report_status"], "available")
+
+            status, headers, body = self._invoke_get("/api/history/r1/report")
+            self.assertEqual(status, 200)
+            self.assertEqual(headers["Content-Type"], "text/plain; charset=utf-8")
+            self.assertIn("# Report", body)
+
+        with patch.object(ui_module, "run_detail_payload", return_value=None), patch.object(
+            ui_module, "read_historical_report", return_value=None
+        ):
+            self.assertEqual(self._invoke_get("/api/history/missing")[0], 404)
+            status, _, body = self._invoke_get("/api/history/missing/report")
+            self.assertEqual(status, 404)
+            self.assertIn("Report not available", json.loads(body)["error"])
+
+        # A broken history store degrades to an error field, not a 500.
+        with patch.object(
+            ui_module,
+            "recent_history_payload",
+            return_value={"runs": [], "error": "duckdb down"},
+        ):
+            status, _, body = self._invoke_get("/api/history")
+            self.assertEqual(status, 200)
+            self.assertEqual(json.loads(body)["error"], "duckdb down")
+
+    def test_latest_review_payload_reads_rolling_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            output_dir = root / "daily_outputs"
+            output_dir.mkdir()
+            (output_dir / "latest_run.md").write_text(
+                "Report with <script>alert(1)</script>",
+                encoding="utf-8",
+            )
+            (output_dir / "latest_run_details.json").write_text(
+                json.dumps(
+                    {
+                        "run_started_at": "2026-06-01T10:00:00",
+                        "settings": {"preset_id": "daily"},
+                        "delivery": {
+                            "status": "skipped: not_configured",
+                            "recipients": [],
+                            "reason": "missing configuration",
+                            "error_type": "",
+                            "error_message": "",
+                        },
+                        "events": [
+                            {"at": "2026-06-01T10:00:30", "label": "completed"}
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            paths = {
+                "output_dir": output_dir,
+                "history_db": root / "history.duckdb",
+                "latest_run_markdown": output_dir / "latest_run.md",
+                "latest_run_details": output_dir / "latest_run_details.json",
+            }
+            with patch.object(ui_module, "_review_paths", return_value=paths):
+                payload = ui_module.latest_review_payload()
+
+        self.assertEqual(payload["run_id"], "2026-06-01_10-00-00")
+        self.assertEqual(payload["run_status"], "completed")
+        self.assertEqual(payload["report_status"], "available")
+        self.assertEqual(payload["delivery_status"], "skipped: not_configured")
+        self.assertEqual(payload["preset_id"], "daily")
+        self.assertEqual(payload["duration_label"], "30s")
+        self.assertIn("<script>", payload["report_text"])
+        self.assertIsNone(payload["error"])
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            output_dir = root / "daily_outputs"
+            output_dir.mkdir()
+            (output_dir / "latest_run_details.json").write_text(
+                "{broken", encoding="utf-8"
+            )
+            paths = {
+                "output_dir": output_dir,
+                "history_db": root / "history.duckdb",
+                "latest_run_markdown": output_dir / "latest_run.md",
+                "latest_run_details": output_dir / "latest_run_details.json",
+            }
+            with patch.object(ui_module, "_review_paths", return_value=paths):
+                payload = ui_module.latest_review_payload()
+            self.assertIsNotNone(payload["error"])
+            self.assertEqual(payload["report_status"], "not_generated")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            output_dir = root / "daily_outputs"
+            output_dir.mkdir()
+            paths = {
+                "output_dir": output_dir,
+                "history_db": root / "history.duckdb",
+                "latest_run_markdown": output_dir / "latest_run.md",
+                "latest_run_details": output_dir / "latest_run_details.json",
+            }
+            with patch.object(ui_module, "_review_paths", return_value=paths):
+                payload = ui_module.latest_review_payload()
+            self.assertEqual(payload["report_status"], "not_generated")
+            self.assertEqual(payload["run_status"], "unknown")
+            self.assertEqual(payload["delivery_status"], "not recorded")
+            self.assertIsNone(payload["error"])
+
+    def test_read_historical_report_validates_okf_root(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            db_path = root / "history" / "news_history.duckdb"
+            diagnostics = RunDiagnostics(
+                run_started_at="2026-06-01T10:00:00",
+                settings={"preset_id": "daily"},
+                events=[{"at": "2026-06-01T10:00:30", "label": "completed"}],
+            )
+            write_run_history(
+                db_path,
+                run_id="2026-06-01_10-00-00",
+                diagnostics=diagnostics,
+                export_csv=False,
+            )
+            bundle = db_path.parent / "okf" / "2026-06-01_10-00-00"
+            bundle.mkdir(parents=True)
+            (bundle / "report.md").write_text("Report with <script>", encoding="utf-8")
+            paths = {
+                "output_dir": root / "daily_outputs",
+                "history_db": db_path,
+                "latest_run_markdown": root / "daily_outputs" / "latest_run.md",
+                "latest_run_details": root / "daily_outputs" / "latest_run_details.json",
+            }
+            with patch.object(ui_module, "_review_paths", return_value=paths):
+                self.assertEqual(
+                    ui_module.read_historical_report("2026-06-01_10-00-00"),
+                    "Report with <script>",
+                )
+                self.assertIsNone(ui_module.read_historical_report("missing-run"))
+                self.assertIsNone(
+                    ui_module.read_historical_report("2026-06-01_10-00-00/../..")
+                )
+
+    def test_report_review_tab_contracts(self) -> None:
+        html = ui_module.HTML
+        # The tab exists with a dedicated icon and section mounts.
+        self.assertIn('["review", "Report Review", "book"]', html)
+        self.assertIn('<section id="review" class="view">', html)
+        self.assertIn('id="reviewMount"', html)
+        self.assertIn('id="historyMount"', html)
+        # API endpoint strings used by the review surface.
+        self.assertIn('"/api/review/latest"', html)
+        self.assertIn('"/api/history"', html)
+        self.assertIn('`/api/history/${encodeURIComponent(runId)}`', html)
+        self.assertIn('`/api/history/${encodeURIComponent(runId)}/report`', html)
+        # Separate run/report/delivery badges render independently.
+        self.assertIn('run: ${escapeHtml(runStatus || "unknown")}', html)
+        self.assertIn('report: ${escapeHtml(reportStatus || "unavailable")}', html)
+        self.assertIn('delivery: ${escapeHtml(deliveryLabel(deliveryStatus))}', html)
+        # Report text is rendered through textContent, never innerHTML.
+        self.assertIn('pane.textContent = review.report_text || "(empty report)";', html)
+        self.assertIn("pane.textContent = text;", html)
+        self.assertIn("pane.textContent = `Report unavailable: ${err.message}`;", html)
+        # Terminal status closes the stream, then refreshes durable review data.
+        self.assertIn("events.close();", html)
+        self.assertIn("refreshReviewData();", html)
+        # Boot loads the durable review/history surfaces.
+        boot = html.split("async function init()")[1].split("init().catch")[0]
+        self.assertIn("await loadReview();", boot)
+        self.assertIn("await loadHistory();", boot)
+        # Stable empty/error states exist for missing history and reports.
+        self.assertIn("No runs recorded yet.", html)
+        self.assertIn("No completed report is available yet.", html)
+        self.assertIn("No report was generated for this run.", html)
 
     def test_module_entrypoint_guard_executes(self) -> None:
         source = "\n" * 2453 + 'if __name__ == "__main__":\n    raise SystemExit(main())\n'
