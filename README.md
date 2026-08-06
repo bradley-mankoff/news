@@ -7,6 +7,7 @@ commands from the repo root so `uv` uses this project environment.
 git clone https://github.com/bradley-mankoff/news.git
 cd news
 uv sync
+uv run pre-commit install   # secret-scanning hook (Gitleaks); runbook: docs/security/secret-prevention.md
 uv run python -c 'import platform; print(platform.machine())'
 ```
 
@@ -147,7 +148,10 @@ human, by design:
   branch is mergeable; no re-drag needed.
 - **Security gate (deliberate):** the history scrub requires human approval —
   run `automation/scrub_history.sh --dry-run`, review, then `--execute`
-  (runbook: `docs/security/history-scrub.md`).
+  (runbook: `docs/security/history-scrub.md`). Secret **prevention** is
+  automatic: the Gitleaks pre-commit hook (`.pre-commit-config.yaml`, installed
+  with `uv run pre-commit install`) rejects commits with staged secrets
+  (runbook: `docs/security/secret-prevention.md`).
 - **Periodic health check:** `python3 automation/board_health.py` prints stale
   runs, unknown blockers, and unsatisfied dependencies (read-only).
 - **Deploy after changes:** after pulling poller/automation changes or
@@ -187,6 +191,9 @@ human, by design:
 - `automation/security_audit.py` — stdlib-only scanner for secrets and personal
   data in the working tree and full history; exits 0 when clean. Report:
   `docs/security/audit-2026-08-02.md`.
+- `.pre-commit-config.yaml` — Gitleaks pre-commit hook (pinned `v8.30.1`) that
+  rejects commits containing staged secrets with redacted output. Install with
+  `uv run pre-commit install`; runbook: `docs/security/secret-prevention.md`.
 - `automation/scrub_history.sh` — gated `git filter-repo` history scrub; prints
   push commands by default (`--dry-run`), requires explicit `--execute` and
   human approval. Runbook: `docs/security/history-scrub.md`.
