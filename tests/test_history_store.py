@@ -310,8 +310,8 @@ class HistoryStoreTests(unittest.TestCase):
             self.assertEqual(summaries[0]["delivery_status"], "skipped: not_configured")
             # Old rows without delivery data display "not recorded".
             self.assertEqual(summaries[1]["delivery_status"], "not recorded")
-            # Completed runs without an OKF report resolve as unavailable.
-            self.assertEqual(summaries[0]["report_status"], "unavailable")
+            # Completed runs without a generated report are not generated.
+            self.assertEqual(summaries[0]["report_status"], "not_generated")
             self.assertEqual(
                 summaries[0]["okf_path"],
                 str(db_path.parent / "okf" / "2026-06-02_10-00-00"),
@@ -329,6 +329,7 @@ class HistoryStoreTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / "history.duckdb"
             completed = self._diagnostics("2026-06-01T10:00:00", preset_id="daily")
+            completed.record_report(path="output/daily_outputs/latest_run.md")
             failed = self._diagnostics("2026-06-02T10:00:00", preset_id="daily")
             failed.events.append(
                 {
@@ -389,7 +390,7 @@ class HistoryStoreTests(unittest.TestCase):
             self.assertEqual(details["run_status"], "completed")
             self.assertEqual(details["delivery_status"], "failed")
             self.assertEqual(details["delivery"]["error_message"], "smtp down")
-            self.assertEqual(details["report_status"], "unavailable")
+            self.assertEqual(details["report_status"], "not_generated")
             self.assertEqual(
                 details["okf_path"],
                 str(db_path.parent / "okf" / "2026-06-01_10-00-00"),
