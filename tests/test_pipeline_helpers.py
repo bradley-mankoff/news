@@ -10,6 +10,7 @@ import sys
 import tempfile
 import types
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from collections import Counter
 from dataclasses import replace
 from io import BytesIO, StringIO
@@ -1057,6 +1058,137 @@ class PipelineHelperTests(unittest.TestCase):
         finally:
             pipeline._HF_REVISION_CACHE.clear()
             pipeline._HF_REVISION_CACHE.update(original_cache)
+
+    def test_prompt_capture_failure_does_not_block_model_call(self) -> None:
+        diagnostics = RunDiagnostics(
+            run_started_at="2026-06-01T10:00:00",
+            settings={},
+        )
+        llm = SimpleNamespace(
+            max_tokens=12,
+            invoke=MagicMock(return_value=AIMessage(content="real response")),
+        )
+
+        with patch.object(pipeline, "ACTIVE_RUN_DIAGNOSTICS", diagnostics), patch.object(
+            pipeline, "_model_snapshot_for_task", side_effect=RuntimeError("capture failed")
+        ), patch.object(pipeline, "_raise_if_managed_model_server_exited"):
+            response = pipeline.invoke_with_retries(
+                llm,
+                [HumanMessage(content="hello")],
+                task_name="analysis for Headline",
+                fallback_content="fallback",
+                attempts=1,
+            )
+
+        self.assertEqual(response.content, "real response")
+        llm.invoke.assert_called_once()
+        self.assertEqual(diagnostics.prompt_snapshots, [])
+
+    def test_prompt_snapshot_update_failure_does_not_replace_model_outcome(self) -> None:
+        diagnostics = RunDiagnostics(
+            run_started_at="2026-06-01T10:00:00",
+            settings={},
+        )
+
+        with patch.object(pipeline, "ACTIVE_RUN_DIAGNOSTICS", diagnostics), patch.object(
+            diagnostics,
+            "update_prompt_snapshot",
+            side_effect=RuntimeError("update failed"),
+        ), patch.object(pipeline, "_raise_if_managed_model_server_exited"), patch.object(
+            pipeline.progress_tracker, "warning"
+        ):
+            success = pipeline.invoke_with_retries(
+                SimpleNamespace(
+                    max_tokens=12,
+                    invoke=MagicMock(return_value=AIMessage(content="real response")),
+                ),
+                [HumanMessage(content="hello")],
+                task_name="analysis for Headline",
+                fallback_content="fallback",
+                attempts=1,
+            )
+            fallback = pipeline.invoke_with_retries(
+                SimpleNamespace(
+                    max_tokens=12,
+                    invoke=MagicMock(side_effect=RuntimeError("model failed")),
+                ),
+                [HumanMessage(content="goodbye")],
+                task_name="story synthesis for Story",
+                fallback_content="fallback response",
+                attempts=1,
+            )
+
+        self.assertEqual(success.content, "real response")
+        self.assertEqual(fallback.content, "fallback response")
+
+    def test_concurrent_model_calls_update_their_own_prompt_snapshots(self) -> None:
+        diagnostics = RunDiagnostics(
+            run_started_at="2026-06-01T10:00:00",
+            settings={},
+        )
+
+        class FakeLLM:
+            def __init__(self, outcomes: list[object]) -> None:
+                self._outcomes = iter(outcomes)
+                self.max_tokens = 12
+
+            def invoke(self, messages):  # noqa: ANN001
+                outcome = next(self._outcomes)
+                if isinstance(outcome, Exception):
+                    raise outcome
+                return outcome
+
+        calls = [
+            (
+                "analysis for A",
+                [httpx.RemoteProtocolError("retry"), AIMessage(content="ok A")],
+            ),
+            ("story synthesis for B", [RuntimeError("boom B")]),
+            ("analysis for C", [AIMessage(content="ok C")]),
+        ]
+
+        def call(item: tuple[str, list[object]]) -> object:
+            task_name, outcomes = item
+            return pipeline.invoke_with_retries(
+                FakeLLM(outcomes),
+                [HumanMessage(content=task_name)],
+                task_name=task_name,
+                fallback_content=f"fallback for {task_name}",
+                attempts=2,
+            )
+
+        with patch.object(pipeline, "ACTIVE_RUN_DIAGNOSTICS", diagnostics), patch.object(
+            pipeline, "_raise_if_managed_model_server_exited"
+        ), patch.object(pipeline.time, "sleep", return_value=None), patch.object(
+            pipeline.progress_tracker, "retrying"
+        ), patch.object(pipeline.progress_tracker, "warning"):
+            with ThreadPoolExecutor(max_workers=3) as executor:
+                responses = list(executor.map(call, calls))
+
+        self.assertEqual(
+            [response.content for response in responses],
+            ["ok A", "fallback for story synthesis for B", "ok C"],
+        )
+        snapshots = {
+            item["task_name"]: item
+            for item in diagnostics.to_dict()["prompt_snapshots"]
+        }
+        self.assertEqual(len(snapshots), 3)
+        for task_name in ("analysis for A", "story synthesis for B", "analysis for C"):
+            self.assertEqual(
+                snapshots[task_name]["messages"],
+                [{"type": "human", "content": task_name}],
+            )
+        self.assertEqual(snapshots["analysis for A"]["retry_attempts"], 1)
+        self.assertFalse(snapshots["analysis for A"]["used_fallback"])
+        self.assertEqual(snapshots["story synthesis for B"]["retry_attempts"], 0)
+        self.assertTrue(snapshots["story synthesis for B"]["used_fallback"])
+        self.assertEqual(snapshots["analysis for C"]["retry_attempts"], 0)
+        self.assertFalse(snapshots["analysis for C"]["used_fallback"])
+        self.assertEqual(
+            {snapshot["sequence"] for snapshot in snapshots.values()},
+            {1, 2, 3},
+        )
 
     def test_invoke_with_retries_skips_capture_without_active_diagnostics(self) -> None:
         with patch.object(pipeline, "ACTIVE_RUN_DIAGNOSTICS", None), patch.object(
