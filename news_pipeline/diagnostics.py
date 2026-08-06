@@ -7,6 +7,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
+from threading import Lock
 from typing import Any
 
 
@@ -24,6 +25,11 @@ class RunDiagnostics:
     reports: list[dict[str, Any]] = field(default_factory=list)
     artifacts: dict[str, Any] = field(default_factory=dict)
     delivery: dict[str, Any] = field(default_factory=dict)
+    prompt_snapshots: list[dict[str, Any]] = field(default_factory=list)
+    # Private: guards snapshot append/sequence assignment so concurrent
+    # article-summary/story-drafting workers cannot corrupt ordering. Kept out
+    # of repr/equality and never serialized by ``to_dict()``.
+    _prompt_snapshots_lock: Lock = field(default_factory=Lock, repr=False, compare=False)
 
     def event(self, label: str, **details: Any) -> None:
         self.events.append(
@@ -87,6 +93,30 @@ class RunDiagnostics:
     def record_activity_snapshot(self, details: dict[str, Any]) -> None:
         self.activity_snapshots.append(details)
 
+    def record_prompt_snapshot(self, details: dict[str, Any]) -> int:
+        """Append one JSON-ready prompt snapshot under a private lock.
+
+        The sequence is assigned atomically (capture order, not pipeline
+        semantic order); the caller receives it back so retry/fallback
+        metadata can be updated later on the same logical call. A shallow
+        copy is stored so later caller-side metadata updates cannot mutate the
+        recorded payload.
+        """
+        snapshot = dict(details or {})
+        with self._prompt_snapshots_lock:
+            sequence = len(self.prompt_snapshots) + 1
+            snapshot["sequence"] = sequence
+            self.prompt_snapshots.append(snapshot)
+        return sequence
+
+    def update_prompt_snapshot(self, sequence: int, **updates: Any) -> None:
+        """Apply retry/fallback metadata to an already recorded snapshot."""
+        with self._prompt_snapshots_lock:
+            for snapshot in self.prompt_snapshots:
+                if snapshot.get("sequence") == sequence:
+                    snapshot.update(updates)
+                    return
+
     def record_report(self, **details: Any) -> None:
         self.reports.append(details)
 
@@ -133,6 +163,7 @@ class RunDiagnostics:
             "reports": self.reports,
             "artifacts": self.artifacts,
             "delivery": self.delivery,
+            "prompt_snapshots": self.prompt_snapshots,
             "events": self.events,
         }
 
