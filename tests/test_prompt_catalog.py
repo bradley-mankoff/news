@@ -452,6 +452,13 @@ Citation precedence: Cite this source only for facts it directly supports.
             "image_art_direction": "Depict the event.",
         }
         self.assertEqual(prompt_contracts.validate_editorial_instructions(clean), [])
+        self.assertEqual(
+            prompt_contracts.validate_editorial_instructions(
+                {**clean, "story_scale_screening": "Use {literal} guidance."},
+                allow_braces_for={"story_scale_screening"},
+            ),
+            [],
+        )
 
         violating = dict(clean)
         violating["story_drafting"] = "Do not use [[S1]] markers"

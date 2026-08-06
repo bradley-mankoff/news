@@ -323,6 +323,33 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
         )
         self.assertEqual(unset.prompt_instruction_overrides, {})
 
+    def test_prompt_override_violating_contract_fails_config_resolution(self) -> None:
+        with self.assertRaisesRegex(
+            ValueError,
+            "violates pipeline-owned output contracts.*story_drafting.*\\[\\[S1\\]\\]",
+        ):
+            load_runtime_config(
+                environ={},
+                overrides={
+                    "NEWS_PROMPT_OVERRIDE_STORY_DRAFTING": "Do not use [[S1]] markers.",
+                },
+                materialize_outputs=False,
+            )
+
+    def test_prompt_override_screening_braces_are_validated_by_safe_rendering_path(self) -> None:
+        config = load_runtime_config(
+            environ={},
+            overrides={
+                "NEWS_PROMPT_OVERRIDE_STORY_SCALE_SCREENING": "Discuss {literal} guidance.",
+            },
+            materialize_outputs=False,
+        )
+
+        self.assertEqual(
+            config.prompt_instruction_overrides,
+            {"story_scale_screening": "Discuss {literal} guidance."},
+        )
+
     def test_removed_topic_env_vars_reported_and_rejected(self) -> None:
         with self.assertRaisesRegex(ValueError, "NEWS_TOPIC_IDS"):
             load_runtime_config(
