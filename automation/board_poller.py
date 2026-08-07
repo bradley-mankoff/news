@@ -903,6 +903,11 @@ def ensure_ship_review(cfg: dict, env: dict, item_id: str, issue_number: int,
         log(f"DEVELOP MERGE issue={issue_number} PR=#{pr['number']}: {note}"
             if ok else
             f"DEVELOP MERGE FAILED issue={issue_number}: {note}")
+        if not ok:
+            # Ship review must be built from the integrated develop branch.
+            # Hold this lane and let the next poll retry the merge/conflict
+            # episode rather than creating a ship PR from an unintegrated head.
+            return None
     head = (pr or {}).get("headRefName") or f"archon/task-issue-{issue_number}"
     ship_to = cfg["dispatch"]["review"].get("ship_to", "main")
     if branch_empty_vs_main(cfg, env, head, ship_to):
@@ -1199,7 +1204,7 @@ def dispatch(cfg: dict, env: dict, wf: str, branch: str, message: str,
     detached-child spawn is broken (it passes the binary path as the command).
     The child is put in its own session so it survives the poller (and
     launchd restarts of it). Output appends to automation/archon-runs.log.
-    Returns True when the process spawned.
+    Returns True when the process survives the startup grace period.
     """
     if DRY_RUN:
         log(f"[dry-run] DISPATCH wf={wf} branch={branch} issue={number}")
@@ -1216,6 +1221,15 @@ def dispatch(cfg: dict, env: dict, wf: str, branch: str, message: str,
             )
     except OSError as exc:
         log(f"DISPATCH FAILED item={item_id} wf={wf}: {exc}")
+        return False
+    # A successful Popen only proves that the CLI could be forked. Give Archon
+    # a short startup window so invalid workflows/authentication/CLI failures
+    # do not advance the board to In Progress with no run to observe.
+    time.sleep(2)
+    if proc.poll() is not None:
+        log(f"DISPATCH FAILED item={item_id} issue={number} wf={wf}: "
+            f"archon exited immediately with code {proc.returncode}; "
+            f"see {log_path}")
         return False
     _consume_dispatch_slot()
     log(f"DISPATCHED item={item_id} issue={number} wf={wf} branch={branch} pid={proc.pid}")

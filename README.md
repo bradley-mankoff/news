@@ -193,9 +193,11 @@ human, by design:
 - The poller runs as a launchd agent (`com.bradley-mankoff.news-board-poller`,
   plist in `~/Library/LaunchAgents/`). Logs: `automation/board_poller.log`;
   state: `automation/state.json` (gitignored).
-- Archon executes all workflows on OpenCode Zen Go (`opencode-go/deepseek-v4-flash`,
-  max effort → xhigh thinking) via the Pi provider; tiers are configured in
-  the archon-pi home `config.yaml`.
+- Archon routine nodes use Pi/OpenCode Zen Go
+  (`opencode-go/deepseek-v4-flash`) at `effort: max`; rigorous nodes use Pi's
+  OpenAI Codex OAuth backend (`provider: pi`,
+  `openai-codex/gpt-5.6-luna`) at `effort: max`. See
+  `docs/archon-workflows.md` for the current 17-workflow inventory.
 
 ### Manual review
 
