@@ -1925,6 +1925,10 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
                     result = ensure_ship_review(
                         cfg, env, item_id, content["number"], content["title"],
                         project_id, field_id, status_options, done_lane_name, rec)
+                    if result is None:
+                        # Do not record the lane transition until the develop
+                        # PR lookup succeeds; retry the same transition next poll.
+                        continue
                     if isinstance(result, tuple):
                         review_msg = result[1]
                         ship_pr_num = result[2]
@@ -1982,9 +1986,7 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
             if item["status"] != review_lane_name:
                 continue
             item_id = item["id"]
-            if item_id in fresh_dispatched:
-                continue
-            if item_id in review_attempted:
+            if item_id in fresh_dispatched or item_id in review_attempted:
                 continue
             rec = state.get(item_id, {})
             if rec.get("review_msg") or rec.get("review_held"):

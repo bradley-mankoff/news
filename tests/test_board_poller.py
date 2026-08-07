@@ -6,8 +6,8 @@ import subprocess
 import unittest
 from unittest.mock import MagicMock, mock_open, patch
 
-from automation import board_poller as bp
 import automation.board_poller as board_poller
+from automation import board_poller as bp
 from automation.board_poller import (
     branch_empty_vs_main,
     build_ready_for_review_comment,
@@ -1404,6 +1404,11 @@ class ResolveWorktreeBranchTests(unittest.TestCase):
 class ResumeIssueTests(unittest.TestCase):
     """HIGH: defer when the branch can't be resolved; verify the spawn;
     only remove the needs-input label after verified spawn + successful edit."""
+
+    def setUp(self) -> None:
+        # Dispatch-capacity tests intentionally exercise the global budget;
+        # resume tests model an independent poll.
+        board_poller._DISPATCH_BUDGET = None
 
     def test_dry_run_does_not_resume_or_mutate(self) -> None:
         with patch.object(bp, "DRY_RUN", True), \
