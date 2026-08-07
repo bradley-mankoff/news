@@ -43,6 +43,8 @@ from automation.board_poller import (
     reconcile_deferred_work,
     recovery_action,
     run_status_for,
+    run_status_lookup_invalid,
+    runs_by_message_from,
     sync_local_develop,
     sync_runnable_labels,
     try_merge_base_into_head,
@@ -503,6 +505,16 @@ class WorkflowRecoveryTest(unittest.TestCase):
             status_map = fetch_runs_by_message({})
             self.assertEqual(status_map, {"m": "running"})
             self.assertIsNone(status_map.error)
+
+    def test_runs_by_message_marks_malformed_matching_record_invalid(self):
+        status_map = runs_by_message_from([
+            {"id": "r1", "user_message": "review", "status": "running",
+             "started_at": "2026-08-07T10:00:00Z"},
+            {"id": None, "user_message": "Prior Context review",
+             "status": "running", "started_at": "2026-08-07T10:01:00Z"},
+        ])
+        self.assertIn("Prior Context review", status_map.invalid_messages)
+        self.assertTrue(run_status_lookup_invalid(status_map, "review"))
 
 
 class MatchIssuePrTest(unittest.TestCase):
@@ -1246,6 +1258,48 @@ class TerminalRecoveryPollTest(unittest.TestCase):
         self.assertEqual(rec["automatic_retry_count"], 1)
         self.assertEqual(dispatch_mock.call_count, 2)
 
+    def test_new_episode_without_baseline_waits_for_registered_run(self):
+        state = self._state()
+        todo = self._item()
+        todo["status"] = "Todo"
+        in_progress = self._item()
+        message = (
+            "Build feature from issue #92: Anchor curated-match prefix "
+            "(o/r). Full issue: https://github.com/o/r/issues/92"
+        )
+        old = self._run(run_id="run-old", status="completed")
+        old["user_message"] = message
+        new = self._run(run_id="run-new")
+        new["user_message"] = message
+        with (
+            patch.object(board_poller, "fetch_project",
+                         side_effect=[
+                             ("p", "f", {"Ready for Review": "ready"}, [todo]),
+                             ("p", "f", {"Ready for Review": "ready"}, [in_progress]),
+                             ("p", "f", {"Ready for Review": "ready"}, [in_progress]),
+                         ]),
+            patch.object(board_poller, "prepare_dispatch_budget"),
+            patch.object(board_poller, "sync_runnable_labels"),
+            patch.object(board_poller, "pick_workflow",
+                         return_value="archon-idea-to-pr"),
+            patch.object(board_poller, "dispatch", return_value=True) as dispatch_mock,
+            patch.object(board_poller, "fetch_workflow_runs",
+                         side_effect=[[old], [old, new]]),
+            patch.object(board_poller, "inspect_worktree", return_value=False),
+            patch.object(board_poller, "save_state"),
+        ):
+            board_poller.poll(self._cfg(), {}, state)
+            new["started_at"] = state["item-92"]["dispatch_started_at"]
+            board_poller.poll(self._cfg(), {}, state)
+            self.assertNotIn("recovery", state["item-92"])
+            board_poller.poll(self._cfg(), {}, state)
+
+        rec = state["item-92"]
+        self.assertEqual(rec["recovery"]["run_id"], "run-new")
+        self.assertEqual(rec["recovery"]["action"], "retrying")
+        self.assertEqual(rec["automatic_retry_count"], 1)
+        self.assertEqual(dispatch_mock.call_count, 2)
+
     def test_non_transient_failure_is_manual_review_without_dispatch(self):
         state = self._state()
         with self._run_poll(state, [self._run(status="failed",
@@ -1309,6 +1363,37 @@ class TerminalRecoveryPollTest(unittest.TestCase):
             board_poller.poll(cfg, {}, state)
         merge.assert_not_called()
         dispatch_mock.assert_not_called()
+
+    def test_malformed_review_status_holds_ship_conflict_update(self):
+        cfg = self._cfg()
+        cfg["dispatch"]["review"]["conflict_fix_workflow"] = (
+            "archon-fix-ship-conflicts")
+        state = self._state()
+        state["item-92"].update({"status": "In Review", "review_msg": "review"})
+        item = self._item()
+        item["status"] = "In Review"
+        malformed = board_poller.WorkflowRunStatusMap(
+            {"review": "completed"},
+            invalid_messages={"Prior Context review"},
+        )
+        with (
+            patch.object(board_poller, "fetch_project",
+                         return_value=("p", "f", {"Ready for Review": "ready"}, [item])),
+            patch.object(board_poller, "prepare_dispatch_budget"),
+            patch.object(board_poller, "sync_runnable_labels"),
+            patch.object(board_poller, "find_ship_pr",
+                         return_value={"number": 153, "mergeable": "CONFLICTING",
+                                       "headRefName": "issue-92"}),
+            patch.object(board_poller, "fetch_runs_by_message",
+                         return_value=malformed),
+            patch.object(board_poller, "try_merge_base_into_head") as merge,
+            patch.object(board_poller, "dispatch") as dispatch_mock,
+            patch.object(board_poller, "save_state"),
+        ):
+            board_poller.poll(cfg, {}, state)
+        merge.assert_not_called()
+        dispatch_mock.assert_not_called()
+        self.assertTrue(run_status_lookup_invalid(malformed, "review"))
 
     def test_missing_run_details_fail_closed(self):
         state = self._state()
@@ -1564,6 +1649,21 @@ class RunStatusForTest(unittest.TestCase):
     def test_substring_match(self):
         self.assertEqual(
             run_status_for({"Prior Context m1": "running"}, "m1"), "running")
+
+    def test_newer_resume_run_wins_regardless_of_map_order(self):
+        original = "Implement GitHub issue #21: Choose a license (o/r)."
+        resumed = "Prior Context: " + original + "\nResuming issue #21."
+        runs = [
+            {"id": "old", "user_message": original,
+             "status": "completed", "started_at": "2026-08-07T10:00:00Z"},
+            {"id": "new", "user_message": resumed,
+             "status": "running", "started_at": "2026-08-07T10:05:00Z"},
+        ]
+        for ordered in (runs, list(reversed(runs))):
+            with self.subTest(ordered=ordered):
+                self.assertEqual(
+                    run_status_for(runs_by_message_from(ordered), original),
+                    "running")
 
     def test_no_match(self):
         self.assertIsNone(run_status_for({"other": "completed"}, "m1"))

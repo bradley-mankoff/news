@@ -78,6 +78,7 @@ ACTIVE_WORKFLOW_STATUSES = frozenset(
     {"running", "pending", "queued", "scheduled", "paused"}
 )
 TERMINAL_WORKFLOW_STATUSES = frozenset({"failed", "cancelled"})
+KNOWN_WORKFLOW_STATUSES = ACTIVE_WORKFLOW_STATUSES | TERMINAL_WORKFLOW_STATUSES | {"completed"}
 _DISPATCH_BUDGET: int | None = None
 
 
@@ -95,11 +96,14 @@ class WorkflowRuns(list[dict]):
 
 
 class WorkflowRunStatusMap(dict[str, str]):
-    """Compatibility status map that retains the full-run lookup health."""
+    """Compatibility status map that retains full-run lookup health."""
 
-    def __init__(self, statuses=(), error: str | None = None):
+    def __init__(self, statuses=(), error: str | None = None,
+                 invalid_messages=(), run_keys=()):
         super().__init__(statuses)
         self.error = error
+        self.invalid_messages = frozenset(invalid_messages)
+        self.run_keys = dict(run_keys)
 
 
 QUERY = """
@@ -1004,6 +1008,7 @@ def ensure_ship_review(cfg: dict, env: dict, item_id: str, issue_number: int,
                     branch, msg, item_id, issue_number):
         log(f"SHIP REVIEW DISPATCH FAILED issue={issue_number} — retrying next poll")
         return None
+    rec["dispatch_started_at"] = datetime.now(timezone.utc).isoformat()
     rec.pop("review_held", None)
     return "ok", msg, ship["number"]
 
@@ -1842,6 +1847,7 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
         ship_pr_num = None
         dispatched_wf = None
         dispatched_branch = None
+        dispatch_started_at = None
         dep_gate_ran = False
         dep_blocked_marker = None
         dep_cancelled_noted = None
@@ -1918,6 +1924,7 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
                     dispatched_msg = msg
                     dispatched_wf = wf
                     dispatched_branch = resumed_branch or branch
+                    dispatch_started_at = datetime.now(timezone.utc).isoformat()
                     fresh_dispatched.add(item_id)
                     target = cfg["dispatch"]["todo"].get("move_to")
                     if ok and target:
@@ -1934,8 +1941,9 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
                     pr_number = content["number"]
                     msg = f"Review PR #{pr_number} ({content['title']})"
                     branch = f"review/pr-{pr_number}"
-                    dispatch(cfg, env, cfg["dispatch"]["review"]["workflow"], branch,
-                             msg, item_id, content["number"])
+                    if dispatch(cfg, env, cfg["dispatch"]["review"]["workflow"], branch,
+                                 msg, item_id, content["number"]):
+                        dispatch_started_at = datetime.now(timezone.utc).isoformat()
                 else:
                     # Ensure the feature is in develop, then review the ship PR
                     # (feature -> main); on an approving review the poller merges
@@ -1988,6 +1996,8 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
             rec.pop("retrying", None)
             rec.pop("automatic_retry_count", None)
             rec.pop("recovery_logged_run_id", None)
+            if dispatch_started_at:
+                rec["dispatch_started_at"] = dispatch_started_at
         if review_msg:
             rec["review_msg"] = review_msg
             rec["ship_pr"] = ship_pr_num
@@ -2103,6 +2113,9 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
                 if run_lookup_error:
                     log(f"RUN LOOKUP UNAVAILABLE: {run_lookup_error}; "
                         "retaining dispatch markers")
+            if run_lookup_error:
+                state[item_id] = rec
+                continue
             # Select one authoritative record for this item.  The same record
             # supplies status, identity, metadata, and worktree details below;
             # do not let the legacy status map choose a different attempt.
@@ -2115,6 +2128,11 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
                                and isinstance(selected_run.get("id"), str)
                                and selected_run.get("id", "").strip()
                                else None)
+            if selected_run_id and dispatch_run_is_stale(rec, selected_run):
+                # A dispatch has started a new episode, but Archon has not
+                # registered its run yet. Never reconcile the previous run.
+                state[item_id] = rec
+                continue
             if selected_run_id:
                 rec["last_observed_run_id"] = selected_run_id
             if run_status == "completed":
@@ -2179,6 +2197,10 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
                     if (issue_number and pr_num and head and dev_wf
                             and runs_by_msg is not None):
                         fix_msg = rec.get("dev_conflict_fix_msg")
+                        if (fix_msg and run_status_lookup_invalid(
+                                runs_by_msg, fix_msg)):
+                            state[item_id] = rec
+                            continue
                         act = develop_conflict_action(
                             bool(rec.get("dev_conflict_mech")), fix_msg,
                             (run_status_for(runs_by_msg, fix_msg)
@@ -2280,13 +2302,6 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
                     # decision until a known run ID exists. Never guess clean,
                     # mark handled, or auto-dispatch from a status alone.
                     continue
-                if (rec.get("dispatch_baseline_run_id") == run_id
-                        and not rec.get("retrying")):
-                    # A newly dispatched episode still points at its previous
-                    # terminal row. Wait for a different authoritative run ID
-                    # instead of consuming the new episode's retry.
-                    state[item_id] = rec
-                    continue
                 if (rec.get("retrying")
                         and rec.get("recovery", {}).get("run_id") == run_id):
                     # The automatic retry was dispatched but its run row has
@@ -2319,6 +2334,9 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
                         if wf and issue_number and dispatch(
                                 cfg, env, wf, branch, msg, item_id,
                                 issue_number):
+                            rec["dispatch_baseline_run_id"] = run_id
+                            rec["dispatch_started_at"] = datetime.now(
+                                timezone.utc).isoformat()
                             rec["retrying"] = True
                             rec["automatic_retry_count"] = 1
                             rec["recovery"]["action"] = "retrying"
@@ -2396,7 +2414,8 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
                 if run_lookup_error:
                     log(f"RUN LOOKUP UNAVAILABLE: {run_lookup_error}; "
                         "retaining run markers")
-            if run_lookup_error:
+            if (run_lookup_error
+                    or run_status_lookup_invalid(runs_by_msg, rmsg)):
                 continue
             rstatus = run_status_for(runs_by_msg, rmsg)
             if rstatus == "completed":
@@ -2494,12 +2513,16 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
             if run_lookup_error:
                 continue
             rmsg = rec.get("review_msg")
+            if (rmsg and run_status_lookup_invalid(runs_by_msg, rmsg)):
+                continue
             review_active = bool(
                 rmsg and run_status_for(runs_by_msg, rmsg)
                 in ACTIVE_WORKFLOW_STATUSES)
             if review_active:
                 continue
             fix_msg = rec.get("conflict_fix_msg")
+            if (fix_msg and run_status_lookup_invalid(runs_by_msg, fix_msg)):
+                continue
             mech_failed = bool(rec.get("conflict_mech_failed"))
             fix_status = (run_status_for(runs_by_msg, fix_msg)
                           if fix_msg else None)
@@ -2558,12 +2581,29 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
         log(f"snapshot taken: {len(seen)} items on board, dispatch armed")
     save_state(cfg, state)
 
+def run_status_lookup_invalid(runs_by_msg: dict[str, str],
+                              dispatch_msg: str) -> bool:
+    """Whether a malformed run record matches this dispatch message."""
+    invalid = getattr(runs_by_msg, "invalid_messages", ())
+    return any(dispatch_msg in msg for msg in invalid)
+
+
 def run_status_for(runs_by_msg: dict[str, str], dispatch_msg: str) -> str | None:
     """Status of the newest run whose message contains the dispatch message."""
-    for msg, status in runs_by_msg.items():
-        if dispatch_msg in msg:
-            return status
-    return None
+    candidates = [(msg, status) for msg, status in runs_by_msg.items()
+                  if dispatch_msg in msg]
+    if not candidates:
+        return None
+    run_keys = getattr(runs_by_msg, "run_keys", {})
+    if run_keys:
+        return max(candidates,
+                   key=lambda pair: run_keys.get(
+                       pair[0], (datetime.min.replace(tzinfo=timezone.utc), "")
+                   ))[1]
+    # Plain dict callers have no timestamps. Prefer Archon's resume form over
+    # the original message so insertion order cannot shadow an active resume.
+    return max(candidates,
+               key=lambda pair: (pair[0].startswith("Prior Context"), pair[0]))[1]
 
 # --- Terminal-run recovery (cancelled runs and transient failures) ----------
 #
@@ -2600,18 +2640,44 @@ _VALIDATION_FAILURE_PATTERNS = (
 )
 
 
-def _run_timestamp(value: object) -> str | None:
-    """Normalize an Archon timestamp, rejecting malformed values."""
+def _parse_run_datetime(value: object) -> datetime | None:
+    """Parse an Archon timestamp as a UTC instant."""
     if not isinstance(value, str):
         return None
     value = value.strip()
     if not value:
         return None
     try:
-        datetime.fromisoformat(value.replace("Z", "+00:00"))
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
     except ValueError:
         return None
-    return value
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _run_timestamp(value: object) -> str | None:
+    """Normalize an Archon timestamp, rejecting malformed values."""
+    if _parse_run_datetime(value) is None:
+        return None
+    return value.strip() if isinstance(value, str) else None
+
+
+def dispatch_run_is_stale(rec: dict, run: dict) -> bool:
+    """Return whether ``run`` predates the current dispatch episode."""
+    run_id = run.get("id") if isinstance(run, dict) else None
+    baseline = rec.get("dispatch_baseline_run_id")
+    if baseline and run_id == baseline:
+        return True
+    if baseline:
+        return False
+    dispatched_at = _parse_run_datetime(rec.get("dispatch_started_at"))
+    if dispatched_at is None:
+        # Records created before the generation marker retain their historical
+        # behavior; all newly-created dispatches persist the marker below.
+        return False
+    started_at = _parse_run_datetime(run.get("started_at"))
+    return started_at is None or started_at < dispatched_at
 
 
 def fetch_workflow_runs(env: dict) -> WorkflowRuns:
@@ -2654,8 +2720,10 @@ def fetch_workflow_runs(env: dict) -> WorkflowRuns:
         return WorkflowRuns(error="run_list_incomplete")
 
     usable = []
+    malformed_record = False
     for run in runs:
         if not isinstance(run, dict):
+            malformed_record = True
             continue
         normalized = dict(run)
         run_id = normalized.get("id")
@@ -2664,6 +2732,7 @@ def fetch_workflow_runs(env: dict) -> WorkflowRuns:
         else:
             normalized["id"] = run_id.strip()
         if not isinstance(normalized.get("user_message"), str):
+            malformed_record = True
             normalized["user_message"] = None
         for field in ("started_at", "completed_at"):
             normalized[field] = _run_timestamp(normalized.get(field))
@@ -2671,36 +2740,54 @@ def fetch_workflow_runs(env: dict) -> WorkflowRuns:
                 and not isinstance(normalized.get("working_path"), str)):
             normalized["working_path"] = None
         usable.append(normalized)
-    return WorkflowRuns(usable)
+    return WorkflowRuns(
+        usable,
+        error="archon_runs_malformed" if malformed_record else None,
+    )
 
 
 def runs_by_message_from(runs: list[dict]) -> WorkflowRunStatusMap:
     """Map exact run user_message -> status of the newest run with it."""
     best: dict[str, tuple[str, str, str]] = {}
+    best_keys: dict[str, tuple[datetime, str]] = {}
     invalid_messages: set[str] = set()
+    malformed_record = False
     for run in runs:
         if not isinstance(run, dict):
+            malformed_record = True
             continue
         run_msg = run.get("user_message")
         if not isinstance(run_msg, str) or not run_msg:
+            malformed_record = True
             continue
         started = _run_timestamp(run.get("started_at"))
-        if started is None:
+        started_at = _parse_run_datetime(run.get("started_at"))
+        if started is None or started_at is None:
             invalid_messages.add(run_msg)
             continue
         run_id = run.get("id")
         if not isinstance(run_id, str) or not run_id.strip():
             invalid_messages.add(run_msg)
             continue
-        key = (started, run_id.strip())
         status = run.get("status")
-        status = status if isinstance(status, str) else ""
-        if key >= best.get(run_msg, ("", "", ""))[1:]:
-            best[run_msg] = (status, started, run_id)
+        if (not isinstance(status, str)
+                or status.lower() not in KNOWN_WORKFLOW_STATUSES):
+            invalid_messages.add(run_msg)
+            continue
+        run_id = run_id.strip()
+        key = (started_at, run_id)
+        if key >= best_keys.get(run_msg, (datetime.min.replace(tzinfo=timezone.utc), "")):
+            best[run_msg] = (status.lower(), started, run_id)
+            best_keys[run_msg] = key
+    error = getattr(runs, "error", None)
+    if malformed_record and error is None:
+        error = "archon_runs_malformed"
     return WorkflowRunStatusMap(
         {msg: status for msg, (status, _, _) in best.items()
          if msg not in invalid_messages},
-        error=getattr(runs, "error", None),
+        error=error,
+        invalid_messages=invalid_messages,
+        run_keys={msg: best_keys[msg] for msg in best if msg not in invalid_messages},
     )
 
 
