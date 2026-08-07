@@ -98,6 +98,11 @@ ISOLATION_LIST = (
 )
 
 class DispatchCapacityTest(unittest.TestCase):
+    def tearDown(self) -> None:
+        # The budget is a module global reset per poll; never leak a
+        # reserved/exhausted value into later tests.
+        board_poller._DISPATCH_BUDGET = None
+
     def test_active_workflow_count_ignores_terminal_runs(self):
         result = subprocess.CompletedProcess(
             ["archon"], 0,
@@ -804,6 +809,28 @@ class PickWorkflowTest(unittest.TestCase):
                          "archon-fix-github-issue")
 
 
+class FetchRunsByMessageTest(unittest.TestCase):
+    def test_lookup_failure_is_distinct_from_empty_success(self):
+        failed = subprocess.CompletedProcess(
+            ["archon"], 1, "", "archon unavailable"
+        )
+        with patch.object(bp.subprocess, "run", return_value=failed):
+            self.assertEqual(bp.fetch_runs_by_message({}), ({}, False))
+
+        empty = subprocess.CompletedProcess(
+            ["archon"], 0, json.dumps({"runs": []}), ""
+        )
+        with patch.object(bp.subprocess, "run", return_value=empty):
+            self.assertEqual(bp.fetch_runs_by_message({}), ({}, True))
+
+    def test_malformed_run_listing_fails_closed(self):
+        malformed = subprocess.CompletedProcess(
+            ["archon"], 0, json.dumps({"runs": {}}), ""
+        )
+        with patch.object(bp.subprocess, "run", return_value=malformed):
+            self.assertEqual(bp.fetch_runs_by_message({}), ({}, False))
+
+
 class RunStatusForTest(unittest.TestCase):
     def test_exact_match(self):
         self.assertEqual(run_status_for({"m1": "completed"}, "m1"), "completed")
@@ -870,6 +897,50 @@ class MergePrToBaseTest(unittest.TestCase):
                                         "develop", 5)
         self.assertTrue(ok)
         self.assertFalse(any(a[0:2] == ["issue", "reopen"] for a in calls))
+
+    def test_issue_state_lookup_failure_blocks_success(self):
+        calls, fake_gh = self._reopen_flow("OPEN")
+        original = fake_gh
+
+        def fail_issue_view(args, env, timeout=90):
+            if args[0:2] == ["issue", "view"]:
+                return _cp(returncode=1, stderr="rate limited")
+            return original(args, env, timeout)
+
+        with patch("automation.board_poller.gh", side_effect=fail_issue_view), \
+                patch("automation.board_poller.time.sleep"):
+            ok, note = merge_pr_to_base({"repo": "o/r"}, {},
+                                        {"number": 7, "state": "OPEN"},
+                                        "develop", 5)
+        self.assertFalse(ok)
+        self.assertIn("state is unreadable", note)
+
+    def test_issue_reopen_failure_blocks_success(self):
+        calls, fake_gh = self._reopen_flow("CLOSED")
+        original = fake_gh
+
+        def fail_reopen(args, env, timeout=90):
+            if args[0:2] == ["issue", "reopen"]:
+                return _cp(returncode=1, stderr="permission denied")
+            return original(args, env, timeout)
+
+        with patch("automation.board_poller.gh", side_effect=fail_reopen), \
+                patch("automation.board_poller.time.sleep"):
+            ok, note = merge_pr_to_base({"repo": "o/r"}, {},
+                                        {"number": 7, "state": "OPEN"},
+                                        "develop", 5)
+        self.assertFalse(ok)
+        self.assertIn("reopen failed", note)
+
+    def test_invalid_issue_state_blocks_success(self):
+        calls, fake_gh = self._reopen_flow("UNKNOWN")
+        with patch("automation.board_poller.gh", side_effect=fake_gh), \
+                patch("automation.board_poller.time.sleep"):
+            ok, note = merge_pr_to_base({"repo": "o/r"}, {},
+                                        {"number": 7, "state": "OPEN"},
+                                        "develop", 5)
+        self.assertFalse(ok)
+        self.assertIn("unknown state", note)
 
     def test_merge_without_issue_number_skips_reopen_check(self):
         calls, fake_gh = self._reopen_flow("CLOSED")
@@ -1334,6 +1405,20 @@ class ResumeIssueTests(unittest.TestCase):
     """HIGH: defer when the branch can't be resolved; verify the spawn;
     only remove the needs-input label after verified spawn + successful edit."""
 
+    def test_dry_run_does_not_resume_or_mutate(self) -> None:
+        with patch.object(bp, "DRY_RUN", True), \
+                patch.object(bp, "resolve_worktree_branch") as resolve, \
+                patch.object(bp, "gh") as gh, \
+                patch.object(bp.subprocess, "Popen") as popen:
+            ok, msg, full = bp.resume_issue(
+                _cfg(), {}, "issue-21", "archon-fix-github-issue", 21
+            )
+        self.assertTrue(ok)
+        self.assertEqual((msg, full), ("dry-run", "issue-21"))
+        resolve.assert_not_called()
+        gh.assert_not_called()
+        popen.assert_not_called()
+
     def test_deferred_when_worktree_branch_not_found(self) -> None:
         with patch.object(bp, "resolve_worktree_branch", return_value=None), \
              patch.object(bp, "gh") as gh, \
@@ -1467,6 +1552,18 @@ class FindIssuePrTest(unittest.TestCase):
         self.assertIsNone(pr)
         self.assertTrue(ok)           # genuinely absent is distinguishable
 
+    def test_review_preparation_defers_when_develop_pr_is_absent(self):
+        rec = {}
+        with patch.object(bp, "find_issue_pr", return_value=(None, True)), \
+                patch.object(bp, "find_or_create_ship_pr") as ship, \
+                patch.object(bp, "dispatch") as dispatch:
+            result = bp.ensure_ship_review(
+                _cfg(), {}, "item-21", 21, "Feature", "project", "field",
+                {"Done": "done"}, "Done", rec)
+        self.assertIsNone(result)
+        ship.assert_not_called()
+        dispatch.assert_not_called()
+
     def test_base_filter_propagates(self):
         prs = json.dumps([
             {"number": 47, "baseRefName": "develop", "body": "Issue: #21",
@@ -1516,7 +1613,7 @@ class FindOrCreateShipPrTest(unittest.TestCase):
             pr = bp.find_or_create_ship_pr(
                 self._cfg(), {}, "head", "T", 5, "main")
         self.assertIsNone(pr)
-        self.assertTrue(any("pr create failed" in c[0][0]
+        self.assertTrue(any("SHIP PR CREATE FAILED" in c[0][0]
                             for c in log.call_args_list))
 
     def test_unparseable_stdout_logged_and_returns_none(self):
@@ -1607,14 +1704,14 @@ class PollFlowTest(unittest.TestCase):
              patch("automation.board_poller.log") as log, \
              patch("automation.board_poller.save_state"):
             bp.poll(self._cfg(), {}, state)
-        # The inline review-lane pass and the recheck pass each attempt the
-        # ship flow once per poll; both must defer on the gh failure.
-        self.assertEqual(find_pr.call_count, 2)
+        # The main pass records the attempt; the recheck pass must not
+        # double-attempt after a transient gh failure.
+        self.assertEqual(find_pr.call_count, 1)
         ship.assert_not_called()
         dispatch.assert_not_called()
         merge.assert_not_called()
-        # status recorded from the board lane; the recheck pass retries next poll
-        self.assertEqual(state["item-5"]["status"], "In Review")
+        # Leave the prior marker untouched so the next poll retries.
+        self.assertEqual(state["item-5"]["status"], "Ready for Review")
         self.assertTrue(any("REVIEW PREP DEFERRED" in c[0][0]
                             for c in log.call_args_list))
 
@@ -1634,6 +1731,7 @@ class PollFlowTest(unittest.TestCase):
         ship.assert_not_called()
         self.assertTrue(any("DEVELOP MERGE FAILED" in c.args[0]
                             for c in log.call_args_list))
+
 
     def test_needs_input_label_moves_completed_run_to_needs_input(self):
         state = {"_meta": {"snapshot_done": True},
@@ -1718,7 +1816,9 @@ class PollFlowTest(unittest.TestCase):
             bp.poll(self._cfg(), {}, state)
         popen.assert_not_called()
         move.assert_not_called()
-        self.assertEqual(state["item-5"]["status"], "Todo")
+        # The prior state marker stays unchanged so the next poll sees Todo
+        # as a fresh transition and retries dispatch.
+        self.assertEqual(state["item-5"]["status"], "Backlog")
 
     def test_poll_runs_develop_conflict_episode_once(self):
         state = {"_meta": {"snapshot_done": True},

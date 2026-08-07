@@ -41,7 +41,7 @@ Project goal: build, review, and send a daily news report from configured source
 - Branch model: `develop` = integration (repo default; workflow base); `main` = production (only via reviewed ship PRs); per-issue branches `archon/task-issue-<N>`.
 - GitHub access convention: gh CLI + the automation scripts (no MCP server).
 - Dev loop (check out develop + run UI): the `news-dev` skill; reply with only the URL.
-- Archon execution: archon-pi build, home at `~/.local/share/archon-pi/archon-home/`; routine nodes use Pi/OpenCode Zen Go and rigorous nodes use Pi's OpenAI Codex OAuth backend, both at max effort. The current 17-workflow inventory and routing split are in `docs/archon-workflows.md`.
+- Archon execution: archon-pi build, home at `~/.local/share/archon-pi/archon-home/`; routine nodes run `pi`/`opencode-go/deepseek-v4-flash` at max effort, while rigorous planning, review, conflict-resolution, and completion nodes use Pi's OpenAI Codex OAuth backend (`provider: pi`, `model: openai-codex/gpt-5.6-luna`, `effort: max`). See the curated runtime matrix in `docs/archon-workflows.md`.
 
 ## Project board protocol
 - The GitHub project board (project #1, “Build public UI”, on `bradley-mankoff`) is the work queue. Lanes: `Backlog` -> `Todo` -> `In Progress` -> `Blocked` -> `Needs Input` -> `Ready for Review` -> `In Review` -> `Done`.

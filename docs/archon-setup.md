@@ -11,7 +11,7 @@ Archon workflow engine + stock Pi provider, no custom extensions.
 | Archon home (`ARCHON_HOME`) | `~/.local/share/archon-pi/archon-home` |
 | `archon` command | `~/.local/bin/archon` — a wrapper script that exports `ARCHON_HOME` + pi defaults and execs `archon-pi/bin/archon` (stock v0.7.0 binary) |
 | `archon-pi` command | shim with the same env + `doctor`/`ui` helpers |
-| Config | `archon-home/config.yaml`: `defaultAssistant: pi`, routine tiers use `opencode-go/deepseek-v4-flash` at effort max; rigorous workflow nodes override with `provider: pi`, `openai-codex/gpt-5.6-luna`, and `effort: max` |
+| Config | `archon-home/config.yaml`: `defaultAssistant: pi`, `assistants.pi.model: opencode-go/deepseek-v4-flash`, tiers small/medium/large → pi + opencode-go + effort max; rigorous workflow nodes override with `provider: pi`, `model: openai-codex/gpt-5.6-luna`, and `effort: max` |
 | Curated workflows | `archon-home/workflows/` (17 pi-usable workflows, overrides bundled by name) |
 | Archived workflows | `archon-home/workflows-archived/` (7 claude-only, not discovered) |
 | Database | `archon-home/archon.db` (SQLite) |

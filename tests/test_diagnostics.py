@@ -341,6 +341,25 @@ class DiagnosticsTests(unittest.TestCase):
         details_markdown = diagnostics.to_markdown()
         self.assertIn("- Delivery: failed", details_markdown)
 
+    def test_delivery_diagnostics_redact_and_bound_untrusted_text(self) -> None:
+        diagnostics = RunDiagnostics(
+            run_started_at="2026-06-01T10:00:00",
+            settings={},
+        )
+        diagnostics.record_delivery(
+            "failed",
+            reason="token=super-secret",
+            error_type="SMTP.Exception!",
+            error_message="password=super-secret\nTraceback details should not persist",
+        )
+
+        delivery = diagnostics.to_dict()["delivery"]
+        self.assertEqual(delivery["status"], "failed")
+        self.assertNotIn("super-secret", str(delivery))
+        self.assertNotIn("Traceback details", delivery["error_message"])
+        self.assertEqual(delivery["error_type"], "SMTP.Exception")
+
+
     def test_empty_delivery_remains_backward_compatible(self) -> None:
         diagnostics = RunDiagnostics(
             run_started_at="2026-06-01T10:00:00",

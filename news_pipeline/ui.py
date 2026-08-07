@@ -91,8 +91,25 @@ def _config_path_from_env(name: str, default: str) -> Path:
     return path if path.is_absolute() else ROOT_DIR / path
 
 
+_SECRET_ENV_PARTS = ("PASSWORD", "SECRET", "API_KEY", "TOKEN", "PRIVATE_KEY")
+
+
 def _mask_secret(value: str | None) -> str:
     return "********" if value else ""
+
+
+def _is_secret_env(name: str) -> bool:
+    """Return whether an environment variable name likely contains a secret."""
+    upper = name.upper()
+    return any(part in upper for part in _SECRET_ENV_PARTS)
+
+
+def _public_env(env: dict[str, str]) -> dict[str, str]:
+    """Return an environment snapshot safe to expose through the UI/API."""
+    return {
+        key: _mask_secret(value) if _is_secret_env(key) else value
+        for key, value in env.items()
+    }
 
 
 def _now_iso_local() -> str:
@@ -832,12 +849,16 @@ def preview_payload(body: dict[str, Any]) -> dict[str, Any]:
         preset_id=preset_id,
     )
     rendered = " ".join(shlex.quote(part) for part in command)
-    if env:
-        rendered = " ".join(f"{key}={shlex.quote(value)}" for key, value in sorted(env.items())) + " " + rendered
+    public_env = _public_env(env)
+    if public_env:
+        rendered = " ".join(
+            f"{key}={shlex.quote(value)}"
+            for key, value in sorted(public_env.items())
+        ) + " " + rendered
     return {
         "command": command,
         "command_text": rendered,
-        "env": env,
+        "env": public_env,
         "runtime": runtime,
         "runtime_error": runtime_error,
         "removed_topic_env_vars": sorted(
@@ -867,7 +888,7 @@ class RunRecord:
             return {
                 "run_id": self.run_id,
                 "command": self.command,
-                "env": {key: _mask_secret(value) if "PASSWORD" in key or "SECRET" in key else value for key, value in self.env.items()},
+                "env": _public_env(self.env),
                 "started_at": self.started_at,
                 "status": self.status,
                 "returncode": self.returncode,
