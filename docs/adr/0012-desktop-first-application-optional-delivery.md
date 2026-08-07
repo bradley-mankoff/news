@@ -108,21 +108,21 @@ never look like configured personal delivery. Placeholder/default values mean
 | `NEWS_EMAIL_FROM` | Delivery Profile transport sender (may equal owner) |
 | `NEWS_SMTP_HOST`/`NEWS_SMTP_PORT`/`NEWS_SMTP_USERNAME`/`NEWS_SMTP_USE_SSL`/`NEWS_SMTP_PASSWORD` | Delivery Profile transport configuration |
 | `NEWS_UNSUBSCRIBE_BASE_URL`/`NEWS_UNSUBSCRIBE_HOST`/`NEWS_UNSUBSCRIBE_PORT`/`NEWS_UNSUBSCRIBE_SECRET` | Delivery Profile transport unsubscribe configuration |
-| `maybe_email_report` implicit skip (pipeline.py:2998–3011) | Explicit Delivery Profile evaluation with recorded delivery status (Slice B) |
+| `maybe_email_report` implicit skip (pipeline.py:2998–3011) | Explicit Delivery Profile evaluation with recorded delivery status (implemented in PR #176) |
 
-### Follow-up slices
+### Delivery slices
 
 - **Slice A — Desktop-first local report review**: the Daily News Application
   renders the report for desktop review (HTML preview plus `latest_run.md`
   review); runs succeed with zero delivery configuration; report layout is
   authored desktop-first with email as a derived, constrained rendering.
-- **Slice B — Owner-first delivery**: Delivery Profile data model; delivery
-  status recorded per delivery attempt (`skipped: not_configured` /
-  `skipped: user_disabled` / `sent` / `failed`, per the Outcome separation
-  section) separately from run status; owner-only default; explicit opt-ins;
-  placeholder detection.
-- **Slice C — Daily automation**: scheduled Run Sessions with an optional
-  Delivery Profile; owner-only default; explicit opt-ins.
+- **Slice B — Owner-first delivery**: implemented in PR #176. The Delivery
+  Profile data model records delivery status per attempt
+  (`skipped: not_configured` / `skipped: user_disabled` / `sent` / `failed`,
+  per the Outcome separation section) separately from run status; owner-only
+  default, explicit opt-ins, and placeholder detection are shipped.
+- **Slice C — Daily automation**: future work; scheduled Run Sessions with an
+  optional Delivery Profile; owner-only default; explicit opt-ins.
 
 ## Consequences
 

@@ -275,6 +275,10 @@ class DeliveryProfile:
     owner_recipient: str
     additional_recipients: tuple[DeliveryRecipient, ...] = ()
     legacy_fallback_recipients: tuple[str, ...] = ()
+    # True only when NEWS_EMAIL_RECIPIENTS was explicitly supplied with a
+    # non-empty value; the default owner is not an implicit recipients-mode
+    # opt-in.
+    legacy_fallback_explicit: bool = False
     sender: str = ""
     smtp_host: str = ""
     smtp_port: int = 465
@@ -2170,9 +2174,11 @@ def _build_runtime_config(
         _str_env("NEWS_SMTP_PASSWORD", "").replace(" ", "")
         or _load_password_from_env_json(env_json_path)
     )
+    legacy_fallback_value = _str_env("NEWS_EMAIL_RECIPIENTS", "").strip()
+    legacy_fallback_explicit = bool(legacy_fallback_value)
     fallback_recipients = [
         addr.strip()
-        for addr in _str_env("NEWS_EMAIL_RECIPIENTS", primary_recipient).split(",")
+        for addr in (legacy_fallback_value or primary_recipient).split(",")
         if addr.strip()
     ]
     # Delivery Profile snapshot: mode resolution follows ADR 0012 precedence
@@ -2195,6 +2201,7 @@ def _build_runtime_config(
         owner_recipient=primary_recipient,
         additional_recipients=additional_recipients,
         legacy_fallback_recipients=tuple(fallback_recipients),
+        legacy_fallback_explicit=legacy_fallback_explicit,
         sender=email_from,
         smtp_host=_str_env("NEWS_SMTP_HOST", "smtp.gmail.com"),
         smtp_port=_int_env("NEWS_SMTP_PORT", 465),

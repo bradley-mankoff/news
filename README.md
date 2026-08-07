@@ -336,11 +336,13 @@ Key Run Settings:
   peripheral sources.
 - `NEWS_DELIVERY_MODE=disabled|owner|recipients`: optional email delivery
   policy. `owner` (the default) sends only to `NEWS_PRIMARY_RECIPIENT`;
-  `recipients` is an explicit opt-in that sends to the active entries in
-  `config/recipients.yaml` (or the legacy `NEWS_EMAIL_RECIPIENTS` fallback),
-  with the owner included only when listed; `disabled` sends nothing and
-  records `skipped: user_disabled`. Legacy `NEWS_RECIPIENT_SCOPE=primary|all`
-  still maps to `owner|recipients` when the new mode is unset.
+  `recipients` is an explicit opt-in that sends to active entries in
+  `config/recipients.yaml` (with the owner included only when listed). An
+  explicitly configured `NEWS_EMAIL_RECIPIENTS` fallback is used only when
+  the catalog is empty; a non-empty catalog with every entry paused records
+  `skipped: user_disabled`. `disabled` sends nothing and records
+  `skipped: user_disabled`. Legacy `NEWS_RECIPIENT_SCOPE=primary|all` still
+  maps to `owner|recipients` when the new mode is unset.
 - `NEWS_BLOCK_REUSED_URLS=0|1`: every run records URL history; only `1` makes
   previously recorded URLs block future reuse.
 - `NEWS_IMAGE_ENABLED=0|1`: report image generation, default off unless a
@@ -553,10 +555,12 @@ hard-coded defaults rather than normal Run Settings.
 - `config/sources.yaml`: single source list. Normal runs select active English
   sources using `NEWS_SOURCE_SCOPE`.
 - `config/recipients.yaml`: public template for the additional-recipient
-  catalog. `NEWS_DELIVERY_MODE=recipients` selects the active entries; the
-  owner is configured with `NEWS_PRIMARY_RECIPIENT` and is included only when
-  listed. Real addresses belong in a local file referenced by
-  `NEWS_RECIPIENTS_YAML`, never in tracked config.
+  catalog. `NEWS_DELIVERY_MODE=recipients` selects active entries; the owner
+  is configured with `NEWS_PRIMARY_RECIPIENT` and is included only when
+  listed. An explicitly configured legacy `NEWS_EMAIL_RECIPIENTS` list is
+  used only when the catalog is empty; an all-paused catalog remains
+  `skipped: user_disabled`. Real addresses belong in a local file referenced
+  by `NEWS_RECIPIENTS_YAML`, never in tracked config.
 - `config/model_tuning_presets.yaml`: saved Model Tuning Presets keyed by id.
 
 Normal collection accepts active English sources. Removed topic-scoped runtime

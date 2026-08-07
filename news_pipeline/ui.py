@@ -101,6 +101,19 @@ def _mask_secret(value: str | None) -> str:
     return "********" if value else ""
 
 
+def _is_secret_env_key(key: str) -> bool:
+    upper_key = key.upper()
+    return any(token in upper_key for token in ("PASSWORD", "SECRET", "API_KEY", "TOKEN"))
+
+
+def _display_env(env: dict[str, str]) -> dict[str, str]:
+    """Return an environment projection safe for API responses and previews."""
+    return {
+        key: _mask_secret(value) if _is_secret_env_key(key) else value
+        for key, value in env.items()
+    }
+
+
 def _now_iso_local() -> str:
     return datetime.now().astimezone().isoformat(timespec="seconds")
 
@@ -832,13 +845,16 @@ def preview_payload(body: dict[str, Any]) -> dict[str, Any]:
         _normalize_env_overrides(body.get("env")),
         preset_id=preset_id,
     )
+    display_env = _display_env(env)
     rendered = " ".join(shlex.quote(part) for part in command)
-    if env:
-        rendered = " ".join(f"{key}={shlex.quote(value)}" for key, value in sorted(env.items())) + " " + rendered
+    if display_env:
+        rendered = " ".join(
+            f"{key}={shlex.quote(value)}" for key, value in sorted(display_env.items())
+        ) + " " + rendered
     return {
         "command": command,
         "command_text": rendered,
-        "env": env,
+        "env": display_env,
         "runtime": runtime,
         "runtime_error": runtime_error,
         "removed_topic_env_vars": sorted(
@@ -868,7 +884,7 @@ class RunRecord:
             return {
                 "run_id": self.run_id,
                 "command": self.command,
-                "env": {key: _mask_secret(value) if "PASSWORD" in key or "SECRET" in key else value for key, value in self.env.items()},
+                "env": _display_env(self.env),
                 "started_at": self.started_at,
                 "status": self.status,
                 "returncode": self.returncode,

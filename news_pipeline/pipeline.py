@@ -1717,12 +1717,16 @@ def _base64url_decode(encoded_value: str) -> bytes:
     return base64.urlsafe_b64decode((encoded_value + padding).encode("ascii"))
 
 
-def _unsubscribe_signing_secret() -> bytes:
-    secret = UNSUBSCRIBE_SECRET or SMTP_PASSWORD or EMAIL_FROM
+def _unsubscribe_signing_secret(signing_secret: str | None = None) -> bytes:
+    secret = signing_secret if signing_secret is not None else (UNSUBSCRIBE_SECRET or SMTP_PASSWORD or EMAIL_FROM)
     return secret.encode("utf-8")
 
 
-def build_unsubscribe_token(recipient_email: str) -> str:
+def build_unsubscribe_token(
+    recipient_email: str,
+    *,
+    signing_secret: str | None = None,
+) -> str:
     payload = json.dumps(
         {"email": recipient_email.strip().lower()},
         separators=(",", ":"),
@@ -1730,7 +1734,7 @@ def build_unsubscribe_token(recipient_email: str) -> str:
     ).encode("utf-8")
     payload_part = _base64url_encode(payload)
     signature = hmac.new(
-        _unsubscribe_signing_secret(),
+        _unsubscribe_signing_secret(signing_secret),
         payload_part.encode("ascii"),
         hashlib.sha256,
     ).digest()
@@ -1759,10 +1763,16 @@ def parse_unsubscribe_token(token: str) -> str:
     return email
 
 
-def build_unsubscribe_url(recipient_email: str) -> str:
-    token = build_unsubscribe_token(recipient_email)
-    separator = "&" if "?" in UNSUBSCRIBE_BASE_URL else "?"
-    return f"{UNSUBSCRIBE_BASE_URL}{separator}{urlencode({'token': token})}"
+def build_unsubscribe_url(
+    recipient_email: str,
+    *,
+    base_url: str | None = None,
+    signing_secret: str | None = None,
+) -> str:
+    token = build_unsubscribe_token(recipient_email, signing_secret=signing_secret)
+    effective_base_url = base_url if base_url is not None else UNSUBSCRIBE_BASE_URL
+    separator = "&" if "?" in effective_base_url else "?"
+    return f"{effective_base_url}{separator}{urlencode({'token': token})}"
 
 
 def update_client_pause_setting(target_email: str, pause: bool = True) -> int:
@@ -1878,8 +1888,9 @@ def _select_delivery_targets(
     disabled/all-paused policy, ``skipped: not_configured`` for missing or
     placeholder targets) and ``reason`` is the actionable preflight detail.
     ``owner`` mode selects only the owner; ``recipients`` mode selects active
-    additional-recipient catalog entries (owner included only when listed) or
-    the legacy fallback list; targets are deduplicated case-insensitively.
+    additional-recipient catalog entries (owner included only when listed).
+    An explicitly configured legacy fallback is used only when the catalog is
+    empty; targets are deduplicated case-insensitively.
     """
     mode = profile.mode
     if mode == DELIVERY_MODE_DISABLED:
@@ -1904,14 +1915,14 @@ def _select_delivery_targets(
     ]
     if active:
         return _dedupe_delivery_recipients(active), "", ""
-    if profile.legacy_fallback_recipients:
+    if profile.additional_recipients:
+        return [], "skipped: user_disabled", "all configured recipients are paused"
+    if profile.legacy_fallback_explicit and profile.legacy_fallback_recipients:
         fallback = [
             DeliveryRecipient(email=email, name=email, pause=False)
             for email in profile.legacy_fallback_recipients
         ]
         return _dedupe_delivery_recipients(fallback), "", ""
-    if profile.additional_recipients:
-        return [], "skipped: user_disabled", "all configured recipients are paused"
     return [], "skipped: not_configured", "missing configuration: recipient list"
 
 
@@ -1944,20 +1955,23 @@ def _redact_delivery_error(
 ) -> str:
     """Redact credential values and bound the persisted/logged error text.
 
-    Replaces the profile password, unsubscribe secret, and the module-level
-    transport credentials wherever they appear in an exception message, then
-    truncates the result. Never returns a traceback or raw credential value;
-    short tokens (fewer than 4 characters) are left alone to avoid mangling
-    ordinary words in SMTP error text.
+    Replaces every non-empty profile or module-level transport credential
+    wherever it appears in an exception message, then truncates the result.
+    Never returns a traceback or raw credential value; configured values remain
+    protected even when they are short.
     """
     message = str(error_message or "")
     secrets: list[str] = []
     if profile is not None:
         secrets.extend([profile.smtp_password, profile.unsubscribe_secret])
     secrets.extend([SMTP_PASSWORD, UNSUBSCRIBE_SECRET])
-    for secret in secrets:
-        if secret and len(secret) >= 4:
-            message = message.replace(secret, "***")
+    secret_values = sorted(
+        {str(secret) for secret in secrets if str(secret)},
+        key=len,
+        reverse=True,
+    )
+    for secret in secret_values:
+        message = message.replace(secret, "***")
     if len(message) > 500:
         message = message[:500].rsplit(" ", 1)[0] + "..."
     return message
@@ -3214,7 +3228,19 @@ def maybe_email_report(
 
     def build_message(recipient_email: str, recipient_name: str) -> EmailMessage:
         first_name = _extract_first_name(recipient_name or recipient_email)
-        unsubscribe_url = build_unsubscribe_url(recipient_email)
+        if delivery_profile is not None:
+            signing_secret = (
+                delivery_profile.unsubscribe_secret
+                or delivery_profile.smtp_password
+                or delivery_profile.sender
+            )
+            unsubscribe_url = build_unsubscribe_url(
+                recipient_email,
+                base_url=delivery_profile.unsubscribe_base_url,
+                signing_secret=signing_secret,
+            )
+        else:
+            unsubscribe_url = build_unsubscribe_url(recipient_email)
         message = EmailMessage()
         message["Subject"] = build_email_subject()
         message["From"] = email_from

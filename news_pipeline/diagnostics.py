@@ -105,16 +105,13 @@ class RunDiagnostics:
         accepted_recipients: list[str] | None = None,
         rejected_recipients: list[str] | None = None,
     ) -> None:
-        """Record the optional delivery outcome independently from run status.
+        """Record a normalized delivery outcome independently from run status.
 
-        ``status`` is one of ``sent``, ``skipped: not_configured``,
-        ``skipped: user_disabled``, or ``failed``. ``recipients`` is the
-        selected target list (compatibility contract); ``accepted_recipients``
-        and ``rejected_recipients`` are the actual transport outcomes, with
-        rejected entries address-only (SMTP refusal payloads are folded into
-        the redacted ``reason``/``error_message``, never stored raw). The
-        mapping never carries SMTP passwords, secrets, or full delivery
-        tracebacks, and recording a delivery outcome never adds a run event:
+        Callers must pass redacted, address-only delivery metadata. This method
+        normalizes supplied values but does not sanitize arbitrary exception or
+        SMTP payload text. ``status`` is one of ``sent``,
+        ``skipped: not_configured``, ``skipped: user_disabled``, or ``failed``.
+        Recording a delivery outcome never adds a run event:
         ``run_status_from_events`` keeps describing report/run generation only.
         """
         self.delivery = {

@@ -2361,12 +2361,13 @@ class PipelineHelperTests(unittest.TestCase):
         self.assertEqual(status, "skipped: user_disabled")
         self.assertEqual(reason, "all configured recipients are paused")
 
-        # Empty catalog falls back to the legacy recipient list; an empty
-        # catalog without a fallback is not_configured.
+        # Empty catalog falls back only to an explicitly configured legacy
+        # recipient list; an empty catalog without one is not_configured.
         profile = DeliveryProfile(
             mode=DELIVERY_MODE_RECIPIENTS,
             owner_recipient="owner@example.com",
             legacy_fallback_recipients=("legacy@example.com",),
+            legacy_fallback_explicit=True,
             sender="owner@example.com",
             smtp_host="smtp.example.com",
             smtp_password="s3cret",
@@ -2382,6 +2383,25 @@ class PipelineHelperTests(unittest.TestCase):
             smtp_password="s3cret",
         )
         targets, status, reason = pipeline._resolve_delivery_plan(profile)
+        self.assertEqual(status, "skipped: not_configured")
+        self.assertEqual(reason, "missing configuration: recipient list")
+
+    def test_delivery_plan_implicit_owner_compat_tuple_is_not_a_fallback(self) -> None:
+        # Regression: when NEWS_EMAIL_RECIPIENTS is absent, the runtime
+        # snapshot keeps a compatibility fallback tuple containing the owner
+        # (``legacy_fallback_explicit=False``). That implicit owner must never
+        # become a recipients-mode opt-in: an empty catalog with only the
+        # default compat tuple is not_configured, exactly like no fallback.
+        profile = DeliveryProfile(
+            mode=DELIVERY_MODE_RECIPIENTS,
+            owner_recipient="owner@example.com",
+            legacy_fallback_recipients=("owner@example.com",),
+            sender="owner@example.com",
+            smtp_host="smtp.example.com",
+            smtp_password="s3cret",
+        )
+        targets, status, reason = pipeline._resolve_delivery_plan(profile)
+        self.assertEqual(targets, [])
         self.assertEqual(status, "skipped: not_configured")
         self.assertEqual(reason, "missing configuration: recipient list")
 
