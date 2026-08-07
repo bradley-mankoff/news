@@ -1720,6 +1720,26 @@ class PollFlowTest(unittest.TestCase):
         self.assertTrue(any("REVIEW PREP DEFERRED" in c[0][0]
                             for c in log.call_args_list))
 
+    def test_review_failure_retries_and_dispatches_on_next_poll(self):
+        state = {"_meta": {"snapshot_done": True},
+                 "item-5": {"status": "Ready for Review"}}
+        items = [self._item(5, "In Review")]
+        with patch("automation.board_poller.fetch_project",
+                   return_value=self._project(items)), \
+             patch("automation.board_poller.prepare_dispatch_budget"), \
+             patch("automation.board_poller.sync_runnable_labels"), \
+             patch("automation.board_poller.ensure_ship_review",
+                   side_effect=[None, ("ok", "review msg", 51)]), \
+             patch("automation.board_poller.save_state"):
+            bp.poll(self._cfg(), {}, state)
+            self.assertEqual(state["item-5"]["status"], "Ready for Review")
+
+            bp.poll(self._cfg(), {}, state)
+
+        self.assertEqual(state["item-5"]["status"], "In Review")
+        self.assertEqual(state["item-5"]["review_msg"], "review msg")
+        self.assertEqual(state["item-5"]["ship_pr"], 51)
+
     def test_review_ship_gate_holds_after_develop_merge_failure(self):
         pr = {"number": 47, "state": "OPEN", "headRefName": "feature-5"}
         with patch("automation.board_poller.find_issue_pr",
