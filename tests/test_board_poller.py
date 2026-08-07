@@ -129,6 +129,25 @@ class WorkflowRecoveryTest(unittest.TestCase):
         self.assertEqual(
             classify_workflow_failure("failed", "request timed out"), "transient")
 
+    def test_failed_rate_limit_is_transient(self):
+        self.assertEqual(
+            classify_workflow_failure("failed", "rate limit exceeded"), "transient")
+
+    def test_failed_merge_conflict_is_orchestration(self):
+        self.assertEqual(
+            classify_workflow_failure("failed", "merge conflict in PR branch"),
+            "orchestration")
+
+    def test_failed_lint_is_validation(self):
+        self.assertEqual(
+            classify_workflow_failure("failed", "lint errors: 4 warnings"),
+            "validation")
+
+    def test_failed_type_check_is_validation(self):
+        self.assertEqual(
+            classify_workflow_failure("failed", "type-check failed"),
+            "validation")
+
     def test_failed_connection_error_is_transient(self):
         self.assertEqual(
             classify_workflow_failure("failed", "connection reset by peer"),
@@ -302,6 +321,14 @@ class WorkflowRecoveryTest(unittest.TestCase):
         result = subprocess.CompletedProcess(["archon"], 0, "{not json", "")
         with patch("automation.board_poller.subprocess.run", return_value=result):
             self.assertEqual(fetch_workflow_runs({}), [])
+
+    def test_fetch_workflow_runs_rejects_wrong_shape(self):
+        result = subprocess.CompletedProcess(
+            ["archon"], 0, json.dumps({"runs": "not-a-list"}), "")
+        with patch("automation.board_poller.subprocess.run", return_value=result):
+            records = fetch_workflow_runs({})
+        self.assertEqual(records, [])
+        self.assertEqual(records.error, "archon_runs_shape")
 
     def test_fetch_workflow_runs_keeps_dict_records_only(self):
         result = subprocess.CompletedProcess(
@@ -953,6 +980,62 @@ class TerminalRecoveryPollTest(unittest.TestCase):
         self.assertEqual(rec["recovery"]["failure_class"], "transient")
         self.assertEqual(rec["recovery"]["action"], "retrying")
         stack.dispatch.assert_called_once()
+
+    def test_dispatch_budget_failure_keeps_retry_available(self):
+        state = self._state()
+        with self._run_poll(state, [self._run()], False, False) as stack:
+            log = stack.enter_context(patch.object(board_poller, "log"))
+            board_poller.poll(self._cfg(), {}, state)
+            board_poller.poll(self._cfg(), {}, state)
+        rec = state["item-92"]
+        self.assertEqual(rec["recovery"]["action"], "retry_available")
+        self.assertNotIn("retrying", rec)
+        self.assertNotIn("automatic_retry_count", rec)
+        self.assertEqual(rec["dispatch_msg"], "run")
+        self.assertEqual(rec["recovery_logged_run_id"], "run-1")
+        recovery_lines = [c.args[0] for c in log.call_args_list
+                          if "RUN CANCELLED" in c.args[0]]
+        self.assertEqual(len(recovery_lines), 1)
+        self.assertIn("transient -> retry_available", recovery_lines[0])
+
+    def test_missing_recovery_identity_is_manual_review(self):
+        state = self._state()
+        del state["item-92"]["wf"]
+        with self._run_poll(state, [self._run()], False, False) as stack:
+            board_poller.poll(self._cfg(), {}, state)
+        rec = state["item-92"]
+        self.assertEqual(rec["recovery"]["action"], "manual_review")
+        self.assertEqual(rec["dispatch_msg"], "run")
+        stack.dispatch.assert_not_called()
+
+    def test_new_dispatch_clears_recovery_episode_markers(self):
+        state = self._state()
+        state["item-92"].update({
+            "recovery": {"action": "resume_required", "run_id": "run-1"},
+            "retrying": True,
+            "automatic_retry_count": 1,
+            "recovery_logged_run_id": "run-1",
+        })
+        item = self._item()
+        item["status"] = "Todo"
+        with (
+            patch.object(board_poller, "fetch_project",
+                         return_value=("p", "f", {"Ready for Review": "ready"},
+                                       [item])),
+            patch.object(board_poller, "prepare_dispatch_budget"),
+            patch.object(board_poller, "sync_runnable_labels"),
+            patch.object(board_poller, "pick_workflow",
+                         return_value="archon-idea-to-pr"),
+            patch.object(board_poller, "dispatch", return_value=True),
+            patch.object(board_poller, "save_state"),
+        ):
+            board_poller.poll(self._cfg(), {}, state)
+        rec = state["item-92"]
+        self.assertTrue(
+            rec["dispatch_msg"].startswith("Build feature from issue #92"))
+        for marker in ("recovery", "retrying", "automatic_retry_count",
+                       "recovery_logged_run_id"):
+            self.assertNotIn(marker, rec)
 
     def test_non_transient_failure_is_manual_review_without_dispatch(self):
         state = self._state()
