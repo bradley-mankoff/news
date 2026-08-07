@@ -94,6 +94,14 @@ class WorkflowRuns(list[dict]):
         self.error = error
 
 
+class WorkflowRunStatusMap(dict[str, str]):
+    """Compatibility status map that retains the full-run lookup health."""
+
+    def __init__(self, statuses=(), error: str | None = None):
+        super().__init__(statuses)
+        self.error = error
+
+
 QUERY = """
 query($login: String!, $number: Int!, $statusField: String!, $cursor: String) {
   user(login: $login) {
@@ -1968,8 +1976,14 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
             rec["issue_number"] = content["number"]
             rec["wf"] = dispatched_wf
             rec["branch"] = dispatched_branch
-            # A genuinely new dispatch starts a fresh episode: reset active
+            # A genuinely new dispatch starts a fresh episode: retain the
+            # latest observed run as the stale-row baseline, then reset active
             # recovery markers so the new run may retry once and log once.
+            baseline = rec.get("last_observed_run_id")
+            if baseline:
+                rec["dispatch_baseline_run_id"] = baseline
+            else:
+                rec.pop("dispatch_baseline_run_id", None)
             rec.pop("recovery", None)
             rec.pop("retrying", None)
             rec.pop("automatic_retry_count", None)
@@ -2072,23 +2086,9 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
     complete_move_to = cfg["dispatch"]["todo"].get("complete_move_to")
     in_progress_name = next(
         (k for k, v in cfg["lanes"].items() if v == "in_progress"), None)
-    runs_by_msg = None
-    full_runs: list[dict] | None = None
-    runs_lookup_ok = True
-
-    def ensure_runs_loaded() -> bool:
-        nonlocal runs_by_msg, runs_lookup_ok
-        if runs_by_msg is not None or not runs_lookup_ok:
-            return runs_lookup_ok
-        result = fetch_runs_by_message(env)
-        if isinstance(result, tuple):
-            runs_by_msg, runs_lookup_ok = result
-        else:  # Backward-compatible with older test doubles/callers.
-            runs_by_msg, runs_lookup_ok = result, True
-        if not runs_lookup_ok:
-            log("RUN STATUS LOOKUP UNAVAILABLE; retrying next poll")
-        return runs_lookup_ok
-
+    runs_by_msg: WorkflowRunStatusMap | None = None
+    full_runs: WorkflowRuns | None = None
+    run_lookup_error: str | None = None
     if complete_move_to and in_progress_name:
         for item_id, rec in list(state.items()):
             if item_id == "_meta" or item_id in fresh_dispatched:
@@ -2099,9 +2099,9 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
             if runs_by_msg is None:
                 full_runs = fetch_workflow_runs(env)
                 runs_by_msg = runs_by_message_from(full_runs)
-                lookup_error = getattr(full_runs, "error", None)
-                if lookup_error:
-                    log(f"RUN LOOKUP UNAVAILABLE: {lookup_error}; "
+                run_lookup_error = getattr(full_runs, "error", None)
+                if run_lookup_error:
+                    log(f"RUN LOOKUP UNAVAILABLE: {run_lookup_error}; "
                         "retaining dispatch markers")
             # Select one authoritative record for this item.  The same record
             # supplies status, identity, metadata, and worktree details below;
@@ -2110,6 +2110,13 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
             selected_status = selected_run.get("status") if selected_run else None
             run_status = (selected_status.lower()
                           if isinstance(selected_status, str) else None)
+            selected_run_id = (selected_run.get("id", "").strip()
+                               if isinstance(selected_run, dict)
+                               and isinstance(selected_run.get("id"), str)
+                               and selected_run.get("id", "").strip()
+                               else None)
+            if selected_run_id:
+                rec["last_observed_run_id"] = selected_run_id
             if run_status == "completed":
                 issue_number = rec.get("issue_number")
                 needs_input_name = next(
@@ -2255,20 +2262,30 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
                 else:
                     log(f"MOVE FAILED item={item_id} -> {complete_move_to}")
             elif run_status in TERMINAL_WORKFLOW_STATUSES:
-                # Terminal recovery: `cancelled` and transient transport
-                # failures are NOT manual-review outcomes. Read the newest
-                # full run record, inspect the associated worktree, and
-                # persist a bounded recovery decision. The dispatch marker is
-                # retained so repeated polls stay idempotent and the worktree
-                # stays correlated with the run that failed.
+                # Terminal recovery: cancelled/transient runs are recovery
+                # candidates, while dirty/unknown worktrees, missing identity,
+                # and exhausted or in-flight retry gates remain manual review.
+                # Read the newest full run record, inspect the associated
+                # worktree, and persist a bounded recovery decision. The
+                # dispatch marker is retained so repeated polls stay idempotent
+                # and the worktree stays correlated with the failed run.
                 issue_number = rec.get("issue_number")
                 run = selected_run
-                run_id = str(run.get("id") or "") if run else ""
+                run_id = (run.get("id", "").strip() if isinstance(run, dict)
+                          and isinstance(run.get("id"), str)
+                          and run.get("id", "").strip() else "")
                 if not run or not run_id:
                     # Status row raced ahead of the full record (or the run
                     # lookup failed): retain the marker and defer the recovery
                     # decision until a known run ID exists. Never guess clean,
                     # mark handled, or auto-dispatch from a status alone.
+                    continue
+                if (rec.get("dispatch_baseline_run_id") == run_id
+                        and not rec.get("retrying")):
+                    # A newly dispatched episode still points at its previous
+                    # terminal row. Wait for a different authoritative run ID
+                    # instead of consuming the new episode's retry.
+                    state[item_id] = rec
                     continue
                 if (rec.get("retrying")
                         and rec.get("recovery", {}).get("run_id") == run_id):
@@ -2295,13 +2312,8 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
                 if action == "retry_available":
                     # One automatic retry for the first clean transient
                     # terminal attempt, through the existing dispatch budget.
-                    matching = [r for r in (full_runs or [])
-                                if isinstance(r, dict)
-                                and isinstance(r.get("user_message"), str)
-                                and msg in r["user_message"]]
                     retries = int(rec.get("automatic_retry_count") or 0)
-                    if (len(matching) <= 1 and retries < 1
-                            and not rec.get("retrying")):
+                    if retries < 1 and not rec.get("retrying"):
                         wf = rec.get("wf")
                         branch = rec.get("branch") or f"issue-{issue_number}"
                         if wf and issue_number and dispatch(
@@ -2378,9 +2390,15 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
             rmsg = rec.get("review_msg")
             if not rmsg or rec.get("status") != review_lane_name:
                 continue
-            if not ensure_runs_loaded():
+            if runs_by_msg is None:
+                runs_by_msg = fetch_runs_by_message(env)
+                run_lookup_error = getattr(runs_by_msg, "error", None)
+                if run_lookup_error:
+                    log(f"RUN LOOKUP UNAVAILABLE: {run_lookup_error}; "
+                        "retaining run markers")
+            if run_lookup_error:
                 continue
-            rstatus = run_status_for(runs_by_msg or {}, rmsg)
+            rstatus = run_status_for(runs_by_msg, rmsg)
             if rstatus == "completed":
                 ship_num = rec.get("ship_pr")
                 ship = None
@@ -2464,21 +2482,26 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
             ship_num = ship.get("number")
             mergeable = ship.get("mergeable") or "UNKNOWN"
             # Never remediate while a review run is active — its sync/fix
-            # nodes also write to the branch; concurrent writers race.
-            rmsg = rec.get("review_msg")
-            if rmsg and not ensure_runs_loaded():
+            # nodes also write to the branch; concurrent writers race. An
+            # unavailable status lookup is also a hold: an empty projection
+            # must not be mistaken for proof that no writer is active.
+            if runs_by_msg is None:
+                runs_by_msg = fetch_runs_by_message(env)
+                run_lookup_error = getattr(runs_by_msg, "error", None)
+                if run_lookup_error:
+                    log(f"RUN LOOKUP UNAVAILABLE: {run_lookup_error}; "
+                        "retaining run markers")
+            if run_lookup_error:
                 continue
+            rmsg = rec.get("review_msg")
             review_active = bool(
-                rmsg and runs_by_msg is not None
-                and run_status_for(runs_by_msg, rmsg)
+                rmsg and run_status_for(runs_by_msg, rmsg)
                 in ACTIVE_WORKFLOW_STATUSES)
             if review_active:
                 continue
             fix_msg = rec.get("conflict_fix_msg")
             mech_failed = bool(rec.get("conflict_mech_failed"))
-            if fix_msg and not ensure_runs_loaded():
-                continue
-            fix_status = (run_status_for(runs_by_msg or {}, fix_msg)
+            fix_status = (run_status_for(runs_by_msg, fix_msg)
                           if fix_msg else None)
             action = conflict_episode_action(mergeable, fix_msg, fix_status, mech_failed)
             if action == "update":
@@ -2535,48 +2558,6 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
         log(f"snapshot taken: {len(seen)} items on board, dispatch armed")
     save_state(cfg, state)
 
-
-def fetch_runs_by_message(env: dict) -> tuple[dict[str, str], bool]:
-    """Map exact run user_message -> status of the newest matching run.
-
-    Returns ``(mapping, False)`` when the Archon lookup is unavailable or
-    malformed. A successful lookup with no runs is ``({}, True)`` so callers
-    never confuse an outage with a valid empty result.
-    """
-    try:
-        result = subprocess.run(
-            ["archon", "workflow", "runs", "--json"],
-            capture_output=True, text=True, timeout=60, env=env, cwd=str(ROOT),
-        )
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        log(f"RUN STATUS LOOKUP FAILED: {exc}")
-        return {}, False
-    if result.returncode != 0:
-        log(f"RUN STATUS LOOKUP FAILED: {result.stderr.strip()[:200]}")
-        return {}, False
-    try:
-        data = json.loads(result.stdout)
-    except (TypeError, ValueError) as exc:
-        log(f"RUN STATUS PARSE FAILED: {exc}")
-        return {}, False
-    runs = data.get("runs") if isinstance(data, dict) else data
-    if not isinstance(runs, list):
-        log("RUN STATUS PARSE FAILED: expected a runs list")
-        return {}, False
-    best: dict[str, tuple[str, str]] = {}
-    for run in runs:
-        if not isinstance(run, dict):
-            log("RUN STATUS PARSE FAILED: run entry is not an object")
-            return {}, False
-        run_msg = run.get("user_message") or ""
-        if not run_msg:
-            continue
-        started = run.get("started_at") or ""
-        if started > best.get(run_msg, ("", ""))[1]:
-            best[run_msg] = (run.get("status") or "", started)
-    return {msg: status for msg, (status, _) in best.items()}, True
-
-
 def run_status_for(runs_by_msg: dict[str, str], dispatch_msg: str) -> str | None:
     """Status of the newest run whose message contains the dispatch message."""
     for msg, status in runs_by_msg.items():
@@ -2619,6 +2600,20 @@ _VALIDATION_FAILURE_PATTERNS = (
 )
 
 
+def _run_timestamp(value: object) -> str | None:
+    """Normalize an Archon timestamp, rejecting malformed values."""
+    if not isinstance(value, str):
+        return None
+    value = value.strip()
+    if not value:
+        return None
+    try:
+        datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return value
+
+
 def fetch_workflow_runs(env: dict) -> WorkflowRuns:
     """Return the complete Archon run view, or a fail-closed health result.
 
@@ -2651,6 +2646,10 @@ def fetch_workflow_runs(env: dict) -> WorkflowRuns:
         total = None
     if not isinstance(runs, list):
         return WorkflowRuns(error="archon_runs_shape")
+    if (total is not None
+            and (isinstance(total, bool) or not isinstance(total, int)
+                 or total < 0)):
+        return WorkflowRuns(error="archon_total_shape")
     if isinstance(total, int) and total > len(runs):
         return WorkflowRuns(error="run_list_incomplete")
 
@@ -2659,11 +2658,15 @@ def fetch_workflow_runs(env: dict) -> WorkflowRuns:
         if not isinstance(run, dict):
             continue
         normalized = dict(run)
+        run_id = normalized.get("id")
+        if not isinstance(run_id, str) or not run_id.strip():
+            normalized["id"] = None
+        else:
+            normalized["id"] = run_id.strip()
         if not isinstance(normalized.get("user_message"), str):
             normalized["user_message"] = None
-        if (normalized.get("started_at") is not None
-                and not isinstance(normalized.get("started_at"), str)):
-            normalized["started_at"] = None
+        for field in ("started_at", "completed_at"):
+            normalized[field] = _run_timestamp(normalized.get(field))
         if (normalized.get("working_path") is not None
                 and not isinstance(normalized.get("working_path"), str)):
             normalized["working_path"] = None
@@ -2671,25 +2674,46 @@ def fetch_workflow_runs(env: dict) -> WorkflowRuns:
     return WorkflowRuns(usable)
 
 
-def runs_by_message_from(runs: list[dict]) -> dict[str, str]:
+def runs_by_message_from(runs: list[dict]) -> WorkflowRunStatusMap:
     """Map exact run user_message -> status of the newest run with it."""
     best: dict[str, tuple[str, str, str]] = {}
+    invalid_messages: set[str] = set()
     for run in runs:
         if not isinstance(run, dict):
             continue
         run_msg = run.get("user_message")
         if not isinstance(run_msg, str) or not run_msg:
             continue
-        started = run.get("started_at")
-        started = started if isinstance(started, str) else ""
-        run_id = str(run.get("id") or "")
-        key = (started, run_id)
+        started = _run_timestamp(run.get("started_at"))
+        if started is None:
+            invalid_messages.add(run_msg)
+            continue
+        run_id = run.get("id")
+        if not isinstance(run_id, str) or not run_id.strip():
+            invalid_messages.add(run_msg)
+            continue
+        key = (started, run_id.strip())
         status = run.get("status")
         status = status if isinstance(status, str) else ""
         if key >= best.get(run_msg, ("", "", ""))[1:]:
             best[run_msg] = (status, started, run_id)
-    return {msg: status for msg, (status, _, _) in best.items()}
+    return WorkflowRunStatusMap(
+        {msg: status for msg, (status, _, _) in best.items()
+         if msg not in invalid_messages},
+        error=getattr(runs, "error", None),
+    )
 
+
+def fetch_runs_by_message(env: dict) -> WorkflowRunStatusMap:
+    """Map exact run user_message -> status of the NEWEST run with it.
+
+    Re-dispatches reuse the same message for the same issue, so multiple runs
+    can share it; the newest run's status is the one that counts. Callers do
+    substring lookup because `archon continue` prepends a "Prior Context"
+    preamble to the message. Derived from the shared full-run reader so the
+    poll never parses Archon output a second way.
+    """
+    return runs_by_message_from(fetch_workflow_runs(env))
 
 
 def parse_run_metadata(run: dict) -> tuple[str, str]:
@@ -2745,9 +2769,12 @@ def latest_workflow_run(runs: list[dict], message: str | None = None,
     Matching keeps the existing substring convention so `Prior Context`
     preambles still resolve. Newest is by `started_at` with a stable run ID
     tiebreak, so re-dispatches that reuse a message pick the current attempt.
+    If any matching record lacks a usable identity or timestamp, selection
+    defers rather than falling back to an older, potentially wrong attempt.
     """
     best: dict | None = None
     best_key = ("", "")
+    invalid_match = False
     for run in runs:
         if not isinstance(run, dict):
             continue
@@ -2758,13 +2785,17 @@ def latest_workflow_run(runs: list[dict], message: str | None = None,
             continue
         if issue_number is not None and f"#{issue_number}" not in run_msg:
             continue
-        started = run.get("started_at")
-        started = started if isinstance(started, str) else ""
-        key = (started, str(run.get("id") or ""))
+        run_id = run.get("id")
+        started = _run_timestamp(run.get("started_at"))
+        if (not isinstance(run_id, str) or not run_id.strip()
+                or started is None):
+            invalid_match = True
+            continue
+        key = (started, run_id.strip())
         if key >= best_key:
             best_key = key
             best = run
-    return best
+    return None if invalid_match else best
 
 
 def inspect_worktree(path: str | None) -> bool | None:

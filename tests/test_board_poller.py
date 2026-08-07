@@ -303,9 +303,26 @@ class WorkflowRecoveryTest(unittest.TestCase):
     def test_metadata_absent_is_empty(self):
         self.assertEqual(parse_run_metadata({"status": "failed"}), ("", ""))
 
-    def test_metadata_error_is_bounded(self):
-        run = {"metadata": {"error": "x" * 2000}}
-        self.assertEqual(len(parse_run_metadata(run)[0]), 500)
+    def test_metadata_error_and_step_are_bounded(self):
+        run = {"metadata": {"error": "x" * 2000,
+                              "failed_step": "s" * 500}}
+        error, step = parse_run_metadata(run)
+        self.assertEqual(len(error), 500)
+        self.assertEqual(len(step), 200)
+
+    def test_metadata_step_fallback_precedence(self):
+        self.assertEqual(
+            parse_run_metadata({"metadata": {"step": "metadata-step",
+                                               "stage": "metadata-stage"},
+                                "failed_step": "top-level-step"})[1],
+            "metadata-step")
+        self.assertEqual(
+            parse_run_metadata({"metadata": {"stage": "metadata-stage"},
+                                "failed_step": "top-level-step"})[1],
+            "metadata-stage")
+        self.assertEqual(
+            parse_run_metadata({"metadata": {}, "failed_step": "top-level-step"})[1],
+            "top-level-step")
 
     def _run(self, run_id, started, msg, status="failed"):
         return {"id": run_id, "started_at": started,
@@ -331,6 +348,15 @@ class WorkflowRecoveryTest(unittest.TestCase):
                 self._run("r2", "2026-08-07T10:01:00Z", "Build feature from issue #8: y")]
         self.assertEqual(latest_workflow_run(runs, issue_number=7)["id"], "r1")
         self.assertEqual(latest_workflow_run(runs, issue_number=8)["id"], "r2")
+
+    def test_latest_defers_on_malformed_newer_match(self):
+        older = self._run("r1", "2026-08-07T10:00:00Z", "m")
+        malformed = self._run("r2", "not-a-timestamp", "m")
+        self.assertIsNone(latest_workflow_run([older, malformed], message="m"))
+
+    def test_latest_rejects_malformed_identity(self):
+        malformed = self._run({"unexpected": True}, "2026-08-07T10:01:00Z", "m")
+        self.assertIsNone(latest_workflow_run([malformed], message="m"))
 
     def test_latest_no_match_returns_none(self):
         self.assertIsNone(
@@ -394,17 +420,23 @@ class WorkflowRecoveryTest(unittest.TestCase):
     def test_fetch_workflow_runs_tolerates_command_failure(self):
         result = subprocess.CompletedProcess(["archon"], 1, "", "boom")
         with patch("automation.board_poller.subprocess.run", return_value=result):
-            self.assertEqual(fetch_workflow_runs({}), [])
+            records = fetch_workflow_runs({})
+        self.assertEqual(records, [])
+        self.assertEqual(records.error, "archon_command_failed")
 
     def test_fetch_workflow_runs_tolerates_timeout(self):
         with patch("automation.board_poller.subprocess.run",
                    side_effect=subprocess.TimeoutExpired("archon", 60)):
-            self.assertEqual(fetch_workflow_runs({}), [])
+            records = fetch_workflow_runs({})
+        self.assertEqual(records, [])
+        self.assertEqual(records.error, "archon_timeout")
 
     def test_fetch_workflow_runs_tolerates_malformed_json(self):
         result = subprocess.CompletedProcess(["archon"], 0, "{not json", "")
         with patch("automation.board_poller.subprocess.run", return_value=result):
-            self.assertEqual(fetch_workflow_runs({}), [])
+            records = fetch_workflow_runs({})
+        self.assertEqual(records, [])
+        self.assertEqual(records.error, "archon_json")
 
     def test_fetch_workflow_runs_rejects_wrong_shape(self):
         result = subprocess.CompletedProcess(
@@ -431,28 +463,46 @@ class WorkflowRecoveryTest(unittest.TestCase):
         self.assertEqual(records.error, "run_list_incomplete")
         self.assertEqual(run.call_args.args[0][-2:], ["--limit", "200"])
 
+    def test_fetch_workflow_runs_rejects_malformed_totals(self):
+        for total in ("151", 151.0, True, -1):
+            with self.subTest(total=total):
+                result = subprocess.CompletedProcess(
+                    ["archon"], 0,
+                    json.dumps({"total": total, "runs": []}), "")
+                with patch("automation.board_poller.subprocess.run",
+                           return_value=result):
+                    records = fetch_workflow_runs({})
+                self.assertEqual(records, [])
+                self.assertEqual(records.error, "archon_total_shape")
+
     def test_fetch_workflow_runs_normalizes_unusable_match_fields(self):
         result = subprocess.CompletedProcess(
             ["archon"], 0,
-            json.dumps({"runs": [{"id": "r1", "user_message": 123,
-                                   "started_at": 42, "working_path": []}]}), "")
+            json.dumps({"runs": [{"id": {"unexpected": True},
+                                   "user_message": 123,
+                                   "started_at": 42,
+                                   "completed_at": [],
+                                   "working_path": []}]}), "")
         with patch("automation.board_poller.subprocess.run", return_value=result):
             records = fetch_workflow_runs({})
+        self.assertIsNone(records[0]["id"])
         self.assertIsNone(records[0]["user_message"])
         self.assertIsNone(records[0]["started_at"])
+        self.assertIsNone(records[0]["completed_at"])
         self.assertIsNone(records[0]["working_path"])
 
     def test_fetch_runs_by_message_derives_status_map_from_full_runs(self):
         result = subprocess.CompletedProcess(
             ["archon"], 0, json.dumps({"runs": [
-                {"user_message": "m", "status": "completed",
+                {"id": "r1", "user_message": "m", "status": "completed",
                  "started_at": "2026-08-07T10:00:00Z"},
-                {"user_message": "m", "status": "running",
+                {"id": "r2", "user_message": "m", "status": "running",
                  "started_at": "2026-08-07T10:01:00Z"},
             ]}), "")
         with patch("automation.board_poller.subprocess.run", return_value=result):
-            self.assertEqual(fetch_runs_by_message({}),
-                             ({"m": "running"}, True))
+            status_map = fetch_runs_by_message({})
+            self.assertEqual(status_map, {"m": "running"})
+            self.assertIsNone(status_map.error)
 
 
 class MatchIssuePrTest(unittest.TestCase):
@@ -978,6 +1028,8 @@ class TerminalRecoveryPollTest(unittest.TestCase):
             entered = stack.enter_context(p)
             if getattr(p, "attribute", None) == "fetch_workflow_runs":
                 stack.fetch_workflow_runs = entered
+            elif getattr(p, "attribute", None) == "inspect_worktree":
+                stack.inspect_worktree = entered
         stack.dispatch = stack.enter_context(
             patch.object(board_poller, "dispatch", return_value=dispatch_result))
         return stack
@@ -1029,6 +1081,21 @@ class TerminalRecoveryPollTest(unittest.TestCase):
         self.assertEqual(len(recovery_lines), 1)
         self.assertIn("automatic retry dispatched", recovery_lines[0])
 
+    def test_registered_active_retry_keeps_retrying_state(self):
+        state = self._state()
+        first = self._run(run_id="run-1")
+        retry = self._run(status="running", run_id="run-2")
+        retry["started_at"] = "2026-08-07T10:10:00Z"
+        with self._run_poll(state, [first], False, True) as stack:
+            stack.fetch_workflow_runs.side_effect = [[first], [first, retry]]
+            board_poller.poll(self._cfg(), {}, state)
+            board_poller.poll(self._cfg(), {}, state)
+        rec = state["item-92"]
+        self.assertTrue(rec["retrying"])
+        self.assertEqual(rec["automatic_retry_count"], 1)
+        self.assertEqual(rec["recovery"]["run_id"], "run-1")
+        stack.dispatch.assert_called_once()
+
     def test_registered_second_terminal_run_requires_manual_review(self):
         state = self._state()
         first = self._run(run_id="run-1")
@@ -1068,7 +1135,13 @@ class TerminalRecoveryPollTest(unittest.TestCase):
 
     def test_dispatch_budget_failure_keeps_retry_available(self):
         state = self._state()
-        with self._run_poll(state, [self._run()], False, False) as stack:
+        with contextlib.ExitStack() as stack:
+            for p in self._poll(state, [self._run()], False):
+                stack.enter_context(p)
+            stack.enter_context(patch.object(board_poller, "DRY_RUN", False))
+            stack.enter_context(patch.object(board_poller, "_DISPATCH_BUDGET", 0))
+            popen = stack.enter_context(
+                patch("automation.board_poller.subprocess.Popen"))
             log = stack.enter_context(patch.object(board_poller, "log"))
             board_poller.poll(self._cfg(), {}, state)
             board_poller.poll(self._cfg(), {}, state)
@@ -1078,14 +1151,24 @@ class TerminalRecoveryPollTest(unittest.TestCase):
         self.assertNotIn("automatic_retry_count", rec)
         self.assertEqual(rec["dispatch_msg"], "run")
         self.assertEqual(rec["recovery_logged_run_id"], "run-1")
+        popen.assert_not_called()
         recovery_lines = [c.args[0] for c in log.call_args_list
                           if "RUN CANCELLED" in c.args[0]]
         self.assertEqual(len(recovery_lines), 1)
         self.assertIn("transient -> retry_available", recovery_lines[0])
-
     def test_missing_recovery_identity_is_manual_review(self):
         state = self._state()
         del state["item-92"]["wf"]
+        with self._run_poll(state, [self._run()], False, False) as stack:
+            board_poller.poll(self._cfg(), {}, state)
+        rec = state["item-92"]
+        self.assertEqual(rec["recovery"]["action"], "manual_review")
+        self.assertEqual(rec["dispatch_msg"], "run")
+        stack.dispatch.assert_not_called()
+
+    def test_missing_issue_number_is_manual_review(self):
+        state = self._state()
+        del state["item-92"]["issue_number"]
         with self._run_poll(state, [self._run()], False, False) as stack:
             board_poller.poll(self._cfg(), {}, state)
         rec = state["item-92"]
@@ -1122,6 +1205,47 @@ class TerminalRecoveryPollTest(unittest.TestCase):
                        "recovery_logged_run_id"):
             self.assertNotIn(marker, rec)
 
+    def test_new_episode_ignores_historical_runs_after_baseline(self):
+        state = self._state()
+        state["item-92"]["last_observed_run_id"] = "run-2"
+        todo = self._item()
+        todo["status"] = "Todo"
+        in_progress = self._item()
+        message = ("Build feature from issue #92: Anchor curated-match prefix "
+                   "(o/r). Full issue: https://github.com/o/r/issues/92")
+        old = self._run(run_id="run-2")
+        old["user_message"] = message
+        new = self._run(run_id="run-3")
+        new["started_at"] = "2026-08-07T10:10:00Z"
+        new["user_message"] = message
+        with (
+            patch.object(board_poller, "fetch_project",
+                         side_effect=[
+                             ("p", "f", {"Ready for Review": "ready"}, [todo]),
+                             ("p", "f", {"Ready for Review": "ready"}, [in_progress]),
+                             ("p", "f", {"Ready for Review": "ready"}, [in_progress]),
+                         ]),
+            patch.object(board_poller, "prepare_dispatch_budget"),
+            patch.object(board_poller, "sync_runnable_labels"),
+            patch.object(board_poller, "pick_workflow",
+                         return_value="archon-idea-to-pr"),
+            patch.object(board_poller, "dispatch", return_value=True) as dispatch_mock,
+            patch.object(board_poller, "fetch_workflow_runs",
+                         side_effect=[[old], [old, new]]),
+            patch.object(board_poller, "inspect_worktree", return_value=False),
+            patch.object(board_poller, "save_state"),
+        ):
+            board_poller.poll(self._cfg(), {}, state)
+            board_poller.poll(self._cfg(), {}, state)
+            rec = state["item-92"]
+            self.assertNotIn("recovery", rec)
+            board_poller.poll(self._cfg(), {}, state)
+        rec = state["item-92"]
+        self.assertEqual(rec["recovery"]["run_id"], "run-3")
+        self.assertEqual(rec["recovery"]["action"], "retrying")
+        self.assertEqual(rec["automatic_retry_count"], 1)
+        self.assertEqual(dispatch_mock.call_count, 2)
+
     def test_non_transient_failure_is_manual_review_without_dispatch(self):
         state = self._state()
         with self._run_poll(state, [self._run(status="failed",
@@ -1143,6 +1267,48 @@ class TerminalRecoveryPollTest(unittest.TestCase):
         self.assertEqual(rec["recovery"]["worktree"]["dirty"], None)
         self.assertEqual(rec["dispatch_msg"], "run")
         stack.dispatch.assert_not_called()
+
+    def test_unavailable_run_lookup_retains_marker_and_does_not_recover(self):
+        state = self._state()
+        unavailable = board_poller.WorkflowRuns(error="archon_timeout")
+        with self._run_poll(state, unavailable, False, False) as stack:
+            log = stack.enter_context(patch.object(board_poller, "log"))
+            board_poller.poll(self._cfg(), {}, state)
+        rec = state["item-92"]
+        self.assertEqual(rec["dispatch_msg"], "run")
+        self.assertNotIn("recovery", rec)
+        self.assertNotIn("last_observed_run_id", rec)
+        stack.dispatch.assert_not_called()
+        stack.inspect_worktree.assert_not_called()
+        self.assertTrue(any(
+            "RUN LOOKUP UNAVAILABLE: archon_timeout" in c.args[0]
+            for c in log.call_args_list))
+
+    def test_unavailable_lookup_holds_ship_conflict_update(self):
+        cfg = self._cfg()
+        cfg["dispatch"]["review"]["conflict_fix_workflow"] = "archon-fix-ship-conflicts"
+        state = self._state()
+        state["item-92"].update({"status": "In Review", "review_msg": "review"})
+        item = self._item()
+        item["status"] = "In Review"
+        unavailable = board_poller.WorkflowRunStatusMap(error="archon_timeout")
+        with (
+            patch.object(board_poller, "fetch_project",
+                         return_value=("p", "f", {"Ready for Review": "ready"}, [item])),
+            patch.object(board_poller, "prepare_dispatch_budget"),
+            patch.object(board_poller, "sync_runnable_labels"),
+            patch.object(board_poller, "find_ship_pr",
+                         return_value={"number": 153, "mergeable": "CONFLICTING",
+                                       "headRefName": "issue-92"}),
+            patch.object(board_poller, "fetch_runs_by_message",
+                         return_value=unavailable),
+            patch.object(board_poller, "try_merge_base_into_head") as merge,
+            patch.object(board_poller, "dispatch") as dispatch_mock,
+            patch.object(board_poller, "save_state"),
+        ):
+            board_poller.poll(cfg, {}, state)
+        merge.assert_not_called()
+        dispatch_mock.assert_not_called()
 
     def test_missing_run_details_fail_closed(self):
         state = self._state()
@@ -1373,20 +1539,22 @@ class FetchRunsByMessageTest(unittest.TestCase):
             ["archon"], 1, "", "archon unavailable"
         )
         with patch.object(bp.subprocess, "run", return_value=failed):
-            self.assertEqual(bp.fetch_runs_by_message({}), ({}, False))
+            self.assertIsNotNone(bp.fetch_runs_by_message({}).error)
 
         empty = subprocess.CompletedProcess(
             ["archon"], 0, json.dumps({"runs": []}), ""
         )
         with patch.object(bp.subprocess, "run", return_value=empty):
-            self.assertEqual(bp.fetch_runs_by_message({}), ({}, True))
+            result = bp.fetch_runs_by_message({})
+            self.assertEqual(result, {})
+            self.assertIsNone(result.error)
 
     def test_malformed_run_listing_fails_closed(self):
         malformed = subprocess.CompletedProcess(
             ["archon"], 0, json.dumps({"runs": {}}), ""
         )
         with patch.object(bp.subprocess, "run", return_value=malformed):
-            self.assertEqual(bp.fetch_runs_by_message({}), ({}, False))
+            self.assertIsNotNone(bp.fetch_runs_by_message({}).error)
 
 
 class RunStatusForTest(unittest.TestCase):
