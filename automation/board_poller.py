@@ -852,7 +852,7 @@ def find_or_create_ship_pr(cfg: dict, env: dict, head: str, title: str,
     r = gh(["pr", "create", "-R", cfg["repo"], "--base", base, "--head", head,
             "--title", title, "--body", body], env)
     if r.returncode != 0:
-        log(f"SHIP PR CREATE FAILED head={head} issue={issue_number}: "
+        log(f"find_or_create_ship_pr: gh pr create failed (head={head}): "
             f"{r.stderr.strip()[:200]}")
         return None
     m = re.search(r"pull/(\d+)", r.stdout or "")

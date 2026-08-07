@@ -56,6 +56,7 @@ def _cfg() -> dict:
             "Todo": "todo",
             "In Progress": "in_progress",
             "Blocked": "blocked",
+            "Needs Input": "needs_input",
             "Ready for Review": "ready",
             "In Review": "review",
             "Done": "done",
@@ -1541,6 +1542,7 @@ class PollFlowTest(unittest.TestCase):
         return ("project-1", "field-1",
                 {"Backlog": "o-backlog", "Todo": "o-todo",
                  "In Progress": "o-ip", "Blocked": "o-blocked",
+                 "Needs Input": "o-needs_input",
                  "Ready for Review": "o-ready", "In Review": "o-review",
                  "Done": "o-done"}, items)
 
@@ -1585,16 +1587,18 @@ class PollFlowTest(unittest.TestCase):
              patch("automation.board_poller.log") as log, \
              patch("automation.board_poller.save_state"):
             bp.poll(self._cfg(), {}, state)
-        find_pr.assert_called_once()
+        # The inline review-lane pass and the recheck pass each attempt the
+        # ship flow once per poll; both must defer on the gh failure.
+        self.assertEqual(find_pr.call_count, 2)
         ship.assert_not_called()
         dispatch.assert_not_called()
         merge.assert_not_called()
-        # status NOT recorded -> lane re-entered next poll (retry)
-        self.assertEqual(state["item-5"]["status"], "Ready for Review")
+        # status recorded from the board lane; the recheck pass retries next poll
+        self.assertEqual(state["item-5"]["status"], "In Review")
         self.assertTrue(any("REVIEW PREP DEFERRED" in c[0][0]
                             for c in log.call_args_list))
 
-    def test_needs_input_label_moves_completed_run_to_blocked(self):
+    def test_needs_input_label_moves_completed_run_to_needs_input(self):
         state = {"_meta": {"snapshot_done": True},
                  "item-5": {"status": "In Progress", "dispatch_msg": "run msg",
                             "issue_number": 5}}
@@ -1611,9 +1615,9 @@ class PollFlowTest(unittest.TestCase):
              patch("automation.board_poller.log"), \
              patch("automation.board_poller.save_state"):
             bp.poll(self._cfg(), {}, state)
-        self.assertTrue(any(c.args[5] == "o-blocked"
+        self.assertTrue(any(c.args[5] == "o-needs_input"
                             for c in move.call_args_list))
-        find_pr.assert_not_called()      # no develop merge while blocked
+        find_pr.assert_not_called()      # no develop merge while needs input
         self.assertNotIn("dispatch_msg", state["item-5"])
 
     def test_needs_input_label_lookup_failure_holds_completion(self):
