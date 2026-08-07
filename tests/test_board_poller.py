@@ -97,7 +97,6 @@ ISOLATION_LIST = (
 
 )
 
-
 class DispatchCapacityTest(unittest.TestCase):
     def tearDown(self) -> None:
         # The budget is a module global reset per poll; never leak a
@@ -147,16 +146,37 @@ class DispatchCapacityTest(unittest.TestCase):
             self.assertFalse(dispatch({}, {}, "workflow", "branch", "message", "item", 7))
             popen.assert_not_called()
 
-    def test_dispatch_consumes_reserved_slot(self):
+    def test_dispatch_consumes_reserved_slot_after_startup_check(self):
         with (
             patch.object(board_poller, "DRY_RUN", False),
             patch.object(board_poller, "_DISPATCH_BUDGET", 1),
+            patch.object(board_poller, "time") as time,
             patch("builtins.open", unittest.mock.mock_open()),
             patch("automation.board_poller.subprocess.Popen") as popen,
         ):
             popen.return_value.pid = 123
+            popen.return_value.poll.return_value = None
             self.assertTrue(dispatch({}, {}, "workflow", "branch", "message", "item", 7))
+            time.sleep.assert_called_once_with(2)
             self.assertEqual(board_poller._DISPATCH_BUDGET, 0)
+
+    def test_dispatch_immediate_exit_does_not_consume_slot(self):
+        with (
+            patch.object(board_poller, "DRY_RUN", False),
+            patch.object(board_poller, "_DISPATCH_BUDGET", 1),
+            patch.object(board_poller, "time"),
+            patch("builtins.open", unittest.mock.mock_open()),
+            patch("automation.board_poller.subprocess.Popen") as popen,
+            patch.object(board_poller, "log") as log,
+        ):
+            popen.return_value.pid = 123
+            popen.return_value.poll.return_value = 2
+            popen.return_value.returncode = 2
+            self.assertFalse(dispatch({}, {}, "workflow", "branch", "message", "item", 7))
+            self.assertEqual(board_poller._DISPATCH_BUDGET, 1)
+            self.assertTrue(any("exited immediately" in c.args[0]
+                                for c in log.call_args_list))
+
 
 
 class MatchIssuePrTest(unittest.TestCase):
@@ -1639,7 +1659,7 @@ class PollFlowTest(unittest.TestCase):
         return ("project-1", "field-1",
                 {"Backlog": "o-backlog", "Todo": "o-todo",
                  "In Progress": "o-ip", "Blocked": "o-blocked",
-                 "Needs Input": "o-needs-input",
+                 "Needs Input": "o-needs_input",
                  "Ready for Review": "o-ready", "In Review": "o-review",
                  "Done": "o-done"}, items)
 
@@ -1684,14 +1704,34 @@ class PollFlowTest(unittest.TestCase):
              patch("automation.board_poller.log") as log, \
              patch("automation.board_poller.save_state"):
             bp.poll(self._cfg(), {}, state)
-        find_pr.assert_called_once()
+        # The main pass records the attempt; the recheck pass must not
+        # double-attempt after a transient gh failure.
+        self.assertEqual(find_pr.call_count, 1)
         ship.assert_not_called()
         dispatch.assert_not_called()
         merge.assert_not_called()
-        # status NOT recorded -> lane re-entered next poll (retry)
+        # Leave the prior marker untouched so the next poll retries.
         self.assertEqual(state["item-5"]["status"], "Ready for Review")
         self.assertTrue(any("REVIEW PREP DEFERRED" in c[0][0]
                             for c in log.call_args_list))
+
+    def test_review_ship_gate_holds_after_develop_merge_failure(self):
+        pr = {"number": 47, "state": "OPEN", "headRefName": "feature-5"}
+        with patch("automation.board_poller.find_issue_pr",
+                   return_value=(pr, True)), \
+             patch("automation.board_poller.merge_pr_to_base",
+                   return_value=(False, "conflict")) as merge, \
+             patch("automation.board_poller.find_or_create_ship_pr") as ship, \
+             patch("automation.board_poller.log") as log:
+            result = bp.ensure_ship_review(
+                self._cfg(), {}, "item-5", 5, "Issue 5", "project", "field",
+                {"Done": "done"}, "Done", {})
+        self.assertIsNone(result)
+        merge.assert_called_once()
+        ship.assert_not_called()
+        self.assertTrue(any("DEVELOP MERGE FAILED" in c.args[0]
+                            for c in log.call_args_list))
+
 
     def test_needs_input_label_moves_completed_run_to_needs_input(self):
         state = {"_meta": {"snapshot_done": True},
@@ -1710,9 +1750,9 @@ class PollFlowTest(unittest.TestCase):
              patch("automation.board_poller.log"), \
              patch("automation.board_poller.save_state"):
             bp.poll(self._cfg(), {}, state)
-        self.assertTrue(any(c.args[5] == "o-needs-input"
+        self.assertTrue(any(c.args[5] == "o-needs_input"
                             for c in move.call_args_list))
-        find_pr.assert_not_called()      # no develop merge while blocked
+        find_pr.assert_not_called()      # no develop merge while needs input
         self.assertNotIn("dispatch_msg", state["item-5"])
 
     def test_needs_input_label_lookup_failure_holds_completion(self):
@@ -1759,6 +1799,75 @@ class PollFlowTest(unittest.TestCase):
                 return _cp()
             return _cp(returncode=1)
         return calls, fake_gh
+
+    def test_poll_holds_todo_dispatch_when_capacity_lookup_fails(self):
+        state = {"_meta": {"snapshot_done": True},
+                 "item-5": {"status": "Backlog"}}
+        items = [self._item(5, "Todo")]
+        with patch("automation.board_poller.fetch_project",
+                   return_value=self._project(items)), \
+             patch("automation.board_poller.fetch_active_workflow_count",
+                   return_value=None), \
+             patch("automation.board_poller.sync_runnable_labels"), \
+             patch("automation.board_poller.move_to_lane") as move, \
+             patch("automation.board_poller.subprocess.Popen") as popen, \
+             patch("automation.board_poller.save_state"), \
+             patch("automation.board_poller.log"):
+            bp.poll(self._cfg(), {}, state)
+        popen.assert_not_called()
+        move.assert_not_called()
+        # The prior state marker stays unchanged so the next poll sees Todo
+        # as a fresh transition and retries dispatch.
+        self.assertEqual(state["item-5"]["status"], "Backlog")
+
+    def test_poll_runs_develop_conflict_episode_once(self):
+        state = {"_meta": {"snapshot_done": True},
+                 "item-5": {"status": "In Progress", "dispatch_msg": "run",
+                            "issue_number": 5}}
+        items = [self._item(5, "In Progress")]
+        cfg = self._cfg()
+        cfg["dispatch"]["todo"]["conflict_fix_workflow"] = \
+            "archon-fix-develop-conflicts"
+        run_call = 0
+
+        def runs(_env):
+            nonlocal run_call
+            run_call += 1
+            result = {"run": "completed"}
+            fix_msg = state["item-5"].get("dev_conflict_fix_msg")
+            if fix_msg and run_call == 3:
+                result[fix_msg] = "running"
+            elif fix_msg and run_call == 4:
+                result[fix_msg] = "completed"
+            return result
+
+        pr = {"number": 47, "state": "OPEN", "headRefName": "feature-5"}
+        with patch("automation.board_poller.fetch_project",
+                   return_value=self._project(items)), \
+             patch("automation.board_poller.prepare_dispatch_budget"), \
+             patch("automation.board_poller.sync_runnable_labels"), \
+             patch("automation.board_poller.fetch_runs_by_message",
+                   side_effect=runs), \
+             patch("automation.board_poller.issue_has_label", return_value=False), \
+             patch("automation.board_poller.find_issue_pr",
+                   return_value=(pr, True)), \
+             patch("automation.board_poller.merge_pr_to_base",
+                   return_value=(False, "conflict")), \
+             patch("automation.board_poller.try_merge_base_into_head",
+                   return_value=(False, "conflict")) as mechanical, \
+             patch("automation.board_poller.dispatch", return_value=True) as dispatch, \
+             patch("automation.board_poller.comment_issue", return_value=True) as comment, \
+             patch("automation.board_poller.save_state"), \
+             patch("automation.board_poller.log"):
+            for _ in range(4):
+                bp.poll(cfg, {}, state)
+
+        mechanical.assert_called_once()
+        dispatch.assert_called_once()
+        self.assertEqual(state["item-5"]["dev_conflict_fix_msg"],
+                         "Resolve merge conflicts on develop PR #47 (issue #5).")
+        self.assertTrue(state["item-5"]["dev_conflict_noted"])
+        self.assertGreaterEqual(comment.call_count, 2)
 
     def test_approving_verdict_merges_ship_pr_and_closes_issue(self):
         state = self._review_state()

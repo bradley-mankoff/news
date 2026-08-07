@@ -359,6 +359,7 @@ class DiagnosticsTests(unittest.TestCase):
         self.assertNotIn("Traceback details", delivery["error_message"])
         self.assertEqual(delivery["error_type"], "SMTP.Exception")
 
+
     def test_empty_delivery_remains_backward_compatible(self) -> None:
         diagnostics = RunDiagnostics(
             run_started_at="2026-06-01T10:00:00",

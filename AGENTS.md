@@ -33,7 +33,7 @@ Project goal: build, review, and send a daily news report from configured source
 - If the surface is closed, the session exits with SIGHUP (stdin ends) — normal terminal behavior, not a crash. Start a fresh session; history persists under `~/.omp/agent/sessions/`.
 
 ## Fresh-session quickstart (GitHub project/issue manager)
-- Board: https://github.com/users/bradley-mankoff/projects/1 — lanes `Backlog` -> `Todo` -> `In Progress` -> `Ready for Review` -> `In Review` -> `Done`. The board drives everything; nothing starts from `Backlog`.
+- Board: https://github.com/users/bradley-mankoff/projects/1 — lanes `Backlog` -> `Todo` -> `In Progress` -> `Blocked` -> `Needs Input` -> `Ready for Review` -> `In Review` -> `Done`. The board drives everything; nothing starts from `Backlog`.
 - Status checks: `launchctl list | grep news-board-poller` (poller alive), `tail -f automation/board_poller.log` (poller log), `archon workflow runs` (runs, from repo root), `archon workflow get <id> --json` (one run).
 - Board ops: `python3 automation/move_item.py <issue> <lane>`; issues: `python3 automation/create_issue.py "<title>"`. Automation config: `automation/config.json` (lanes, workflow mapping, merge targets).
 - Creating a Backlog issue: `python3 automation/create_issue.py "<title>"` (one step: create + board + default lane; `--label enhancement` → idea-to-pr dispatch, `--body` for context, `--lane` to override).
@@ -41,7 +41,7 @@ Project goal: build, review, and send a daily news report from configured source
 - Branch model: `develop` = integration (repo default; workflow base); `main` = production (only via reviewed ship PRs); per-issue branches `archon/task-issue-<N>`.
 - GitHub access convention: gh CLI + the automation scripts (no MCP server).
 - Dev loop (check out develop + run UI): the `news-dev` skill; reply with only the URL.
-- Archon execution: archon-pi build, home at `~/.local/share/archon-pi/archon-home/`; routine nodes run `pi`/`opencode-go/deepseek-v4-flash` at max effort, while rigorous planning, review, conflict-resolution, and completion nodes use Pi's OpenAI Codex backend (`provider: pi`, `model: openai-codex/gpt-5.6-luna`, `effort: max`). See the curated runtime matrix in `docs/archon-workflows.md`.
+- Archon execution: archon-pi build, home at `~/.local/share/archon-pi/archon-home/`; routine nodes run `pi`/`opencode-go/deepseek-v4-flash` at max effort, while rigorous planning, review, conflict-resolution, and completion nodes use Pi's OpenAI Codex OAuth backend (`provider: pi`, `model: openai-codex/gpt-5.6-luna`, `effort: max`). See the curated runtime matrix in `docs/archon-workflows.md`.
 
 ## Project board protocol
 - The GitHub project board (project #1, “Build public UI”, on `bradley-mankoff`) is the work queue. Lanes: `Backlog` -> `Todo` -> `In Progress` -> `Blocked` -> `Needs Input` -> `Ready for Review` -> `In Review` -> `Done`.

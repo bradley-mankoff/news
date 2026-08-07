@@ -18,6 +18,79 @@ from automation.apply_workflow_edits import (
 )
 
 
+class WorkflowMigrationTest(unittest.TestCase):
+    def test_sync_node_rewires_target_and_is_idempotent(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "wf.yaml"
+            path.write_text(
+                "  - id: check-blocked\n"
+                "    context: fresh\n"
+                "  - id: create-pr\n"
+                "    depends_on: [check-blocked]\n"
+                "    context: fresh\n",
+                encoding="utf-8",
+            )
+            anchor = "  - id: check-blocked\n    context: fresh\n"
+            node = "  - id: sync-with-develop\n    context: fresh"
+            old_dep = "    depends_on: [check-blocked]\n    context: fresh"
+            new_dep = "    depends_on: [sync-with-develop]\n    context: fresh"
+
+            note = ensure_sync_node(
+                path, anchor, node, "create-pr", old_dep, new_dep)
+            self.assertEqual(note, "added sync-with-develop to wf.yaml")
+            before = path.read_text(encoding="utf-8")
+            self.assertIn("depends_on: [sync-with-develop]", before)
+            self.assertEqual(
+                ensure_sync_node(path, anchor, node, "create-pr", old_dep, new_dep),
+                None,
+            )
+            self.assertEqual(path.read_text(encoding="utf-8"), before)
+
+    def test_spec_review_insertion_rewires_synthesize(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "review.yaml"
+            path.write_text(
+                "  - id: sync\n"
+                "    command: archon-sync-pr-with-main\n"
+                "    depends_on: [review-scope]\n"
+                "    context: fresh\n\n"
+                "  - id: synthesize\n"
+                "    depends_on: [code-review, error-handling, test-coverage, "
+                "comment-quality, docs-impact]\n",
+                encoding="utf-8",
+            )
+            note = ensure_spec_review(path)
+            self.assertEqual(note, "added spec-review node to archon-review-block.yaml")
+            text = path.read_text(encoding="utf-8")
+            self.assertIn("- id: spec-review", text)
+            self.assertIn("depends_on: [sync]", text)
+            self.assertIn("docs-impact, spec-review]", text)
+            self.assertIsNone(ensure_spec_review(path))
+
+    def test_rigorous_model_pinning_replaces_existing_assignments(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "workflow.yaml"
+            path.write_text(
+                "  - id: review\n"
+                "    provider: claude\n"
+                "    model: old-model\n"
+                "    effort: low\n"
+                "    modelReasoningEffort: old\n"
+                "    prompt: review\n",
+                encoding="utf-8",
+            )
+            note = ensure_rigorous_models(path, ("review",))
+            self.assertEqual(note, "pinned rigorous Pi Codex nodes in workflow.yaml")
+            text = path.read_text(encoding="utf-8")
+            self.assertEqual(text.count("provider:"), 1)
+            self.assertEqual(text.count("model:"), 1)
+            self.assertIn("provider: pi", text)
+            self.assertIn("model: openai-codex/gpt-5.6-luna", text)
+            self.assertIn("effort: max", text)
+            self.assertNotIn("modelReasoningEffort", text)
+            self.assertIsNone(ensure_rigorous_models(path, ("review",)))
+
+
 class EnsureNodeTest(unittest.TestCase):
     def test_inserts_node_after_anchor(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

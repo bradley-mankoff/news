@@ -1919,6 +1919,7 @@ class PipelineHelperTests(unittest.TestCase):
         )
         self.assertIn("1 sent", warning.call_args[0][0])
 
+
     def test_attempt_email_delivery_records_success_result(self) -> None:
         diagnostics = RunDiagnostics(
             run_started_at="2026-06-01T10:00:00",

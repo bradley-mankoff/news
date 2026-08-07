@@ -194,6 +194,125 @@ class ConfigHelperTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Unknown model tuning preset"):
             config_module._configured_model_tuning("model", preset_id="missing", presets={})
 
+    def test_model_tuning_max_tokens_reject_non_positive_values(self) -> None:
+        # Preset path: the max_tokens shorthand resolves by assignment task and
+        # then must be positive; the error names the preset id, original key,
+        # and the offending value.
+        for preset_key in ("max_tokens", "story_drafting_max_tokens"):
+            for bad_value in (0, -1):
+                with self.subTest(preset_key=preset_key, value=bad_value):
+                    with self.assertRaisesRegex(
+                        ValueError,
+                        rf"sample.*{preset_key}.*greater than zero",
+                    ) as ctx:
+                        config_module._apply_model_tuning_preset(
+                            ModelTuningSettings(task_sampling={}),
+                            preset_id="sample",
+                            preset={"tuning": {preset_key: bad_value}},
+                            assignment_task="story_drafting",
+                        )
+                    self.assertIn(str(bad_value), str(ctx.exception))
+
+        # Valid positive boundary: max_tokens=1 resolves through the task alias
+        # and survives unchanged (not replaced by a default).
+        boundary_tuning = config_module._apply_model_tuning_preset(
+            ModelTuningSettings(task_sampling={}),
+            preset_id="sample",
+            preset={"tuning": {"max_tokens": 1}},
+            assignment_task="story_drafting",
+        )
+        self.assertEqual(boundary_tuning.story_drafting_max_tokens, 1)
+
+        # Env path: each model-tuning max-token variable rejects 0 and negative
+        # values with the variable named, and 1 survives as the tuning value.
+        env_fields = {
+            "NEWS_MODEL_MAX_INPUT_TOKENS": "model_max_input_tokens",
+            "NEWS_ARTICLE_SUMMARY_MAX_TOKENS": "article_summary_max_tokens",
+            "NEWS_STORY_DRAFTING_MAX_TOKENS": "story_drafting_max_tokens",
+            "NEWS_STORY_SCALE_SCREENING_MAX_TOKENS": "story_scale_screening_max_tokens",
+            "NEWS_TITLE_GENERATION_MAX_TOKENS": "title_generation_max_tokens",
+        }
+        for env_name, field_name in env_fields.items():
+            for bad_value in (0, -1):
+                with self.subTest(env=env_name, value=bad_value):
+                    with patch.dict(os.environ, {env_name: str(bad_value)}, clear=True):
+                        with self.assertRaisesRegex(
+                            ValueError,
+                            rf"{env_name}.*greater than zero",
+                        ) as ctx:
+                            config_module._apply_model_tuning_env_overrides(
+                                ModelTuningSettings(task_sampling={})
+                            )
+                    self.assertIn(str(bad_value), str(ctx.exception))
+            with patch.dict(os.environ, {env_name: "1"}, clear=True):
+                overridden = config_module._apply_model_tuning_env_overrides(
+                    ModelTuningSettings(task_sampling={})
+                )
+            self.assertEqual(getattr(overridden, field_name), 1)
+
+        # The positive wrapper keeps blank/unset and syntax behavior from the
+        # generic parser: blank means unset, a bad number still raises the
+        # generic integer error.
+        self.assertIsNone(config_module._positive_optional_int_env("X", {"X": " "}))
+        self.assertEqual(config_module._positive_optional_int_env("X", {"X": "7"}), 7)
+        with self.assertRaisesRegex(ValueError, "Invalid integer value"):
+            config_module._positive_optional_int_env("X", {"X": "abc"})
+
+        # Sampling fields are unaffected: top_k=0 stays legal on the generic
+        # integer path and only max-token fields enforce positivity.
+        with patch.dict(os.environ, {"NEWS_MODEL_ARTICLE_SUMMARY_TOP_K": "0"}, clear=True):
+            sampling_ok = config_module._apply_model_tuning_env_overrides(
+                ModelTuningSettings(task_sampling={})
+            )
+        self.assertEqual(
+            sampling_ok.task_sampling[config_module.MODEL_TASK_ARTICLE_SUMMARY].top_k,
+            0,
+        )
+
+    def test_model_tuning_preset_max_tokens_covers_all_fields_and_task_aliases(self) -> None:
+        canonical_fields = (
+            "model_max_input_tokens",
+            "article_summary_max_tokens",
+            "story_drafting_max_tokens",
+            "story_scale_screening_max_tokens",
+            "title_generation_max_tokens",
+        )
+        for field_name in canonical_fields:
+            for bad_value in (0, -1):
+                with self.subTest(field=field_name, value=bad_value):
+                    with self.assertRaisesRegex(
+                        ValueError,
+                        rf"sample.*{field_name}.*greater than zero",
+                    ) as ctx:
+                        config_module._apply_model_tuning_preset(
+                            ModelTuningSettings(task_sampling={}),
+                            preset_id="sample",
+                            preset={"tuning": {field_name: bad_value}},
+                            assignment_task="default",
+                        )
+                    self.assertIn(str(bad_value), str(ctx.exception))
+
+        task_fields = (
+            ("default", "model_max_input_tokens"),
+            (config_module.MODEL_TASK_ARTICLE_SUMMARY, "article_summary_max_tokens"),
+            (config_module.MODEL_TASK_STORY_DRAFTING, "story_drafting_max_tokens"),
+            (
+                config_module.MODEL_TASK_STORY_SCALE_SCREENING,
+                "story_scale_screening_max_tokens",
+            ),
+            (config_module.MODEL_TASK_TITLE_GENERATION, "title_generation_max_tokens"),
+            (config_module.MODEL_TASK_IMAGE_ART_DIRECTION, "title_generation_max_tokens"),
+        )
+        for assignment_task, field_name in task_fields:
+            with self.subTest(task=assignment_task):
+                tuning = config_module._apply_model_tuning_preset(
+                    ModelTuningSettings(task_sampling={}),
+                    preset_id="sample",
+                    preset={"tuning": {"max_tokens": 1}},
+                    assignment_task=assignment_task,
+                )
+                self.assertEqual(getattr(tuning, field_name), 1)
+
     def test_validate_managed_model_assignments_covers_branches(self) -> None:
         # The default assignment defines the compared values (model_name,
         # model_base_url), so it always matches and is skipped.

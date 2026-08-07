@@ -1169,6 +1169,7 @@ def resume_issue(cfg: dict, env: dict, branch: str, wf: str,
         log(f"RESUME FAILED issue={issue_number}: archon continue exited "
             f"immediately with code {proc.returncode}")
         return False, msg, None
+    _consume_dispatch_slot()
     log(f"RESUMED issue={issue_number} branch={full_branch} wf={wf} pid={proc.pid}")
     return True, msg, full_branch
 
@@ -1244,7 +1245,7 @@ def dispatch(cfg: dict, env: dict, wf: str, branch: str, message: str,
     detached-child spawn is broken (it passes the binary path as the command).
     The child is put in its own session so it survives the poller (and
     launchd restarts of it). Output appends to automation/archon-runs.log.
-    Returns True when the process spawned.
+    Returns True when the process survives the startup grace period.
     """
     if DRY_RUN:
         log(f"[dry-run] DISPATCH wf={wf} branch={branch} issue={number}")
@@ -1261,6 +1262,15 @@ def dispatch(cfg: dict, env: dict, wf: str, branch: str, message: str,
             )
     except OSError as exc:
         log(f"DISPATCH FAILED item={item_id} wf={wf}: {exc}")
+        return False
+    # A successful Popen only proves that the CLI could be forked. Give Archon
+    # a short startup window so invalid workflows/authentication/CLI failures
+    # do not advance the board to In Progress with no run to observe.
+    time.sleep(2)
+    if proc.poll() is not None:
+        log(f"DISPATCH FAILED item={item_id} issue={number} wf={wf}: "
+            f"archon exited immediately with code {proc.returncode}; "
+            f"see {log_path}")
         return False
     _consume_dispatch_slot()
     log(f"DISPATCHED item={item_id} issue={number} wf={wf} branch={branch} pid={proc.pid}")
