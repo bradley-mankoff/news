@@ -12,6 +12,8 @@ from news_pipeline.history_store import (
     connect,
     ensure_schema,
     export_history_csvs,
+    get_run_details,
+    list_recent_run_summaries,
     upsert_url_history,
     write_run_history,
 )
@@ -221,6 +223,182 @@ class HistoryStoreTests(unittest.TestCase):
             exports = export_history_csvs(db_path)
             self.assertTrue(exports)
             self.assertTrue((db_path.parent / "runs.csv").exists())
+
+    def test_delivery_fields_migrate_and_persist(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "history.duckdb"
+            ensure_schema(db_path)
+            with connect(db_path) as con:
+                con.execute("ALTER TABLE runs DROP COLUMN delivery_status")
+                con.execute("ALTER TABLE runs DROP COLUMN delivery_json")
+
+            diagnostics = self._diagnostics("2026-06-01T10:00:00", preset_id="daily")
+            diagnostics.record_delivery(
+                "sent",
+                recipients=["reader@example.com"],
+            )
+            write_run_history(
+                db_path,
+                run_id="2026-06-01_10-00-00",
+                diagnostics=diagnostics,
+                export_csv=False,
+            )
+
+            with connect(db_path) as con:
+                row = con.execute(
+                    "SELECT delivery_status, delivery_json FROM runs"
+                ).fetchone()
+            self.assertEqual(row[0], "sent")
+            self.assertIn("reader@example.com", row[1])
+
+    def test_delivery_failed_persists_independent_from_run_status(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "history.duckdb"
+            diagnostics = self._diagnostics("2026-06-01T10:00:00", preset_id="daily")
+            diagnostics.record_delivery(
+                "failed",
+                recipients=["reader@example.com"],
+                reason="delivery failed after report construction",
+                error_type="RuntimeError",
+                error_message="smtp down",
+            )
+            write_run_history(
+                db_path,
+                run_id="2026-06-01_10-00-00",
+                diagnostics=diagnostics,
+                export_csv=False,
+            )
+
+            with connect(db_path) as con:
+                self.assertEqual(
+                    con.execute("SELECT status FROM runs").fetchone()[0],
+                    "completed",
+                )
+                self.assertEqual(
+                    con.execute("SELECT delivery_status FROM runs").fetchone()[0],
+                    "failed",
+                )
+
+    def test_list_recent_run_summaries_orders_and_limits(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "history.duckdb"
+            first = self._diagnostics("2026-06-01T10:00:00", preset_id="scratch")
+            second = self._diagnostics("2026-06-02T10:00:00", preset_id="daily")
+            second.record_delivery(
+                "skipped: not_configured",
+                recipients=[],
+                reason="missing configuration: NEWS_EMAIL_FROM",
+            )
+            write_run_history(
+                db_path,
+                run_id="2026-06-01_10-00-00",
+                diagnostics=first,
+                export_csv=False,
+            )
+            write_run_history(
+                db_path,
+                run_id="2026-06-02_10-00-00",
+                diagnostics=second,
+                export_csv=False,
+            )
+
+            summaries = list_recent_run_summaries(db_path)
+            self.assertEqual(
+                [summary["run_id"] for summary in summaries],
+                ["2026-06-02_10-00-00", "2026-06-01_10-00-00"],
+            )
+            self.assertEqual(summaries[0]["delivery_status"], "skipped: not_configured")
+            # Old rows without delivery data display "not recorded".
+            self.assertEqual(summaries[1]["delivery_status"], "not recorded")
+            # Completed runs without a generated report are not generated.
+            self.assertEqual(summaries[0]["report_status"], "not_generated")
+            self.assertEqual(
+                summaries[0]["okf_path"],
+                str(db_path.parent / "okf" / "2026-06-02_10-00-00"),
+            )
+
+            limited = list_recent_run_summaries(db_path, limit=1)
+            self.assertEqual(len(limited), 1)
+            self.assertEqual(limited[0]["run_id"], "2026-06-02_10-00-00")
+            # The limit is bounded even when a caller requests a huge value.
+            self.assertEqual(len(list_recent_run_summaries(db_path, limit=999)), 2)
+            self.assertEqual(len(list_recent_run_summaries(db_path, limit="bad")), 2)
+            self.assertEqual(list_recent_run_summaries(db_path.parent / "missing.duckdb"), [])
+
+    def test_summary_report_status_from_okf_bundle(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "history.duckdb"
+            completed = self._diagnostics("2026-06-01T10:00:00", preset_id="daily")
+            completed.record_report(path="output/daily_outputs/latest_run.md")
+            failed = self._diagnostics("2026-06-02T10:00:00", preset_id="daily")
+            failed.events.append(
+                {
+                    "at": "2026-06-02T10:01:00",
+                    "label": "failed",
+                    "error_type": "RuntimeError",
+                    "error_message": "boom",
+                }
+            )
+            write_run_history(
+                db_path,
+                run_id="2026-06-01_10-00-00",
+                diagnostics=completed,
+                export_csv=False,
+            )
+            write_run_history(
+                db_path,
+                run_id="2026-06-02_10-00-00",
+                diagnostics=failed,
+                export_csv=False,
+            )
+
+            okf_report = db_path.parent / "okf" / "2026-06-01_10-00-00" / "report.md"
+            okf_report.parent.mkdir(parents=True)
+            okf_report.write_text("Report body", encoding="utf-8")
+
+            summaries = {
+                summary["run_id"]: summary
+                for summary in list_recent_run_summaries(db_path)
+            }
+            self.assertEqual(summaries["2026-06-01_10-00-00"]["report_status"], "available")
+            self.assertEqual(summaries["2026-06-02_10-00-00"]["report_status"], "not_generated")
+
+    def test_get_run_details_decodes_and_returns_none_for_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "history.duckdb"
+            diagnostics = self._diagnostics("2026-06-01T10:00:00", preset_id="daily")
+            diagnostics.record_delivery(
+                "failed",
+                recipients=["reader@example.com"],
+                error_type="RuntimeError",
+                error_message="smtp down",
+            )
+            write_run_history(
+                db_path,
+                run_id="2026-06-01_10-00-00",
+                diagnostics=diagnostics,
+                export_csv=False,
+            )
+
+            self.assertIsNone(get_run_details(db_path, "missing-run"))
+            self.assertIsNone(get_run_details(db_path.parent / "missing.duckdb", "2026-06-01_10-00-00"))
+
+            details = get_run_details(db_path, "2026-06-01_10-00-00")
+            self.assertIsNotNone(details)
+            assert details is not None
+            self.assertEqual(details["run_id"], "2026-06-01_10-00-00")
+            self.assertEqual(details["run_status"], "completed")
+            self.assertEqual(details["delivery_status"], "failed")
+            self.assertEqual(details["delivery"]["error_message"], "smtp down")
+            self.assertEqual(details["report_status"], "not_generated")
+            self.assertEqual(
+                details["okf_path"],
+                str(db_path.parent / "okf" / "2026-06-01_10-00-00"),
+            )
+            self.assertEqual(details["settings"]["preset_id"], "daily")
+            self.assertEqual(details["events"][-1]["label"], "completed")
+            self.assertEqual(details["artifacts"], [])
+            self.assertEqual(details["delivery"]["recipients"], ["reader@example.com"])
 
     def _diagnostics(self, started_at: str, *, preset_id: str, blocking: bool = False) -> RunDiagnostics:
         return RunDiagnostics(

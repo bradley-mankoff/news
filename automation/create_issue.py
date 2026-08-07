@@ -79,8 +79,14 @@ def main() -> int:
     cfg = json.loads((ROOT / "automation" / "config.json").read_text())
     lane = args.lane or cfg.get("default_lane", "Backlog")
 
-    body = args.body or (f"**What and why:** {args.title}\n\n"
-                         "Acceptance criteria to be filled when planned.")
+    body = args.body or (
+        f"**What and why:** {args.title}\n\n"
+        "## Ownership\n\n"
+        "Files/areas: declare before moving this issue to Todo.\n\n"
+        "## Depends on\n\n"
+        "None.\n\n"
+        "Acceptance criteria to be filled when planned."
+    )
     cmd = ["issue", "create", "-R", cfg["repo"], "--title", args.title,
            "--body", body]
     if args.label:

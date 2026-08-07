@@ -7,15 +7,23 @@ import unittest
 from unittest.mock import MagicMock, mock_open, patch
 
 from automation import board_poller as bp
+import automation.board_poller as board_poller
 from automation.board_poller import (
+    branch_empty_vs_main,
+    build_ready_for_review_comment,
     conflict_episode_action,
     dedupe_deferred,
     dep_gate,
+    dispatch,
+    develop_conflict_action,
+    extract_test_guidance,
+    fetch_active_workflow_count,
     fetch_project,
 
     find_unchecked_criteria,
     fmt_deps,
     has_deferral_language,
+    issue_is_runnable,
     match_issue_pr,
     merge_pr_to_base,
     normalize_title,
@@ -23,9 +31,12 @@ from automation.board_poller import (
     parse_deferred_work,
     parse_verdict,
     pick_workflow,
+    post_ready_for_review_comment,
+    prepare_dispatch_budget,
     reconcile_deferred_work,
     run_status_for,
     sync_local_develop,
+    sync_runnable_labels,
     try_merge_base_into_head,
 )
 
@@ -45,6 +56,7 @@ def _cfg() -> dict:
             "Todo": "todo",
             "In Progress": "in_progress",
             "Blocked": "blocked",
+            "Needs Input": "needs_input",
             "Ready for Review": "ready",
             "In Review": "review",
             "Done": "done",
@@ -86,6 +98,67 @@ ISOLATION_LIST = (
 )
 
 
+class DispatchCapacityTest(unittest.TestCase):
+    def tearDown(self) -> None:
+        # The budget is a module global reset per poll; never leak a
+        # reserved/exhausted value into later tests.
+        board_poller._DISPATCH_BUDGET = None
+
+    def test_active_workflow_count_ignores_terminal_runs(self):
+        result = subprocess.CompletedProcess(
+            ["archon"], 0,
+            json.dumps({"runs": [
+                {"status": "running"},
+                {"status": "paused"},
+                {"status": "completed"},
+            ]}),
+            "",
+        )
+        with patch("automation.board_poller.subprocess.run", return_value=result):
+            self.assertEqual(fetch_active_workflow_count({}), 2)
+
+    def test_active_workflow_count_fails_closed(self):
+        result = subprocess.CompletedProcess(["archon"], 1, "", "unavailable")
+        with patch("automation.board_poller.subprocess.run", return_value=result):
+            self.assertIsNone(fetch_active_workflow_count({}))
+
+    def test_budget_reserves_slots_after_existing_runs(self):
+        with (
+            patch.object(board_poller, "DRY_RUN", False),
+            patch.object(board_poller, "fetch_active_workflow_count", return_value=2),
+        ):
+            prepare_dispatch_budget({"max_concurrent_workflows": 3}, {})
+            self.assertEqual(board_poller._DISPATCH_BUDGET, 1)
+
+    def test_budget_holds_when_status_lookup_fails(self):
+        with (
+            patch.object(board_poller, "DRY_RUN", False),
+            patch.object(board_poller, "fetch_active_workflow_count", return_value=None),
+        ):
+            prepare_dispatch_budget({"max_concurrent_workflows": 3}, {})
+            self.assertEqual(board_poller._DISPATCH_BUDGET, 0)
+
+    def test_dispatch_holds_when_budget_is_exhausted(self):
+        with (
+            patch.object(board_poller, "DRY_RUN", False),
+            patch.object(board_poller, "_DISPATCH_BUDGET", 0),
+            patch("automation.board_poller.subprocess.Popen") as popen,
+        ):
+            self.assertFalse(dispatch({}, {}, "workflow", "branch", "message", "item", 7))
+            popen.assert_not_called()
+
+    def test_dispatch_consumes_reserved_slot(self):
+        with (
+            patch.object(board_poller, "DRY_RUN", False),
+            patch.object(board_poller, "_DISPATCH_BUDGET", 1),
+            patch("builtins.open", unittest.mock.mock_open()),
+            patch("automation.board_poller.subprocess.Popen") as popen,
+        ):
+            popen.return_value.pid = 123
+            self.assertTrue(dispatch({}, {}, "workflow", "branch", "message", "item", 7))
+            self.assertEqual(board_poller._DISPATCH_BUDGET, 0)
+
+
 class MatchIssuePrTest(unittest.TestCase):
     def _ship(self):
         return {"number": 51, "baseRefName": "main",
@@ -115,6 +188,23 @@ class MatchIssuePrTest(unittest.TestCase):
         pr = {"number": 9, "baseRefName": "main", "body": "Nothing here",
               "title": "Unrelated"}
         self.assertIsNone(match_issue_pr([pr], 21))
+    def test_incidental_issue_mention_is_not_a_link(self):
+        pr = {
+            "number": 153,
+            "baseRefName": "develop",
+            "body": "Issue #124 cleanup removed an old model reference.",
+            "title": "Anchor curated-match prefix (#92)",
+        }
+        self.assertIsNone(match_issue_pr([pr], 124))
+
+    def test_issue_link_line_with_following_text_is_accepted(self):
+        pr = {
+            "number": 11,
+            "baseRefName": "develop",
+            "body": "Issue: #21\n\nDetails follow.",
+            "title": "Implement the change",
+        }
+        self.assertEqual(match_issue_pr([pr], 21)["number"], 11)
 
 
 class ConflictEpisodeActionTest(unittest.TestCase):
@@ -135,6 +225,10 @@ class ConflictEpisodeActionTest(unittest.TestCase):
         self.assertEqual(
             conflict_episode_action("CONFLICTING", "m", "queued", True), "active")
 
+    def test_paused_fix_run_waits(self):
+        self.assertEqual(
+            conflict_episode_action("CONFLICTING", "m", "paused", True), "active")
+
     def test_fix_run_completed_still_conflicting(self):
         self.assertEqual(
             conflict_episode_action("CONFLICTING", "m", "completed", True), "failed")
@@ -152,6 +246,47 @@ class ConflictEpisodeActionTest(unittest.TestCase):
 
     def test_mergeable_clears_mech_failed_only(self):
         self.assertEqual(conflict_episode_action("MERGEABLE", None, None, True), "clear")
+
+
+class DevelopConflictActionTest(unittest.TestCase):
+    def test_fresh_conflict_tries_mechanical(self):
+        self.assertEqual(develop_conflict_action(False, None, None), "mech")
+
+
+class BranchEmptyVsMainTest(unittest.TestCase):
+    def _gh(self, stdout="", returncode=0):
+        return subprocess.CompletedProcess([], returncode, stdout=stdout, stderr="")
+
+    @patch("automation.board_poller.gh")
+    def test_empty_branch_is_already_shipped(self, gh):
+        gh.return_value = self._gh('{"ahead_by": 0}')
+        self.assertTrue(branch_empty_vs_main({"repo": "r"}, {}, "head", "main"))
+
+    @patch("automation.board_poller.gh")
+    def test_ahead_branch_is_shippable(self, gh):
+        gh.return_value = self._gh('{"ahead_by": 5}')
+        self.assertFalse(branch_empty_vs_main({"repo": "r"}, {}, "head", "main"))
+
+    @patch("automation.board_poller.gh")
+    def test_api_error_is_not_shipped(self, gh):
+        gh.return_value = self._gh("", returncode=1)
+        self.assertFalse(branch_empty_vs_main({"repo": "r"}, {}, "head", "main"))
+
+    @patch("automation.board_poller.gh")
+    def test_unparseable_is_not_shipped(self, gh):
+        gh.return_value = self._gh("not json")
+        self.assertFalse(branch_empty_vs_main({"repo": "r"}, {}, "head", "main"))
+
+    def test_mech_failed_dispatches_resolver(self):
+        self.assertEqual(develop_conflict_action(True, None, None), "dispatch")
+
+    def test_resolver_active_waits(self):
+        for st in ("running", "pending", "queued", "scheduled", "paused"):
+            self.assertEqual(develop_conflict_action(True, "m", st), "active")
+
+    def test_resolver_done_still_failing_needs_human(self):
+        self.assertEqual(develop_conflict_action(True, "m", "completed"), "failed")
+        self.assertEqual(develop_conflict_action(True, "m", "failed"), "failed")
 
 
 class ParseDepRefsTest(unittest.TestCase):
@@ -210,6 +345,65 @@ class DepGateTest(unittest.TestCase):
             dep_gate([5], {5: "Todo"}, {5: "OPEN"}, "Done"), ([5], []))
 
 
+
+class RunnableLabelTest(unittest.TestCase):
+    def _issue(self, number, status, body="", labels=None, state="OPEN"):
+        return {
+            "id": f"item-{number}",
+            "status": status,
+            "content": {
+                "__typename": "Issue",
+                "number": number,
+                "state": state,
+                "body": body,
+                "repository": {"nameWithOwner": "r"},
+                "labels": {"nodes": [{"name": name} for name in (labels or [])]},
+            },
+        }
+
+    def test_only_open_todo_issue_with_satisfied_deps_is_runnable(self):
+        issue = self._issue(8, "Todo", "Depends on: #7")
+        self.assertTrue(issue_is_runnable(
+            issue["content"], issue["status"],
+            {7: "Done"}, {7: "CLOSED"}, "Todo", "Done"))
+        self.assertFalse(issue_is_runnable(
+            issue["content"], "In Progress",
+            {7: "Done"}, {7: "CLOSED"}, "Todo", "Done"))
+        self.assertFalse(issue_is_runnable(
+            issue["content"], issue["status"],
+            {7: "Todo"}, {7: "OPEN"}, "Todo", "Done"))
+
+    @patch("automation.board_poller.gh")
+    def test_sync_adds_and_removes_label(self, gh):
+        gh.return_value = subprocess.CompletedProcess([], 0, stdout="", stderr="")
+        items = [
+            self._issue(8, "Todo"),
+            self._issue(9, "In Progress", labels=["runnable"]),
+        ]
+        sync_runnable_labels(
+            {"repo": "r", "runnable_label": "runnable"},
+            {},
+            items,
+            {8: "Todo", 9: "In Progress"},
+            {8: "OPEN", 9: "OPEN"},
+            "Todo",
+            "Done",
+        )
+        commands = [call.args[0] for call in gh.call_args_list]
+        self.assertIn(
+            ["label", "create", "runnable", "-R", "r", "--color", "0e8a16",
+             "--description", "Todo issue with satisfied dependencies", "--force"],
+            commands,
+        )
+        self.assertIn(
+            ["issue", "edit", "8", "-R", "r", "--add-label", "runnable"],
+            commands,
+        )
+        self.assertIn(
+            ["issue", "edit", "9", "-R", "r", "--remove-label", "runnable"],
+            commands,
+        )
+
 class ParseVerdictTest(unittest.TestCase):
     def test_approve(self):
         self.assertEqual(parse_verdict(["Reviewed. VERDICT: approve"]), "approve")
@@ -247,6 +441,153 @@ class ParseVerdictTest(unittest.TestCase):
             parse_verdict(["line one\nVERDICT: approve\nline three"]), "approve")
 
 
+class ReadyForReviewCommentTest(unittest.TestCase):
+    def test_explicit_guidance_wins_over_older_validation(self):
+        comments = [
+            {"body": "## Validation\n`pytest tests/test_old.py -q`"},
+            {"body": ("## How to test\n"
+                      "Run `news ui` and open http://localhost:8766.\n"
+                      "### Expected\nThe page loads.")},
+        ]
+        self.assertEqual(
+            extract_test_guidance(comments),
+            ("Run `news ui` and open http://localhost:8766.\n"
+             "### Expected\nThe page loads."),
+        )
+
+    def test_validation_backfills_older_completion_records(self):
+        comments = [
+            {"body": "### Validation\n```bash\npytest tests/test_model_catalog.py -q\n```"},
+            {"body": "### Validation\n✅ Tests (478 passed, 0 failed)."},
+            {"body": "## How to test\n*None.*"},
+        ]
+        self.assertEqual(
+            extract_test_guidance(comments),
+            "```bash\npytest tests/test_model_catalog.py -q\n```",
+        )
+
+    def test_build_includes_branch_pr_and_promotion_command(self):
+        body = build_ready_for_review_comment(
+            92, "develop", 153, "Run `pytest tests/test_model_catalog.py -q`."
+        )
+        self.assertIn("Develop PR #153 was merged into `develop`.", body)
+        self.assertIn("pytest tests/test_model_catalog.py -q", body)
+        self.assertIn(
+            'python3 automation/move_item.py 92 "In Review"', body)
+
+    def test_build_removes_inline_shell_comments_from_commands(self):
+        body = build_ready_for_review_comment(
+            92,
+            "develop",
+            153,
+            "```bash\n"
+            ".venv/bin/python -m pytest tests/test_ui.py -q # integration consumers\n"
+            "```",
+        )
+        self.assertIn(
+            ".venv/bin/python -m pytest tests/test_ui.py -q", body)
+        self.assertNotIn("# integration consumers", body)
+
+    def test_build_is_explicit_when_no_test_path_was_recorded(self):
+        body = build_ready_for_review_comment(7, "develop", None, None)
+        self.assertIn("no linked develop PR was available", body)
+        self.assertIn("No runnable issue-specific instructions", body)
+
+    @patch("automation.board_poller.gh")
+    def test_post_fetches_guidance_then_comments(self, gh):
+        gh.side_effect = [
+            subprocess.CompletedProcess(
+                [], 0, stdout=json.dumps({
+                    "comments": [{"body": "## How to test\nRun the focused check."}],
+                }), stderr=""),
+            subprocess.CompletedProcess([], 0, stdout="", stderr=""),
+        ]
+        with patch.object(board_poller, "DRY_RUN", False):
+            self.assertTrue(
+                post_ready_for_review_comment(
+                    {"repo": "o/r"}, {}, 7, "develop", 9))
+        self.assertEqual(gh.call_args_list[0].args[0][:2], ["issue", "view"])
+        comment_args = gh.call_args_list[1].args[0]
+        self.assertEqual(comment_args[:2], ["issue", "comment"])
+        self.assertIn("Run the focused check.", comment_args[-1])
+
+
+class ReadyForReviewTransitionTest(unittest.TestCase):
+    def test_completed_run_posts_handoff_after_develop_merge(self):
+        item_id = "item-92"
+        item = {
+            "id": item_id,
+            "status": "In Progress",
+            "content": {
+                "__typename": "Issue",
+                "number": 92,
+                "title": "Anchor curated-match prefix",
+                "url": "https://github.com/o/r/issues/92",
+                "body": "",
+                "state": "OPEN",
+                "repository": {"nameWithOwner": "o/r"},
+                "labels": {"nodes": []},
+            },
+        }
+        cfg = {
+            "repo": "o/r",
+            "state_file": "state.json",
+            "lanes": {
+                "Backlog": "backlog",
+                "Todo": "todo",
+                "In Progress": "in_progress",
+                "Ready for Review": "ready",
+                "In Review": "review",
+                "Done": "done",
+            },
+            "dispatch": {
+                "todo": {
+                    "complete_move_to": "Ready for Review",
+                    "merge_develop_base": "develop",
+                },
+                "review": {
+                    "merge_ship_on_approve": False,
+                    "ship_to": "main",
+                    "done_lane": "Done",
+                },
+            },
+            "deferred_work": {"enabled": True},
+        }
+        state = {
+            "_meta": {"snapshot_done": True},
+            item_id: {
+                "status": "In Progress",
+                "issue_number": 92,
+                "dispatch_msg": "run",
+            },
+        }
+        with (
+            patch.object(board_poller, "fetch_project",
+                         return_value=("p", "f", {"Ready for Review": "ready"}, [item])),
+            patch.object(board_poller, "prepare_dispatch_budget"),
+            patch.object(board_poller, "sync_runnable_labels"),
+            patch.object(board_poller, "fetch_runs_by_message",
+                         return_value={"run": "completed"}),
+            patch.object(board_poller, "issue_has_label", return_value=False),
+            patch.object(board_poller, "find_issue_pr",
+                         return_value=({"number": 153, "state": "OPEN",
+                                        "headRefName": "issue-92"}, True)),
+            patch.object(board_poller, "merge_pr_to_base",
+                         return_value=(True, "merged")),
+            patch.object(board_poller, "sync_local_develop",
+                         return_value="local sync skipped"),
+            patch.object(board_poller, "reconcile_deferred_work", return_value=True),
+            patch.object(board_poller, "move_to_lane", return_value=True) as move,
+            patch.object(board_poller, "post_ready_for_review_comment",
+                         return_value=True) as post,
+            patch.object(board_poller, "save_state"),
+        ):
+            board_poller.poll(cfg, {}, state)
+        move.assert_called_once_with(cfg, {}, "p", "item-92", "f", "ready")
+        post.assert_called_once_with(cfg, {}, 92, "develop", 153)
+        self.assertTrue(state[item_id]["ready_test_comment"])
+
+
 class ParseDeferredWorkTest(unittest.TestCase):
     def _record(self, section):
         return ("## What shipped\nStuff.\n\n## Deferred work\n" + section
@@ -265,11 +606,13 @@ class ParseDeferredWorkTest(unittest.TestCase):
              "description": "Port the model layer to llama.cpp.",
              "reason": "Packaging work beyond this decision.",
              "label": "feature",
-             "links_to": None, "supersedes": None, "skip": ""},
+             "links_to": None, "supersedes": None, "skip": "",
+             "out_of_scope": ""},
             {"title": "Extract shared readiness helper",
              "description": "Merge the two readiness loops.",
              "reason": "", "label": "",
-             "links_to": None, "supersedes": None, "skip": ""},
+             "links_to": None, "supersedes": None, "skip": "",
+             "out_of_scope": ""},
         ])
 
     def test_none_marker(self):
@@ -287,7 +630,8 @@ class ParseDeferredWorkTest(unittest.TestCase):
         self.assertEqual(parse_deferred_work(body), [
             {"title": "First", "description": "one",
              "reason": "", "label": "",
-             "links_to": None, "supersedes": None, "skip": ""}])
+             "links_to": None, "supersedes": None, "skip": "",
+             "out_of_scope": ""}])
 
     def test_case_insensitive_heading(self):
         body = "## DEFERRED WORK\n- **Title:** X\n"
@@ -325,6 +669,12 @@ class ParseDeferredWorkTest(unittest.TestCase):
         body = self._record("- **Title:** X\n  **Skip:** HANDOFF forbids this\n")
         item = parse_deferred_work(body)[0]
         self.assertEqual(item["skip"], "HANDOFF forbids this")
+
+    def test_out_of_scope_field(self):
+        body = self._record("- **Title:** X\n  **Out of scope:** dark-mode\n")
+        item = parse_deferred_work(body)[0]
+        self.assertEqual(item["out_of_scope"], "dark-mode")
+        self.assertEqual(item["skip"], "")
 
     def test_bare_item_has_no_stamps(self):
         body = self._record("- **Title:** X\n  **Description:** d\n")
@@ -439,6 +789,28 @@ class PickWorkflowTest(unittest.TestCase):
                          "archon-fix-github-issue")
 
 
+class FetchRunsByMessageTest(unittest.TestCase):
+    def test_lookup_failure_is_distinct_from_empty_success(self):
+        failed = subprocess.CompletedProcess(
+            ["archon"], 1, "", "archon unavailable"
+        )
+        with patch.object(bp.subprocess, "run", return_value=failed):
+            self.assertEqual(bp.fetch_runs_by_message({}), ({}, False))
+
+        empty = subprocess.CompletedProcess(
+            ["archon"], 0, json.dumps({"runs": []}), ""
+        )
+        with patch.object(bp.subprocess, "run", return_value=empty):
+            self.assertEqual(bp.fetch_runs_by_message({}), ({}, True))
+
+    def test_malformed_run_listing_fails_closed(self):
+        malformed = subprocess.CompletedProcess(
+            ["archon"], 0, json.dumps({"runs": {}}), ""
+        )
+        with patch.object(bp.subprocess, "run", return_value=malformed):
+            self.assertEqual(bp.fetch_runs_by_message({}), ({}, False))
+
+
 class RunStatusForTest(unittest.TestCase):
     def test_exact_match(self):
         self.assertEqual(run_status_for({"m1": "completed"}, "m1"), "completed")
@@ -505,6 +877,50 @@ class MergePrToBaseTest(unittest.TestCase):
                                         "develop", 5)
         self.assertTrue(ok)
         self.assertFalse(any(a[0:2] == ["issue", "reopen"] for a in calls))
+
+    def test_issue_state_lookup_failure_blocks_success(self):
+        calls, fake_gh = self._reopen_flow("OPEN")
+        original = fake_gh
+
+        def fail_issue_view(args, env, timeout=90):
+            if args[0:2] == ["issue", "view"]:
+                return _cp(returncode=1, stderr="rate limited")
+            return original(args, env, timeout)
+
+        with patch("automation.board_poller.gh", side_effect=fail_issue_view), \
+                patch("automation.board_poller.time.sleep"):
+            ok, note = merge_pr_to_base({"repo": "o/r"}, {},
+                                        {"number": 7, "state": "OPEN"},
+                                        "develop", 5)
+        self.assertFalse(ok)
+        self.assertIn("state is unreadable", note)
+
+    def test_issue_reopen_failure_blocks_success(self):
+        calls, fake_gh = self._reopen_flow("CLOSED")
+        original = fake_gh
+
+        def fail_reopen(args, env, timeout=90):
+            if args[0:2] == ["issue", "reopen"]:
+                return _cp(returncode=1, stderr="permission denied")
+            return original(args, env, timeout)
+
+        with patch("automation.board_poller.gh", side_effect=fail_reopen), \
+                patch("automation.board_poller.time.sleep"):
+            ok, note = merge_pr_to_base({"repo": "o/r"}, {},
+                                        {"number": 7, "state": "OPEN"},
+                                        "develop", 5)
+        self.assertFalse(ok)
+        self.assertIn("reopen failed", note)
+
+    def test_invalid_issue_state_blocks_success(self):
+        calls, fake_gh = self._reopen_flow("UNKNOWN")
+        with patch("automation.board_poller.gh", side_effect=fake_gh), \
+                patch("automation.board_poller.time.sleep"):
+            ok, note = merge_pr_to_base({"repo": "o/r"}, {},
+                                        {"number": 7, "state": "OPEN"},
+                                        "develop", 5)
+        self.assertFalse(ok)
+        self.assertIn("unknown state", note)
 
     def test_merge_without_issue_number_skips_reopen_check(self):
         calls, fake_gh = self._reopen_flow("CLOSED")
@@ -969,6 +1385,20 @@ class ResumeIssueTests(unittest.TestCase):
     """HIGH: defer when the branch can't be resolved; verify the spawn;
     only remove the needs-input label after verified spawn + successful edit."""
 
+    def test_dry_run_does_not_resume_or_mutate(self) -> None:
+        with patch.object(bp, "DRY_RUN", True), \
+                patch.object(bp, "resolve_worktree_branch") as resolve, \
+                patch.object(bp, "gh") as gh, \
+                patch.object(bp.subprocess, "Popen") as popen:
+            ok, msg, full = bp.resume_issue(
+                _cfg(), {}, "issue-21", "archon-fix-github-issue", 21
+            )
+        self.assertTrue(ok)
+        self.assertEqual((msg, full), ("dry-run", "issue-21"))
+        resolve.assert_not_called()
+        gh.assert_not_called()
+        popen.assert_not_called()
+
     def test_deferred_when_worktree_branch_not_found(self) -> None:
         with patch.object(bp, "resolve_worktree_branch", return_value=None), \
              patch.object(bp, "gh") as gh, \
@@ -1102,6 +1532,18 @@ class FindIssuePrTest(unittest.TestCase):
         self.assertIsNone(pr)
         self.assertTrue(ok)           # genuinely absent is distinguishable
 
+    def test_review_preparation_defers_when_develop_pr_is_absent(self):
+        rec = {}
+        with patch.object(bp, "find_issue_pr", return_value=(None, True)), \
+                patch.object(bp, "find_or_create_ship_pr") as ship, \
+                patch.object(bp, "dispatch") as dispatch:
+            result = bp.ensure_ship_review(
+                _cfg(), {}, "item-21", 21, "Feature", "project", "field",
+                {"Done": "done"}, "Done", rec)
+        self.assertIsNone(result)
+        ship.assert_not_called()
+        dispatch.assert_not_called()
+
     def test_base_filter_propagates(self):
         prs = json.dumps([
             {"number": 47, "baseRefName": "develop", "body": "Issue: #21",
@@ -1151,7 +1593,7 @@ class FindOrCreateShipPrTest(unittest.TestCase):
             pr = bp.find_or_create_ship_pr(
                 self._cfg(), {}, "head", "T", 5, "main")
         self.assertIsNone(pr)
-        self.assertTrue(any("pr create failed" in c[0][0]
+        self.assertTrue(any("SHIP PR CREATE FAILED" in c[0][0]
                             for c in log.call_args_list))
 
     def test_unparseable_stdout_logged_and_returns_none(self):
@@ -1197,6 +1639,7 @@ class PollFlowTest(unittest.TestCase):
         return ("project-1", "field-1",
                 {"Backlog": "o-backlog", "Todo": "o-todo",
                  "In Progress": "o-ip", "Blocked": "o-blocked",
+                 "Needs Input": "o-needs-input",
                  "Ready for Review": "o-ready", "In Review": "o-review",
                  "Done": "o-done"}, items)
 
@@ -1250,7 +1693,7 @@ class PollFlowTest(unittest.TestCase):
         self.assertTrue(any("REVIEW PREP DEFERRED" in c[0][0]
                             for c in log.call_args_list))
 
-    def test_needs_input_label_moves_completed_run_to_blocked(self):
+    def test_needs_input_label_moves_completed_run_to_needs_input(self):
         state = {"_meta": {"snapshot_done": True},
                  "item-5": {"status": "In Progress", "dispatch_msg": "run msg",
                             "issue_number": 5}}
@@ -1267,7 +1710,7 @@ class PollFlowTest(unittest.TestCase):
              patch("automation.board_poller.log"), \
              patch("automation.board_poller.save_state"):
             bp.poll(self._cfg(), {}, state)
-        self.assertTrue(any(c.args[5] == "o-blocked"
+        self.assertTrue(any(c.args[5] == "o-needs-input"
                             for c in move.call_args_list))
         find_pr.assert_not_called()      # no develop merge while blocked
         self.assertNotIn("dispatch_msg", state["item-5"])

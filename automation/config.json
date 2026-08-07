@@ -6,6 +6,8 @@
   "default_lane": "Backlog",
   "poll_interval_seconds": 45,
   "state_file": "automation/state.json",
+  "max_concurrent_workflows": 10,
+  "runnable_label": "runnable",
   "deferred_work": {
     "enabled": true,
     "fallback_warn": true
@@ -15,6 +17,7 @@
     "Todo": "todo",
     "In Progress": "in_progress",
     "Blocked": "blocked",
+    "Needs Input": "needs_input",
     "Ready for Review": "ready",
     "In Review": "review",
     "Done": "done"
@@ -25,6 +28,7 @@
       "move_to": "In Progress",
       "complete_move_to": "Ready for Review",
       "merge_develop_base": "develop",
+      "conflict_fix_workflow": "archon-fix-develop-conflicts",
       "label_overrides": {
         "bug": "archon-fix-github-issue",
         "feature": "archon-idea-to-pr",

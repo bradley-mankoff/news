@@ -5,23 +5,34 @@ Machine-local archon (archon-pi build, v0.7.0 = stock Archon) lives at
 
 ## Execution model
 
-- Provider: `pi` (the `pi` CLI); model `opencode-go/deepseek-v4-flash` at `effort: max`
-  (xhigh thinking) for every tier (`small`/`medium`/`large`) — configured in
-  `archon-home/config.yaml`.
+- Routine nodes use the `pi` CLI with
+  `opencode-go/deepseek-v4-flash` at `effort: max` via the `small`/`medium`/`large`
+  tiers in `archon-home/config.yaml`.
+- Rigorous nodes use Pi's OpenAI Codex OAuth backend with
+  `provider: pi`, `model: openai-codex/gpt-5.6-luna`, and `effort: max`, matching
+  this session's `openai-codex/gpt-5.6-luna` model.
+  It covers planning, review, conflict resolution, issue drafting, and the
+  completion records that classify deferred work; the board poller then creates
+  deduped issues mechanically.
+- Both paths run at their maximum Pi reasoning setting: DeepSeek and the
+  OpenAI Codex backend both use `effort: max`.
+- Pi OAuth credentials are configured with the interactive `/login` command.
+  The OpenAI Codex subscription is stored in `~/.pi/agent/auth.json`; the
+  routine OpenCode credential remains alongside it.
 - Bundled workflow defaults are disabled (repo `.archon/config.yaml` →
-  `defaults.loadDefaultWorkflows: false`). The usable set is the 15 files in
+  `defaults.loadDefaultWorkflows: false`). The usable set is the 17 files in
   `archon-home/workflows/`.
-- Provider pins on bundled workflows are **overridden when the node's `model:`
-  resolves to a tier** — the tier's provider wins (dag-executor). E.g.
-  `archon-fix-github-issue` declares `provider: claude, model: medium` but runs
-  entirely on pi/opencode-go via the `medium` tier. Only workflows pinned to claude
-  with **no tier model** stay claude-locked (archived below).
+- Tier model refs use the tier's provider; explicit Pi model refs select the
+  OpenAI Codex backend. Routine nodes therefore remain on Pi/DeepSeek while
+  rigorous nodes use Pi/OpenAI Codex.
+- Only workflows pinned to claude with **no tier model** stay claude-locked
+  (archived below).
 
-## Usable workflows (pi/opencode-go)
+## Usable workflows (Pi: OpenAI Codex + OpenCode)
 
 | Workflow | Intent |
 |---|---|
-| `archon-fix-github-issue` | Classify issue → investigate (bug) or plan (feature) → implement → validate → **draft PR** → smart review (code-review always + conditional error-handling/test-coverage/comment-quality/docs-impact) → self-fix → simplify → report on the issue. Leaves the PR draft — the human tests locally, then moves the issue to In Review. Local copy adds a `completion-comment` node: posts `## What shipped` / `## Decisions` / `## Acceptance criteria` (with evidence) on the issue. |
+| `archon-fix-github-issue` | Classify issue → investigate (bug) or plan (feature) → implement → validate → **draft PR** → smart review (code-review always + conditional error-handling/test-coverage/comment-quality/docs-impact) → self-fix → report on the issue. Leaves the PR draft — the human tests locally, then moves the issue to In Review. Local copy adds a `completion-comment` node: posts `## What shipped` / `## Decisions` / `## Acceptance criteria` / `## How to test` (with evidence) on the issue. |
 | `archon-idea-to-pr` | Feature idea/issue → plan → implement → validate → ready PR → comprehensive review block (5 parallel review agents) → synthesize → fix → summary comment. Local copy adds a `completion-comment` node with the same structured record as fix-github-issue. |
 | `archon-plan-to-pr` | Execute an existing plan file end to end (same review block as idea-to-pr). |
 | `archon-feature-development` | Implement from a plan file or a GitHub issue containing a plan. |
@@ -32,18 +43,19 @@ Machine-local archon (archon-pi build, v0.7.0 = stock Archon) lives at
 | `archon-create-issue` | File a bug report with reproduction evidence. Requires the `agent-browser` skill only for web-UI repro playbooks (installed globally). |
 | `archon-resolve-conflicts` | Resolve PR merge conflicts. |
 | `archon-fix-ship-conflicts` | Resolve conflicts on a ship PR (In Review lane) so the verdict-gated merge can proceed: merge base into head, resolve, validate, push, comment. Dispatched by the board poller when the mechanical merge API hits real conflicts; never posts a `VERDICT:` line (the review workflow owns that). Fully inline prompt node — no DB commands. |
+| `archon-fix-develop-conflicts` | Resolve conflicts on a develop PR (In Progress lane) so the completion merge can proceed: merge develop into head, resolve, validate (`.venv` pytest), push, comment. Dispatched by the board poller's develop-conflict gate; never posts a `VERDICT:` line. Fully inline prompt node. |
 | `archon-assist` | Fallback general-purpose agent. |
 | `archon-workflow-builder` | Author a new workflow from a description. |
 | `archon-test-loop-dag` | Loop-mechanics test workflow (used in smoke tests). |
 | `archon-review-block` | Building block included by idea-to-pr / plan-to-pr / issue-review-full — not standalone. |
-| `archon-pi-default` | Minimal stock-pi oneshot. |
+| `archon-pi-default` | Minimal fallback oneshot. |
 
 ## Archived workflows (claude-only — not discovered)
 
 Reason: pinned to the claude provider with **no tier model reference**, so the
 tier override does not apply; they need the Claude Code binary and/or
-claude-only features (hooks, interactive relay). This project runs exclusively
-on pi/opencode-go. Original YAMLs are preserved at
+claude-only features (hooks, interactive relay). Routine nodes use
+pi/opencode-go; rigorous nodes use Pi's OpenAI Codex backend. Original YAMLs are preserved at
 `~/.local/share/archon-pi/archon-home/workflows-archived/`.
 
 | Workflow | Original intent | Why archived |
@@ -78,9 +90,34 @@ YAML is overwritten. If a workflow file is replaced, re-apply:
   (posts `VERDICT: <approve|request-changes|block>` on the PR).
 - `archon-fix-github-issue.yaml`: `completion-comment` node after `report`
   (posts the structured completion record on the issue, including the
-  `## Deferred work` section the board poller parses).
+  `## How to test` handoff and the `## Deferred work` section the board poller
+  parses).
 - `archon-idea-to-pr.yaml`: `completion-comment` node after `workflow-summary`
-  (same structured record + `## Deferred work` section).
+  (same structured record + `## How to test` handoff + `## Deferred work`
+  section).
+- Both implementation workflows: `sync-with-develop` node before the PR node
+  (merges develop into the branch, resolves, validates) — `create-pr` /
+  `finalize-pr` depend on it.
+- `archon-review-block.yaml`: `spec-review` node after `sync` (Spec axis of
+  the two-axis review — the diff vs the originating issue's criteria and Out
+  of scope; posts a summary on the PR, never a VERDICT); `synthesize`
+  depends on it.
+- `archon-fix-develop-conflicts.yaml`: fully inline (one `prompt` node, no DB
+  commands); the develop-lane twin of `archon-fix-ship-conflicts`.
+
+## Vendored matt pocock skills (MIT, adapted)
+
+Wrapper-facing skills (grilling, to-spec, to-tickets, triage, wayfinder, and
+the execution disciplines) are installed at `~/.claude/skills/` (home level,
+auto-discovered by the omp wrapper — attribution + license in
+`~/.claude/skills/LICENSE-mattpocock-skills.txt`). The execution disciplines
+used inside workflows are also vendored as repo-level commands in
+`.archon/commands/` (`implement`, `tdd`, `code-review`, `diagnosing-bugs`,
+`prototype`, `research`, `domain-modeling`, `codebase-design`,
+`resolving-merge-conflicts`, `handoff` — `archon validate commands` checks
+them). Workflow prompts reference `resolving-merge-conflicts` (sync + resolver
+nodes) and `code-review` (spec-review node). Update: re-pull upstream, re-adapt
+(the adaptations are mechanical: de-slash, tracker mechanics → this repo).
 - `archon-fix-ship-conflicts.yaml`: fully inline (one `prompt` node, no DB
   commands); if missing, re-create it per `docs/archon-workflows.md` (same
   shape as the other local workflows — `name`, `description`, `nodes`, `effort`).

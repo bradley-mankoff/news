@@ -44,12 +44,20 @@ def main() -> int:
 
     state_path = ROOT / cfg["state_file"]
     state = json.loads(state_path.read_text()) if state_path.exists() else {}
-    runs_by_msg = fetch_runs_by_message(env)
+    run_lookup = fetch_runs_by_message(env)
+    if isinstance(run_lookup, tuple):
+        runs_by_msg, runs_ok = run_lookup
+    else:  # Compatibility with older integrations that return only the mapping.
+        runs_by_msg, runs_ok = run_lookup, True
+    if not runs_ok:
+        print("ERROR: Archon run status unavailable; retry the health check")
+        return 0
 
     lane_names = {v: k for k, v in cfg["lanes"].items()}
     done_lane = lane_names.get("done")
     todo_lane = lane_names.get("todo")
     blocked_lane = lane_names.get("blocked")
+    needs_input_lane = lane_names.get("needs_input")
     in_progress_lane = lane_names.get("in_progress")
     review_lane = lane_names.get("review")
 
@@ -71,7 +79,8 @@ def main() -> int:
     total = len(issues)
     done_count = counts.get(lane_names.get("done", ""), 0)
     order = [lane_names.get(v) for v in
-             ("backlog", "todo", "in_progress", "blocked", "ready", "review", "done")
+             ("backlog", "todo", "in_progress", "blocked", "needs_input",
+              "ready", "review", "done")
              if lane_names.get(v)]
     summary = "Board: " + ", ".join(
         f"{name} {counts.get(name, 0)}" for name in order) + f" (total {total})"
@@ -99,10 +108,15 @@ def main() -> int:
                         f"#{number} in {in_progress_lane} with no active run "
                         f"(status {status or 'unknown'}) — re-drag to Todo or move it")
         elif lane == blocked_lane:
-            if "needs-input" not in labels and not rec.get("dep_blocked"):
+            if not rec.get("dep_blocked"):
                 findings.append(
-                    f"#{number} in {blocked_lane} without needs-input or a dependency "
-                    "marker — unknown blocker, check manually")
+                    f"#{number} in {blocked_lane} without a dependency marker — "
+                    "unknown blocker, check manually")
+        elif lane == needs_input_lane:
+            if "needs-input" not in labels:
+                findings.append(
+                    f"#{number} in {needs_input_lane} without the needs-input label — "
+                    "unknown blocker, check manually")
         elif lane == review_lane:
             rmsg = rec.get("review_msg")
             if not rmsg:
