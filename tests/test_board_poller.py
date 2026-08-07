@@ -3,6 +3,7 @@ from __future__ import annotations
 import contextlib
 import json
 import subprocess
+import tempfile
 import unittest
 from unittest.mock import MagicMock, mock_open, patch
 
@@ -11,6 +12,7 @@ from automation import board_poller as bp
 from automation.board_poller import (
     branch_empty_vs_main,
     build_ready_for_review_comment,
+    classify_workflow_failure,
     conflict_episode_action,
     dedupe_deferred,
     dep_gate,
@@ -19,21 +21,27 @@ from automation.board_poller import (
     extract_test_guidance,
     fetch_active_workflow_count,
     fetch_project,
-
+    fetch_runs_by_message,
+    fetch_workflow_runs,
     find_unchecked_criteria,
     fmt_deps,
     has_deferral_language,
+    inspect_worktree,
     issue_is_runnable,
+    latest_workflow_run,
+    log_recovery_once,
     match_issue_pr,
     merge_pr_to_base,
     normalize_title,
     parse_dep_refs,
     parse_deferred_work,
+    parse_run_metadata,
     parse_verdict,
     pick_workflow,
     post_ready_for_review_comment,
     prepare_dispatch_budget,
     reconcile_deferred_work,
+    recovery_action,
     run_status_for,
     sync_local_develop,
     sync_runnable_labels,
@@ -177,6 +185,215 @@ class DispatchCapacityTest(unittest.TestCase):
             self.assertTrue(any("exited immediately" in c.args[0]
                                 for c in log.call_args_list))
 
+
+
+class WorkflowRecoveryTest(unittest.TestCase):
+    """Classification, recovery-action matrix, run selection, worktree
+    probing, and one-log-per-run-ID idempotence for cancelled/transient
+    terminal runs."""
+
+    def test_cancelled_classifies_transient_with_empty_error(self):
+        self.assertEqual(classify_workflow_failure("cancelled", ""), "transient")
+
+    def test_cancelled_classifies_transient_with_noisy_error(self):
+        self.assertEqual(
+            classify_workflow_failure("cancelled", "tests failed: 3 errors"),
+            "transient")
+
+    def test_cancelled_is_case_insensitive(self):
+        self.assertEqual(classify_workflow_failure("Cancelled", ""), "transient")
+
+    def test_failed_stream_ended_is_transient(self):
+        self.assertEqual(
+            classify_workflow_failure(
+                "failed", "Stream ended without finish_reason"),
+            "transient")
+
+    def test_failed_timeout_is_transient(self):
+        self.assertEqual(
+            classify_workflow_failure("failed", "request timed out"), "transient")
+
+    def test_failed_connection_error_is_transient(self):
+        self.assertEqual(
+            classify_workflow_failure("failed", "connection reset by peer"),
+            "transient")
+
+    def test_failed_pr_handoff_is_orchestration(self):
+        self.assertEqual(
+            classify_workflow_failure(
+                "failed", "could not open the pull request for the branch"),
+            "orchestration")
+
+    def test_failed_validation_is_validation(self):
+        self.assertEqual(
+            classify_workflow_failure("failed", "unit tests failed: 2 failures"),
+            "validation")
+
+    def test_failed_unknown_text_is_unknown(self):
+        self.assertEqual(
+            classify_workflow_failure("failed", "something odd happened"), "unknown")
+
+    def test_non_failed_status_is_unknown(self):
+        self.assertEqual(classify_workflow_failure("running", ""), "unknown")
+
+    def test_recovery_action_matrix(self):
+        self.assertEqual(
+            recovery_action("cancelled", "transient", True), "resume_required")
+        self.assertEqual(
+            recovery_action("failed", "transient", True), "resume_required")
+        self.assertEqual(
+            recovery_action("cancelled", "transient", False), "retry_available")
+        self.assertEqual(
+            recovery_action("failed", "transient", False), "retry_available")
+        self.assertEqual(
+            recovery_action("cancelled", "transient", None), "manual_review")
+        self.assertEqual(
+            recovery_action("failed", "orchestration", False), "manual_review")
+        self.assertEqual(
+            recovery_action("failed", "validation", True), "manual_review")
+        self.assertEqual(
+            recovery_action("failed", "unknown", False), "manual_review")
+
+    def test_recovery_action_monitoring_for_active_and_completed(self):
+        self.assertEqual(recovery_action("running", "", False), "monitoring")
+        self.assertEqual(recovery_action("completed", "", None), "monitoring")
+
+    def test_metadata_dict_extracts_error_and_step(self):
+        run = {"metadata": {"error": "Stream ended", "failed_step": "implement"},
+               "status": "failed"}
+        self.assertEqual(parse_run_metadata(run), ("Stream ended", "implement"))
+
+    def test_metadata_json_string_extracts_error(self):
+        run = {"metadata": json.dumps(
+            {"error": "Stream ended without finish_reason"}),
+            "status": "failed"}
+        error, step = parse_run_metadata(run)
+        self.assertIn("Stream ended", error)
+        self.assertEqual(step, "")
+
+    def test_metadata_malformed_falls_back_to_top_level_error(self):
+        run = {"metadata": "{not json", "error": "rate limit", "status": "failed"}
+        self.assertEqual(parse_run_metadata(run), ("rate limit", ""))
+
+    def test_metadata_absent_is_empty(self):
+        self.assertEqual(parse_run_metadata({"status": "failed"}), ("", ""))
+
+    def test_metadata_error_is_bounded(self):
+        run = {"metadata": {"error": "x" * 2000}}
+        self.assertEqual(len(parse_run_metadata(run)[0]), 500)
+
+    def _run(self, run_id, started, msg, status="failed"):
+        return {"id": run_id, "started_at": started,
+                "user_message": msg, "status": status}
+
+    def test_latest_picks_newest_started_at(self):
+        runs = [self._run("r1", "2026-08-07T10:00:00Z", "m"),
+                self._run("r2", "2026-08-07T10:05:00Z", "m")]
+        self.assertEqual(latest_workflow_run(runs, message="m")["id"], "r2")
+
+    def test_latest_breaks_ties_with_stable_id(self):
+        runs = [self._run("r2", "2026-08-07T10:00:00Z", "m"),
+                self._run("r1", "2026-08-07T10:00:00Z", "m")]
+        self.assertEqual(latest_workflow_run(runs, message="m")["id"], "r2")
+
+    def test_latest_matches_prior_context_substring(self):
+        runs = [self._run("r1", "2026-08-07T10:00:00Z", "Prior Context m"),
+                self._run("r2", "2026-08-07T10:01:00Z", "m")]
+        self.assertEqual(latest_workflow_run(runs, message="m")["id"], "r2")
+
+    def test_latest_filters_by_issue_number(self):
+        runs = [self._run("r1", "2026-08-07T10:00:00Z", "Implement issue #7: x"),
+                self._run("r2", "2026-08-07T10:01:00Z", "Build feature from issue #8: y")]
+        self.assertEqual(latest_workflow_run(runs, issue_number=7)["id"], "r1")
+        self.assertEqual(latest_workflow_run(runs, issue_number=8)["id"], "r2")
+
+    def test_latest_no_match_returns_none(self):
+        self.assertIsNone(
+            latest_workflow_run([self._run("r1", "t", "other")], message="m"))
+        self.assertIsNone(latest_workflow_run([], message="m"))
+
+    def test_inspect_worktree_missing_path_is_unknown_without_probe(self):
+        with patch("automation.board_poller.subprocess.run",
+                   side_effect=AssertionError("must not probe")):
+            self.assertIsNone(inspect_worktree("/no/such/dir-177"))
+
+    def test_inspect_worktree_file_path_is_unknown(self):
+        with tempfile.NamedTemporaryFile() as f:
+            self.assertIsNone(inspect_worktree(f.name))
+
+    def test_inspect_worktree_clean(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch("automation.board_poller.subprocess.run",
+                       return_value=subprocess.CompletedProcess(["git"], 0, "", "")):
+                self.assertFalse(inspect_worktree(tmp))
+
+    def test_inspect_worktree_dirty(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch("automation.board_poller.subprocess.run",
+                       return_value=subprocess.CompletedProcess(
+                           ["git"], 0, " M automation/board_poller.py\n", "")):
+                self.assertTrue(inspect_worktree(tmp))
+
+    def test_inspect_worktree_git_failure_is_unknown(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch("automation.board_poller.subprocess.run",
+                       return_value=subprocess.CompletedProcess(["git"], 1, "", "fatal")):
+                self.assertIsNone(inspect_worktree(tmp))
+
+    def test_inspect_worktree_git_timeout_is_unknown(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch("automation.board_poller.subprocess.run",
+                       side_effect=subprocess.TimeoutExpired("git", 30)):
+                self.assertIsNone(inspect_worktree(tmp))
+
+    def test_log_recovery_once_emits_once_per_run_id(self):
+        rec = {}
+        with patch.object(board_poller, "log") as log:
+            self.assertTrue(log_recovery_once(rec, "run-1", "first"))
+            self.assertFalse(log_recovery_once(rec, "run-1", "first again"))
+            self.assertTrue(log_recovery_once(rec, "run-2", "second"))
+        self.assertEqual(rec["recovery_logged_run_id"], "run-2")
+        self.assertEqual(log.call_count, 2)
+
+    def test_log_recovery_once_requires_known_run_id(self):
+        rec = {}
+        with patch.object(board_poller, "log") as log:
+            self.assertFalse(log_recovery_once(rec, "", "nope"))
+        log.assert_not_called()
+        self.assertNotIn("recovery_logged_run_id", rec)
+
+    def test_fetch_workflow_runs_tolerates_command_failure(self):
+        result = subprocess.CompletedProcess(["archon"], 1, "", "boom")
+        with patch("automation.board_poller.subprocess.run", return_value=result):
+            self.assertEqual(fetch_workflow_runs({}), [])
+
+    def test_fetch_workflow_runs_tolerates_timeout(self):
+        with patch("automation.board_poller.subprocess.run",
+                   side_effect=subprocess.TimeoutExpired("archon", 60)):
+            self.assertEqual(fetch_workflow_runs({}), [])
+
+    def test_fetch_workflow_runs_tolerates_malformed_json(self):
+        result = subprocess.CompletedProcess(["archon"], 0, "{not json", "")
+        with patch("automation.board_poller.subprocess.run", return_value=result):
+            self.assertEqual(fetch_workflow_runs({}), [])
+
+    def test_fetch_workflow_runs_keeps_dict_records_only(self):
+        result = subprocess.CompletedProcess(
+            ["archon"], 0, json.dumps({"runs": [{"id": "r1", "status": "failed"},
+                                                "junk", None]}), "")
+        with patch("automation.board_poller.subprocess.run", return_value=result):
+            self.assertEqual([r["id"] for r in fetch_workflow_runs({})], ["r1"])
+
+    def test_fetch_runs_by_message_derives_status_map_from_full_runs(self):
+        result = subprocess.CompletedProcess(
+            ["archon"], 0, json.dumps({"runs": [
+                {"user_message": "m", "status": "completed",
+                 "started_at": "2026-08-07T10:00:00Z"},
+                {"user_message": "m", "status": "running",
+                 "started_at": "2026-08-07T10:01:00Z"},
+            ]}), "")
+        with patch("automation.board_poller.subprocess.run", return_value=result):
+            self.assertEqual(fetch_runs_by_message({}), {"m": "running"})
 
 
 class MatchIssuePrTest(unittest.TestCase):
@@ -586,8 +803,12 @@ class ReadyForReviewTransitionTest(unittest.TestCase):
                          return_value=("p", "f", {"Ready for Review": "ready"}, [item])),
             patch.object(board_poller, "prepare_dispatch_budget"),
             patch.object(board_poller, "sync_runnable_labels"),
-            patch.object(board_poller, "fetch_runs_by_message",
-                         return_value={"run": "completed"}),
+            patch.object(board_poller, "fetch_workflow_runs",
+                         return_value=[{"id": "run-9",
+                                        "user_message": "run",
+                                        "status": "completed",
+                                        "started_at": "2026-08-07T10:00:00Z",
+                                        "working_path": "/work/news"}]),
             patch.object(board_poller, "issue_has_label", return_value=False),
             patch.object(board_poller, "find_issue_pr",
                          return_value=({"number": 153, "state": "OPEN",
@@ -606,6 +827,189 @@ class ReadyForReviewTransitionTest(unittest.TestCase):
         move.assert_called_once_with(cfg, {}, "p", "item-92", "f", "ready")
         post.assert_called_once_with(cfg, {}, 92, "develop", 153)
         self.assertTrue(state[item_id]["ready_test_comment"])
+
+
+class TerminalRecoveryPollTest(unittest.TestCase):
+    """Poll-level regression: a cancelled/transient In Progress run records a
+    bounded recovery decision, keeps its dispatch marker, never re-dispatches
+    dirty worktrees, retries a clean worktree at most once, and logs each
+    terminal run ID at most once."""
+
+    def _item(self, item_id="item-92", number=92):
+        return {
+            "id": item_id,
+            "status": "In Progress",
+            "content": {
+                "__typename": "Issue",
+                "number": number,
+                "title": "Anchor curated-match prefix",
+                "url": f"https://github.com/o/r/issues/{number}",
+                "body": "",
+                "state": "OPEN",
+                "repository": {"nameWithOwner": "o/r"},
+                "labels": {"nodes": []},
+            },
+        }
+
+    def _cfg(self):
+        return {
+            "repo": "o/r",
+            "state_file": "state.json",
+            "lanes": {
+                "Backlog": "backlog",
+                "Todo": "todo",
+                "In Progress": "in_progress",
+                "Ready for Review": "ready",
+                "In Review": "review",
+                "Done": "done",
+            },
+            "dispatch": {
+                "todo": {
+                    "complete_move_to": "Ready for Review",
+                    "merge_develop_base": "develop",
+                },
+                "review": {
+                    "merge_ship_on_approve": False,
+                    "ship_to": "main",
+                    "done_lane": "Done",
+                },
+            },
+            "deferred_work": {"enabled": True},
+        }
+
+    def _state(self, item_id="item-92"):
+        return {
+            "_meta": {"snapshot_done": True},
+            item_id: {
+                "status": "In Progress",
+                "issue_number": 92,
+                "dispatch_msg": "run",
+                "wf": "archon-idea-to-pr",
+                "branch": "issue-92",
+            },
+        }
+
+    def _run(self, status="cancelled", run_id="run-1", error=""):
+        return {
+            "id": run_id,
+            "workflow_name": "archon-idea-to-pr",
+            "user_message": "run",
+            "status": status,
+            "metadata": {"error": error},
+            "started_at": "2026-08-07T10:00:00Z",
+            "completed_at": "2026-08-07T10:05:00Z",
+            "working_path": "/work/news",
+        }
+
+    def _poll(self, state, runs, dirty):
+        return [
+            patch.object(board_poller, "fetch_project",
+                         return_value=("p", "f", {"Ready for Review": "ready"},
+                                       [self._item()])),
+            patch.object(board_poller, "prepare_dispatch_budget"),
+            patch.object(board_poller, "sync_runnable_labels"),
+            patch.object(board_poller, "fetch_workflow_runs", return_value=runs),
+            patch.object(board_poller, "inspect_worktree", return_value=dirty),
+            patch.object(board_poller, "save_state"),
+        ]
+
+    def _run_poll(self, state, runs, dirty, dispatch_result):
+        stack = contextlib.ExitStack()
+        for p in self._poll(state, runs, dirty):
+            stack.enter_context(p)
+        stack.dispatch = stack.enter_context(
+            patch.object(board_poller, "dispatch", return_value=dispatch_result))
+        return stack
+
+    def test_cancelled_clean_run_records_retry_and_logs_once(self):
+        state = self._state()
+        with self._run_poll(state, [self._run()], False, False) as stack:
+            log = stack.enter_context(patch.object(board_poller, "log"))
+            board_poller.poll(self._cfg(), {}, state)
+            board_poller.poll(self._cfg(), {}, state)
+        rec = state["item-92"]
+        self.assertEqual(rec["dispatch_msg"], "run")
+        self.assertEqual(rec["recovery"]["action"], "retry_available")
+        self.assertEqual(rec["recovery"]["run_id"], "run-1")
+        self.assertEqual(rec["recovery"]["failure_class"], "transient")
+        self.assertEqual(rec["recovery"]["failed_step"], "")
+        self.assertEqual(rec["recovery"]["worktree"],
+                         {"dirty": False, "path": "/work/news"})
+        self.assertEqual(rec["recovery_logged_run_id"], "run-1")
+        recovery_lines = [c.args[0] for c in log.call_args_list
+                          if "RUN CANCELLED" in c.args[0]]
+        self.assertEqual(len(recovery_lines), 1)
+        self.assertIn("transient -> retry_available", recovery_lines[0])
+
+    def test_cancelled_dirty_run_requires_resume_and_never_dispatches(self):
+        state = self._state()
+        with self._run_poll(state, [self._run()], True, False) as stack:
+            board_poller.poll(self._cfg(), {}, state)
+        rec = state["item-92"]
+        self.assertEqual(rec["recovery"]["action"], "resume_required")
+        self.assertEqual(rec["dispatch_msg"], "run")
+        stack.dispatch.assert_not_called()
+
+    def test_clean_retry_dispatches_once_then_waits(self):
+        state = self._state()
+        with self._run_poll(state, [self._run()], False, True) as stack:
+            log = stack.enter_context(patch.object(board_poller, "log"))
+            board_poller.poll(self._cfg(), {}, state)
+            board_poller.poll(self._cfg(), {}, state)
+        rec = state["item-92"]
+        self.assertEqual(rec["recovery"]["action"], "retrying")
+        self.assertEqual(rec["automatic_retry_count"], 1)
+        self.assertTrue(rec["retrying"])
+        stack.dispatch.assert_called_once_with(
+            self._cfg(), {}, "archon-idea-to-pr", "issue-92", "run",
+            "item-92", 92)
+        recovery_lines = [c.args[0] for c in log.call_args_list
+                          if "RUN CANCELLED" in c.args[0]]
+        self.assertEqual(len(recovery_lines), 1)
+        self.assertIn("automatic retry dispatched", recovery_lines[0])
+
+    def test_non_transient_failure_is_manual_review_without_dispatch(self):
+        state = self._state()
+        with self._run_poll(state, [self._run(status="failed",
+                                              error="unit tests failed")],
+                            False, False) as stack:
+            board_poller.poll(self._cfg(), {}, state)
+        rec = state["item-92"]
+        self.assertEqual(rec["recovery"]["action"], "manual_review")
+        self.assertEqual(rec["recovery"]["failure_class"], "validation")
+        self.assertEqual(rec["dispatch_msg"], "run")
+        stack.dispatch.assert_not_called()
+
+    def test_unknown_worktree_fails_closed(self):
+        state = self._state()
+        with self._run_poll(state, [self._run()], None, False) as stack:
+            board_poller.poll(self._cfg(), {}, state)
+        rec = state["item-92"]
+        self.assertEqual(rec["recovery"]["action"], "manual_review")
+        self.assertEqual(rec["recovery"]["worktree"]["dirty"], None)
+        self.assertEqual(rec["dispatch_msg"], "run")
+        stack.dispatch.assert_not_called()
+
+    def test_missing_run_details_fail_closed(self):
+        state = self._state()
+        with self._run_poll(state, [], False, False) as stack:
+            board_poller.poll(self._cfg(), {}, state)
+        rec = state["item-92"]
+        self.assertEqual(rec["dispatch_msg"], "run")
+        self.assertNotIn("recovery", rec)
+        self.assertNotIn("recovery_logged_run_id", rec)
+        stack.dispatch.assert_not_called()
+
+    def test_run_without_id_defers_recovery(self):
+        state = self._state()
+        run = self._run()
+        run.pop("id")
+        with self._run_poll(state, [run], False, False) as stack:
+            board_poller.poll(self._cfg(), {}, state)
+        rec = state["item-92"]
+        self.assertEqual(rec["dispatch_msg"], "run")
+        self.assertNotIn("recovery", rec)
+        stack.dispatch.assert_not_called()
 
 
 class ParseDeferredWorkTest(unittest.TestCase):
