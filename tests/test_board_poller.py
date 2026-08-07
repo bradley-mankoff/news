@@ -218,6 +218,12 @@ class WorkflowRecoveryTest(unittest.TestCase):
             classify_workflow_failure("failed", "connection reset by peer"),
             "transient")
 
+    def test_observed_websocket_disconnect_is_transient(self):
+        self.assertEqual(
+            classify_workflow_failure(
+                "failed", "SDK returned error — WebSocket closed 1006 Connection ended"),
+            "transient")
+
     def test_failed_pr_handoff_is_orchestration(self):
         self.assertEqual(
             classify_workflow_failure(
@@ -321,6 +327,10 @@ class WorkflowRecoveryTest(unittest.TestCase):
         with tempfile.NamedTemporaryFile() as f:
             self.assertIsNone(inspect_worktree(f.name))
 
+    def test_inspect_worktree_malformed_path_is_unknown(self):
+        self.assertIsNone(inspect_worktree(123))
+        self.assertIsNone(inspect_worktree([]))
+
     def test_inspect_worktree_clean(self):
         with tempfile.TemporaryDirectory() as tmp:
             with patch("automation.board_poller.subprocess.run",
@@ -384,6 +394,27 @@ class WorkflowRecoveryTest(unittest.TestCase):
         with patch("automation.board_poller.subprocess.run", return_value=result):
             self.assertEqual([r["id"] for r in fetch_workflow_runs({})], ["r1"])
 
+    def test_fetch_workflow_runs_rejects_truncated_response(self):
+        result = subprocess.CompletedProcess(
+            ["archon"], 0,
+            json.dumps({"total": 151, "runs": [{"id": "r1"}]}), "")
+        with patch("automation.board_poller.subprocess.run", return_value=result) as run:
+            records = fetch_workflow_runs({})
+        self.assertEqual(records, [])
+        self.assertEqual(records.error, "run_list_incomplete")
+        self.assertEqual(run.call_args.args[0][-2:], ["--limit", "200"])
+
+    def test_fetch_workflow_runs_normalizes_unusable_match_fields(self):
+        result = subprocess.CompletedProcess(
+            ["archon"], 0,
+            json.dumps({"runs": [{"id": "r1", "user_message": 123,
+                                   "started_at": 42, "working_path": []}]}), "")
+        with patch("automation.board_poller.subprocess.run", return_value=result):
+            records = fetch_workflow_runs({})
+        self.assertIsNone(records[0]["user_message"])
+        self.assertIsNone(records[0]["started_at"])
+        self.assertIsNone(records[0]["working_path"])
+
     def test_fetch_runs_by_message_derives_status_map_from_full_runs(self):
         result = subprocess.CompletedProcess(
             ["archon"], 0, json.dumps({"runs": [
@@ -393,7 +424,8 @@ class WorkflowRecoveryTest(unittest.TestCase):
                  "started_at": "2026-08-07T10:01:00Z"},
             ]}), "")
         with patch("automation.board_poller.subprocess.run", return_value=result):
-            self.assertEqual(fetch_runs_by_message({}), {"m": "running"})
+            self.assertEqual(fetch_runs_by_message({}),
+                             ({"m": "running"}, True))
 
 
 class MatchIssuePrTest(unittest.TestCase):
@@ -916,7 +948,9 @@ class TerminalRecoveryPollTest(unittest.TestCase):
     def _run_poll(self, state, runs, dirty, dispatch_result):
         stack = contextlib.ExitStack()
         for p in self._poll(state, runs, dirty):
-            stack.enter_context(p)
+            entered = stack.enter_context(p)
+            if getattr(p, "attribute", None) == "fetch_workflow_runs":
+                stack.fetch_workflow_runs = entered
         stack.dispatch = stack.enter_context(
             patch.object(board_poller, "dispatch", return_value=dispatch_result))
         return stack
@@ -967,6 +1001,43 @@ class TerminalRecoveryPollTest(unittest.TestCase):
                           if "RUN CANCELLED" in c.args[0]]
         self.assertEqual(len(recovery_lines), 1)
         self.assertIn("automatic retry dispatched", recovery_lines[0])
+
+    def test_registered_second_terminal_run_requires_manual_review(self):
+        state = self._state()
+        first = self._run(run_id="run-1")
+        second = self._run(status="failed", run_id="run-2",
+                           error="connection reset by peer")
+        second["started_at"] = "2026-08-07T10:10:00Z"
+        with self._run_poll(state, [first], False, True) as stack:
+            stack.fetch_workflow_runs.side_effect = [[first], [first, second]]
+            board_poller.poll(self._cfg(), {}, state)
+            board_poller.poll(self._cfg(), {}, state)
+        rec = state["item-92"]
+        self.assertEqual(rec["automatic_retry_count"], 1)
+        self.assertEqual(rec["recovery"]["run_id"], "run-2")
+        self.assertEqual(rec["recovery"]["action"], "manual_review")
+        stack.dispatch.assert_called_once()
+
+    def test_status_and_recovery_use_newest_same_timestamp_run(self):
+        state = self._state()
+        terminal = self._run(run_id="run-1")
+        active = self._run(status="running", run_id="run-2")
+        with self._run_poll(state, [terminal, active], False, True) as stack:
+            board_poller.poll(self._cfg(), {}, state)
+        rec = state["item-92"]
+        self.assertNotIn("recovery", rec)
+        stack.dispatch.assert_not_called()
+
+    def test_failed_transient_run_retries_via_poll(self):
+        state = self._state()
+        run = self._run(status="failed", error="connection reset by peer")
+        run["metadata"] = json.dumps({"error": "connection reset by peer"})
+        with self._run_poll(state, [run], False, True) as stack:
+            board_poller.poll(self._cfg(), {}, state)
+        rec = state["item-92"]
+        self.assertEqual(rec["recovery"]["failure_class"], "transient")
+        self.assertEqual(rec["recovery"]["action"], "retrying")
+        stack.dispatch.assert_called_once()
 
     def test_non_transient_failure_is_manual_review_without_dispatch(self):
         state = self._state()
@@ -2169,8 +2240,10 @@ class PollFlowTest(unittest.TestCase):
         items = [self._item(5, "In Progress")]
         with patch("automation.board_poller.fetch_project",
                    return_value=self._project(items)), \
-             patch("automation.board_poller.fetch_runs_by_message",
-                   return_value={"run msg": "completed"}), \
+             patch("automation.board_poller.fetch_workflow_runs",
+                   return_value=[{"id": "r1", "user_message": "run msg",
+                                  "status": "completed",
+                                  "started_at": "2026-08-07T10:00:00Z"}]), \
              patch("automation.board_poller.issue_has_label",
                    return_value=True), \
              patch("automation.board_poller.find_issue_pr") as find_pr, \
@@ -2193,8 +2266,10 @@ class PollFlowTest(unittest.TestCase):
         items = [self._item(5, "In Progress")]
         with patch("automation.board_poller.fetch_project",
                    return_value=self._project(items)), \
-             patch("automation.board_poller.fetch_runs_by_message",
-                   return_value={"run msg": "completed"}), \
+             patch("automation.board_poller.fetch_workflow_runs",
+                   return_value=[{"id": "r1", "user_message": "run msg",
+                                  "status": "completed",
+                                  "started_at": "2026-08-07T10:00:00Z"}]), \
              patch("automation.board_poller.issue_has_label",
                    return_value=None), \
              patch("automation.board_poller.find_issue_pr") as find_pr, \
@@ -2268,14 +2343,16 @@ class PollFlowTest(unittest.TestCase):
                 result[fix_msg] = "running"
             elif fix_msg and run_call == 4:
                 result[fix_msg] = "completed"
-            return result
+            return [{"id": f"r{i}", "user_message": msg, "status": st,
+                     "started_at": f"2026-08-07T10:0{i}:00Z"}
+                    for i, (msg, st) in enumerate(result.items())]
 
         pr = {"number": 47, "state": "OPEN", "headRefName": "feature-5"}
         with patch("automation.board_poller.fetch_project",
                    return_value=self._project(items)), \
              patch("automation.board_poller.prepare_dispatch_budget"), \
              patch("automation.board_poller.sync_runnable_labels"), \
-             patch("automation.board_poller.fetch_runs_by_message",
+             patch("automation.board_poller.fetch_workflow_runs",
                    side_effect=runs), \
              patch("automation.board_poller.issue_has_label", return_value=False), \
              patch("automation.board_poller.find_issue_pr",
