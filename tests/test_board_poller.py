@@ -789,6 +789,28 @@ class PickWorkflowTest(unittest.TestCase):
                          "archon-fix-github-issue")
 
 
+class FetchRunsByMessageTest(unittest.TestCase):
+    def test_lookup_failure_is_distinct_from_empty_success(self):
+        failed = subprocess.CompletedProcess(
+            ["archon"], 1, "", "archon unavailable"
+        )
+        with patch.object(bp.subprocess, "run", return_value=failed):
+            self.assertEqual(bp.fetch_runs_by_message({}), ({}, False))
+
+        empty = subprocess.CompletedProcess(
+            ["archon"], 0, json.dumps({"runs": []}), ""
+        )
+        with patch.object(bp.subprocess, "run", return_value=empty):
+            self.assertEqual(bp.fetch_runs_by_message({}), ({}, True))
+
+    def test_malformed_run_listing_fails_closed(self):
+        malformed = subprocess.CompletedProcess(
+            ["archon"], 0, json.dumps({"runs": {}}), ""
+        )
+        with patch.object(bp.subprocess, "run", return_value=malformed):
+            self.assertEqual(bp.fetch_runs_by_message({}), ({}, False))
+
+
 class RunStatusForTest(unittest.TestCase):
     def test_exact_match(self):
         self.assertEqual(run_status_for({"m1": "completed"}, "m1"), "completed")
@@ -855,6 +877,50 @@ class MergePrToBaseTest(unittest.TestCase):
                                         "develop", 5)
         self.assertTrue(ok)
         self.assertFalse(any(a[0:2] == ["issue", "reopen"] for a in calls))
+
+    def test_issue_state_lookup_failure_blocks_success(self):
+        calls, fake_gh = self._reopen_flow("OPEN")
+        original = fake_gh
+
+        def fail_issue_view(args, env, timeout=90):
+            if args[0:2] == ["issue", "view"]:
+                return _cp(returncode=1, stderr="rate limited")
+            return original(args, env, timeout)
+
+        with patch("automation.board_poller.gh", side_effect=fail_issue_view), \
+                patch("automation.board_poller.time.sleep"):
+            ok, note = merge_pr_to_base({"repo": "o/r"}, {},
+                                        {"number": 7, "state": "OPEN"},
+                                        "develop", 5)
+        self.assertFalse(ok)
+        self.assertIn("state is unreadable", note)
+
+    def test_issue_reopen_failure_blocks_success(self):
+        calls, fake_gh = self._reopen_flow("CLOSED")
+        original = fake_gh
+
+        def fail_reopen(args, env, timeout=90):
+            if args[0:2] == ["issue", "reopen"]:
+                return _cp(returncode=1, stderr="permission denied")
+            return original(args, env, timeout)
+
+        with patch("automation.board_poller.gh", side_effect=fail_reopen), \
+                patch("automation.board_poller.time.sleep"):
+            ok, note = merge_pr_to_base({"repo": "o/r"}, {},
+                                        {"number": 7, "state": "OPEN"},
+                                        "develop", 5)
+        self.assertFalse(ok)
+        self.assertIn("reopen failed", note)
+
+    def test_invalid_issue_state_blocks_success(self):
+        calls, fake_gh = self._reopen_flow("UNKNOWN")
+        with patch("automation.board_poller.gh", side_effect=fake_gh), \
+                patch("automation.board_poller.time.sleep"):
+            ok, note = merge_pr_to_base({"repo": "o/r"}, {},
+                                        {"number": 7, "state": "OPEN"},
+                                        "develop", 5)
+        self.assertFalse(ok)
+        self.assertIn("unknown state", note)
 
     def test_merge_without_issue_number_skips_reopen_check(self):
         calls, fake_gh = self._reopen_flow("CLOSED")
@@ -1319,6 +1385,20 @@ class ResumeIssueTests(unittest.TestCase):
     """HIGH: defer when the branch can't be resolved; verify the spawn;
     only remove the needs-input label after verified spawn + successful edit."""
 
+    def test_dry_run_does_not_resume_or_mutate(self) -> None:
+        with patch.object(bp, "DRY_RUN", True), \
+                patch.object(bp, "resolve_worktree_branch") as resolve, \
+                patch.object(bp, "gh") as gh, \
+                patch.object(bp.subprocess, "Popen") as popen:
+            ok, msg, full = bp.resume_issue(
+                _cfg(), {}, "issue-21", "archon-fix-github-issue", 21
+            )
+        self.assertTrue(ok)
+        self.assertEqual((msg, full), ("dry-run", "issue-21"))
+        resolve.assert_not_called()
+        gh.assert_not_called()
+        popen.assert_not_called()
+
     def test_deferred_when_worktree_branch_not_found(self) -> None:
         with patch.object(bp, "resolve_worktree_branch", return_value=None), \
              patch.object(bp, "gh") as gh, \
@@ -1451,6 +1531,18 @@ class FindIssuePrTest(unittest.TestCase):
             pr, ok = bp.find_issue_pr(self._cfg(), {}, 21)
         self.assertIsNone(pr)
         self.assertTrue(ok)           # genuinely absent is distinguishable
+
+    def test_review_preparation_defers_when_develop_pr_is_absent(self):
+        rec = {}
+        with patch.object(bp, "find_issue_pr", return_value=(None, True)), \
+                patch.object(bp, "find_or_create_ship_pr") as ship, \
+                patch.object(bp, "dispatch") as dispatch:
+            result = bp.ensure_ship_review(
+                _cfg(), {}, "item-21", 21, "Feature", "project", "field",
+                {"Done": "done"}, "Done", rec)
+        self.assertIsNone(result)
+        ship.assert_not_called()
+        dispatch.assert_not_called()
 
     def test_base_filter_propagates(self):
         prs = json.dumps([

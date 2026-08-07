@@ -1848,16 +1848,76 @@ class PipelineHelperTests(unittest.TestCase):
 
         self.assertEqual(result["status"], "failed")
         self.assertEqual(result["recipients"], ["reader@example.com"])
-        self.assertEqual(result["reason"], "delivery failed after report construction")
+        self.assertEqual(result["reason"], "unexpected delivery error")
         self.assertEqual(result["error_type"], "RuntimeError")
-        self.assertEqual(result["error_message"], "smtp down")
+        self.assertEqual(
+            result["error_message"],
+            "unexpected delivery error; see the run log",
+        )
         self.assertEqual(diagnostics.delivery["status"], "failed")
         warning.assert_called_once()
-        self.assertIn("Delivery failed", warning.call_args[0][0])
+        self.assertIn("Unexpected delivery error", warning.call_args[0][0])
         # The run outcome stays completed; no failed run event is added, so
         # the surrounding report-finalization path can continue normally.
         self.assertEqual(run_status_from_events(diagnostics.events), "completed")
         self.assertFalse(any(event["label"] == "failed" for event in diagnostics.events))
+
+    def test_attempt_email_delivery_tracks_partial_transport_failure(self) -> None:
+        class PartialSMTP:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):  # noqa: ANN001, ANN002, ANN003
+                return False
+
+            def starttls(self) -> None:
+                return None
+
+            def login(self, username: str, password: str) -> None:
+                return None
+
+            def send_message(self, message) -> None:  # noqa: ANN001
+                if len(self.sent) == 1:
+                    raise pipeline.smtplib.SMTPException("password=secret")
+                self.sent.append(message)
+
+            sent: list[object] = []
+
+        diagnostics = RunDiagnostics(
+            run_started_at="2026-06-01T10:00:00",
+            settings={},
+        )
+        with patch.object(pipeline, "EMAIL_FROM", "from@example.com"), patch.object(
+            pipeline, "SMTP_HOST", "smtp.example.com"
+        ), patch.object(pipeline, "SMTP_USERNAME", "user"), patch.object(
+            pipeline, "SMTP_PASSWORD", "secret"
+        ), patch.object(pipeline, "SMTP_PORT", 587), patch.object(
+            pipeline, "SMTP_USE_SSL", False
+        ), patch.object(
+            pipeline, "build_report_html", return_value="<html>report</html>"
+        ), patch.object(
+            pipeline, "build_unsubscribe_url", return_value="https://example.com/unsubscribe"
+        ), patch.object(
+            pipeline.smtplib, "SMTP", return_value=PartialSMTP()
+        ), patch.object(pipeline.progress_tracker, "warning") as warning:
+            result = pipeline._attempt_email_delivery(
+                diagnostics,
+                report_title="Title",
+                report_body="Body",
+                synthesis_body="Synthesis",
+                final_reports=[],
+                recipient_list=["first@example.com", "second@example.com"],
+                recipient_names=["First", "Second"],
+            )
+
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["sent_recipients"], ["first@example.com"])
+        self.assertEqual(result["failed_recipients"], ["second@example.com"])
+        self.assertNotIn("secret", result["error_message"])
+        self.assertEqual(
+            diagnostics.delivery["sent_recipients"], ["first@example.com"]
+        )
+        self.assertIn("1 sent", warning.call_args[0][0])
 
     def test_attempt_email_delivery_records_success_result(self) -> None:
         diagnostics = RunDiagnostics(

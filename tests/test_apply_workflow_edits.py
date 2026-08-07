@@ -6,10 +6,15 @@ from pathlib import Path
 
 from automation.apply_workflow_edits import (
     CONTRACT,
+    MODEL_ID,
+    MODEL_PROVIDER,
     TESTING_COMMAND_RULE,
     TESTING_CONTRACT,
     ensure_contract,
     ensure_node,
+    ensure_rigorous_models,
+    ensure_spec_review,
+    ensure_sync_node,
 )
 
 
@@ -110,6 +115,85 @@ class EnsureContractTest(unittest.TestCase):
                             encoding="utf-8")
             note = ensure_contract(path, "completion-comment")
             self.assertIn("end not found", note)
+
+
+class WorkflowMutationTest(unittest.TestCase):
+    def test_sync_node_rewires_target_and_is_idempotent(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "wf.yaml"
+            path.write_text(
+                "  - id: check-blocked\n"
+                "    depends_on: [validate]\n"
+                "\n"
+                "  - id: create-pr\n"
+                "    depends_on: [check-blocked]\n"
+                "    context: fresh\n",
+                encoding="utf-8",
+            )
+            note = ensure_sync_node(
+                path,
+                "  - id: check-blocked\n    depends_on: [validate]",
+                "  - id: sync-with-develop\n    context: fresh",
+                "create-pr",
+                "    depends_on: [check-blocked]",
+                "    depends_on: [sync-with-develop]",
+            )
+            text = path.read_text(encoding="utf-8")
+            self.assertIsNotNone(note)
+            self.assertIn("sync-with-develop", text)
+            self.assertIn("depends_on: [sync-with-develop]", text)
+            self.assertIsNone(
+                ensure_sync_node(
+                    path,
+                    "  - id: check-blocked\n    depends_on: [validate]",
+                    "  - id: sync-with-develop\n    context: fresh",
+                    "create-pr",
+                    "    depends_on: [check-blocked]",
+                    "    depends_on: [sync-with-develop]",
+                )
+            )
+            self.assertEqual(text.count("- id: sync-with-develop"), 1)
+
+    def test_spec_review_inserts_node_and_rewires_synthesize(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "archon-review-block.yaml"
+            path.write_text(
+                "  - id: sync\n"
+                "    command: archon-sync-pr-with-main\n"
+                "    depends_on: [review-scope]\n"
+                "    context: fresh\n\n"
+                "  - id: synthesize\n"
+                "    depends_on: [code-review, error-handling, test-coverage, "
+                "comment-quality, docs-impact]\n",
+                encoding="utf-8",
+            )
+            note = ensure_spec_review(path)
+            text = path.read_text(encoding="utf-8")
+            self.assertIn("spec-review", note or "")
+            self.assertIn("- id: spec-review", text)
+            self.assertIn("spec-review", text.split("- id: synthesize", 1)[1])
+            self.assertIsNone(ensure_spec_review(path))
+
+    def test_rigorous_models_are_pinned_and_idempotent(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "wf.yaml"
+            path.write_text(
+                "  - id: review\n"
+                "    provider: old-provider\n"
+                "    model: old-model\n"
+                "    effort: low\n"
+                "    context: fresh\n\n"
+                "  - id: next\n    context: fresh\n",
+                encoding="utf-8",
+            )
+            note = ensure_rigorous_models(path, ("review",))
+            text = path.read_text(encoding="utf-8")
+            self.assertIsNotNone(note)
+            self.assertIn(f"provider: {MODEL_PROVIDER}", text)
+            self.assertIn(f"model: {MODEL_ID}", text)
+            self.assertIn("effort: max", text)
+            self.assertNotIn("old-provider", text)
+            self.assertIsNone(ensure_rigorous_models(path, ("review",)))
 
 
 if __name__ == "__main__":

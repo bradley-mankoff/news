@@ -44,7 +44,14 @@ def main() -> int:
 
     state_path = ROOT / cfg["state_file"]
     state = json.loads(state_path.read_text()) if state_path.exists() else {}
-    runs_by_msg = fetch_runs_by_message(env)
+    run_lookup = fetch_runs_by_message(env)
+    if isinstance(run_lookup, tuple):
+        runs_by_msg, runs_ok = run_lookup
+    else:  # Compatibility with older integrations that return only the mapping.
+        runs_by_msg, runs_ok = run_lookup, True
+    if not runs_ok:
+        print("ERROR: Archon run status unavailable; retry the health check")
+        return 0
 
     lane_names = {v: k for k, v in cfg["lanes"].items()}
     done_lane = lane_names.get("done")

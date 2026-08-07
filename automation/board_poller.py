@@ -827,9 +827,33 @@ def merge_pr_to_base(cfg: dict, env: dict, pr: dict, base: str,
         time.sleep(6)
         q = gh(["issue", "view", str(issue_number), "-R", cfg["repo"],
                 "--json", "state"], env)
-        if q.returncode == 0 and json.loads(q.stdout).get("state") == "CLOSED":
-            gh(["issue", "reopen", str(issue_number), "-R", cfg["repo"]], env)
+        if q.returncode != 0:
+            return False, (
+                f"merged into {base}, but issue #{issue_number} state is "
+                f"unreadable: {q.stderr.strip()[:200]}"
+            )
+        try:
+            issue_state = json.loads(q.stdout).get("state")
+        except (TypeError, ValueError, AttributeError) as exc:
+            return False, (
+                f"merged into {base}, but issue #{issue_number} state was "
+                f"invalid: {exc}"
+            )
+        if issue_state == "CLOSED":
+            reopened = gh(
+                ["issue", "reopen", str(issue_number), "-R", cfg["repo"]], env
+            )
+            if reopened.returncode != 0:
+                return False, (
+                    f"merged into {base}, but issue #{issue_number} reopen "
+                    f"failed: {reopened.stderr.strip()[:200]}"
+                )
             return True, f"merged into {base} (issue #{issue_number} reopened)"
+        if issue_state != "OPEN":
+            return False, (
+                f"merged into {base}, but issue #{issue_number} has unknown "
+                f"state {issue_state!r}"
+            )
     return True, f"merged into {base}"
 
 
@@ -843,10 +867,18 @@ def find_or_create_ship_pr(cfg: dict, env: dict, head: str, title: str,
             "--json", "number,baseRefName"], env)
     if r.returncode != 0:
         log(f"SHIP PR LIST FAILED head={head}: {r.stderr.strip()[:200]}")
-    elif r.returncode == 0:
-        for pr in json.loads(r.stdout):
-            if pr.get("baseRefName") == base:
-                return pr
+        return None
+    try:
+        listed = json.loads(r.stdout or "[]")
+    except (TypeError, ValueError) as exc:
+        log(f"SHIP PR LIST UNPARSEABLE head={head}: {exc}")
+        return None
+    if not isinstance(listed, list):
+        log(f"SHIP PR LIST UNPARSEABLE head={head}: expected a list")
+        return None
+    for pr in listed:
+        if isinstance(pr, dict) and pr.get("baseRefName") == base:
+            return pr
     body = (f"Issue #{issue_number}. Shipped from develop after human testing. "
             "Reviewed by archon-smart-pr-review before merge.")
     r = gh(["pr", "create", "-R", cfg["repo"], "--base", base, "--head", head,
@@ -890,36 +922,49 @@ def ensure_ship_review(cfg: dict, env: dict, item_id: str, issue_number: int,
     """
     merge_base = cfg["dispatch"]["todo"].get("merge_develop_base", "develop")
     pr, pr_ok = find_issue_pr(cfg, env, issue_number, base=merge_base)
-    if not pr_ok:
-        # A gh failure must never be misread as "no PR": the develop merge
-        # would be skipped and the ship PR built from a guessed head branch.
-        # Keep the item in place (status not recorded -> lane re-entered next
-        # poll) and retry then.
-        log(f"REVIEW PREP DEFERRED issue={issue_number}: PR lookup failed "
-            "(gh error); retrying next poll")
+    if not pr_ok or pr is None:
+        # A failed lookup and an absent develop PR are both unsafe here: the
+        # ship branch must never be guessed or reviewed before integration is
+        # positively confirmed. Retry on the next poll.
+        reason = "PR lookup failed" if not pr_ok else "develop PR not found"
+        log(f"REVIEW PREP DEFERRED issue={issue_number}: {reason}; retrying next poll")
         return None
-    if pr:
-        ok, note = merge_pr_to_base(cfg, env, pr, merge_base, issue_number)
-        log(f"DEVELOP MERGE issue={issue_number} PR=#{pr['number']}: {note}"
-            if ok else
-            f"DEVELOP MERGE FAILED issue={issue_number}: {note}")
-    head = (pr or {}).get("headRefName") or f"archon/task-issue-{issue_number}"
+    ok, note = merge_pr_to_base(cfg, env, pr, merge_base, issue_number)
+    log(f"DEVELOP MERGE issue={issue_number} PR=#{pr['number']}: {note}"
+        if ok else
+        f"DEVELOP MERGE FAILED issue={issue_number}: {note}")
+    if not ok:
+        log(f"REVIEW PREP DEFERRED issue={issue_number}: develop merge failed")
+        return None
+    head = pr.get("headRefName")
+    if not head:
+        log(f"REVIEW PREP DEFERRED issue={issue_number}: develop PR has no head")
+        return None
     ship_to = cfg["dispatch"]["review"].get("ship_to", "main")
     if branch_empty_vs_main(cfg, env, head, ship_to):
         if DRY_RUN:
             log(f"[dry-run] ALREADY SHIPPED issue={issue_number} head={head}")
         else:
-            comment_issue(
-                cfg, env, issue_number,
-                "Closing as shipped: this branch has no commits beyond main — "
-                "its work already reached main via an earlier ship PR's develop "
-                "merge. No review needed.")
-            gh(["issue", "close", str(issue_number), "-R", cfg["repo"]], env)
+            if not comment_issue(
+                    cfg, env, issue_number,
+                    "Closing as shipped: this branch has no commits beyond main — "
+                    "its work already reached main via an earlier ship PR's develop "
+                    "merge. No review needed."):
+                log(f"ALREADY SHIPPED COMMENT FAILED issue={issue_number}")
+                return None
+            close_result = gh(
+                ["issue", "close", str(issue_number), "-R", cfg["repo"]], env)
+            if close_result.returncode != 0:
+                log(f"ALREADY SHIPPED CLOSE FAILED issue={issue_number}: "
+                    f"{close_result.stderr.strip()[:200]}")
+                return None
             log(f"ALREADY SHIPPED issue={issue_number} head={head} -> {done_name}")
         if done_name:
             option_id = status_options.get(done_name)
-            if option_id:
-                move_to_lane(cfg, env, project_id, item_id, field_id, option_id)
+            if not option_id or not move_to_lane(
+                    cfg, env, project_id, item_id, field_id, option_id):
+                log(f"ALREADY SHIPPED BOARD MOVE FAILED issue={issue_number}")
+                return None
         rec.pop("review_msg", None)
         rec.pop("ship_pr", None)
         rec.pop("review_held", None)
@@ -1077,6 +1122,7 @@ def resume_issue(cfg: dict, env: dict, branch: str, wf: str,
     """
     if DRY_RUN:
         log(f"[dry-run] RESUME issue={issue_number} branch={branch} wf={wf}")
+        return True, "dry-run", branch
     if not _dispatch_slot_available(wf, issue_number):
         return False, "Archon workflow capacity is full", None
     full_branch = resolve_worktree_branch(env, issue_number, cfg["repo"])
@@ -1419,12 +1465,15 @@ def create_deferred_issue(cfg: dict, env: dict, issue_number: int,
 
 
 def record_out_of_scope(cfg: dict, slug: str, item: dict,
-                        source_number: int, source_title: str) -> bool:
-    """Record a durable rejection in .out-of-scope/<slug>.md (Matt Pocock KB).
+                        source_number: int, source_title: str) -> Path | None:
+    """Record and publish a durable rejection in .out-of-scope/<slug>.md.
 
-    Creates or appends the concept file and commits it (a dirty tree is fine —
-    only the KB path is staged). Returns False on failure (logged, non-fatal:
-    the skip stands; a future run re-stamping the concept will retry the write).
+    The poller runs from the local develop checkout. The narrowly-scoped KB
+    commit is pushed to origin/develop before this returns successfully, so it
+    cannot leave an unpushed commit that blocks the normal local-sync loop.
+    Returns the actual path on success and None on any write, git, or push
+    failure. A failed operation restores the file to its pre-attempt contents
+    so the next poll can retry cleanly.
     """
     slug = re.sub(r"[^a-z0-9-]+", "-", (slug or "").lower()).strip("-")
     if not slug:
@@ -1432,43 +1481,100 @@ def record_out_of_scope(cfg: dict, slug: str, item: dict,
     path = ROOT / ".out-of-scope" / f"{slug}.md"
     if DRY_RUN:
         log(f"[dry-run] OUT-OF-SCOPE {path.relative_to(ROOT)}")
-        return True
+        return path
     heading = slug.replace("-", " ").strip().title()
     request_line = f'- #{source_number} — "{source_title}"'
-    if path.exists():
-        text = path.read_text()
-        if request_line in text:
-            return True
-        if "## Prior requests" in text:
-            text = text.replace("## Prior requests",
-                                "## Prior requests\n" + request_line, 1)
-        else:
-            text += f"\n## Prior requests\n\n{request_line}\n"
-    else:
-        why = item.get("reason") or item.get("description") or ""
-        text = (f"# {heading}\n\n{why}\n\n"
-                f"## Prior requests\n\n{request_line}\n")
     try:
+        original = path.read_bytes() if path.exists() else None
+        if original is not None:
+            original_text = original.decode()
+            if request_line in original_text:
+                return path
+            text = original_text
+            if "## Prior requests" in text:
+                text = text.replace("## Prior requests",
+                                    "## Prior requests\n" + request_line, 1)
+            else:
+                text += f"\n## Prior requests\n\n{request_line}\n"
+        else:
+            why = item.get("reason") or item.get("description") or ""
+            text = (f"# {heading}\n\n{why}\n\n"
+                    f"## Prior requests\n\n{request_line}\n")
+
+        def restore_file() -> None:
+            try:
+                if original is None:
+                    if path.exists():
+                        path.unlink()
+                else:
+                    path.write_bytes(original)
+            except OSError as exc:
+                log(f"OUT-OF-SCOPE RESTORE FAILED {slug}: {exc}")
+
+        branch = subprocess.run(
+            ["git", "branch", "--show-current"], capture_output=True,
+            text=True, timeout=60, cwd=str(ROOT),
+        )
+        if branch.returncode != 0 or branch.stdout.strip() != "develop":
+            log("OUT-OF-SCOPE WRITE FAILED: local checkout is not develop")
+            return None
+        before = subprocess.run(
+            ["git", "rev-parse", "HEAD"], capture_output=True,
+            text=True, timeout=60, cwd=str(ROOT),
+        )
+        if before.returncode != 0 or not before.stdout.strip():
+            log(f"OUT-OF-SCOPE WRITE FAILED {slug}: cannot read HEAD")
+            return None
+        before_head = before.stdout.strip()
         path.parent.mkdir(exist_ok=True)
         path.write_text(text)
-        subprocess.run(["git", "add", "--", str(path)], capture_output=True,
-                       text=True, timeout=60, cwd=str(ROOT))
-        r = subprocess.run(["git", "commit", "-m", f"out-of-scope: {slug}",
-                            "--", str(path)], capture_output=True, text=True,
-                           timeout=60, cwd=str(ROOT))
-        if r.returncode != 0:
-            log(f"OUT-OF-SCOPE COMMIT FAILED {slug}: {r.stderr.strip()[:200]}")
-            return False
-    except OSError as exc:
+        added = subprocess.run(
+            ["git", "add", "--", str(path)], capture_output=True,
+            text=True, timeout=60, cwd=str(ROOT),
+        )
+        if added.returncode != 0:
+            log(f"OUT-OF-SCOPE ADD FAILED {slug}: {added.stderr.strip()[:200]}")
+            restore_file()
+            return None
+        committed = subprocess.run(
+            ["git", "commit", "-m", f"out-of-scope: {slug}", "--", str(path)],
+            capture_output=True, text=True, timeout=60, cwd=str(ROOT),
+        )
+        if committed.returncode != 0:
+            log(f"OUT-OF-SCOPE COMMIT FAILED {slug}: "
+                f"{committed.stderr.strip()[:200]}")
+            subprocess.run(["git", "reset", "HEAD", "--", str(path)],
+                           capture_output=True, text=True, timeout=60,
+                           cwd=str(ROOT))
+            restore_file()
+            return None
+        pushed = subprocess.run(
+            ["git", "push", "origin", "HEAD:develop"], capture_output=True,
+            text=True, timeout=90, cwd=str(ROOT),
+        )
+        if pushed.returncode != 0:
+            log(f"OUT-OF-SCOPE PUSH FAILED {slug}: "
+                f"{pushed.stderr.strip()[:200]}")
+            rollback = subprocess.run(
+                ["git", "reset", "--mixed", before_head], capture_output=True,
+                text=True, timeout=60, cwd=str(ROOT),
+            )
+            if rollback.returncode != 0:
+                log(f"OUT-OF-SCOPE ROLLBACK FAILED {slug}: "
+                    f"{rollback.stderr.strip()[:200]}")
+            restore_file()
+            return None
+    except (OSError, UnicodeError) as exc:
         log(f"OUT-OF-SCOPE WRITE FAILED {slug}: {exc}")
-        return False
-    return True
+        return None
+    return path
 
 
 def reconcile_deferred_work(cfg: dict, env: dict, issue_number: int,
                             pr_number: int | None, rec: dict, runs_msg: str,
                             project_id: str, field_id: str,
-                            status_options: dict) -> bool:
+                            status_options: dict,
+                            board_items: list[dict] | None = None) -> bool:
     """Guarantee every deferred item in the run's completion record is tracked.
 
     Idempotent: skips when `runs_msg` was already handled (state marker) and
@@ -1520,14 +1626,45 @@ def reconcile_deferred_work(cfg: dict, env: dict, issue_number: int,
     if open_issues is None or closed_issues is None:
         return False
 
+    board_issue_numbers: set[int] | None = None
+    if board_items is not None:
+        board_issue_numbers = set()
+        for board_item in board_items:
+            content = board_item.get("content") or {}
+            number = content.get("number")
+            try:
+                if content.get("__typename") == "Issue" and number is not None:
+                    board_issue_numbers.add(int(number))
+            except (TypeError, ValueError):
+                continue
+
+    def ensure_tracked(target: int) -> bool:
+        if board_issue_numbers is None or target in board_issue_numbers:
+            return True
+        if not add_to_board(cfg, env, target, lane, project_id, field_id,
+                            status_options):
+            log(f"DEFERRED RETRY issue={issue_number}: linked issue #{target} "
+                "could not be added to the project")
+            return False
+        board_issue_numbers.add(target)
+        return True
+
     lane = cfg.get("default_lane", "Backlog")
     lines: list[str] = []
     for item in items:
         if item.get("out_of_scope"):
-            record_out_of_scope(cfg, item["out_of_scope"], item,
-                                issue_number, source_title)
+            recorded_path = record_out_of_scope(
+                cfg, item["out_of_scope"], item, issue_number, source_title
+            )
+            if not recorded_path:
+                log(f"DEFERRED RETRY issue={issue_number}: out-of-scope "
+                    f"record failed for '{item['title']}'")
+                return False
+            display_path = (recorded_path.relative_to(ROOT)
+                            if isinstance(recorded_path, Path)
+                            else recorded_path)
             lines.append(f"- **{item['title']}** \u2014 out of scope, recorded in "
-                         f".out-of-scope/{item['out_of_scope'].strip('-')}.md")
+                         f"{display_path}")
             continue
         if item.get("skip"):
             lines.append(f"- **{item['title']}** \u2014 skipped ({item['skip']})")
@@ -1535,6 +1672,8 @@ def reconcile_deferred_work(cfg: dict, env: dict, issue_number: int,
         if item.get("links_to") is not None:
             target = item["links_to"]
             if any(i.get("number") == target for i in open_issues):
+                if not ensure_tracked(target):
+                    return False
                 lines.append(f"- **{item['title']}** \u2192 already tracked in #{target}")
             else:
                 log(f"DEFERRED: '{item['title']}' links to #{target}, which is not "
@@ -1552,6 +1691,8 @@ def reconcile_deferred_work(cfg: dict, env: dict, issue_number: int,
             continue
         action, ref = dedupe_deferred(item, open_issues, closed_issues)
         if action == "link":
+            if not ensure_tracked(ref):
+                return False
             lines.append(f"- **{item['title']}** \u2192 already tracked in #{ref}")
             continue
         supersedes = item.get("supersedes")
@@ -1736,11 +1877,16 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
                             )
                         ok = dispatch(cfg, env, wf, branch, msg,
                                       item_id, content["number"])
-                    if ok:
-                        dispatched_msg = msg
-                        dispatched_wf = wf
-                        dispatched_branch = resumed_branch or branch
-                        fresh_dispatched.add(item_id)
+                    if not ok:
+                        log(f"DISPATCH DEFERRED issue={content['number']}: "
+                            "retrying next poll")
+                        # Preserve the prior state marker. The next poll must
+                        # observe Todo as a new transition and retry dispatch.
+                        continue
+                    dispatched_msg = msg
+                    dispatched_wf = wf
+                    dispatched_branch = resumed_branch or branch
+                    fresh_dispatched.add(item_id)
                     target = cfg["dispatch"]["todo"].get("move_to")
                     if ok and target:
                         option_id = status_options.get(target)
@@ -1894,7 +2040,22 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
     complete_move_to = cfg["dispatch"]["todo"].get("complete_move_to")
     in_progress_name = next(
         (k for k, v in cfg["lanes"].items() if v == "in_progress"), None)
-    runs_by_msg = None
+    runs_by_msg: dict[str, str] | None = None
+    runs_lookup_ok = True
+
+    def ensure_runs_loaded() -> bool:
+        nonlocal runs_by_msg, runs_lookup_ok
+        if runs_by_msg is not None or not runs_lookup_ok:
+            return runs_lookup_ok
+        result = fetch_runs_by_message(env)
+        if isinstance(result, tuple):
+            runs_by_msg, runs_lookup_ok = result
+        else:  # Backward-compatible with older test doubles/callers.
+            runs_by_msg, runs_lookup_ok = result, True
+        if not runs_lookup_ok:
+            log("RUN STATUS LOOKUP UNAVAILABLE; retrying next poll")
+        return runs_lookup_ok
+
     if complete_move_to and in_progress_name:
         for item_id, rec in list(state.items()):
             if item_id == "_meta" or item_id in fresh_dispatched:
@@ -1902,9 +2063,9 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
             msg = rec.get("dispatch_msg")
             if not msg or rec.get("status") != in_progress_name:
                 continue
-            if runs_by_msg is None:
-                runs_by_msg = fetch_runs_by_message(env)
-            run_status = run_status_for(runs_by_msg, msg)
+            if not ensure_runs_loaded():
+                continue
+            run_status = run_status_for(runs_by_msg or {}, msg)
             if run_status == "completed":
                 issue_number = rec.get("issue_number")
                 needs_input_name = next(
@@ -1930,7 +2091,12 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
                 merge_base = cfg["dispatch"]["todo"].get("merge_develop_base")
                 merge_ok = True
                 pr_num = None
-                if issue_number and merge_base:
+                pr = None
+                if issue_number:
+                    if not merge_base:
+                        log(f"DEVELOP MERGE DEFERRED issue={issue_number}: "
+                            "develop base is not configured")
+                        continue
                     pr, pr_ok = find_issue_pr(cfg, env, issue_number, base=merge_base)
                     if not pr_ok:
                         # gh lookup failed — cannot positively confirm the merge
@@ -1939,15 +2105,19 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
                         log(f"DEVELOP MERGE DEFERRED issue={issue_number}: PR lookup "
                             "failed (gh error); retrying next poll")
                         continue
-                    if pr:
-                        pr_num = pr.get("number")
-                        merge_ok, note = merge_pr_to_base(cfg, env, pr, merge_base,
-                                                          issue_number)
-                        log(f"DEVELOP MERGE issue={issue_number} PR=#{pr['number']}: {note}"
-                            if merge_ok else
-                            f"DEVELOP MERGE FAILED issue={issue_number}: {note}")
-                    else:
-                        log(f"no PR found for issue #{issue_number}; skipping develop merge")
+                    if not pr:
+                        # An absent develop PR is not evidence that the work was
+                        # integrated. Never clear the dispatch marker or advance
+                        # to Ready for Review on a missing integration PR.
+                        log(f"DEVELOP MERGE DEFERRED issue={issue_number}: "
+                            "develop PR not found; retrying next poll")
+                        continue
+                    pr_num = pr.get("number")
+                    merge_ok, note = merge_pr_to_base(cfg, env, pr, merge_base,
+                                                      issue_number)
+                    log(f"DEVELOP MERGE issue={issue_number} PR=#{pr['number']}: {note}"
+                        if merge_ok else
+                        f"DEVELOP MERGE FAILED issue={issue_number}: {note}")
                 if not merge_ok:
                     # Develop-merge conflict gate: mirror the ship-lane state
                     # machine. Episode markers: dev_conflict_mech /
@@ -2016,7 +2186,7 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
                 if (issue_number and dw_cfg.get("enabled", True)
                         and not reconcile_deferred_work(
                             cfg, env, issue_number, pr_num, rec, msg,
-                            project_id, field_id, status_options)):
+                            project_id, field_id, status_options, items)):
                     log(f"DEFERRED RETRY item={item_id} issue={issue_number} "
                         "(guard incomplete; will retry next poll)")
                     continue
@@ -2090,9 +2260,9 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
             rmsg = rec.get("review_msg")
             if not rmsg or rec.get("status") != review_lane_name:
                 continue
-            if runs_by_msg is None:
-                runs_by_msg = fetch_runs_by_message(env)
-            rstatus = run_status_for(runs_by_msg, rmsg)
+            if not ensure_runs_loaded():
+                continue
+            rstatus = run_status_for(runs_by_msg or {}, rmsg)
             if rstatus == "completed":
                 ship_num = rec.get("ship_pr")
                 ship = None
@@ -2178,20 +2348,20 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
             # Never remediate while a review run is active — its sync/fix
             # nodes also write to the branch; concurrent writers race.
             rmsg = rec.get("review_msg")
-            if rmsg and runs_by_msg is None:
-                runs_by_msg = fetch_runs_by_message(env)
+            if rmsg and not ensure_runs_loaded():
+                continue
             review_active = bool(
-                rmsg and runs_by_msg
+                rmsg and runs_by_msg is not None
                 and run_status_for(runs_by_msg, rmsg)
                 in ACTIVE_WORKFLOW_STATUSES)
             if review_active:
                 continue
             fix_msg = rec.get("conflict_fix_msg")
             mech_failed = bool(rec.get("conflict_mech_failed"))
-            if fix_msg and runs_by_msg is None:
-                runs_by_msg = fetch_runs_by_message(env)
-            fix_status = (run_status_for(runs_by_msg, fix_msg)
-                          if fix_msg and runs_by_msg else None)
+            if fix_msg and not ensure_runs_loaded():
+                continue
+            fix_status = (run_status_for(runs_by_msg or {}, fix_msg)
+                          if fix_msg else None)
             action = conflict_episode_action(mergeable, fix_msg, fix_status, mech_failed)
             if action == "update":
                 ok, note = try_merge_base_into_head(
@@ -2248,30 +2418,45 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
     save_state(cfg, state)
 
 
-def fetch_runs_by_message(env: dict) -> dict[str, str]:
-    """Map exact run user_message -> status of the NEWEST run with it.
+def fetch_runs_by_message(env: dict) -> tuple[dict[str, str], bool]:
+    """Map exact run user_message -> status of the newest matching run.
 
-    Re-dispatches reuse the same message for the same issue, so multiple runs
-    can share it; the newest run's status is the one that counts. Callers do
-    substring lookup because `archon continue` prepends a "Prior Context"
-    preamble to the message.
+    Returns ``(mapping, False)`` when the Archon lookup is unavailable or
+    malformed. A successful lookup with no runs is ``({}, True)`` so callers
+    never confuse an outage with a valid empty result.
     """
-    r = subprocess.run(["archon", "workflow", "runs", "--json"],
-                       capture_output=True, text=True, timeout=60, env=env,
-                       cwd=str(ROOT))
-    if r.returncode != 0:
-        return {}
-    data = json.loads(r.stdout)
+    try:
+        result = subprocess.run(
+            ["archon", "workflow", "runs", "--json"],
+            capture_output=True, text=True, timeout=60, env=env, cwd=str(ROOT),
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        log(f"RUN STATUS LOOKUP FAILED: {exc}")
+        return {}, False
+    if result.returncode != 0:
+        log(f"RUN STATUS LOOKUP FAILED: {result.stderr.strip()[:200]}")
+        return {}, False
+    try:
+        data = json.loads(result.stdout)
+    except (TypeError, ValueError) as exc:
+        log(f"RUN STATUS PARSE FAILED: {exc}")
+        return {}, False
     runs = data.get("runs") if isinstance(data, dict) else data
+    if not isinstance(runs, list):
+        log("RUN STATUS PARSE FAILED: expected a runs list")
+        return {}, False
     best: dict[str, tuple[str, str]] = {}
     for run in runs:
+        if not isinstance(run, dict):
+            log("RUN STATUS PARSE FAILED: run entry is not an object")
+            return {}, False
         run_msg = run.get("user_message") or ""
         if not run_msg:
             continue
         started = run.get("started_at") or ""
         if started > best.get(run_msg, ("", ""))[1]:
             best[run_msg] = (run.get("status") or "", started)
-    return {msg: status for msg, (status, _) in best.items()}
+    return {msg: status for msg, (status, _) in best.items()}, True
 
 
 def run_status_for(runs_by_msg: dict[str, str], dispatch_msg: str) -> str | None:
