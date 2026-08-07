@@ -27,8 +27,9 @@ Pipeline Budget, Model Server Settings, and Prompt Profile.
 | `NEWS_PROMPT_OVERRIDE_<TASK>` | _(unset)_ | Per-stage editorial override layered on top of `NEWS_PROMPT_PROFILE` (override wins). Tasks: `ARTICLE_SUMMARY`, `STORY_SCALE_SCREENING`, `STORY_DRAFTING`, `TITLE_GENERATION`, `IMAGE_ART_DIRECTION`. Unset/empty = use profile text. Editable from the UI's Editorial approach panel. |
 | `NEWS_MODEL` | `gemma-4-12b-it-4bit` | Default friendly alias or full model repo/name. Task-specific model assignments inherit this value unless overridden. Stages with no LLM call of their own (story discovery) inherit this value. |
 | `NEWS_SOURCE_SCOPE` | `core` | `core` selects active English core sources. `peripheral` selects core plus peripheral sources. |
-| `NEWS_RECIPIENT_SCOPE` | `primary` | `primary` sends to `NEWS_PRIMARY_RECIPIENT`. `all` sends to active configured recipients. |
-| `NEWS_PRIMARY_RECIPIENT` | `primary@example.com` | Single-recipient address used by primary-recipient-scoped runs. |
+| `NEWS_DELIVERY_MODE` | `owner` | Optional email delivery policy: `disabled` (no delivery, `skipped: user_disabled`), `owner` (sends only to `NEWS_PRIMARY_RECIPIENT`), or `recipients` (explicit opt-in: active `config/recipients.yaml` entries or the legacy `NEWS_EMAIL_RECIPIENTS` fallback; owner included only when listed). Legacy `NEWS_RECIPIENT_SCOPE` maps to this mode when the new variable is unset. |
+| `NEWS_RECIPIENT_SCOPE` | `primary` | Legacy migration value: `primary` maps to `NEWS_DELIVERY_MODE=owner`, `all` maps to `recipients`. Prefer `NEWS_DELIVERY_MODE`. |
+| `NEWS_PRIMARY_RECIPIENT` | `primary@example.com` | Owner recipient used by `owner` delivery mode. |
 | `NEWS_BLOCK_REUSED_URLS` | `0` | Every run records URL history. `1` makes recorded URLs block future reuse. |
 | `NEWS_IMAGE_ENABLED` | `0` | `1` enables report image generation. Image model, size, crop, steps, and fail-open behavior are fixed defaults. |
 | `NEWS_RECENT_WINDOW_HOURS` | `24` | Only articles published within this window are considered. |
@@ -111,9 +112,9 @@ These settings are intentionally not part of the normal Run Settings surface.
 | `NEWS_HISTORY_DB` | `output/history/news_history.duckdb` | DuckDB run and URL history path. |
 | `NEWS_HISTORY_EXPORT_CSV` | `1` | Export readable history CSVs after writes. |
 | `NEWS_ENV_JSON` | `env.json` | JSON file with SMTP password fallback. |
-| `NEWS_EMAIL_FROM` | `news@example.com` | Sender address and SMTP username default. |
-| `NEWS_EMAIL_RECIPIENTS` | `NEWS_PRIMARY_RECIPIENT` | Fallback recipient list if recipient YAML has no active entries. |
-| `NEWS_SMTP_HOST`, `NEWS_SMTP_PORT`, `NEWS_SMTP_USERNAME`, `NEWS_SMTP_USE_SSL`, `NEWS_SMTP_PASSWORD` | mail defaults | SMTP delivery configuration. |
+| `NEWS_EMAIL_FROM` | `news@example.com` | Delivery Profile sender address and SMTP username default. The checked-in example address is a placeholder and is never deliverable (`skipped: not_configured`). |
+| `NEWS_EMAIL_RECIPIENTS` | `NEWS_PRIMARY_RECIPIENT` | Legacy fallback recipient list used only when `NEWS_DELIVERY_MODE=recipients` finds no active YAML entries. |
+| `NEWS_SMTP_HOST`, `NEWS_SMTP_PORT`, `NEWS_SMTP_USERNAME`, `NEWS_SMTP_USE_SSL`, `NEWS_SMTP_PASSWORD` | mail defaults | SMTP delivery configuration. Placeholder credential tokens (`password`, `change-me`, …) and empty values count as not configured. |
 | `NEWS_UNSUBSCRIBE_BASE_URL`, `NEWS_UNSUBSCRIBE_HOST`, `NEWS_UNSUBSCRIBE_PORT`, `NEWS_UNSUBSCRIBE_SECRET` | local defaults | Unsubscribe endpoint configuration. |
 | `NEWS_TOKEN_ENCODING` | `o200k_base` | Token-counting encoding. |
 
@@ -128,8 +129,13 @@ update, duplicate, delete, select, and preview commands for these presets.
 - `language: en` for normal source selection.
 - `tier: core` and `tier: peripheral` with `NEWS_SOURCE_SCOPE`.
 
-`config/recipients.yaml` stores delivery recipients. `pause: true` skips a
-recipient without removing the entry.
+`config/recipients.yaml` stores the Delivery Profile's additional-recipient
+catalog. The checked-in file is a public template with an illustrative
+placeholder entry; real addresses belong in a local copy referenced by
+`NEWS_RECIPIENTS_YAML`. `pause: true` keeps a recipient configured but skips
+delivery (`skipped: user_disabled`). `NEWS_DELIVERY_MODE=recipients` selects
+the active entries; the owner is configured with `NEWS_PRIMARY_RECIPIENT` and
+is included only when also listed here.
 
 ## Removed Settings
 

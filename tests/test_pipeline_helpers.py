@@ -24,7 +24,16 @@ from datetime import datetime
 
 import news_pipeline.pipeline as pipeline
 from news_pipeline.article_summary_records import ArticleSummaryRecord
-from news_pipeline.config import ModelSamplingSettings, MODEL_TASK_STORY_SCALE_SCREENING, MODEL_TASK_TITLE_GENERATION
+from news_pipeline.config import (
+    DELIVERY_MODE_DISABLED,
+    DELIVERY_MODE_OWNER,
+    DELIVERY_MODE_RECIPIENTS,
+    DeliveryProfile,
+    DeliveryRecipient,
+    ModelSamplingSettings,
+    MODEL_TASK_STORY_SCALE_SCREENING,
+    MODEL_TASK_TITLE_GENERATION,
+)
 from news_pipeline.diagnostics import RunDiagnostics, run_status_from_events
 
 
@@ -2014,6 +2023,16 @@ class PipelineHelperTests(unittest.TestCase):
             )
             stack.enter_context(patch.object(pipeline, "load_recipient_config", return_value={}))
             stack.enter_context(patch.object(pipeline, "get_active_recipient_config", return_value={}))
+            # Delivery Profile target resolution is the delivery call-site
+            # seam; pin it so the test stays deterministic regardless of the
+            # import-time environment (e.g. NEWS_DELIVERY_MODE=disabled).
+            stack.enter_context(
+                patch.object(
+                    pipeline,
+                    "_resolve_delivery_plan",
+                    return_value=([], "skipped: not_configured", "missing configuration: recipient list"),
+                )
+            )
             stack.enter_context(patch.object(pipeline, "_finish_run_diagnostics", finish))
             stack.enter_context(patch.object(pipeline, "record_activity_snapshot"))
             stack.enter_context(patch.object(pipeline, "sync_assistant_context_latest_output"))
@@ -2111,6 +2130,418 @@ class PipelineHelperTests(unittest.TestCase):
             art_brief = pipeline.generate_image_art_brief("Summary text", "Report title")
         self.assertEqual(art_brief["overlay_headline"], "Report title")
         self.assertIn("image_prompt", art_brief)
+
+    def test_delivery_profile_disabled_records_user_disabled_without_smtp(self) -> None:
+        # Explicit disabled mode: skipped: user_disabled, no SMTP object is
+        # constructed, and the report completion path still records.
+        profile = DeliveryProfile(
+            mode=DELIVERY_MODE_DISABLED,
+            owner_recipient="",
+            sender="",
+            smtp_host="",
+            smtp_password="",
+        )
+        with patch.object(pipeline.smtplib, "SMTP_SSL") as smtp_ssl, patch.object(
+            pipeline.smtplib, "SMTP"
+        ) as smtp, patch.object(pipeline.progress_tracker, "detail") as detail:
+            result = pipeline.maybe_email_report(
+                "Title",
+                "Body",
+                "Synthesis",
+                [],
+                ["reader@example.com"],
+                ["Reader"],
+                delivery_profile=profile,
+            )
+        self.assertEqual(result["status"], "skipped: user_disabled")
+        self.assertEqual(result["reason"], "delivery disabled by profile")
+        smtp_ssl.assert_not_called()
+        smtp.assert_not_called()
+        self.assertIn("delivery disabled by profile", detail.call_args[0][0])
+
+        # The same outcome flows through the delivery boundary with a
+        # preflight decision and keeps the run completed.
+        diagnostics = RunDiagnostics(
+            run_started_at="2026-06-01T10:00:00",
+            settings={},
+            events=[{"at": "2026-06-01T10:01:00", "label": "completed"}],
+        )
+        result = pipeline._attempt_email_delivery(
+            diagnostics,
+            report_title="Title",
+            report_body="Body",
+            synthesis_body="Synthesis",
+            final_reports=[],
+            recipient_list=[],
+            recipient_names=[],
+            delivery_profile=profile,
+            preflight_status="skipped: user_disabled",
+            preflight_reason="delivery disabled by profile",
+        )
+        self.assertEqual(result["status"], "skipped: user_disabled")
+        self.assertEqual(diagnostics.delivery["status"], "skipped: user_disabled")
+        self.assertEqual(run_status_from_events(diagnostics.events), "completed")
+        self.assertFalse(any(event["label"] == "failed" for event in diagnostics.events))
+
+    def test_delivery_profile_owner_mode_sends_only_owner(self) -> None:
+        # Owner-only mode sends only the owner, and a sender equal to the
+        # owner is accepted (ADR 0012 identity rules).
+        class FakeSMTP:
+            def __init__(self, *args, **kwargs) -> None:  # noqa: ANN002, ANN003
+                self.messages = []
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):  # noqa: ANN001, ANN002, ANN003
+                return False
+
+            def starttls(self) -> None:
+                return None
+
+            def login(self, username: str, password: str) -> None:
+                return None
+
+            def send_message(self, message) -> None:  # noqa: ANN001
+                self.messages.append(message)
+                return {}
+
+        fake_smtp = FakeSMTP()
+        profile = DeliveryProfile(
+            mode=DELIVERY_MODE_OWNER,
+            owner_recipient="owner@example.com",
+            additional_recipients=(
+                DeliveryRecipient(email="editor@example.com", name="Editor"),
+            ),
+            sender="owner@example.com",
+            smtp_host="smtp.example.com",
+            smtp_port=587,
+            smtp_username="owner@example.com",
+            smtp_use_ssl=False,
+            smtp_password="s3cret",
+        )
+        with patch.object(
+            pipeline, "build_report_html", return_value="<html>report</html>"
+        ), patch.object(
+            pipeline, "build_unsubscribe_url", return_value="https://example.com/u?t=1"
+        ), patch.object(pipeline.smtplib, "SMTP", return_value=fake_smtp), patch.object(
+            pipeline.progress_tracker, "detail"
+        ):
+            result = pipeline.maybe_email_report(
+                "Daily Brief",
+                "Body text",
+                "Synthesis text",
+                [],
+                [],
+                [],
+                delivery_profile=profile,
+            )
+        self.assertEqual(result["status"], "sent")
+        self.assertEqual(result["recipients"], ["owner@example.com"])
+        self.assertEqual(result["accepted_recipients"], ["owner@example.com"])
+        self.assertEqual(result["phase"], "send")
+        self.assertEqual(len(fake_smtp.messages), 1)
+        self.assertEqual(fake_smtp.messages[0]["To"], "owner@example.com")
+        self.assertEqual(fake_smtp.messages[0]["From"], "owner@example.com")
+
+    def test_delivery_profile_recipients_mode_selects_catalog_and_deduplicates(self) -> None:
+        # Configured-recipients mode is an explicit opt-in: active catalog
+        # entries only (paused skipped, owner not silently prepended), with
+        # case-insensitive dedupe retaining first order/name.
+        class FakeSMTP:
+            def __init__(self, *args, **kwargs) -> None:  # noqa: ANN002, ANN003
+                self.messages = []
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):  # noqa: ANN001, ANN002, ANN003
+                return False
+
+            def starttls(self) -> None:
+                return None
+
+            def login(self, username: str, password: str) -> None:
+                return None
+
+            def send_message(self, message) -> None:  # noqa: ANN001
+                self.messages.append(message)
+                return {}
+
+        fake_smtp = FakeSMTP()
+        profile = DeliveryProfile(
+            mode=DELIVERY_MODE_RECIPIENTS,
+            owner_recipient="owner@example.com",
+            additional_recipients=(
+                DeliveryRecipient(email="Reader@Example.com", name="Reader First"),
+                DeliveryRecipient(email="reader@example.com", name="Reader Duplicate"),
+                DeliveryRecipient(email="editor@example.com", name="Editor"),
+                DeliveryRecipient(email="paused@example.com", name="Paused", pause=True),
+            ),
+            sender="owner@example.com",
+            smtp_host="smtp.example.com",
+            smtp_port=587,
+            smtp_username="owner@example.com",
+            smtp_use_ssl=False,
+            smtp_password="s3cret",
+        )
+        with patch.object(
+            pipeline, "build_report_html", return_value="<html>report</html>"
+        ), patch.object(
+            pipeline, "build_unsubscribe_url", return_value="https://example.com/u?t=1"
+        ), patch.object(pipeline.smtplib, "SMTP", return_value=fake_smtp), patch.object(
+            pipeline.progress_tracker, "detail"
+        ):
+            result = pipeline.maybe_email_report(
+                "Daily Brief",
+                "Body text",
+                "Synthesis text",
+                [],
+                [],
+                [],
+                delivery_profile=profile,
+            )
+        self.assertEqual(result["status"], "sent")
+        # Owner is included only when listed; the duplicate casing is sent
+        # once, retaining the first name.
+        self.assertEqual(
+            result["recipients"], ["Reader@Example.com", "editor@example.com"]
+        )
+        self.assertEqual(len(fake_smtp.messages), 2)
+        self.assertEqual(fake_smtp.messages[0]["To"], "Reader@Example.com")
+        self.assertEqual(fake_smtp.messages[1]["To"], "editor@example.com")
+
+    def test_delivery_plan_paused_placeholder_and_fallback_policy(self) -> None:
+        # Owner listed as paused in the additional catalog is user-disabled.
+        profile = DeliveryProfile(
+            mode=DELIVERY_MODE_OWNER,
+            owner_recipient="owner@example.com",
+            additional_recipients=(
+                DeliveryRecipient(email="owner@example.com", name="Owner", pause=True),
+            ),
+        )
+        targets, status, reason = pipeline._resolve_delivery_plan(profile)
+        self.assertEqual(targets, [])
+        self.assertEqual(status, "skipped: user_disabled")
+        self.assertEqual(reason, "owner recipient is paused")
+
+        # Placeholder owner/sender values are not configured, never sent.
+        profile = DeliveryProfile(
+            mode=DELIVERY_MODE_OWNER,
+            owner_recipient="primary@example.com",
+            sender="news@example.com",
+            smtp_host="smtp.gmail.com",
+            smtp_username="news@example.com",
+            smtp_password="password",
+        )
+        targets, status, reason = pipeline._resolve_delivery_plan(profile)
+        self.assertEqual(targets, [])
+        self.assertEqual(status, "skipped: not_configured")
+        self.assertEqual(reason, "placeholder recipient address")
+        with patch.object(pipeline.progress_tracker, "detail"):
+            result = pipeline.maybe_email_report(
+                "Title", "Body", "Synthesis", [], [], [], delivery_profile=profile
+            )
+        self.assertEqual(result["status"], "skipped: not_configured")
+        self.assertIn("placeholder", result["reason"])
+
+        # All-paused configured recipients are user-disabled.
+        profile = DeliveryProfile(
+            mode=DELIVERY_MODE_RECIPIENTS,
+            owner_recipient="owner@example.com",
+            additional_recipients=(
+                DeliveryRecipient(email="a@example.com", name="A", pause=True),
+                DeliveryRecipient(email="b@example.com", name="B", pause=True),
+            ),
+            sender="owner@example.com",
+            smtp_host="smtp.example.com",
+            smtp_password="s3cret",
+        )
+        targets, status, reason = pipeline._resolve_delivery_plan(profile)
+        self.assertEqual(status, "skipped: user_disabled")
+        self.assertEqual(reason, "all configured recipients are paused")
+
+        # Empty catalog falls back to the legacy recipient list; an empty
+        # catalog without a fallback is not_configured.
+        profile = DeliveryProfile(
+            mode=DELIVERY_MODE_RECIPIENTS,
+            owner_recipient="owner@example.com",
+            legacy_fallback_recipients=("legacy@example.com",),
+            sender="owner@example.com",
+            smtp_host="smtp.example.com",
+            smtp_password="s3cret",
+        )
+        targets, status, reason = pipeline._resolve_delivery_plan(profile)
+        self.assertEqual(status, "")
+        self.assertEqual([t.email for t in targets], ["legacy@example.com"])
+        profile = DeliveryProfile(
+            mode=DELIVERY_MODE_RECIPIENTS,
+            owner_recipient="owner@example.com",
+            sender="owner@example.com",
+            smtp_host="smtp.example.com",
+            smtp_password="s3cret",
+        )
+        targets, status, reason = pipeline._resolve_delivery_plan(profile)
+        self.assertEqual(status, "skipped: not_configured")
+        self.assertEqual(reason, "missing configuration: recipient list")
+
+    def test_maybe_email_report_partial_refusal_is_failed(self) -> None:
+        # ``send_message`` reports refused recipients by returning a mapping
+        # instead of raising; a partial refusal must be ``failed`` with
+        # accepted/rejected recipient data, never a false ``sent``.
+        class RefusingSMTP:
+            def __init__(self, *args, **kwargs) -> None:  # noqa: ANN002, ANN003
+                self.messages = []
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):  # noqa: ANN001, ANN002, ANN003
+                return False
+
+            def starttls(self) -> None:
+                return None
+
+            def login(self, username: str, password: str) -> None:
+                return None
+
+            def send_message(self, message) -> dict[str, str]:  # noqa: ANN001
+                self.messages.append(message)
+                if message["To"] == "refused@example.com":
+                    return {"refused@example.com": (550, b"relay denied")}
+                return {}
+
+        fake_smtp = RefusingSMTP()
+        with patch.object(pipeline, "EMAIL_FROM", "from@example.com"), patch.object(
+            pipeline, "SMTP_HOST", "smtp.example.com"
+        ), patch.object(pipeline, "SMTP_USERNAME", "user"), patch.object(
+            pipeline, "SMTP_PASSWORD", "secret"
+        ), patch.object(pipeline, "SMTP_PORT", 587), patch.object(
+            pipeline, "SMTP_USE_SSL", False
+        ), patch.object(
+            pipeline, "build_report_html", return_value="<html>report</html>"
+        ), patch.object(
+            pipeline,
+            "build_unsubscribe_url",
+            return_value="https://example.com/unsubscribe?token=abc",
+        ), patch.object(pipeline.smtplib, "SMTP", return_value=fake_smtp), patch.object(
+            pipeline.progress_tracker, "warning"
+        ) as warning:
+            result = pipeline.maybe_email_report(
+                "Daily Brief",
+                "Body text",
+                "Synthesis text",
+                [],
+                ["accepted@example.com", "refused@example.com"],
+                ["Accepted", "Refused"],
+            )
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["phase"], "send")
+        self.assertEqual(result["recipients"], ["accepted@example.com", "refused@example.com"])
+        self.assertEqual(result["accepted_recipients"], ["accepted@example.com"])
+        self.assertEqual(result["rejected_recipients"], ["refused@example.com"])
+        self.assertIn("delivery refused", result["reason"])
+        self.assertEqual(result["error_type"], "SMTPRecipientsRefused")
+        warning.assert_called_once()
+        self.assertIn("refused@example.com", warning.call_args[0][0])
+
+    def test_attempt_email_delivery_redacts_password_in_failure(self) -> None:
+        # An exception message that echoes the SMTP password must be redacted
+        # from the result, the warning, and the recorded diagnostics.
+        diagnostics = RunDiagnostics(
+            run_started_at="2026-06-01T10:00:00",
+            settings={},
+            events=[{"at": "2026-06-01T10:01:00", "label": "completed"}],
+        )
+        profile = DeliveryProfile(
+            mode=DELIVERY_MODE_OWNER,
+            owner_recipient="owner@example.com",
+            sender="owner@example.com",
+            smtp_host="smtp.example.com",
+            smtp_password="super-secret-password",
+            unsubscribe_secret="unsub-token",
+        )
+
+        def explode(*_args, **_kwargs) -> dict[str, Any]:
+            raise RuntimeError(
+                "auth failed for super-secret-password via unsub-token"
+            )
+
+        with patch.object(pipeline, "maybe_email_report", side_effect=explode), patch.object(
+            pipeline.progress_tracker, "warning"
+        ) as warning:
+            result = pipeline._attempt_email_delivery(
+                diagnostics,
+                report_title="Title",
+                report_body="Body",
+                synthesis_body="Synthesis",
+                final_reports=[],
+                recipient_list=["owner@example.com"],
+                recipient_names=["Owner"],
+                delivery_profile=profile,
+            )
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["phase"], "send")
+        self.assertNotIn("super-secret-password", result["error_message"])
+        self.assertNotIn("unsub-token", result["error_message"])
+        self.assertNotIn("super-secret-password", warning.call_args[0][0])
+        self.assertNotIn("super-secret-password", json.dumps(diagnostics.delivery))
+        self.assertIn("***", result["error_message"])
+        # Run status stays completed; no failed run event is added.
+        self.assertEqual(run_status_from_events(diagnostics.events), "completed")
+        self.assertFalse(any(event["label"] == "failed" for event in diagnostics.events))
+
+    def test_complete_pipeline_run_records_disabled_preflight(self) -> None:
+        # A disabled preflight decision still records skipped: user_disabled
+        # before the completed event and durable finalization, with no SMTP
+        # attempt and no failed run event.
+        diagnostics = RunDiagnostics(
+            run_started_at="2026-06-01T10:00:00",
+            settings={},
+        )
+        finalizer = MagicMock()
+        calls: list[str] = []
+        finalizer.record_report_body.side_effect = lambda _body: calls.append("record_report")
+
+        with patch.object(pipeline.smtplib, "SMTP") as smtp, patch.object(
+            pipeline.smtplib, "SMTP_SSL"
+        ) as smtp_ssl, patch.object(
+            pipeline, "_active_run_finalizer", return_value=finalizer
+        ), patch.object(
+            pipeline,
+            "_finish_run_diagnostics",
+            side_effect=lambda *_args, **_kwargs: calls.append("finish"),
+        ), patch.object(pipeline, "sync_assistant_context_latest_output"), patch.object(
+            pipeline.progress_tracker, "detail"
+        ):
+            pipeline._complete_pipeline_run(
+                diagnostics,
+                pipeline.CONFIG,
+                report_body="Daily News Summary\n\nA useful report.",
+                delivery_context={
+                    "report_title": "Daily News Summary",
+                    "report_body": "Daily News Summary\n\nA useful report.",
+                    "synthesis_body": "A useful report.",
+                    "final_reports": [],
+                    "recipient_list": [],
+                    "recipient_names": [],
+                    "delivery_profile": DeliveryProfile(
+                        mode=DELIVERY_MODE_DISABLED,
+                        owner_recipient="",
+                    ),
+                    "preflight_status": "skipped: user_disabled",
+                    "preflight_reason": "delivery disabled by profile",
+                },
+            )
+
+        self.assertEqual(diagnostics.delivery["status"], "skipped: user_disabled")
+        self.assertEqual(run_status_from_events(diagnostics.events), "completed")
+        self.assertEqual(calls, ["record_report", "finish"])
+        smtp.assert_not_called()
+        smtp_ssl.assert_not_called()
+        finalizer.record_report_body.assert_called_once_with(
+            "Daily News Summary\n\nA useful report."
+        )
 
     def test_build_image_art_system_prompt_contains_protocol(self) -> None:
         # The extracted pure helper must always carry the pipeline-owned JSON

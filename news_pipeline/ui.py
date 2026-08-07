@@ -64,12 +64,18 @@ from .model_catalog import (
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8766
-RECIPIENT_HEADER = """# Email recipients for generated reports.
+RECIPIENT_HEADER = """# Additional email recipients for generated reports.
+#
+# This is a public template: real addresses and credentials belong in a local
+# recipient file referenced by NEWS_RECIPIENTS_YAML (or env/ignored env.json),
+# never in tracked config. The owner recipient is configured separately with
+# NEWS_PRIMARY_RECIPIENT.
 #
 # Usage:
-# - pause: true keeps the recipient configured but skips delivery.
-# - NEWS_RECIPIENT_SCOPE=primary sends only to the primary recipient,
-#   regardless of this file.
+# - pause: true keeps the recipient configured but skips delivery
+#   (skipped: user_disabled).
+# - NEWS_DELIVERY_MODE=recipients selects the active entries below; the owner
+#   is included only when listed here.
 """
 RUN_PRESET_HEADER = """# Saved run presets for the daily news pipeline.
 #
@@ -229,18 +235,13 @@ def _runtime_snapshot(
                 "base_model": config.image_base_model,
             },
             "delivery": {
+                **config.delivery_profile.public_snapshot(),
                 "primary_recipient": config.primary_recipient,
                 "fallback_recipients": config.email_recipients_fallback,
                 "email_from": config.email_from,
-                "smtp_host": config.smtp_host,
-                "smtp_port": config.smtp_port,
-                "smtp_username": config.smtp_username,
-                "smtp_use_ssl": config.smtp_use_ssl,
-                "smtp_password_set": bool(config.smtp_password),
                 "unsubscribe_base_url": config.unsubscribe_base_url,
                 "unsubscribe_host": config.unsubscribe_host,
                 "unsubscribe_port": config.unsubscribe_port,
-                "unsubscribe_secret_set": bool(config.unsubscribe_secret),
             },
         }, None
     except Exception as exc:  # pragma: no cover - surfaced to browser
@@ -1579,6 +1580,7 @@ HTML = r"""<!doctype html>
         <div class="table-wrap"><table id="recipientTable"></table></div>
         <div class="panel">
           <h2>Recipient Editor</h2>
+          <p class="muted">Additional recipients for the configured-recipients delivery mode; the owner is configured with NEWS_PRIMARY_RECIPIENT. The checked-in config/recipients.yaml is a public template.</p>
           <div class="form-grid">
             <label>Email<input id="recipient_email"></label>
             <label>Name<input id="recipient_name"></label>
@@ -1632,7 +1634,7 @@ HTML = r"""<!doctype html>
     const SURFACED_ENVS = new Set([
       "NEWS_MODEL",  // dedicated "Default model" knob in Run Setup; suppress the Advanced-tab duplicate
       "NEWS_SOURCE_SCOPE",
-      "NEWS_RECIPIENT_SCOPE",
+      "NEWS_DELIVERY_MODE",  // dedicated "Delivery mode" control in Run Setup; suppress the Advanced-tab duplicate
       "NEWS_PROMPT_PROFILE",  // has a dedicated panel control; suppress the Advanced-tab duplicate
       "NEWS_PROMPT_OVERRIDE_ARTICLE_SUMMARY",       // dedicated per-stage editors in the
       "NEWS_PROMPT_OVERRIDE_STORY_SCALE_SCREENING", // Editorial approach panel; suppress
@@ -1792,7 +1794,8 @@ HTML = r"""<!doctype html>
       ["recipients", "Recipients", "person"]
     ];
     const KNOB_HINTS = {
-      NEWS_RECIPIENT_SCOPE: "Chooses whether this run targets only the primary recipient or all active recipients.",
+      NEWS_DELIVERY_MODE: "Chooses the delivery policy: no delivery, owner only (default), or explicit configured recipients. Legacy NEWS_RECIPIENT_SCOPE still maps to this mode when set.",
+      NEWS_RECIPIENT_SCOPE: "Legacy migration value for NEWS_DELIVERY_MODE (primary -> owner, all -> recipients); prefer the delivery mode control.",
       NEWS_SOURCE_SCOPE: "Chooses the source pool: core sources only, or the full source list.",
       NEWS_MODEL: "Default local model alias used when a task-specific model is not set.",
       NEWS_MODEL_ARTICLE_SUMMARY: "Model used for article summarization before story drafting.",
@@ -2210,10 +2213,6 @@ HTML = r"""<!doctype html>
         core: "Core",
         peripheral: "All"
       };
-      const recipientScopes = {
-        primary: "Primary-only",
-        all: "All"
-      };
       const defaultModel = knobField("NEWS_MODEL", "Default model", { emptyLabel: "default: gemma-4-12b-it-4bit" });
       const sharedModelTokens = knobField("NEWS_MODEL_MAX_INPUT_TOKENS", "Shared model input cap");
       const articleTokenCap = knobField("NEWS_ARTICLE_SUMMARY_MAX_TOKENS", "Article summary max tokens");
@@ -2275,15 +2274,16 @@ HTML = r"""<!doctype html>
           ${runtimeError ? `<p class="bad" style="margin:0 0 8px">Configuration error: ${escapeHtml(runtimeError)}</p>` : ""}
           <section class="panel">
             <p class="eyebrow">Routing</p>
-            <h2>Recipients and sources</h2>
+            <h2>Delivery and sources</h2>
             <div class="form-grid">
-              <label class="field"><span>Recipients</span>
-                <select id="recipientScope" data-env="NEWS_RECIPIENT_SCOPE">
-                  <option value="">default: Primary-only</option>
-                  <option value="primary"${currentControlValue("NEWS_RECIPIENT_SCOPE") === "primary" ? " selected" : ""}>Primary-only</option>
-                  <option value="all"${currentControlValue("NEWS_RECIPIENT_SCOPE") === "all" ? " selected" : ""}>All</option>
+              <label class="field"><span>Delivery</span>
+                <select id="deliveryMode" data-env="NEWS_DELIVERY_MODE">
+                  <option value="">default: Owner only</option>
+                  <option value="disabled"${currentControlValue("NEWS_DELIVERY_MODE") === "disabled" ? " selected" : ""}>No delivery</option>
+                  <option value="owner"${currentControlValue("NEWS_DELIVERY_MODE") === "owner" ? " selected" : ""}>Owner only</option>
+                  <option value="recipients"${currentControlValue("NEWS_DELIVERY_MODE") === "recipients" ? " selected" : ""}>Configured recipients</option>
                 </select>
-                <code>NEWS_RECIPIENT_SCOPE</code>
+                <code>NEWS_DELIVERY_MODE</code>
               </label>
               <label class="field"><span>Source list</span>
                 <select id="sourceScope" data-env="NEWS_SOURCE_SCOPE">
@@ -2928,6 +2928,9 @@ HTML = r"""<!doctype html>
       const deliveryStatus = review.delivery_status || "not recorded";
       const deliveryMeta = [
         delivery.reason ? `reason: ${delivery.reason}` : "",
+        delivery.phase ? `phase: ${delivery.phase}` : "",
+        delivery.accepted_recipients && delivery.accepted_recipients.length ? `accepted: ${delivery.accepted_recipients.join(", ")}` : "",
+        delivery.rejected_recipients && delivery.rejected_recipients.length ? `rejected: ${delivery.rejected_recipients.join(", ")}` : "",
         delivery.error_type ? `${delivery.error_type}: ${delivery.error_message}` : ""
       ].filter(Boolean).join(" · ");
       $("reviewMount").innerHTML = `
@@ -3044,6 +3047,9 @@ HTML = r"""<!doctype html>
       const delivery = run.delivery || {};
       const deliveryMeta = [
         delivery.reason ? `reason: ${delivery.reason}` : "",
+        delivery.phase ? `phase: ${delivery.phase}` : "",
+        delivery.accepted_recipients && delivery.accepted_recipients.length ? `accepted: ${delivery.accepted_recipients.join(", ")}` : "",
+        delivery.rejected_recipients && delivery.rejected_recipients.length ? `rejected: ${delivery.rejected_recipients.join(", ")}` : "",
         delivery.error_type ? `${delivery.error_type}: ${delivery.error_message}` : ""
       ].filter(Boolean).join(" · ");
       container.innerHTML = `

@@ -268,9 +268,12 @@ class RunFinalizerTests(unittest.TestCase):
             finalizer, paths, _progress = self._finalizer(tmpdir)
             finalizer.diagnostics.record_delivery(
                 "failed",
-                recipients=["reader@example.com"],
-                error_type="RuntimeError",
-                error_message="smtp down",
+                recipients=["reader@example.com", "editor@example.com"],
+                error_type="SMTPRecipientsRefused",
+                error_message="refused recipient",
+                phase="send",
+                accepted_recipients=["reader@example.com"],
+                rejected_recipients=["editor@example.com"],
             )
             finalizer.record_report_body("Daily News Summary\n\nA useful report.")
             finalizer.diagnostics.event("completed")
@@ -280,6 +283,20 @@ class RunFinalizerTests(unittest.TestCase):
             review = paths["latest_markdown"].read_text(encoding="utf-8")
             self.assertIn("A useful report.", review)
             self.assertIn("| Delivery | failed |", review)
+            self.assertIn("| Phase | send |", review)
+            self.assertIn("| Accepted | reader@example.com |", review)
+            self.assertIn("| Rejected | editor@example.com |", review)
+            details = json.loads(paths["latest_details"].read_text(encoding="utf-8"))
+            self.assertEqual(details["delivery"]["status"], "failed")
+            self.assertEqual(details["delivery"]["phase"], "send")
+            self.assertEqual(
+                details["delivery"]["accepted_recipients"],
+                ["reader@example.com"],
+            )
+            self.assertEqual(
+                details["delivery"]["rejected_recipients"],
+                ["editor@example.com"],
+            )
             with connect(paths["history_db"]) as con:
                 self.assertEqual(
                     con.execute("SELECT status FROM runs").fetchone()[0],
@@ -289,6 +306,11 @@ class RunFinalizerTests(unittest.TestCase):
                     con.execute("SELECT delivery_status FROM runs").fetchone()[0],
                     "failed",
                 )
+                delivery_json = con.execute(
+                    "SELECT delivery_json FROM runs"
+                ).fetchone()[0]
+            self.assertIn("\"phase\": \"send\"", delivery_json)
+            self.assertIn("editor@example.com", delivery_json)
 
     def _finalizer(self, tmpdir: str) -> tuple[RunFinalizer, dict[str, Path], _Progress]:
         root = Path(tmpdir)
