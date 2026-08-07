@@ -78,6 +78,20 @@ ACTIVE_WORKFLOW_STATUSES = frozenset(
 TERMINAL_WORKFLOW_STATUSES = frozenset({"failed", "cancelled"})
 _DISPATCH_BUDGET: int | None = None
 
+
+class WorkflowRuns(list[dict]):
+    """Run records plus a bounded lookup-health result.
+
+    The list shape keeps callers compatible with the normal run reader while
+    allowing the poller to distinguish an empty complete result from an
+    unavailable or truncated result.
+    """
+
+    def __init__(self, runs=(), error: str | None = None):
+        super().__init__(runs)
+        self.error = error
+
+
 QUERY = """
 query($login: String!, $number: Int!, $statusField: String!, $cursor: String) {
   user(login: $login) {
@@ -1811,7 +1825,17 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
             if runs_by_msg is None:
                 full_runs = fetch_workflow_runs(env)
                 runs_by_msg = runs_by_message_from(full_runs)
-            run_status = run_status_for(runs_by_msg, msg)
+                lookup_error = getattr(full_runs, "error", None)
+                if lookup_error:
+                    log(f"RUN LOOKUP UNAVAILABLE: {lookup_error}; "
+                        "retaining dispatch markers")
+            # Select one authoritative record for this item.  The same record
+            # supplies status, identity, metadata, and worktree details below;
+            # do not let the legacy status map choose a different attempt.
+            selected_run = latest_workflow_run(full_runs or [], message=msg)
+            selected_status = selected_run.get("status") if selected_run else None
+            run_status = (selected_status.lower()
+                          if isinstance(selected_status, str) else None)
             if run_status == "completed":
                 issue_number = rec.get("issue_number")
                 needs_input_name = next(
@@ -1946,15 +1970,13 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
                 # retained so repeated polls stay idempotent and the worktree
                 # stays correlated with the run that failed.
                 issue_number = rec.get("issue_number")
-                run = latest_workflow_run(full_runs or [], message=msg)
+                run = selected_run
                 run_id = str(run.get("id") or "") if run else ""
                 if not run or not run_id:
                     # Status row raced ahead of the full record (or the run
                     # lookup failed): retain the marker and defer the recovery
                     # decision until a known run ID exists. Never guess clean,
                     # mark handled, or auto-dispatch from a status alone.
-                    log(f"RUN {run_status.upper()} item={item_id}: run details "
-                        "unavailable; recovery deferred")
                     continue
                 if (rec.get("retrying")
                         and rec.get("recovery", {}).get("run_id") == run_id):
@@ -1982,7 +2004,9 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
                     # One automatic retry for the first clean transient
                     # terminal attempt, through the existing dispatch budget.
                     matching = [r for r in (full_runs or [])
-                                if msg in (r.get("user_message") or "")]
+                                if isinstance(r, dict)
+                                and isinstance(r.get("user_message"), str)
+                                and msg in r["user_message"]]
                     retries = int(rec.get("automatic_retry_count") or 0)
                     if (len(matching) <= 1 and retries < 1
                             and not rec.get("retrying")):
@@ -2231,6 +2255,12 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
 
 _TRANSIENT_FAILURE_PATTERNS = (
     re.compile(r"stream ended without finish_reason", re.IGNORECASE),
+    re.compile(
+        r"\b(?:websocket|socket|connection)\b.*"
+        r"\b(?:closed|ended|reset|aborted|disconnected|hang up)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(r"\bwebsocket\b.*\b1006\b", re.IGNORECASE),
     re.compile(r"connection (?:reset|refused|closed|error)", re.IGNORECASE),
     re.compile(r"network (?:error|failure|unavailable)", re.IGNORECASE),
     re.compile(r"\btime\s?d?\s?out", re.IGNORECASE),
@@ -2249,43 +2279,76 @@ _VALIDATION_FAILURE_PATTERNS = (
 )
 
 
-def fetch_workflow_runs(env: dict) -> list[dict]:
-    """Full Archon run records, or [] when the lookup is unusable.
+def fetch_workflow_runs(env: dict) -> WorkflowRuns:
+    """Return the complete Archon run view, or a fail-closed health result.
 
-    Command failures, timeouts, malformed JSON, and unusable records all
-    yield no usable runs so callers fail closed: markers are retained, no
-    recovery line is emitted, and nothing is dispatched from a guess.
+    Archon defaults to a newest-20 window, which is not sufficient for
+    reconciling retained dispatch markers. Request the largest supported
+    window and reject a response whose advertised total is larger than the
+    returned records. The error remains attached to the list-shaped result so
+    callers can retain markers without guessing and emit one poll diagnostic.
     """
     try:
         result = subprocess.run(
-            ["archon", "workflow", "runs", "--json"],
+            ["archon", "workflow", "runs", "--json", "--limit", "200"],
             capture_output=True, text=True, timeout=60, env=env,
             cwd=str(ROOT))
-    except (OSError, subprocess.TimeoutExpired):
-        return []
+    except subprocess.TimeoutExpired:
+        return WorkflowRuns(error="archon_timeout")
+    except OSError:
+        return WorkflowRuns(error="archon_unavailable")
     if result.returncode != 0:
-        return []
+        return WorkflowRuns(error="archon_command_failed")
     try:
         data = json.loads(result.stdout)
     except (TypeError, ValueError):
-        return []
-    runs = data.get("runs") if isinstance(data, dict) else data
+        return WorkflowRuns(error="archon_json")
+    if isinstance(data, dict):
+        runs = data.get("runs")
+        total = data.get("total")
+    else:
+        runs = data
+        total = None
     if not isinstance(runs, list):
-        return []
-    return [run for run in runs if isinstance(run, dict)]
+        return WorkflowRuns(error="archon_runs_shape")
+    if isinstance(total, int) and total > len(runs):
+        return WorkflowRuns(error="run_list_incomplete")
+
+    usable = []
+    for run in runs:
+        if not isinstance(run, dict):
+            continue
+        normalized = dict(run)
+        if not isinstance(normalized.get("user_message"), str):
+            normalized["user_message"] = None
+        if (normalized.get("started_at") is not None
+                and not isinstance(normalized.get("started_at"), str)):
+            normalized["started_at"] = None
+        if (normalized.get("working_path") is not None
+                and not isinstance(normalized.get("working_path"), str)):
+            normalized["working_path"] = None
+        usable.append(normalized)
+    return WorkflowRuns(usable)
 
 
 def runs_by_message_from(runs: list[dict]) -> dict[str, str]:
-    """Map exact run user_message -> status of the NEWEST run with it."""
-    best: dict[str, tuple[str, str]] = {}
+    """Map exact run user_message -> status of the newest run with it."""
+    best: dict[str, tuple[str, str, str]] = {}
     for run in runs:
-        run_msg = run.get("user_message") or ""
-        if not run_msg:
+        if not isinstance(run, dict):
             continue
-        started = run.get("started_at") or ""
-        if started > best.get(run_msg, ("", ""))[1]:
-            best[run_msg] = (run.get("status") or "", started)
-    return {msg: status for msg, (status, _) in best.items()}
+        run_msg = run.get("user_message")
+        if not isinstance(run_msg, str) or not run_msg:
+            continue
+        started = run.get("started_at")
+        started = started if isinstance(started, str) else ""
+        run_id = str(run.get("id") or "")
+        key = (started, run_id)
+        status = run.get("status")
+        status = status if isinstance(status, str) else ""
+        if key >= best.get(run_msg, ("", "", ""))[1:]:
+            best[run_msg] = (status, started, run_id)
+    return {msg: status for msg, (status, _, _) in best.items()}
 
 
 def fetch_runs_by_message(env: dict) -> dict[str, str]:
@@ -2357,15 +2420,18 @@ def latest_workflow_run(runs: list[dict], message: str | None = None,
     best: dict | None = None
     best_key = ("", "")
     for run in runs:
-        if message:
-            run_msg = run.get("user_message") or ""
-            if message not in run_msg:
-                continue
-        if issue_number is not None:
-            run_msg = run.get("user_message") or ""
-            if f"#{issue_number}" not in run_msg:
-                continue
-        key = ((run.get("started_at") or ""), str(run.get("id") or ""))
+        if not isinstance(run, dict):
+            continue
+        run_msg = run.get("user_message")
+        if not isinstance(run_msg, str):
+            run_msg = ""
+        if message and message not in run_msg:
+            continue
+        if issue_number is not None and f"#{issue_number}" not in run_msg:
+            continue
+        started = run.get("started_at")
+        started = started if isinstance(started, str) else ""
+        key = (started, str(run.get("id") or ""))
         if key >= best_key:
             best_key = key
             best = run
@@ -2379,9 +2445,11 @@ def inspect_worktree(path: str | None) -> bool | None:
     failed/timed-out probe). Unknown is never clean, so callers fail closed
     and do not auto-retry.
     """
-    if not path or not Path(path).is_dir():
+    if not isinstance(path, str) or not path:
         return None
     try:
+        if not Path(path).is_dir():
+            return None
         result = subprocess.run(["git", "status", "--porcelain"],
                                 capture_output=True, text=True, timeout=30,
                                 cwd=str(path))
