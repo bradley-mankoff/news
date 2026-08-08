@@ -217,7 +217,7 @@ def _reconcile_completions(
                     )
                     runs_by_msg = runs_by_message_from(runs_snapshot)
                 lookup_error = getattr(runs_snapshot, "error", None)
-                if lookup_error and not direct_run:
+                if lookup_error and not direct_run and not runs_snapshot:
                     log(
                         f"RUN LOOKUP UNAVAILABLE: {lookup_error}; "
                         "retaining run markers"

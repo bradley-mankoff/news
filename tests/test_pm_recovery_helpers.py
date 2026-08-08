@@ -194,10 +194,20 @@ class InspectWorktreeTest(unittest.TestCase):
 
 
 class FetchWorkflowRunsTest(unittest.TestCase):
+    def _fake_run(self, payload: str = "", returncode: int = 0):
+        def fake(cmd, **kwargs):
+            stdout = kwargs.get("stdout")
+            if hasattr(stdout, "write"):
+                stdout.write(payload)
+                stdout.flush()
+            return subprocess.CompletedProcess(cmd, returncode, "", "")
+
+        return fake
+
     def test_tolerates_command_failure_and_timeout(self) -> None:
         with patch(
             "automation.pm_harness.archon.subprocess.run",
-            return_value=subprocess.CompletedProcess(["archon"], 1, "", "boom"),
+            side_effect=self._fake_run(returncode=1),
         ):
             failed = archon.fetch_workflow_runs({})
         self.assertEqual(failed, [])
@@ -211,20 +221,50 @@ class FetchWorkflowRunsTest(unittest.TestCase):
 
     def test_rejects_malformed_and_incomplete_payloads(self) -> None:
         cases = [
-            ("{not json", "archon_json"),
-            (json.dumps({"runs": "not-a-list"}), "archon_runs_shape"),
-            (json.dumps({"total": 151, "runs": [{"id": "r1"}]}), "run_list_incomplete"),
-            (json.dumps({"total": "151", "runs": []}), "archon_total_shape"),
+            ("{not json", "archon_json", 0),
+            (json.dumps({"runs": "not-a-list"}), "archon_runs_shape", 0),
+            (
+                json.dumps({"total": 151, "runs": [{"id": "r1", "user_message": "m", "started_at": "2026-08-07T10:00:00Z"}]}),
+                "run_list_incomplete",
+                1,
+            ),
+            (json.dumps({"total": "151", "runs": []}), "archon_total_shape", 0),
         ]
-        for payload, error in cases:
+        for payload, error, expected_len in cases:
             with self.subTest(error=error):
                 with patch(
                     "automation.pm_harness.archon.subprocess.run",
-                    return_value=subprocess.CompletedProcess(["archon"], 0, payload, ""),
+                    side_effect=self._fake_run(payload),
                 ):
                     records = archon.fetch_workflow_runs({})
-                self.assertEqual(records, [])
+                self.assertEqual(len(records), expected_len)
                 self.assertEqual(records.error, error)
+
+    def test_file_capture_returns_complete_large_payload(self) -> None:
+        payload = json.dumps({
+            "total": 2,
+            "runs": [
+                {
+                    "id": "r1",
+                    "status": "failed",
+                    "user_message": "Build feature from issue #141",
+                    "started_at": "2026-08-07T10:00:00Z",
+                },
+                {
+                    "id": "r2",
+                    "status": "completed",
+                    "user_message": "Build feature from issue #142",
+                    "started_at": "2026-08-07T11:00:00Z",
+                },
+            ],
+        })
+        with patch(
+            "automation.pm_harness.archon.subprocess.run",
+            side_effect=self._fake_run(payload),
+        ):
+            records = archon.fetch_workflow_runs({})
+        self.assertIsNone(records.error)
+        self.assertEqual([r["id"] for r in records], ["r1", "r2"])
 
     def test_normalizes_unusable_match_fields(self) -> None:
         payload = json.dumps({
@@ -238,7 +278,7 @@ class FetchWorkflowRunsTest(unittest.TestCase):
         })
         with patch(
             "automation.pm_harness.archon.subprocess.run",
-            return_value=subprocess.CompletedProcess(["archon"], 0, payload, ""),
+            side_effect=self._fake_run(payload),
         ):
             records = archon.fetch_workflow_runs({})
         self.assertIsNone(records[0]["id"])
@@ -253,6 +293,20 @@ class FetchWorkflowRunsTest(unittest.TestCase):
             mapped = cycle.fetch_runs_by_message({})
         self.assertEqual(mapped, {})
         self.assertEqual(mapped.error, "archon_timeout")
+
+    def test_latest_run_works_on_salvaged_partial_rows(self) -> None:
+        runs = WorkflowRuns(
+            [{
+                "id": "r1",
+                "user_message": "Build feature from issue #141",
+                "started_at": "2026-08-07T10:00:00Z",
+                "status": "failed",
+            }],
+            error="archon_json",
+            partial=True,
+        )
+        chosen = archon.latest_workflow_run(runs, issue_number=141)
+        self.assertEqual(chosen["id"], "r1")
 
 
 if __name__ == "__main__":
