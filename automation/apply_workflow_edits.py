@@ -667,9 +667,6 @@ def apply_rigorous_models(changed: list[str]) -> None:
         if note:
             changed.append(note)
 
-
-
-
 def main() -> int:
     changed: list[str] = []
     for fname, node_id, node_text, anchor in (
