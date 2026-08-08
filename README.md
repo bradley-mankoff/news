@@ -36,10 +36,16 @@ The repo runs a fully automated agentic loop driven by the GitHub project board
   workflow PRs target it); every issue works on its own branch
   (`archon/task-issue-<N>`) in an isolated worktree, so issues in `Todo` run in
   parallel.
-- The poller caps concurrent Archon workflows at `max_concurrent_workflows`
-  (currently `10`, matching `MAX_CONCURRENT_CONVERSATIONS`). It counts active
-  and paused runs before dispatching, reserves slots for dispatches made in the
-  current poll, and holds new dispatches when the status lookup is unavailable.
+- **Dogfood caps:** the poller caps concurrent Archon workflows at
+  `max_concurrent_workflows` (currently `2` in `automation/config.json`). It
+  counts active and paused runs before dispatching, reserves slots for
+  dispatches made in the current poll, and holds new dispatches when the
+  status lookup is unavailable. This is a repo-level poller cap and is
+  separate from Archon's machine-level `MAX_CONCURRENT_CONVERSATIONS`, which
+  remains an upper bound on the whole machine — raising the repo cap above
+  the machine capacity gains nothing. To raise the cap, edit
+  `automation/config.json` and restart the poller with
+  `automation/deploy.sh`.
 - Creating an issue lands it in `Backlog`; nothing starts from `Backlog`.
 - **Slicing convention:** slice issues as tracer bullets — narrow, end-to-end
   vertical slices (schema → API → UI → tests), each demoable and sized to one
@@ -77,13 +83,14 @@ The repo runs a fully automated agentic loop driven by the GitHub project board
   fix run finishes and the PR is still conflicting, the poller comments on the
   issue asking for manual help (merge develop into the branch; the poller
   merges automatically once it is mergeable).
-- Deferred work is auto-tracked (the deferral strategy): the completion record
-  on the issue carries a `## Deferred work` section — one bullet per deferred
-  item with `**Title:**` / `**Description:**` / `**Reason:**` / optional
-  `**Label:**` — enforced by the workflow-side `completion-comment` nodes, which
-  must trace the original issue ask (every criterion, described behavior, or
-  named component in the issue body that the run did NOT ship is deferred work
-  and must be listed). The node also judges each item against a size bar:
+- Deferred work is parsed from every completion record (the deferral
+  strategy): the completion record on the issue carries a `## Deferred work`
+  section — one bullet per deferred item with `**Title:**` /
+  `**Description:**` / `**Reason:**` / optional `**Label:**` — enforced by the
+  workflow-side `completion-comment` nodes, which must trace the original
+  issue ask (every criterion, described behavior, or named component in the
+  issue body that the run did NOT ship is deferred work and must be listed).
+  The node also judges each item against a size bar:
   only independently schedulable deliverables are spawned as issues; small
   chores, test/doc tweaks, and review findings belonging to the parent are
   stamped `**Skip:**` (preserved in the record, not the backlog). It then
@@ -92,12 +99,19 @@ The repo runs a fully automated agentic loop driven by the GitHub project board
   `**Links to:** #N` (already tracked), `**Supersedes:** #N` (closed — new
   issue referencing it), `**Out of scope:** <slug>` (durable rejection — the
   poller records it in `.out-of-scope/<slug>.md`), `**Skip:** <reason>`, or
-  leaves it bare. When a run completes, the poller
-  executes mechanically: links, creates (boarded in the default lane),
-  skips, and comments the linkage on the source issue (an exact-title safety
-  check links but never creates). Deferral language or
-  unchecked acceptance criteria (`- [ ]`) without the section post a
-  verification comment instead — never an auto-created issue from prose.
+  leaves it bare. When a run completes, the poller always fetches and parses
+  the newest section — even with automatic creation disabled — so records stay
+  validated and deferral prose without the section still posts a verification
+  comment (never an auto-created issue from prose). Automatic tracking is
+  opt-in: with `deferred_work.enabled: true` in `automation/config.json` the
+  poller executes mechanically — links, creates (boarded in the default
+  lane), skips, and comments the linkage on the source issue (an exact-title
+  safety check links but never creates). With the dogfood default
+  `deferred_work.enabled: false` it stops after parsing and logging, creating
+  no issues; `deferred_work.fallback_warn: true` retains the verification
+  comment for malformed/implicit deferrals. To restore automatic creation,
+  set `deferred_work.enabled` to `true` in `automation/config.json` and
+  restart the poller with `automation/deploy.sh`.
 - Moving an issue into `In Review` makes the poller open the ship PR
   (feature → `main`), run `archon-smart-pr-review` on it, and on review
   completion merge it into `main` and move the issue to `Done` automatically.
@@ -124,8 +138,9 @@ inventory: `docs/archon-workflows.md`.
 
 ### Human touchpoints
 
-Everything else in the loop is automated (dispatch, merges, lanes, deferred
-issue creation, conflict auto-fix). These are the only actions that need a
+Everything else in the loop is automated (dispatch, merges, lanes, conflict
+auto-fix; deferred issue creation when `deferred_work.enabled` is `true` — see
+Dogfood caps above). These are the only actions that need a
 human, by design:
 
 - **Test + promote:** when an issue lands in `Ready for Review`, follow the

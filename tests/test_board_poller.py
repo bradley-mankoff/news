@@ -851,6 +851,91 @@ class ReadyForReviewTransitionTest(unittest.TestCase):
         post.assert_called_once_with(cfg, {}, 92, "develop", 153)
         self.assertTrue(state[item_id]["ready_test_comment"])
 
+    def test_completed_run_still_reconciles_when_deferred_creation_disabled(self):
+        item_id = "item-93"
+        item = {
+            "id": item_id,
+            "status": "In Progress",
+            "content": {
+                "__typename": "Issue",
+                "number": 93,
+                "title": "Anchor curated-match prefix",
+                "url": "https://github.com/o/r/issues/93",
+                "body": "",
+                "state": "OPEN",
+                "repository": {"nameWithOwner": "o/r"},
+                "labels": {"nodes": []},
+            },
+        }
+        cfg = {
+            "repo": "o/r",
+            "state_file": "state.json",
+            "lanes": {
+                "Backlog": "backlog",
+                "Todo": "todo",
+                "In Progress": "in_progress",
+                "Ready for Review": "ready",
+                "In Review": "review",
+                "Done": "done",
+            },
+            "dispatch": {
+                "todo": {
+                    "complete_move_to": "Ready for Review",
+                    "merge_develop_base": "develop",
+                },
+                "review": {
+                    "merge_ship_on_approve": False,
+                    "ship_to": "main",
+                    "done_lane": "Done",
+                },
+            },
+            "deferred_work": {"enabled": False},
+        }
+        state = {
+            "_meta": {"snapshot_done": True},
+            item_id: {
+                "status": "In Progress",
+                "issue_number": 93,
+                "dispatch_msg": "run",
+            },
+        }
+        with (
+            patch.object(board_poller, "fetch_project",
+                         return_value=("p", "f", {"Ready for Review": "ready"}, [item])),
+            patch.object(board_poller, "prepare_dispatch_budget"),
+            patch.object(board_poller, "sync_runnable_labels"),
+            patch.object(board_poller, "fetch_workflow_runs",
+                         return_value=[{"id": "run-9",
+                                        "user_message": "run",
+                                        "status": "completed",
+                                        "started_at": "2026-08-07T10:00:00Z",
+                                        "working_path": "/work/news"}]),
+            patch.object(board_poller, "issue_has_label", return_value=False),
+            patch.object(board_poller, "find_issue_pr",
+                         return_value=({"number": 153, "state": "OPEN",
+                                        "headRefName": "issue-93"}, True)),
+            patch.object(board_poller, "merge_pr_to_base",
+                         return_value=(True, "merged")),
+            patch.object(board_poller, "sync_local_develop",
+                         return_value="local sync skipped"),
+            patch.object(board_poller, "reconcile_deferred_work",
+                         return_value=True) as reconcile,
+            patch.object(board_poller, "move_to_lane", return_value=True) as move,
+            patch.object(board_poller, "post_ready_for_review_comment",
+                         return_value=True) as post,
+            patch.object(board_poller, "save_state"),
+        ):
+            board_poller.poll(cfg, {}, state)
+        # The disabled setting must NOT bypass the reconciler: the completion
+        # path still invokes it (parse/observe happens inside), then completes
+        # the normal lane/handoff transition.
+        reconcile.assert_called_once_with(
+            cfg, {}, 93, 153, state[item_id], "run",
+            "p", "f", {"Ready for Review": "ready"})
+        move.assert_called_once_with(cfg, {}, "p", item_id, "f", "ready")
+        post.assert_called_once_with(cfg, {}, 93, "develop", 153)
+        self.assertTrue(state[item_id]["ready_test_comment"])
+
 
 class TerminalRecoveryPollTest(unittest.TestCase):
     """Poll-level regression: a cancelled/transient In Progress run records a
@@ -1567,14 +1652,17 @@ class TryMergeBaseIntoHeadTest(unittest.TestCase):
 
 
 class ReconcileDeferredWorkTest(unittest.TestCase):
-    def _cfg(self):
-        return {"deferred_work": {"fallback_warn": True},
+    def _cfg(self, enabled=None):
+        cfg = {"deferred_work": {"fallback_warn": True},
                 "default_lane": "Backlog", "repo": "o/r"}
+        if enabled is not None:
+            cfg["deferred_work"]["enabled"] = enabled
+        return cfg
 
     def _env(self):
         return {}
 
-    def _run(self, comments, rec=None, runs_msg="run-1"):
+    def _run(self, comments, rec=None, runs_msg="run-1", enabled=None):
         rec = {} if rec is None else rec
         calls = []
 
@@ -1590,7 +1678,7 @@ class ReconcileDeferredWorkTest(unittest.TestCase):
             return _cp(returncode=1)
         with patch("automation.board_poller.gh", side_effect=fake_gh):
             ok = reconcile_deferred_work(
-                self._cfg(), self._env(), 5, None, rec,
+                self._cfg(enabled), self._env(), 5, None, rec,
                 runs_msg, "p", "f", {"Backlog": "o1"})
         return ok, rec, calls
 
@@ -1654,6 +1742,59 @@ class ReconcileDeferredWorkTest(unittest.TestCase):
         # newest *None.* section must NOT resurface the older run's items
         self.assertNotIn("Deferred work from this run",
                          " ".join(a[-1] for a in calls if a[0:2] == ["issue", "comment"]))
+
+    def test_disabled_mode_parses_items_without_side_effects(self):
+        comments = [{"body": ("## What shipped\nDone.\n\n## Deferred work\n"
+                               "- **Title:** Add llama.cpp backend support\n"
+                               "  **Description:** Port the model layer.\n")}]
+        ok, rec, calls = self._run(comments, enabled=False)
+        self.assertTrue(ok)
+        # parse happened (explicit section, so no fallback-warning comment)
+        # and the disabled boundary stopped before any side-effect call.
+        self.assertEqual(rec["deferred_handled"], "run-1")
+        self.assertNotIn("deferred_warned", rec)
+        self.assertEqual([a[0:2] for a in calls], [["issue", "view"]])
+
+    def test_disabled_mode_empty_section_no_warn_no_side_effects(self):
+        comments = [{"body": "## Deferred work\n*None.*\n"}]
+        ok, rec, calls = self._run(comments, enabled=False)
+        self.assertTrue(ok)
+        self.assertEqual(rec["deferred_handled"], "run-1")
+        self.assertNotIn("deferred_warned", rec)
+        self.assertEqual([a[0:2] for a in calls], [["issue", "view"]])
+
+    def test_disabled_mode_still_warns_on_missing_section(self):
+        comments = [{"body": "Completed. Some work explicitly deferred to a later phase."}]
+        ok, rec, calls = self._run(comments, enabled=False)
+        self.assertTrue(ok)
+        self.assertTrue(rec["deferred_warned"])
+        self.assertEqual(rec["deferred_handled"], "run-1")
+        self.assertEqual(
+            sum(1 for a in calls if a[0:2] == ["issue", "comment"]), 1)
+        self.assertIn("has no `## Deferred work` section",
+                      calls[-1][-1])
+
+    def test_disabled_mode_fetch_failure_remains_retryable(self):
+        def fake_gh(args, env, timeout=90):
+            if args[0:2] == ["issue", "view"]:
+                return _cp(returncode=1, stderr="rate limited")
+            return _cp(returncode=1)
+        with patch("automation.board_poller.gh", side_effect=fake_gh):
+            rec = {}
+            ok = reconcile_deferred_work(
+                self._cfg(enabled=False), self._env(), 5, None, rec,
+                "run-1", "p", "f", {"Backlog": "o1"})
+        self.assertFalse(ok)
+        self.assertEqual(rec, {})
+
+    def test_disabled_mode_marker_still_skips_entirely(self):
+        rec = {"deferred_handled": "run-1"}
+        with patch("automation.board_poller.gh") as m:
+            ok = reconcile_deferred_work(
+                self._cfg(enabled=False), self._env(), 5, None, rec,
+                "run-1", "p", "f", {"Backlog": "o1"})
+        self.assertTrue(ok)
+        m.assert_not_called()
 
 class FetchProjectTest(unittest.TestCase):
     def _cfg(self):

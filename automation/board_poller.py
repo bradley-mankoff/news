@@ -1408,12 +1408,17 @@ def reconcile_deferred_work(cfg: dict, env: dict, issue_number: int,
                             pr_number: int | None, rec: dict, runs_msg: str,
                             project_id: str, field_id: str,
                             status_options: dict) -> bool:
-    """Guarantee every deferred item in the run's completion record is tracked.
+    """Reconcile the run's completion record for deferred work.
 
-    Idempotent: skips when `runs_msg` was already handled (state marker) and
-    dedupes against existing issue titles before creating. Returns False on
-    any failure so the caller retries on the next poll (marker not set); the
-    dedupe makes retries safe.
+    Always fetches and parses the newest `## Deferred work` section so
+    completion evidence stays validated and fallback warnings still fire.
+    When `deferred_work.enabled` is false, stops after parsing: items are
+    logged as observed, `deferred_handled` is recorded, and no issue-list,
+    issue-create, board, or linkage-comment side effects run. When enabled
+    (the default), guarantees every deferred item is tracked: idempotent
+    (skips when `runs_msg` was already handled) and dedupes against existing
+    issue titles before creating. Returns False on any failure so the caller
+    retries on the next poll (marker not set); the dedupe makes retries safe.
     """
     if rec.get("deferred_handled") == runs_msg:
         return True
@@ -1451,6 +1456,16 @@ def reconcile_deferred_work(cfg: dict, env: dict, issue_number: int,
                 "but has no `## Deferred work` section. If any deferred item "
                 "needs an issue, create one (or drag it to Todo)." + note)
             rec["deferred_warned"] = True
+        rec["deferred_handled"] = runs_msg
+        return True
+
+    # Disabled-mode observation boundary: creation is off, but the newest
+    # section was still parsed above (and fallback warnings still applied),
+    # so the completion record is validated and marked handled without any
+    # issue-list/create, board, or linkage-comment side effects.
+    if not cfg.get("deferred_work", {}).get("enabled", True):
+        log(f"DEFERRED DISABLED issue={issue_number}: parsed {len(items)} "
+            "item(s); automatic issue creation disabled")
         rec["deferred_handled"] = runs_msg
         return True
 
@@ -1955,9 +1970,9 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
                         rec.pop(m, None)
                     log(sync_local_develop())
                 # Deferred-work guard: anything deferred by this run must be
-                # tracked as an issue before the item moves to Ready for Review.
-                dw_cfg = cfg.get("deferred_work") or {}
-                if (issue_number and dw_cfg.get("enabled", True)
+                # reconciled (parsed; tracked as an issue when enabled) before
+                # the item moves to Ready for Review.
+                if (issue_number
                         and not reconcile_deferred_work(
                             cfg, env, issue_number, pr_num, rec, msg,
                             project_id, field_id, status_options)):
