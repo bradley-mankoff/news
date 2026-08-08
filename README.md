@@ -17,219 +17,52 @@ Python version from `.python-version` (3.12) automatically.
 > name, but the package is not published to PyPI yet — install instructions
 > will be added here at release time.
 
-## Project Automation
+## Project Automation (product facts only)
 
-The repo runs a fully automated agentic loop driven by the GitHub project board
-(Projects v2, project #1 “Build public UI”, owner `bradley-mankoff`).
+This repo has automated issue/PR glue under `automation/`. Product workers do
+not manage the board. Board policy lives outside this product tree.
 
-### Board flow
+### What product workers need
 
-- Lanes: `Backlog` → `Todo` → `In Progress` → `Blocked` → `Needs Input` → `Ready for Review` → `In Review` → `Done`.
-- `Blocked` = dependency-gated: an issue dragged to `Todo` whose `Depends on:`
-  refs are not all in `Done` moves here with a comment, and returns to `Todo`
-  (auto-dispatch) when its dependencies ship.
-- `Needs Input` = the agent asked the human a question (see the `NEEDS INPUT`
-  comment + `needs-input` label on the issue); answer on the issue and drag
-  the ticket back to `Todo` — the poller resumes the workflow in the same
-  worktree (`archon continue`) instead of starting over.
-- Branch model: `main` = production; `develop` = integration (repo default branch,
-  workflow PRs target it); every issue works on its own branch
-  (`archon/task-issue-<N>`) in an isolated worktree, so issues in `Todo` run in
-  parallel.
-- The poller caps concurrent Archon workflows at `max_concurrent_workflows`
-  (currently `10`, matching `MAX_CONCURRENT_CONVERSATIONS`). It counts active
-  and paused runs before dispatching, reserves slots for dispatches made in the
-  current poll, and holds new dispatches when the status lookup is unavailable.
-- Creating an issue lands it in `Backlog`; nothing starts from `Backlog`.
-- **Slicing convention:** slice issues as tracer bullets — narrow, end-to-end
-  vertical slices (schema → API → UI → tests), each demoable and sized to one
-  context window — and keep parallel runs merge-safe by declaring file/area
-  ownership in the plan. Ownership may be function- or component-level when
-  two changes truly touch different parts of one file. Two issues may run in
-  parallel only when their planned ownership areas are disjoint; overlapping
-  ownership means the later one declares `Depends on: #<earlier>`. Any set of
-  issues with satisfied dependencies can be triggered together.
-- A `Depends on: #N` line (one line; `#42, #57` for several) gates dispatch:
-  an issue dragged to `Todo` with an unsatisfied dependency moves to `Blocked`
-  with a comment and returns to `Todo` (auto-dispatch) when the dependency
-  ships. `Blocked` is exclusively dependency gating; `Needs Input` is
-  exclusively NEEDS INPUT questions.
-- `priority: critical` is the human queue-priority label for production
-  blockers. Filter the project by that label to bubble critical bugs above
-  normal backlog work; labels do not change the board's manual card order.
-- `runnable` is maintained by the poller: it marks open issues in `Todo` whose
-  declared dependencies are all in `Done`, and is removed when the issue is
-  blocked, dispatched, closed, or otherwise leaves `Todo`.
-- Moving an issue into `Todo` triggers an Archon workflow (label-aware: `bug`
-  → `archon-fix-github-issue`, `feature`/`enhancement` → `archon-idea-to-pr`,
-  default → `archon-fix-github-issue`), and the poller moves the issue to
-  `In Progress`.
-- When the dispatched run completes, the poller marks the PR ready and merges
-  it into `develop`, then moves the issue to `Ready for Review`. It posts a
-  final handoff comment at the bottom of the issue with the recorded
-  issue-specific test steps (or an explicit no-runnable-path fallback).
-  The human tests the integration branch from there.
-- **Develop conflicts auto-fix:** implementation workflows sync with `develop`
-  before opening their PR (parallel runs progressively absorb each other); a
-  PR that still conflicts at merge time is resolved automatically — the
-  poller first merges `develop` into the branch via the GitHub merge API, then
-  dispatches `archon-fix-develop-conflicts` once per conflict episode. If the
-  fix run finishes and the PR is still conflicting, the poller comments on the
-  issue asking for manual help (merge develop into the branch; the poller
-  merges automatically once it is mergeable).
-- Deferred work is auto-tracked (the deferral strategy): the completion record
-  on the issue carries a `## Deferred work` section — one bullet per deferred
-  item with `**Title:**` / `**Description:**` / `**Reason:**` / optional
-  `**Label:**` — enforced by the workflow-side `completion-comment` nodes, which
-  must trace the original issue ask (every criterion, described behavior, or
-  named component in the issue body that the run did NOT ship is deferred work
-  and must be listed). The node also judges each item against a size bar:
-  only independently schedulable deliverables are spawned as issues; small
-  chores, test/doc tweaks, and review findings belonging to the parent are
-  stamped `**Skip:**` (preserved in the record, not the backlog). It then
-  dedupes by consulting all open/closed issue titles + initial bodies and repo
-  context (pending checklists, ADRs, `.out-of-scope/`) and stamps each item
-  `**Links to:** #N` (already tracked), `**Supersedes:** #N` (closed — new
-  issue referencing it), `**Out of scope:** <slug>` (durable rejection — the
-  poller records it in `.out-of-scope/<slug>.md`), `**Skip:** <reason>`, or
-  leaves it bare. When a run completes, the poller
-  executes mechanically: links, creates (boarded in the default lane),
-  skips, and comments the linkage on the source issue (an exact-title safety
-  check links but never creates). Deferral language or
-  unchecked acceptance criteria (`- [ ]`) without the section post a
-  verification comment instead — never an auto-created issue from prose.
-- Moving an issue into `In Review` makes the poller open the ship PR
-  (feature → `main`), run `archon-smart-pr-review` on it, and on review
-  completion merge it into `main` and move the issue to `Done` automatically.
-- Agents move issues with `python3 automation/move_item.py <issue> <lane>`.
+- Integration branch: `develop`. Production branch: `main`.
+- Issue branches: `archon/task-issue-<N>` in isolated worktrees.
+- Implementation PRs target `develop` and stay **draft**.
+- On develop PRs/commits use `Issue: #N` — never `Fixes` / `Closes` / `Resolves`.
+- Human-only product decisions: comment `NEEDS INPUT:` with 2–3 options, add
+  label `needs-input`, stop coding.
+- Completion records on issues must include:
+  `## What shipped`, `## Decisions`, `## Acceptance criteria`,
+  `## How to test`, `## Deferred work`.
+- Create a shaped Backlog issue:
+  `python3 automation/create_issue.py "<title>" --body "<shaped markdown>"`
+- After automation/workflow install changes:
+  `automation/deploy.sh`
+- Reliable tests on this machine:
+  `.venv/bin/python3 -m pytest tests/ -q`
 
-### Two review stages (by design)
+### Local UI after develop merges
 
-1. **Readiness review** — inside the implementation workflows, before the human
-   sees anything: `archon-fix-github-issue` runs a smart review (code review +
-   conditional error-handling/test/comment/docs) then self-fixes and simplifies;
-   `archon-idea-to-pr` runs a 5-agent review block and fixes findings. The bar:
-   “the human should not have to check whether it works, is complete, or
-   matches the issue intent.” Implementation PRs are left **draft** so you can
-   test the branch locally first.
-2. **Quality review** — the `In Review` lane trigger (`archon-smart-pr-review`):
-   after you judge the feature working and move the ticket, the review targets
-   code quality, conventions, and subtle/peripheral breakage, and auto-fixes
-   CRITICAL/HIGH findings. It runs on the final diff — including anything you
-   changed during testing.
-
-The workflows are the stock Archon 0.7.0 pi-usable set, curated in the archon
-home (`workflows/`); claude-only workflows are archived, not discovered. Full
-inventory: `docs/archon-workflows.md`.
-
-### Human touchpoints
-
-Everything else in the loop is automated (dispatch, merges, lanes, deferred
-issue creation, conflict auto-fix). These are the only actions that need a
-human, by design:
-
-- **Test + promote:** when an issue lands in `Ready for Review`, follow the
-  bottom-of-issue test handoff comment against the integration branch; when it
-  works, move it to `In Review` with
-  `python3 automation/move_item.py <N> "In Review"`.
-- **Answer Needs Input:** an issue in `Needs Input` carries a `NEEDS INPUT:`
-  comment (with `needs-input` label) — answer on the issue, then drag it back
-  to `Todo` to resume the workflow in place.
-- **Re-review after a held ship:** if the ship review posts anything other
-  than `VERDICT: approve`, fix the findings and drag the issue back to
-  `In Review`.
-- **Ship-conflict manual help:** if the poller comments that it could not
-  resolve ship-PR conflicts automatically, merge `main` into the branch (or
-  rewrite the conflicting lines) and drag the issue back to `In Review`.
-- **Develop-conflict manual help:** if the poller comments that the develop
-  resolver could not fix a conflict, merge `develop` into the branch (or
-  rewrite the conflicting lines) — the poller merges automatically once the
-  branch is mergeable; no re-drag needed.
-- **Security gate (deliberate):** the history scrub requires human approval —
-  run `automation/scrub_history.sh --dry-run`, review, then `--execute`
-  (runbook: `docs/security/history-scrub.md`).
-- **Periodic health check:** `python3 automation/board_health.py` prints stale
-  runs, unknown blockers, and unsatisfied dependencies (read-only).
-- **Deploy after changes:** after pulling poller/automation changes or
-  reinstalling archon, run `automation/deploy.sh` (re-applies local workflow
-  edits, restarts the poller).
-- **New ideas (top of funnel):** describe the idea in the agent session for
-  this repo (any format). The agent grills you — what & why, binary acceptance
-  criteria, out of scope, `Depends on` — then creates the issue in `Backlog`
-  via `python3 automation/create_issue.py`. Nothing auto-detects ideas from
-  chat; the board is the source of truth and work starts only when you drag
-  the issue to `Todo`.
-- **New issues:** `python3 automation/create_issue.py "<title>"` creates the
-  issue, boards it, and lands it in the default lane in one step (add
-  `--label enhancement` for the idea-to-pr workflow; fill `Depends on` in the body
-  when gating). Work starts only when the issue is dragged to `Todo`.
-
-### Components
-
-- `automation/board_poller.py` — polls the board every 45s, dispatches Archon
-  runs on lane transitions; moves the item to `In Progress` on dispatch, merges
-  the feature PR into `develop` and moves to `Ready for Review` when the run
-  completes, and on review completion merges the ship PR into `main` and moves
-  to `Done`. First poll after (re)start is a snapshot: state is recorded,
-  nothing is dispatched (prevents backlog bursts after downtime).
-- `automation/config.json` — repo, project, lanes, and workflow mapping.
-- `automation/move_item.py` — move an issue to a lane from the CLI.
-- `automation/create_issue.py` — create an issue and land it on the board in
-  the default lane in one step.
-- `automation/board_health.py` — read-only board health report: stale runs,
-  unknown blockers, unsatisfied dependencies (exit 0 always).
-- `automation/deploy.sh` — re-apply local archon workflow edits and restart
-  the board poller after a deploy or archon reinstall.
-- `automation/apply_workflow_edits.py` — idempotently re-apply the local
-  archon workflow edits (completion-comment nodes with the Deferred-work
-  contract, `report-verdict`, `archon-fix-ship-conflicts`) after an archon
-  reinstall; `automation/deploy.sh` also restarts the poller.
-- `automation/security_audit.py` — stdlib-only scanner for secrets and personal
-  data in the working tree and full history; exits 0 when clean. Report:
-  `docs/security/audit-2026-08-02.md`.
-- `automation/scrub_history.sh` — gated `git filter-repo` history scrub; prints
-  push commands by default (`--dry-run`), requires explicit `--execute` and
-  human approval. Runbook: `docs/security/history-scrub.md`.
-- The poller runs as a launchd agent (`com.bradley-mankoff.news-board-poller`,
-  plist in `~/Library/LaunchAgents/`). Logs: `automation/board_poller.log`;
-  state: `automation/state.json` (gitignored).
-- Archon executes all workflows on OpenCode Zen Go (`opencode-go/deepseek-v4-flash`,
-  max effort → xhigh thinking) via the Pi provider; tiers are configured in
-  the archon-pi home `config.yaml`.
-
-### Manual review
-
-Review a PR by hand:
+News keeps a dedicated clean UI runtime worktree and can restart only the UI
+process it owns. Register the cmux-owned runner once:
 
 ```bash
-archon workflow run archon-smart-pr-review "Review PR #123"
+python3 automation/news_ui_runtime.py register
 ```
 
-### Monitoring
+Manual sync:
 
-- Archon runs: `archon workflow runs` (run from the repo root).
-- Poller: `launchctl list | grep news-board-poller`, or
-  `tail -f automation/board_poller.log`.
-- Board: `gh project item-list 1 --owner bradley-mankoff --format json`.
+```bash
+python3 automation/news_ui_runtime.py sync
+```
 
-### Local dev loop (automatic)
+This never rewrites a dirty developer checkout and never kills an unknown
+listener on the UI port.
 
-When the poller merges a PR into `develop` server-side, it also refreshes the
-local checkout and restarts the UI automatically — no manual steps:
+### Security gate
 
-- `sync_local_develop()` in `automation/board_poller.py`: `git fetch` →
-  fast-forward-only merge → UI restart (only if the UI is running on
-  127.0.0.1:8766). Runs after every successful develop merge and once at
-  poller startup (catches merges that landed while the poller was down).
-- Strict skip boundaries (each logs one line in `automation/board_poller.log`):
-  `--dry-run`, fetch failure, not on `develop`, dirty tree, unpushed local
-  commits. Never forced, never destructive — unpushed local work is a human
-  decision point (push it and the sync resumes).
-- Test invocation that works reliably on this machine:
-  `.venv/bin/python3 -m pytest tests/ -q` — plain `uv run pytest` / `uv run
-  news` are intermittently flaky ("Failed to spawn") even with a healthy
-  venv; if the `news` entrypoint ever vanishes from `.venv/bin`, re-run
-  `uv pip install -e .`.
+History scrub is human-gated: `automation/scrub_history.sh --dry-run`, review,
+then `--execute`. Runbook: `docs/security/history-scrub.md`.
+
 
 ## UI
 
