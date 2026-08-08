@@ -1,8 +1,13 @@
 # PM Harness
 
-A reusable, Python-standard-library state machine connecting a GitHub Projects v2 board to Archon workflows.
+A reusable, Python-standard-library state machine connecting a GitHub Projects
+v2 board to Archon workflows.
 
-The harness owns mechanical board behavior only: lane transitions, dependency gates, bounded dispatch, run recovery, integration/ship pull-request gates, and durable state. Product-specific lifecycle work belongs in configured hooks. Human/worker role policy belongs outside this package.
+The harness owns mechanical board behavior only: lane transitions, dependency
+gates, bounded dispatch, run recovery, integration/ship pull-request gates, and
+durable state. Product-specific lifecycle work belongs in configured hooks.
+Human/worker role policy does **not** belong here and must not be imported from
+product repo docs.
 
 ## Requirements
 
@@ -78,4 +83,7 @@ Backlog -> Todo -> In Progress -> Ready for Review -> In Review -> Done
 ## Repository-specific integrations
 
 Do not add product behavior to `cycle.py`. Configure a hook or keep a sibling
-adapter; the reusable package contains no UI or product-runtime assumptions.
+adapter; the reusable package contains no UI, launchd, checkout, or
+product-runtime assumptions.
+
+Outer-PM constitution belongs in the operator's agent profile, not this package.

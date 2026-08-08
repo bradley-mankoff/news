@@ -1,6 +1,6 @@
 # PM Harness Extraction
 
-**Status:** implemented on 2026-08-08
+**Status:** implemented on 2026-08-08; role split hardened same day
 
 ## Goal
 
@@ -9,13 +9,21 @@ new repository without carrying Daily News UI, model, launchd, checkout, or
 role-policy assumptions. Preserve the proven board behavior while replacing
 the 3,400-line poller monolith and its process-global/item-ID state.
 
+## Role split
+
+- Product repo docs (`AGENTS.md`, product README) are worker-only. They must not
+  teach outer-PM identity or board-supervise policy.
+- Outer PM constitution + board contracts live in the omp pm profile:
+  `~/.omp/profiles/pm/agent/` (`AGENTS.md`, `PM.md`, `repos/*`, lessons).
+- Portable engine lives in-repo as `automation/pm_harness/` and is role-agnostic.
+
 ## Board issue inventory
 
 | Issue | Requirement | Implementation |
 |---|---|---|
 | #177 | Treat cancelled transport failures as recoverable and log once | `pm_harness/recovery.py`; clean runs retry once, dirty runs require resume/discard |
 | #178 | Cap concurrency at two; disable deferred issue creation | `automation/config.json`; capacity remains config-driven |
-| #179 | Keep outer PM policy out of product worker instructions | PM constitution remains in `~/.omp/profiles/pm/agent/`; repo `AGENTS.md` is worker-only |
+| #179 | Keep outer PM policy out of product worker instructions | product docs are worker-only; PM constitution/board contracts live only in `~/.omp/profiles/pm/agent/` |
 | #182 | Require merged integration PR before Ready and make correction sticky | `_enforce_ready_proof` bounces stale/manual Ready items to In Progress |
 | #183 | Requeue review after a ship conflict resolves | resolved episodes clear markers and dispatch review once when no verdict exists |
 | #184 | Make capacity holds visible | one issue comment per capacity-hold episode; health report includes held Todo items |
@@ -75,3 +83,6 @@ python3 automation/board_health.py
 A consumer copies `automation/pm_harness/`, the thin entrypoints it needs, and
 an edited `example_config.json`. Runtime files and credentials remain outside
 the package.
+
+Outer-PM behavior is not copied with the package. Bring or author a pm-profile
+board contract separately (`repos/<name>.md` pattern).
