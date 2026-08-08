@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
+import tempfile
 from datetime import datetime
 from pathlib import Path
 
@@ -69,11 +71,16 @@ def _parse_workflow_runs(output: str) -> WorkflowRuns:
             )
         ):
             return WorkflowRuns(error="archon_total_shape")
-        if isinstance(total, int) and total > len(runs):
-            return WorkflowRuns(error="run_list_incomplete")
-        return WorkflowRuns([
+        normalized = [
             _normalize_run(run) for run in runs if isinstance(run, dict)
-        ])
+        ]
+        if isinstance(total, int) and total > len(normalized):
+            return WorkflowRuns(
+                normalized,
+                error="run_list_incomplete",
+                partial=True,
+            )
+        return WorkflowRuns(normalized)
 
     marker = re.search(r'"runs"\s*:\s*\[', output or "")
     start = marker.end() if marker else (output or "").find("[") + 1
@@ -97,23 +104,42 @@ def _parse_workflow_runs(output: str) -> WorkflowRuns:
 
 
 def fetch_workflow_runs(env: dict) -> WorkflowRuns:
-    """Read recent runs; malformed output fails closed but keeps safe prefix rows."""
+    """Read recent runs; prefer a real file so large JSON is not pipe-truncated."""
+    # Archon can emit large run payloads. Capturing via PIPE truncates around
+    # 64KiB on this platform; writing to a temp file matches the working shell
+    # redirect path and keeps complete JSON.
     try:
-        result = subprocess.run(
-            ["archon", "workflow", "runs", "--json", "--limit", "200"],
-            capture_output=True,
-            text=True,
-            timeout=60,
-            env=env,
-            cwd=str(ROOT),
-        )
+        with tempfile.NamedTemporaryFile(
+            mode="w+",
+            prefix="pm-harness-archon-runs-",
+            suffix=".json",
+            delete=False,
+        ) as handle:
+            out_path = handle.name
+        try:
+            with open(out_path, "w", encoding="utf-8") as out:
+                result = subprocess.run(
+                    ["archon", "workflow", "runs", "--json", "--limit", "200"],
+                    stdout=out,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    timeout=60,
+                    env=env,
+                    cwd=str(ROOT),
+                )
+            output = Path(out_path).read_text(encoding="utf-8")
+        finally:
+            try:
+                os.unlink(out_path)
+            except OSError:
+                pass
     except subprocess.TimeoutExpired:
         return WorkflowRuns(error="archon_timeout")
     except OSError:
         return WorkflowRuns(error="archon_unavailable")
     if result.returncode != 0:
         return WorkflowRuns(error="archon_command_failed")
-    return _parse_workflow_runs(result.stdout)
+    return _parse_workflow_runs(output)
 
 
 def fetch_workflow_run(env: dict, run_id: str | None) -> dict | None:
@@ -146,11 +172,11 @@ def latest_workflow_run(
     issue_number: int | None = None,
     message: str | None = None,
 ) -> dict | None:
-    """Select a newest valid run, never an older row beside malformed matches."""
+    """Select a newest valid run from complete or salvaged run rows."""
     if issue_number is None and not message:
         return None
-    if getattr(runs, "partial", False):
-        return None
+    # Partial lists are still usable for exact issue/message matches among
+    # fully decoded leading rows. Invalid matches still fail closed.
     best = None
     best_key = ("", "")
     invalid_match = False
