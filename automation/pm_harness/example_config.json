@@ -1,6 +1,6 @@
 {
-  "repo": "bradley-mankoff/news",
-  "project_owner": "bradley-mankoff",
+  "repo": "OWNER/REPOSITORY",
+  "project_owner": "OWNER",
   "project_number": 1,
   "status_field": "Status",
   "default_lane": "Backlog",
@@ -17,13 +17,7 @@
     "enabled": false,
     "fallback_warn": true
   },
-  "hooks": {
-    "after_integration_merge": [
-      "python3",
-      "automation/news_ui_runtime.py",
-      "sync"
-    ]
-  },
+  "hooks": {},
   "lanes": {
     "Backlog": "backlog",
     "Todo": "todo",
@@ -36,23 +30,22 @@
   },
   "dispatch": {
     "todo": {
-      "default": "archon-fix-github-issue",
+      "default": "IMPLEMENT_WORKFLOW",
       "move_to": "In Progress",
       "complete_move_to": "Ready for Review",
       "merge_develop_base": "develop",
-      "conflict_fix_workflow": "archon-fix-develop-conflicts",
+      "conflict_fix_workflow": "INTEGRATION_CONFLICT_WORKFLOW",
       "label_overrides": {
-        "bug": "archon-fix-github-issue",
-        "feature": "archon-idea-to-pr",
-        "enhancement": "archon-idea-to-pr"
+        "bug": "BUGFIX_WORKFLOW",
+        "enhancement": "FEATURE_WORKFLOW"
       }
     },
     "review": {
-      "workflow": "archon-smart-pr-review",
+      "workflow": "REVIEW_WORKFLOW",
       "ship_to": "main",
       "merge_ship_on_approve": true,
       "done_lane": "Done",
-      "conflict_fix_workflow": "archon-fix-ship-conflicts"
+      "conflict_fix_workflow": "SHIP_CONFLICT_WORKFLOW"
     }
   }
 }

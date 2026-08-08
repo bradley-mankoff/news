@@ -19,6 +19,12 @@ Python version from `.python-version` (3.12) automatically.
 
 ## Project Automation
 
+The board loop is driven from the **pm profile** (`omp --profile pm`). Its
+contract (lanes, caps, who-moves-what, supervise commands) lives in
+`~/.omp/profiles/pm/agent/PM.md` — outside this repo, so direct sessions never
+see PM-role guidance. Workers implement issues; they do not manage the board.
+Human runbook continues below.
+
 The repo runs a fully automated agentic loop driven by the GitHub project board
 (Projects v2, project #1 “Build public UI”, owner `bradley-mankoff`).
 
@@ -37,9 +43,9 @@ The repo runs a fully automated agentic loop driven by the GitHub project board
   (`archon/task-issue-<N>`) in an isolated worktree, so issues in `Todo` run in
   parallel.
 - The poller caps concurrent Archon workflows at `max_concurrent_workflows`
-  (currently `10`, matching `MAX_CONCURRENT_CONVERSATIONS`). It counts active
-  and paused runs before dispatching, reserves slots for dispatches made in the
-  current poll, and holds new dispatches when the status lookup is unavailable.
+  (currently `2`). It counts active and paused runs, reserves slots dispatched
+  in the current poll, and leaves capacity-deferred work visibly in `Todo` with
+  one issue comment per hold episode. A status lookup failure fails closed.
 - Creating an issue lands it in `Backlog`; nothing starts from `Backlog`.
 - **Slicing convention:** slice issues as tracer bullets — narrow, end-to-end
   vertical slices (schema → API → UI → tests), each demoable and sized to one
@@ -159,25 +165,30 @@ human, by design:
   via `python3 automation/create_issue.py`. Nothing auto-detects ideas from
   chat; the board is the source of truth and work starts only when you drag
   the issue to `Todo`.
-- **New issues:** `python3 automation/create_issue.py "<title>"` creates the
-  issue, boards it, and lands it in the default lane in one step (add
-  `--label enhancement` for the idea-to-pr workflow; fill `Depends on` in the body
-  when gating). Work starts only when the issue is dragged to `Todo`.
+- **New issues:** `python3 automation/create_issue.py "<title>" --body
+  "<shaped markdown>"` creates the issue, boards it, and lands it in the
+  default lane. Use `--label enhancement` for implementation or `--decision`
+  for an owner decision that must never dispatch code. Work starts only when
+  an implementation issue is dragged to `Todo`.
 
 ### Components
 
-- `automation/board_poller.py` — polls the board every 45s, dispatches Archon
-  runs on lane transitions; moves the item to `In Progress` on dispatch, merges
-  the feature PR into `develop` and moves to `Ready for Review` when the run
-  completes, and on review completion merges the ship PR into `main` and moves
-  to `Done`. First poll after (re)start is a snapshot: state is recorded,
-  nothing is dispatched (prevents backlog bursts after downtime).
-- `automation/config.json` — repo, project, lanes, and workflow mapping.
+- `automation/pm_harness/` — reusable, stdlib-only GitHub Projects + Archon
+  state machine. It owns lane transitions, bounded dispatch/recovery, merge
+  proof, review verdicts, conflict episodes, and issue-keyed durable state.
+  Portable interface and example config: `automation/pm_harness/README.md`.
+- `automation/board_poller.py` — compatibility entrypoint for the reusable
+  harness. Every poll runs in a bounded subprocess, so a stuck CLI call cannot
+  deadlock later polls.
+- `automation/config.json` — News repository/project, lane/workflow mappings,
+  concurrency/timeout policy, and product hook configuration.
+- `automation/news_ui_runtime.py` — News-only integration hook that refreshes
+  the dedicated `develop` UI worktree after a verified integration merge.
 - `automation/move_item.py` — move an issue to a lane from the CLI.
-- `automation/create_issue.py` — create an issue and land it on the board in
-  the default lane in one step.
-- `automation/board_health.py` — read-only board health report: stale runs,
-  unknown blockers, unsatisfied dependencies (exit 0 always).
+- `automation/create_issue.py` — create and board a shaped implementation or
+  decision-only issue.
+- `automation/board_health.py` — read-only report for stale runs, visible
+  capacity holds, unknown blockers, and unsatisfied dependencies (exit 0).
 - `automation/deploy.sh` — re-apply local archon workflow edits and restart
   the board poller after a deploy or archon reinstall.
 - `automation/apply_workflow_edits.py` — idempotently re-apply the local
@@ -214,17 +225,20 @@ archon workflow run archon-smart-pr-review "Review PR #123"
 
 ### Local dev loop (automatic)
 
-When the poller merges a PR into `develop` server-side, it also refreshes the
-local checkout and restarts the UI automatically — no manual steps:
+The reusable PM state machine has no UI or checkout lifecycle behavior.
+News configures `hooks.after_integration_merge` to run
+`python3 automation/news_ui_runtime.py sync` after GitHub confirms the
+integration PR merged into `develop`.
 
-- `sync_local_develop()` in `automation/board_poller.py`: `git fetch` →
-  fast-forward-only merge → UI restart (only if the UI is running on
-  127.0.0.1:8766). Runs after every successful develop merge and once at
-  poller startup (catches merges that landed while the poller was down).
-- Strict skip boundaries (each logs one line in `automation/board_poller.log`):
-  `--dry-run`, fetch failure, not on `develop`, dirty tree, unpushed local
-  commits. Never forced, never destructive — unpushed local work is a human
-  decision point (push it and the sync resumes).
+The News adapter fetches `origin/develop`, updates a dedicated clean
+`news-ui-runtime` worktree, and restarts only the UI process it owns. It never
+rewrites the developer checkout or kills an unknown process on the UI port.
+Hook failures are logged without falsifying the board transition. Register a
+cmux-owned UI runner with:
+
+```bash
+python3 automation/news_ui_runtime.py register
+```
 - Test invocation that works reliably on this machine:
   `.venv/bin/python3 -m pytest tests/ -q` — plain `uv run pytest` / `uv run
   news` are intermittently flaky ("Failed to spawn") even with a healthy
