@@ -149,6 +149,7 @@ def _ensure_schema(con: Any) -> None:
             source_status_counts_json VARCHAR,
             rejection_counts_json VARCHAR,
             settings_json VARCHAR,
+            prompt_snapshots_json VARCHAR,
             stats_json VARCHAR,
             events_json VARCHAR,
             reports_json VARCHAR,
@@ -167,6 +168,7 @@ def _ensure_schema(con: Any) -> None:
             "preset_id": "VARCHAR",
             "delivery_status": "VARCHAR",
             "delivery_json": "VARCHAR",
+            "prompt_snapshots_json": "VARCHAR",
         },
     )
     con.execute(
@@ -671,6 +673,7 @@ def _insert_run(con: Any, run_id: str, diagnostics: RunDiagnostics, *, imported_
         "source_status_counts_json": _json(stats.get("source_status_counts")),
         "rejection_counts_json": _json(stats.get("rejection_counts")),
         "settings_json": _json(settings),
+        "prompt_snapshots_json": _json_list(diagnostics.prompt_snapshots),
         "stats_json": _json(stats),
         "events_json": _json(diagnostics.events),
         "reports_json": _json(diagnostics.reports),
@@ -757,8 +760,8 @@ def get_run_details(db_path: Path, run_id: str) -> dict[str, Any] | None:
             SELECT run_id, run_started_at, run_completed_at, run_date, preset_id,
                    status, abort_reason, duration_seconds, duration_label,
                    model, model_name, report_count, recipient_count,
-                   delivery_status, delivery_json, settings_json, stats_json,
-                   events_json, reports_json, artifacts_json,
+                   delivery_status, delivery_json, settings_json, prompt_snapshots_json,
+                   stats_json, events_json, reports_json, artifacts_json,
                    imported_from_path, imported_at
             FROM runs
             WHERE run_id = ?
@@ -813,13 +816,14 @@ def get_run_details(db_path: Path, run_id: str) -> dict[str, Any] | None:
         ),
         "okf_path": str(okf_path),
         "settings": _loads(row[15]),
-        "stats": _loads(row[16]),
-        "events": _loads(row[17]),
-        "reports": _loads(row[18]),
-        "artifacts_json": _loads(row[19]),
+        "prompt_snapshots": _prompt_snapshots(row[16]),
+        "stats": _loads(row[17]),
+        "events": _loads(row[18]),
+        "reports": _loads(row[19]),
+        "artifacts_json": _loads(row[20]),
         "artifacts": artifacts,
-        "imported_from_path": str(row[20] or ""),
-        "imported_at": str(row[21] or ""),
+        "imported_from_path": str(row[21] or ""),
+        "imported_at": str(row[22] or ""),
     }
 
 
@@ -1069,6 +1073,7 @@ def _load_diagnostics_for_backfill(run_id: str, details_path: Path | None) -> Ru
             reports=payload.get("reports") or [],
             artifacts=payload.get("artifacts") or {},
             delivery=payload.get("delivery") or {},
+            prompt_snapshots=payload.get("prompt_snapshots") or [],
         )
     return RunDiagnostics(
         run_started_at=_run_started_at_from_id(run_id),
@@ -1327,6 +1332,14 @@ def _loads(value: Any) -> Any:
         return {}
 
 
+def _prompt_snapshots(value: Any) -> list[dict[str, Any]]:
+    """Decode the prompt snapshot payload; old/missing/invalid rows read []."""
+    payload = _loads(value)
+    if isinstance(payload, list):
+        return [item for item in payload if isinstance(item, dict)]
+    return []
+
+
 def _run_started_at_from_id(run_id: str) -> str:
     if TIMESTAMP_RE.fullmatch(run_id):
         date_part, time_part = run_id.split("_", 1)
@@ -1366,6 +1379,12 @@ def _json(value: Any) -> str:
         return json.dumps(value or {}, sort_keys=True, ensure_ascii=False)
     except TypeError:
         return json.dumps(str(value), ensure_ascii=False)
+
+
+def _json_list(value: Any) -> str:
+    """JSON-encode a list payload, preserving an empty ``[]`` (unlike ``_json``)."""
+    items = value if isinstance(value, list) else []
+    return json.dumps(items, sort_keys=True, ensure_ascii=False)
 
 
 def _int(value: Any) -> int:

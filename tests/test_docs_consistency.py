@@ -6,6 +6,10 @@ docs/adr/README.md document but that no runtime code exercises:
 - ADR 0012's canonical delivery outcome vocabulary must match the knowledge
   bundle concept and must not be restated in a conflicting compressed form
   (guards the Slice B implementation contract).
+- ADR 0007 must stay `Accepted` with the model-configuration boundary
+  vocabulary, README.md and SETTINGS.md must link the accepted decision, and
+  SETTINGS.md must keep Prompt Profile ownership with the Prompt Catalog ADR
+  (guards the model-configuration vocabulary contract).
 - New ADRs must be uniquely numbered (never re-using or renumbering an
   existing decision) and carry the required Status/Date/Context/Decision/
   Consequences sections.
@@ -22,8 +26,33 @@ import unittest
 from pathlib import Path
 
 _REPO = Path(__file__).resolve().parents[1]
+_ADR_0007 = _REPO / "docs/adr/0007-model-configuration-vocabulary.md"
 _ADR_0012 = _REPO / "docs/adr/0012-desktop-first-application-optional-delivery.md"
 _DELIVERY_PROFILE = _REPO / "knowledge/domain/delivery-profile.md"
+_README = _REPO / "README.md"
+_SETTINGS = _REPO / "SETTINGS.md"
+
+_ADR_0007_LINK = "docs/adr/0007-model-configuration-vocabulary.md"
+_PROMPT_CATALOG_ADR_LINK = (
+    "docs/adr/0010-prompt-catalog-owns-editorial-instructions.md"
+)
+_ADR_0007_BOUNDARY_TERMS = (
+    "Task Model Assignment",
+    "Model Tuning",
+    "Pipeline Budget",
+    "Model Server Settings",
+    "Run Preset",
+    "Runtime Config Snapshot",
+)
+_ADR_0007_TASK_TERMS = (
+    "Article Summarization",
+    "Story Drafting",
+    "Story Scale Screening",
+    "Title Generation",
+    "Image Art Direction",
+    "Story Discovery",
+    "NEWS_MODEL_STORY_DISCOVERY",
+)
 
 _CANONICAL_OUTCOME_TOKENS = {
     "skipped: not_configured",
@@ -60,11 +89,46 @@ class DocsConsistencyTests(unittest.TestCase):
 
         # Slice B's summary must not use the compressed form that collapses
         # the two skip reasons or elevates `user_disabled` to a sibling state.
-        slice_b = adr.split("### Follow-up slices")[1].split("## Consequences")[0]
+        slice_b = adr.split("### Delivery slices")[1].split("## Consequences")[0]
         self.assertIn("skipped: not_configured", slice_b)
         self.assertIn("skipped: user_disabled", slice_b)
         self.assertNotIn("`user_disabled`", slice_b)
         self.assertNotIn("`skipped`", slice_b)
+
+    def test_adr_0007_is_accepted_and_linked(self) -> None:
+        adr = _ADR_0007.read_text(encoding="utf-8")
+        readme = _README.read_text(encoding="utf-8")
+        settings = _SETTINGS.read_text(encoding="utf-8")
+
+        # The decision must carry the exact accepted status line, never a
+        # regression back to Proposed.
+        self.assertTrue(
+            re.search(r"^Status: Accepted$", adr, re.M),
+            "ADR 0007 must have the exact status line 'Status: Accepted'",
+        )
+        self.assertNotIn("Status: Proposed", adr)
+
+        # The accepted record must define the ownership boundaries and the
+        # current task assignments/inheritance rules.
+        for term in _ADR_0007_BOUNDARY_TERMS + _ADR_0007_TASK_TERMS:
+            self.assertIn(term, adr, f"ADR 0007 missing vocabulary term {term!r}")
+
+        # Both runtime documents must link the accepted decision.
+        for doc, text in (("README.md", readme), ("SETTINGS.md", settings)):
+            self.assertIn(
+                _ADR_0007_LINK,
+                text,
+                f"{doc} must link to the accepted ADR 0007",
+            )
+
+        # Prompt Profile ownership stays with the Prompt Catalog ADR, not with
+        # Model Tuning.
+        self.assertIn(
+            _PROMPT_CATALOG_ADR_LINK,
+            settings,
+            "SETTINGS.md must link Prompt Profile ownership to the Prompt "
+            "Catalog ADR",
+        )
 
     def test_adrs_are_uniquely_numbered_and_well_formed(self) -> None:
         adr_paths = sorted(_REPO.glob("docs/adr/[0-9][0-9][0-9][0-9]-*.md"))

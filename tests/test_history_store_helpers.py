@@ -339,6 +339,20 @@ class HistoryStoreHelperTests(unittest.TestCase):
                     "empty": "",
                 },
             )
+            diagnostics.settings["prompt_profile_id"] = "balanced"
+            diagnostics.record_prompt_snapshot(
+                {
+                    "captured_at": "2026-06-01T10:00:01Z",
+                    "task": "article_summary",
+                    "task_name": "analysis for Headline",
+                    "messages": [
+                        {"type": "system", "content": "Summarize exactly."},
+                        {"type": "human", "content": "Article body"},
+                    ],
+                    "retry_attempts": 0,
+                    "used_fallback": False,
+                }
+            )
             details_path = run_dir / "run_details_2026-06-01_10-00-00.json"
             details_path.write_text(json.dumps(diagnostics.to_dict()), encoding="utf-8")
 
@@ -475,7 +489,17 @@ class HistoryStoreHelperTests(unittest.TestCase):
                 self.assertIn("200000/200000 steps", log_row[1])
                 self.assertIn("WARNING: low coverage", log_row[1])
                 self.assertEqual(log_row[0], len(log_row[1].encode("utf-8")))
+                row = con.execute(
+                    "SELECT prompt_snapshots_json, settings_json FROM runs"
+                ).fetchone()
+            self.assertIn("Summarize exactly.", row[0])
+            self.assertIn("prompt_profile_id", row[1])
 
+            details = history_module.get_run_details(db_path, run_id)
+            self.assertIsNotNone(details)
+            assert details is not None
+            self.assertEqual(len(details["prompt_snapshots"]), 1)
+            self.assertEqual(details["prompt_snapshots"][0]["task"], "article_summary")
 
             with patch.object(
                 history_module,
@@ -487,6 +511,40 @@ class HistoryStoreHelperTests(unittest.TestCase):
                     output_dir,
                     run_id,
                 )
+
+    def test_backfill_legacy_details_without_prompt_snapshots_loads_empty(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            output_dir = root / "daily_outputs"
+            run_dir = output_dir / "2026-06-01"
+            run_dir.mkdir(parents=True)
+            details_path = run_dir / "run_details_2026-06-01_10-00-00.json"
+            details_path.write_text(
+                json.dumps(
+                    {
+                        "run_started_at": "2026-06-01T10:00:00",
+                        "settings": {"preset_id": "legacy"},
+                        "events": [{"at": "2026-06-01T10:00:00", "label": "completed"}],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            diagnostics = history_module._load_diagnostics_for_backfill(
+                "2026-06-01_10-00-00", details_path
+            )
+            self.assertEqual(diagnostics.prompt_snapshots, [])
+            self.assertEqual(diagnostics.settings["preset_id"], "legacy")
+
+            db_path = root / "history.duckdb"
+            history_module.backfill_outputs(output_dir, db_path, dry_run=False, export_csv=False)
+            with history_module.connect(db_path) as con:
+                raw = con.execute("SELECT prompt_snapshots_json FROM runs").fetchone()[0]
+            self.assertEqual(json.loads(raw), [])
+            details = history_module.get_run_details(db_path, "2026-06-01_10-00-00")
+            self.assertIsNotNone(details)
+            assert details is not None
+            self.assertEqual(details["prompt_snapshots"], [])
 
     def test_cleanup_and_parse_helpers_cover_edge_branches(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

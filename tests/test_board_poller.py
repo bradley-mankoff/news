@@ -1,40 +1,55 @@
 from __future__ import annotations
 
-import contextlib
 import json
 import subprocess
+import tempfile
 import unittest
-from unittest.mock import patch
+from pathlib import Path
+from unittest.mock import call, patch
 import automation.board_poller as board_poller
+import automation.pm_harness.archon as archon_adapter
+import automation.pm_harness.cycle as cycle_adapter
+import automation.pm_harness.deferred as deferred_adapter
+import automation.pm_harness.dispatch as dispatch_adapter
+import automation.pm_harness.github as github_adapter
+import automation.pm_harness.recovery as recovery_adapter
 from automation.board_poller import (
     branch_empty_vs_main,
+    build_recovery_comment,
     build_ready_for_review_comment,
+    classify_workflow_failure,
     conflict_episode_action,
     dedupe_deferred,
     dep_gate,
     dispatch,
     develop_conflict_action,
     extract_test_guidance,
+    failed_workflow_step,
     fetch_active_workflow_count,
     fetch_project,
     find_unchecked_criteria,
     fmt_deps,
     has_deferral_language,
+    issue_number_from_message,
     issue_is_runnable,
+    latest_workflow_run,
+    fresh_issue_dispatch_guard,
     match_issue_pr,
     merge_pr_to_base,
+    pick_workflow,
     normalize_title,
     parse_dep_refs,
     parse_deferred_work,
+    parse_isolation_list,
     parse_verdict,
-    pick_workflow,
     post_ready_for_review_comment,
     prepare_dispatch_budget,
+    recovery_action,
     reconcile_deferred_work,
     run_status_for,
-    sync_local_develop,
     sync_runnable_labels,
     try_merge_base_into_head,
+    workflow_run_details,
 )
 
 
@@ -49,49 +64,164 @@ class DispatchCapacityTest(unittest.TestCase):
             ]}),
             "",
         )
-        with patch("automation.board_poller.subprocess.run", return_value=result):
+        with patch("automation.pm_harness.dispatch.subprocess.run", return_value=result):
             self.assertEqual(fetch_active_workflow_count({}), 2)
 
     def test_active_workflow_count_fails_closed(self):
         result = subprocess.CompletedProcess(["archon"], 1, "", "unavailable")
-        with patch("automation.board_poller.subprocess.run", return_value=result):
+        with patch("automation.pm_harness.dispatch.subprocess.run", return_value=result):
             self.assertIsNone(fetch_active_workflow_count({}))
 
     def test_budget_reserves_slots_after_existing_runs(self):
         with (
-            patch.object(board_poller, "DRY_RUN", False),
-            patch.object(board_poller, "fetch_active_workflow_count", return_value=2),
+            patch.object(dispatch_adapter, "DRY_RUN", False),
+            patch.object(
+                dispatch_adapter, "fetch_active_workflow_count", return_value=2),
         ):
             prepare_dispatch_budget({"max_concurrent_workflows": 3}, {})
-            self.assertEqual(board_poller._DISPATCH_BUDGET, 1)
+            self.assertEqual(dispatch_adapter._DISPATCH_BUDGET, 1)
 
     def test_budget_holds_when_status_lookup_fails(self):
         with (
-            patch.object(board_poller, "DRY_RUN", False),
-            patch.object(board_poller, "fetch_active_workflow_count", return_value=None),
+            patch.object(dispatch_adapter, "DRY_RUN", False),
+            patch.object(
+                dispatch_adapter, "fetch_active_workflow_count", return_value=None),
         ):
             prepare_dispatch_budget({"max_concurrent_workflows": 3}, {})
-            self.assertEqual(board_poller._DISPATCH_BUDGET, 0)
+            self.assertEqual(dispatch_adapter._DISPATCH_BUDGET, 0)
 
     def test_dispatch_holds_when_budget_is_exhausted(self):
         with (
-            patch.object(board_poller, "DRY_RUN", False),
-            patch.object(board_poller, "_DISPATCH_BUDGET", 0),
-            patch("automation.board_poller.subprocess.Popen") as popen,
+            patch.object(dispatch_adapter, "DRY_RUN", False),
+            patch.object(dispatch_adapter, "_DISPATCH_BUDGET", 0),
+            patch("automation.pm_harness.dispatch.subprocess.Popen") as popen,
         ):
             self.assertFalse(dispatch({}, {}, "workflow", "branch", "message", "item", 7))
             popen.assert_not_called()
 
     def test_dispatch_consumes_reserved_slot(self):
         with (
-            patch.object(board_poller, "DRY_RUN", False),
-            patch.object(board_poller, "_DISPATCH_BUDGET", 1),
+            patch.object(dispatch_adapter, "DRY_RUN", False),
+            patch.object(dispatch_adapter, "_DISPATCH_BUDGET", 1),
             patch("builtins.open", unittest.mock.mock_open()),
-            patch("automation.board_poller.subprocess.Popen") as popen,
+            patch("automation.pm_harness.dispatch.subprocess.Popen") as popen,
         ):
             popen.return_value.pid = 123
             self.assertTrue(dispatch({}, {}, "workflow", "branch", "message", "item", 7))
-            self.assertEqual(board_poller._DISPATCH_BUDGET, 0)
+            self.assertEqual(dispatch_adapter._DISPATCH_BUDGET, 0)
+
+
+class WorkflowRecoveryTest(unittest.TestCase):
+    def test_classifies_known_failures_and_extracts_step(self):
+        transient = (
+            "DAG workflow 'archon-fix-github-issue' completed with failures: "
+            "'web-research': Node 'web-research' failed: SDK returned error - "
+            "Stream ended without finish_reason"
+        )
+        orchestration = (
+            "DAG workflow 'archon-idea-to-pr' completed with failures: "
+            "'review__verify-pr-base': No open PR found for branch archon/task-issue-61"
+        )
+        self.assertEqual(classify_workflow_failure("failed", transient), "transient")
+        self.assertEqual(classify_workflow_failure("failed", orchestration),
+                         "orchestration")
+        self.assertEqual(failed_workflow_step(transient), "web-research")
+
+    def test_issue_number_and_newest_run_matching(self):
+        runs = [
+            {"id": "old", "started_at": "2026-08-06 22:00:00",
+             "user_message": "Build feature from issue #141"},
+            {"id": "new", "started_at": "2026-08-06 22:10:00",
+             "user_message": "Prior Context: Build feature from issue #141"},
+        ]
+        self.assertEqual(issue_number_from_message(runs[0]["user_message"]), 141)
+        self.assertEqual(latest_workflow_run(runs, issue_number=141)["id"], "new")
+        self.assertEqual(latest_workflow_run(runs, message="issue #141")["id"], "new")
+
+    def test_dirty_transient_failure_requires_resume(self):
+        self.assertEqual(recovery_action("failed", "transient", True),
+                         "resume_required")
+        self.assertEqual(recovery_action("failed", "transient", False),
+                         "retry_available")
+        self.assertEqual(recovery_action("failed", "orchestration", False),
+                         "manual_review")
+
+    def test_cancelled_run_is_transient_recovery(self):
+        self.assertEqual(classify_workflow_failure("cancelled", ""), "transient")
+        self.assertEqual(recovery_action("cancelled", "transient", True),
+                         "resume_required")
+        self.assertEqual(recovery_action("cancelled", "transient", False),
+                         "retry_available")
+
+    def test_isolation_parser_keeps_branch_and_path(self):
+        output = (
+            "https://github.com/o/r.git:\n"
+            "  archon/task-issue-141\n"
+            "    Path: /tmp/issue-141\n"
+            "    Type: task | Platform: cli\n"
+        )
+        self.assertEqual(
+            parse_isolation_list(output),
+            {"archon/task-issue-141": {"path": "/tmp/issue-141"}},
+        )
+    def test_isolation_parser_accepts_short_issue_branch(self):
+        output = (
+            "https://github.com/o/r.git:\n"
+            "  issue-61\n"
+            "    Path: /tmp/issue-61\n"
+        )
+        self.assertEqual(
+            parse_isolation_list(output),
+            {"issue-61": {"path": "/tmp/issue-61"}},
+        )
+
+    def test_resolve_worktree_info_accepts_short_issue_branch(self):
+        with patch.object(
+            archon_adapter,
+            "fetch_archon_worktrees",
+            return_value={"issue-61": {"path": "/tmp/issue-61"}},
+        ):
+            self.assertEqual(
+                board_poller.resolve_worktree_info({}, 61),
+                {"branch": "issue-61", "path": "/tmp/issue-61"},
+            )
+
+
+    def test_recovery_comment_exposes_safe_actions(self):
+        body = build_recovery_comment(
+            141,
+            {
+                "run_id": "run-141",
+                "failed_step": "validate",
+                "failure_class": "transient",
+                "error": "stream ended",
+            },
+            {"path": "/tmp/issue-141", "exists": True, "dirty": True},
+            "resume_required",
+        )
+        self.assertIn("workflow_recovery.py status 141", body)
+        self.assertIn("workflow_recovery.py resume 141", body)
+        self.assertIn("workflow_recovery.py discard 141", body)
+    def test_fresh_dispatch_refuses_dirty_existing_worktree(self):
+        with (
+            patch.object(
+                recovery_adapter,
+                "resolve_worktree_info",
+                return_value={"branch": "archon/task-issue-141", "path": "/tmp/141"},
+            ),
+            patch.object(
+                recovery_adapter,
+                "inspect_worktree",
+                return_value={"path": "/tmp/141", "exists": True, "dirty": True},
+            ),
+            patch.object(recovery_adapter, "fetch_workflow_runs") as fetch,
+        ):
+            allowed, reason = fresh_issue_dispatch_guard({}, 141)
+        self.assertFalse(allowed)
+        self.assertIn("dirty", reason)
+        fetch.assert_not_called()
+
+
 
 
 class MatchIssuePrTest(unittest.TestCase):
@@ -192,22 +322,22 @@ class BranchEmptyVsMainTest(unittest.TestCase):
     def _gh(self, stdout="", returncode=0):
         return subprocess.CompletedProcess([], returncode, stdout=stdout, stderr="")
 
-    @patch("automation.board_poller.gh")
+    @patch("automation.pm_harness.github.gh")
     def test_empty_branch_is_already_shipped(self, gh):
         gh.return_value = self._gh('{"ahead_by": 0}')
         self.assertTrue(branch_empty_vs_main({"repo": "r"}, {}, "head", "main"))
 
-    @patch("automation.board_poller.gh")
+    @patch("automation.pm_harness.github.gh")
     def test_ahead_branch_is_shippable(self, gh):
         gh.return_value = self._gh('{"ahead_by": 5}')
         self.assertFalse(branch_empty_vs_main({"repo": "r"}, {}, "head", "main"))
 
-    @patch("automation.board_poller.gh")
+    @patch("automation.pm_harness.github.gh")
     def test_api_error_is_not_shipped(self, gh):
         gh.return_value = self._gh("", returncode=1)
         self.assertFalse(branch_empty_vs_main({"repo": "r"}, {}, "head", "main"))
 
-    @patch("automation.board_poller.gh")
+    @patch("automation.pm_harness.github.gh")
     def test_unparseable_is_not_shipped(self, gh):
         gh.return_value = self._gh("not json")
         self.assertFalse(branch_empty_vs_main({"repo": "r"}, {}, "head", "main"))
@@ -308,7 +438,7 @@ class RunnableLabelTest(unittest.TestCase):
             issue["content"], issue["status"],
             {7: "Todo"}, {7: "OPEN"}, "Todo", "Done"))
 
-    @patch("automation.board_poller.gh")
+    @patch("automation.pm_harness.github.gh")
     def test_sync_adds_and_removes_label(self, gh):
         gh.return_value = subprocess.CompletedProcess([], 0, stdout="", stderr="")
         items = [
@@ -428,7 +558,7 @@ class ReadyForReviewCommentTest(unittest.TestCase):
         self.assertIn("no linked develop PR was available", body)
         self.assertIn("No runnable issue-specific instructions", body)
 
-    @patch("automation.board_poller.gh")
+    @patch("automation.pm_harness.github.gh")
     def test_post_fetches_guidance_then_comments(self, gh):
         gh.side_effect = [
             subprocess.CompletedProcess(
@@ -437,7 +567,7 @@ class ReadyForReviewCommentTest(unittest.TestCase):
                 }), stderr=""),
             subprocess.CompletedProcess([], 0, stdout="", stderr=""),
         ]
-        with patch.object(board_poller, "DRY_RUN", False):
+        with patch.object(github_adapter, "DRY_RUN", False):
             self.assertTrue(
                 post_ready_for_review_comment(
                     {"repo": "o/r"}, {}, 7, "develop", 9))
@@ -448,7 +578,7 @@ class ReadyForReviewCommentTest(unittest.TestCase):
 
 
 class ReadyForReviewTransitionTest(unittest.TestCase):
-    def test_completed_run_posts_handoff_after_develop_merge(self):
+    def test_stored_run_id_completes_when_run_list_is_malformed(self):
         item_id = "item-92"
         item = {
             "id": item_id,
@@ -493,31 +623,50 @@ class ReadyForReviewTransitionTest(unittest.TestCase):
             item_id: {
                 "status": "In Progress",
                 "issue_number": 92,
-                "dispatch_msg": "run",
+                "dispatch_msg": "original dispatch text",
+                "run_id": "direct-run-92",
             },
         }
         with (
-            patch.object(board_poller, "fetch_project",
-                         return_value=("p", "f", {"Ready for Review": "ready"}, [item])),
-            patch.object(board_poller, "prepare_dispatch_budget"),
-            patch.object(board_poller, "sync_runnable_labels"),
-            patch.object(board_poller, "fetch_runs_by_message",
-                         return_value={"run": "completed"}),
-            patch.object(board_poller, "issue_has_label", return_value=False),
-            patch.object(board_poller, "find_issue_pr",
-                         return_value=({"number": 153, "state": "OPEN",
-                                        "headRefName": "issue-92"}, True)),
-            patch.object(board_poller, "merge_pr_to_base",
-                         return_value=(True, "merged")),
-            patch.object(board_poller, "sync_local_develop",
-                         return_value="local sync skipped"),
-            patch.object(board_poller, "reconcile_deferred_work", return_value=True),
-            patch.object(board_poller, "move_to_lane", return_value=True) as move,
-            patch.object(board_poller, "post_ready_for_review_comment",
-                         return_value=True) as post,
-            patch.object(board_poller, "save_state"),
+            patch.object(
+                cycle_adapter,
+                "fetch_project",
+                return_value=("p", "f", {"Ready for Review": "ready"}, [item]),
+            ),
+            patch.object(cycle_adapter, "prepare_dispatch_budget"),
+            patch.object(cycle_adapter, "sync_runnable_labels"),
+            patch.object(cycle_adapter, "fetch_workflow_run", return_value={
+                "id": "direct-run-92",
+                "user_message": "Prior Context omitted the original dispatch text",
+                "status": "completed",
+                "started_at": "2026-08-08T10:00:00Z",
+            }),
+            patch.object(
+                cycle_adapter,
+                "fetch_workflow_runs",
+                return_value=board_poller.WorkflowRuns(error="archon_json"),
+            ),
+            patch.object(cycle_adapter, "issue_has_label", return_value=False),
+            patch.object(cycle_adapter, "find_issue_pr", side_effect=[
+                ({"number": 153, "state": "OPEN",
+                  "headRefName": "issue-92"}, True),
+                ({"number": 153, "state": "MERGED",
+                  "headRefName": "issue-92"}, True),
+            ]),
+            patch.object(
+                cycle_adapter, "merge_pr_to_base", return_value=(True, "merged")),
+            patch.object(cycle_adapter, "run_hook", return_value="hook skipped"),
+            patch.object(
+                cycle_adapter, "reconcile_deferred_work", return_value=True),
+            patch.object(cycle_adapter, "move_to_lane", return_value=True) as move,
+            patch.object(
+                cycle_adapter,
+                "post_ready_for_review_comment",
+                return_value=True,
+            ) as post,
+            patch.object(cycle_adapter, "save_state"),
         ):
-            board_poller.poll(cfg, {}, state)
+            cycle_adapter.poll(cfg, {}, state)
         move.assert_called_once_with(cfg, {}, "p", "item-92", "f", "ready")
         post.assert_called_once_with(cfg, {}, 92, "develop", 153)
         self.assertTrue(state[item_id]["ready_test_comment"])
@@ -772,8 +921,8 @@ class MergePrToBaseTest(unittest.TestCase):
 
     def test_reopens_issue_after_keyword_auto_close(self):
         calls, fake_gh = self._reopen_flow("CLOSED")
-        with patch("automation.board_poller.gh", side_effect=fake_gh), \
-                patch("automation.board_poller.time.sleep"):
+        with patch("automation.pm_harness.github.gh", side_effect=fake_gh), \
+                patch("automation.pm_harness.github.time.sleep"):
             ok, note = merge_pr_to_base({"repo": "o/r"}, {},
                                         {"number": 7, "state": "OPEN"},
                                         "develop", 5)
@@ -783,8 +932,8 @@ class MergePrToBaseTest(unittest.TestCase):
 
     def test_no_reopen_when_issue_still_open(self):
         calls, fake_gh = self._reopen_flow("OPEN")
-        with patch("automation.board_poller.gh", side_effect=fake_gh), \
-                patch("automation.board_poller.time.sleep"):
+        with patch("automation.pm_harness.github.gh", side_effect=fake_gh), \
+                patch("automation.pm_harness.github.time.sleep"):
             ok, note = merge_pr_to_base({"repo": "o/r"}, {},
                                         {"number": 7, "state": "OPEN"},
                                         "develop", 5)
@@ -793,7 +942,7 @@ class MergePrToBaseTest(unittest.TestCase):
 
     def test_merge_without_issue_number_skips_reopen_check(self):
         calls, fake_gh = self._reopen_flow("CLOSED")
-        with patch("automation.board_poller.gh", side_effect=fake_gh):
+        with patch("automation.pm_harness.github.gh", side_effect=fake_gh):
             ok, note = merge_pr_to_base({"repo": "o/r"}, {},
                                         {"number": 7, "state": "OPEN"}, "develop")
         self.assertTrue(ok)
@@ -808,7 +957,7 @@ class MergePrToBaseTest(unittest.TestCase):
             if args[0:2] == ["pr", "merge"]:
                 return _cp(returncode=1, stderr="merge failed: conflict")
             return _cp(returncode=1)
-        with patch("automation.board_poller.gh", side_effect=fake_gh):
+        with patch("automation.pm_harness.github.gh", side_effect=fake_gh):
             ok, note = merge_pr_to_base({"repo": "o/r"}, {},
                                         {"number": 7, "state": "OPEN"}, "develop")
         self.assertFalse(ok)
@@ -817,7 +966,7 @@ class MergePrToBaseTest(unittest.TestCase):
 
 class TryMergeBaseIntoHeadTest(unittest.TestCase):
     def _run(self, stderr="", returncode=1):
-        with patch("automation.board_poller.gh",
+        with patch("automation.pm_harness.github.gh",
                    return_value=_cp(returncode=returncode, stderr=stderr)):
             return try_merge_base_into_head({"repo": "o/r"}, {}, 7, "head", "main")
 
@@ -865,7 +1014,10 @@ class ReconcileDeferredWorkTest(unittest.TestCase):
             if args[0:2] == ["issue", "list"]:
                 return _cp(stdout="[]")
             return _cp(returncode=1)
-        with patch("automation.board_poller.gh", side_effect=fake_gh):
+        with (
+            patch("automation.pm_harness.deferred.gh", side_effect=fake_gh),
+            patch("automation.pm_harness.github.gh", side_effect=fake_gh),
+        ):
             ok = reconcile_deferred_work(
                 self._cfg(), self._env(), 5, None, rec,
                 runs_msg, "p", "f", {"Backlog": "o1"})
@@ -884,7 +1036,7 @@ class ReconcileDeferredWorkTest(unittest.TestCase):
 
     def test_handled_marker_skips_entirely(self):
         rec = {"deferred_handled": "run-1"}
-        with patch("automation.board_poller.gh") as m:
+        with patch("automation.pm_harness.deferred.gh") as m:
             ok = reconcile_deferred_work(
                 self._cfg(), self._env(), 5, None, rec,
                 "run-1", "p", "f", {"Backlog": "o1"})
@@ -896,7 +1048,7 @@ class ReconcileDeferredWorkTest(unittest.TestCase):
             if args[0:2] == ["issue", "view"]:
                 return _cp(returncode=1, stderr="rate limited")
             return _cp(returncode=1)
-        with patch("automation.board_poller.gh", side_effect=fake_gh):
+        with patch("automation.pm_harness.deferred.gh", side_effect=fake_gh):
             rec = {}
             ok = reconcile_deferred_work(
                 self._cfg(), self._env(), 5, None, rec,
@@ -938,7 +1090,7 @@ class FetchProjectTest(unittest.TestCase):
 
     def test_missing_project_raises(self):
         data = {"data": {"user": {"projectV2": None}}}
-        with patch("automation.board_poller.graphql", return_value=data):
+        with patch("automation.pm_harness.github.graphql", return_value=data):
             with self.assertRaisesRegex(RuntimeError, "not found"):
                 fetch_project(self._cfg(), {})
 
@@ -948,7 +1100,7 @@ class FetchProjectTest(unittest.TestCase):
             "fields": {"nodes": []},
             "items": {"nodes": [], "pageInfo": {"hasNextPage": False}},
         }}}}
-        with patch("automation.board_poller.graphql", return_value=data):
+        with patch("automation.pm_harness.github.graphql", return_value=data):
             with self.assertRaisesRegex(RuntimeError, "status field"):
                 fetch_project(self._cfg(), {})
 
@@ -966,7 +1118,7 @@ class FetchProjectTest(unittest.TestCase):
                           "pageInfo": {"hasNextPage": False}},
             }}}}
 
-        with patch("automation.board_poller.graphql", side_effect=fake_graphql):
+        with patch("automation.pm_harness.github.graphql", side_effect=fake_graphql):
             pid, fid, options, items = fetch_project(self._cfg(), {})
         self.assertEqual(options, {"Todo": "o1"})
         self.assertEqual([i["id"] for i in items], ["i1", "i2"])
@@ -977,136 +1129,7 @@ def _cp(returncode=0, stdout="", stderr=""):
     return subprocess.CompletedProcess([], returncode, stdout, stderr)
 
 
-class SyncLocalDevelopTest(unittest.TestCase):
-    """Boundaries of the post-merge local sync: never destructive, restart
-    only when the UI is running."""
 
-    def _fake_run(self, plan):
-        """Dispatch subprocess.run per git subcommand; anything unplanned fails."""
-        def fake_run(cmd, *args, **kwargs):
-            if cmd[0] == "git":
-                if cmd[1] == "rev-list":
-                    entries = plan["rev-list"]
-                    return entries.pop(0)() if isinstance(entries, list) else entries()
-                key = cmd[1] if cmd[1] in ("fetch", "rev-parse", "status",
-                                           "merge") else cmd[1]
-                return plan[key]()
-            if cmd[0] == "pkill":
-                return _cp()
-            raise AssertionError(f"unexpected command: {cmd}")
-        return fake_run
-
-    def _run_with(self, plan, ui_running=None, restart_ok=None):
-        patches = [patch("automation.board_poller.subprocess.run",
-                         side_effect=self._fake_run(plan))]
-        if ui_running is not None:
-            patches.append(patch("automation.board_poller._ui_running",
-                                 return_value=ui_running))
-        if restart_ok is not None:
-            patches.append(patch("automation.board_poller._restart_ui",
-                                 return_value=restart_ok))
-        with contextlib.ExitStack() as stack:
-            for p in patches:
-                stack.enter_context(p)
-            return sync_local_develop()
-
-    def test_dry_run_never_touches_git(self):
-        with patch("automation.board_poller.DRY_RUN", True), \
-                patch("automation.board_poller.subprocess.run",
-                      side_effect=AssertionError("must not run")) as m:
-            self.assertIn("dry-run", sync_local_develop())
-            m.assert_not_called()
-
-    def test_fetch_failure_is_loud(self):
-        msg = self._run_with({"fetch": lambda: _cp(1, stderr="boom")})
-        self.assertIn("LOCAL SYNC FAILED", msg)
-        self.assertIn("fetch", msg)
-
-    def test_not_on_develop_skips(self):
-        plan = {
-            "fetch": lambda: _cp(),
-            "rev-parse": lambda: _cp(stdout="main\n"),
-        }
-        msg = self._run_with(plan)
-        self.assertIn("LOCAL SYNC SKIP", msg)
-        self.assertIn("main", msg)
-
-    def test_dirty_tree_skips(self):
-        plan = {
-            "fetch": lambda: _cp(),
-            "rev-parse": lambda: _cp(stdout="develop\n"),
-            "status": lambda: _cp(stdout=" M automation/board_poller.py\n"),
-        }
-        msg = self._run_with(plan)
-        self.assertIn("LOCAL SYNC SKIP", msg)
-        self.assertIn("dirty", msg)
-
-    def test_unpushed_commits_skip(self):
-        plan = {
-            "fetch": lambda: _cp(),
-            "rev-parse": lambda: _cp(stdout="develop\n"),
-            "status": lambda: _cp(),
-            "rev-list": lambda: _cp(stdout="2\n"),
-        }
-        msg = self._run_with(plan)
-        self.assertIn("LOCAL SYNC SKIP", msg)
-        self.assertIn("2 unpushed", msg)
-
-    def test_up_to_date_is_a_noop(self):
-        plan = {
-            "fetch": lambda: _cp(),
-            "rev-parse": lambda: _cp(stdout="develop\n"),
-            "status": lambda: _cp(),
-            "rev-list": lambda: _cp(stdout="0\n"),
-        }
-        msg = self._run_with(plan)
-        self.assertIn("up to date", msg)
-
-    def test_behind_merges_and_skips_ui_when_not_running(self):
-        plan = {
-            "fetch": lambda: _cp(),
-            "rev-parse": lambda: _cp(stdout="develop\n"),
-            "status": lambda: _cp(),
-            "rev-list": [lambda: _cp(stdout="0\n"), lambda: _cp(stdout="3\n")],
-            "merge": lambda: _cp(stdout="Fast-forward\n 3 files changed\n"),
-        }
-        msg = self._run_with(plan, ui_running=False)
-        self.assertIn("develop updated", msg)
-        self.assertIn("UI not running", msg)
-
-    def test_behind_restarts_ui_when_running(self):
-        plan = {
-            "fetch": lambda: _cp(),
-            "rev-parse": lambda: _cp(stdout="develop\n"),
-            "status": lambda: _cp(),
-            "rev-list": [lambda: _cp(stdout="0\n"), lambda: _cp(stdout="3\n")],
-            "merge": lambda: _cp(stdout="Fast-forward\n 3 files changed\n"),
-        }
-        msg = self._run_with(plan, ui_running=True, restart_ok=True)
-        self.assertIn("UI restarted", msg)
-
-    def test_restart_failure_warns(self):
-        plan = {
-            "fetch": lambda: _cp(),
-            "rev-parse": lambda: _cp(stdout="develop\n"),
-            "status": lambda: _cp(),
-            "rev-list": [lambda: _cp(stdout="0\n"), lambda: _cp(stdout="3\n")],
-            "merge": lambda: _cp(stdout="Fast-forward\n 3 files changed\n"),
-        }
-        msg = self._run_with(plan, ui_running=True, restart_ok=False)
-        self.assertIn("LOCAL SYNC WARNING", msg)
-
-    def test_ff_only_merge_failure_is_loud(self):
-        plan = {
-            "fetch": lambda: _cp(),
-            "rev-parse": lambda: _cp(stdout="develop\n"),
-            "status": lambda: _cp(),
-            "rev-list": [lambda: _cp(stdout="0\n"), lambda: _cp(stdout="3\n")],
-            "merge": lambda: _cp(1, stderr="Not possible to fast-forward"),
-        }
-        msg = self._run_with(plan)
-        self.assertIn("LOCAL SYNC FAILED", msg)
-        self.assertIn("fast-forward", msg)
 
 
 if __name__ == "__main__":

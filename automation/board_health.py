@@ -1,32 +1,64 @@
 #!/usr/bin/env python3
-"""Board health report for the Daily News GitHub project.
+"""Read-only health report for the configured PM harness board.
 
-Read-only snapshot of board + run state, pointing out items that need a human
-or a re-drag. Exit code is always 0; findings are printed as a plain list.
+Exit code is always zero; findings identify recovery, capacity, dependency,
+readiness, or review state that needs attention.
 
 Usage: python3 automation/board_health.py
-
-Checks: lane counts and progress, stale In Progress items (no active run),
-Blocked items with no known blocker, unsatisfied dependencies in started
-lanes, and In Review items whose review run is not active.
 """
 
 import json
 import os
 import sys
 
-from board_poller import (  # same-dir import
-    ROOT,
-    dep_gate,
-    fetch_project,
-    fetch_runs_by_message,
-    find_ship_pr,
-    fmt_deps,
-    gh,
-    load_config,
-    parse_dep_refs,
-    run_status_for,
-)
+if __package__:
+    from . import board_poller as harness
+else:
+    import board_poller as harness
+
+ROOT = harness.ROOT
+dep_gate = harness.dep_gate
+fetch_project = harness.fetch_project
+fetch_workflow_run = harness.fetch_workflow_run
+fetch_workflow_runs = harness.fetch_workflow_runs
+find_issue_pr = harness.find_issue_pr
+find_ship_pr = harness.find_ship_pr
+fmt_deps = harness.fmt_deps
+gh = harness.gh
+inspect_worktree = harness.inspect_worktree
+latest_workflow_run = harness.latest_workflow_run
+load_config = harness.load_config
+parse_dep_refs = harness.parse_dep_refs
+run_status_for = harness.run_status_for
+workflow_run_details = harness.workflow_run_details
+workflow_status_by_message = harness.workflow_status_by_message
+
+def recovery_finding(number: int, rec: dict, run: dict) -> str:
+    details = workflow_run_details(run, branch=rec.get("branch"))
+    worktree = inspect_worktree(
+        details.get("working_path")
+        or ((rec.get("recovery") or {}).get("worktree") or {}).get("path")
+    )
+    action = ((rec.get("recovery") or {}).get("action")
+              or ("resume_required" if worktree.get("dirty") else "manual_review"))
+    step = details.get("failed_step") or "unknown step"
+    classification = details.get("failure_class") or "unknown"
+    worktree_state = (
+        "dirty" if worktree.get("dirty") else
+        "clean" if worktree.get("exists") else "missing"
+    )
+    next_step = {
+        "resume_required": "resume or discard the worktree",
+        "retry_available": "one clean-worktree retry is available",
+        "manual_review": "inspect before requeueing",
+    }.get(action, action)
+    return (
+        f"#{number} run {details.get('status') or 'unknown'} at {step} "
+        f"({classification}); worktree {worktree_state}; "
+        f"recovery={next_step} — "
+        f"python3 automation/workflow_recovery.py status {number}"
+    )
+
 
 
 def main() -> int:
@@ -43,8 +75,12 @@ def main() -> int:
         return 0
 
     state_path = ROOT / cfg["state_file"]
-    state = json.loads(state_path.read_text()) if state_path.exists() else {}
-    runs_by_msg = fetch_runs_by_message(env)
+    try:
+        state = json.loads(state_path.read_text()) if state_path.exists() else {}
+    except (OSError, ValueError):
+        state = {}
+    workflow_runs = fetch_workflow_runs(env)
+    runs_by_msg = workflow_status_by_message(workflow_runs)
 
     lane_names = {v: k for k, v in cfg["lanes"].items()}
     done_lane = lane_names.get("done")
@@ -52,6 +88,7 @@ def main() -> int:
     blocked_lane = lane_names.get("blocked")
     needs_input_lane = lane_names.get("needs_input")
     in_progress_lane = lane_names.get("in_progress")
+    ready_lane = lane_names.get("ready")
     review_lane = lane_names.get("review")
 
     issues = []
@@ -86,20 +123,52 @@ def main() -> int:
         content = item["content"]
         number = content["number"]
         lane = item["status"]
-        rec = state.get(item["id"], {})
+        rec = state.get(str(number), state.get(item["id"], {}))
         labels = [n["name"] for n in content["labels"]["nodes"]]
 
         if lane == in_progress_lane:
             msg = rec.get("dispatch_msg")
-            if not msg:
+            run = fetch_workflow_run(env, rec.get("run_id"))
+            if run is None:
+                run = latest_workflow_run(
+                    workflow_runs,
+                    message=msg,
+                ) if msg else latest_workflow_run(
+                    workflow_runs,
+                    issue_number=number,
+                )
+            if run:
+                status = str(run.get("status") or "").lower()
+                if status in {"failed", "cancelled"}:
+                    findings.append(recovery_finding(number, rec, run))
+                elif status not in ("running", "pending", "queued", "completed"):
+                    findings.append(
+                        f"#{number} in {in_progress_lane} with no active run "
+                        f"(status {status or 'unknown'}) — inspect recovery state")
+            elif not msg:
                 findings.append(
-                    f"#{number} in {in_progress_lane} with no dispatch record — re-drag to Todo")
+                    f"#{number} in {in_progress_lane} with no dispatch record and "
+                    "no matching Archon run — inspect before re-dragging")
             else:
                 status = run_status_for(runs_by_msg, msg)
                 if status not in ("running", "pending", "queued", "completed"):
                     findings.append(
                         f"#{number} in {in_progress_lane} with no active run "
-                        f"(status {status or 'unknown'}) — re-drag to Todo or move it")
+                        f"(status {status or 'unknown'}) — inspect recovery state")
+        elif lane == ready_lane:
+            base = cfg["dispatch"]["todo"].get(
+                "merge_develop_base", "develop")
+            pr, ok = find_issue_pr(cfg, env, number, base=base)
+            if not ok:
+                findings.append(
+                    f"#{number} in {ready_lane} but integration proof is unreadable")
+            elif not pr or pr.get("state") != "MERGED":
+                detail = (
+                    "no linked integration PR"
+                    if not pr else f"PR #{pr.get('number')} is {pr.get('state')}"
+                )
+                findings.append(
+                    f"#{number} false Ready: {detail}; bounce to {in_progress_lane}")
         elif lane == blocked_lane:
             if not rec.get("dep_blocked"):
                 findings.append(
@@ -139,6 +208,9 @@ def main() -> int:
                         detail = "mechanical merge pending"
                     findings.append(
                         f"#{number} ship PR #{ship['number']} conflicting ({detail})")
+        if rec.get("capacity_deferred"):
+            findings.append(
+                f"#{number} queued in {lane}: workflow capacity is full")
 
         if done_lane and lane in (todo_lane, in_progress_lane, blocked_lane, review_lane):
             deps = parse_dep_refs(content.get("body") or "")
