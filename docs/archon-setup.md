@@ -28,10 +28,26 @@ Archon workflow engine + stock Pi provider, no custom extensions.
   (`launchctl list | grep news-board-poller`; log `automation/board_poller.log`;
   state `automation/state.json`).
 - The board poller enforces the committed
-  `automation/config.json:max_concurrent_workflows` limit (`10` here), counts
+  `automation/config.json:max_concurrent_workflows` limit (`2` here), counts
   active/paused Archon runs before dispatching, reserves slots within a poll,
-  and holds dispatches if the status lookup fails.
+  and holds dispatches if the status lookup fails. Polls use a 300-second
+  supervisor timeout. Deferred Todo items remain visible, but deferred issue
+  creation is disabled for this repository (`deferred_work.enabled: false`).
 - **news UI** — `uv run news ui` on `http://127.0.0.1:8766` (see the `news-dev` skill).
+
+The reusable PM implementation lives under `automation/pm_harness/`; the
+`automation/board_poller.py` script remains a compatibility entrypoint. After a
+cancelled or transport-failed run, inspect the existing worktree with:
+
+```bash
+python3 automation/workflow_recovery.py status <issue>
+python3 automation/workflow_recovery.py resume <issue>
+python3 automation/workflow_recovery.py discard <issue>       # only after review
+python3 automation/workflow_recovery.py discard <issue> --force  # dirty worktree
+```
+
+Use `resume` to continue an existing worktree. Use `discard` only when its
+changes are explicitly unwanted; neither command starts a fresh workflow.
 
 ## Execution model
 

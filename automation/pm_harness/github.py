@@ -401,10 +401,15 @@ def post_ready_for_review_comment(cfg: dict, env: dict, issue_number: int,
     return ok
 
 
-def issue_has_label(cfg: dict, env: dict, issue_number: int, label: str) -> bool:
+def issue_has_label(cfg: dict, env: dict, issue_number: int,
+                    label: str) -> bool | None:
+    """Return label presence, or ``None`` when GitHub state is unavailable."""
     r = gh(["issue", "view", str(issue_number), "-R", cfg["repo"], "--json", "labels",
             "-q", ".labels[].name"], env)
-    return r.returncode == 0 and label in r.stdout.split()
+    if r.returncode != 0:
+        log(f"LABEL FETCH FAILED issue #{issue_number}: {r.stderr.strip()[:200]}")
+        return None
+    return label in r.stdout.split()
 
 
 def fetch_verdict(cfg: dict, env: dict, pr_number: int) -> tuple[str | None, bool]:

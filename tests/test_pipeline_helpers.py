@@ -1578,6 +1578,42 @@ class PipelineHelperTests(unittest.TestCase):
             snapshot.assert_any_call("before_external_server_wait", pipeline.ACTIVE_RUN_DIAGNOSTICS)
             snapshot.assert_any_call("after_external_server_ready", pipeline.ACTIVE_RUN_DIAGNOSTICS)
 
+    def test_managed_model_server_starts_probes_and_stops(self) -> None:
+        process = MagicMock(pid=4242)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with (
+                patch.object(pipeline, "MODEL_BACKEND", "mlx-lm"),
+                patch.object(pipeline, "MODEL_SERVER_COMMAND", "fake-server --port 9999"),
+                patch.object(pipeline, "MANAGED_MODEL_SERVER_ACTIVE", False),
+                patch.object(pipeline, "MANAGED_MODEL_SERVER_READY", False),
+                patch.object(pipeline, "MANAGED_MODEL_SERVER_EXTERNAL", False),
+                patch.object(pipeline, "MANAGED_MODEL_SERVER_PROCESS", None),
+                patch.object(pipeline, "RUN_OUTPUT_DIR", tmpdir),
+                patch.object(pipeline, "_managed_model_server_log_path",
+                             return_value=str(Path(tmpdir) / "model.log")),
+                patch.object(pipeline, "ensure_codex_safe_model_reference"),
+                patch.object(pipeline, "preflight_model_server",
+                             return_value={"ok": False}),
+                patch.object(pipeline.subprocess, "Popen", return_value=process) as popen,
+                patch.object(
+                    pipeline,
+                    "_wait_for_managed_model_server",
+                    return_value={"ok": True, "model_match": True},
+                ),
+                patch.object(pipeline, "probe_model_generation", return_value={"ok": True}),
+                patch.object(pipeline, "_raise_if_managed_model_server_exited"),
+                patch.object(pipeline, "_stop_managed_server_process") as stop,
+                patch.object(pipeline.time, "sleep"),
+                patch.object(pipeline, "record_activity_snapshot"),
+            ):
+                with pipeline.managed_model_server():
+                    pipeline._ensure_main_model_server_ready()
+                    self.assertTrue(pipeline.MANAGED_MODEL_SERVER_READY)
+
+        popen.assert_called_once()
+        self.assertEqual(popen.call_args.args[0], ["fake-server", "--port", "9999"])
+        stop.assert_called_once_with(process, server_label="model server")
+
     def test_external_model_server_wrong_model_retries_then_ready(self) -> None:
         with patch.object(pipeline, "MODEL_BACKEND", "external"), patch.object(
             pipeline, "MANAGED_MODEL_SERVER_EXTERNAL", False

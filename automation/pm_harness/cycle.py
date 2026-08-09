@@ -247,15 +247,25 @@ def _reconcile_completions(
                 issue_number = rec.get("issue_number")
                 needs_input_name = next(
                     (k for k, v in cfg["lanes"].items() if v == "needs_input"), None)
-                if (issue_number and needs_input_name
-                        and issue_has_label(cfg, env, issue_number, "needs-input")):
-                    option_id = status_options.get(needs_input_name)
-                    if option_id and move_to_lane(
-                            cfg, env, project_id, item_id, field_id, option_id):
-                        log(f"NEEDS INPUT item={item_id} issue={issue_number} -> "
-                            f"{needs_input_name} (awaiting human input)")
-                    rec.pop("dispatch_msg", None)
-                    continue
+                if issue_number and needs_input_name:
+                    label_state = issue_has_label(
+                        cfg, env, issue_number, "needs-input")
+                    if label_state is None:
+                        log(
+                            f"NEEDS INPUT LOOKUP DEFERRED issue={issue_number}: "
+                            "label state unavailable; retaining run markers"
+                        )
+                        state[item_id] = rec
+                        continue
+                    if label_state:
+                        option_id = status_options.get(needs_input_name)
+                        if option_id and move_to_lane(
+                                cfg, env, project_id, item_id, field_id, option_id):
+                            log(f"NEEDS INPUT item={item_id} issue={issue_number} -> "
+                                f"{needs_input_name} (awaiting human input)")
+                        rec.pop("dispatch_msg", None)
+                        state[item_id] = rec
+                        continue
                 merge_base = cfg["dispatch"]["todo"].get("merge_develop_base")
                 merge_ok = False
                 pr = None
@@ -360,8 +370,16 @@ def _reconcile_completions(
                         log(f"left item={item_id} in {in_progress_name} "
                             "(develop merge conflict episode active)")
                         continue
-                    log(f"left item={item_id} in {in_progress_name} (develop merge failed)")
-                    rec.pop("dispatch_msg", None)
+                    note_integration_blocked(
+                        cfg, env, issue_number, rec,
+                        f"integration merge failed: {note}",
+                    )
+                    rec["awaiting_integration"] = True
+                    state[item_id] = rec
+                    log(
+                        f"left item={item_id} in {in_progress_name} "
+                        "(develop merge deferred)"
+                    )
                     continue
                 if merge_ok:
                     for marker in (
@@ -790,13 +808,43 @@ def ensure_ship_review(cfg: dict, env: dict, item_id: str, issue_number: int,
     this poll (logged; the recheck pass retries).
     """
     merge_base = cfg["dispatch"]["todo"].get("merge_develop_base", "develop")
-    pr, _ok = find_issue_pr(cfg, env, issue_number, base=merge_base)
-    if pr:
-        ok, note = merge_pr_to_base(cfg, env, pr, merge_base, issue_number)
-        log(f"DEVELOP MERGE issue={issue_number} PR=#{pr['number']}: {note}"
-            if ok else
-            f"DEVELOP MERGE FAILED issue={issue_number}: {note}")
-    head = (pr or {}).get("headRefName") or f"archon/task-issue-{issue_number}"
+    pr, pr_ok = find_issue_pr(cfg, env, issue_number, base=merge_base)
+    if not pr_ok:
+        log(
+            f"SHIP REVIEW DEFERRED issue={issue_number}: "
+            "develop PR lookup failed"
+        )
+        return None
+    if not pr:
+        log(
+            f"SHIP REVIEW DEFERRED issue={issue_number}: "
+            "no linked develop PR found"
+        )
+        return None
+    merged, note = merge_pr_to_base(cfg, env, pr, merge_base, issue_number)
+    log(f"DEVELOP MERGE issue={issue_number} PR=#{pr['number']}: {note}"
+        if merged else
+        f"DEVELOP MERGE FAILED issue={issue_number}: {note}")
+    if not merged:
+        return None
+    if not DRY_RUN:
+        verified, verify_ok = find_issue_pr(
+            cfg, env, issue_number, base=merge_base)
+        if (
+            not verify_ok
+            or not verified
+            or verified.get("state") != "MERGED"
+        ):
+            log(
+                f"SHIP REVIEW DEFERRED issue={issue_number}: "
+                "develop PR is not confirmed merged"
+            )
+            return None
+        pr = verified
+    head = pr.get("headRefName")
+    if not head:
+        log(f"SHIP REVIEW DEFERRED issue={issue_number}: develop PR has no head branch")
+        return None
     ship_to = cfg["dispatch"]["review"].get("ship_to", "main")
     if branch_empty_vs_main(cfg, env, head, ship_to):
         if DRY_RUN:

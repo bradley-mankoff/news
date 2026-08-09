@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import re
 from datetime import datetime, timezone
 
 from .archon import (
+    fetch_archon_worktrees,
     fetch_workflow_runs,
     inspect_worktree,
     latest_workflow_run,
@@ -163,8 +165,17 @@ def fresh_issue_dispatch_guard(
     env: dict,
     issue_number: int,
 ) -> tuple[bool, str]:
-    """Refuse a fresh run while an existing issue worktree is unsafe."""
-    worktree_info = resolve_worktree_info(env, issue_number)
+    """Refuse a fresh run while existing Archon state cannot be verified."""
+    records = fetch_archon_worktrees(env)
+    if records is None:
+        return False, f"cannot verify Archon worktrees for issue #{issue_number}"
+
+    pat = re.compile(rf"(?:task-issue-|issue-){issue_number}\b")
+    worktree_info = None
+    for branch, record in records.items():
+        if pat.search(branch):
+            worktree_info = {"branch": branch, **record}
+            break
     if worktree_info:
         worktree = inspect_worktree(worktree_info.get("path"))
         if worktree.get("dirty") is True:
@@ -172,7 +183,16 @@ def fresh_issue_dispatch_guard(
                 f"existing worktree is dirty: {worktree.get('path')}; "
                 f"resume or discard issue #{issue_number}"
             )
+        if worktree.get("dirty") is not False:
+            return False, (
+                f"existing worktree cleanliness is unknown: "
+                f"{worktree.get('path') or 'path unavailable'}; "
+                f"resume or inspect issue #{issue_number}"
+            )
+
     runs = fetch_workflow_runs(env)
+    if getattr(runs, "error", None):
+        return False, f"cannot verify Archon runs: {runs.error}"
     latest = latest_workflow_run(runs, issue_number=issue_number)
     if latest and str(latest.get("status") or "").lower() in ACTIVE_WORKFLOW_STATUSES:
         return False, (

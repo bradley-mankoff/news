@@ -96,6 +96,7 @@ class TerminalRecoveryPollTest(unittest.TestCase):
                                        [self._item()])),
             patch.object(cycle_adapter, "prepare_dispatch_budget"),
             patch.object(cycle_adapter, "sync_runnable_labels"),
+            patch.object(cycle_adapter, "fresh_issue_dispatch_guard", return_value=(True, "")),
             patch.object(cycle_adapter, "fetch_workflow_runs",
                          return_value=self._as_runs(runs)),
             patch.object(cycle_adapter, "fetch_workflow_run", return_value=None),
@@ -289,6 +290,7 @@ class TerminalRecoveryPollTest(unittest.TestCase):
                                        [item])),
             patch.object(cycle_adapter, "prepare_dispatch_budget"),
             patch.object(cycle_adapter, "sync_runnable_labels"),
+            patch.object(cycle_adapter, "fresh_issue_dispatch_guard", return_value=(True, "")),
             patch.object(cycle_adapter, "pick_workflow",
                          return_value="archon-idea-to-pr"),
             patch.object(
@@ -328,6 +330,7 @@ class TerminalRecoveryPollTest(unittest.TestCase):
                          ]),
             patch.object(cycle_adapter, "prepare_dispatch_budget"),
             patch.object(cycle_adapter, "sync_runnable_labels"),
+            patch.object(cycle_adapter, "fresh_issue_dispatch_guard", return_value=(True, "")),
             patch.object(cycle_adapter, "pick_workflow",
                          return_value="archon-idea-to-pr"),
             patch.object(

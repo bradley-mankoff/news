@@ -7,24 +7,21 @@ Date: 2026-08-04
 ## Context
 
 The Daily News Report and its email delivery are coupled in one flow:
-`_run_pipeline` (pipeline.py:4356) always calls `maybe_email_report`
-(pipeline.py:4959) after rendering. Delivery is only implicitly optional — it
-skips when SMTP env vars or recipients are absent (pipeline.py:2998–3011) and
-surfaces as a progress detail line, never as a recorded delivery status. When
-delivery config is present but broken, the SMTP failure propagates out of
-`maybe_email_report` with no try/except (pipeline.py:3088–3100) and the run is
-recorded `failed` (pipeline.py:1110) — a generated report and a failed run in
-the same execution. Run history stores a single status derived from pipeline
-events (`completed`/`failed`/`aborted`, from `run_status_from_events`,
-diagnostics.py:977–983), so "report built but not delivered" and "report built
-and delivered" are indistinguishable.
+`_run_pipeline` always calls `maybe_email_report` after rendering. Delivery is
+only implicitly optional — it skips when SMTP env vars or recipients are
+absent and surfaces as a progress detail line, never as a recorded delivery
+status. When delivery config is present but broken, the SMTP failure
+propagates out of `maybe_email_report` with no try/except and the run is
+recorded `failed` — a generated report and a failed run in the same execution.
+Run history stores a single status derived from pipeline events
+(`completed`/`failed`/`aborted`, from `run_status_from_events`), so "report built
+but not delivered" and "report built and delivered" are indistinguishable.
 
 Recipient policy is scattered across `NEWS_PRIMARY_RECIPIENT`,
-`NEWS_RECIPIENT_SCOPE` (config.py:107–109; reads at config.py:1688, 1948),
-`NEWS_EMAIL_RECIPIENTS`, SMTP env vars (SETTINGS.md:114–117), and
-`config/recipients.yaml` (`pause: true`), with
-no explicit "delivery disabled" state and no canonical vocabulary for the
-product surface, delivery policy, or automation. The product should be a
+`NEWS_RECIPIENT_SCOPE`, `NEWS_EMAIL_RECIPIENTS`, SMTP env vars, and
+`config/recipients.yaml` (`pause: true`), with no explicit "delivery disabled"
+state and no canonical vocabulary for the product surface, delivery policy,
+or automation. The product should be a
 desktop-first Daily News Application where the generated report is complete and
 reviewable without any email configuration, and email is an optional delivery
 channel governed by an explicit Delivery Profile whose outcome is recorded
@@ -51,9 +48,8 @@ separately from the Run Session outcome.
 Run Session/report outcome and Delivery Profile outcome are two independent
 dimensions.
 
-Run Session outcome is the existing `run_status_from_events` vocabulary
-(diagnostics.py:977–983): `completed`, `failed`, `aborted` (`unknown` is the
-pre-terminal fallback, diagnostics.py:983).
+Run Session outcome is the existing `run_status_from_events` vocabulary:
+`completed`, `failed`, `aborted` (`unknown` is the pre-terminal fallback).
 
 Delivery Profile outcome per delivery attempt is:
 
@@ -76,10 +72,19 @@ and produces a complete, reviewable report with zero delivery configuration.
 ### Scheduled default and precedence
 
 Scheduled personal use defaults to sending only to the owner recipient.
-Additional recipients are explicit opt-ins for a run or a schedule. Precedence:
-run-level explicit opt-ins > schedule-level opt-ins > owner-only default.
-`NEWS_RECIPIENT_SCOPE=all` maps to the legacy opt-in list (all active
-`config/recipients.yaml` entries; owner included when listed).
+Additional recipients are explicit opt-ins for a run or a schedule. The
+canonical setting is `NEWS_DELIVERY_MODE=disabled|owner|recipients`, with
+precedence:
+
+1. explicit `NEWS_DELIVERY_MODE`;
+2. legacy `NEWS_RECIPIENT_SCOPE` (`primary` maps to `owner`, `all` maps to
+   `recipients`);
+3. owner-only default.
+
+`recipients` selects active `config/recipients.yaml` entries; the owner is
+included only when listed. `disabled` records `skipped: user_disabled` and an
+all-paused profile has the same outcome. Missing or placeholder configuration
+records `skipped: not_configured`.
 
 ### Identity rules
 
@@ -91,15 +96,14 @@ News Report domain.
 
 Placeholder addresses (`you@example.com` — the checked-in default in
 `config/recipients.yaml`; `primary@example.com` — the `NEWS_PRIMARY_RECIPIENT`
-default, SETTINGS.md:31 / config.py:1948; `news@example.com` — the
-`NEWS_EMAIL_FROM` default, SETTINGS.md:114) and placeholder credentials must
-never look like configured personal delivery. Placeholder/default values mean
-`skipped: not_configured`, never `sent`.
+default; `news@example.com` — the `NEWS_EMAIL_FROM` default) and placeholder
+credentials must never look like configured personal delivery. Placeholder/default values mean `skipped: not_configured`, never `sent`.
 
 ### Migration table
 
-| Legacy | New vocabulary |
+| Setting | New vocabulary |
 |---|---|
+| `NEWS_DELIVERY_MODE=disabled|owner|recipients` | Explicit Delivery Profile mode; takes precedence over legacy scope |
 | `NEWS_PRIMARY_RECIPIENT` | Delivery Profile owner recipient |
 | `NEWS_RECIPIENT_SCOPE=primary` | Owner-only delivery (default) |
 | `NEWS_RECIPIENT_SCOPE=all` | All active `config/recipients.yaml` entries (owner included when listed; legacy explicit opt-in list) |
@@ -108,7 +112,7 @@ never look like configured personal delivery. Placeholder/default values mean
 | `NEWS_EMAIL_FROM` | Delivery Profile transport sender (may equal owner) |
 | `NEWS_SMTP_HOST`/`NEWS_SMTP_PORT`/`NEWS_SMTP_USERNAME`/`NEWS_SMTP_USE_SSL`/`NEWS_SMTP_PASSWORD` | Delivery Profile transport configuration |
 | `NEWS_UNSUBSCRIBE_BASE_URL`/`NEWS_UNSUBSCRIBE_HOST`/`NEWS_UNSUBSCRIBE_PORT`/`NEWS_UNSUBSCRIBE_SECRET` | Delivery Profile transport unsubscribe configuration |
-| `maybe_email_report` implicit skip (pipeline.py:2998–3011) | Explicit Delivery Profile evaluation with recorded delivery status (implemented in PR #176) |
+| `maybe_email_report` implicit skip | Explicit Delivery Profile evaluation with recorded delivery status (implemented in PR #176) |
 
 ### Delivery slices
 
@@ -130,12 +134,11 @@ never look like configured personal delivery. Placeholder/default values mean
   absent delivery setup never fails a run, and delivery outcomes are recorded
   distinctly from run outcomes.
 - The desktop application becomes the canonical render target; the email HTML
-  (`build_report_html`, pipeline.py:3767–3779, mobile-first 600px media query)
-  is a constrained derived rendering, not the primary surface.
-- The UI control panel already trends desktop-first (ui.py:1269
-  `max-width: min(1180px, ...)`, ui.py:1284 780px media query) — this decision
-  makes that direction load-bearing for the whole product.
-- Legacy settings keep working through the migration mapping until the
-  follow-up slices implement the Delivery Profile.
+  (`build_report_html`, with its constrained media-query layout) is a derived
+  rendering, not the primary surface.
+- The UI control panel already trends desktop-first; this decision makes that
+  direction load-bearing for the whole product.
+- Legacy settings keep working through the migration mapping. Slice B is
+  implemented in PR #176; Slice C (scheduled automation) remains future work.
 - Delivery decisions (outcome states, precedence, identity, placeholders)
   cannot be re-litigated without new evidence.

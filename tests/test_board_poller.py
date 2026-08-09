@@ -206,8 +206,8 @@ class WorkflowRecoveryTest(unittest.TestCase):
         with (
             patch.object(
                 recovery_adapter,
-                "resolve_worktree_info",
-                return_value={"branch": "archon/task-issue-141", "path": "/tmp/141"},
+                "fetch_archon_worktrees",
+                return_value={"archon/task-issue-141": {"path": "/tmp/141"}},
             ),
             patch.object(
                 recovery_adapter,
@@ -220,6 +220,28 @@ class WorkflowRecoveryTest(unittest.TestCase):
         self.assertFalse(allowed)
         self.assertIn("dirty", reason)
         fetch.assert_not_called()
+
+    def test_fresh_dispatch_refuses_when_worktree_lookup_fails(self):
+        with patch.object(
+            recovery_adapter, "fetch_archon_worktrees", return_value=None
+        ), patch.object(recovery_adapter, "fetch_workflow_runs") as fetch:
+            allowed, reason = fresh_issue_dispatch_guard({}, 141)
+        self.assertFalse(allowed)
+        self.assertIn("cannot verify Archon worktrees", reason)
+        fetch.assert_not_called()
+
+    def test_fresh_dispatch_refuses_when_run_lookup_is_unhealthy(self):
+        with (
+            patch.object(recovery_adapter, "fetch_archon_worktrees", return_value={}),
+            patch.object(
+                recovery_adapter,
+                "fetch_workflow_runs",
+                return_value=board_poller.WorkflowRuns(error="archon_json"),
+            ),
+        ):
+            allowed, reason = fresh_issue_dispatch_guard({}, 141)
+        self.assertFalse(allowed)
+        self.assertIn("cannot verify Archon runs", reason)
 
 
 
@@ -504,6 +526,28 @@ class ParseVerdictTest(unittest.TestCase):
     def test_multiline_body(self):
         self.assertEqual(
             parse_verdict(["line one\nVERDICT: approve\nline three"]), "approve")
+
+
+class IssueLabelLookupTest(unittest.TestCase):
+    def test_lookup_failure_is_unknown_not_absent(self):
+        with patch.object(
+            github_adapter,
+            "gh",
+            return_value=_cp(returncode=1, stderr="rate limited"),
+        ):
+            self.assertIsNone(github_adapter.issue_has_label(
+                {"repo": "o/r"}, {}, 7, "needs-input"))
+
+    def test_successful_lookup_reports_label_presence(self):
+        with patch.object(
+            github_adapter,
+            "gh",
+            return_value=_cp(stdout="needs-input\nrunnable\n"),
+        ):
+            self.assertTrue(github_adapter.issue_has_label(
+                {"repo": "o/r"}, {}, 7, "needs-input"))
+            self.assertFalse(github_adapter.issue_has_label(
+                {"repo": "o/r"}, {}, 7, "blocked"))
 
 
 class ReadyForReviewCommentTest(unittest.TestCase):

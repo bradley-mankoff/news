@@ -165,6 +165,122 @@ class SyntheticProjectTest(unittest.TestCase):
         )
 
 
+class ShipReviewTest(unittest.TestCase):
+    def _context(self, cfg, state, status_options):
+        return cycle.PollContext(
+            cfg=cfg,
+            env={},
+            state=state,
+            project_id="project",
+            field_id="field",
+            status_options=status_options,
+            items=[],
+            first_run=False,
+            done_lane_name="Done",
+            todo_lane_name="Todo",
+            blocked_lane_name="Blocked",
+            ready_lane_name="Ready for Review",
+            in_progress_lane_name="In Progress",
+            number_lane={},
+            number_state={},
+            seen=set(),
+            fresh_dispatched=set(),
+        )
+
+    def test_approved_ship_pr_merges_closes_and_moves_to_done(self):
+        cfg = config()
+        cfg["dispatch"]["review"]["merge_ship_on_approve"] = True
+        state = {
+            "item-92": {
+                "status": "In Review",
+                "issue_number": 92,
+                "ship_pr": 153,
+                "review_msg": "Review PR #153",
+            }
+        }
+        result = Mock(returncode=0, stdout='{"number":153,"state":"OPEN"}', stderr="")
+        with (
+            patch.object(cycle, "gh", side_effect=[
+                result,
+                Mock(returncode=0, stdout="", stderr=""),
+                Mock(returncode=0, stdout="", stderr=""),
+            ]) as gh,
+            patch.object(cycle, "fetch_verdict", return_value=("approve", True)),
+            patch.object(cycle, "move_to_lane", return_value=True) as move,
+        ):
+            cycle._complete_reviews(
+                self._context(cfg, state, {"Done": "done-option"}), None, None
+            )
+
+        self.assertNotIn("ship_pr", state["item-92"])
+        self.assertNotIn("review_msg", state["item-92"])
+        move.assert_called_once_with(
+            cfg, {}, "project", "item-92", "field", "done-option"
+        )
+        self.assertEqual(gh.call_args_list[1].args[0][:3], ["pr", "merge", "153"])
+        self.assertEqual(gh.call_args_list[2].args[0][:3], ["issue", "close", "92"])
+
+    def test_ship_review_defers_when_develop_pr_lookup_fails(self):
+        cfg = config()
+        with (
+            patch.object(cycle, "find_issue_pr", return_value=(None, False)),
+            patch.object(cycle, "branch_empty_vs_main") as empty,
+        ):
+            result = cycle.ensure_ship_review(
+                cfg, {}, "item-92", 92, "Issue 92", "project", "field", {},
+                "Done", {},
+            )
+        self.assertIsNone(result)
+        empty.assert_not_called()
+
+    def test_ship_review_defers_when_develop_merge_fails(self):
+        cfg = config()
+        pr = {"number": 153, "state": "OPEN", "headRefName": "issue-92"}
+        with (
+            patch.object(cycle, "find_issue_pr", return_value=(pr, True)),
+            patch.object(cycle, "merge_pr_to_base", return_value=(False, "permission denied")),
+            patch.object(cycle, "branch_empty_vs_main") as empty,
+        ):
+            result = cycle.ensure_ship_review(
+                cfg, {}, "item-92", 92, "Issue 92", "project", "field", {},
+                "Done", {},
+            )
+        self.assertIsNone(result)
+        empty.assert_not_called()
+
+    def test_failed_develop_merge_retains_retry_marker(self):
+        cfg = config()
+        run = {
+            "id": "run-92",
+            "status": "completed",
+            "user_message": "Implement issue #92",
+            "started_at": "2026-08-08T10:00:00Z",
+        }
+        state = {
+            "item-92": {
+                "status": "In Progress",
+                "issue_number": 92,
+                "dispatch_msg": "Implement issue #92",
+                "run_id": "run-92",
+            }
+        }
+        ctx = self._context(cfg, state, {"Ready for Review": "ready-option"})
+        with (
+            patch.object(cycle, "fetch_workflow_run", return_value=run),
+            patch.object(cycle, "fetch_workflow_runs", return_value=cycle.WorkflowRuns([run])),
+            patch.object(cycle, "issue_has_label", return_value=False),
+            patch.object(cycle, "find_issue_pr", return_value=({"number": 153}, True)),
+            patch.object(cycle, "merge_pr_to_base", return_value=(False, "temporary GitHub error")),
+            patch.object(github, "comment_issue", return_value=True),
+            patch.object(cycle, "move_to_lane") as move,
+        ):
+            cycle._reconcile_completions(ctx)
+        rec = state["item-92"]
+        self.assertEqual(rec["dispatch_msg"], "Implement issue #92")
+        self.assertTrue(rec["awaiting_integration"])
+        move.assert_not_called()
+
+
 class DecisionOnlyTest(unittest.TestCase):
     def test_todo_decision_moves_to_input_without_implementation_dispatch(self) -> None:
         cfg = config()

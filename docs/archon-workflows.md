@@ -3,6 +3,22 @@
 Machine-local archon (archon-pi build, v0.7.0 = stock Archon) lives at
 `~/.local/share/archon-pi/archon-home/`.
 
+## Operator recovery
+
+The extracted PM harness persists issue-number state and keeps recovery
+separate from fresh dispatch. Inspect a stopped run with:
+
+```bash
+python3 automation/workflow_recovery.py status <issue>
+```
+
+Use `resume <issue>` only to continue the existing Archon worktree. Use
+`discard <issue>` only after confirming that the worktree can be removed; add
+`--force` only when a dirty worktree's changes are explicitly unwanted. The
+poller is bounded by the configured two-workflow board capacity and a
+300-second supervisor timeout. `automation/board_poller.py` remains a
+compatibility entrypoint for `automation/pm_harness/`.
+
 ## Execution model
 
 - Routine nodes use the `pi` CLI with
@@ -12,8 +28,10 @@ Machine-local archon (archon-pi build, v0.7.0 = stock Archon) lives at
   `provider: pi`, `model: openai-codex/gpt-5.6-luna`, and `effort: max`, matching
   this session's `openai-codex/gpt-5.6-luna` model.
   It covers planning, review, conflict resolution, issue drafting, and the
-  completion records that classify deferred work; the board poller then creates
-  deduped issues mechanically.
+  completion records that classify deferred work. This repository keeps
+  `deferred_work.enabled` disabled, so deferred Todo items remain visible and
+  are not converted into issues automatically; operators can create or requeue
+  them explicitly when appropriate.
 - Both paths run at their maximum Pi reasoning setting: DeepSeek and the
   OpenAI Codex backend both use `effort: max`.
 - Pi OAuth credentials are configured with the interactive `/login` command.
