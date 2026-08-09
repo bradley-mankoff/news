@@ -107,6 +107,24 @@ SOURCE_SCOPES = (SOURCE_SCOPE_CORE, SOURCE_SCOPE_PERIPHERAL)
 RECIPIENT_SCOPE_PRIMARY = "primary"
 RECIPIENT_SCOPE_ALL = "all"
 RECIPIENT_SCOPES = (RECIPIENT_SCOPE_PRIMARY, RECIPIENT_SCOPE_ALL)
+DELIVERY_MODE_DISABLED = "disabled"
+DELIVERY_MODE_OWNER = "owner"
+DELIVERY_MODE_RECIPIENTS = "recipients"
+DELIVERY_MODES = (DELIVERY_MODE_DISABLED, DELIVERY_MODE_OWNER, DELIVERY_MODE_RECIPIENTS)
+DELIVERY_MODE_ENV_VAR = "NEWS_DELIVERY_MODE"
+# ADR 0012 placeholder rule: exact checked-in example addresses and
+# placeholder credential tokens are never deliverable and must resolve to
+# ``skipped: not_configured``, never ``sent``. The empty value is included
+# for credentials so blank/unset inputs normalize to the same outcome.
+PLACEHOLDER_ADDRESSES = ("you@example.com", "primary@example.com", "news@example.com")
+PLACEHOLDER_CREDENTIAL_TOKENS = (
+    "",
+    "password",
+    "your-password",
+    "change-me",
+    "changeme",
+    "placeholder",
+)
 PRESET_ENV_VAR = "NEWS_PRESET"
 ACTIVE_PRESET_ENV_VAR = "NEWS_ACTIVE_PRESET"
 PRESET_MARKER_ENV_VARS = {PRESET_ENV_VAR, ACTIVE_PRESET_ENV_VAR}
@@ -235,6 +253,75 @@ class TaskModelAssignment:
 
 
 @dataclass(frozen=True)
+class DeliveryRecipient:
+    """One normalized delivery target from the additional-recipient catalog."""
+
+    email: str
+    name: str
+    pause: bool = False
+
+
+@dataclass(frozen=True)
+class DeliveryProfile:
+    """Resolved optional-delivery policy for one Run Session (ADR 0012 Slice B).
+
+    Owns the delivery mode, owner recipient, additional-recipient snapshot,
+    legacy fallback list, and transport values. Credentials (``smtp_password``,
+    ``unsubscribe_secret``) live in memory only; use ``public_snapshot()`` for
+    any UI/diagnostics projection so secrets never serialize.
+    """
+
+    mode: str
+    owner_recipient: str
+    additional_recipients: tuple[DeliveryRecipient, ...] = ()
+    legacy_fallback_recipients: tuple[str, ...] = ()
+    # True only when NEWS_EMAIL_RECIPIENTS was explicitly supplied with a
+    # non-empty value; the default owner is not an implicit recipients-mode
+    # opt-in.
+    legacy_fallback_explicit: bool = False
+    sender: str = ""
+    smtp_host: str = ""
+    smtp_port: int = 465
+    smtp_username: str = ""
+    smtp_use_ssl: bool = True
+    smtp_password: str = ""
+    unsubscribe_base_url: str = ""
+    unsubscribe_host: str = ""
+    unsubscribe_port: int = 0
+    unsubscribe_secret: str = ""
+
+    def public_snapshot(self) -> dict[str, Any]:
+        """Redacted, JSON-ready projection safe for UI/runtime display.
+
+        Never includes the SMTP password or unsubscribe secret; credentials
+        are exposed only as configured/not-configured booleans. Placeholder
+        values count as not configured so the UI cannot present example
+        inputs as real personal delivery.
+        """
+        return {
+            "mode": self.mode,
+            "owner": self.owner_recipient,
+            "sender": self.sender,
+            "smtp_host": self.smtp_host,
+            "smtp_port": self.smtp_port,
+            "smtp_username": self.smtp_username,
+            "smtp_use_ssl": self.smtp_use_ssl,
+            "smtp_password_set": bool(
+                self.smtp_password
+                and not is_placeholder_credential(self.smtp_password)
+            ),
+            "unsubscribe_base_url": self.unsubscribe_base_url,
+            "unsubscribe_host": self.unsubscribe_host,
+            "unsubscribe_port": self.unsubscribe_port,
+            "unsubscribe_secret_set": bool(
+                self.unsubscribe_secret
+                and not is_placeholder_credential(self.unsubscribe_secret)
+            ),
+            "additional_recipient_count": len(self.additional_recipients),
+        }
+
+
+@dataclass(frozen=True)
 class RuntimeConfig:
     root_dir: Path
     sources_path: Path
@@ -308,6 +395,7 @@ class RuntimeConfig:
     story_selection_overlap_threshold: float
     story_embedding_dedup_threshold: float
     story_backfill_batch_multiplier: int
+    delivery_profile: DeliveryProfile
 
 
 @dataclass(frozen=True)
@@ -518,6 +606,27 @@ def _optional_int_env(name: str, environ: Mapping[str, str] | None = None) -> in
         ) from None
 
 
+def _positive_optional_int_env(
+    name: str,
+    environ: Mapping[str, str] | None = None,
+) -> int | None:
+    """Parse an integer env value that must be greater than zero when set.
+
+    Model-tuning max-token caps are only meaningful as positive whole
+    numbers; zero and negative values are rejected here so they never reach
+    runtime tuning consumers (where falsy fallbacks or clamps would silently
+    replace them). Blank/unset values remain "unset" and keep the existing
+    default/preset precedence.
+    """
+    value = _optional_int_env(name, environ)
+    if value is not None and value <= 0:
+        raise ValueError(
+            f"Invalid max-token value for {name!r}: {value}. "
+            "Expected a whole number greater than zero."
+        )
+    return value
+
+
 def _optional_float_env(name: str, environ: Mapping[str, str] | None = None) -> float | None:
     raw = (environ or _active_env()).get(name)
     if raw is None or not raw.strip():
@@ -609,6 +718,10 @@ _TASK_MAX_TOKENS_FIELDS: dict[str, str] = {
     # (generate_image_art_brief); it inherits that task's token cap by design.
     MODEL_TASK_IMAGE_ART_DIRECTION: "title_generation_max_tokens",
 }
+
+# Canonical model-tuning max-token fields, derived from the task map so the
+# allowed-field and positive-value checks cannot drift from the alias mapping.
+_MAX_TOKENS_TUNING_FIELDS: frozenset[str] = frozenset(_TASK_MAX_TOKENS_FIELDS.values())
 
 
 def _task_max_tokens_field(task: str) -> str:
@@ -795,13 +908,7 @@ def _apply_model_tuning_preset(
             continue
         if field_name == "max_tokens":
             field_name = _task_max_tokens_field(assignment_task)
-        if field_name not in {
-            "model_max_input_tokens",
-            "article_summary_max_tokens",
-            "story_drafting_max_tokens",
-            "story_scale_screening_max_tokens",
-            "title_generation_max_tokens",
-        }:
+        if field_name not in _MAX_TOKENS_TUNING_FIELDS:
             raise ValueError(
                 f"Unsupported tuning field {key!r} in model tuning preset {preset_id!r}."
             )
@@ -813,6 +920,11 @@ def _apply_model_tuning_preset(
             raise ValueError(
                 f"Model tuning preset {preset_id!r} field {key!r} must be a number, "
                 f"got {value!r}."
+            )
+        if coerced_value <= 0:
+            raise ValueError(
+                f"Model tuning preset {preset_id!r} field {key!r} must be greater "
+                f"than zero, got {coerced_value}."
             )
         updates[field_name] = coerced_value
 
@@ -884,23 +996,23 @@ def _apply_model_tuning_env_overrides(tuning: ModelTuningSettings) -> ModelTunin
     return ModelTuningSettings(
         model_max_input_tokens=_merge_optional_value(
             tuning.model_max_input_tokens,
-            _optional_int_env("NEWS_MODEL_MAX_INPUT_TOKENS"),
+            _positive_optional_int_env("NEWS_MODEL_MAX_INPUT_TOKENS"),
         ),
         article_summary_max_tokens=_merge_optional_value(
             tuning.article_summary_max_tokens,
-            _optional_int_env("NEWS_ARTICLE_SUMMARY_MAX_TOKENS"),
+            _positive_optional_int_env("NEWS_ARTICLE_SUMMARY_MAX_TOKENS"),
         ),
         story_drafting_max_tokens=_merge_optional_value(
             tuning.story_drafting_max_tokens,
-            _optional_int_env("NEWS_STORY_DRAFTING_MAX_TOKENS"),
+            _positive_optional_int_env("NEWS_STORY_DRAFTING_MAX_TOKENS"),
         ),
         story_scale_screening_max_tokens=_merge_optional_value(
             tuning.story_scale_screening_max_tokens,
-            _optional_int_env("NEWS_STORY_SCALE_SCREENING_MAX_TOKENS"),
+            _positive_optional_int_env("NEWS_STORY_SCALE_SCREENING_MAX_TOKENS"),
         ),
         title_generation_max_tokens=_merge_optional_value(
             tuning.title_generation_max_tokens,
-            _optional_int_env("NEWS_TITLE_GENERATION_MAX_TOKENS"),
+            _positive_optional_int_env("NEWS_TITLE_GENERATION_MAX_TOKENS"),
         ),
         task_sampling=task_sampling,
     )
@@ -1349,6 +1461,7 @@ def runtime_knob_registry() -> list[dict[str, Any]]:
     knobs = [
         _runtime_knob("Run Settings", "Source scope", "NEWS_SOURCE_SCOPE", "select", default="core", options=list(SOURCE_SCOPES)),
         _runtime_knob("Run Settings", "Recipient scope", "NEWS_RECIPIENT_SCOPE", "select", default="primary", options=list(RECIPIENT_SCOPES)),
+        _runtime_knob("Run Settings", "Delivery mode", DELIVERY_MODE_ENV_VAR, "select", default=DELIVERY_MODE_OWNER, options=list(DELIVERY_MODES)),
         _runtime_knob("Run Settings", "Block reused URLs", "NEWS_BLOCK_REUSED_URLS", "bool", default=False),
         _runtime_knob("Run Settings", "Image generation", "NEWS_IMAGE_ENABLED", "bool", default=False),
         _runtime_knob("Run Settings", "Story scale screening", "NEWS_STORY_SCALE_SCREENING_ENABLED", "bool"),
@@ -1715,6 +1828,57 @@ def _configured_recipient_scope() -> str:
     return _normalize_recipient_scope(_str_env("NEWS_RECIPIENT_SCOPE", RECIPIENT_SCOPE_PRIMARY))
 
 
+def _normalize_delivery_mode(value: Any) -> str:
+    """Normalize an explicit ``NEWS_DELIVERY_MODE`` to the canonical closed set.
+
+    Case-insensitive and whitespace-normalized; underscore spellings map to
+    their dash canonical forms. Non-empty invalid values fail fast with an
+    actionable ``ValueError`` so a typo never silently changes delivery
+    policy. Empty values are handled by ``_configured_delivery_mode()`` as
+    unset (ADR 0012 precedence), not raised here.
+    """
+    mode = str(value or "").strip().lower().replace("_", "-")
+    aliases = {
+        "none": DELIVERY_MODE_DISABLED,
+        "off": DELIVERY_MODE_DISABLED,
+        "owner-only": DELIVERY_MODE_OWNER,
+    }
+    normalized = aliases.get(mode, mode)
+    if normalized not in DELIVERY_MODES:
+        raise ValueError(
+            "NEWS_DELIVERY_MODE must be one of: " + ", ".join(DELIVERY_MODES)
+        )
+    return normalized
+
+
+def _configured_delivery_mode() -> str:
+    """Resolve the delivery mode with ADR 0012 precedence.
+
+    Explicit ``NEWS_DELIVERY_MODE`` wins; otherwise legacy
+    ``NEWS_RECIPIENT_SCOPE`` translates ``primary`` -> ``owner`` and
+    ``all`` -> ``recipients``; otherwise the owner-only default applies.
+    An empty-but-present explicit value follows the sibling empty-env
+    convention and behaves as unset.
+    """
+    explicit = _str_env(DELIVERY_MODE_ENV_VAR, "").strip()
+    if explicit:
+        return _normalize_delivery_mode(explicit)
+    legacy_scope = _configured_recipient_scope()
+    if legacy_scope == RECIPIENT_SCOPE_ALL:
+        return DELIVERY_MODE_RECIPIENTS
+    return DELIVERY_MODE_OWNER
+
+
+def is_placeholder_address(value: Any) -> bool:
+    """True for exact checked-in example addresses (case-insensitive)."""
+    return str(value or "").strip().lower() in PLACEHOLDER_ADDRESSES
+
+
+def is_placeholder_credential(value: Any) -> bool:
+    """True for exact placeholder credential tokens, including empty input."""
+    return str(value or "").strip().lower() in PLACEHOLDER_CREDENTIAL_TOKENS
+
+
 def _source_enabled_for_scope(
     raw_source: dict[str, Any],
     source_scope: str,
@@ -2010,11 +2174,48 @@ def _build_runtime_config(
         _str_env("NEWS_SMTP_PASSWORD", "").replace(" ", "")
         or _load_password_from_env_json(env_json_path)
     )
+    legacy_fallback_value = _str_env("NEWS_EMAIL_RECIPIENTS", "").strip()
+    legacy_fallback_explicit = bool(legacy_fallback_value)
     fallback_recipients = [
         addr.strip()
-        for addr in _str_env("NEWS_EMAIL_RECIPIENTS", primary_recipient).split(",")
+        for addr in (legacy_fallback_value or primary_recipient).split(",")
         if addr.strip()
     ]
+    # Delivery Profile snapshot: mode resolution follows ADR 0012 precedence
+    # (explicit NEWS_DELIVERY_MODE > legacy NEWS_RECIPIENT_SCOPE > owner
+    # default), and the additional-recipient catalog is captured once here so
+    # profile evaluation and the UI runtime snapshot never diverge from the
+    # pipeline's target selection. Credentials stay in memory only; the
+    # profile's public_snapshot() is the only projection consumers may use.
+    delivery_mode = _configured_delivery_mode()
+    additional_recipients = tuple(
+        DeliveryRecipient(
+            email=email,
+            name=str(info.get("name") or email),
+            pause=bool(info.get("pause")),
+        )
+        for email, info in load_recipients(recipients_path).items()
+    )
+    delivery_profile = DeliveryProfile(
+        mode=delivery_mode,
+        owner_recipient=primary_recipient,
+        additional_recipients=additional_recipients,
+        legacy_fallback_recipients=tuple(fallback_recipients),
+        legacy_fallback_explicit=legacy_fallback_explicit,
+        sender=email_from,
+        smtp_host=_str_env("NEWS_SMTP_HOST", "smtp.gmail.com"),
+        smtp_port=_int_env("NEWS_SMTP_PORT", 465),
+        smtp_username=_str_env("NEWS_SMTP_USERNAME", email_from),
+        smtp_use_ssl=_bool_env("NEWS_SMTP_USE_SSL", True),
+        smtp_password=smtp_password,
+        unsubscribe_base_url=_str_env(
+            "NEWS_UNSUBSCRIBE_BASE_URL",
+            "http://127.0.0.1:8765/unsubscribe",
+        ),
+        unsubscribe_host=_str_env("NEWS_UNSUBSCRIBE_HOST", "127.0.0.1"),
+        unsubscribe_port=_int_env("NEWS_UNSUBSCRIBE_PORT", 8765),
+        unsubscribe_secret=_str_env("NEWS_UNSUBSCRIBE_SECRET", ""),
+    )
 
     pipeline_budget = _configured_pipeline_budget()
     default_reference = _configured_model_reference()
@@ -2152,6 +2353,7 @@ def _build_runtime_config(
         story_selection_overlap_threshold=pipeline_budget.story_selection_overlap_threshold,
         story_embedding_dedup_threshold=pipeline_budget.story_embedding_dedup_threshold,
         story_backfill_batch_multiplier=pipeline_budget.story_backfill_batch_multiplier,
+        delivery_profile=delivery_profile,
     )
 
 

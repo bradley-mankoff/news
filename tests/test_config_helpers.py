@@ -194,6 +194,125 @@ class ConfigHelperTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Unknown model tuning preset"):
             config_module._configured_model_tuning("model", preset_id="missing", presets={})
 
+    def test_model_tuning_max_tokens_reject_non_positive_values(self) -> None:
+        # Preset path: the max_tokens shorthand resolves by assignment task and
+        # then must be positive; the error names the preset id, original key,
+        # and the offending value.
+        for preset_key in ("max_tokens", "story_drafting_max_tokens"):
+            for bad_value in (0, -1):
+                with self.subTest(preset_key=preset_key, value=bad_value):
+                    with self.assertRaisesRegex(
+                        ValueError,
+                        rf"sample.*{preset_key}.*greater than zero",
+                    ) as ctx:
+                        config_module._apply_model_tuning_preset(
+                            ModelTuningSettings(task_sampling={}),
+                            preset_id="sample",
+                            preset={"tuning": {preset_key: bad_value}},
+                            assignment_task="story_drafting",
+                        )
+                    self.assertIn(str(bad_value), str(ctx.exception))
+
+        # Valid positive boundary: max_tokens=1 resolves through the task alias
+        # and survives unchanged (not replaced by a default).
+        boundary_tuning = config_module._apply_model_tuning_preset(
+            ModelTuningSettings(task_sampling={}),
+            preset_id="sample",
+            preset={"tuning": {"max_tokens": 1}},
+            assignment_task="story_drafting",
+        )
+        self.assertEqual(boundary_tuning.story_drafting_max_tokens, 1)
+
+        # Env path: each model-tuning max-token variable rejects 0 and negative
+        # values with the variable named, and 1 survives as the tuning value.
+        env_fields = {
+            "NEWS_MODEL_MAX_INPUT_TOKENS": "model_max_input_tokens",
+            "NEWS_ARTICLE_SUMMARY_MAX_TOKENS": "article_summary_max_tokens",
+            "NEWS_STORY_DRAFTING_MAX_TOKENS": "story_drafting_max_tokens",
+            "NEWS_STORY_SCALE_SCREENING_MAX_TOKENS": "story_scale_screening_max_tokens",
+            "NEWS_TITLE_GENERATION_MAX_TOKENS": "title_generation_max_tokens",
+        }
+        for env_name, field_name in env_fields.items():
+            for bad_value in (0, -1):
+                with self.subTest(env=env_name, value=bad_value):
+                    with patch.dict(os.environ, {env_name: str(bad_value)}, clear=True):
+                        with self.assertRaisesRegex(
+                            ValueError,
+                            rf"{env_name}.*greater than zero",
+                        ) as ctx:
+                            config_module._apply_model_tuning_env_overrides(
+                                ModelTuningSettings(task_sampling={})
+                            )
+                    self.assertIn(str(bad_value), str(ctx.exception))
+            with patch.dict(os.environ, {env_name: "1"}, clear=True):
+                overridden = config_module._apply_model_tuning_env_overrides(
+                    ModelTuningSettings(task_sampling={})
+                )
+            self.assertEqual(getattr(overridden, field_name), 1)
+
+        # The positive wrapper keeps blank/unset and syntax behavior from the
+        # generic parser: blank means unset, a bad number still raises the
+        # generic integer error.
+        self.assertIsNone(config_module._positive_optional_int_env("X", {"X": " "}))
+        self.assertEqual(config_module._positive_optional_int_env("X", {"X": "7"}), 7)
+        with self.assertRaisesRegex(ValueError, "Invalid integer value"):
+            config_module._positive_optional_int_env("X", {"X": "abc"})
+
+        # Sampling fields are unaffected: top_k=0 stays legal on the generic
+        # integer path and only max-token fields enforce positivity.
+        with patch.dict(os.environ, {"NEWS_MODEL_ARTICLE_SUMMARY_TOP_K": "0"}, clear=True):
+            sampling_ok = config_module._apply_model_tuning_env_overrides(
+                ModelTuningSettings(task_sampling={})
+            )
+        self.assertEqual(
+            sampling_ok.task_sampling[config_module.MODEL_TASK_ARTICLE_SUMMARY].top_k,
+            0,
+        )
+
+    def test_model_tuning_preset_max_tokens_covers_all_fields_and_task_aliases(self) -> None:
+        canonical_fields = (
+            "model_max_input_tokens",
+            "article_summary_max_tokens",
+            "story_drafting_max_tokens",
+            "story_scale_screening_max_tokens",
+            "title_generation_max_tokens",
+        )
+        for field_name in canonical_fields:
+            for bad_value in (0, -1):
+                with self.subTest(field=field_name, value=bad_value):
+                    with self.assertRaisesRegex(
+                        ValueError,
+                        rf"sample.*{field_name}.*greater than zero",
+                    ) as ctx:
+                        config_module._apply_model_tuning_preset(
+                            ModelTuningSettings(task_sampling={}),
+                            preset_id="sample",
+                            preset={"tuning": {field_name: bad_value}},
+                            assignment_task="default",
+                        )
+                    self.assertIn(str(bad_value), str(ctx.exception))
+
+        task_fields = (
+            ("default", "model_max_input_tokens"),
+            (config_module.MODEL_TASK_ARTICLE_SUMMARY, "article_summary_max_tokens"),
+            (config_module.MODEL_TASK_STORY_DRAFTING, "story_drafting_max_tokens"),
+            (
+                config_module.MODEL_TASK_STORY_SCALE_SCREENING,
+                "story_scale_screening_max_tokens",
+            ),
+            (config_module.MODEL_TASK_TITLE_GENERATION, "title_generation_max_tokens"),
+            (config_module.MODEL_TASK_IMAGE_ART_DIRECTION, "title_generation_max_tokens"),
+        )
+        for assignment_task, field_name in task_fields:
+            with self.subTest(task=assignment_task):
+                tuning = config_module._apply_model_tuning_preset(
+                    ModelTuningSettings(task_sampling={}),
+                    preset_id="sample",
+                    preset={"tuning": {"max_tokens": 1}},
+                    assignment_task=assignment_task,
+                )
+                self.assertEqual(getattr(tuning, field_name), 1)
+
     def test_validate_managed_model_assignments_covers_branches(self) -> None:
         # The default assignment defines the compared values (model_name,
         # model_base_url), so it always matches and is skipped.
@@ -831,7 +950,124 @@ class ConfigHelperTests(unittest.TestCase):
             self.assertEqual(effective_env["NEWS_MODEL"], "override")
             self.assertEqual(effective_env[config_module.PRESET_ENV_VAR], "preset")
 
-    def test_remaining_config_helpers_cover_unseen_branches(self) -> None:
+    def test_delivery_mode_and_placeholder_helpers_cover_edge_branches(self) -> None:
+        # Closed-set normalization: canonical values, aliases, and
+        # case/whitespace/underscore-insensitive forms.
+        for raw, expected in (
+            ("disabled", config_module.DELIVERY_MODE_DISABLED),
+            ("owner", config_module.DELIVERY_MODE_OWNER),
+            ("recipients", config_module.DELIVERY_MODE_RECIPIENTS),
+            ("DISABLED", config_module.DELIVERY_MODE_DISABLED),
+            (" Owner ", config_module.DELIVERY_MODE_OWNER),
+            ("owner_only", config_module.DELIVERY_MODE_OWNER),
+            ("none", config_module.DELIVERY_MODE_DISABLED),
+            ("off", config_module.DELIVERY_MODE_DISABLED),
+            ("owner-only", config_module.DELIVERY_MODE_OWNER),
+        ):
+            self.assertEqual(config_module._normalize_delivery_mode(raw), expected)
+        with self.assertRaisesRegex(ValueError, "NEWS_DELIVERY_MODE must be one of"):
+            config_module._normalize_delivery_mode("everyone")
+        with self.assertRaisesRegex(ValueError, "NEWS_DELIVERY_MODE must be one of"):
+            config_module._normalize_delivery_mode("")
+
+        # Precedence: explicit mode > legacy recipient scope > owner default;
+        # an empty explicit value behaves as unset.
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(config_module._configured_delivery_mode(), config_module.DELIVERY_MODE_OWNER)
+        with patch.dict(os.environ, {"NEWS_RECIPIENT_SCOPE": "primary"}, clear=True):
+            self.assertEqual(config_module._configured_delivery_mode(), config_module.DELIVERY_MODE_OWNER)
+        with patch.dict(os.environ, {"NEWS_RECIPIENT_SCOPE": "all"}, clear=True):
+            self.assertEqual(config_module._configured_delivery_mode(), config_module.DELIVERY_MODE_RECIPIENTS)
+        with patch.dict(os.environ, {"NEWS_DELIVERY_MODE": "disabled"}, clear=True):
+            self.assertEqual(config_module._configured_delivery_mode(), config_module.DELIVERY_MODE_DISABLED)
+        with patch.dict(
+            os.environ,
+            {"NEWS_DELIVERY_MODE": "owner", "NEWS_RECIPIENT_SCOPE": "all"},
+            clear=True,
+        ):
+            # Explicit new setting wins over legacy scope.
+            self.assertEqual(config_module._configured_delivery_mode(), config_module.DELIVERY_MODE_OWNER)
+        with patch.dict(
+            os.environ,
+            {"NEWS_DELIVERY_MODE": "", "NEWS_RECIPIENT_SCOPE": "all"},
+            clear=True,
+        ):
+            # Empty-but-present explicit value follows the empty-env
+            # convention and behaves as unset, so legacy scope applies.
+            self.assertEqual(config_module._configured_delivery_mode(), config_module.DELIVERY_MODE_RECIPIENTS)
+        with patch.dict(os.environ, {"NEWS_DELIVERY_MODE": "bogus"}, clear=True):
+            with self.assertRaisesRegex(ValueError, "NEWS_DELIVERY_MODE must be one of"):
+                config_module._configured_delivery_mode()
+
+        # Placeholder predicates are case-insensitive and whitespace-
+        # normalized; the empty credential counts as a placeholder.
+        self.assertTrue(config_module.is_placeholder_address("you@example.com"))
+        self.assertTrue(config_module.is_placeholder_address("PRIMARY@EXAMPLE.COM"))
+        self.assertTrue(config_module.is_placeholder_address(" news@example.com "))
+        self.assertFalse(config_module.is_placeholder_address("owner@example.com"))
+        self.assertFalse(config_module.is_placeholder_address(""))
+        for token in ("password", "your-password", "change-me", "changeme", "placeholder", ""):
+            self.assertTrue(config_module.is_placeholder_credential(token), token)
+        self.assertTrue(config_module.is_placeholder_credential("Change-Me"))
+        self.assertTrue(config_module.is_placeholder_credential(" PASSWORD "))
+        self.assertFalse(config_module.is_placeholder_credential("s3cret"))
+        self.assertTrue(config_module.is_placeholder_credential(None))
+
+        # The public profile snapshot never exposes credentials: passwords
+        # and unsubscribe secrets appear only as configured booleans, and
+        # placeholder values count as not configured.
+        placeholder_profile = config_module.DeliveryProfile(
+            mode=config_module.DELIVERY_MODE_OWNER,
+            owner_recipient="primary@example.com",
+            sender="news@example.com",
+            smtp_host="smtp.gmail.com",
+            smtp_port=465,
+            smtp_username="news@example.com",
+            smtp_password="password",
+            unsubscribe_secret="change-me",
+        )
+        snapshot = placeholder_profile.public_snapshot()
+        self.assertEqual(snapshot["mode"], "owner")
+        self.assertFalse(snapshot["smtp_password_set"])
+        self.assertFalse(snapshot["unsubscribe_secret_set"])
+        # The raw credential values never appear in the projection; only the
+        # configured booleans exist.
+        self.assertNotIn("smtp_password", snapshot)
+        self.assertNotIn("unsubscribe_secret", snapshot)
+        self.assertNotIn("change-me", str(snapshot))
+
+        secret_profile = config_module.DeliveryProfile(
+            mode=config_module.DELIVERY_MODE_RECIPIENTS,
+            owner_recipient="owner@example.com",
+            sender="owner@example.com",
+            smtp_host="smtp.example.com",
+            smtp_port=587,
+            smtp_username="owner@example.com",
+            smtp_use_ssl=False,
+            smtp_password="s3cret",
+            unsubscribe_secret="unsub-token",
+        )
+        secret_snapshot = secret_profile.public_snapshot()
+        self.assertTrue(secret_snapshot["smtp_password_set"])
+        self.assertTrue(secret_snapshot["unsubscribe_secret_set"])
+        self.assertNotIn("s3cret", str(secret_snapshot))
+        self.assertNotIn("unsub-token", str(secret_snapshot))
+
+        # A sender equal to the owner is accepted at the profile level; no
+        # identity inequality check exists (ADR 0012 identity rules).
+        self.assertEqual(secret_profile.sender, secret_profile.owner_recipient)
+
+        # Delivery mode knob contract in the shared registry: a Run Settings
+        # select with the three canonical options and the owner default.
+        registry = config_module.runtime_knob_registry()
+        delivery_knobs = [knob for knob in registry if knob["env"] == config_module.DELIVERY_MODE_ENV_VAR]
+        self.assertEqual(len(delivery_knobs), 1)
+        self.assertEqual(delivery_knobs[0]["group"], "Run Settings")
+        self.assertEqual(delivery_knobs[0]["type"], "select")
+        self.assertEqual(delivery_knobs[0]["default"], config_module.DELIVERY_MODE_OWNER)
+        self.assertEqual(set(delivery_knobs[0]["options"]), set(config_module.DELIVERY_MODES))
+
+
         self.assertEqual(config_module.MODEL_BACKEND_EXTERNAL, "external")
         self.assertEqual(config_module.SUPPORTED_MODEL_BACKENDS, ("mlx-lm", "mlx-vlm", "external"))
         self.assertEqual(

@@ -17,7 +17,12 @@ from unittest.mock import patch
 import yaml
 
 from news_pipeline import ui as ui_module
-from news_pipeline.config import CODEX_TEST_MODEL_ALIAS, GEMMA_4_12B_IT_4BIT_MODEL_ALIAS
+from news_pipeline.config import (
+    CODEX_TEST_MODEL_ALIAS,
+    DELIVERY_MODE_OWNER,
+    DeliveryProfile,
+    GEMMA_4_12B_IT_4BIT_MODEL_ALIAS,
+)
 from news_pipeline.diagnostics import RunDiagnostics
 from news_pipeline.history_store import write_run_history
 from news_pipeline.ui import (
@@ -132,7 +137,7 @@ class UITests(unittest.TestCase):
     def test_env_info_tooltips_cover_run_setup_and_advanced_settings(self) -> None:
         html = ui_module.HTML
         # Exact explanatory text for one Run Setup setting and one Advanced-only setting.
-        self.assertIn('NEWS_RECIPIENT_SCOPE: "Chooses whether this run targets only the primary recipient or all active recipients."', html)
+        self.assertIn('NEWS_DELIVERY_MODE: "Chooses the delivery policy: no delivery, owner only (default), or explicit configured recipients. Legacy NEWS_RECIPIENT_SCOPE still maps to this mode when set."', html)
         self.assertIn('NEWS_MAX_STORIES: "Maximum number of final stories selected for the report."', html)
         # All three surfaces run the decorator.
         self.assertIn('decorateEnvHints($("runSetupMount"))', html)
@@ -464,6 +469,20 @@ class UITests(unittest.TestCase):
                     unsubscribe_host="0.0.0.0",
                     unsubscribe_port=9000,
                     unsubscribe_secret="token",  # pragma: allowlist secret
+                    delivery_profile=DeliveryProfile(
+                        mode=DELIVERY_MODE_OWNER,
+                        owner_recipient="primary@example.com",
+                        sender="news@example.com",
+                        smtp_host="smtp.example.com",
+                        smtp_port=587,
+                        smtp_username="news",
+                        smtp_use_ssl=True,
+                        smtp_password="secret",  # pragma: allowlist secret
+                        unsubscribe_base_url="https://example.com",
+                        unsubscribe_host="0.0.0.0",
+                        unsubscribe_port=9000,
+                        unsubscribe_secret="token",  # pragma: allowlist secret
+                    ),
                 )
                 runtime = SimpleNamespace(
                     config=runtime_config,
@@ -477,7 +496,12 @@ class UITests(unittest.TestCase):
                 self.assertEqual(snapshot["model"]["reference"], "gemma-2b")
                 self.assertEqual(snapshot["model"]["story_scale_screening"]["reference"], "gemma-2b")
                 self.assertEqual(snapshot["model"]["title_generation"]["reference"], "gemma-2b")
+                self.assertEqual(snapshot["delivery"]["mode"], "owner")
                 self.assertEqual(snapshot["delivery"]["unsubscribe_secret_set"], True)
+                # Raw credential values never appear in the redacted snapshot.
+                self.assertNotIn("\"token\"", json.dumps(snapshot["delivery"]))
+                self.assertNotIn("smtp_password", snapshot["delivery"])
+                self.assertNotIn("unsubscribe_secret", snapshot["delivery"])
 
                 with patch.object(ui_module, "resolve_runtime_config", side_effect=RuntimeError("boom")):
                     snapshot, error = _runtime_snapshot({}, preset_id="daily")
@@ -1453,11 +1477,14 @@ class UITests(unittest.TestCase):
                         "settings": {"preset_id": "daily"},
                         "report_generated": True,
                         "delivery": {
-                            "status": "skipped: not_configured",
-                            "recipients": [],
-                            "reason": "missing configuration",
-                            "error_type": "",
-                            "error_message": "",
+                            "status": "failed",
+                            "recipients": ["reader@example.com", "editor@example.com"],
+                            "reason": "delivery refused for: editor@example.com",
+                            "error_type": "SMTPRecipientsRefused",
+                            "error_message": "refused recipient",
+                            "phase": "send",
+                            "accepted_recipients": ["reader@example.com"],
+                            "rejected_recipients": ["editor@example.com"],
                         },
                         "events": [
                             {"at": "2026-06-01T10:00:30", "label": "completed"}
@@ -1478,7 +1505,14 @@ class UITests(unittest.TestCase):
         self.assertEqual(payload["run_id"], "2026-06-01_10-00-00")
         self.assertEqual(payload["run_status"], "completed")
         self.assertEqual(payload["report_status"], "available")
-        self.assertEqual(payload["delivery_status"], "skipped: not_configured")
+        self.assertEqual(payload["delivery_status"], "failed")
+        self.assertEqual(payload["delivery"]["phase"], "send")
+        self.assertEqual(
+            payload["delivery"]["accepted_recipients"], ["reader@example.com"]
+        )
+        self.assertEqual(
+            payload["delivery"]["rejected_recipients"], ["editor@example.com"]
+        )
         self.assertEqual(payload["preset_id"], "daily")
         self.assertEqual(payload["duration_label"], "30s")
         self.assertIn("<script>", payload["report_text"])
@@ -1574,6 +1608,18 @@ class UITests(unittest.TestCase):
         self.assertIn('pane.textContent = review.report_text || "(empty report)";', html)
         self.assertIn("pane.textContent = text;", html)
         self.assertIn("pane.textContent = `Report unavailable: ${err.message}`;", html)
+        # Rich delivery metadata (phase, accepted/rejected recipients) is
+        # rendered in the review and history detail surfaces, escaped through
+        # the existing escapeHtml/textContent paths.
+        self.assertIn('delivery.phase ? `phase: ${delivery.phase}` : ""', html)
+        self.assertIn(
+            'delivery.accepted_recipients && delivery.accepted_recipients.length ? `accepted: ${delivery.accepted_recipients.join(", ")}` : ""',
+            html,
+        )
+        self.assertIn(
+            'delivery.rejected_recipients && delivery.rejected_recipients.length ? `rejected: ${delivery.rejected_recipients.join(", ")}` : ""',
+            html,
+        )
         # Terminal status closes the stream, then refreshes durable review data.
         self.assertIn("events.close();", html)
         self.assertIn("refreshReviewData();", html)

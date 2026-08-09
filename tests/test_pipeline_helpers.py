@@ -10,6 +10,7 @@ import sys
 import tempfile
 import types
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from collections import Counter
 from dataclasses import replace
 from io import BytesIO, StringIO
@@ -19,12 +20,21 @@ from unittest.mock import MagicMock, patch
 
 import httpx
 from PIL import Image
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from datetime import datetime
 
 import news_pipeline.pipeline as pipeline
 from news_pipeline.article_summary_records import ArticleSummaryRecord
-from news_pipeline.config import ModelSamplingSettings, MODEL_TASK_STORY_SCALE_SCREENING, MODEL_TASK_TITLE_GENERATION
+from news_pipeline.config import (
+    DELIVERY_MODE_DISABLED,
+    DELIVERY_MODE_OWNER,
+    DELIVERY_MODE_RECIPIENTS,
+    DeliveryProfile,
+    DeliveryRecipient,
+    ModelSamplingSettings,
+    MODEL_TASK_STORY_SCALE_SCREENING,
+    MODEL_TASK_TITLE_GENERATION,
+)
 from news_pipeline.diagnostics import RunDiagnostics, run_status_from_events
 
 
@@ -784,6 +794,454 @@ class PipelineHelperTests(unittest.TestCase):
             diagnostics.settings["source_languages"],
             {"de": 1, "en": 2},  # sorted keys, missing language defaults to "en"
         )
+
+    def test_compat_runtime_values_propagates_prompt_profile_and_instructions(self) -> None:
+        config = replace(
+            pipeline.CONFIG,
+            prompt_profile_id="facts-only",
+            prompt_instruction_overrides={"article_summary": "Custom override text."},
+        )
+        values = pipeline._compat_runtime_values(config)
+        self.assertEqual(values["PROMPT_PROFILE_ID"], "facts-only")
+        instructions = values["PROMPT_INSTRUCTIONS"]
+        self.assertEqual(instructions["article_summary"], "Custom override text.")
+        # Other profile tasks come from the resolved facts-only profile.
+        self.assertTrue(instructions["story_drafting"])
+
+    def test_plausible_hf_repository_and_revision_metadata_offline_branches(self) -> None:
+        self.assertEqual(pipeline._plausible_hf_repository("mlx-community/gemma-4-12B-it-4bit"), "mlx-community/gemma-4-12B-it-4bit")
+        self.assertIsNone(pipeline._plausible_hf_repository("gpt-4o"))
+        self.assertIsNone(pipeline._plausible_hf_repository("https://huggingface.co/org/repo"))
+        self.assertIsNone(pipeline._plausible_hf_repository(""))
+        self.assertIsNone(pipeline._plausible_hf_repository("org name/repo"))
+
+        # External model ids are honestly not_huggingface.
+        external = pipeline._hf_revision_metadata("gpt-4o")
+        self.assertEqual(external["revision_status"], "not_huggingface")
+        self.assertIsNone(external["repository"])
+        self.assertIsNone(external["revision"])
+
+        # Outside the production run entry the lookup stays offline and explicit.
+        offline = pipeline._hf_revision_metadata("mlx-community/gemma-4-12B-it-4bit")
+        self.assertEqual(offline["repository"], "mlx-community/gemma-4-12B-it-4bit")
+        self.assertEqual(offline["revision_status"], "unresolved")
+        self.assertIsNone(offline["revision"])
+        self.assertIn("disabled outside the production run entry", offline["revision_reason"])
+
+    def test_run_pipeline_enables_revision_lookup(self) -> None:
+        original_cache = dict(pipeline._HF_REVISION_CACHE)
+        original_flag = pipeline._HF_REVISION_LOOKUP_ENABLED
+        try:
+            pipeline._HF_REVISION_CACHE.clear()
+            captured: dict[str, dict[str, Any]] = {}
+
+            def fake_run(self) -> None:  # noqa: ANN001
+                captured["flag"] = pipeline._HF_REVISION_LOOKUP_ENABLED
+                captured["result"] = pipeline._hf_revision_metadata(
+                    "mlx-community/gemma-4-12B-it-4bit"
+                )
+
+            with patch("huggingface_hub.HfApi") as fake_api_class, patch.object(
+                pipeline.RunSession, "run", fake_run
+            ):
+                fake_api_class.return_value.model_info.return_value = SimpleNamespace(
+                    id="mlx-community/gemma-4-12B-it-4bit",
+                    sha="sha-production",
+                )
+                pipeline.run_pipeline()
+            # The flag is restored once the run entry completes.
+            self.assertFalse(pipeline._HF_REVISION_LOOKUP_ENABLED)
+            self.assertTrue(captured["flag"])
+            self.assertEqual(captured["result"]["revision_status"], "resolved")
+            self.assertEqual(captured["result"]["revision"], "sha-production")
+        finally:
+            pipeline._HF_REVISION_CACHE.clear()
+            pipeline._HF_REVISION_CACHE.update(original_cache)
+            pipeline._HF_REVISION_LOOKUP_ENABLED = original_flag
+
+    def test_hf_revision_metadata_resolved_and_failure_paths(self) -> None:
+        original_cache = dict(pipeline._HF_REVISION_CACHE)
+        try:
+            pipeline._HF_REVISION_CACHE.clear()
+            with patch("huggingface_hub.HfApi") as fake_api_class, patch.object(
+                pipeline, "_HF_REVISION_LOOKUP_ENABLED", True
+            ):
+                fake_api_class.return_value.model_info.return_value = SimpleNamespace(
+                    id="mlx-community/gemma-4-12B-it-4bit",
+                    sha="abc123def456",
+                )
+                resolved = pipeline._hf_revision_metadata("mlx-community/gemma-4-12B-it-4bit")
+            self.assertEqual(resolved["revision_status"], "resolved")
+            self.assertEqual(resolved["revision"], "abc123def456")
+            self.assertEqual(resolved["repository"], "mlx-community/gemma-4-12B-it-4bit")
+
+            # Deduplicated: a second lookup reuses the cached result.
+            with patch("huggingface_hub.HfApi") as fake_api_class, patch.object(
+                pipeline, "_HF_REVISION_LOOKUP_ENABLED", True
+            ):
+                again = pipeline._hf_revision_metadata("mlx-community/gemma-4-12B-it-4bit")
+            self.assertEqual(again["revision"], "abc123def456")
+            self.assertFalse(fake_api_class.return_value.model_info.called)
+
+            # Repository/network failures are non-fatal unresolved metadata.
+            with patch("huggingface_hub.HfApi") as failing_api, patch.object(
+                pipeline, "_HF_REVISION_LOOKUP_ENABLED", True
+            ):
+                failing_api.return_value.model_info.side_effect = RuntimeError("hub down")
+                failed = pipeline._hf_revision_metadata("other-org/some-repo")
+            self.assertEqual(failed["revision_status"], "unresolved")
+            self.assertEqual(failed["repository"], "other-org/some-repo")
+            self.assertIn("hub down", failed["revision_reason"])
+        finally:
+            pipeline._HF_REVISION_CACHE.clear()
+            pipeline._HF_REVISION_CACHE.update(original_cache)
+
+    def test_model_snapshots_normalize_identity_tuning_and_inheritance(self) -> None:
+        original_cache = dict(pipeline._HF_REVISION_CACHE)
+        try:
+            pipeline._HF_REVISION_CACHE.clear()
+            resolved = {
+                "repository": "mlx-community/gemma-4-12B-it-4bit",
+                "revision": "sha123",
+                "revision_status": "resolved",
+            }
+            with patch.object(pipeline, "_hf_revision_metadata", return_value=resolved):
+                snapshots = pipeline._model_snapshots()
+
+            self.assertEqual(
+                list(snapshots),
+                [
+                    "default",
+                    "article_summary",
+                    "story_drafting",
+                    "story_scale_screening",
+                    "title_generation",
+                    "image_art_direction",
+                    "story_discovery",
+                ],
+            )
+            default = snapshots["default"]
+            self.assertEqual(default["revision"], "sha123")
+            self.assertEqual(default["revision_status"], "resolved")
+            self.assertIn("tuning", default)
+            self.assertIn("backend", default)
+            self.assertIn("base_url", default)
+            self.assertEqual(default["model_id"], default["repository"])
+
+            image_art = snapshots["image_art_direction"]
+            self.assertEqual(image_art["inherits_task"], "title_generation")
+            self.assertEqual(image_art["model_id"], snapshots["title_generation"]["model_id"])
+            story_discovery = snapshots["story_discovery"]
+            self.assertFalse(story_discovery["llm_stage"])
+            self.assertEqual(story_discovery["inherits_task"], "default")
+        finally:
+            pipeline._HF_REVISION_CACHE.clear()
+            pipeline._HF_REVISION_CACHE.update(original_cache)
+
+    def test_new_run_diagnostics_snapshot_settings(self) -> None:
+        resolved = {
+            "repository": "mlx-community/gemma-4-12B-it-4bit",
+            "revision": "sha123",
+            "revision_status": "resolved",
+        }
+        with patch.object(pipeline, "_hf_revision_metadata", return_value=resolved):
+            diagnostics = pipeline._new_run_diagnostics(2)
+        settings = diagnostics.settings
+        self.assertEqual(settings["prompt_profile_id"], pipeline.PROMPT_PROFILE_ID)
+        self.assertEqual(
+            settings["prompt_instruction_overrides"],
+            pipeline._json_ready(pipeline.CONFIG.prompt_instruction_overrides),
+        )
+        self.assertEqual(settings["prompt_instructions"], pipeline._json_ready(pipeline.PROMPT_INSTRUCTIONS))
+        self.assertEqual(settings["model_snapshots"]["default"]["revision_status"], "resolved")
+        self.assertEqual(settings["model_snapshots"]["default"]["revision"], "sha123")
+        self.assertEqual(settings["model_snapshots"]["title_generation"]["revision"], "sha123")
+        self.assertIn("image_art_direction", settings["model_snapshots"])
+        self.assertIn("story_discovery", settings["model_snapshots"])
+        # Existing compatibility keys remain intact.
+        self.assertIn("model_assignments", settings)
+        self.assertIn("model_tuning", settings)
+
+        translation_policy = settings["translation_policy"]
+        self.assertFalse(translation_policy["enabled"])
+        self.assertEqual(translation_policy["status"], "disabled_not_implemented")
+        self.assertEqual(translation_policy["target_language"], "en")
+        self.assertEqual(translation_policy["source_gate"]["rule"], "language == 'en'")
+        self.assertIsNone(translation_policy["translation_model_assignment"])
+
+    def test_logical_task_assignment_key_mapping(self) -> None:
+        self.assertEqual(
+            pipeline._logical_task_assignment_key("analysis for Headline"),
+            "article_summary",
+        )
+        self.assertEqual(
+            pipeline._logical_task_assignment_key("analysis for final synthesis of X"),
+            "story_drafting",
+        )
+        self.assertEqual(
+            pipeline._logical_task_assignment_key("story synthesis for Big Story"),
+            "story_drafting",
+        )
+        self.assertEqual(
+            pipeline._logical_task_assignment_key("global story scale screening"),
+            "story_scale_screening",
+        )
+        self.assertEqual(
+            pipeline._logical_task_assignment_key("image art prompt generation"),
+            "title_generation",
+        )
+        self.assertEqual(pipeline._logical_task_assignment_key("unknown task"), "default")
+        self.assertEqual(pipeline._logical_task_assignment_key(""), "default")
+
+    def test_invoke_with_retries_captures_prompt_snapshots(self) -> None:
+        diagnostics = RunDiagnostics(
+            run_started_at="2026-06-01T10:00:00",
+            settings={"preset_id": "daily"},
+        )
+        original_cache = dict(pipeline._HF_REVISION_CACHE)
+        try:
+            pipeline._HF_REVISION_CACHE.clear()
+
+            class FakeLLM:
+                def __init__(self, outcomes: list[object]) -> None:
+                    self._outcomes = iter(outcomes)
+                    self.max_tokens = 12
+
+                def invoke(self, messages):  # noqa: ANN001
+                    outcome = next(self._outcomes)
+                    if isinstance(outcome, Exception):
+                        raise outcome
+                    return outcome
+
+            with patch.object(pipeline, "ACTIVE_RUN_DIAGNOSTICS", diagnostics), patch.object(
+                pipeline.progress_tracker, "retrying"
+            ), patch.object(pipeline.progress_tracker, "warning"), patch.object(
+                pipeline.time, "sleep", return_value=None
+            ), patch.object(pipeline, "_raise_if_managed_model_server_exited"):
+                response = pipeline.invoke_with_retries(
+                    FakeLLM([httpx.RemoteProtocolError("retry"), AIMessage(content="ok")]),
+                    [
+                        SystemMessage(content="Summarize exactly."),
+                        HumanMessage(content=[{"text": "Article body"}]),
+                    ],
+                    task_name="analysis for Headline",
+                    fallback_content="fallback",
+                    attempts=2,
+                )
+                fallback_response = pipeline.invoke_with_retries(
+                    FakeLLM([RuntimeError("boom")]),
+                    [HumanMessage(content="hello")],
+                    task_name="story synthesis for Story",
+                    fallback_content="fallback content",
+                    attempts=1,
+                )
+
+            self.assertEqual(response.content, "ok")
+            self.assertEqual(fallback_response.content, "fallback content")
+
+            snapshots = diagnostics.to_dict()["prompt_snapshots"]
+            self.assertEqual(len(snapshots), 2)
+            first = snapshots[0]
+            self.assertEqual(first["sequence"], 1)
+            self.assertEqual(first["task"], "article_summary")
+            self.assertEqual(first["model_task"], "article_summary")
+            self.assertEqual(first["task_name"], "analysis for Headline")
+            self.assertEqual(first["max_tokens"], 12)
+            self.assertEqual(first["retry_attempts"], 1)
+            self.assertFalse(first["used_fallback"])
+            self.assertEqual(
+                first["messages"],
+                [
+                    {"type": "system", "content": "Summarize exactly."},
+                    {"type": "human", "content": [{"text": "Article body"}]},
+                ],
+            )
+            self.assertEqual(first["model_snapshot"]["task"], "article_summary")
+
+            second = snapshots[1]
+            self.assertEqual(second["sequence"], 2)
+            self.assertEqual(second["task"], "story_drafting")
+            self.assertEqual(second["retry_attempts"], 0)
+            self.assertTrue(second["used_fallback"])
+            self.assertEqual(second["messages"], [{"type": "human", "content": "hello"}])
+        finally:
+            pipeline._HF_REVISION_CACHE.clear()
+            pipeline._HF_REVISION_CACHE.update(original_cache)
+
+    def test_prompt_capture_failure_does_not_block_model_call(self) -> None:
+        diagnostics = RunDiagnostics(
+            run_started_at="2026-06-01T10:00:00",
+            settings={},
+        )
+        llm = SimpleNamespace(
+            max_tokens=12,
+            invoke=MagicMock(return_value=AIMessage(content="real response")),
+        )
+
+        with patch.object(pipeline, "ACTIVE_RUN_DIAGNOSTICS", diagnostics), patch.object(
+            pipeline, "_model_snapshot_for_task", side_effect=RuntimeError("capture failed")
+        ), patch.object(pipeline, "_raise_if_managed_model_server_exited"):
+            response = pipeline.invoke_with_retries(
+                llm,
+                [HumanMessage(content="hello")],
+                task_name="analysis for Headline",
+                fallback_content="fallback",
+                attempts=1,
+            )
+
+        self.assertEqual(response.content, "real response")
+        llm.invoke.assert_called_once()
+        self.assertEqual(diagnostics.prompt_snapshots, [])
+
+    def test_prompt_snapshot_update_failure_does_not_replace_model_outcome(self) -> None:
+        diagnostics = RunDiagnostics(
+            run_started_at="2026-06-01T10:00:00",
+            settings={},
+        )
+
+        with patch.object(pipeline, "ACTIVE_RUN_DIAGNOSTICS", diagnostics), patch.object(
+            diagnostics,
+            "update_prompt_snapshot",
+            side_effect=RuntimeError("update failed"),
+        ), patch.object(pipeline, "_raise_if_managed_model_server_exited"), patch.object(
+            pipeline.progress_tracker, "warning"
+        ):
+            success = pipeline.invoke_with_retries(
+                SimpleNamespace(
+                    max_tokens=12,
+                    invoke=MagicMock(return_value=AIMessage(content="real response")),
+                ),
+                [HumanMessage(content="hello")],
+                task_name="analysis for Headline",
+                fallback_content="fallback",
+                attempts=1,
+            )
+            fallback = pipeline.invoke_with_retries(
+                SimpleNamespace(
+                    max_tokens=12,
+                    invoke=MagicMock(side_effect=RuntimeError("model failed")),
+                ),
+                [HumanMessage(content="goodbye")],
+                task_name="story synthesis for Story",
+                fallback_content="fallback response",
+                attempts=1,
+            )
+
+        self.assertEqual(success.content, "real response")
+        self.assertEqual(fallback.content, "fallback response")
+
+    def test_concurrent_model_calls_update_their_own_prompt_snapshots(self) -> None:
+        diagnostics = RunDiagnostics(
+            run_started_at="2026-06-01T10:00:00",
+            settings={},
+        )
+
+        class FakeLLM:
+            def __init__(self, outcomes: list[object]) -> None:
+                self._outcomes = iter(outcomes)
+                self.max_tokens = 12
+
+            def invoke(self, messages):  # noqa: ANN001
+                outcome = next(self._outcomes)
+                if isinstance(outcome, Exception):
+                    raise outcome
+                return outcome
+
+        calls = [
+            (
+                "analysis for A",
+                [httpx.RemoteProtocolError("retry"), AIMessage(content="ok A")],
+            ),
+            ("story synthesis for B", [RuntimeError("boom B")]),
+            ("analysis for C", [AIMessage(content="ok C")]),
+        ]
+
+        def call(item: tuple[str, list[object]]) -> object:
+            task_name, outcomes = item
+            return pipeline.invoke_with_retries(
+                FakeLLM(outcomes),
+                [HumanMessage(content=task_name)],
+                task_name=task_name,
+                fallback_content=f"fallback for {task_name}",
+                attempts=2,
+            )
+
+        with patch.object(pipeline, "ACTIVE_RUN_DIAGNOSTICS", diagnostics), patch.object(
+            pipeline, "_raise_if_managed_model_server_exited"
+        ), patch.object(pipeline.time, "sleep", return_value=None), patch.object(
+            pipeline.progress_tracker, "retrying"
+        ), patch.object(pipeline.progress_tracker, "warning"):
+            with ThreadPoolExecutor(max_workers=3) as executor:
+                responses = list(executor.map(call, calls))
+
+        self.assertEqual(
+            [response.content for response in responses],
+            ["ok A", "fallback for story synthesis for B", "ok C"],
+        )
+        snapshots = {
+            item["task_name"]: item
+            for item in diagnostics.to_dict()["prompt_snapshots"]
+        }
+        self.assertEqual(len(snapshots), 3)
+        for task_name in ("analysis for A", "story synthesis for B", "analysis for C"):
+            self.assertEqual(
+                snapshots[task_name]["messages"],
+                [{"type": "human", "content": task_name}],
+            )
+        self.assertEqual(snapshots["analysis for A"]["retry_attempts"], 1)
+        self.assertFalse(snapshots["analysis for A"]["used_fallback"])
+        self.assertEqual(snapshots["story synthesis for B"]["retry_attempts"], 0)
+        self.assertTrue(snapshots["story synthesis for B"]["used_fallback"])
+        self.assertEqual(snapshots["analysis for C"]["retry_attempts"], 0)
+        self.assertFalse(snapshots["analysis for C"]["used_fallback"])
+        self.assertEqual(
+            {snapshot["sequence"] for snapshot in snapshots.values()},
+            {1, 2, 3},
+        )
+
+    def test_invoke_with_retries_skips_capture_without_active_diagnostics(self) -> None:
+        with patch.object(pipeline, "ACTIVE_RUN_DIAGNOSTICS", None), patch.object(
+            pipeline, "_raise_if_managed_model_server_exited"
+        ):
+            response = pipeline.invoke_with_retries(
+                SimpleNamespace(max_tokens=12, invoke=lambda messages: AIMessage(content="ok")),
+                [HumanMessage(content="hello")],
+                task_name="analysis for Headline",
+                fallback_content="fallback",
+                attempts=1,
+            )
+        self.assertEqual(response.content, "ok")
+
+    def test_run_session_activate_propagates_non_default_prompt_profile(self) -> None:
+        config = replace(
+            pipeline.CONFIG,
+            prompt_profile_id="facts-only",
+            prompt_instruction_overrides={"article_summary": "Session override."},
+        )
+        session = pipeline.RunSession(config)
+        with patch.object(pipeline, "_hf_revision_metadata", return_value={
+            "repository": "mlx-community/gemma-4-12B-it-4bit",
+            "revision": "sha123",
+            "revision_status": "resolved",
+        }):
+            with session._activate():
+                self.assertEqual(pipeline.PROMPT_PROFILE_ID, "facts-only")
+                self.assertEqual(
+                    pipeline.PROMPT_INSTRUCTIONS["article_summary"],
+                    "Session override.",
+                )
+                diagnostics = pipeline._new_run_diagnostics(1)
+                self.assertEqual(diagnostics.settings["prompt_profile_id"], "facts-only")
+                self.assertEqual(
+                    diagnostics.settings["prompt_instruction_overrides"],
+                    {"article_summary": "Session override."},
+                )
+                self.assertEqual(
+                    diagnostics.settings["prompt_instructions"]["article_summary"],
+                    "Session override.",
+                )
+        # Globals are restored after the session ends.
+        self.assertEqual(pipeline.PROMPT_PROFILE_ID, pipeline.CONFIG.prompt_profile_id)
 
     def test_rendering_and_finalizer_helpers(self) -> None:
         record = ArticleSummaryRecord(
@@ -1887,12 +2345,17 @@ class PipelineHelperTests(unittest.TestCase):
         self.assertEqual(result["status"], "sent")
         self.assertEqual(diagnostics.delivery["status"], "sent")
 
-    def test_run_pipeline_with_no_recipients_finishes_local_report(self) -> None:
+    def test_run_pipeline_wires_delivery_profile_into_completion(self) -> None:
         diagnostics = RunDiagnostics(
             run_started_at="2026-06-01T10:00:00",
             settings={},
         )
         finalizer = MagicMock()
+        profile = DeliveryProfile(
+            mode=DELIVERY_MODE_OWNER,
+            owner_recipient="owner@real.test",
+        )
+        run_config = replace(pipeline.CONFIG, delivery_profile=profile)
         article = {"article_id": "article-1", "url": "https://example.com/article"}
         story_record = {"story_key": "story-1", "article_ids": ["article-1"]}
         story_draft = {"story_key": "story-1", "article_ids": ["article-1"]}
@@ -2014,6 +2477,14 @@ class PipelineHelperTests(unittest.TestCase):
             )
             stack.enter_context(patch.object(pipeline, "load_recipient_config", return_value={}))
             stack.enter_context(patch.object(pipeline, "get_active_recipient_config", return_value={}))
+            stack.enter_context(patch.object(pipeline, "CONFIG", run_config))
+            complete = stack.enter_context(
+                patch.object(
+                    pipeline,
+                    "_complete_pipeline_run",
+                    wraps=pipeline._complete_pipeline_run,
+                )
+            )
             stack.enter_context(patch.object(pipeline, "_finish_run_diagnostics", finish))
             stack.enter_context(patch.object(pipeline, "record_activity_snapshot"))
             stack.enter_context(patch.object(pipeline, "sync_assistant_context_latest_output"))
@@ -2026,10 +2497,17 @@ class PipelineHelperTests(unittest.TestCase):
         self.assertEqual(run_status_from_events(diagnostics.events), "completed")
         self.assertFalse(any(event["label"] == "completed_without_recipients" for event in diagnostics.events))
         self.assertEqual(len(diagnostics.reports), 1)
+        complete.assert_called_once()
+        delivery_context = complete.call_args.kwargs["delivery_context"]
+        self.assertEqual(delivery_context["recipient_list"], ["owner@real.test"])
+        self.assertEqual(delivery_context["recipient_names"], ["owner@real.test"])
+        self.assertIs(delivery_context["delivery_profile"], profile)
+        self.assertEqual(delivery_context["preflight_status"], "")
+        self.assertEqual(delivery_context["preflight_reason"], "")
         finalizer.record_report_body.assert_called_once_with(
             "Daily News Summary\n\nA useful report."
         )
-        finish.assert_called_once_with(diagnostics, pipeline.CONFIG)
+        finish.assert_called_once_with(diagnostics, run_config)
 
     def test_complete_pipeline_run_persists_report_after_delivery_failure(self) -> None:
         diagnostics = RunDiagnostics(
@@ -2111,6 +2589,580 @@ class PipelineHelperTests(unittest.TestCase):
             art_brief = pipeline.generate_image_art_brief("Summary text", "Report title")
         self.assertEqual(art_brief["overlay_headline"], "Report title")
         self.assertIn("image_prompt", art_brief)
+
+    def test_delivery_profile_disabled_records_user_disabled_without_smtp(self) -> None:
+        # Explicit disabled mode: skipped: user_disabled, no SMTP object is
+        # constructed, and the report completion path still records.
+        profile = DeliveryProfile(
+            mode=DELIVERY_MODE_DISABLED,
+            owner_recipient="",
+            sender="",
+            smtp_host="",
+            smtp_password="",
+        )
+        with patch.object(pipeline.smtplib, "SMTP_SSL") as smtp_ssl, patch.object(
+            pipeline.smtplib, "SMTP"
+        ) as smtp, patch.object(pipeline.progress_tracker, "detail") as detail:
+            result = pipeline.maybe_email_report(
+                "Title",
+                "Body",
+                "Synthesis",
+                [],
+                ["reader@example.com"],
+                ["Reader"],
+                delivery_profile=profile,
+            )
+        self.assertEqual(result["status"], "skipped: user_disabled")
+        self.assertEqual(result["reason"], "delivery disabled by profile")
+        smtp_ssl.assert_not_called()
+        smtp.assert_not_called()
+        self.assertIn("delivery disabled by profile", detail.call_args[0][0])
+
+        # The same outcome flows through the delivery boundary with a
+        # preflight decision and keeps the run completed.
+        diagnostics = RunDiagnostics(
+            run_started_at="2026-06-01T10:00:00",
+            settings={},
+            events=[{"at": "2026-06-01T10:01:00", "label": "completed"}],
+        )
+        result = pipeline._attempt_email_delivery(
+            diagnostics,
+            report_title="Title",
+            report_body="Body",
+            synthesis_body="Synthesis",
+            final_reports=[],
+            recipient_list=[],
+            recipient_names=[],
+            delivery_profile=profile,
+            preflight_status="skipped: user_disabled",
+            preflight_reason="delivery disabled by profile",
+        )
+        self.assertEqual(result["status"], "skipped: user_disabled")
+        self.assertEqual(diagnostics.delivery["status"], "skipped: user_disabled")
+        self.assertEqual(run_status_from_events(diagnostics.events), "completed")
+        self.assertFalse(any(event["label"] == "failed" for event in diagnostics.events))
+
+    def test_delivery_profile_owner_mode_sends_only_owner(self) -> None:
+        # Owner-only mode sends only the owner, and a sender equal to the
+        # owner is accepted (ADR 0012 identity rules).
+        class FakeSMTP:
+            def __init__(self, *args, **kwargs) -> None:  # noqa: ANN002, ANN003
+                self.messages = []
+                self.started_tls = False
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):  # noqa: ANN001, ANN002, ANN003
+                return False
+
+            def starttls(self) -> None:
+                self.started_tls = True
+
+            def login(self, username: str, password: str) -> None:
+                return None
+
+            def send_message(self, message) -> None:  # noqa: ANN001
+                self.messages.append(message)
+                return {}
+
+        fake_smtp = FakeSMTP()
+        profile = DeliveryProfile(
+            mode=DELIVERY_MODE_OWNER,
+            owner_recipient="owner@example.com",
+            additional_recipients=(
+                DeliveryRecipient(email="editor@example.com", name="Editor"),
+            ),
+            sender="owner@example.com",
+            smtp_host="smtp.example.com",
+            smtp_port=587,
+            smtp_username="owner@example.com",
+            smtp_use_ssl=False,
+            smtp_password="s3cret",
+            unsubscribe_base_url="https://example.com/unsubscribe",
+            unsubscribe_secret="unsub-secret",
+        )
+        with patch.object(
+            pipeline, "build_report_html", return_value="<html>report</html>"
+        ), patch.object(
+            pipeline, "build_unsubscribe_url", return_value="https://example.com/u?t=1"
+        ) as build_url, patch.object(
+            pipeline.smtplib, "SMTP", return_value=fake_smtp
+        ) as smtp, patch.object(
+            pipeline.progress_tracker, "detail"
+        ):
+            result = pipeline.maybe_email_report(
+                "Daily Brief",
+                "Body text",
+                "Synthesis text",
+                [],
+                [],
+                [],
+                delivery_profile=profile,
+            )
+        self.assertEqual(result["status"], "sent")
+        self.assertEqual(result["recipients"], ["owner@example.com"])
+        self.assertEqual(result["accepted_recipients"], ["owner@example.com"])
+        self.assertEqual(result["phase"], "send")
+        smtp.assert_called_once_with("smtp.example.com", 587, timeout=30)
+        self.assertTrue(fake_smtp.started_tls)
+        build_url.assert_called_once_with(
+            "owner@example.com",
+            base_url="https://example.com/unsubscribe",
+            signing_secret="unsub-secret",
+        )
+        self.assertEqual(len(fake_smtp.messages), 1)
+        self.assertEqual(fake_smtp.messages[0]["To"], "owner@example.com")
+        self.assertEqual(fake_smtp.messages[0]["From"], "owner@example.com")
+
+    def test_delivery_profile_ssl_transport_and_unsubscribe_configuration(self) -> None:
+        class FakeSMTP:
+            def __init__(self) -> None:
+                self.logged_in: tuple[str, str] | None = None
+                self.messages = []
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def starttls(self) -> None:
+                raise AssertionError("SSL delivery must not negotiate STARTTLS")
+
+            def login(self, username: str, password: str) -> None:
+                self.logged_in = (username, password)
+
+            def send_message(self, message) -> None:
+                self.messages.append(message)
+
+        fake_smtp = FakeSMTP()
+        profile = DeliveryProfile(
+            mode=DELIVERY_MODE_OWNER,
+            owner_recipient="owner@real.test",
+            sender="sender@real.test",
+            smtp_host="smtp.real.test",
+            smtp_port=465,
+            smtp_username="smtp-user",
+            smtp_password="smtp-secret",
+            smtp_use_ssl=True,
+            unsubscribe_base_url="https://local.test/unsubscribe",
+            unsubscribe_secret="unsubscribe-secret",
+        )
+        with patch.object(
+            pipeline, "build_report_html", return_value="<html>report</html>"
+        ), patch.object(
+            pipeline, "build_unsubscribe_url", return_value="https://local.test/u"
+        ) as build_url, patch.object(
+            pipeline.smtplib, "SMTP_SSL", return_value=fake_smtp
+        ) as smtp_ssl, patch.object(pipeline.smtplib, "SMTP") as smtp, patch.object(
+            pipeline.progress_tracker, "detail"
+        ):
+            result = pipeline.maybe_email_report(
+                "Daily Brief",
+                "Body text",
+                "Synthesis text",
+                [],
+                [],
+                [],
+                delivery_profile=profile,
+            )
+
+        self.assertEqual(result["status"], "sent")
+        smtp_ssl.assert_called_once_with("smtp.real.test", 465, timeout=30)
+        smtp.assert_not_called()
+        self.assertEqual(fake_smtp.logged_in, ("smtp-user", "smtp-secret"))
+        build_url.assert_called_once_with(
+            "owner@real.test",
+            base_url="https://local.test/unsubscribe",
+            signing_secret="unsubscribe-secret",
+        )
+        self.assertEqual(fake_smtp.messages[0]["To"], "owner@real.test")
+
+    def test_delivery_profile_missing_transport_skips_before_smtp(self) -> None:
+        profile = DeliveryProfile(
+            mode=DELIVERY_MODE_OWNER,
+            owner_recipient="owner@real.test",
+            sender="sender@real.test",
+            smtp_host="smtp.real.test",
+            smtp_username="smtp-user",
+            smtp_password="",
+        )
+        with patch.object(pipeline.smtplib, "SMTP") as smtp, patch.object(
+            pipeline.smtplib, "SMTP_SSL"
+        ) as smtp_ssl, patch.object(pipeline.progress_tracker, "detail") as detail:
+            result = pipeline.maybe_email_report(
+                "Daily Brief",
+                "Body text",
+                "Synthesis text",
+                [],
+                [],
+                [],
+                delivery_profile=profile,
+            )
+
+        self.assertEqual(result["status"], "skipped: not_configured")
+        self.assertIn("NEWS_SMTP_PASSWORD", result["reason"])
+        smtp.assert_not_called()
+        smtp_ssl.assert_not_called()
+        detail.assert_called_once()
+
+    def test_delivery_profile_recipients_mode_selects_catalog_and_deduplicates(self) -> None:
+        # Configured-recipients mode is an explicit opt-in: active catalog
+        # entries only (paused skipped, owner not silently prepended), with
+        # case-insensitive dedupe retaining first order/name.
+        class FakeSMTP:
+            def __init__(self, *args, **kwargs) -> None:  # noqa: ANN002, ANN003
+                self.messages = []
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):  # noqa: ANN001, ANN002, ANN003
+                return False
+
+            def starttls(self) -> None:
+                return None
+
+            def login(self, username: str, password: str) -> None:
+                return None
+
+            def send_message(self, message) -> None:  # noqa: ANN001
+                self.messages.append(message)
+                return {}
+
+        fake_smtp = FakeSMTP()
+        profile = DeliveryProfile(
+            mode=DELIVERY_MODE_RECIPIENTS,
+            owner_recipient="owner@example.com",
+            additional_recipients=(
+                DeliveryRecipient(email="Reader@Example.com", name="Reader First"),
+                DeliveryRecipient(email="reader@example.com", name="Reader Duplicate"),
+                DeliveryRecipient(email="editor@example.com", name="Editor"),
+                DeliveryRecipient(email="paused@example.com", name="Paused", pause=True),
+            ),
+            sender="owner@example.com",
+            smtp_host="smtp.example.com",
+            smtp_port=587,
+            smtp_username="owner@example.com",
+            smtp_use_ssl=False,
+            smtp_password="s3cret",
+        )
+        with patch.object(
+            pipeline, "build_report_html", return_value="<html>report</html>"
+        ), patch.object(
+            pipeline, "build_unsubscribe_url", return_value="https://example.com/u?t=1"
+        ), patch.object(pipeline.smtplib, "SMTP", return_value=fake_smtp), patch.object(
+            pipeline.progress_tracker, "detail"
+        ):
+            result = pipeline.maybe_email_report(
+                "Daily Brief",
+                "Body text",
+                "Synthesis text",
+                [],
+                [],
+                [],
+                delivery_profile=profile,
+            )
+        self.assertEqual(result["status"], "sent")
+        # Owner is included only when listed; the duplicate casing is sent
+        # once, retaining the first name.
+        self.assertEqual(
+            result["recipients"], ["Reader@Example.com", "editor@example.com"]
+        )
+        self.assertEqual(len(fake_smtp.messages), 2)
+        self.assertEqual(fake_smtp.messages[0]["To"], "Reader@Example.com")
+        self.assertEqual(fake_smtp.messages[1]["To"], "editor@example.com")
+
+    def test_delivery_plan_paused_placeholder_and_fallback_policy(self) -> None:
+        # Owner listed as paused in the additional catalog is user-disabled.
+        profile = DeliveryProfile(
+            mode=DELIVERY_MODE_OWNER,
+            owner_recipient="owner@example.com",
+            additional_recipients=(
+                DeliveryRecipient(email="owner@example.com", name="Owner", pause=True),
+            ),
+        )
+        targets, status, reason = pipeline._resolve_delivery_plan(profile)
+        self.assertEqual(targets, [])
+        self.assertEqual(status, "skipped: user_disabled")
+        self.assertEqual(reason, "owner recipient is paused")
+
+        # Placeholder owner/sender values are not configured, never sent.
+        profile = DeliveryProfile(
+            mode=DELIVERY_MODE_OWNER,
+            owner_recipient="primary@example.com",
+            sender="news@example.com",
+            smtp_host="smtp.gmail.com",
+            smtp_username="news@example.com",
+            smtp_password="password",
+        )
+        targets, status, reason = pipeline._resolve_delivery_plan(profile)
+        self.assertEqual(targets, [])
+        self.assertEqual(status, "skipped: not_configured")
+        self.assertEqual(reason, "placeholder recipient address")
+        with patch.object(pipeline.progress_tracker, "detail"):
+            result = pipeline.maybe_email_report(
+                "Title", "Body", "Synthesis", [], [], [], delivery_profile=profile
+            )
+        self.assertEqual(result["status"], "skipped: not_configured")
+        self.assertIn("placeholder", result["reason"])
+
+        # All-paused configured recipients are user-disabled.
+        profile = DeliveryProfile(
+            mode=DELIVERY_MODE_RECIPIENTS,
+            owner_recipient="owner@example.com",
+            additional_recipients=(
+                DeliveryRecipient(email="a@example.com", name="A", pause=True),
+                DeliveryRecipient(email="b@example.com", name="B", pause=True),
+            ),
+            sender="owner@example.com",
+            smtp_host="smtp.example.com",
+            smtp_password="s3cret",
+        )
+        targets, status, reason = pipeline._resolve_delivery_plan(profile)
+        self.assertEqual(status, "skipped: user_disabled")
+        self.assertEqual(reason, "all configured recipients are paused")
+
+        # Empty catalog falls back only to an explicitly configured legacy
+        # recipient list; an empty catalog without one is not_configured.
+        profile = DeliveryProfile(
+            mode=DELIVERY_MODE_RECIPIENTS,
+            owner_recipient="owner@example.com",
+            legacy_fallback_recipients=("legacy@example.com",),
+            legacy_fallback_explicit=True,
+            sender="owner@example.com",
+            smtp_host="smtp.example.com",
+            smtp_password="s3cret",
+        )
+        targets, status, reason = pipeline._resolve_delivery_plan(profile)
+        self.assertEqual(status, "")
+        self.assertEqual([t.email for t in targets], ["legacy@example.com"])
+        profile = DeliveryProfile(
+            mode=DELIVERY_MODE_RECIPIENTS,
+            owner_recipient="owner@example.com",
+            sender="owner@example.com",
+            smtp_host="smtp.example.com",
+            smtp_password="s3cret",
+        )
+        targets, status, reason = pipeline._resolve_delivery_plan(profile)
+        self.assertEqual(status, "skipped: not_configured")
+        self.assertEqual(reason, "missing configuration: recipient list")
+
+    def test_delivery_plan_implicit_owner_compat_tuple_is_not_a_fallback(self) -> None:
+        # Regression: when NEWS_EMAIL_RECIPIENTS is absent, the runtime
+        # snapshot keeps a compatibility fallback tuple containing the owner
+        # (``legacy_fallback_explicit=False``). That implicit owner must never
+        # become a recipients-mode opt-in: an empty catalog with only the
+        # default compat tuple is not_configured, exactly like no fallback.
+        profile = DeliveryProfile(
+            mode=DELIVERY_MODE_RECIPIENTS,
+            owner_recipient="owner@example.com",
+            legacy_fallback_recipients=("owner@example.com",),
+            sender="owner@example.com",
+            smtp_host="smtp.example.com",
+            smtp_password="s3cret",
+        )
+        targets, status, reason = pipeline._resolve_delivery_plan(profile)
+        self.assertEqual(targets, [])
+        self.assertEqual(status, "skipped: not_configured")
+        self.assertEqual(reason, "missing configuration: recipient list")
+
+    def test_maybe_email_report_partial_refusal_is_failed(self) -> None:
+        # ``send_message`` reports refused recipients by returning a mapping
+        # instead of raising; a partial refusal must be ``failed`` with
+        # accepted/rejected recipient data, never a false ``sent``.
+        class RefusingSMTP:
+            def __init__(self, *args, **kwargs) -> None:  # noqa: ANN002, ANN003
+                self.messages = []
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):  # noqa: ANN001, ANN002, ANN003
+                return False
+
+            def starttls(self) -> None:
+                return None
+
+            def login(self, username: str, password: str) -> None:
+                return None
+
+            def send_message(self, message) -> dict[str, str]:  # noqa: ANN001
+                self.messages.append(message)
+                if message["To"] == "refused@example.com":
+                    return {"refused@example.com": (550, b"relay denied")}
+                return {}
+
+        fake_smtp = RefusingSMTP()
+        with patch.object(pipeline, "EMAIL_FROM", "from@example.com"), patch.object(
+            pipeline, "SMTP_HOST", "smtp.example.com"
+        ), patch.object(pipeline, "SMTP_USERNAME", "user"), patch.object(
+            pipeline, "SMTP_PASSWORD", "secret"
+        ), patch.object(pipeline, "SMTP_PORT", 587), patch.object(
+            pipeline, "SMTP_USE_SSL", False
+        ), patch.object(
+            pipeline, "build_report_html", return_value="<html>report</html>"
+        ), patch.object(
+            pipeline,
+            "build_unsubscribe_url",
+            return_value="https://example.com/unsubscribe?token=abc",
+        ), patch.object(pipeline.smtplib, "SMTP", return_value=fake_smtp), patch.object(
+            pipeline.progress_tracker, "warning"
+        ) as warning:
+            result = pipeline.maybe_email_report(
+                "Daily Brief",
+                "Body text",
+                "Synthesis text",
+                [],
+                ["accepted@example.com", "refused@example.com"],
+                ["Accepted", "Refused"],
+            )
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["phase"], "send")
+        self.assertEqual(result["recipients"], ["accepted@example.com", "refused@example.com"])
+        self.assertEqual(result["accepted_recipients"], ["accepted@example.com"])
+        self.assertEqual(result["rejected_recipients"], ["refused@example.com"])
+        self.assertIn("delivery refused", result["reason"])
+        self.assertEqual(result["error_type"], "SMTPRecipientsRefused")
+        warning.assert_called_once()
+        self.assertIn("refused@example.com", warning.call_args[0][0])
+
+    def test_attempt_email_delivery_redacts_password_in_failure(self) -> None:
+        # An exception message that echoes the SMTP password must be redacted
+        # from the result, the warning, and the recorded diagnostics.
+        diagnostics = RunDiagnostics(
+            run_started_at="2026-06-01T10:00:00",
+            settings={},
+            events=[{"at": "2026-06-01T10:01:00", "label": "completed"}],
+        )
+        profile = DeliveryProfile(
+            mode=DELIVERY_MODE_OWNER,
+            owner_recipient="owner@example.com",
+            sender="owner@example.com",
+            smtp_host="smtp.example.com",
+            smtp_password="super-secret-password",
+            unsubscribe_secret="unsub-token",
+        )
+
+        def explode(*_args, **_kwargs) -> dict[str, Any]:
+            raise RuntimeError(
+                "auth failed for super-secret-password via unsub-token"
+            )
+
+        with patch.object(pipeline, "maybe_email_report", side_effect=explode), patch.object(
+            pipeline.progress_tracker, "warning"
+        ) as warning:
+            result = pipeline._attempt_email_delivery(
+                diagnostics,
+                report_title="Title",
+                report_body="Body",
+                synthesis_body="Synthesis",
+                final_reports=[],
+                recipient_list=["owner@example.com"],
+                recipient_names=["Owner"],
+                delivery_profile=profile,
+            )
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["phase"], "send")
+        self.assertNotIn("super-secret-password", result["error_message"])
+        self.assertNotIn("unsub-token", result["error_message"])
+        self.assertNotIn("super-secret-password", warning.call_args[0][0])
+        self.assertNotIn("super-secret-password", json.dumps(diagnostics.delivery))
+        self.assertIn("***", result["error_message"])
+        # Run status stays completed; no failed run event is added.
+        self.assertEqual(run_status_from_events(diagnostics.events), "completed")
+        self.assertFalse(any(event["label"] == "failed" for event in diagnostics.events))
+
+    def test_attempt_email_delivery_redacts_legacy_credentials_and_truncates(self) -> None:
+        diagnostics = RunDiagnostics(
+            run_started_at="2026-06-01T10:00:00",
+            settings={},
+            events=[{"at": "2026-06-01T10:01:00", "label": "completed"}],
+        )
+
+        with patch.object(pipeline, "SMTP_PASSWORD", "legacy-smtp-secret"), patch.object(
+            pipeline, "UNSUBSCRIBE_SECRET", "legacy-unsubscribe-secret"
+        ), patch.object(
+            pipeline,
+            "maybe_email_report",
+            side_effect=RuntimeError(
+                "auth failed for legacy-smtp-secret via legacy-unsubscribe-secret"
+            ),
+        ), patch.object(pipeline.progress_tracker, "warning") as warning:
+            result = pipeline._attempt_email_delivery(
+                diagnostics,
+                report_title="Title",
+                report_body="Body",
+                synthesis_body="Synthesis",
+                final_reports=[],
+                recipient_list=["owner@real.test"],
+                recipient_names=["Owner"],
+            )
+
+        serialized = json.dumps(diagnostics.delivery)
+        for secret in ("legacy-smtp-secret", "legacy-unsubscribe-secret"):
+            self.assertNotIn(secret, result["error_message"])
+            self.assertNotIn(secret, warning.call_args[0][0])
+            self.assertNotIn(secret, serialized)
+        self.assertIn("***", result["error_message"])
+        self.assertEqual(result["status"], "failed")
+
+        long_message = pipeline._redact_delivery_error("word " * 200)
+        self.assertTrue(long_message.endswith("..."))
+        self.assertLessEqual(len(long_message), 503)
+
+    def test_complete_pipeline_run_records_disabled_preflight(self) -> None:
+        # A disabled preflight decision still records skipped: user_disabled
+        # before the completed event and durable finalization, with no SMTP
+        # attempt and no failed run event.
+        diagnostics = RunDiagnostics(
+            run_started_at="2026-06-01T10:00:00",
+            settings={},
+        )
+        finalizer = MagicMock()
+        calls: list[str] = []
+        finalizer.record_report_body.side_effect = lambda _body: calls.append("record_report")
+
+        with patch.object(pipeline.smtplib, "SMTP") as smtp, patch.object(
+            pipeline.smtplib, "SMTP_SSL"
+        ) as smtp_ssl, patch.object(
+            pipeline, "_active_run_finalizer", return_value=finalizer
+        ), patch.object(
+            pipeline,
+            "_finish_run_diagnostics",
+            side_effect=lambda *_args, **_kwargs: calls.append("finish"),
+        ), patch.object(pipeline, "sync_assistant_context_latest_output"), patch.object(
+            pipeline.progress_tracker, "detail"
+        ):
+            pipeline._complete_pipeline_run(
+                diagnostics,
+                pipeline.CONFIG,
+                report_body="Daily News Summary\n\nA useful report.",
+                delivery_context={
+                    "report_title": "Daily News Summary",
+                    "report_body": "Daily News Summary\n\nA useful report.",
+                    "synthesis_body": "A useful report.",
+                    "final_reports": [],
+                    "recipient_list": [],
+                    "recipient_names": [],
+                    "delivery_profile": DeliveryProfile(
+                        mode=DELIVERY_MODE_DISABLED,
+                        owner_recipient="",
+                    ),
+                    "preflight_status": "skipped: user_disabled",
+                    "preflight_reason": "delivery disabled by profile",
+                },
+            )
+
+        self.assertEqual(diagnostics.delivery["status"], "skipped: user_disabled")
+        self.assertEqual(run_status_from_events(diagnostics.events), "completed")
+        self.assertEqual(calls, ["record_report", "finish"])
+        smtp.assert_not_called()
+        smtp_ssl.assert_not_called()
+        finalizer.record_report_body.assert_called_once_with(
+            "Daily News Summary\n\nA useful report."
+        )
 
     def test_build_image_art_system_prompt_contains_protocol(self) -> None:
         # The extracted pure helper must always carry the pipeline-owned JSON

@@ -1,13 +1,16 @@
-# Email recipients for generated reports.
+# Additional email recipients for generated reports.
 #
-# Checked-in file is a public template with example entries. Real recipients
-# are configured in a local copy referenced by NEWS_RECIPIENTS_YAML (see
-# SETTINGS.md). Do not commit real addresses.
+# Checked-in file is a public template with an illustrative example entry.
+# Real recipients belong in a local copy referenced by NEWS_RECIPIENTS_YAML
+# (see SETTINGS.md). Do not commit real addresses or credentials.
 #
 # Usage:
-# - pause: true keeps the recipient configured but skips delivery.
-# - NEWS_RECIPIENT_SCOPE=primary sends only to the primary recipient,
-#   regardless of this file.
+# - The owner recipient is configured with NEWS_PRIMARY_RECIPIENT, not here.
+# - pause: true keeps the recipient configured but skips delivery
+#   (skipped: user_disabled).
+# - NEWS_DELIVERY_MODE=recipients selects the active entries below; the owner
+#   is included only when listed here. The placeholder address below is never
+#   deliverable and resolves to skipped: not_configured.
 recipients:
   - email: you@example.com
     name: Example Recipient
