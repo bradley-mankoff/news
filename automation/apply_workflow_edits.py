@@ -614,7 +614,7 @@ def ensure_spec_review(path: Path) -> str | None:
     old = "depends_on: [code-review, error-handling, test-coverage, comment-quality, docs-impact]"
     if old not in text:
         return "synthesize deps not found in archon-review-block.yaml; rewire manually"
-    text = text.replace(old, old + ", spec-review")
+    text = text.replace(old, old[:-1] + ", spec-review]")
     path.write_text(text)
     return "added spec-review node to archon-review-block.yaml"
 
@@ -666,9 +666,6 @@ def apply_rigorous_models(changed: list[str]) -> None:
         note = ensure_rigorous_models(path, node_ids)
         if note:
             changed.append(note)
-
-
-
 
 def main() -> int:
     changed: list[str] = []

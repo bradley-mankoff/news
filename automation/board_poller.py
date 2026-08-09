@@ -45,8 +45,10 @@ between lanes. Contract:
   `develop`, the poller posts a bottom-of-issue comment with the workflow's
   `## How to test` guidance (or an explicit fallback when none was recorded).
   Failed comment posts are retried for issues already in Ready for Review.
-- Dispatch = `archon workflow run <wf> --branch <branch> --detach "<msg>"`
-  executed in the repo root.
+- Dispatch = `archon workflow run <wf> --branch <branch> "<msg>"` executed in
+  the repo root as a detached child (`subprocess.Popen` + `start_new_session`).
+  `--detach` is NOT used — the archon-pi build's detached-child spawn is broken
+  (see `dispatch()`).
 
 Config: automation/config.json (repo, committed).
 State:  automation/state.json (gitignored, machine-local).
@@ -75,7 +77,34 @@ DRY_RUN = "--dry-run" in sys.argv
 ACTIVE_WORKFLOW_STATUSES = frozenset(
     {"running", "pending", "queued", "scheduled", "paused"}
 )
+TERMINAL_WORKFLOW_STATUSES = frozenset({"failed", "cancelled"})
+KNOWN_WORKFLOW_STATUSES = ACTIVE_WORKFLOW_STATUSES | TERMINAL_WORKFLOW_STATUSES | {"completed"}
 _DISPATCH_BUDGET: int | None = None
+
+
+class WorkflowRuns(list[dict]):
+    """Run records plus a bounded lookup-health result.
+
+    The list shape keeps callers compatible with the normal run reader while
+    allowing the poller to distinguish an empty complete result from an
+    unavailable or truncated result.
+    """
+
+    def __init__(self, runs=(), error: str | None = None):
+        super().__init__(runs)
+        self.error = error
+
+
+class WorkflowRunStatusMap(dict[str, str]):
+    """Compatibility status map that retains full-run lookup health."""
+
+    def __init__(self, statuses=(), error: str | None = None,
+                 invalid_messages=(), run_keys=()):
+        super().__init__(statuses)
+        self.error = error
+        self.invalid_messages = frozenset(invalid_messages)
+        self.run_keys = dict(run_keys)
+
 
 QUERY = """
 query($login: String!, $number: Int!, $statusField: String!, $cursor: String) {
@@ -231,39 +260,51 @@ def sync_local_develop() -> str:
     """
     if DRY_RUN:
         return "LOCAL SYNC: dry-run (no fetch/merge/restart)"
-    r = subprocess.run(["git", "fetch", "origin"], capture_output=True,
-                       text=True, timeout=90, cwd=str(ROOT))
-    if r.returncode != 0:
-        return f"LOCAL SYNC FAILED: git fetch: {r.stderr.strip()[:200]}"
-    branch = subprocess.run(["git", "rev-parse", "--abbrev-ref", "HEAD"],
-                            capture_output=True, text=True, timeout=30,
-                            cwd=str(ROOT))
-    if branch.returncode != 0 or branch.stdout.strip() != "develop":
+
+    def run_git(args: list[str], timeout: int):
+        try:
+            result = subprocess.run(
+                ["git", *args], capture_output=True, text=True,
+                timeout=timeout, cwd=str(ROOT),
+            )
+        except (subprocess.TimeoutExpired, OSError) as exc:
+            return None, str(exc)
+        if result.returncode != 0:
+            detail = result.stderr.strip()[:200] or f"exit status {result.returncode}"
+            return None, detail
+        return result, None
+
+    fetch, error = run_git(["fetch", "origin"], 90)
+    if fetch is None:
+        return f"LOCAL SYNC FAILED: git fetch: {error}"
+    branch, error = run_git(["rev-parse", "--abbrev-ref", "HEAD"], 30)
+    if branch is None:
+        return f"LOCAL SYNC FAILED: git branch check: {error}"
+    if branch.stdout.strip() != "develop":
         return (f"LOCAL SYNC SKIP: not on develop "
                 f"(branch={branch.stdout.strip() or '?'!r})")
-    dirty = subprocess.run(["git", "status", "--porcelain"],
-                           capture_output=True, text=True, timeout=30,
-                           cwd=str(ROOT))
+    dirty, error = run_git(["status", "--porcelain"], 30)
+    if dirty is None:
+        return f"LOCAL SYNC FAILED: git status: {error}"
     dirty_files = [ln for ln in dirty.stdout.splitlines() if ln.strip()]
     if dirty_files:
         return f"LOCAL SYNC SKIP: working tree dirty ({len(dirty_files)} file(s))"
-    ahead = subprocess.run(["git", "rev-list", "--count", "origin/develop..HEAD"],
-                           capture_output=True, text=True, timeout=30,
-                           cwd=str(ROOT))
-    if ahead.returncode == 0 and ahead.stdout.strip() != "0":
+    ahead, error = run_git(["rev-list", "--count", "origin/develop..HEAD"], 30)
+    if ahead is None:
+        return f"LOCAL SYNC FAILED: git ahead check: {error}"
+    if ahead.stdout.strip() != "0":
         n = ahead.stdout.strip()
         return (f"LOCAL SYNC SKIP: local develop has {n} unpushed commit(s); "
                 "sync blocked until they are pushed (fast-forward only)")
-    behind = subprocess.run(["git", "rev-list", "--count", "HEAD..origin/develop"],
-                            capture_output=True, text=True, timeout=30,
-                            cwd=str(ROOT))
-    if behind.returncode == 0 and behind.stdout.strip() == "0":
+    behind, error = run_git(["rev-list", "--count", "HEAD..origin/develop"], 30)
+    if behind is None:
+        return f"LOCAL SYNC FAILED: git behind check: {error}"
+    if behind.stdout.strip() == "0":
         return "LOCAL SYNC: develop already up to date"
-    m = subprocess.run(["git", "merge", "--ff-only", "origin/develop"],
-                       capture_output=True, text=True, timeout=90, cwd=str(ROOT))
-    if m.returncode != 0:
-        return f"LOCAL SYNC FAILED: fast-forward merge: {m.stderr.strip()[:200]}"
-    merged = (m.stdout.strip() or f"{behind.stdout.strip()} commit(s)").splitlines()[-1]
+    merge, error = run_git(["merge", "--ff-only", "origin/develop"], 90)
+    if merge is None:
+        return f"LOCAL SYNC FAILED: fast-forward merge: {error}"
+    merged = (merge.stdout.strip() or f"{behind.stdout.strip()} commit(s)").splitlines()[-1]
     if not _ui_running():
         return f"LOCAL SYNC: develop updated ({merged}); UI not running, left as is"
     if _restart_ui():
@@ -495,6 +536,9 @@ def parse_deferred_work(body: str) -> list[dict] | None:
         **Skip:** <reason>     (never-to-be-done — do not create)
     Returns None when the section is absent; [] when the section is present
     but empty or `*None.*` (the contract's explicit "nothing deferred" form).
+    Indented fields: `**Links to:** #N` (already tracked — the model judged it
+    covered), `**Supersedes:** #N` (closed issue — create a new one referencing
+    it), `**Skip:** <reason>` (never-to-be-done — do not create).
     """
     m = DEFERRED_SECTION_RE.search(body or "")
     if not m:
@@ -810,9 +854,33 @@ def merge_pr_to_base(cfg: dict, env: dict, pr: dict, base: str,
         time.sleep(6)
         q = gh(["issue", "view", str(issue_number), "-R", cfg["repo"],
                 "--json", "state"], env)
-        if q.returncode == 0 and json.loads(q.stdout).get("state") == "CLOSED":
-            gh(["issue", "reopen", str(issue_number), "-R", cfg["repo"]], env)
+        if q.returncode != 0:
+            return False, (
+                f"merged into {base}, but issue #{issue_number} state is "
+                f"unreadable: {q.stderr.strip()[:200]}"
+            )
+        try:
+            issue_state = json.loads(q.stdout).get("state")
+        except (TypeError, ValueError, AttributeError) as exc:
+            return False, (
+                f"merged into {base}, but issue #{issue_number} state was "
+                f"invalid: {exc}"
+            )
+        if issue_state == "CLOSED":
+            reopened = gh(
+                ["issue", "reopen", str(issue_number), "-R", cfg["repo"]], env
+            )
+            if reopened.returncode != 0:
+                return False, (
+                    f"merged into {base}, but issue #{issue_number} reopen "
+                    f"failed: {reopened.stderr.strip()[:200]}"
+                )
             return True, f"merged into {base} (issue #{issue_number} reopened)"
+        if issue_state != "OPEN":
+            return False, (
+                f"merged into {base}, but issue #{issue_number} has unknown "
+                f"state {issue_state!r}"
+            )
     return True, f"merged into {base}"
 
 
@@ -826,10 +894,18 @@ def find_or_create_ship_pr(cfg: dict, env: dict, head: str, title: str,
             "--json", "number,baseRefName"], env)
     if r.returncode != 0:
         log(f"SHIP PR LIST FAILED head={head}: {r.stderr.strip()[:200]}")
-    elif r.returncode == 0:
-        for pr in json.loads(r.stdout):
-            if pr.get("baseRefName") == base:
-                return pr
+        return None
+    try:
+        listed = json.loads(r.stdout or "[]")
+    except (TypeError, ValueError) as exc:
+        log(f"SHIP PR LIST UNPARSEABLE head={head}: {exc}")
+        return None
+    if not isinstance(listed, list):
+        log(f"SHIP PR LIST UNPARSEABLE head={head}: expected a list")
+        return None
+    for pr in listed:
+        if isinstance(pr, dict) and pr.get("baseRefName") == base:
+            return pr
     body = (f"Issue #{issue_number}. Shipped from develop after human testing. "
             "Reviewed by archon-smart-pr-review before merge.")
     r = gh(["pr", "create", "-R", cfg["repo"], "--base", base, "--head", head,
@@ -839,7 +915,11 @@ def find_or_create_ship_pr(cfg: dict, env: dict, head: str, title: str,
             f"{r.stderr.strip()[:200]}")
         return None
     m = re.search(r"pull/(\d+)", r.stdout or "")
-    return {"number": int(m.group(1)), "headRefName": head} if m else None
+    if not m:
+        log(f"find_or_create_ship_pr: cannot parse PR number from: "
+            f"{r.stdout[:200]!r}")
+        return None
+    return {"number": int(m.group(1)), "headRefName": head}
 
 
 def branch_empty_vs_main(cfg: dict, env: dict, head: str, base: str) -> bool:
@@ -868,29 +948,50 @@ def ensure_ship_review(cfg: dict, env: dict, item_id: str, issue_number: int,
     this poll (logged; the recheck pass retries).
     """
     merge_base = cfg["dispatch"]["todo"].get("merge_develop_base", "develop")
-    pr, _ok = find_issue_pr(cfg, env, issue_number, base=merge_base)
-    if pr:
-        ok, note = merge_pr_to_base(cfg, env, pr, merge_base, issue_number)
-        log(f"DEVELOP MERGE issue={issue_number} PR=#{pr['number']}: {note}"
-            if ok else
-            f"DEVELOP MERGE FAILED issue={issue_number}: {note}")
-    head = (pr or {}).get("headRefName") or f"archon/task-issue-{issue_number}"
+    pr, pr_ok = find_issue_pr(cfg, env, issue_number, base=merge_base)
+    if not pr_ok or pr is None:
+        # A failed lookup and an absent develop PR are both unsafe here: the
+        # ship branch must never be guessed or reviewed before integration is
+        # positively confirmed. Retry on the next poll.
+        reason = "PR lookup failed" if not pr_ok else "develop PR not found"
+        log(f"REVIEW PREP DEFERRED issue={issue_number}: {reason}; retrying next poll")
+        return None
+    ok, note = merge_pr_to_base(cfg, env, pr, merge_base, issue_number)
+    log(f"DEVELOP MERGE issue={issue_number} PR=#{pr['number']}: {note}"
+        if ok else
+        f"DEVELOP MERGE FAILED issue={issue_number}: {note}")
+    if not ok:
+        log(f"REVIEW PREP DEFERRED issue={issue_number}: develop merge failed")
+        return None
+    head = pr.get("headRefName")
+    if not head:
+        log(f"REVIEW PREP DEFERRED issue={issue_number}: develop PR has no head")
+        return None
     ship_to = cfg["dispatch"]["review"].get("ship_to", "main")
     if branch_empty_vs_main(cfg, env, head, ship_to):
         if DRY_RUN:
             log(f"[dry-run] ALREADY SHIPPED issue={issue_number} head={head}")
         else:
-            comment_issue(
-                cfg, env, issue_number,
-                "Closing as shipped: this branch has no commits beyond main — "
-                "its work already reached main via an earlier ship PR's develop "
-                "merge. No review needed.")
-            gh(["issue", "close", str(issue_number), "-R", cfg["repo"]], env)
+            if not comment_issue(
+                    cfg, env, issue_number,
+                    "Closing as shipped: this branch has no commits beyond main — "
+                    "its work already reached main via an earlier ship PR's develop "
+                    "merge. No review needed."):
+                log(f"ALREADY SHIPPED COMMENT FAILED issue={issue_number}")
+                return None
+            close_result = gh(
+                ["issue", "close", str(issue_number), "-R", cfg["repo"]], env)
+            if close_result.returncode != 0:
+                log(f"ALREADY SHIPPED CLOSE FAILED issue={issue_number}: "
+                    f"{close_result.stderr.strip()[:200]}")
+                return None
             log(f"ALREADY SHIPPED issue={issue_number} head={head} -> {done_name}")
         if done_name:
             option_id = status_options.get(done_name)
-            if option_id:
-                move_to_lane(cfg, env, project_id, item_id, field_id, option_id)
+            if not option_id or not move_to_lane(
+                    cfg, env, project_id, item_id, field_id, option_id):
+                log(f"ALREADY SHIPPED BOARD MOVE FAILED issue={issue_number}")
+                return None
         rec.pop("review_msg", None)
         rec.pop("ship_pr", None)
         rec.pop("review_held", None)
@@ -907,9 +1008,9 @@ def ensure_ship_review(cfg: dict, env: dict, item_id: str, issue_number: int,
                     branch, msg, item_id, issue_number):
         log(f"SHIP REVIEW DISPATCH FAILED issue={issue_number} — retrying next poll")
         return None
+    rec["dispatch_started_at"] = datetime.now(timezone.utc).isoformat()
     rec.pop("review_held", None)
     return "ok", msg, ship["number"]
-
 
 def pick_workflow(cfg: dict, labels: list[str]) -> str:
     todo_cfg = cfg["dispatch"]["todo"]
@@ -985,49 +1086,95 @@ def post_ready_for_review_comment(cfg: dict, env: dict, issue_number: int,
     return ok
 
 
-def issue_has_label(cfg: dict, env: dict, issue_number: int, label: str) -> bool:
-    r = gh(["issue", "view", str(issue_number), "-R", cfg["repo"], "--json", "labels",
-            "-q", ".labels[].name"], env)
-    return r.returncode == 0 and label in r.stdout.split()
+def issue_has_label(cfg: dict, env: dict, issue_number: int, label: str) -> bool | None:
+    """True/False, or None when the label state could not be determined.
+
+    A gh failure must never be misread as "label absent": the caller gates the
+    Blocked-vs-complete decision on this, and a blocked issue that falls through
+    to the normal completion path could ship past the human's decision.
+    """
+    try:
+        r = gh(["issue", "view", str(issue_number), "-R", cfg["repo"],
+                "--json", "labels", "-q", ".labels[].name"], env)
+    except subprocess.TimeoutExpired as exc:
+        log(f"LABEL CHECK TIMEOUT issue={issue_number}: {exc}")
+        return None
+    if r.returncode != 0:
+        log(f"LABEL CHECK FAILED issue={issue_number}: {r.stderr.strip()[:200]}")
+        return None
+    return label in r.stdout.split()
 
 
-def resolve_worktree_branch(env: dict, issue_number: int) -> str | None:
+def resolve_worktree_branch(env: dict, issue_number: int, repo: str) -> str | None:
     """Find the archon worktree branch for an issue (e.g. archon/task-issue-12).
 
     `archon continue` needs the full namespaced branch, not the shorthand the
-    poller passes to `workflow run --branch`.
+    poller passes to `workflow run --branch`. The parse is scoped to this
+    repo's section of `archon isolation list` so a same-named worktree of
+    another repository can never be resumed.
     """
     r = subprocess.run(["archon", "isolation", "list"], capture_output=True,
                        text=True, timeout=60, env=env, cwd=str(ROOT))
     if r.returncode != 0:
+        log(f"WORKTREE LIST FAILED: {r.stderr.strip()[:200]}")
         return None
     pat = re.compile(rf"task-issue-{issue_number}\b")
-    for line in r.stdout.splitlines():
-        line = line.strip()
-        if pat.search(line) and not line.startswith(("Path", "Type")):
+    in_repo = False
+    for raw in r.stdout.splitlines():
+        line = raw.strip()
+        if line.endswith(":") and "github.com" in line:   # repo section header
+            in_repo = repo in line
+            continue
+        if in_repo and line.lstrip().startswith("{"):  # archon JSON log line
+            continue
+        if in_repo and pat.search(line) and not line.startswith(("Path", "Type")):
             return line
     return None
 
 
 def resume_issue(cfg: dict, env: dict, branch: str, wf: str,
-                 issue_number: int) -> tuple[bool, str]:
+                 issue_number: int) -> tuple[bool, str, str | None]:
     """Resume a blocked issue in its existing worktree after human input.
 
     Uses `archon continue` so the workflow picks up in the same worktree with
-    prior context; the human's latest comment is passed as the message. Removes
-    the needs-input label (the run is no longer blocked).
+    prior context; the human's latest comment is passed as the message.
+
+    Returns (ok, msg, full_branch). ok=False means the resume was NOT started
+    (or the spawned process died immediately); the caller falls back to a
+    fresh dispatch. Every False path leaves NO `archon continue` child
+    running, so the fallback can never double-run the issue: the needs-input
+    label is removed BEFORE the spawn, so a failed label edit means no child
+    was ever created. A lingering label stays as the recovery signal only on
+    the defer path (worktree branch unresolvable).
     """
     if DRY_RUN:
         log(f"[dry-run] RESUME issue={issue_number} branch={branch} wf={wf}")
-        return True, "dry-run"
+        return True, "dry-run", branch
     if not _dispatch_slot_available(wf, issue_number):
-        return False, "Archon workflow capacity is full"
-    full_branch = resolve_worktree_branch(env, issue_number) or branch
+        return False, "Archon workflow capacity is full", None
+    full_branch = resolve_worktree_branch(env, issue_number, cfg["repo"])
+    if full_branch is None:
+        log(f"RESUME DEFERRED issue={issue_number}: worktree branch not found "
+            f"(needs-input label kept; retrying next poll)")
+        return False, "", None
     r = gh(["issue", "view", str(issue_number), "-R", cfg["repo"], "--json", "comments",
             "-q", ".comments[-1].body"], env)
+    if r.returncode != 0:
+        log(f"COMMENT FETCH FAILED issue={issue_number}: {r.stderr.strip()[:200]} "
+            f"(resuming without the answer in context)")
     answer = (r.stdout or "").strip()[:600] if r.returncode == 0 else ""
     msg = (f"Resuming issue #{issue_number} after human input."
            + (f" Latest comment from the human: {answer}" if answer else ""))
+    # Remove the needs-input label FIRST: if this fails, no child has been
+    # spawned, so the caller's fresh-dispatch fallback cannot start a SECOND
+    # concurrent run for the same issue/worktree. The label edit is the gate;
+    # only a verified removal proceeds to spawn.
+    r = gh(["issue", "edit", str(issue_number), "-R", cfg["repo"],
+            "--remove-label", "needs-input"], env)
+    if r.returncode != 0:
+        log(f"RESUME LABEL REMOVE FAILED issue={issue_number}: "
+            f"{r.stderr.strip()[:200]} (label kept; not spawning)")
+        return False, msg, None
     log_path = ROOT / "automation" / "archon-runs.log"
     try:
         with open(log_path, "a") as out:
@@ -1038,12 +1185,22 @@ def resume_issue(cfg: dict, env: dict, branch: str, wf: str,
             )
     except OSError as exc:
         log(f"RESUME FAILED issue={issue_number}: {exc}")
-        return False, msg
+        return False, msg, None
     _consume_dispatch_slot()
-    gh(["issue", "edit", str(issue_number), "-R", cfg["repo"],
-        "--remove-label", "needs-input"], env)
+    # A short grace period catches immediate non-zero exits (bad branch or
+    # workflow name): resuming must not be reported as success when no run
+    # will actually run. The label is already removed, so the caller's fresh
+    # dispatch replaces the dead run without a re-block cycle.
+    time.sleep(2)
+    if proc.poll() is not None:
+        log(f"RESUME FAILED issue={issue_number}: archon continue exited "
+            f"immediately with code {proc.returncode}")
+        return False, msg, None
+    _consume_dispatch_slot()
     log(f"RESUMED issue={issue_number} branch={full_branch} wf={wf} pid={proc.pid}")
-    return True, msg
+    return True, msg, full_branch
+
+
 def fetch_active_workflow_count(env: dict) -> int | None:
     """Return active Archon runs, or None when the status lookup is unusable."""
     try:
@@ -1107,8 +1264,6 @@ def _consume_dispatch_slot() -> None:
         _DISPATCH_BUDGET -= 1
 
 
-
-
 def dispatch(cfg: dict, env: dict, wf: str, branch: str, message: str,
              item_id: str, number: int) -> bool:
     """Start an Archon workflow run in a detached child process.
@@ -1117,7 +1272,7 @@ def dispatch(cfg: dict, env: dict, wf: str, branch: str, message: str,
     detached-child spawn is broken (it passes the binary path as the command).
     The child is put in its own session so it survives the poller (and
     launchd restarts of it). Output appends to automation/archon-runs.log.
-    Returns True when the process spawned.
+    Returns True when the process survives the startup grace period.
     """
     if DRY_RUN:
         log(f"[dry-run] DISPATCH wf={wf} branch={branch} issue={number}")
@@ -1134,6 +1289,15 @@ def dispatch(cfg: dict, env: dict, wf: str, branch: str, message: str,
             )
     except OSError as exc:
         log(f"DISPATCH FAILED item={item_id} wf={wf}: {exc}")
+        return False
+    # A successful Popen only proves that the CLI could be forked. Give Archon
+    # a short startup window so invalid workflows/authentication/CLI failures
+    # do not advance the board to In Progress with no run to observe.
+    time.sleep(2)
+    if proc.poll() is not None:
+        log(f"DISPATCH FAILED item={item_id} issue={number} wf={wf}: "
+            f"archon exited immediately with code {proc.returncode}; "
+            f"see {log_path}")
         return False
     _consume_dispatch_slot()
     log(f"DISPATCHED item={item_id} issue={number} wf={wf} branch={branch} pid={proc.pid}")
@@ -1290,7 +1454,8 @@ def add_to_board(cfg: dict, env: dict, issue_number: int, lane: str,
 def create_deferred_issue(cfg: dict, env: dict, issue_number: int,
                           pr_number: int | None, source_title: str,
                           item: dict, lane: str, project_id: str,
-                          field_id: str, status_options: dict) -> int | None:
+                          field_id: str, status_options: dict,
+                          supersedes: int | None = None) -> int | None:
     """Create + board the tracking issue for one deferred item.
 
     Returns the new issue number, 0 in dry-run (simulated), or None on failure.
@@ -1308,6 +1473,8 @@ def create_deferred_issue(cfg: dict, env: dict, issue_number: int,
         + "None.\n\n"
         + "Acceptance criteria to be filled when this is planned."
     )
+    if supersedes is not None:
+        body += f"\n\nSupersedes: #{supersedes}"
     cmd = ["issue", "create", "-R", cfg["repo"], "--title", title,
            "--body", body]
     label = item.get("label") or ""
@@ -1335,12 +1502,15 @@ def create_deferred_issue(cfg: dict, env: dict, issue_number: int,
 
 
 def record_out_of_scope(cfg: dict, slug: str, item: dict,
-                        source_number: int, source_title: str) -> bool:
-    """Record a durable rejection in .out-of-scope/<slug>.md (Matt Pocock KB).
+                        source_number: int, source_title: str) -> Path | None:
+    """Record and publish a durable rejection in .out-of-scope/<slug>.md.
 
-    Creates or appends the concept file and commits it (a dirty tree is fine —
-    only the KB path is staged). Returns False on failure (logged, non-fatal:
-    the skip stands; a future run re-stamping the concept will retry the write).
+    The poller runs from the local develop checkout. The narrowly-scoped KB
+    commit is pushed to origin/develop before this returns successfully, so it
+    cannot leave an unpushed commit that blocks the normal local-sync loop.
+    Returns the actual path on success and None on any write, git, or push
+    failure. A failed operation restores the file to its pre-attempt contents
+    so the next poll can retry cleanly.
     """
     slug = re.sub(r"[^a-z0-9-]+", "-", (slug or "").lower()).strip("-")
     if not slug:
@@ -1348,43 +1518,100 @@ def record_out_of_scope(cfg: dict, slug: str, item: dict,
     path = ROOT / ".out-of-scope" / f"{slug}.md"
     if DRY_RUN:
         log(f"[dry-run] OUT-OF-SCOPE {path.relative_to(ROOT)}")
-        return True
+        return path
     heading = slug.replace("-", " ").strip().title()
     request_line = f'- #{source_number} — "{source_title}"'
-    if path.exists():
-        text = path.read_text()
-        if request_line in text:
-            return True
-        if "## Prior requests" in text:
-            text = text.replace("## Prior requests",
-                                "## Prior requests\n" + request_line, 1)
-        else:
-            text += f"\n## Prior requests\n\n{request_line}\n"
-    else:
-        why = item.get("reason") or item.get("description") or ""
-        text = (f"# {heading}\n\n{why}\n\n"
-                f"## Prior requests\n\n{request_line}\n")
     try:
+        original = path.read_bytes() if path.exists() else None
+        if original is not None:
+            original_text = original.decode()
+            if request_line in original_text:
+                return path
+            text = original_text
+            if "## Prior requests" in text:
+                text = text.replace("## Prior requests",
+                                    "## Prior requests\n" + request_line, 1)
+            else:
+                text += f"\n## Prior requests\n\n{request_line}\n"
+        else:
+            why = item.get("reason") or item.get("description") or ""
+            text = (f"# {heading}\n\n{why}\n\n"
+                    f"## Prior requests\n\n{request_line}\n")
+
+        def restore_file() -> None:
+            try:
+                if original is None:
+                    if path.exists():
+                        path.unlink()
+                else:
+                    path.write_bytes(original)
+            except OSError as exc:
+                log(f"OUT-OF-SCOPE RESTORE FAILED {slug}: {exc}")
+
+        branch = subprocess.run(
+            ["git", "branch", "--show-current"], capture_output=True,
+            text=True, timeout=60, cwd=str(ROOT),
+        )
+        if branch.returncode != 0 or branch.stdout.strip() != "develop":
+            log("OUT-OF-SCOPE WRITE FAILED: local checkout is not develop")
+            return None
+        before = subprocess.run(
+            ["git", "rev-parse", "HEAD"], capture_output=True,
+            text=True, timeout=60, cwd=str(ROOT),
+        )
+        if before.returncode != 0 or not before.stdout.strip():
+            log(f"OUT-OF-SCOPE WRITE FAILED {slug}: cannot read HEAD")
+            return None
+        before_head = before.stdout.strip()
         path.parent.mkdir(exist_ok=True)
         path.write_text(text)
-        subprocess.run(["git", "add", "--", str(path)], capture_output=True,
-                       text=True, timeout=60, cwd=str(ROOT))
-        r = subprocess.run(["git", "commit", "-m", f"out-of-scope: {slug}",
-                            "--", str(path)], capture_output=True, text=True,
-                           timeout=60, cwd=str(ROOT))
-        if r.returncode != 0:
-            log(f"OUT-OF-SCOPE COMMIT FAILED {slug}: {r.stderr.strip()[:200]}")
-            return False
-    except OSError as exc:
+        added = subprocess.run(
+            ["git", "add", "--", str(path)], capture_output=True,
+            text=True, timeout=60, cwd=str(ROOT),
+        )
+        if added.returncode != 0:
+            log(f"OUT-OF-SCOPE ADD FAILED {slug}: {added.stderr.strip()[:200]}")
+            restore_file()
+            return None
+        committed = subprocess.run(
+            ["git", "commit", "-m", f"out-of-scope: {slug}", "--", str(path)],
+            capture_output=True, text=True, timeout=60, cwd=str(ROOT),
+        )
+        if committed.returncode != 0:
+            log(f"OUT-OF-SCOPE COMMIT FAILED {slug}: "
+                f"{committed.stderr.strip()[:200]}")
+            subprocess.run(["git", "reset", "HEAD", "--", str(path)],
+                           capture_output=True, text=True, timeout=60,
+                           cwd=str(ROOT))
+            restore_file()
+            return None
+        pushed = subprocess.run(
+            ["git", "push", "origin", "HEAD:develop"], capture_output=True,
+            text=True, timeout=90, cwd=str(ROOT),
+        )
+        if pushed.returncode != 0:
+            log(f"OUT-OF-SCOPE PUSH FAILED {slug}: "
+                f"{pushed.stderr.strip()[:200]}")
+            rollback = subprocess.run(
+                ["git", "reset", "--mixed", before_head], capture_output=True,
+                text=True, timeout=60, cwd=str(ROOT),
+            )
+            if rollback.returncode != 0:
+                log(f"OUT-OF-SCOPE ROLLBACK FAILED {slug}: "
+                    f"{rollback.stderr.strip()[:200]}")
+            restore_file()
+            return None
+    except (OSError, UnicodeError) as exc:
         log(f"OUT-OF-SCOPE WRITE FAILED {slug}: {exc}")
-        return False
-    return True
+        return None
+    return path
 
 
 def reconcile_deferred_work(cfg: dict, env: dict, issue_number: int,
                             pr_number: int | None, rec: dict, runs_msg: str,
                             project_id: str, field_id: str,
-                            status_options: dict) -> bool:
+                            status_options: dict,
+                            board_items: list[dict] | None = None) -> bool:
     """Guarantee every deferred item in the run's completion record is tracked.
 
     Idempotent: skips when `runs_msg` was already handled (state marker) and
@@ -1436,14 +1663,45 @@ def reconcile_deferred_work(cfg: dict, env: dict, issue_number: int,
     if open_issues is None or closed_issues is None:
         return False
 
+    board_issue_numbers: set[int] | None = None
+    if board_items is not None:
+        board_issue_numbers = set()
+        for board_item in board_items:
+            content = board_item.get("content") or {}
+            number = content.get("number")
+            try:
+                if content.get("__typename") == "Issue" and number is not None:
+                    board_issue_numbers.add(int(number))
+            except (TypeError, ValueError):
+                continue
+
+    def ensure_tracked(target: int) -> bool:
+        if board_issue_numbers is None or target in board_issue_numbers:
+            return True
+        if not add_to_board(cfg, env, target, lane, project_id, field_id,
+                            status_options):
+            log(f"DEFERRED RETRY issue={issue_number}: linked issue #{target} "
+                "could not be added to the project")
+            return False
+        board_issue_numbers.add(target)
+        return True
+
     lane = cfg.get("default_lane", "Backlog")
     lines: list[str] = []
     for item in items:
         if item.get("out_of_scope"):
-            record_out_of_scope(cfg, item["out_of_scope"], item,
-                                issue_number, source_title)
+            recorded_path = record_out_of_scope(
+                cfg, item["out_of_scope"], item, issue_number, source_title
+            )
+            if not recorded_path:
+                log(f"DEFERRED RETRY issue={issue_number}: out-of-scope "
+                    f"record failed for '{item['title']}'")
+                return False
+            display_path = (recorded_path.relative_to(ROOT)
+                            if isinstance(recorded_path, Path)
+                            else recorded_path)
             lines.append(f"- **{item['title']}** \u2014 out of scope, recorded in "
-                         f".out-of-scope/{item['out_of_scope'].strip('-')}.md")
+                         f"{display_path}")
             continue
         if item.get("skip"):
             lines.append(f"- **{item['title']}** \u2014 skipped ({item['skip']})")
@@ -1451,13 +1709,16 @@ def reconcile_deferred_work(cfg: dict, env: dict, issue_number: int,
         if item.get("links_to") is not None:
             target = item["links_to"]
             if any(i.get("number") == target for i in open_issues):
+                if not ensure_tracked(target):
+                    return False
                 lines.append(f"- **{item['title']}** \u2192 already tracked in #{target}")
             else:
                 log(f"DEFERRED: '{item['title']}' links to #{target}, which is not "
                     "an open issue; creating fresh")
                 created = create_deferred_issue(
                     cfg, env, issue_number, pr_number, source_title, item, lane,
-                    project_id, field_id, status_options)
+                    project_id, field_id, status_options,
+                    supersedes=item.get("supersedes"))
                 if created is None:
                     log(f"DEFERRED RETRY issue={issue_number}: create failed for "
                         f"'{item['title']}'")
@@ -1467,20 +1728,25 @@ def reconcile_deferred_work(cfg: dict, env: dict, issue_number: int,
             continue
         action, ref = dedupe_deferred(item, open_issues, closed_issues)
         if action == "link":
+            if not ensure_tracked(ref):
+                return False
             lines.append(f"- **{item['title']}** \u2192 already tracked in #{ref}")
             continue
+        supersedes = item.get("supersedes")
+        if supersedes is None and action == "create-ref":
+            supersedes = ref
         created = create_deferred_issue(
             cfg, env, issue_number, pr_number, source_title, item, lane,
-            project_id, field_id, status_options)
+            project_id, field_id, status_options, supersedes=supersedes)
         if created is None:
             log(f"DEFERRED RETRY issue={issue_number}: create failed for "
                 f"'{item['title']}'")
             return False
         if created == 0:  # dry-run simulated
             continue
-        if action == "create-ref":
+        if supersedes is not None:
             lines.append(f"- **{item['title']}** \u2192 #{created} "
-                         f"(created; supersedes closed #{ref})")
+                         f"(created; supersedes closed #{supersedes})")
         else:
             lines.append(f"- **{item['title']}** \u2192 #{created} (created, {lane})")
     if lines:
@@ -1552,6 +1818,10 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
     # with the same message (re-dispatches reuse the message) and pop the
     # marker before the new run registers.
     fresh_dispatched: set[str] = set()
+    # Review-lane items already attempted in the main pass this poll; the
+    # recheck pass must not double-attempt them (a gh failure defers to the
+    # next poll, never a same-poll retry).
+    review_attempted: set[str] = set()
     for item in items:
         item_id = item["id"]
         seen.add(item_id)
@@ -1577,6 +1847,7 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
         ship_pr_num = None
         dispatched_wf = None
         dispatched_branch = None
+        dispatch_started_at = None
         dep_gate_ran = False
         dep_blocked_marker = None
         dep_cancelled_noted = None
@@ -1626,9 +1897,10 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
                     wf = pick_workflow(cfg, labels)
                     branch = f"issue-{content['number']}"
                     ok = False
+                    resumed_branch = None
                     if "needs-input" in labels and rec.get("branch") and rec.get("wf"):
-                        ok, msg = resume_issue(cfg, env, rec["branch"], rec["wf"],
-                                               content["number"])
+                        ok, msg, resumed_branch = resume_issue(
+                            cfg, env, rec["branch"], rec["wf"], content["number"])
                         if ok:
                             wf = rec["wf"]
                     if not ok:
@@ -1643,11 +1915,17 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
                             )
                         ok = dispatch(cfg, env, wf, branch, msg,
                                       item_id, content["number"])
-                    if ok:
-                        dispatched_msg = msg
-                        dispatched_wf = wf
-                        dispatched_branch = branch
-                        fresh_dispatched.add(item_id)
+                    if not ok:
+                        log(f"DISPATCH DEFERRED issue={content['number']}: "
+                            "retrying next poll")
+                        # Preserve the prior state marker. The next poll must
+                        # observe Todo as a new transition and retry dispatch.
+                        continue
+                    dispatched_msg = msg
+                    dispatched_wf = wf
+                    dispatched_branch = resumed_branch or branch
+                    dispatch_started_at = datetime.now(timezone.utc).isoformat()
+                    fresh_dispatched.add(item_id)
                     target = cfg["dispatch"]["todo"].get("move_to")
                     if ok and target:
                         option_id = status_options.get(target)
@@ -1663,8 +1941,9 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
                     pr_number = content["number"]
                     msg = f"Review PR #{pr_number} ({content['title']})"
                     branch = f"review/pr-{pr_number}"
-                    dispatch(cfg, env, cfg["dispatch"]["review"]["workflow"], branch,
-                             msg, item_id, content["number"])
+                    if dispatch(cfg, env, cfg["dispatch"]["review"]["workflow"], branch,
+                                 msg, item_id, content["number"]):
+                        dispatch_started_at = datetime.now(timezone.utc).isoformat()
                 else:
                     # Ensure the feature is in develop, then review the ship PR
                     # (feature -> main); on an approving review the poller merges
@@ -1672,9 +1951,14 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
                     # reached main (empty ship PR) and logs failures so the
                     # recheck pass can retry.
                     rec = state.get(item_id, {})
+                    review_attempted.add(item_id)
                     result = ensure_ship_review(
                         cfg, env, item_id, content["number"], content["title"],
                         project_id, field_id, status_options, done_lane_name, rec)
+                    if result is None:
+                        # Do not record the lane transition until the develop
+                        # PR lookup succeeds; retry the same transition next poll.
+                        continue
                     if isinstance(result, tuple):
                         review_msg = result[1]
                         ship_pr_num = result[2]
@@ -1682,6 +1966,12 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
                     elif result == "shipped":
                         if done_lane_name:
                             status_val = done_lane_name
+                    else:
+                        # Deferred (gh failure or ship PR unavailable): keep
+                        # the recorded status so the lane is re-entered next
+                        # poll — never advance on uncertainty, and never
+                        # double-attempt within the same poll.
+                        continue
 
         rec = state.get(item_id, {})
         rec["status"] = status_val
@@ -1694,6 +1984,20 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
             rec["issue_number"] = content["number"]
             rec["wf"] = dispatched_wf
             rec["branch"] = dispatched_branch
+            # A genuinely new dispatch starts a fresh episode: retain the
+            # latest observed run as the stale-row baseline, then reset active
+            # recovery markers so the new run may retry once and log once.
+            baseline = rec.get("last_observed_run_id")
+            if baseline:
+                rec["dispatch_baseline_run_id"] = baseline
+            else:
+                rec.pop("dispatch_baseline_run_id", None)
+            rec.pop("recovery", None)
+            rec.pop("retrying", None)
+            rec.pop("automatic_retry_count", None)
+            rec.pop("recovery_logged_run_id", None)
+            if dispatch_started_at:
+                rec["dispatch_started_at"] = dispatch_started_at
         if review_msg:
             rec["review_msg"] = review_msg
             rec["ship_pr"] = ship_pr_num
@@ -1726,7 +2030,7 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
             if item["status"] != review_lane_name:
                 continue
             item_id = item["id"]
-            if item_id in fresh_dispatched:
+            if item_id in fresh_dispatched or item_id in review_attempted:
                 continue
             rec = state.get(item_id, {})
             if rec.get("review_msg") or rec.get("review_held"):
@@ -1792,7 +2096,9 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
     complete_move_to = cfg["dispatch"]["todo"].get("complete_move_to")
     in_progress_name = next(
         (k for k, v in cfg["lanes"].items() if v == "in_progress"), None)
-    runs_by_msg = None
+    runs_by_msg: WorkflowRunStatusMap | None = None
+    full_runs: WorkflowRuns | None = None
+    run_lookup_error: str | None = None
     if complete_move_to and in_progress_name:
         for item_id, rec in list(state.items()):
             if item_id == "_meta" or item_id in fresh_dispatched:
@@ -1801,25 +2107,65 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
             if not msg or rec.get("status") != in_progress_name:
                 continue
             if runs_by_msg is None:
-                runs_by_msg = fetch_runs_by_message(env)
-            run_status = run_status_for(runs_by_msg, msg)
+                full_runs = fetch_workflow_runs(env)
+                runs_by_msg = runs_by_message_from(full_runs)
+                run_lookup_error = getattr(full_runs, "error", None)
+                if run_lookup_error:
+                    log(f"RUN LOOKUP UNAVAILABLE: {run_lookup_error}; "
+                        "retaining dispatch markers")
+            if run_lookup_error:
+                state[item_id] = rec
+                continue
+            # Select one authoritative record for this item.  The same record
+            # supplies status, identity, metadata, and worktree details below;
+            # do not let the legacy status map choose a different attempt.
+            selected_run = latest_workflow_run(full_runs or [], message=msg)
+            selected_status = selected_run.get("status") if selected_run else None
+            run_status = (selected_status.lower()
+                          if isinstance(selected_status, str) else None)
+            selected_run_id = (selected_run.get("id", "").strip()
+                               if isinstance(selected_run, dict)
+                               and isinstance(selected_run.get("id"), str)
+                               and selected_run.get("id", "").strip()
+                               else None)
+            if selected_run_id and dispatch_run_is_stale(rec, selected_run):
+                # A dispatch has started a new episode, but Archon has not
+                # registered its run yet. Never reconcile the previous run.
+                state[item_id] = rec
+                continue
+            if selected_run_id:
+                rec["last_observed_run_id"] = selected_run_id
             if run_status == "completed":
                 issue_number = rec.get("issue_number")
                 needs_input_name = next(
                     (k for k, v in cfg["lanes"].items() if v == "needs_input"), None)
-                if (issue_number and needs_input_name
-                        and issue_has_label(cfg, env, issue_number, "needs-input")):
-                    option_id = status_options.get(needs_input_name)
-                    if option_id and move_to_lane(
-                            cfg, env, project_id, item_id, field_id, option_id):
-                        log(f"NEEDS INPUT item={item_id} issue={issue_number} -> "
-                            f"{needs_input_name} (awaiting human input)")
-                    rec.pop("dispatch_msg", None)
-                    continue
+                if issue_number and needs_input_name:
+                    label_state = issue_has_label(
+                        cfg, env, issue_number, "needs-input")
+                    if label_state is None:
+                        # gh failure — must not be misread as "label absent":
+                        # the run may be awaiting human input. Keep the marker
+                        # and retry next poll (never advance on uncertainty).
+                        log(f"LABEL CHECK UNREADABLE issue={issue_number}; holding "
+                            "completion until the needs-input state is known")
+                        continue
+                    if label_state:
+                        option_id = status_options.get(needs_input_name)
+                        if option_id and move_to_lane(
+                                cfg, env, project_id, item_id, field_id, option_id):
+                            log(f"NEEDS INPUT item={item_id} issue={issue_number} -> "
+                                f"{needs_input_name} (awaiting human input)")
+                        rec.pop("dispatch_msg", None)
+                        continue
                 merge_base = cfg["dispatch"]["todo"].get("merge_develop_base")
                 merge_ok = True
                 pr_num = None
-                if issue_number and merge_base:
+                pr = None
+                if issue_number:
+                    if not merge_base:
+                        log(f"DEVELOP MERGE DEFERRED issue={issue_number}: "
+                            "develop base is not configured")
+                        continue
                     pr, pr_ok = find_issue_pr(cfg, env, issue_number, base=merge_base)
                     if not pr_ok:
                         # gh lookup failed — cannot positively confirm the merge
@@ -1828,15 +2174,19 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
                         log(f"DEVELOP MERGE DEFERRED issue={issue_number}: PR lookup "
                             "failed (gh error); retrying next poll")
                         continue
-                    if pr:
-                        pr_num = pr.get("number")
-                        merge_ok, note = merge_pr_to_base(cfg, env, pr, merge_base,
-                                                          issue_number)
-                        log(f"DEVELOP MERGE issue={issue_number} PR=#{pr['number']}: {note}"
-                            if merge_ok else
-                            f"DEVELOP MERGE FAILED issue={issue_number}: {note}")
-                    else:
-                        log(f"no PR found for issue #{issue_number}; skipping develop merge")
+                    if not pr:
+                        # An absent develop PR is not evidence that the work was
+                        # integrated. Never clear the dispatch marker or advance
+                        # to Ready for Review on a missing integration PR.
+                        log(f"DEVELOP MERGE DEFERRED issue={issue_number}: "
+                            "develop PR not found; retrying next poll")
+                        continue
+                    pr_num = pr.get("number")
+                    merge_ok, note = merge_pr_to_base(cfg, env, pr, merge_base,
+                                                      issue_number)
+                    log(f"DEVELOP MERGE issue={issue_number} PR=#{pr['number']}: {note}"
+                        if merge_ok else
+                        f"DEVELOP MERGE FAILED issue={issue_number}: {note}")
                 if not merge_ok:
                     # Develop-merge conflict gate: mirror the ship-lane state
                     # machine. Episode markers: dev_conflict_mech /
@@ -1847,6 +2197,10 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
                     if (issue_number and pr_num and head and dev_wf
                             and runs_by_msg is not None):
                         fix_msg = rec.get("dev_conflict_fix_msg")
+                        if (fix_msg and run_status_lookup_invalid(
+                                runs_by_msg, fix_msg)):
+                            state[item_id] = rec
+                            continue
                         act = develop_conflict_action(
                             bool(rec.get("dev_conflict_mech")), fix_msg,
                             (run_status_for(runs_by_msg, fix_msg)
@@ -1905,7 +2259,7 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
                 if (issue_number and dw_cfg.get("enabled", True)
                         and not reconcile_deferred_work(
                             cfg, env, issue_number, pr_num, rec, msg,
-                            project_id, field_id, status_options)):
+                            project_id, field_id, status_options, items)):
                     log(f"DEFERRED RETRY item={item_id} issue={issue_number} "
                         "(guard incomplete; will retry next poll)")
                     continue
@@ -1929,9 +2283,84 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
                     log(f"MOVE SKIPPED item={item_id}: lane '{complete_move_to}' not on board")
                 else:
                     log(f"MOVE FAILED item={item_id} -> {complete_move_to}")
-            elif run_status in ("failed", "cancelled"):
-                log(f"RUN {run_status.upper()} item={item_id}; left in {in_progress_name}")
-                rec.pop("dispatch_msg", None)
+            elif run_status in TERMINAL_WORKFLOW_STATUSES:
+                # Terminal recovery: cancelled/transient runs are recovery
+                # candidates, while dirty/unknown worktrees, missing identity,
+                # and exhausted or in-flight retry gates remain manual review.
+                # Read the newest full run record, inspect the associated
+                # worktree, and persist a bounded recovery decision. The
+                # dispatch marker is retained so repeated polls stay idempotent
+                # and the worktree stays correlated with the failed run.
+                issue_number = rec.get("issue_number")
+                run = selected_run
+                run_id = (run.get("id", "").strip() if isinstance(run, dict)
+                          and isinstance(run.get("id"), str)
+                          and run.get("id", "").strip() else "")
+                if not run or not run_id:
+                    # Status row raced ahead of the full record (or the run
+                    # lookup failed): retain the marker and defer the recovery
+                    # decision until a known run ID exists. Never guess clean,
+                    # mark handled, or auto-dispatch from a status alone.
+                    continue
+                if (rec.get("retrying")
+                        and rec.get("recovery", {}).get("run_id") == run_id):
+                    # The automatic retry was dispatched but its run row has
+                    # not registered yet (re-dispatches reuse the message, so
+                    # the status map still shows the old terminal row). Wait
+                    # for the new run instead of re-escalating.
+                    state[item_id] = rec
+                    continue
+                error, failed_step = parse_run_metadata(run)
+                failure_class = classify_workflow_failure(run_status, error)
+                dirty = inspect_worktree(run.get("working_path"))
+                action = recovery_action(run_status, failure_class, dirty)
+                rec["recovery"] = {
+                    "action": action,
+                    "run_id": run_id,
+                    "failure_class": failure_class,
+                    "failed_step": failed_step,
+                    "worktree": {"dirty": dirty,
+                                 "path": run.get("working_path")},
+                    "started_at": run.get("started_at") or "",
+                    "completed_at": run.get("completed_at") or "",
+                }
+                if action == "retry_available":
+                    # One automatic retry for the first clean transient
+                    # terminal attempt, through the existing dispatch budget.
+                    retries = int(rec.get("automatic_retry_count") or 0)
+                    if retries < 1 and not rec.get("retrying"):
+                        wf = rec.get("wf")
+                        branch = rec.get("branch") or f"issue-{issue_number}"
+                        if wf and issue_number and dispatch(
+                                cfg, env, wf, branch, msg, item_id,
+                                issue_number):
+                            rec["dispatch_baseline_run_id"] = run_id
+                            rec["dispatch_started_at"] = datetime.now(
+                                timezone.utc).isoformat()
+                            rec["retrying"] = True
+                            rec["automatic_retry_count"] = 1
+                            rec["recovery"]["action"] = "retrying"
+                            log_recovery_once(
+                                rec, run_id,
+                                f"RUN {run_status.upper()} item={item_id} "
+                                f"issue={issue_number}: {failure_class} failure, "
+                                "clean worktree — automatic retry dispatched "
+                                f"(run {run_id})")
+                            state[item_id] = rec
+                            continue
+                        if not wf or not issue_number:
+                            # No recovery identity on record — fail closed.
+                            rec["recovery"]["action"] = "manual_review"
+                            action = "manual_review"
+                    else:
+                        # Retry budget already spent for this episode.
+                        rec["recovery"]["action"] = "manual_review"
+                        action = "manual_review"
+                log_recovery_once(
+                    rec, run_id,
+                    f"RUN {run_status.upper()} item={item_id} "
+                    f"issue={issue_number or '?'}: {failure_class} -> {action} "
+                    f"(run {run_id})")
 
     # Ready-lane recheck: a comment failure must not strand the issue without
     # its handoff. This also backfills issues that reached Ready before this
@@ -1981,6 +2410,13 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
                 continue
             if runs_by_msg is None:
                 runs_by_msg = fetch_runs_by_message(env)
+                run_lookup_error = getattr(runs_by_msg, "error", None)
+                if run_lookup_error:
+                    log(f"RUN LOOKUP UNAVAILABLE: {run_lookup_error}; "
+                        "retaining run markers")
+            if (run_lookup_error
+                    or run_status_lookup_invalid(runs_by_msg, rmsg)):
+                continue
             rstatus = run_status_for(runs_by_msg, rmsg)
             if rstatus == "completed":
                 ship_num = rec.get("ship_pr")
@@ -2065,22 +2501,31 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
             ship_num = ship.get("number")
             mergeable = ship.get("mergeable") or "UNKNOWN"
             # Never remediate while a review run is active — its sync/fix
-            # nodes also write to the branch; concurrent writers race.
-            rmsg = rec.get("review_msg")
-            if rmsg and runs_by_msg is None:
+            # nodes also write to the branch; concurrent writers race. An
+            # unavailable status lookup is also a hold: an empty projection
+            # must not be mistaken for proof that no writer is active.
+            if runs_by_msg is None:
                 runs_by_msg = fetch_runs_by_message(env)
+                run_lookup_error = getattr(runs_by_msg, "error", None)
+                if run_lookup_error:
+                    log(f"RUN LOOKUP UNAVAILABLE: {run_lookup_error}; "
+                        "retaining run markers")
+            if run_lookup_error:
+                continue
+            rmsg = rec.get("review_msg")
+            if (rmsg and run_status_lookup_invalid(runs_by_msg, rmsg)):
+                continue
             review_active = bool(
-                rmsg and runs_by_msg
-                and run_status_for(runs_by_msg, rmsg)
+                rmsg and run_status_for(runs_by_msg, rmsg)
                 in ACTIVE_WORKFLOW_STATUSES)
             if review_active:
                 continue
             fix_msg = rec.get("conflict_fix_msg")
+            if (fix_msg and run_status_lookup_invalid(runs_by_msg, fix_msg)):
+                continue
             mech_failed = bool(rec.get("conflict_mech_failed"))
-            if fix_msg and runs_by_msg is None:
-                runs_by_msg = fetch_runs_by_message(env)
             fix_status = (run_status_for(runs_by_msg, fix_msg)
-                          if fix_msg and runs_by_msg else None)
+                          if fix_msg else None)
             action = conflict_episode_action(mergeable, fix_msg, fix_status, mech_failed)
             if action == "update":
                 ok, note = try_merge_base_into_head(
@@ -2136,39 +2581,364 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
         log(f"snapshot taken: {len(seen)} items on board, dispatch armed")
     save_state(cfg, state)
 
+def run_status_lookup_invalid(runs_by_msg: dict[str, str],
+                              dispatch_msg: str) -> bool:
+    """Whether a malformed run record matches this dispatch message."""
+    invalid = getattr(runs_by_msg, "invalid_messages", ())
+    return any(dispatch_msg in msg for msg in invalid)
 
-def fetch_runs_by_message(env: dict) -> dict[str, str]:
+
+def run_status_for(runs_by_msg: dict[str, str], dispatch_msg: str) -> str | None:
+    """Status of the newest run whose message contains the dispatch message."""
+    candidates = [(msg, status) for msg, status in runs_by_msg.items()
+                  if dispatch_msg in msg]
+    if not candidates:
+        return None
+    run_keys = getattr(runs_by_msg, "run_keys", {})
+    if run_keys:
+        return max(candidates,
+                   key=lambda pair: run_keys.get(
+                       pair[0], (datetime.min.replace(tzinfo=timezone.utc), "")
+                   ))[1]
+    # Plain dict callers have no timestamps. Prefer Archon's resume form over
+    # the original message so insertion order cannot shadow an active resume.
+    return max(candidates,
+               key=lambda pair: (pair[0].startswith("Prior Context"), pair[0]))[1]
+
+# --- Terminal-run recovery (cancelled runs and transient failures) ----------
+#
+# A terminal Archon run is not always a manual-review outcome: `cancelled`
+# (and stream/network transport failures) are recovery events. When the
+# associated worktree is clean the poller may retry once through the existing
+# dispatch budget; a dirty worktree is never overwritten (resume_required).
+# Recovery state is persisted on the issue record and each terminal run ID
+# logs at most one recovery line.
+
+_TRANSIENT_FAILURE_PATTERNS = (
+    re.compile(r"stream ended without finish_reason", re.IGNORECASE),
+    re.compile(
+        r"\b(?:websocket|socket|connection)\b.*"
+        r"\b(?:closed|ended|reset|aborted|disconnected|hang up)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(r"\bwebsocket\b.*\b1006\b", re.IGNORECASE),
+    re.compile(r"connection (?:reset|refused|closed|error)", re.IGNORECASE),
+    re.compile(r"network (?:error|failure|unavailable)", re.IGNORECASE),
+    re.compile(r"\btime\s?d?\s?out", re.IGNORECASE),
+    re.compile(r"rate ?limit", re.IGNORECASE),
+)
+_ORCHESTRATION_FAILURE_PATTERNS = (
+    re.compile(r"\bpull request\b", re.IGNORECASE),
+    re.compile(r"orchestrat", re.IGNORECASE),
+    re.compile(r"merge conflict", re.IGNORECASE),
+)
+_VALIDATION_FAILURE_PATTERNS = (
+    re.compile(r"\btests?\b", re.IGNORECASE),
+    re.compile(r"validation", re.IGNORECASE),
+    re.compile(r"\blint", re.IGNORECASE),
+    re.compile(r"type[- ]?check", re.IGNORECASE),
+)
+
+
+def _parse_run_datetime(value: object) -> datetime | None:
+    """Parse an Archon timestamp as a UTC instant."""
+    if not isinstance(value, str):
+        return None
+    value = value.strip()
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _run_timestamp(value: object) -> str | None:
+    """Normalize an Archon timestamp, rejecting malformed values."""
+    if _parse_run_datetime(value) is None:
+        return None
+    return value.strip() if isinstance(value, str) else None
+
+
+def dispatch_run_is_stale(rec: dict, run: dict) -> bool:
+    """Return whether ``run`` predates the current dispatch episode."""
+    run_id = run.get("id") if isinstance(run, dict) else None
+    baseline = rec.get("dispatch_baseline_run_id")
+    if baseline and run_id == baseline:
+        return True
+    if baseline:
+        return False
+    dispatched_at = _parse_run_datetime(rec.get("dispatch_started_at"))
+    if dispatched_at is None:
+        # Records created before the generation marker retain their historical
+        # behavior; all newly-created dispatches persist the marker below.
+        return False
+    started_at = _parse_run_datetime(run.get("started_at"))
+    return started_at is None or started_at < dispatched_at
+
+
+def fetch_workflow_runs(env: dict) -> WorkflowRuns:
+    """Return the complete Archon run view, or a fail-closed health result.
+
+    Archon defaults to a newest-20 window, which is not sufficient for
+    reconciling retained dispatch markers. Request the largest supported
+    window and reject a response whose advertised total is larger than the
+    returned records. The error remains attached to the list-shaped result so
+    callers can retain markers without guessing and emit one poll diagnostic.
+    """
+    try:
+        result = subprocess.run(
+            ["archon", "workflow", "runs", "--json", "--limit", "200"],
+            capture_output=True, text=True, timeout=60, env=env,
+            cwd=str(ROOT))
+    except subprocess.TimeoutExpired:
+        return WorkflowRuns(error="archon_timeout")
+    except OSError:
+        return WorkflowRuns(error="archon_unavailable")
+    if result.returncode != 0:
+        return WorkflowRuns(error="archon_command_failed")
+    try:
+        data = json.loads(result.stdout)
+    except (TypeError, ValueError):
+        return WorkflowRuns(error="archon_json")
+    if isinstance(data, dict):
+        runs = data.get("runs")
+        total = data.get("total")
+    else:
+        runs = data
+        total = None
+    if not isinstance(runs, list):
+        return WorkflowRuns(error="archon_runs_shape")
+    if (total is not None
+            and (isinstance(total, bool) or not isinstance(total, int)
+                 or total < 0)):
+        return WorkflowRuns(error="archon_total_shape")
+    if isinstance(total, int) and total > len(runs):
+        return WorkflowRuns(error="run_list_incomplete")
+
+    usable = []
+    malformed_record = False
+    for run in runs:
+        if not isinstance(run, dict):
+            malformed_record = True
+            continue
+        normalized = dict(run)
+        run_id = normalized.get("id")
+        if not isinstance(run_id, str) or not run_id.strip():
+            normalized["id"] = None
+        else:
+            normalized["id"] = run_id.strip()
+        if not isinstance(normalized.get("user_message"), str):
+            malformed_record = True
+            normalized["user_message"] = None
+        for field in ("started_at", "completed_at"):
+            normalized[field] = _run_timestamp(normalized.get(field))
+        if (normalized.get("working_path") is not None
+                and not isinstance(normalized.get("working_path"), str)):
+            normalized["working_path"] = None
+        usable.append(normalized)
+    return WorkflowRuns(
+        usable,
+        error="archon_runs_malformed" if malformed_record else None,
+    )
+
+
+def runs_by_message_from(runs: list[dict]) -> WorkflowRunStatusMap:
+    """Map exact run user_message -> status of the newest run with it."""
+    best: dict[str, tuple[str, str, str]] = {}
+    best_keys: dict[str, tuple[datetime, str]] = {}
+    invalid_messages: set[str] = set()
+    malformed_record = False
+    for run in runs:
+        if not isinstance(run, dict):
+            malformed_record = True
+            continue
+        run_msg = run.get("user_message")
+        if not isinstance(run_msg, str) or not run_msg:
+            malformed_record = True
+            continue
+        started = _run_timestamp(run.get("started_at"))
+        started_at = _parse_run_datetime(run.get("started_at"))
+        if started is None or started_at is None:
+            invalid_messages.add(run_msg)
+            continue
+        run_id = run.get("id")
+        if not isinstance(run_id, str) or not run_id.strip():
+            invalid_messages.add(run_msg)
+            continue
+        status = run.get("status")
+        if (not isinstance(status, str)
+                or status.lower() not in KNOWN_WORKFLOW_STATUSES):
+            invalid_messages.add(run_msg)
+            continue
+        run_id = run_id.strip()
+        key = (started_at, run_id)
+        if key >= best_keys.get(run_msg, (datetime.min.replace(tzinfo=timezone.utc), "")):
+            best[run_msg] = (status.lower(), started, run_id)
+            best_keys[run_msg] = key
+    error = getattr(runs, "error", None)
+    if malformed_record and error is None:
+        error = "archon_runs_malformed"
+    return WorkflowRunStatusMap(
+        {msg: status for msg, (status, _, _) in best.items()
+         if msg not in invalid_messages},
+        error=error,
+        invalid_messages=invalid_messages,
+        run_keys={msg: best_keys[msg] for msg in best if msg not in invalid_messages},
+    )
+
+
+def fetch_runs_by_message(env: dict) -> WorkflowRunStatusMap:
     """Map exact run user_message -> status of the NEWEST run with it.
 
     Re-dispatches reuse the same message for the same issue, so multiple runs
     can share it; the newest run's status is the one that counts. Callers do
     substring lookup because `archon continue` prepends a "Prior Context"
-    preamble to the message.
+    preamble to the message. Derived from the shared full-run reader so the
+    poll never parses Archon output a second way.
     """
-    r = subprocess.run(["archon", "workflow", "runs", "--json"],
-                       capture_output=True, text=True, timeout=60, env=env,
-                       cwd=str(ROOT))
-    if r.returncode != 0:
-        return {}
-    data = json.loads(r.stdout)
-    runs = data.get("runs") if isinstance(data, dict) else data
-    best: dict[str, tuple[str, str]] = {}
+    return runs_by_message_from(fetch_workflow_runs(env))
+
+
+def parse_run_metadata(run: dict) -> tuple[str, str]:
+    """Bounded (error, failed_step) from a run record.
+
+    `metadata` is accepted as a dict or a JSON string; a top-level `error`
+    is the fallback. Returned text is bounded so persisted state never
+    carries raw command output or sensitive payloads.
+    """
+    metadata = run.get("metadata")
+    if isinstance(metadata, str):
+        try:
+            metadata = json.loads(metadata)
+        except (TypeError, ValueError):
+            metadata = None
+    meta = metadata if isinstance(metadata, dict) else {}
+    error = meta.get("error") or run.get("error") or ""
+    step = (meta.get("failed_step") or meta.get("step")
+            or meta.get("stage") or run.get("failed_step") or "")
+    if isinstance(error, (dict, list)):
+        error = json.dumps(error)
+    if isinstance(step, (dict, list)):
+        step = json.dumps(step)
+    return str(error)[:500], str(step)[:200]
+
+
+def classify_workflow_failure(status: str, error: str = "") -> str:
+    """Classify a terminal run status plus bounded error text.
+
+    `cancelled` is transient by status, before any error text is inspected.
+    Failed runs bucket into transient / orchestration / validation / unknown
+    using bounded, case-insensitive patterns.
+    """
+    status = (status or "").lower()
+    if status == "cancelled":
+        return "transient"
+    if status != "failed":
+        return "unknown"
+    err = (error or "").lower()
+    if any(p.search(err) for p in _TRANSIENT_FAILURE_PATTERNS):
+        return "transient"
+    if any(p.search(err) for p in _ORCHESTRATION_FAILURE_PATTERNS):
+        return "orchestration"
+    if any(p.search(err) for p in _VALIDATION_FAILURE_PATTERNS):
+        return "validation"
+    return "unknown"
+
+
+def latest_workflow_run(runs: list[dict], message: str | None = None,
+                        issue_number: int | None = None) -> dict | None:
+    """Newest run matching an optional message / issue number.
+
+    Matching keeps the existing substring convention so `Prior Context`
+    preambles still resolve. Newest is by `started_at` with a stable run ID
+    tiebreak, so re-dispatches that reuse a message pick the current attempt.
+    If any matching record lacks a usable identity or timestamp, selection
+    defers rather than falling back to an older, potentially wrong attempt.
+    """
+    best: dict | None = None
+    best_key = ("", "")
+    invalid_match = False
     for run in runs:
-        run_msg = run.get("user_message") or ""
-        if not run_msg:
+        if not isinstance(run, dict):
             continue
-        started = run.get("started_at") or ""
-        if started > best.get(run_msg, ("", ""))[1]:
-            best[run_msg] = (run.get("status") or "", started)
-    return {msg: status for msg, (status, _) in best.items()}
+        run_msg = run.get("user_message")
+        if not isinstance(run_msg, str):
+            run_msg = ""
+        if message and message not in run_msg:
+            continue
+        if issue_number is not None and f"#{issue_number}" not in run_msg:
+            continue
+        run_id = run.get("id")
+        started = _run_timestamp(run.get("started_at"))
+        if (not isinstance(run_id, str) or not run_id.strip()
+                or started is None):
+            invalid_match = True
+            continue
+        key = (started, run_id.strip())
+        if key >= best_key:
+            best_key = key
+            best = run
+    return None if invalid_match else best
 
 
-def run_status_for(runs_by_msg: dict[str, str], dispatch_msg: str) -> str | None:
-    """Status of the newest run whose message contains the dispatch message."""
-    for msg, status in runs_by_msg.items():
-        if dispatch_msg in msg:
-            return status
-    return None
+def inspect_worktree(path: str | None) -> bool | None:
+    """Read-only `git status --porcelain` probe of an Archon worktree.
+
+    True = dirty, False = clean, None = unknown (missing/unreadable path or
+    failed/timed-out probe). Unknown is never clean, so callers fail closed
+    and do not auto-retry.
+    """
+    if not isinstance(path, str) or not path:
+        return None
+    try:
+        if not Path(path).is_dir():
+            return None
+        result = subprocess.run(["git", "status", "--porcelain"],
+                                capture_output=True, text=True, timeout=30,
+                                cwd=str(path))
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if result.returncode != 0:
+        return None
+    return bool(result.stdout.strip())
+
+
+def recovery_action(status: str, failure_class: str,
+                    dirty: bool | None) -> str:
+    """Named recovery action for a terminal run + worktree state.
+
+    monitoring      active/completed runs need no recovery
+    resume_required transient + dirty worktree — human resumes; never overwrite
+    retry_available transient + clean worktree — one bounded automatic retry
+    manual_review   non-transient failure, or unknown worktree state (fail closed)
+    """
+    if (status or "").lower() not in TERMINAL_WORKFLOW_STATUSES:
+        return "monitoring"
+    if failure_class != "transient":
+        return "manual_review"
+    if dirty is False:
+        return "retry_available"
+    if dirty is True:
+        return "resume_required"
+    return "manual_review"
+
+
+def log_recovery_once(rec: dict, run_id: str, message: str) -> bool:
+    """Emit `message` at most once per terminal run ID.
+
+    Writes rec["recovery_logged_run_id"] only after logging a known run ID;
+    repeated calls for the same ID are side-effect free. Returns True when
+    the line was emitted.
+    """
+    if not run_id or rec.get("recovery_logged_run_id") == run_id:
+        return False
+    log(message)
+    rec["recovery_logged_run_id"] = run_id
+    return True
 
 
 def save_state(cfg: dict, state: dict) -> None:
@@ -2214,3 +2984,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
+

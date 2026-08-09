@@ -6,7 +6,7 @@ drafting, title generation, image art direction). The machine-required output
 contracts (``DATABASE_ENTRY:`` blocks, ``Headline:``/``Main story:``/
 ``Contradictions:`` format, ``[[S1]]`` citation markers, strict JSON for image
 art, retry correction messages, scale label vocabulary) live in
-``news_pipeline/prompt_contracts.py`` (ADR 0011); profiles only swap the
+``news_pipeline/prompt_contracts.py`` (ADR 0012); profiles only swap the
 editorial sentences.
 
 This module is deliberately stdlib-only (``dataclasses``, ``difflib``,

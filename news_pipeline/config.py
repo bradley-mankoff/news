@@ -518,6 +518,27 @@ def _optional_int_env(name: str, environ: Mapping[str, str] | None = None) -> in
         ) from None
 
 
+def _positive_optional_int_env(
+    name: str,
+    environ: Mapping[str, str] | None = None,
+) -> int | None:
+    """Parse an integer env value that must be greater than zero when set.
+
+    Model-tuning max-token caps are only meaningful as positive whole
+    numbers; zero and negative values are rejected here so they never reach
+    runtime tuning consumers (where falsy fallbacks or clamps would silently
+    replace them). Blank/unset values remain "unset" and keep the existing
+    default/preset precedence.
+    """
+    value = _optional_int_env(name, environ)
+    if value is not None and value <= 0:
+        raise ValueError(
+            f"Invalid max-token value for {name!r}: {value}. "
+            "Expected a whole number greater than zero."
+        )
+    return value
+
+
 def _optional_float_env(name: str, environ: Mapping[str, str] | None = None) -> float | None:
     raw = (environ or _active_env()).get(name)
     if raw is None or not raw.strip():
@@ -609,6 +630,10 @@ _TASK_MAX_TOKENS_FIELDS: dict[str, str] = {
     # (generate_image_art_brief); it inherits that task's token cap by design.
     MODEL_TASK_IMAGE_ART_DIRECTION: "title_generation_max_tokens",
 }
+
+# Canonical model-tuning max-token fields, derived from the task map so the
+# allowed-field and positive-value checks cannot drift from the alias mapping.
+_MAX_TOKENS_TUNING_FIELDS: frozenset[str] = frozenset(_TASK_MAX_TOKENS_FIELDS.values())
 
 
 def _task_max_tokens_field(task: str) -> str:
@@ -795,13 +820,7 @@ def _apply_model_tuning_preset(
             continue
         if field_name == "max_tokens":
             field_name = _task_max_tokens_field(assignment_task)
-        if field_name not in {
-            "model_max_input_tokens",
-            "article_summary_max_tokens",
-            "story_drafting_max_tokens",
-            "story_scale_screening_max_tokens",
-            "title_generation_max_tokens",
-        }:
+        if field_name not in _MAX_TOKENS_TUNING_FIELDS:
             raise ValueError(
                 f"Unsupported tuning field {key!r} in model tuning preset {preset_id!r}."
             )
@@ -813,6 +832,11 @@ def _apply_model_tuning_preset(
             raise ValueError(
                 f"Model tuning preset {preset_id!r} field {key!r} must be a number, "
                 f"got {value!r}."
+            )
+        if coerced_value <= 0:
+            raise ValueError(
+                f"Model tuning preset {preset_id!r} field {key!r} must be greater "
+                f"than zero, got {coerced_value}."
             )
         updates[field_name] = coerced_value
 
@@ -884,23 +908,23 @@ def _apply_model_tuning_env_overrides(tuning: ModelTuningSettings) -> ModelTunin
     return ModelTuningSettings(
         model_max_input_tokens=_merge_optional_value(
             tuning.model_max_input_tokens,
-            _optional_int_env("NEWS_MODEL_MAX_INPUT_TOKENS"),
+            _positive_optional_int_env("NEWS_MODEL_MAX_INPUT_TOKENS"),
         ),
         article_summary_max_tokens=_merge_optional_value(
             tuning.article_summary_max_tokens,
-            _optional_int_env("NEWS_ARTICLE_SUMMARY_MAX_TOKENS"),
+            _positive_optional_int_env("NEWS_ARTICLE_SUMMARY_MAX_TOKENS"),
         ),
         story_drafting_max_tokens=_merge_optional_value(
             tuning.story_drafting_max_tokens,
-            _optional_int_env("NEWS_STORY_DRAFTING_MAX_TOKENS"),
+            _positive_optional_int_env("NEWS_STORY_DRAFTING_MAX_TOKENS"),
         ),
         story_scale_screening_max_tokens=_merge_optional_value(
             tuning.story_scale_screening_max_tokens,
-            _optional_int_env("NEWS_STORY_SCALE_SCREENING_MAX_TOKENS"),
+            _positive_optional_int_env("NEWS_STORY_SCALE_SCREENING_MAX_TOKENS"),
         ),
         title_generation_max_tokens=_merge_optional_value(
             tuning.title_generation_max_tokens,
-            _optional_int_env("NEWS_TITLE_GENERATION_MAX_TOKENS"),
+            _positive_optional_int_env("NEWS_TITLE_GENERATION_MAX_TOKENS"),
         ),
         task_sampling=task_sampling,
     )
@@ -1982,7 +2006,7 @@ def _build_runtime_config(
     # CLI/UI semantics. Strict validation of non-empty ids happens below.
     prompt_profile_id = _str_env(PROMPT_PROFILE_ENV_VAR, DEFAULT_PROMPT_PROFILE_ID) or DEFAULT_PROMPT_PROFILE_ID
     # Resolved once at import time in pipeline.py; fails fast on unknown ids.
-    get_prompt_profile(prompt_profile_id)
+    profile = get_prompt_profile(prompt_profile_id)
     # Per-stage prompt overrides (NEWS_PROMPT_OVERRIDE_<TASK>): non-empty
     # values only; empty-but-present counts as unset like sibling knobs.
     prompt_instruction_overrides = {
@@ -1992,13 +2016,28 @@ def _build_runtime_config(
     }
     # Editorial sentences must never weaken the pipeline-owned output contracts
     # (parsers, retries, citation renderers, sanitizers depend on them); a
-    # violating profile fails fast at config resolution, not mid-run.
-    profile_violations = validate_editorial_instructions(get_prompt_profile(prompt_profile_id).prompts)
-    if profile_violations:
+    # violating profile or override fails fast at config resolution, not
+    # mid-run. Validate the profile strictly, then validate the effective map
+    # with the screening override's existing brace-safe rendering allowance.
+    profile_violations = validate_editorial_instructions(profile.prompts)
+    effective_instructions = {**profile.prompts, **prompt_instruction_overrides}
+    effective_violations = validate_editorial_instructions(
+        effective_instructions,
+        allow_braces_for=(
+            {"story_scale_screening"}
+            if "story_scale_screening" in prompt_instruction_overrides
+            else frozenset()
+        ),
+    )
+    violations = profile_violations + [
+        violation for violation in effective_violations if violation not in profile_violations
+    ]
+    if violations:
         raise ValueError(
             f"Prompt profile {prompt_profile_id!r} violates pipeline-owned output contracts: "
-            + "; ".join(profile_violations)
+            + "; ".join(violations)
         )
+
     tracked_urls_filename = "tracked_urls.txt"
     blocking_urls_filename = "blocking_urls.txt"
     run_used_urls_filename = (
@@ -2203,3 +2242,4 @@ def load_runtime_config(
 
 def _coerce_pause_value(value: Any) -> bool:
     return _coerce_bool_value(value, False)
+

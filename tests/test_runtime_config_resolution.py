@@ -268,6 +268,31 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
                 materialize_outputs=False,
             )
 
+    def test_profile_violating_contracts_fails_config_resolution(self) -> None:
+        # A profile whose editorial instructions contain pipeline-owned
+        # contract language must fail fast at config resolution instead of
+        # silently weakening the parsers/retries/citation renderers mid-run.
+        # All other slots stay valid (balanced strings) so the failure is
+        # specifically the blocklisted drafting sentence.
+        bad_profile = PromptProfile(
+            id="bad",
+            name="Bad",
+            description="Violates the drafting output contract.",
+            prompts={
+                **prompt_catalog.PROMPT_PROFILES["balanced"].prompts,
+                "story_drafting": "Return exactly this format: and nothing else.",
+            },
+        )
+        with patch(
+            "news_pipeline.prompt_catalog.PROMPT_PROFILES",
+            {**prompt_catalog.PROMPT_PROFILES, "bad": bad_profile},
+        ):
+            with self.assertRaisesRegex(ValueError, "violates pipeline-owned output contracts"):
+                load_runtime_config(
+                    environ={},
+                    overrides={"NEWS_PROMPT_PROFILE": "bad"},
+                    materialize_outputs=False,
+                )
     def test_prompt_override_envs_resolve_into_runtime_config(self) -> None:
         config = load_runtime_config(
             environ={},
@@ -297,31 +322,33 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
             materialize_outputs=False,
         )
         self.assertEqual(unset.prompt_instruction_overrides, {})
-    def test_profile_violating_contracts_fails_config_resolution(self) -> None:
-        # A profile whose editorial instructions contain pipeline-owned
-        # contract language must fail fast at config resolution instead of
-        # silently weakening the parsers/retries/citation renderers mid-run.
-        # All other slots stay valid (balanced strings) so the failure is
-        # specifically the blocklisted drafting sentence.
-        bad_profile = PromptProfile(
-            id="bad",
-            name="Bad",
-            description="Violates the drafting output contract.",
-            prompts={
-                **prompt_catalog.PROMPT_PROFILES["balanced"].prompts,
-                "story_drafting": "Return exactly this format: and nothing else.",
-            },
-        )
-        with patch(
-            "news_pipeline.prompt_catalog.PROMPT_PROFILES",
-            {**prompt_catalog.PROMPT_PROFILES, "bad": bad_profile},
+
+    def test_prompt_override_violating_contract_fails_config_resolution(self) -> None:
+        with self.assertRaisesRegex(
+            ValueError,
+            "violates pipeline-owned output contracts.*story_drafting.*\\[\\[S1\\]\\]",
         ):
-            with self.assertRaisesRegex(ValueError, "violates pipeline-owned output contracts"):
-                load_runtime_config(
-                    environ={},
-                    overrides={"NEWS_PROMPT_PROFILE": "bad"},
-                    materialize_outputs=False,
-                )
+            load_runtime_config(
+                environ={},
+                overrides={
+                    "NEWS_PROMPT_OVERRIDE_STORY_DRAFTING": "Do not use [[S1]] markers.",
+                },
+                materialize_outputs=False,
+            )
+
+    def test_prompt_override_screening_braces_are_validated_by_safe_rendering_path(self) -> None:
+        config = load_runtime_config(
+            environ={},
+            overrides={
+                "NEWS_PROMPT_OVERRIDE_STORY_SCALE_SCREENING": "Discuss {literal} guidance.",
+            },
+            materialize_outputs=False,
+        )
+
+        self.assertEqual(
+            config.prompt_instruction_overrides,
+            {"story_scale_screening": "Discuss {literal} guidance."},
+        )
 
     def test_removed_topic_env_vars_reported_and_rejected(self) -> None:
         with self.assertRaisesRegex(ValueError, "NEWS_TOPIC_IDS"):
@@ -834,6 +861,32 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
                 ):
                     load_runtime_config(materialize_outputs=False)
 
+    def test_model_tuning_blank_env_preserves_preset_value(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            preset_path = Path(tmpdir) / "model_tuning_presets.yaml"
+            preset_path.write_text(
+                textwrap.dedent(
+                    """\
+                    presets:
+                      default-cap:
+                        tuning:
+                          max_tokens: 1400
+                    """
+                ),
+                encoding="utf-8",
+            )
+
+            with patch.object(config_module, "MODEL_TUNING_PRESETS_PATH", preset_path):
+                config = load_runtime_config(
+                    environ={
+                        "NEWS_MODEL_TUNING_PRESET": "default-cap",
+                        "NEWS_MODEL_MAX_INPUT_TOKENS": "  ",
+                    },
+                    materialize_outputs=False,
+                )
+
+        self.assertEqual(config.model_tuning.model_max_input_tokens, 1400)
+
     def test_new_task_tuning_preset_applies_with_env_overrides(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             tmpdir_path = Path(tmpdir)
@@ -890,6 +943,115 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
                 # Documented defaults are pinned so drift is caught by CI.
                 self.assertEqual(config_module.DEFAULT_STORY_SCALE_SCREENING_MAX_TOKENS, 3000)
                 self.assertEqual(config_module.DEFAULT_TITLE_GENERATION_MAX_TOKENS, 700)
+
+    def test_model_tuning_max_tokens_reject_non_positive_env_and_preset(self) -> None:
+        # Env path: every model-tuning max-token variable fails fast with an
+        # error naming the variable before a runtime config is returned.
+        env_vars = [
+            "NEWS_MODEL_MAX_INPUT_TOKENS",
+            "NEWS_ARTICLE_SUMMARY_MAX_TOKENS",
+            "NEWS_STORY_DRAFTING_MAX_TOKENS",
+            "NEWS_STORY_SCALE_SCREENING_MAX_TOKENS",
+            "NEWS_TITLE_GENERATION_MAX_TOKENS",
+        ]
+        for name in env_vars:
+            for bad_value in ("0", "-1"):
+                with self.subTest(env=name, value=bad_value):
+                    with self.assertRaisesRegex(
+                        ValueError,
+                        rf"{name}.*greater than zero",
+                    ):
+                        load_runtime_config(
+                            environ={name: bad_value},
+                            materialize_outputs=False,
+                        )
+
+        # Valid boundary on the env path: 1 persists into the default and task
+        # tuning fields instead of being replaced by a DEFAULT_* fallback.
+        boundary_env = load_runtime_config(
+            environ={
+                "NEWS_MODEL_MAX_INPUT_TOKENS": "1",
+                "NEWS_TITLE_GENERATION_MAX_TOKENS": "1",
+            },
+            materialize_outputs=False,
+        )
+        self.assertEqual(boundary_env.model_tuning.model_max_input_tokens, 1)
+        self.assertEqual(
+            boundary_env.model_assignments[MODEL_TASK_TITLE_GENERATION]
+            .tuning.title_generation_max_tokens,
+            1,
+        )
+
+        # Preset path: shorthand and canonical fields reject zero/negative
+        # values with the preset id and original key named, while a positive
+        # boundary value survives into the resolved tuning.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            preset_path = Path(tmpdir) / "model_tuning_presets.yaml"
+            preset_path.write_text(
+                textwrap.dedent(
+                    """\
+                    presets:
+                      zero-max-tokens:
+                        tuning:
+                          max_tokens: 0
+                      negative-task-max-tokens:
+                        task: story_drafting
+                        tuning:
+                          max_tokens: -1
+                      zero-title-tokens:
+                        tuning:
+                          title_generation_max_tokens: 0
+                      one-max-token:
+                        tuning:
+                          max_tokens: 1
+                    """
+                ),
+                encoding="utf-8",
+            )
+
+            with patch.object(config_module, "MODEL_TUNING_PRESETS_PATH", preset_path):
+                # Default-assignment shorthand: max_tokens maps to
+                # model_max_input_tokens before the positive check runs.
+                with self.assertRaisesRegex(
+                    ValueError,
+                    r"zero-max-tokens.*max_tokens.*greater than zero",
+                ):
+                    load_runtime_config(
+                        environ={"NEWS_MODEL_TUNING_PRESET": "zero-max-tokens"},
+                        materialize_outputs=False,
+                    )
+
+                # Task-scoped shorthand: max_tokens resolves through the
+                # story_drafting assignment before the positive check runs.
+                with self.assertRaisesRegex(
+                    ValueError,
+                    r"negative-task-max-tokens.*max_tokens.*greater than zero",
+                ):
+                    load_runtime_config(
+                        environ={
+                            "NEWS_MODEL_STORY_DRAFTING": "mlx-community/example-model",
+                            "NEWS_MODEL_STORY_DRAFTING_BASE_URL": "http://127.0.0.1:8090/v1",
+                            "NEWS_MODEL_STORY_DRAFTING_TUNING_PRESET": "negative-task-max-tokens",
+                        },
+                        materialize_outputs=False,
+                    )
+
+                # Explicit canonical preset field is rejected with its key named.
+                with self.assertRaisesRegex(
+                    ValueError,
+                    r"zero-title-tokens.*title_generation_max_tokens.*greater than zero",
+                ):
+                    load_runtime_config(
+                        environ={"NEWS_MODEL_TUNING_PRESET": "zero-title-tokens"},
+                        materialize_outputs=False,
+                    )
+
+                # Positive boundary on the preset path: 1 is kept, not defaulted.
+                boundary_preset = load_runtime_config(
+                    environ={"NEWS_MODEL_TUNING_PRESET": "one-max-token"},
+                    materialize_outputs=False,
+                )
+                self.assertEqual(boundary_preset.model_tuning.model_max_input_tokens, 1)
 
     def test_sampling_fields_remain_unset_without_override(self) -> None:
         with patch.dict(
@@ -1021,3 +1183,4 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

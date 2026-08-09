@@ -193,9 +193,11 @@ human, by design:
 - The poller runs as a launchd agent (`com.bradley-mankoff.news-board-poller`,
   plist in `~/Library/LaunchAgents/`). Logs: `automation/board_poller.log`;
   state: `automation/state.json` (gitignored).
-- Archon executes all workflows on OpenCode Zen Go (`opencode-go/deepseek-v4-flash`,
-  max effort → xhigh thinking) via the Pi provider; tiers are configured in
-  the archon-pi home `config.yaml`.
+- Archon routine nodes use Pi/OpenCode Zen Go
+  (`opencode-go/deepseek-v4-flash`) at `effort: max`; rigorous nodes use Pi's
+  OpenAI Codex OAuth backend (`provider: pi`,
+  `openai-codex/gpt-5.6-luna`) at `effort: max`. See
+  `docs/archon-workflows.md` for the current 17-workflow inventory.
 
 ### Manual review
 
@@ -426,7 +428,7 @@ Curated models (2):
 
 - `gemma-4-12b-it-4bit` — mlx-vlm, 256K-token context, default model
   ([Hugging Face](https://huggingface.co/mlx-community/gemma-4-12B-it-4bit))
-- `gemma-e2b-tiny` — mlx-lm, Codex-safe test model
+- `gemma-e2b-tiny` — mlx-vlm, Codex-safe test model
   ([Hugging Face](https://huggingface.co/deadbydawn101/gemma-4-E2B-Heretic-Uncensored-mlx-4bit))
 
 Hugging Face search results carry runtime-fit verdicts (`managed_mlx_lm`,
@@ -631,3 +633,4 @@ the model-server command:
 ```bash
 uv run news model-server-command
 ```
+

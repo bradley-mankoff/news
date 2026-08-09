@@ -71,6 +71,32 @@ class ModelCatalogTests(unittest.TestCase):
                 f"{entry.alias} reference must equal hf_repo (issue #92)",
             )
 
+    def test_catalog_backends_agree_with_runtime_inference(self) -> None:
+        # Drift-guard (ship-review finding, #146): the picker must never offer
+        # a curated card whose backend label disagrees with the backend the
+        # pipeline actually infers for it (HANDOFF: "Model picker must validate
+        # runtime support").
+        for entry in model_catalog.CATALOG_MODELS.values():
+            self.assertEqual(
+                config.infer_model_backend(entry.alias),
+                entry.backend,
+                f"{entry.alias} backend label {entry.backend!r} disagrees with "
+                f"config.infer_model_backend()",
+            )
+            fit = model_catalog.runtime_fit_for_hf_model(
+                {"id": entry.hf_repo, "tags": [], "library_name": "", "pipeline_tag": None}
+            )
+            expected_fit = (
+                model_catalog.RUNTIME_FIT_MANAGED_MLX_VLM
+                if entry.backend == "mlx-vlm"
+                else model_catalog.RUNTIME_FIT_MANAGED_MLX_LM
+            )
+            self.assertEqual(
+                fit["status"],
+                expected_fit,
+                f"{entry.alias} curated fit verdict disagrees with its backend label",
+            )
+
     def test_default_catalog_model_is_the_default_alias(self) -> None:
         self.assertEqual(model_catalog.DEFAULT_CATALOG_MODEL_ALIAS, config.DEFAULT_MODEL_ALIAS)
         default = model_catalog.CATALOG_MODELS[model_catalog.DEFAULT_CATALOG_MODEL_ALIAS]
@@ -141,8 +167,8 @@ class ModelCatalogTests(unittest.TestCase):
                 model_catalog.RUNTIME_FIT_EXTERNAL_ONLY,
             ),
             (
-                {"id": "deadbydawn101/gemma-4-E2B-Heretic-Uncensored-mlx-4bit", "tags": ["mlx"], "library_name": "mlx", "pipeline_tag": "text-generation"},
-                model_catalog.RUNTIME_FIT_MANAGED_MLX_LM,
+                {"id": "deadbydawn101/gemma-4-E2B-Heretic-Uncensored-mlx-4bit", "tags": ["mlx", "vision"], "library_name": "mlx", "pipeline_tag": "image-text-to-text"},
+                model_catalog.RUNTIME_FIT_MANAGED_MLX_VLM,
             ),
             (
                 {"id": "someone/arbitrary-gguf", "tags": ["gguf", "text-generation"], "library_name": "transformers", "pipeline_tag": "text-generation"},
@@ -195,10 +221,10 @@ class ModelCatalogTests(unittest.TestCase):
                 {"id": "mlx-community/gemma-4-12B-it-4bit-other", "tags": ["mlx"], "library_name": "mlx", "pipeline_tag": "text-generation"},
                 model_catalog.RUNTIME_FIT_MANAGED_MLX_LM,
             ),
-            # Prefix-collision sibling of the mlx-lm curated entry (issue
+            # Prefix-collision sibling of the mlx-vlm curated entry (issue
             # #92): the curated and generic-MLX verdicts coincide here, so
             # this row pins behavior; the deadbydawn101 org-id row above is
-            # the discriminating guard for the mlx-lm entry.
+            # the discriminating guard for the mlx-vlm entry.
             (
                 {"id": "deadbydawn101/gemma-4-E2B-Heretic-Uncensored-mlx-4bit-other", "tags": ["mlx"], "library_name": "mlx", "pipeline_tag": "text-generation"},
                 model_catalog.RUNTIME_FIT_MANAGED_MLX_LM,

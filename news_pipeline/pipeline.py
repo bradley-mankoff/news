@@ -2983,6 +2983,24 @@ def build_email_subject(run_datetime: datetime | None = None) -> str:
     return f"Daily LLM News, {subject_date}"
 
 
+class _EmailDeliveryError(Exception):
+    """Internal error carrying bounded recipient accounting across the boundary."""
+
+    def __init__(
+        self,
+        cause: Exception,
+        sent_recipients: list[str],
+        failed_recipients: list[str],
+    ) -> None:
+        super().__init__(type(cause).__name__)
+        self.cause_type = type(cause).__name__
+        self.sent_recipients = sent_recipients
+        self.failed_recipients = failed_recipients
+        self.expected_transport = isinstance(
+            cause, (smtplib.SMTPException, OSError, TimeoutError)
+        )
+
+
 def maybe_email_report(
     report_title: str,
     report_body: str,
@@ -3082,19 +3100,36 @@ def maybe_email_report(
             )
         return message
 
+    # Build every message before opening the transport. A programming error in
+    # message construction must not occur after an earlier recipient was sent.
+    messages = []
+    for index, recipient_email in enumerate(recipients):
+        recipient_name = recipient_names[index] if index < len(recipient_names) else recipient_email
+        messages.append((recipient_email, build_message(recipient_email, recipient_name)))
+
+    def send_messages(smtp: Any) -> list[str]:
+        sent: list[str] = []
+        for index, (recipient_email, message) in enumerate(messages):
+            try:
+                smtp.send_message(message)
+            except Exception as error:
+                raise _EmailDeliveryError(
+                    error,
+                    sent,
+                    [email for email, _message in messages[index:]],
+                ) from error
+            sent.append(recipient_email)
+        return sent
+
     if SMTP_USE_SSL:
         with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, timeout=30) as smtp:
             smtp.login(SMTP_USERNAME, SMTP_PASSWORD)
-            for index, recipient_email in enumerate(recipients):
-                recipient_name = recipient_names[index] if index < len(recipient_names) else recipient_email
-                smtp.send_message(build_message(recipient_email, recipient_name))
+            send_messages(smtp)
     else:
         with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=30) as smtp:
             smtp.starttls()
             smtp.login(SMTP_USERNAME, SMTP_PASSWORD)
-            for index, recipient_email in enumerate(recipients):
-                recipient_name = recipient_names[index] if index < len(recipient_names) else recipient_email
-                smtp.send_message(build_message(recipient_email, recipient_name))
+            send_messages(smtp)
 
     progress_tracker.detail(f"[email] Sent report to {', '.join(recipients)}")
     return {
@@ -3138,16 +3173,64 @@ def _attempt_email_delivery(
             citation_sources,
             citation_groups,
         )
-    except Exception as error:
+    except _EmailDeliveryError as error:
         result = {
             "status": "failed",
             "recipients": list(recipient_list),
-            "reason": "delivery failed after report construction",
+            "reason": "email transport failed",
+            "error_type": error.cause_type,
+            "error_message": "email transport failed",
+            "sent_recipients": error.sent_recipients,
+            "failed_recipients": error.failed_recipients,
+        }
+        if error.expected_transport:
+            progress_tracker.warning(
+                f"[email] Delivery failed ({error.cause_type}); "
+                f"{len(error.sent_recipients)} sent, "
+                f"{len(error.failed_recipients)} not sent; the completed report "
+                "remains available for review."
+            )
+        else:
+            logger.exception(
+                "[email] Unexpected exception while sending email (%s)",
+                error.cause_type,
+            )
+            progress_tracker.warning(
+                f"[email] Unexpected delivery error ({error.cause_type}); "
+                "the completed report remains available for review."
+            )
+    except (smtplib.SMTPException, OSError, TimeoutError) as error:
+        result = {
+            "status": "failed",
+            "recipients": list(recipient_list),
+            "reason": "email transport failed",
             "error_type": type(error).__name__,
-            "error_message": str(error),
+            "error_message": "email transport failed",
+            "sent_recipients": [],
+            "failed_recipients": list(recipient_list),
         }
         progress_tracker.warning(
-            f"[email] Delivery failed ({type(error).__name__}: {error}); "
+            f"[email] Delivery failed ({type(error).__name__}); "
+            "the completed report remains available for review."
+        )
+    except Exception as error:
+        # Keep report completion independent from unexpected delivery bugs, but
+        # put the full traceback only in the local log, never in durable UI data.
+        logger.exception(
+            "[email] Unexpected exception before email transport (%s)",
+            type(error).__name__,
+        )
+        result = {
+            "status": "failed",
+            "recipients": list(recipient_list),
+            "reason": "unexpected delivery error",
+            "error_type": type(error).__name__,
+            "error_message": "unexpected delivery error; see the run log",
+            "sent_recipients": [],
+            "failed_recipients": list(recipient_list),
+        }
+        progress_tracker.warning(
+            f"[email] Unexpected delivery error ({type(error).__name__}); "
             "the completed report remains available for review."
         )
     diagnostics.record_delivery(**result)
