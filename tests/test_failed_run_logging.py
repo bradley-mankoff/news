@@ -22,8 +22,15 @@ class FailedRunLoggingTests(unittest.TestCase):
                 log_file.close()
         if pipeline.RUN_LOG_FILE is not None and not pipeline.RUN_LOG_FILE.closed:
             pipeline.RUN_LOG_FILE.close()
+        for diagnostic_file in list(pipeline.RUN_DIAGNOSTIC_FILES):
+            if not diagnostic_file.closed:
+                diagnostic_file.close()
+        if pipeline.RUN_DIAGNOSTIC_FILE is not None and not pipeline.RUN_DIAGNOSTIC_FILE.closed:
+            pipeline.RUN_DIAGNOSTIC_FILE.close()
         pipeline.RUN_LOG_FILES = []
         pipeline.RUN_LOG_FILE = None
+        pipeline.RUN_DIAGNOSTIC_FILES = []
+        pipeline.RUN_DIAGNOSTIC_FILE = None
         pipeline.ACTIVE_RUN_DIAGNOSTICS = None
         pipeline.ACTIVE_RUN_FINALIZER = None
         pipeline.ACTIVE_RUN_SESSION = None
@@ -109,6 +116,7 @@ class FailedRunLoggingTests(unittest.TestCase):
             self.assertTrue(latest_markdown.exists())
             self.assertTrue(latest_log.exists())
             self.assertTrue(latest_details.exists())
+            self.assertTrue((output_dir / "latest_run_diagnostics.log").exists())
             self.assertIn("| Status | failed |", latest_markdown.read_text(encoding="utf-8"))
             latest_log_text = latest_log.read_text(encoding="utf-8")
             self.assertIn("Traceback", latest_log_text)
@@ -188,9 +196,44 @@ class FailedRunLoggingTests(unittest.TestCase):
             self.assertIn("RuntimeError: synthetic clustering failure", text)
             self.assertIn("Run log saved:", text)
 
+            # Raw diagnostics: every intermediate meter and the full traceback
+            # survive in the rolling and durable transcripts, while the staging
+            # source is removed only after the durable copy exists.
+            rolling_diagnostics = output_dir / "latest_run_diagnostics.log"
+            self.assertTrue(rolling_diagnostics.exists())
+            rolling_text = rolling_diagnostics.read_text(encoding="utf-8")
+            self.assertIn("101000/200000 steps", rolling_text)
+            self.assertIn("71000/200000 steps", rolling_text)
+            self.assertIn("Traceback", rolling_text)
+            self.assertIn("RuntimeError: synthetic clustering failure", rolling_text)
+            self.assertNotIn("\r", rolling_text)
+            self.assertNotIn("\033", rolling_text)
+            durable_diagnostics = history_db_path.parent / "diagnostics" / f"run_diagnostics_{timestamp}.log"
+            self.assertTrue(durable_diagnostics.exists())
+            durable_text = durable_diagnostics.read_text(encoding="utf-8")
+            self.assertIn("101000/200000 steps", durable_text)
+            self.assertIn("synthetic clustering failure", durable_text)
+            self.assertFalse((run_output_dir / f"run_diagnostics_{timestamp}.log").exists())
+
             details = json.loads(latest_details.read_text(encoding="utf-8"))
             self.assertEqual(details["events"][-1]["label"], "failed")
             self.assertIn("synthetic clustering failure", details["events"][-1]["traceback"])
+            run_diagnostics_artifact = details["artifacts"].get("run_diagnostics")
+            self.assertIsNotNone(run_diagnostics_artifact)
+            self.assertEqual(
+                run_diagnostics_artifact["path"],
+                str(durable_diagnostics),
+            )
+            self.assertEqual(run_diagnostics_artifact["representation"], "diagnostic")
+            self.assertEqual(run_diagnostics_artifact["policy"], "raw_backend_transcript")
+            self.assertEqual(
+                run_diagnostics_artifact["rolling"],
+                str(rolling_diagnostics),
+            )
+            self.assertEqual(
+                run_diagnostics_artifact["source"],
+                str(run_output_dir / f"run_diagnostics_{timestamp}.log"),
+            )
 
             with connect(history_db_path) as con:
                 run_id, status = con.execute("SELECT run_id, status FROM runs").fetchone()

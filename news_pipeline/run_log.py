@@ -35,17 +35,41 @@ from dataclasses import dataclass
 from typing import Any, Callable, Literal
 
 EventKind = Literal["message", "progress"]
+# High-value message categories used by the live progress contract. ``detail``
+# is the default for ordinary lines; the UI suppresses detail events and keeps
+# them backend-only, while transitions/warnings/retries/errors/summaries stay
+# visible as categorized notices.
+MessageCategory = Literal["transition", "warning", "retry", "error", "summary", "detail"]
 
 # ProgressTracker renders meters as:
 #   [3/9 clustering] [####------------] 10000/200000 steps
 #   [custom] [####------------] 1/3 steps
 # with an optional " | detail" suffix. The bar is exactly 20 characters and
-# the stage label is the stable per-stage identity.
+# the stage label is the stable per-stage identity. The optional leading
+# index/count and the trailing unit are captured as structured metadata.
 _METER_RE = re.compile(
-    r"^\[(?:\d+/\d+\s+)?(?P<stage>[a-zA-Z][a-zA-Z0-9 _-]*)\]\s+"
+    r"^\[(?:(?P<stage_index>\d+)/(?P<stage_count>\d+)\s+)?(?P<stage>[a-zA-Z][a-zA-Z0-9 _-]*)\]\s+"
     r"\[[#\-]{20}\]\s+"
     r"(?P<done>\d+)/(?P<total>\d+)\s+"
-    r"[a-zA-Z][a-zA-Z0-9 _/-]*(?:\s+\|.*)?$"
+    r"(?P<unit>[a-zA-Z][a-zA-Z0-9 _/-]*)(?:\s+\|.*)?$"
+)
+
+# A stage-header line such as ``[3/9 clustering] Clustering 139 candidate
+# articles.`` names a stable stage but is not a meter (no bar/counts). Meter
+# lines are matched first, so this never steals a progress event.
+_STAGE_HEADER_RE = re.compile(
+    r"^\[(?:\d+/\d+\s+)?(?P<stage>[a-zA-Z][a-zA-Z0-9 _-]*)\]\s+(?P<text>.+)$"
+)
+
+_RETRY_RE = re.compile(r"^Retry", re.IGNORECASE)
+_WARNING_RE = re.compile(r"^WARNING\b", re.IGNORECASE)
+_ERROR_RE = re.compile(
+    r"^(?:Traceback \(most recent call last\):|.*(?:Error|Exception)\s*:)",
+    re.IGNORECASE,
+)
+_SUMMARY_RE = re.compile(
+    r"(Daily news run (?:complete|failed)|Run (?:log|history|details|review|Bundle).*saved:|process exited with code|Story clustering:)",
+    re.IGNORECASE,
 )
 
 # ANSI CSI sequences: ESC [ <params> <intermediate> <final byte>.
@@ -63,10 +87,13 @@ class RunLogEvent:
     """One normalized run-log event.
 
     ``kind`` is ``message`` for ordinary lines or ``progress`` for meter
-    snapshots. ``stage`` is the stable stage identity for progress events.
-    ``replace`` marks a snapshot that supersedes the previous snapshot of the
-    same stage. ``complete`` is true when a progress snapshot shows the meter
-    at its final total.
+    snapshots. ``stage`` is the stable stage identity for progress events and
+    for transition messages that begin with a stage header. ``replace`` marks
+    a snapshot that supersedes the previous snapshot of the same stage.
+    ``complete`` is true when a progress snapshot shows the meter at its
+    final total. Progress events additionally expose structured ``done`` /
+    ``total`` / ``unit`` counts and the optional stage ``index`` / ``count``;
+    message events expose a ``category`` for the live notice contract.
     """
 
     line: str
@@ -74,15 +101,32 @@ class RunLogEvent:
     stage: str | None = None
     replace: bool = False
     complete: bool = False
+    done: int | None = None
+    total: int | None = None
+    unit: str | None = None
+    stage_index: int | None = None
+    stage_count: int | None = None
+    category: MessageCategory = "detail"
 
     def to_dict(self) -> dict[str, Any]:
         payload: dict[str, Any] = {"line": self.line, "kind": self.kind}
-        if self.stage is not None:
-            payload["stage"] = self.stage
-        if self.replace:
-            payload["replace"] = True
-        if self.kind == "progress" and self.complete:
-            payload["complete"] = True
+        if self.kind == "progress":
+            if self.stage is not None:
+                payload["stage"] = self.stage
+            if self.replace:
+                payload["replace"] = True
+            if self.complete:
+                payload["complete"] = True
+            if self.done is not None:
+                payload["done"] = self.done
+            if self.total is not None:
+                payload["total"] = self.total
+            if self.unit is not None:
+                payload["unit"] = self.unit
+        else:
+            payload["category"] = self.category
+            if self.stage is not None:
+                payload["stage"] = self.stage
         return payload
 
 
@@ -143,20 +187,53 @@ def normalize_lines(raw: str) -> list[str]:
     return lines
 
 
+def _classify_message(clean: str) -> MessageCategory:
+    """Classify one normalized non-meter line into a message category.
+
+    Order matters: retries are named before the exception they embed, warnings
+    before their text, errors before summary/transition phrasing, and stage
+    headers are the last structural marker before the ``detail`` default.
+    """
+    if _RETRY_RE.match(clean):
+        return "retry"
+    if _WARNING_RE.match(clean):
+        return "warning"
+    if _ERROR_RE.match(clean):
+        return "error"
+    if _SUMMARY_RE.search(clean):
+        return "summary"
+    if _STAGE_HEADER_RE.match(clean):
+        return "transition"
+    return "detail"
+
+
 def parse_event(line: str) -> RunLogEvent:
     """Classify one normalized line into a structured event."""
     clean = _continuation_line(line)
-    match = _METER_RE.match(clean)
-    if match:
-        total = int(match.group("total"))
-        done = int(match.group("done"))
+    meter = _METER_RE.match(clean)
+    if meter:
+        total = int(meter.group("total"))
+        done = int(meter.group("done"))
+        stage_index = int(meter.group("stage_index")) if meter.group("stage_index") else None
+        stage_count = int(meter.group("stage_count")) if meter.group("stage_count") else None
         return RunLogEvent(
             line=clean,
             kind="progress",
-            stage=match.group("stage"),
+            stage=meter.group("stage"),
             complete=total > 0 and done >= total,
+            done=done,
+            total=total,
+            unit=meter.group("unit"),
+            stage_index=stage_index,
+            stage_count=stage_count,
         )
-    return RunLogEvent(line=clean, kind="message")
+    category = _classify_message(clean)
+    stage = None
+    if category == "transition":
+        header = _STAGE_HEADER_RE.match(clean)
+        if header:
+            stage = header.group("stage")
+    return RunLogEvent(line=clean, kind="message", category=category, stage=stage)
 
 
 def parse_stream(raw: str) -> list[RunLogEvent]:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Iterable, Protocol
@@ -21,6 +22,8 @@ class RunFinalizerConfig:
     beehiiv_paste_dir: Path
     output_dir: Path
     run_log_path: str
+    run_diagnostics_path: Path | None = None
+    latest_run_diagnostics_path: Path | None = None
     history_export_csv: bool = True
 
 
@@ -88,12 +91,41 @@ class RunFinalizer:
     def finish(self) -> None:
         self.adapters.attach_pending_activity_snapshots(self.diagnostics)
         self.diagnostics.record_model_call_stats(self.adapters.model_call_stats_snapshot())
+        self._record_diagnostic_artifact()
         self._write_details()
         self._write_history()
         self._write_okf_run_bundle()
         self._write_review()
         self._write_beehiiv_paste()
         self._cleanup_visible_outputs()
+
+    def _durable_run_diagnostics_path(self) -> Path:
+        return self.config.history_db_path.parent / "diagnostics" / f"run_diagnostics_{self.config.run_id}.log"
+
+    def _record_diagnostic_artifact(self) -> None:
+        """Record the deterministic durable diagnostic path before history writes.
+
+        The path is recorded before the post-``run_logging()`` copy completes
+        so details/history always name it; the copy step is responsible for
+        making the file exist before the run session returns. No raw content
+        is ever written to DuckDB ``run_logs`` by this metadata record.
+        """
+        source = Path(self.config.run_diagnostics_path) if self.config.run_diagnostics_path else None
+        if source is None:
+            return
+        rolling = (
+            Path(self.config.latest_run_diagnostics_path)
+            if self.config.latest_run_diagnostics_path
+            else Path("")
+        )
+        self.diagnostics.record_artifact(
+            "run_diagnostics",
+            str(self._durable_run_diagnostics_path()),
+            representation="diagnostic",
+            policy="raw_backend_transcript",
+            source=str(source),
+            rolling=str(rolling),
+        )
 
     def _write_details(self) -> None:
         try:
@@ -163,14 +195,20 @@ class RunFinalizer:
             self._warning(f"Beehiiv paste file write failed: {error}")
 
     def _cleanup_visible_outputs(self) -> None:
+        keep_paths = [
+            self.config.latest_run_markdown_path,
+            self.config.latest_run_log_path,
+            self.config.latest_run_details_path,
+        ]
+        if self.config.run_diagnostics_path:
+            # The timestamped diagnostic source is archived after the concise
+            # log context closes; retain it through visible-output cleanup so
+            # the durable copy step can still read it.
+            keep_paths.append(Path(self.config.run_diagnostics_path))
         try:
             deleted_count, deleted_bytes = self.adapters.cleanup_visible_outputs(
                 self.config.output_dir,
-                keep_paths=[
-                    self.config.latest_run_markdown_path,
-                    self.config.latest_run_log_path,
-                    self.config.latest_run_details_path,
-                ],
+                keep_paths=keep_paths,
             )
             if deleted_count:
                 self._detail(
@@ -189,3 +227,21 @@ class RunFinalizer:
         progress = self.adapters.progress
         if progress is not None:
             progress.warning(message)
+
+
+def archive_run_diagnostics(source_path: Path, target_path: Path) -> None:
+    """Atomically move a closed per-run diagnostic transcript into durable storage.
+
+    A missing source is a no-op. The copy is written to a temporary sibling
+    and renamed into place so a partially-written archive is never visible;
+    the staging source is removed only after the durable copy exists. Errors
+    propagate to the caller, which must treat them as warnings that never
+    replace the primary run result.
+    """
+    if not source_path.exists():
+        return
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = target_path.with_name(f"{target_path.name}.tmp")
+    shutil.copyfile(source_path, temp_path)
+    temp_path.replace(target_path)
+    source_path.unlink(missing_ok=True)

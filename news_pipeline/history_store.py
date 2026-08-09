@@ -24,6 +24,9 @@ URL_LIST_FILE_RE = re.compile(
     r"^(candidate_urls|selected_article_urls)_(\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2})\.txt$"
 )
 RUN_LOG_FILE_RE = re.compile(r"^run_log_(\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2})\.log$")
+RUN_DIAGNOSTICS_FILE_RE = re.compile(
+    r"^run_diagnostics_(\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2})\.log$"
+)
 RUN_DETAILS_FILE_RE = re.compile(r"^run_details_(\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2})\.json$")
 
 SUMMARY_STAGE_BY_PREFIX = {
@@ -40,6 +43,7 @@ ROLLING_REVIEW_FILENAME = "latest_run.md"
 ROLLING_RUN_FILENAMES = {
     ROLLING_REVIEW_FILENAME,
     "latest_run.log",
+    "latest_run_diagnostics.log",
     "latest_run_details.json",
 }
 
@@ -1258,6 +1262,8 @@ def _artifact_family(filename: str) -> str:
         return "run_summary"
     if filename.startswith("run_log_"):
         return "run_log"
+    if RUN_DIAGNOSTICS_FILE_RE.match(filename):
+        return "run_diagnostics"
     if SUMMARY_FILE_RE.match(filename):
         return "article_summary_json"
     if URL_LIST_FILE_RE.match(filename):

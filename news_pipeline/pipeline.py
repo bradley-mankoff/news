@@ -83,6 +83,7 @@ from bs4 import BeautifulSoup
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage, SystemMessage, BaseMessage, AIMessage
 from datetime import datetime, timezone, timedelta
+from pathlib import Path
 from email.message import EmailMessage
 from email.utils import make_msgid
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -123,7 +124,12 @@ from .config import (
 )
 from .diagnostics import RunDiagnostics
 from . import run_log
-from .run_finalizer import RunFinalizer, RunFinalizerAdapters, RunFinalizerConfig
+from .run_finalizer import (
+    RunFinalizer,
+    RunFinalizerAdapters,
+    RunFinalizerConfig,
+    archive_run_diagnostics,
+)
 from .article_collection import (
     ArticleCollectionAdapters,
     ArticleCollectionRequest,
@@ -268,6 +274,7 @@ RUN_OUTPUT_DIR = str(CONFIG.run_output_dir)
 RUN_STAGING_DIR = str(CONFIG.run_staging_dir)
 LATEST_RUN_MARKDOWN_PATH = str(CONFIG.latest_run_markdown_path)
 LATEST_RUN_LOG_PATH = str(CONFIG.latest_run_log_path)
+LATEST_RUN_DIAGNOSTICS_PATH = str(CONFIG.latest_run_diagnostics_path)
 LATEST_RUN_DETAILS_PATH = str(CONFIG.latest_run_details_path)
 HISTORY_DB_PATH = str(CONFIG.history_db_path)
 HISTORY_EXPORT_CSV = CONFIG.history_export_csv
@@ -284,6 +291,7 @@ URL_REUSE_BLOCKING_ENABLED = CONFIG.url_reuse_blocking_enabled
 RELAXED_STORY_DRAFTING_GUARDS = CONFIG.relaxed_story_drafting_guards
 RUN_USED_URLS_PATH = str(CONFIG.run_used_urls_path)
 RUN_LOG_PATH = os.path.join(RUN_OUTPUT_DIR, f"run_log_{timestamp}.log")
+RUN_DIAGNOSTICS_PATH = os.path.join(RUN_STAGING_DIR, f"run_diagnostics_{timestamp}.log")
 EMAIL_RECIPIENTS_FALLBACK = CONFIG.email_recipients_fallback
 EMAIL_FROM = CONFIG.email_from
 SMTP_HOST = CONFIG.smtp_host
@@ -991,6 +999,11 @@ LOW_COVERAGE_SYNTHESIS_PATTERNS = [
 
 RUN_LOG_FILE: TextIO | None = None
 RUN_LOG_FILES: list[TextIO] = []
+# Raw backend diagnostic sinks (rolling + timestamped). They capture every
+# meter render, detail message, traceback, and subprocess transcript verbatim;
+# they are never part of the concise projection or the live progress DOM.
+RUN_DIAGNOSTIC_FILE: TextIO | None = None
+RUN_DIAGNOSTIC_FILES: list[TextIO] = []
 # Concise-writer state, scoped to the run_logging() lifecycle; None when no
 # run log is active (manual RUN_LOG_FILES handles in tests still write
 # through the normalized fallback path).
@@ -1024,6 +1037,8 @@ def _compat_runtime_values(config: RuntimeConfig) -> dict[str, Any]:
         "RUN_STAGING_DIR": str(config.run_staging_dir),
         "LATEST_RUN_MARKDOWN_PATH": str(config.latest_run_markdown_path),
         "LATEST_RUN_LOG_PATH": str(config.latest_run_log_path),
+        "LATEST_RUN_DIAGNOSTICS_PATH": str(config.output_dir / "latest_run_diagnostics.log"),
+        "RUN_DIAGNOSTICS_PATH": os.path.join(str(config.run_staging_dir), f"run_diagnostics_{config.timestamp}.log"),
         "LATEST_RUN_DETAILS_PATH": str(config.latest_run_details_path),
         "HISTORY_DB_PATH": str(config.history_db_path),
         "HISTORY_EXPORT_CSV": config.history_export_csv,
@@ -1115,6 +1130,8 @@ class RunSession:
         self.activity_snapshots: list[dict[str, Any]] = []
         self.run_log_file: TextIO | None = None
         self.run_log_files: list[TextIO] = []
+        self.run_diagnostic_file: TextIO | None = None
+        self.run_diagnostic_files: list[TextIO] = []
         self.managed_model_server_active = False
         self.managed_model_server_ready = False
         self.managed_model_server_external = False
@@ -1125,21 +1142,28 @@ class RunSession:
     def run(self, run_impl: Callable[[], None] | None = None) -> None:
         implementation = run_impl or _run_pipeline
         with self._activate():
-            with run_logging():
-                try:
-                    with managed_model_server():
-                        implementation()
-                except Exception as error:
-                    traceback_text = "".join(
-                        traceback.format_exception(type(error), error, error.__traceback__)
-                    )
-                    progress_tracker.step("finalize", "Daily news run failed. See the run log for details.")
-                    progress_tracker.detail(f"Run failed: {type(error).__name__}: {error}")
-                    _write_run_log(traceback_text)
-                    _finalize_failed_run(error, traceback_text, self.config)
-                    raise
-                else:
-                    progress_tracker.finish("done")
+            try:
+                with run_logging():
+                    try:
+                        with managed_model_server():
+                            implementation()
+                    except Exception as error:
+                        traceback_text = "".join(
+                            traceback.format_exception(type(error), error, error.__traceback__)
+                        )
+                        progress_tracker.step("finalize", "Daily news run failed. See the run log for details.")
+                        progress_tracker.detail(f"Run failed: {type(error).__name__}: {error}")
+                        _write_run_log(traceback_text)
+                        _write_run_diagnostics(traceback_text)
+                        _finalize_failed_run(error, traceback_text, self.config)
+                        raise
+                    else:
+                        progress_tracker.finish("done")
+            finally:
+                # The concise log context is closed by now, so the timestamped
+                # diagnostic source is complete; move it to durable history
+                # before the session returns. Best-effort and never fatal.
+                _archive_run_diagnostics(self.config)
 
     @contextmanager
     def _activate(self):
@@ -1157,7 +1181,8 @@ class RunSession:
                 "RUN_ACTIVITY_SNAPSHOTS",
                 "RUN_LOG_FILE",
                 "RUN_LOG_FILES",
-                "MANAGED_MODEL_SERVER_ACTIVE",
+                "RUN_DIAGNOSTIC_FILE",
+                "RUN_DIAGNOSTIC_FILES","MANAGED_MODEL_SERVER_ACTIVE",
                 "MANAGED_MODEL_SERVER_READY",
                 "MANAGED_MODEL_SERVER_EXTERNAL",
                 "MANAGED_MODEL_SERVER_PROCESS",
@@ -1188,6 +1213,8 @@ class RunSession:
                 "RUN_ACTIVITY_SNAPSHOTS": self.activity_snapshots,
                 "RUN_LOG_FILE": self.run_log_file,
                 "RUN_LOG_FILES": self.run_log_files,
+                "RUN_DIAGNOSTIC_FILE": self.run_diagnostic_file,
+                "RUN_DIAGNOSTIC_FILES": self.run_diagnostic_files,
                 "MANAGED_MODEL_SERVER_ACTIVE": self.managed_model_server_active,
                 "MANAGED_MODEL_SERVER_READY": self.managed_model_server_ready,
                 "MANAGED_MODEL_SERVER_EXTERNAL": self.managed_model_server_external,
@@ -1204,6 +1231,8 @@ class RunSession:
         self.activity_snapshots = RUN_ACTIVITY_SNAPSHOTS
         self.run_log_file = RUN_LOG_FILE
         self.run_log_files = RUN_LOG_FILES
+        self.run_diagnostic_file = RUN_DIAGNOSTIC_FILE
+        self.run_diagnostic_files = RUN_DIAGNOSTIC_FILES
         self.managed_model_server_active = MANAGED_MODEL_SERVER_ACTIVE
         self.managed_model_server_ready = MANAGED_MODEL_SERVER_READY
         self.managed_model_server_external = MANAGED_MODEL_SERVER_EXTERNAL
@@ -1247,6 +1276,61 @@ def _write_run_log(message: str) -> None:
                 RUN_LOG_WRITER.message(line)
         else:
             _write_run_log_line(line)
+
+
+def _write_run_diagnostics(message: str) -> None:
+    """Write raw detail/traceback/meter text to the diagnostic sinks verbatim.
+
+    The forensic source is intentionally not normalized or coalesced: every
+    meter render and every raw line the pipeline emits lands here, while the
+    concise sinks keep their policy-selected projection. A failed sink is
+    disabled through the progress warning path and never replaces the primary
+    pipeline exception or result.
+    """
+    if not RUN_DIAGNOSTIC_FILES:
+        return
+    text = str(message or "")
+    if text and not text.endswith("\n"):
+        text += "\n"
+    try:
+        for diagnostic_file in RUN_DIAGNOSTIC_FILES:
+            diagnostic_file.write(text)
+        for diagnostic_file in RUN_DIAGNOSTIC_FILES:
+            diagnostic_file.flush()
+    except Exception as error:
+        _disable_run_diagnostics(f"Run diagnostics write failed: {error}")
+
+
+def _disable_run_diagnostics(reason: str) -> None:
+    """Turn off the raw diagnostic sinks after a write failure, with a warning."""
+    global RUN_DIAGNOSTIC_FILE
+    global RUN_DIAGNOSTIC_FILES
+    RUN_DIAGNOSTIC_FILES = []
+    RUN_DIAGNOSTIC_FILE = None
+    try:
+        progress_tracker.warning(reason)
+    except Exception:
+        pass
+
+
+def _archive_run_diagnostics(config: RuntimeConfig) -> None:
+    """Copy the closed per-run diagnostic transcript into durable history.
+
+    Runs after ``run_logging()`` closes the sink so the final lines are
+    included. The source is the session-derived staging path (mirroring how
+    ``run_logging`` locates its files), so fixtures that ``replace()`` the
+    module config still resolve to their own temporary staging dir. A missing
+    source (no diagnostics produced) is a silent no-op; any copy failure is
+    surfaced as a progress warning and never replaces the run outcome.
+    """
+    source = Path(config.run_staging_dir) / f"run_diagnostics_{config.timestamp}.log"
+    target = Path(config.history_db_path).parent / "diagnostics" / f"run_diagnostics_{config.timestamp}.log"
+    try:
+        archive_run_diagnostics(source, target)
+        if target.exists():
+            progress_tracker.detail(f"Durable run diagnostics saved: {target}")
+    except Exception as error:
+        progress_tracker.warning(f"Run diagnostics archive failed: {error}")
 
 
 class ProgressTracker:
@@ -1307,11 +1391,13 @@ class ProgressTracker:
             line = f"{self._step_prefix(step_key)} {message}"
             self._print_terminal_line_locked(line)
             _write_run_log(line)
+            _write_run_diagnostics(line)
         if log_detail:
             self.detail(log_detail)
 
     def detail(self, message: str) -> None:
         _write_run_log(message)
+        _write_run_diagnostics(message)
 
     def log(self, message: str, *, terminal: bool = True) -> None:
         clean = _clean_progress_message(message)
@@ -1320,6 +1406,7 @@ class ProgressTracker:
                 self._finish_active_line_locked()
                 self._print_terminal_line_locked(clean)
         _write_run_log(clean)
+        _write_run_diagnostics(clean)
 
     def start_meter(
         self,
@@ -1586,6 +1673,9 @@ class ProgressTracker:
             self._line_active = True
         stream.flush()
         self.last_render = line
+        # Every actual render lands in the raw diagnostic transcript, not just
+        # forced/final snapshots; the concise projection stays policy-selected.
+        _write_run_diagnostics(line)
         if force or final or effective_final:
             _write_run_log(line)
 
@@ -1702,7 +1792,14 @@ def run_logging():
     global RUN_LOG_FILE
     global RUN_LOG_FILES
     global RUN_LOG_WRITER
-    for log_path in (RUN_LOG_PATH, LATEST_RUN_LOG_PATH):
+    global RUN_DIAGNOSTIC_FILE
+    global RUN_DIAGNOSTIC_FILES
+    for log_path in (
+        RUN_LOG_PATH,
+        LATEST_RUN_LOG_PATH,
+        RUN_DIAGNOSTICS_PATH,
+        LATEST_RUN_DIAGNOSTICS_PATH,
+    ):
         log_dir = os.path.dirname(log_path)
         if log_dir:
             os.makedirs(log_dir, exist_ok=True)
@@ -1710,9 +1807,19 @@ def run_logging():
         LATEST_RUN_LOG_PATH,
         "w",
         encoding="utf-8",
-    ) as latest_log_file:
+    ) as latest_log_file, open(
+        RUN_DIAGNOSTICS_PATH,
+        "w",
+        encoding="utf-8",
+    ) as run_diagnostic_file, open(
+        LATEST_RUN_DIAGNOSTICS_PATH,
+        "w",
+        encoding="utf-8",
+    ) as latest_diagnostic_file:
         RUN_LOG_FILE = run_log_file
         RUN_LOG_FILES = [run_log_file, latest_log_file]
+        RUN_DIAGNOSTIC_FILE = run_diagnostic_file
+        RUN_DIAGNOSTIC_FILES = [run_diagnostic_file, latest_diagnostic_file]
         RUN_LOG_WRITER = run_log.ConciseLogWriter(write_line=_write_run_log_line)
         header = (
             "# Daily news run log\n"
@@ -1724,6 +1831,17 @@ def run_logging():
         for log_file in RUN_LOG_FILES:
             log_file.write(header)
             log_file.flush()
+        diagnostic_header = (
+            "# Daily news run diagnostics (raw backend transcript)\n"
+            f"# Started: {RUN_STARTED_AT.isoformat(timespec='seconds')}\n"
+            f"# Preset: {PRESET_ID or 'custom'}\n"
+            f"# Timestamped diagnostics: {RUN_DIAGNOSTICS_PATH}\n"
+            f"# Rolling diagnostics: {LATEST_RUN_DIAGNOSTICS_PATH}\n"
+            "# Policy: backend-only raw detail; not a concise projection.\n\n"
+        )
+        for log_file in RUN_DIAGNOSTIC_FILES:
+            log_file.write(diagnostic_header)
+            log_file.flush()
         try:
             yield
         finally:
@@ -1733,9 +1851,12 @@ def run_logging():
             _write_run_log(f"Rolling run log saved: {LATEST_RUN_LOG_PATH}")
             if RUN_LOG_WRITER is not None:
                 RUN_LOG_WRITER.flush()
+            _write_run_diagnostics("Run diagnostics saved.")
             RUN_LOG_WRITER = None
             RUN_LOG_FILES = []
             RUN_LOG_FILE = None
+            RUN_DIAGNOSTIC_FILES = []
+            RUN_DIAGNOSTIC_FILE = None
 
 
 def load_recipient_config() -> dict[str, dict]:
@@ -4043,7 +4164,7 @@ def generate_image_with_mflux(prompt: str, *, output_path: str, seed: int) -> ob
             command,
             check=True,
             cwd=str(CONFIG.root_dir),
-            stdout=RUN_LOG_FILE or subprocess.DEVNULL,
+            stdout=RUN_DIAGNOSTIC_FILE or subprocess.DEVNULL,
             stderr=subprocess.STDOUT,
         )
         if not os.path.exists(raw_output_path):
@@ -4542,6 +4663,8 @@ def _new_run_diagnostics(source_count: int) -> RunDiagnostics:
             "run_staging_dir": RUN_STAGING_DIR,
             "latest_run_markdown_path": LATEST_RUN_MARKDOWN_PATH,
             "latest_run_log_path": LATEST_RUN_LOG_PATH,
+            "latest_run_diagnostics_path": LATEST_RUN_DIAGNOSTICS_PATH,
+            "run_diagnostics_path": RUN_DIAGNOSTICS_PATH,
             "latest_run_details_path": LATEST_RUN_DETAILS_PATH,
             "history_db_path": HISTORY_DB_PATH,
             "history_export_csv": HISTORY_EXPORT_CSV,
@@ -4620,6 +4743,10 @@ def _new_run_finalizer(diagnostics: RunDiagnostics, config: RuntimeConfig) -> Ru
             beehiiv_paste_dir=config.output_dir.parent / "beehiiv",
             output_dir=config.output_dir,
             run_log_path=os.path.join(str(config.run_output_dir), f"run_log_{config.timestamp}.log"),
+            run_diagnostics_path=os.path.join(
+                str(config.run_staging_dir), f"run_diagnostics_{config.timestamp}.log"
+            ),
+            latest_run_diagnostics_path=str(config.output_dir / "latest_run_diagnostics.log"),
             history_export_csv=config.history_export_csv,
         ),
         adapters=RunFinalizerAdapters(
@@ -5102,9 +5229,11 @@ def _run_pipeline() -> None:
     progress_tracker.detail(f"Run staging folder: {RUN_OUTPUT_DIR}")
     progress_tracker.detail(f"Latest readable run review: {LATEST_RUN_MARKDOWN_PATH}")
     progress_tracker.detail(f"Rolling run log: {LATEST_RUN_LOG_PATH}")
+    progress_tracker.detail(f"Rolling run diagnostics: {LATEST_RUN_DIAGNOSTICS_PATH}")
     progress_tracker.detail(f"Rolling run details: {LATEST_RUN_DETAILS_PATH}")
     progress_tracker.detail(f"Run used URL log: {RUN_USED_URLS_PATH}")
     progress_tracker.detail(f"Run log: {RUN_LOG_PATH}")
+    progress_tracker.detail(f"Run diagnostics: {RUN_DIAGNOSTICS_PATH}")
     if not URL_REUSE_BLOCKING_ENABLED:
         progress_tracker.detail("URL reuse blocking: disabled for this run.")
 

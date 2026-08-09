@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import dataclasses
 import json
 import tempfile
 import unittest
@@ -10,7 +11,12 @@ from unittest.mock import patch
 from news_pipeline import ui as ui_module
 from news_pipeline.diagnostics import RunDiagnostics
 from news_pipeline.history_store import connect
-from news_pipeline.run_finalizer import RunFinalizer, RunFinalizerAdapters, RunFinalizerConfig
+from news_pipeline.run_finalizer import (
+    RunFinalizer,
+    RunFinalizerAdapters,
+    RunFinalizerConfig,
+    archive_run_diagnostics,
+)
 
 
 class _Progress:
@@ -465,6 +471,96 @@ class RunFinalizerTests(unittest.TestCase):
 
     def _summary(self, url: str, title: str) -> dict[str, str]:
         return {"url": url, "title": title, "summary": "Short summary"}
+
+    def test_archive_run_diagnostics_copies_atomically_and_removes_source(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            source = root / "staging" / "run_diagnostics_2026-06-01_10-00-00.log"
+            target = root / "history" / "diagnostics" / "run_diagnostics_2026-06-01_10-00-00.log"
+            source.parent.mkdir(parents=True)
+            source.write_text("raw transcript line\n", encoding="utf-8")
+
+            archive_run_diagnostics(source, target)
+
+            self.assertTrue(target.exists())
+            self.assertEqual(target.read_text(encoding="utf-8"), "raw transcript line\n")
+            self.assertFalse(source.exists())
+            self.assertFalse(target.with_name(f"{target.name}.tmp").exists())
+
+    def test_archive_run_diagnostics_missing_source_is_noop(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            archive_run_diagnostics(root / "missing.log", root / "target.log")
+            self.assertFalse((root / "target.log").exists())
+
+    def test_archive_run_diagnostics_failure_propagates_without_partial_target(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            source = root / "source.log"
+            target = root / "target.log"
+            source.write_text("content", encoding="utf-8")
+
+            with patch(
+                "news_pipeline.run_finalizer.shutil.copyfile",
+                side_effect=OSError("disk full"),
+            ):
+                with self.assertRaisesRegex(OSError, "disk full"):
+                    archive_run_diagnostics(source, target)
+
+            # The source survives a failed copy so the rolling diagnostic file
+            # remains available as the fallback.
+            self.assertTrue(source.exists())
+            self.assertFalse(target.exists())
+
+    def test_finish_records_diagnostic_artifact_and_keeps_staging_source(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            finalizer, paths, _progress = self._finalizer(tmpdir)
+            root = Path(tmpdir)
+            staging = root / "daily_outputs" / ".staging" / "2026-06-01_10-00-00"
+            staging.mkdir(parents=True)
+            staging_source = staging / "run_diagnostics_2026-06-01_10-00-00.log"
+            staging_source.write_text("raw\n", encoding="utf-8")
+            rolling = root / "daily_outputs" / "latest_run_diagnostics.log"
+            rolling.write_text("rolling\n", encoding="utf-8")
+            finalizer.config = RunFinalizerConfig(
+                **{
+                    **dataclasses.asdict(finalizer.config),
+                    "run_diagnostics_path": staging_source,
+                    "latest_run_diagnostics_path": rolling,
+                }
+            )
+            finalizer.diagnostics.event("completed")
+            finalizer.record_report_body("Daily News Summary\n\nA useful report.")
+
+            finalizer.finish()
+
+            # Artifact metadata names the deterministic durable target with
+            # representation/policy/source, and the staging source survived
+            # visible-output cleanup so the post-context archive can copy it.
+            artifact = finalizer.diagnostics.artifacts["run_diagnostics"]
+            self.assertEqual(
+                artifact["path"],
+                str(paths["history_db"].parent / "diagnostics" / "run_diagnostics_2026-06-01_10-00-00.log"),
+            )
+            self.assertEqual(artifact["representation"], "diagnostic")
+            self.assertEqual(artifact["policy"], "raw_backend_transcript")
+            self.assertEqual(artifact["source"], str(staging_source))
+            self.assertEqual(artifact["rolling"], str(rolling))
+            self.assertTrue(staging_source.exists())
+            # The durable copy happens after the finalizer returns (once the
+            # concise log context closes), so it is not expected here.
+            self.assertFalse(
+                (paths["history_db"].parent / "diagnostics" / "run_diagnostics_2026-06-01_10-00-00.log").exists()
+            )
+
+    def test_diagnostic_artifact_without_source_path_is_skipped(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            finalizer, _paths, _progress = self._finalizer(tmpdir)
+            finalizer.diagnostics.event("completed")
+
+            finalizer.finish()
+
+            self.assertNotIn("run_diagnostics", finalizer.diagnostics.artifacts)
 
 
 if __name__ == "__main__":

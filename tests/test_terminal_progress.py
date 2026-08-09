@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import tempfile
 from io import StringIO
+from pathlib import Path
 from unittest.mock import patch
 import unittest
 
+import news_pipeline.pipeline as pipeline
 from news_pipeline.pipeline import ProgressTracker
 from news_pipeline.story_clustering import organize_article_targets_into_global_stories
 from news_pipeline.story_drafting import StoryDraftingRuntime, run_story_synthesis_blocks
@@ -240,6 +243,51 @@ class TerminalProgressTests(unittest.TestCase):
         self.assertIn("0/200000 steps", output)
         self.assertIn("200000/200000 steps", output)
         self.assertLessEqual(len(output.split("\n")), 3, output)
+
+    def test_high_frequency_clustering_terminal_budget_unchanged_with_diagnostics(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            with patch.object(pipeline, "RUN_LOG_PATH", str(root / "run.log")), patch.object(
+                pipeline,
+                "LATEST_RUN_LOG_PATH",
+                str(root / "latest.log"),
+            ), patch.object(
+                pipeline,
+                "RUN_DIAGNOSTICS_PATH",
+                str(root / "run_diagnostics.log"),
+            ), patch.object(
+                pipeline,
+                "LATEST_RUN_DIAGNOSTICS_PATH",
+                str(root / "latest_diagnostics.log"),
+            ):
+                with pipeline.run_logging():
+                    stream = FakePipe()
+                    tracker = ProgressTracker(stream=stream)
+                    tracker.start_story_clustering(
+                        200_000,
+                        detail="Clustering 139 candidate articles.",
+                    )
+                    for done in range(1, 200_001, 500):
+                        tracker.story_clustering_progress(
+                            "similarity_pair",
+                            {
+                                "phase": "pairwise similarity",
+                                "done": done,
+                                "total": 200_000,
+                                "linked_pairs": done // 10_000,
+                            },
+                        )
+                    tracker.finish_meter(detail="47 story groups")
+
+            # Terminal output budget is identical while the raw diagnostic
+            # transcript captures every render without altering TTY behavior.
+            output = stream.getvalue()
+            self.assertIn("200000/200000 steps", output)
+            self.assertLessEqual(len(output.split("\n")), 3, output)
+            raw = (root / "run_diagnostics.log").read_text(encoding="utf-8")
+            self.assertGreater(raw.count("steps"), 50)
+            self.assertIn("50001/200000 steps", raw)
+            self.assertIn("150001/200000 steps", raw)
 
     def test_story_drafting_progress_reports_concurrent_completions(self) -> None:
         events: list[tuple[str, dict]] = []

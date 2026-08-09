@@ -919,11 +919,12 @@ class UITests(unittest.TestCase):
 
     def test_run_record_and_manager_processes(self) -> None:
         record = RunRecord("run-1", ["news", "run"], {"PASSWORD": "secret", "VISIBLE": "ok"})
-        record.append("line one\n")
+        record.append("WARNING: low coverage\n")
         snapshot = record.snapshot()
         self.assertEqual(snapshot["env"]["PASSWORD"], "********")
         self.assertEqual(snapshot["env"]["VISIBLE"], "ok")
         self.assertEqual(snapshot["line_count"], 1)
+        self.assertNotIn("duration", snapshot)  # not terminal yet
 
         manager = RunManager()
         self.assertIsNone(manager.get("missing"))
@@ -1008,6 +1009,92 @@ class UITests(unittest.TestCase):
         self.assertEqual(record.events[2]["line"], "[7/9 story drafting] [####----------------] 12/47 stories")
         self.assertEqual(record.snapshot()["line_count"], 3)
         self.assertEqual(record.events[0]["line"], meter_final)
+
+    def test_run_record_coalesces_high_frequency_meters_and_suppresses_detail(self) -> None:
+        record = RunRecord("run-1", ["news", "run"], {})
+        for done in range(1_000, 200_001, 1_000):
+            record.append(
+                "[3/9 clustering] [####----------------] "
+                f"{done}/200000 steps | pairwise similarity\n"
+            )
+        record.append("[3/9 clustering] [####################] 200000/200000 steps\n")
+        record.append("Starting source 1/57: Reuters\n")  # low-value detail
+        record.append("WARNING: low coverage\n")
+        record.append("[2/9 sources] Fetching sources.\n")  # transition
+
+        # One coalesced progress event per stage, structured counts, and only
+        # high-value messages retained; detail never reaches the event list.
+        self.assertEqual(
+            [event["kind"] for event in record.events],
+            ["progress", "message", "message"],
+        )
+        progress = record.events[0]
+        self.assertEqual(progress["stage"], "clustering")
+        self.assertEqual(progress["done"], 200000)
+        self.assertEqual(progress["total"], 200000)
+        self.assertEqual(progress["unit"], "steps")
+        self.assertEqual(progress["complete"], True)
+        self.assertEqual(progress["replace"], True)
+        self.assertIn("at", progress)
+        self.assertEqual(record.events[1]["category"], "warning")
+        self.assertEqual(record.events[2]["category"], "transition")
+        self.assertEqual(record.events[2]["stage"], "sources")
+        for event in record.events:
+            self.assertNotIn("\r", event["line"])
+            self.assertNotIn("\033", event["line"])
+            self.assertIn("at", event)
+
+    def test_run_record_terminal_snapshot_has_duration_and_diagnostic_path(self) -> None:
+        record = RunRecord("run-1", ["news", "run"], {})
+        record.append("WARNING: careful\n")
+        self.assertNotIn("duration", record.snapshot())
+        self.assertNotIn("finished_at", record.snapshot())
+        with record.lock:
+            record.status = "completed"
+            record.returncode = 0
+        snapshot = record.snapshot()
+        self.assertEqual(snapshot["status"], "completed")
+        self.assertIn("duration", snapshot)
+        self.assertIsInstance(snapshot["duration"], float)
+        self.assertIn("finished_at", snapshot)
+        self.assertNotIn("diagnostic_path", snapshot)  # unset until start() resolves it
+
+        started = RunRecord("run-2", ["news", "run"], {})
+        started.diagnostic_path = "/tmp/daily_outputs/latest_run_diagnostics.log"
+        with started.lock:
+            started.status = "failed"
+        self.assertEqual(
+            started.snapshot()["diagnostic_path"],
+            "/tmp/daily_outputs/latest_run_diagnostics.log",
+        )
+
+    def test_run_manager_start_resolves_sanitized_diagnostic_path(self) -> None:
+        manager = RunManager()
+
+        class _FakeThread:
+            def __init__(self, target, args, daemon):
+                self.target = target
+                self.args = args
+                self.daemon = daemon
+                self.started = False
+
+            def start(self) -> None:
+                self.started = True
+
+        with patch.object(
+            ui_module,
+            "build_command",
+            return_value=(["news", "run"], {"NEWS_PRESET": "dev"}),
+        ), patch.object(ui_module, "uuid") as uuid_module, patch.object(
+            ui_module.threading,
+            "Thread",
+            _FakeThread,
+        ):
+            uuid_module.uuid4.return_value.hex = "0123456789abcdef"
+            record = manager.start({"action": "run"})
+        self.assertEqual(record.run_id, "0123456789ab")
+        self.assertTrue(record.diagnostic_path.endswith("latest_run_diagnostics.log"))
+        self.assertIn("daily_outputs", record.diagnostic_path)
 
     def test_sse_delivers_progress_replacement_after_cursor_advances(self) -> None:
         record = RunRecord("run-sse", ["news", "run"], {})
@@ -1829,42 +1916,57 @@ class UITests(unittest.TestCase):
                     ui_module.read_historical_report("2026-06-01_10-00-00/../..")
                 )
 
-    def test_run_log_renderer_contracts(self) -> None:
+    def test_run_progress_renderer_contracts(self) -> None:
         html = ui_module.HTML
-        # The log pane is an accessible live region rendered via textContent.
-        self.assertIn('<pre id="logPane" role="log" aria-live="polite"', html)
+        # The progress region is an accessible live status region, not a
+        # terminal transcript pane.
+        self.assertIn('<div id="runProgress" role="status" aria-live="polite"', html)
+        self.assertNotIn('id="logPane"', html)
         # Stage-keyed reducer replaces the active progress row in place.
-        self.assertIn("logState.progressByStage", html)
-        self.assertIn("function appendLogEvent(payload)", html)
-        self.assertIn("function resetLog()", html)
-        self.assertIn("function stopSpinner()", html)
+        self.assertIn("progressState.stages", html)
+        self.assertIn("function appendRunEvent(payload)", html)
+        self.assertIn("function resetRunProgress()", html)
+        self.assertIn("function stopProgressTimer()", html)
         self.assertIn("function finalizeRun(payload, events)", html)
-        # Restrained spinner sequence and explicit terminal glyphs/statuses.
-        self.assertIn("SPINNER_GLYPHS", html)
+        # Explicit terminal glyphs/statuses with readable status words.
+        self.assertIn("STATUS_GLYPHS", html)
         self.assertIn('completed: "✓"', html)
         self.assertIn('failed: "✗"', html)
         self.assertIn('stopped: "■"', html)
         self.assertIn('["completed", "failed", "stopped"]', html)
-        # The spinner decorates, never replaces, the numeric progress text.
-        self.assertIn("SPINNER_GLYPHS[logState.spinnerIndex % SPINNER_GLYPHS.length]} ${text}", html)
-        # All three terminal statuses stop the spinner, close the stream,
+        # Native progress semantics: determinate bars only when totals exist;
+        # zero/unknown totals render an indeterminate bar, never NaN%.
+        self.assertIn('<progress value="${stage.done}" max="${stage.total}"', html)
+        self.assertIn('aria-label="${escapeHtml(stage.label)} progress, indeterminate"', html)
+        self.assertIn("determinate = stage.total > 0", html)
+        self.assertNotIn("NaN%", html)
+        # Categorized notices with visible labels and styling levels.
+        self.assertIn("NOTICE_LEVELS", html)
+        self.assertIn('warning: "warn"', html)
+        self.assertIn('error: "bad"', html)
+        # The backend diagnostic path is displayed as metadata, never read in.
+        self.assertIn("payload.diagnostic_path", html)
+        self.assertIn("Backend diagnostics:", html)
+        # All three terminal statuses stop the timer, close the stream,
         # clear active controls, and refresh durable review data.
         self.assertIn("events.close();", html)
         self.assertIn("refreshReviewData();", html)
-        self.assertIn("stopSpinner();", html)
+        self.assertIn("stopProgressTimer();", html)
         self.assertIn("TERMINAL_STATUSES.includes(payload.status)", html)
         self.assertIn("events.onerror", html)
         self.assertIn("pollRunStatus", html)
         self.assertIn("Live run stream disconnected", html)
         self.assertIn("Live run stream sent invalid data", html)
         self.assertIn("Stop failed:", html)
-        # No append-only raw rendering path remains.
+        # No append-only raw rendering path remains: payload.line is never
+        # written into the DOM.
+        renderer = html.split("function renderRunProgress()")[1].split("function finalizeRun")[0]
+        self.assertNotIn("payload.line", renderer)
         self.assertNotIn("textContent += payload.line", html)
-        self.assertNotIn("textContent += \`\\n[ui] ", html)
         # Run start clears and reinitializes the reducer state.
         run_action = html.split("async function runAction")[1].split("events.addEventListener")[0]
-        self.assertIn("resetLog();", run_action)
-        self.assertIn("startSpinner();", run_action)
+        self.assertIn("resetRunProgress();", run_action)
+        self.assertIn("startProgressTimer();", run_action)
         self.assertIn("new EventSource", run_action)
 
     def test_report_review_tab_contracts(self) -> None:

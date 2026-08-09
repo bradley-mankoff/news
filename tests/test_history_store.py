@@ -451,6 +451,12 @@ class HistoryStoreTests(unittest.TestCase):
                 error_type="RuntimeError",
                 error_message="smtp down",
             )
+            diagnostics.record_artifact(
+                "run_diagnostics",
+                str(db_path.parent / "diagnostics" / "run_diagnostics_2026-06-01_10-00-00.log"),
+                representation="diagnostic",
+                policy="raw_backend_transcript",
+            )
             write_run_history(
                 db_path,
                 run_id="2026-06-01_10-00-00",
@@ -475,8 +481,20 @@ class HistoryStoreTests(unittest.TestCase):
             )
             self.assertEqual(details["settings"]["preset_id"], "daily")
             self.assertEqual(details["events"][-1]["label"], "completed")
-            self.assertEqual(details["artifacts"], [])
             self.assertEqual(details["delivery"]["recipients"], ["reader@example.com"])
+            self.assertEqual(
+                details["artifacts"],
+                [
+                    {
+                        "name": "run_diagnostics",
+                        "path": str(
+                            db_path.parent / "diagnostics" / "run_diagnostics_2026-06-01_10-00-00.log"
+                        ),
+                        "family": "run_diagnostics",
+                        "imported": False,
+                    }
+                ],
+            )
 
     def test_prompt_snapshots_persist_decode_and_idempotent_rewrite(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

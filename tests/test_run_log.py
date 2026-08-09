@@ -82,11 +82,32 @@ class ParseEventTests(unittest.TestCase):
         self.assertEqual(event.stage, "clustering")
         self.assertFalse(event.complete)
         self.assertFalse(event.replace)
+        self.assertEqual(event.done, 10000)
+        self.assertEqual(event.total, 200000)
+        self.assertEqual(event.unit, "steps")
+        self.assertEqual(event.stage_index, 3)
+        self.assertEqual(event.stage_count, 9)
 
     def test_final_counts_mark_complete_progress(self) -> None:
         event = parse_event(_METER_FINAL)
         self.assertEqual(event.kind, "progress")
         self.assertTrue(event.complete)
+        self.assertEqual(event.done, 200000)
+        self.assertEqual(event.total, 200000)
+
+    def test_unindexed_meter_has_no_stage_index_metadata(self) -> None:
+        event = parse_event("[custom] [###-----------------] 1/3 steps")
+        self.assertEqual(event.stage, "custom")
+        self.assertIsNone(event.stage_index)
+        self.assertIsNone(event.stage_count)
+        self.assertEqual(event.unit, "steps")
+
+    def test_zero_total_meter_is_never_complete(self) -> None:
+        event = parse_event("[sources] [#-------------------] 0/0 steps")
+        self.assertEqual(event.kind, "progress")
+        self.assertFalse(event.complete)
+        self.assertEqual(event.done, 0)
+        self.assertEqual(event.total, 0)
 
     def test_stage_key_uses_the_rendered_label(self) -> None:
         self.assertEqual(parse_event("[7/9 story drafting] [####----------------] 12/47 stories").stage, "story drafting")
@@ -111,6 +132,36 @@ class ParseEventTests(unittest.TestCase):
         ):
             self.assertEqual(parse_event(line).kind, "message", line)
 
+    def test_message_categories_for_live_notice_contract(self) -> None:
+        cases = {
+            "[2/9 sources] Fetching sources.": ("transition", "sources"),
+            "[custom] Starting model server.": ("transition", "custom"),
+            "[9/9 finalize] Daily news run complete.": ("summary", None),
+            "[ui] process exited with code 0": ("summary", None),
+            "WARNING: low coverage": ("warning", None),
+            "Retrying task: attempt 1/3 failed (TimeoutError: boom)": ("retry", None),
+            "Traceback (most recent call last):": ("error", None),
+            "RuntimeError: synthetic failure": ("error", None),
+            "  File \"x.py\", line 3, in <module>": ("detail", None),
+            "Starting source 1/57: Reuters": ("detail", None),
+            "Run log saved: /tmp/run_log_1.log": ("summary", None),
+        }
+        for line, (category, stage) in cases.items():
+            event = parse_event(line)
+            self.assertEqual(event.kind, "message", line)
+            self.assertEqual(event.category, category, line)
+            self.assertEqual(event.stage, stage, line)
+
+    def test_stage_looking_sentence_is_not_a_meter(self) -> None:
+        # The QA-driven gotcha: prose under a stage header must not be parsed
+        # as a meter even though it contains the stage label and a count.
+        line = "[3/9 clustering] Clustering 139 candidate articles."
+        event = parse_event(line)
+        self.assertEqual(event.kind, "message")
+        self.assertEqual(event.category, "transition")
+        self.assertIsNone(event.done)
+        self.assertIsNone(event.total)
+
     def test_meter_lookalikes_without_exact_bar_shape_stay_messages(self) -> None:
         self.assertEqual(parse_event("[3/9 clustering] [----] 1/2 steps").kind, "message")
         self.assertEqual(parse_event("[3/9 clustering] [####] 1/2 steps").kind, "message")
@@ -119,13 +170,55 @@ class ParseEventTests(unittest.TestCase):
     def test_event_dict_shape_is_json_ready(self) -> None:
         self.assertEqual(
             parse_event(_METER_LINE).to_dict(),
-            {"line": _METER_LINE, "kind": "progress", "stage": "clustering"},
+            {
+                "line": _METER_LINE,
+                "kind": "progress",
+                "stage": "clustering",
+                "done": 10000,
+                "total": 200000,
+                "unit": "steps",
+            },
         )
         self.assertEqual(
             parse_event(_METER_FINAL).to_dict(),
-            {"line": _METER_FINAL, "kind": "progress", "stage": "clustering", "complete": True},
+            {
+                "line": _METER_FINAL,
+                "kind": "progress",
+                "stage": "clustering",
+                "complete": True,
+                "done": 200000,
+                "total": 200000,
+                "unit": "steps",
+            },
         )
-        self.assertEqual(parse_event("hello").to_dict(), {"line": "hello", "kind": "message"})
+        self.assertEqual(
+            parse_event("[custom] [#-------------------] 0/0 items").to_dict(),
+            {
+                "line": "[custom] [#-------------------] 0/0 items",
+                "kind": "progress",
+                "stage": "custom",
+                "done": 0,
+                "total": 0,
+                "unit": "items",
+            },
+        )
+        self.assertEqual(
+            parse_event("hello").to_dict(),
+            {"line": "hello", "kind": "message", "category": "detail"},
+        )
+        self.assertEqual(
+            parse_event("[2/9 sources] Fetching sources.").to_dict(),
+            {
+                "line": "[2/9 sources] Fetching sources.",
+                "kind": "message",
+                "category": "transition",
+                "stage": "sources",
+            },
+        )
+        self.assertEqual(
+            parse_event("WARNING: careful").to_dict(),
+            {"line": "WARNING: careful", "kind": "message", "category": "warning"},
+        )
 
     def test_run_log_event_to_dict_honors_replace_metadata(self) -> None:
         event = RunLogEvent(line="x", kind="progress", stage="s", replace=True)
@@ -142,6 +235,10 @@ class ParseStreamTests(unittest.TestCase):
         events = parse_stream(traceback)
         self.assertEqual([event.kind for event in events], ["message", "message", "message"])
         self.assertEqual([event.line for event in events], traceback.rstrip("\n").split("\n"))
+        self.assertEqual(
+            [event.category for event in events],
+            ["error", "detail", "error"],
+        )
 
     def test_stream_mixes_messages_and_meters_in_order(self) -> None:
         events = parse_stream(

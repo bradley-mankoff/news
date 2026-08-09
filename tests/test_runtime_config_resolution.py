@@ -834,6 +834,46 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
 
         self.assertEqual(config.output_dir, output_dir)
 
+    def test_diagnostic_paths_follow_output_and_staging_dirs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir) / "outputs"
+            config = load_runtime_config(
+                environ={"NEWS_OUTPUT_DIR": str(output_dir)},
+                materialize_outputs=False,
+                run_started_at=datetime(2026, 6, 14, 12, 0, 0),
+            )
+
+        timestamp = "2026-06-14_12-00-00"
+        self.assertEqual(
+            config.latest_run_diagnostics_path,
+            output_dir / "latest_run_diagnostics.log",
+        )
+        self.assertEqual(
+            config.run_diagnostics_path,
+            output_dir / ".staging" / timestamp / f"run_diagnostics_{timestamp}.log",
+        )
+        # The concise siblings keep their documented paths.
+        self.assertEqual(config.latest_run_log_path, output_dir / "latest_run.log")
+        self.assertEqual(
+            config.latest_run_details_path,
+            output_dir / "latest_run_details.json",
+        )
+
+    def test_default_diagnostic_paths_use_daily_outputs(self) -> None:
+        config = load_runtime_config(
+            environ={},
+            materialize_outputs=False,
+            run_started_at=datetime(2026, 6, 14, 12, 0, 0),
+        )
+        self.assertEqual(
+            config.latest_run_diagnostics_path,
+            config.output_dir / "latest_run_diagnostics.log",
+        )
+        self.assertEqual(
+            config.run_diagnostics_path.parent.parent,
+            config.output_dir / ".staging",
+        )
+
     def test_load_model_tuning_presets_missing_and_explicit_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             tmpdir_path = Path(tmpdir)

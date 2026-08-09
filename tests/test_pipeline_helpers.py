@@ -1868,6 +1868,90 @@ class PipelineHelperTests(unittest.TestCase):
             )
             self.assertIsNone(pipeline.RUN_LOG_WRITER)
 
+    def test_run_logging_tees_every_meter_to_raw_diagnostics_only(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            run_log = root / "run.log"
+            latest_log = root / "latest.log"
+            run_diag = root / "run_diagnostics.log"
+            latest_diag = root / "latest_diagnostics.log"
+            with patch.object(pipeline, "RUN_LOG_PATH", str(run_log)), patch.object(
+                pipeline,
+                "LATEST_RUN_LOG_PATH",
+                str(latest_log),
+            ), patch.object(
+                pipeline,
+                "RUN_DIAGNOSTICS_PATH",
+                str(run_diag),
+            ), patch.object(
+                pipeline,
+                "LATEST_RUN_DIAGNOSTICS_PATH",
+                str(latest_diag),
+            ):
+                with pipeline.run_logging():
+                    tracker = pipeline.ProgressTracker(stream=StringIO())
+                    tracker.step("setup", "Initializing")
+                    tracker.start_story_clustering(200_000, detail="Clustering.")
+                    for done in range(5_000, 200_001, 5_000):
+                        tracker.story_clustering_progress(
+                            "similarity_pair",
+                            {
+                                "phase": "pairwise similarity",
+                                "done": done,
+                                "total": 200_000,
+                                "linked_pairs": done // 10_000,
+                            },
+                        )
+                    tracker.finish_meter(detail="47 story groups")
+                    tracker.warning("careful")
+                    pipeline._write_run_diagnostics("raw detail line")
+
+            concise = run_log.read_text(encoding="utf-8")
+            raw = run_diag.read_text(encoding="utf-8")
+            # Concise policy: initial/final snapshots and warnings, no spam.
+            self.assertIn("0/200000 steps", concise)
+            self.assertIn("200000/200000 steps", concise)
+            self.assertIn("WARNING: careful", concise)
+            self.assertNotIn("50000/200000 steps", concise)
+            self.assertNotIn("100000/200000 steps", concise)
+            # Raw policy: every actual meter render plus raw detail lines.
+            self.assertIn("50000/200000 steps", raw)
+            self.assertIn("100000/200000 steps", raw)
+            self.assertIn("raw detail line", raw)
+            # Both sinks tee their rolling counterpart byte-for-byte.
+            self.assertEqual(concise, latest_log.read_text(encoding="utf-8"))
+            self.assertEqual(raw, latest_diag.read_text(encoding="utf-8"))
+            self.assertIsNone(pipeline.RUN_LOG_WRITER)
+            self.assertEqual(pipeline.RUN_DIAGNOSTIC_FILES, [])
+
+    def test_diagnostic_sink_write_failure_disables_without_masking(self) -> None:
+        warnings: list[str] = []
+
+        class _RecordingProgress:
+            def warning(self, message: str) -> None:
+                warnings.append(message)
+
+        class _BrokenHandle:
+            def write(self, text: str) -> int:
+                raise OSError("disk full")
+
+            def flush(self) -> None:
+                return None
+
+        with patch.object(pipeline, "RUN_DIAGNOSTIC_FILES", [_BrokenHandle()]), patch.object(
+            pipeline,
+            "progress_tracker",
+            _RecordingProgress(),
+        ):
+            # The sink is disabled after the first failure and a warning is
+            # emitted; subsequent writes are silent no-ops, never exceptions.
+            pipeline._write_run_diagnostics("raw detail")
+            pipeline._write_run_diagnostics("more detail")
+
+        self.assertEqual(pipeline.RUN_DIAGNOSTIC_FILES, [])
+        self.assertIsNone(pipeline.RUN_DIAGNOSTIC_FILE)
+        self.assertEqual(warnings, ["Run diagnostics write failed: disk full"])
+
 
     def test_unsubscribe_google_news_and_source_match_branch_helpers(self) -> None:
         with patch.object(pipeline, "UNSUBSCRIBE_SECRET", "secret"), patch.object(

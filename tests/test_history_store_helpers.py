@@ -554,6 +554,7 @@ class HistoryStoreHelperTests(unittest.TestCase):
             keep = output_dir / "latest_run.md"
             keep.write_text("keep", encoding="utf-8")
             (output_dir / "latest_run.log").write_text("log", encoding="utf-8")
+            (output_dir / "latest_run_diagnostics.log").write_text("raw", encoding="utf-8")
             (output_dir / "latest_run_details.json").write_text("{}", encoding="utf-8")
             candidate_paths = [output_dir / f"candidate_{index}.txt" for index in range(81)]
             for path in candidate_paths[:-1]:
@@ -620,6 +621,8 @@ class HistoryStoreHelperTests(unittest.TestCase):
             history_module._remove_empty_output_dirs(missing_dir)
             self.assertEqual(history_module._run_started_at_from_id("not-a-run"), "")
             self.assertEqual(history_module._artifact_family("run_summary_2026-06-01_10-00-00.json"), "run_summary")
+            self.assertEqual(history_module._artifact_family("run_diagnostics_2026-06-01_10-00-00.log"), "run_diagnostics")
+            self.assertEqual(history_module._artifact_family("run_diagnostics_2026-06-02_09-00-00.log"), "run_diagnostics")
             self.assertEqual(history_module._artifact_family("topics_2026-06-01_10-00-00.json"), "topics")
             self.assertEqual(history_module._artifact_family("news_report_2026-06-01_10-00-00.txt"), "final_report")
             self.assertEqual(history_module._artifact_family("plain.txt"), "other")
@@ -631,6 +634,7 @@ class HistoryStoreHelperTests(unittest.TestCase):
             keep.write_text("keep", encoding="utf-8")
             (visible_dir / "latest_run.md").write_text("latest", encoding="utf-8")
             (visible_dir / "latest_run.log").write_text("log", encoding="utf-8")
+            (visible_dir / "latest_run_diagnostics.log").write_text("raw", encoding="utf-8")
             (visible_dir / "latest_run_details.json").write_text("{}", encoding="utf-8")
             drop = visible_dir / "drop.txt"
             drop.write_text("drop", encoding="utf-8")
@@ -639,6 +643,19 @@ class HistoryStoreHelperTests(unittest.TestCase):
                 history_module._visible_output_cleanup_candidates(visible_dir, keep_paths=[keep]),
                 [drop],
             )
+
+            # The rolling diagnostic transcript is retained like the other
+            # rolling files even without an explicit keep path.
+            (visible_dir / "latest_run_diagnostics.log").unlink()
+            candidates = history_module._visible_output_cleanup_candidates(
+                visible_dir,
+                keep_paths=[keep],
+            )
+            self.assertNotIn(
+                (visible_dir / "latest_run_diagnostics.log").resolve(),
+                [path.resolve() for path in candidates],
+            )
+            (visible_dir / "latest_run_diagnostics.log").write_text("raw", encoding="utf-8")
 
             empty_root = root / "empty"
             nested = empty_root / "nested"

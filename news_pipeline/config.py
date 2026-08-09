@@ -334,6 +334,8 @@ class RuntimeConfig:
     run_output_dir: Path
     latest_run_markdown_path: Path
     latest_run_log_path: Path
+    latest_run_diagnostics_path: Path
+    run_diagnostics_path: Path
     latest_run_details_path: Path
     run_staging_dir: Path
     history_db_path: Path
@@ -2125,6 +2127,8 @@ def _build_runtime_config(
     run_output_dir = run_staging_dir
     latest_run_markdown_path = output_dir / "latest_run.md"
     latest_run_log_path = output_dir / "latest_run.log"
+    latest_run_diagnostics_path = output_dir / "latest_run_diagnostics.log"
+    run_diagnostics_path = run_staging_dir / f"run_diagnostics_{timestamp}.log"
     latest_run_details_path = output_dir / "latest_run_details.json"
     if materialize_outputs:
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -2286,6 +2290,8 @@ def _build_runtime_config(
         run_output_dir=run_output_dir,
         latest_run_markdown_path=latest_run_markdown_path,
         latest_run_log_path=latest_run_log_path,
+        latest_run_diagnostics_path=latest_run_diagnostics_path,
+        run_diagnostics_path=run_diagnostics_path,
         latest_run_details_path=latest_run_details_path,
         run_staging_dir=run_staging_dir,
         history_db_path=history_db_path,

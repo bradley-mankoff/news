@@ -34,6 +34,7 @@ from .config import (
     load_run_presets,
     load_model_tuning_presets,
     load_recipients,
+    load_runtime_config,
     load_sources,
     normalize_preset_id,
     run_preset_env,
@@ -870,10 +871,12 @@ class RunRecord:
         self.command = command
         self.env = env
         self.started_at = time.time()
-        # Normalized structured events (message/progress) in arrival order.
+        self._monotonic_started = time.monotonic()
+        # Normalized structured events (progress/message) in arrival order.
         # Progress snapshots replace the previous snapshot of the same stage
-        # in place, so the event history stays bounded by meaningful messages
-        # plus one line per active stage.
+        # in place, so the event history stays bounded by high-value messages
+        # plus one line per active stage. Low-value ``detail`` messages are
+        # suppressed here and live only in the backend diagnostic artifact.
         self.events: list[dict[str, Any]] = []
         self._event_sequences: list[int] = []
         self._next_event_sequence = 0
@@ -883,14 +886,21 @@ class RunRecord:
         self.returncode: int | None = None
         self.process: subprocess.Popen[str] | None = None
         self.lock = threading.Lock()
+        # Sanitized rolling diagnostic path shown as backend metadata; never
+        # used to read file content into the browser.
+        self.diagnostic_path = ""
 
     def append(self, line: str) -> None:
         with self.lock:
             for event in run_log.parse_stream(line):
                 if event.kind == "progress":
                     self._append_progress(event)
+                elif event.category == "detail":
+                    continue  # low-value detail stays backend-only
                 else:
-                    self.events.append(event.to_dict())
+                    payload = event.to_dict()
+                    payload["at"] = time.time()
+                    self.events.append(payload)
                     self._event_sequences.append(self._next_sequence())
 
     def _next_sequence(self) -> int:
@@ -899,6 +909,7 @@ class RunRecord:
 
     def _append_progress(self, event: run_log.RunLogEvent) -> None:
         payload = event.to_dict()
+        payload["at"] = time.time()
         index = self._progress_index.get(event.stage or "")
         if index is not None:
             if self.events[index].get("line") == payload["line"]:
@@ -934,7 +945,7 @@ class RunRecord:
 
     def snapshot(self) -> dict[str, Any]:
         with self.lock:
-            return {
+            payload = {
                 "run_id": self.run_id,
                 "command": self.command,
                 "env": _display_env(self.env),
@@ -943,6 +954,12 @@ class RunRecord:
                 "returncode": self.returncode,
                 "line_count": len(self.events),
             }
+            if self.status in {"completed", "failed", "stopped"}:
+                payload["finished_at"] = time.time()
+                payload["duration"] = round(time.monotonic() - self._monotonic_started, 3)
+            if self.diagnostic_path:
+                payload["diagnostic_path"] = self.diagnostic_path
+            return payload
 
     def is_active(self) -> bool:
         with self.lock:
@@ -969,6 +986,18 @@ class RunManager:
         command, env = build_command(body)
         run_id = uuid.uuid4().hex[:12]
         record = RunRecord(run_id, command, env)
+        # Sanitized backend metadata only: the rolling diagnostic path is
+        # resolved from the same command environment the child will run with
+        # and shown to operators, never read into the browser. Resolution
+        # failure is non-fatal (the path is display metadata).
+        try:
+            resolved = load_runtime_config(
+                environ=dict(os.environ, **env),
+                materialize_outputs=False,
+            )
+            record.diagnostic_path = str(resolved.latest_run_diagnostics_path)
+        except Exception:
+            record.diagnostic_path = ""
         with self.lock:
             for existing in self.runs.values():
                 if existing.is_active():
@@ -1571,12 +1600,80 @@ HTML = r"""<!doctype html>
       border-radius: 8px;
       white-space: pre-wrap;
     }
-    #logPane {
-      min-height: 280px;
-      max-height: 52vh;
-      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
-      font-size: 13px;
-      line-height: 1.55;
+    #runProgress {
+      min-height: 96px;
+    }
+    .run-summary {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-weight: 700;
+      margin-bottom: 10px;
+    }
+    .run-summary .status-glyph { font-size: 16px; line-height: 1; }
+    .stage-list { display: grid; gap: 6px; }
+    .stage-row {
+      display: grid;
+      grid-template-columns: 20px minmax(110px, 170px) minmax(80px, 1fr) auto auto;
+      gap: 10px;
+      align-items: center;
+      padding: 8px 10px;
+      background: #fff;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      box-shadow: 0 4px 12px rgba(36, 44, 60, 0.04);
+    }
+    .stage-state { text-align: center; font-weight: 700; }
+    .stage-state.live {
+      color: var(--blue);
+      animation: stagePulse 1.6s ease-in-out infinite;
+    }
+    .stage-state.done { color: var(--green); }
+    .stage-state.idle { color: var(--muted); }
+    @keyframes stagePulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.4; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .stage-state.live { animation: none; }
+    }
+    .stage-label { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .stage-row progress { width: 100%; min-width: 70px; }
+    .stage-counts, .stage-elapsed {
+      white-space: nowrap;
+      color: var(--muted);
+      font-size: 12px;
+      font-variant-numeric: tabular-nums;
+    }
+    .stage-elapsed { min-width: 52px; text-align: right; }
+    .notices { margin-top: 10px; display: grid; gap: 4px; }
+    .notice {
+      font-size: 12px;
+      padding: 4px 8px;
+      border-radius: 8px;
+      border: 1px solid var(--line);
+      background: #fff;
+    }
+    .notice.warn { color: var(--gold); border-color: #e2cf9f; background: #fdf8ec; }
+    .notice.bad { color: var(--red); border-color: #e5b4b4; background: #fdf2f2; }
+    .notice.muted { color: var(--muted); }
+    .run-diagnostics {
+      margin-top: 10px;
+      font-size: 12px;
+      color: var(--muted);
+    }
+    .run-diagnostics code {
+      word-break: break-all;
+      padding: 2px 5px;
+      border-radius: 5px;
+      background: #f3f5f8;
+      border: 1px solid var(--line);
+      font-size: 11px;
+    }
+    .run-progress-empty { margin: 0; }
+    @media (max-width: 780px) {
+      .stage-row { grid-template-columns: 20px 1fr auto; }
+      .stage-counts { grid-column: 2 / -1; }
     }
     .knob-group { margin-bottom: 18px; }
     .knobs { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 10px; }
@@ -2567,8 +2664,10 @@ HTML = r"""<!doctype html>
             <pre id="previewPane"></pre>
           </section>
           <section class="panel">
-            <div class="toolbar"><h2 style="margin-right:auto">Run log</h2><button id="stopBtn" class="danger">Stop</button></div>
-            <pre id="logPane" role="log" aria-live="polite" aria-label="Run log"></pre>
+            <div class="toolbar"><h2 style="margin-right:auto">Run progress</h2><button id="stopBtn" class="danger">Stop</button></div>
+            <div id="runProgress" role="status" aria-live="polite" aria-label="Run progress">
+              <p class="run-progress-empty muted">Start a run to see stage progress here.</p>
+            </div>
           </section>
         </div>
       `;
@@ -3035,84 +3134,146 @@ HTML = r"""<!doctype html>
         $("previewPane").textContent = `Preview unavailable: ${err.message}`;
       }
     }
-    // Run log rendering: one mutable progress row per active stage, plain
-    // message rows appended, and a restrained spinner while a stage is live.
-    // Glyphs are decoration only: numeric counts and status words stay in
-    // every line so the log reads fine when glyphs are unavailable.
-    const SPINNER_GLYPHS = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-    const TERMINAL_GLYPHS = { completed: "✓", failed: "✗", stopped: "■" };
+    // Run progress rendering: one concise mutable row per observed stage with
+    // counts, percentage, timing, and a live indicator; categorized notices
+    // for stage transitions, warnings, retries, errors, and summaries; and an
+    // explicit terminal summary with duration and the sanitized backend
+    // diagnostic path. Raw transcript lines, traceback frames, ANSI, and CR
+    // are never rendered here — detail lives in the backend diagnostic file.
+    // Glyphs are decoration only: status words and counts stay readable when
+    // glyphs are unavailable.
     const TERMINAL_STATUSES = ["completed", "failed", "stopped"];
-    const logState = { rows: [], progressByStage: new Map(), spinnerIndex: 0, spinnerTimer: null };
-    function resetLog() {
-      stopSpinner();
-      logState.rows = [];
-      logState.progressByStage = new Map();
-      logState.spinnerIndex = 0;
-      $("logPane").textContent = "";
+    const STATUS_GLYPHS = { completed: "✓", failed: "✗", stopped: "■" };
+    const NOTICE_LEVELS = {
+      warning: "warn",
+      retry: "warn",
+      error: "bad",
+      summary: "muted",
+      transition: "muted"
+    };
+    const MAX_NOTICES = 30;
+    const progressState = { stages: new Map(), notices: [], statusText: "", diagnosticsPath: "", timer: null };
+
+    function formatElapsed(seconds) {
+      const total = Math.max(0, Number(seconds) || 0);
+      if (total < 60) return `${total.toFixed(1)}s`;
+      const minutes = Math.floor(total / 60);
+      const rest = Math.round(total % 60);
+      return `${minutes}m ${rest}s`;
     }
-    function stopSpinner() {
-      if (logState.spinnerTimer !== null) {
-        clearInterval(logState.spinnerTimer);
-        logState.spinnerTimer = null;
+
+    function formatCount(value) {
+      return Number(value || 0).toLocaleString();
+    }
+
+    function stopProgressTimer() {
+      if (progressState.timer !== null) {
+        clearInterval(progressState.timer);
+        progressState.timer = null;
       }
     }
-    function renderLog() {
-      const pane = $("logPane");
-      const rows = [];
-      for (const row of logState.rows) {
-        let text = row.text;
-        if (row.stage) {
-          if (row.live) {
-            text = `${SPINNER_GLYPHS[logState.spinnerIndex % SPINNER_GLYPHS.length]} ${text}`;
-          } else if (row.complete) {
-            text = `✓ ${text}`;
-          }
-        }
-        rows.push(text);
-      }
-      pane.textContent = rows.join("\n");
-      pane.scrollTop = pane.scrollHeight;
+
+    function startProgressTimer() {
+      stopProgressTimer();
+      progressState.timer = setInterval(renderRunProgress, 1000);
     }
-    function startSpinner() {
-      stopSpinner();
-      logState.spinnerTimer = setInterval(() => {
-        logState.spinnerIndex += 1;
-        renderLog();
-      }, 160);
+
+    function resetRunProgress() {
+      stopProgressTimer();
+      progressState.stages = new Map();
+      progressState.notices = [];
+      progressState.statusText = "";
+      progressState.diagnosticsPath = "";
+      renderRunProgress();
     }
-    function appendLogEvent(payload) {
-      const parts = String(payload.line || "").split("\n");
-      for (const line of parts) {
-        if (!line) continue;
-        if (payload.kind === "progress" && payload.stage) {
-          const index = logState.progressByStage.get(payload.stage);
-          const live = !payload.complete;
-          const complete = Boolean(payload.complete);
-          if (index !== undefined) {
-            if (logState.rows[index].text === line) continue; // defensive duplicate
-            logState.rows[index].text = line;
-            logState.rows[index].live = live;
-            logState.rows[index].complete = complete;
-          } else {
-            logState.progressByStage.set(payload.stage, logState.rows.length);
-            logState.rows.push({ stage: payload.stage, text: line, live: live, complete: complete });
-          }
-        } else {
-          logState.rows.push({ stage: null, text: line });
-        }
-      }
-      renderLog();
-    }
+
     function terminalGlyph(status) {
-      return TERMINAL_GLYPHS[status] || "•";
+      return STATUS_GLYPHS[status] || "•";
     }
+
+    // Stage-keyed reducer: a progress payload upserts one row per stable stage
+    // (idempotent under SSE replay), and high-value notices are deduplicated.
+    // ``payload.line`` is never appended to the DOM.
+    function appendRunEvent(payload) {
+      if (!payload || typeof payload !== "object") return;
+      if (payload.kind === "progress" && payload.stage) {
+        progressState.stages.set(payload.stage, {
+          label: payload.stage,
+          done: payload.done,
+          total: payload.total,
+          unit: payload.unit || "",
+          complete: Boolean(payload.complete),
+          live: !payload.complete,
+          at: payload.at || Date.now() / 1000
+        });
+      } else if (payload.kind === "message") {
+        const category = payload.category || "detail";
+        const text = String(payload.line || "").trim();
+        if (category === "detail" || !text) return; // defensive: backend already suppresses detail
+        const key = `${category}:${text}`;
+        if (!progressState.notices.some(notice => notice.key === key)) {
+          progressState.notices.push({ key, text, level: NOTICE_LEVELS[category] || "muted" });
+          if (progressState.notices.length > MAX_NOTICES) progressState.notices.shift();
+        }
+        if (category === "transition" && payload.stage) {
+          const stage = progressState.stages.get(payload.stage);
+          if (stage) stage.live = false;
+        }
+      }
+      renderRunProgress();
+    }
+
+    function renderRunProgress() {
+      const region = $("runProgress");
+      if (!region) return;
+      const now = Date.now() / 1000;
+      const rows = [...progressState.stages.values()];
+      if (!rows.length && !progressState.statusText) {
+        region.innerHTML = `<p class="run-progress-empty muted">Start a run to see stage progress here.</p>`;
+        return;
+      }
+      const stageHtml = rows.map(stage => {
+        const determinate = stage.total > 0;
+        const percent = determinate ? Math.min(100, Math.round((stage.done / stage.total) * 100)) : null;
+        const counts = `${formatCount(stage.done)}/${formatCount(stage.total)} ${escapeHtml(stage.unit)}`.trim();
+        const elapsed = formatElapsed(now - (stage.at || now));
+        const state = stage.complete ? "✓" : stage.live ? "◌" : "—";
+        const stateClass = stage.complete ? "done" : stage.live ? "live" : "idle";
+        const bar = determinate
+          ? `<progress value="${stage.done}" max="${stage.total}" aria-label="${escapeHtml(stage.label)} progress"></progress>`
+          : `<progress aria-label="${escapeHtml(stage.label)} progress, indeterminate"></progress>`;
+        const pct = percent !== null ? ` · ${percent}%` : "";
+        return `<div class="stage-row" data-stage="${escapeHtml(stage.label)}">
+          <span class="stage-state ${stateClass}" aria-hidden="true">${state}</span>
+          <span class="stage-label">${escapeHtml(stage.label)}</span>
+          ${bar}
+          <span class="stage-counts">${escapeHtml(counts)}${pct}</span>
+          <span class="stage-elapsed">${escapeHtml(elapsed)}</span>
+        </div>`;
+      }).join("");
+      const noticesHtml = progressState.notices.map(notice =>
+        `<div class="notice ${notice.level}">${escapeHtml(notice.text)}</div>`
+      ).join("");
+      const summary = progressState.statusText
+        ? `<div class="run-summary"><span class="status-glyph" aria-hidden="true">${escapeHtml(terminalGlyph(progressState.statusGlyph))}</span><span>${escapeHtml(progressState.statusText)}</span></div>`
+        : "";
+      const diagnostics = progressState.diagnosticsPath
+        ? `<div class="run-diagnostics">Backend diagnostics: <code>${escapeHtml(progressState.diagnosticsPath)}</code> <span class="muted">(raw transcript — not shown in this panel)</span></div>`
+        : "";
+      region.innerHTML = `${summary}<div class="stage-list">${stageHtml}</div>${noticesHtml ? `<div class="notices">${noticesHtml}</div>` : ""}${diagnostics}`;
+    }
+
     function finalizeRun(payload, events) {
       if (!TERMINAL_STATUSES.includes(payload.status)) return false;
-      stopSpinner();
-      for (const row of logState.rows) {
-        if (row.stage) row.live = false;
-      }
-      appendLogEvent({ line: `${terminalGlyph(payload.status)} [ui] ${payload.status}` });
+      stopProgressTimer();
+      for (const stage of progressState.stages.values()) stage.live = false;
+      const duration = payload.duration !== undefined && payload.duration !== null
+        ? ` · ${formatElapsed(payload.duration)}`
+        : "";
+      progressState.statusGlyph = payload.status;
+      progressState.statusText = `Run ${payload.status}${duration}`;
+      if (payload.diagnostic_path) progressState.diagnosticsPath = payload.diagnostic_path;
+      renderRunProgress();
       state.activeRun = null;
       updateRunControls();
       setStatus(`Run ${payload.run_id} ${payload.status}.`, payload.status === "failed" ? "bad" : "muted");
@@ -3128,8 +3289,8 @@ HTML = r"""<!doctype html>
       const data = await api("/api/run", { method: "POST", body: JSON.stringify(requestBody(action)) });
       state.activeRun = data.run_id;
       updateRunControls();
-      resetLog();
-      startSpinner();
+      resetRunProgress();
+      startProgressTimer();
       const events = new EventSource(`/api/runs/${data.run_id}/events`);
       let recoveryStarted = false;
       const pollRunStatus = async () => {
@@ -3146,13 +3307,13 @@ HTML = r"""<!doctype html>
         if (recoveryStarted || state.activeRun !== data.run_id) return;
         recoveryStarted = true;
         events.close();
-        stopSpinner();
+        stopProgressTimer();
         setStatus("Live run stream disconnected; checking run status…", "warn");
         void pollRunStatus();
       };
       events.onmessage = event => {
         try {
-          appendLogEvent(JSON.parse(event.data));
+          appendRunEvent(JSON.parse(event.data));
         } catch (err) {
           setStatus(`Live run stream sent invalid data: ${err.message}`, "bad");
           recoverFromStream();

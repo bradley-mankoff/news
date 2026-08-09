@@ -108,15 +108,18 @@ the live stream closes and the review/history panels refresh automatically; a
 completed report navigates to Report Review, while a failed run without a
 report leaves you on Run Setup with the failure visible.
 
-The **Run log** shows a concise, normalized projection of the child process:
-progress meters update one line per active stage (with a small spinner glyph
-while the stage is live), stage headers, warnings, retries, errors, and final
-summaries append in order, and carriage returns/terminal control sequences
-never reach the pane. The stream always ends with an explicit terminal line
-using a restrained text glyph: `✓ [ui] completed`, `✗ [ui] failed`, or
-`■ [ui] stopped` (a user-requested stop is never reported as a failure). The
-glyphs are decoration only; plain counts and status words remain readable even
-when glyphs are unavailable.
+The **Run Progress** panel replaces the old terminal-style log wall with a
+concise, stage-oriented view: one row per observed stage with counts and
+percentage where totals are known (indeterminate bars for unknown/zero
+totals), elapsed timing per stage, a small live indicator, and an explicit
+terminal summary with total duration for `✓ completed`, `✗ failed`, or
+`■ stopped` (a user-requested stop is never reported as a failure). Warnings,
+retries, errors, stage transitions, and final summaries appear as compact
+categorized notices; raw transcript lines, carriage returns, ANSI sequences,
+traceback walls, and SSE framing never reach the panel. The sanitized backend
+diagnostic path is shown as metadata for debugging, and a user-requested stop
+is never reported as a failure. The glyphs are decoration only; plain counts
+and status words remain readable even when glyphs are unavailable.
 
 Report-generation status and optional email delivery status are independent:
 a run with no sender/recipient/SMTP configuration finishes with delivery
@@ -423,7 +426,10 @@ variables and source topic fields are rejected when present.
 
 ## Outputs
 
-Current run review files are written under `output/daily_outputs/`:
+Current run review files are written under `output/daily_outputs/`. The
+representation policy splits the run transcript into a **concise projection**
+(readable, normalized, kept small) and a **raw diagnostic transcript**
+(complete backend forensics, never shown in the browser):
 
 - `latest_run.md`: latest human-readable report.
 - `latest_run.log`: latest concise normalized run log. Progress meters are
@@ -431,12 +437,24 @@ Current run review files are written under `output/daily_outputs/`:
   sequences are removed, and warnings, retries, errors, final summaries, and
   full failure tracebacks remain readable. The per-run timestamped counterpart
   is written to `.staging/<run-date>/run_log_<run-id>.log` with the same
-  concise policy and is passed to DuckDB history.
+  concise policy and is passed to DuckDB history (see `run_logs` below).
+- `latest_run_diagnostics.log`: latest **raw backend diagnostic transcript**.
+  Every meter render, detail message, warning/retry/error text, full failure
+  traceback, and subprocess output (including mflux image generation) is
+  captured verbatim here. It is never streamed into the Run Progress panel
+  and never ingested into `run_logs`. The per-run timestamped counterpart is
+  written to `.staging/<run-date>/run_diagnostics_<run-id>.log` and copied
+  to `output/history/diagnostics/run_diagnostics_<run-id>.log` before staging
+  cleanup so it survives finalization; the durable path is recorded in
+  `latest_run_details.json` artifacts and DuckDB `artifacts`. When a run
+  starts, both diagnostic paths are printed as run details.
 - `latest_run_details.json`: latest backend audit details (includes the
   normalized delivery outcome — status, reason, phase, and
-  accepted/rejected recipients — when a delivery attempt was possible). This
-  and the managed `model_server.log` are the detailed diagnostic sources; the
-  concise run log is not a raw transcript.
+  accepted/rejected recipients — when a delivery attempt was possible, plus
+  artifact metadata naming the durable diagnostic path). This and the managed
+  `model_server.log` are the structured diagnostic sources; the concise run
+  log is not a raw transcript, and the raw diagnostic transcript is not a
+  concise projection.
 
 Durable run history is written to `output/history/news_history.duckdb`, with CSV
 exports in `output/history/` for quick review. The DuckDB `run_logs` table
