@@ -1,0 +1,15 @@
+# Secret-scanning prevention: Gitleaks runs on staged changes before every
+# commit. The hook is pinned so detector changes are deliberate updates
+# (see docs/security/secret-prevention.md).
+#
+# The entry is the upstream staged-only, redacted invocation and is NOT
+# overridden here: `gitleaks git --pre-commit --redact --staged --verbose`.
+# It scans only the staged diff, so it does not gate existing history
+# (history audit/scrub are separate controls, see AGENTS.md).
+minimum_pre_commit_version: "4.6.1"
+
+repos:
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.30.1
+    hooks:
+      - id: gitleaks

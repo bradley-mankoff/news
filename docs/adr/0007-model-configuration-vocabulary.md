@@ -1,79 +1,113 @@
 # ADR 0007: Model Configuration Vocabulary
 
-Status: Proposed
+Status: Accepted
 
-Date: 2026-06-21
+Date: 2026-08-06
 
 ## Context
 
-The current model configuration Interface is shallow. `NEWS_MODEL` chooses a
-model, but it also causes Runtime Config Resolution to infer a model runtime
-profile, server settings, sampling settings, token limits, and article caps.
-That gives callers a small-looking Interface that hides too many unrelated
-decisions behind one value.
+Model configuration originally exposed a shallow Interface: `NEWS_MODEL`
+chose a model, but it also caused Runtime Config Resolution to infer a
+size-class runtime profile (reported as names such as `big_conservative`) that
+bundled server settings, sampling settings, token limits, and article caps
+behind one value. That gave callers a small-looking Interface that hid too many
+unrelated decisions, and the UI exposed raw settings that overlapped the
+inferred bundle's pieces, making the profile neither a reliable default nor a
+clean user preset.
 
-The confusing symptom is the setup line that can report a profile such as
-`big_conservative` instead of the model the user thought they selected. The
-deeper problem is not just the name. A size-class profile is an inferred bundle
-of opinions. It mixes model identity, Model Tuning, Pipeline Budget, and Model
-Server Settings. Those concepts vary for different reasons and should not share
-one implicit seam.
-
-The UI also exposes enough raw settings to override pieces of the inferred
-profile. That makes the profile neither a reliable default nor a clean user
-preset. Users see too many controls, and several controls appear to overlap
-because they belong to different concepts that are not named separately.
+The implementation has since replaced profile inference with explicit category
+seams. Model identity/task routing, Model Tuning, Pipeline Budget, and Model
+Server Settings are separate frozen dataclasses in `RuntimeConfig`, and the
+runtime knob registry groups settings under those same names. The decision
+record stayed `Proposed` while the code shipped, so maintainers could not treat
+the vocabulary as a settled architecture constraint. This record accepts the
+explicit vocabulary as the load-bearing boundary between model selection,
+tuning, budgets, and model-server settings. The `big_conservative` size-class
+profile is historical pressure, not current runtime behavior.
 
 ## Vocabulary
 
 - Run Settings: every user-controllable value that shapes one Run Session.
 - Run Preset: a saved Run Settings overlay in `config/run_presets.yaml`.
-- Task Model Assignment: the model selected for a model-using task. Every
+- Task Model Assignment: the model selected for a model-using task, including
+  its resolved name, backend, base URL, server command, and tuning. Every
   actual LLM stage has its own assignment: Article Summarization, Story
   Drafting, Story Scale Screening, and Title Generation. Image Art Direction
   inherits the Title Generation assignment (one shared LLM call produces both
   outputs), and Story Discovery has no LLM stage (embedding/TF-IDF clustering)
-  so it inherits the default model.
+  so it inherits the default model. There is no image-art-direction model
+  variable.
 - Model Defaults: model or backend defaults used when no explicit Model Tuning
   is configured.
 - Model Tuning: explicit inference settings for a selected model, such as
-  sampling settings and task token limits.
+  sampling settings and model/task token limits.
 - Model Tuning Preset: a saved Model Tuning overlay for one model or one
-  model-task pair.
+  model-task pair, stored in `config/model_tuning_presets.yaml`.
 - Pipeline Budget: non-model limits such as article caps, story caps, text
-  truncation, recency windows, and concurrency.
+  truncation, recency windows, thresholds, and pipeline workload concurrency.
 - Model Server Settings: adapter settings for the local OpenAI-compatible model
-  server.
+  server, including base URLs, model-server concurrency, prefill, cache, and
+  server max tokens.
 - Runtime Config Snapshot: the resolved immutable result consumed by Run
   Session.
 
 ## Decision
 
-Runtime Config Resolution remains the Module that owns the external Interface
-for Run Settings. It should stop inferring size-class model profiles from
-`NEWS_MODEL`.
+Runtime Config Resolution (ADR 0004) remains the Module that turns base
+environment values, saved run presets, and explicit overrides into one Runtime
+Config Snapshot. It does not infer size-class model profiles from `NEWS_MODEL`.
 
-Model selection should be explicit through Task Model Assignment. A default run
-may keep one model for all model-using tasks, but callers should be able to
-select separate models for Article Summarization, Story Drafting, Story Scale
-Screening, and Title Generation without forking the rest of the run.
+Setting ownership is exactly:
 
-Model Tuning should be explicit and user-owned. If a Hugging Face model page
-documents recommended inference settings, the repo may carry those as named
-defaults for that specific model. If the page has no guidance, Runtime Config
-Resolution should let the backend/model defaults ride.
+1. **Model Selection / Task Model Assignment** — `NEWS_MODEL` is default model
+   selection only. The four LLM stages (Article Summarization, Story Drafting,
+   Story Scale Screening, and Title Generation) have their own assignments via
+   `NEWS_MODEL_<TASK>`. A default run may keep one model for all model-using
+   tasks, but callers can select separate models without forking the rest of
+   the run. Image Art Direction shares the Title Generation LLM call; Story
+   Discovery is algorithmic and inherits the default model.
+2. **Model Tuning** — sampling settings and model/task token caps, such as
+   `NEWS_MODEL_MAX_INPUT_TOKENS`, `NEWS_<TASK>_MAX_TOKENS`, and
+   `NEWS_MODEL_<TASK>_TEMPERATURE`. Precedence is backend/model defaults, then
+   verified model-specific code defaults, then the selected Model Tuning
+   Preset, then explicit `NEWS_` tuning overrides. If a Hugging Face model page
+   documents recommended inference settings, the repo may carry those as named
+   defaults for that specific model; otherwise backend/model defaults ride.
+3. **Pipeline Budget** — article text caps, article summary caps, recency
+   windows, article/story limits, story thresholds, and pipeline workload
+   concurrency (`NEWS_SOURCE_COLLECTION_CONCURRENCY`,
+   `NEWS_ARTICLE_SUMMARY_CONCURRENCY`, `NEWS_STORY_SYNTHESIS_CONCURRENCY`).
+4. **Model Server Settings** — base URLs (`NEWS_MODEL_BASE_URL`,
+   `NEWS_MODEL_<TASK>_BASE_URL`), model-server concurrency
+   (`NEWS_MODEL_CONCURRENCY`), prefill step size, prompt cache size/bytes, and
+   server max tokens.
 
 Run Presets and Model Tuning Presets are different concepts. A Run Preset
-chooses a workflow. A Model Tuning Preset chooses inference settings for a
-selected model or task. The UI may show both, but it should label them
-separately and keep advanced Model Tuning in collapsible sections.
+chooses a workflow; a Model Tuning Preset chooses inference settings for a
+selected model or task. The UI labels them separately and keeps advanced Model
+Tuning in collapsible sections.
+
+Supported backend policy (`mlx-lm`, `mlx-vlm`, `external`) is delegated to ADR
+0010 (Runtime Matrix) and is not restated here.
+
+Prompt Profiles are adjacent but out of boundary: they swap editorial
+instruction sentences only, and their ownership belongs to the Prompt Catalog
+ADR (`0010-prompt-catalog-owns-editorial-instructions.md`), not to Model
+Tuning.
 
 ## Consequences
 
-- `NEWS_MODEL` stops being a hidden bundle of model identity, tuning, budgets,
-  and server settings.
-- The `big_conservative` profile concept can be deleted rather than renamed.
-- Model-specific settings gain Locality in Model Tuning.
-- Run-wide limits gain Locality in Pipeline Budget.
-- UI settings become easier to scan because controls are grouped by concept,
-  not by historical environment-variable shape.
+- `NEWS_MODEL` is default model selection only; it is not a hidden bundle of
+  model identity, tuning, budgets, and server settings, and no size-class
+  profile (such as `big_conservative`) is inferred at runtime.
+- Model-specific settings gain Locality in Model Tuning; run-wide limits gain
+  Locality in Pipeline Budget; endpoint and server behavior gain Locality in
+  Model Server Settings.
+- UI settings are grouped by concept — Model Selection, Model Tuning, Pipeline
+  Budget, Model Server Settings — matching the runtime knob registry, so
+  controls no longer appear to overlap.
+- `NEWS_MODEL_STORY_DISCOVERY_*` knobs are compatibility-only: story discovery
+  has no LLM stage, and there is no image-art-direction model variable because
+  image art direction shares the Title Generation call.
+- Run Presets and Model Tuning Presets remain distinct and are never treated
+  as interchangeable.

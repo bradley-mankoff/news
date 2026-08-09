@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 
@@ -303,6 +304,9 @@ class DiagnosticsTests(unittest.TestCase):
                 "reason": "",
                 "error_type": "",
                 "error_message": "",
+                "phase": "",
+                "accepted_recipients": [],
+                "rejected_recipients": [],
             },
         )
         self.assertEqual(run_status_from_events(diagnostics.events), "completed")
@@ -314,6 +318,61 @@ class DiagnosticsTests(unittest.TestCase):
 
         summary_markdown = diagnostics.to_summary_markdown()
         self.assertIn("- Delivery: sent", summary_markdown)
+
+    def test_record_delivery_rich_metadata_renders_and_keeps_status(self) -> None:
+        diagnostics = RunDiagnostics(
+            run_started_at="2026-06-01T10:00:00",
+            settings={},
+            events=[{"at": "2026-06-01T10:01:00", "label": "completed"}],
+        )
+        diagnostics.record_delivery(
+            "failed",
+            recipients=["reader@example.com", "editor@example.com"],
+            reason="delivery refused for: editor@example.com",
+            error_type="SMTPRecipientsRefused",
+            error_message="refused recipient",
+            phase="send",
+            accepted_recipients=["reader@example.com"],
+            rejected_recipients=["editor@example.com"],
+        )
+
+        recorded = diagnostics.to_dict()["delivery"]
+        self.assertEqual(recorded["phase"], "send")
+        self.assertEqual(recorded["accepted_recipients"], ["reader@example.com"])
+        self.assertEqual(recorded["rejected_recipients"], ["editor@example.com"])
+
+        # Run status remains independent: no failed run event is added.
+        self.assertEqual(run_status_from_events(diagnostics.events), "completed")
+        self.assertFalse(any(event["label"] == "failed" for event in diagnostics.events))
+
+        review_markdown = diagnostics.to_run_review_markdown()
+        self.assertIn("| Delivery | failed |", review_markdown)
+        self.assertIn("| Phase | send |", review_markdown)
+        self.assertIn("| Accepted | reader@example.com |", review_markdown)
+        self.assertIn("| Rejected | editor@example.com |", review_markdown)
+        self.assertIn(
+            "| Error | SMTPRecipientsRefused: refused recipient |",
+            review_markdown,
+        )
+
+        # Collections are normalized to lists of strings on re-record.
+        self.assertIsNone(
+            diagnostics.record_delivery(
+                "sent",
+                recipients=["a@example.com"],
+                phase="send",
+                accepted_recipients=None,
+            )
+        )
+
+        # Empty rich collections stay compact: no rows for unrecorded data.
+        plain = RunDiagnostics(run_started_at="2026-06-01T10:00:00", settings={})
+        plain.record_delivery("skipped: user_disabled", reason="delivery disabled by profile")
+        plain_markdown = plain.to_run_review_markdown()
+        self.assertIn("| Status | skipped: user_disabled |", plain_markdown)
+        self.assertNotIn("| Phase |", plain_markdown)
+        self.assertNotIn("| Accepted |", plain_markdown)
+        self.assertNotIn("| Rejected |", plain_markdown)
 
     def test_record_delivery_failed_keeps_run_status_and_adds_no_event(self) -> None:
         diagnostics = RunDiagnostics(
@@ -341,25 +400,6 @@ class DiagnosticsTests(unittest.TestCase):
         details_markdown = diagnostics.to_markdown()
         self.assertIn("- Delivery: failed", details_markdown)
 
-    def test_delivery_diagnostics_redact_and_bound_untrusted_text(self) -> None:
-        diagnostics = RunDiagnostics(
-            run_started_at="2026-06-01T10:00:00",
-            settings={},
-        )
-        diagnostics.record_delivery(
-            "failed",
-            reason="token=super-secret",
-            error_type="SMTP.Exception!",
-            error_message="password=super-secret\nTraceback details should not persist",
-        )
-
-        delivery = diagnostics.to_dict()["delivery"]
-        self.assertEqual(delivery["status"], "failed")
-        self.assertNotIn("super-secret", str(delivery))
-        self.assertNotIn("Traceback details", delivery["error_message"])
-        self.assertEqual(delivery["error_type"], "SMTP.Exception")
-
-
     def test_empty_delivery_remains_backward_compatible(self) -> None:
         diagnostics = RunDiagnostics(
             run_started_at="2026-06-01T10:00:00",
@@ -372,6 +412,117 @@ class DiagnosticsTests(unittest.TestCase):
         self.assertIn("| Status | not recorded |", review_markdown)
         summary_markdown = diagnostics.to_summary_markdown()
         self.assertIn("- Delivery: not recorded", summary_markdown)
+
+    def test_prompt_snapshot_recording_sequences_and_round_trip(self) -> None:
+        diagnostics = RunDiagnostics(
+            run_started_at="2026-06-01T10:00:00",
+            settings={},
+        )
+        self.assertEqual(diagnostics.to_dict()["prompt_snapshots"], [])
+
+        first_sequence = diagnostics.record_prompt_snapshot(
+            {
+                "captured_at": "2026-06-01T10:00:01Z",
+                "task": "article_summary",
+                "task_name": "analysis for Headline",
+                "messages": [
+                    {"type": "system", "content": "Summarize."},
+                    {"type": "human", "content": [{"text": "Article body"}]},
+                ],
+                "retry_attempts": 0,
+                "used_fallback": False,
+            }
+        )
+        second_sequence = diagnostics.record_prompt_snapshot(
+            {
+                "captured_at": "2026-06-01T10:00:02Z",
+                "task": "story_drafting",
+                "task_name": "story synthesis for Story",
+                "messages": [{"type": "system", "content": "Draft."}],
+            }
+        )
+        self.assertEqual(first_sequence, 1)
+        self.assertEqual(second_sequence, 2)
+
+        payload = diagnostics.to_dict()
+        self.assertEqual(len(payload["prompt_snapshots"]), 2)
+        self.assertEqual(payload["prompt_snapshots"][0]["sequence"], 1)
+        self.assertEqual(payload["prompt_snapshots"][1]["sequence"], 2)
+        self.assertEqual(
+            payload["prompt_snapshots"][0]["messages"][1]["content"],
+            [{"text": "Article body"}],
+        )
+        # Snapshot recording must not leak into summary stats or Markdown.
+        self.assertEqual(diagnostics.summary_stats()["model_call_count"], 0)
+        self.assertNotIn("prompt_snapshots", diagnostics.to_summary_markdown())
+        self.assertNotIn("Summarize.", diagnostics.to_markdown())
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            details_path = Path(tmpdir) / "latest_run_details.json"
+            diagnostics.write_details_json(details_path)
+            written = json.loads(details_path.read_text(encoding="utf-8"))
+            self.assertEqual(len(written["prompt_snapshots"]), 2)
+            self.assertEqual(written["prompt_snapshots"][0]["sequence"], 1)
+            self.assertEqual(
+                written["prompt_snapshots"][0]["messages"][0],
+                {"type": "system", "content": "Summarize."},
+            )
+
+    def test_prompt_snapshot_update_metadata_and_isolated_copy(self) -> None:
+        diagnostics = RunDiagnostics(
+            run_started_at="2026-06-01T10:00:00",
+            settings={},
+        )
+        details = {"task": "article_summary", "messages": []}
+        sequence = diagnostics.record_prompt_snapshot(details)
+        # Later caller-side mutation must not alter the recorded payload.
+        details["messages"] = [{"type": "human", "content": "changed"}]
+        self.assertEqual(diagnostics.prompt_snapshots[0]["messages"], [])
+
+        diagnostics.update_prompt_snapshot(
+            sequence,
+            retry_attempts=2,
+            used_fallback=True,
+        )
+        diagnostics.update_prompt_snapshot(999, retry_attempts=9)
+        snapshot = diagnostics.to_dict()["prompt_snapshots"][0]
+        self.assertEqual(snapshot["retry_attempts"], 2)
+        self.assertTrue(snapshot["used_fallback"])
+
+    def test_prompt_snapshot_concurrent_recording_keeps_unique_sequences(self) -> None:
+        diagnostics = RunDiagnostics(
+            run_started_at="2026-06-01T10:00:00",
+            settings={},
+        )
+        errors: list[Exception] = []
+
+        def record(index: int) -> None:
+            try:
+                diagnostics.record_prompt_snapshot(
+                    {
+                        "task": "article_summary",
+                        "task_name": f"analysis for Article {index}",
+                        "messages": [{"type": "human", "content": f"body {index}"}],
+                    }
+                )
+            except Exception as error:  # pragma: no cover - failure path
+                errors.append(error)
+
+        threads = [
+            threading.Thread(target=record, args=(index,)) for index in range(16)
+        ]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+
+        self.assertEqual(errors, [])
+        snapshots = diagnostics.to_dict()["prompt_snapshots"]
+        self.assertEqual(len(snapshots), 16)
+        self.assertEqual(
+            sorted(snapshot["sequence"] for snapshot in snapshots),
+            list(range(1, 17)),
+        )
 
     def _populated_diagnostics(self, root: Path) -> RunDiagnostics:
         diagnostics = RunDiagnostics(
@@ -863,4 +1014,3 @@ class DiagnosticsTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

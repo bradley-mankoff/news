@@ -91,16 +91,26 @@ import httpx
 from openai import APIConnectionError, APITimeoutError, InternalServerError, RateLimitError
 
 from .config import (
+    DELIVERY_MODE_DISABLED,
+    DELIVERY_MODE_OWNER,
+    DELIVERY_MODE_RECIPIENTS,
+    DeliveryProfile,
+    DeliveryRecipient,
     ModelSamplingSettings,
     RuntimeConfig,
     DEFAULT_TITLE_GENERATION_MAX_TOKENS,
     MODEL_BACKEND_EXTERNAL,
+    MODEL_TASK_ARTICLE_SUMMARY,
     MODEL_TASK_IMAGE_ART_DIRECTION,
+    MODEL_TASK_STORY_DISCOVERY,
+    MODEL_TASK_STORY_DRAFTING,
     MODEL_TASK_STORY_SCALE_SCREENING,
     MODEL_TASK_TITLE_GENERATION,
     configured_model_api_key,
     ensure_codex_safe_model_reference,
     is_managed_model_backend,
+    is_placeholder_address,
+    is_placeholder_credential,
     managed_model_conflict_message,
     same_model_endpoint,
     is_gemma_4_model_reference,
@@ -997,6 +1007,8 @@ def _compat_runtime_values(config: RuntimeConfig) -> dict[str, Any]:
         "MODEL_BACKEND": config.model_backend,
         "MODEL_SERVER_COMMAND": config.model_server_command,
         "PRIMARY_RECIPIENT": config.primary_recipient,
+        "DELIVERY_PROFILE": config.delivery_profile,
+        "DELIVERY_MODE": config.delivery_profile.mode,
         "RECENT_WINDOW_HOURS": config.recent_window_hours,
         "MAX_ARTICLES_PER_SOURCE": config.max_articles_per_source,
         "RUN_STARTED_AT": config.run_started_at,
@@ -1011,6 +1023,11 @@ def _compat_runtime_values(config: RuntimeConfig) -> dict[str, Any]:
         "HISTORY_DB_PATH": str(config.history_db_path),
         "HISTORY_EXPORT_CSV": config.history_export_csv,
         "PRESET_ID": config.preset_id,
+        "PROMPT_PROFILE_ID": config.prompt_profile_id,
+        "PROMPT_INSTRUCTIONS": resolve_prompt_instructions(
+            config.prompt_profile_id,
+            overrides=config.prompt_instruction_overrides,
+        ),
         "SOURCE_SCOPE": config.source_scope,
         "RECIPIENT_SCOPE": config.recipient_scope,
         "URL_REUSE_BLOCKING_ENABLED": config.url_reuse_blocking_enabled,
@@ -1708,12 +1725,16 @@ def _base64url_decode(encoded_value: str) -> bytes:
     return base64.urlsafe_b64decode((encoded_value + padding).encode("ascii"))
 
 
-def _unsubscribe_signing_secret() -> bytes:
-    secret = UNSUBSCRIBE_SECRET or SMTP_PASSWORD or EMAIL_FROM
+def _unsubscribe_signing_secret(signing_secret: str | None = None) -> bytes:
+    secret = signing_secret if signing_secret is not None else (UNSUBSCRIBE_SECRET or SMTP_PASSWORD or EMAIL_FROM)
     return secret.encode("utf-8")
 
 
-def build_unsubscribe_token(recipient_email: str) -> str:
+def build_unsubscribe_token(
+    recipient_email: str,
+    *,
+    signing_secret: str | None = None,
+) -> str:
     payload = json.dumps(
         {"email": recipient_email.strip().lower()},
         separators=(",", ":"),
@@ -1721,7 +1742,7 @@ def build_unsubscribe_token(recipient_email: str) -> str:
     ).encode("utf-8")
     payload_part = _base64url_encode(payload)
     signature = hmac.new(
-        _unsubscribe_signing_secret(),
+        _unsubscribe_signing_secret(signing_secret),
         payload_part.encode("ascii"),
         hashlib.sha256,
     ).digest()
@@ -1750,10 +1771,16 @@ def parse_unsubscribe_token(token: str) -> str:
     return email
 
 
-def build_unsubscribe_url(recipient_email: str) -> str:
-    token = build_unsubscribe_token(recipient_email)
-    separator = "&" if "?" in UNSUBSCRIBE_BASE_URL else "?"
-    return f"{UNSUBSCRIBE_BASE_URL}{separator}{urlencode({'token': token})}"
+def build_unsubscribe_url(
+    recipient_email: str,
+    *,
+    base_url: str | None = None,
+    signing_secret: str | None = None,
+) -> str:
+    token = build_unsubscribe_token(recipient_email, signing_secret=signing_secret)
+    effective_base_url = base_url if base_url is not None else UNSUBSCRIBE_BASE_URL
+    separator = "&" if "?" in effective_base_url else "?"
+    return f"{effective_base_url}{separator}{urlencode({'token': token})}"
 
 
 def update_client_pause_setting(target_email: str, pause: bool = True) -> int:
@@ -1844,6 +1871,118 @@ def get_active_recipient_config(recipient_config: dict[str, dict]) -> dict[str, 
     }
 
 
+def _dedupe_delivery_recipients(
+    recipients: list[DeliveryRecipient],
+) -> list[DeliveryRecipient]:
+    """Deduplicate targets case-insensitively, retaining first order/name."""
+    seen: set[str] = set()
+    deduped: list[DeliveryRecipient] = []
+    for recipient in recipients:
+        key = (recipient.email or "").strip().lower()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        deduped.append(recipient)
+    return deduped
+
+
+def _select_delivery_targets(
+    profile: DeliveryProfile,
+) -> tuple[list[DeliveryRecipient], str, str]:
+    """Resolve the recipient target list and canonical skip state from a profile.
+
+    Returns ``(targets, status, reason)`` where a non-empty ``status`` is the
+    ADR 0012 canonical skip outcome (``skipped: user_disabled`` for explicit
+    disabled/all-paused policy, ``skipped: not_configured`` for missing or
+    placeholder targets) and ``reason`` is the actionable preflight detail.
+    ``owner`` mode selects only the owner; ``recipients`` mode selects active
+    additional-recipient catalog entries (owner included only when listed).
+    An explicitly configured legacy fallback is used only when the catalog is
+    empty; targets are deduplicated case-insensitively.
+    """
+    mode = profile.mode
+    if mode == DELIVERY_MODE_DISABLED:
+        return [], "skipped: user_disabled", "delivery disabled by profile"
+
+    if mode == DELIVERY_MODE_OWNER:
+        owner_email = (profile.owner_recipient or "").strip()
+        if not owner_email:
+            return [], "skipped: not_configured", "missing configuration: NEWS_PRIMARY_RECIPIENT"
+        owner_key = owner_email.lower()
+        for recipient in profile.additional_recipients:
+            if (recipient.email or "").strip().lower() == owner_key and recipient.pause:
+                return [], "skipped: user_disabled", "owner recipient is paused"
+        return [DeliveryRecipient(email=owner_email, name=owner_email, pause=False)], "", ""
+
+    # recipients mode: active additional-recipient catalog entries first,
+    # then the legacy fallback list when the catalog has no active entries.
+    active = [
+        recipient
+        for recipient in profile.additional_recipients
+        if not recipient.pause
+    ]
+    if active:
+        return _dedupe_delivery_recipients(active), "", ""
+    if profile.additional_recipients:
+        return [], "skipped: user_disabled", "all configured recipients are paused"
+    if profile.legacy_fallback_explicit and profile.legacy_fallback_recipients:
+        fallback = [
+            DeliveryRecipient(email=email, name=email, pause=False)
+            for email in profile.legacy_fallback_recipients
+        ]
+        return _dedupe_delivery_recipients(fallback), "", ""
+    return [], "skipped: not_configured", "missing configuration: recipient list"
+
+
+def _resolve_delivery_plan(
+    profile: DeliveryProfile,
+) -> tuple[list[DeliveryRecipient], str, str]:
+    """Resolve targets plus the transport-independent preflight decision.
+
+    Filters exact repository placeholder addresses before transport (ADR 0012
+    placeholder rule): a fully-placeholder target list can never look
+    configured, so it resolves to ``skipped: not_configured``. A non-empty
+    ``status`` means delivery must be skipped with that canonical outcome;
+    otherwise ``targets`` are the deduplicated active recipients ready for
+    transport evaluation.
+    """
+    targets, status, reason = _select_delivery_targets(profile)
+    if status:
+        return targets, status, reason
+    real_targets = [
+        target for target in targets if not is_placeholder_address(target.email)
+    ]
+    if not real_targets:
+        return [], "skipped: not_configured", "placeholder recipient address"
+    return real_targets, "", ""
+
+
+def _redact_delivery_error(
+    error_message: str,
+    profile: DeliveryProfile | None = None,
+) -> str:
+    """Redact credential values and bound the persisted/logged error text.
+
+    Replaces every non-empty profile or module-level transport credential
+    wherever it appears in an exception message, then truncates the result.
+    Never returns a traceback or raw credential value; configured values remain
+    protected even when they are short.
+    """
+    message = str(error_message or "")
+    secrets: list[str] = []
+    if profile is not None:
+        secrets.extend([profile.smtp_password, profile.unsubscribe_secret])
+    secrets.extend([SMTP_PASSWORD, UNSUBSCRIBE_SECRET])
+    secret_values = sorted(
+        {str(secret) for secret in secrets if str(secret)},
+        key=len,
+        reverse=True,
+    )
+    for secret in secret_values:
+        message = message.replace(secret, "***")
+    if len(message) > 500:
+        message = message[:500].rsplit(" ", 1)[0] + "..."
+    return message
 
 
 def _resolve_google_news_url_details(url: str) -> dict[str, str]:
@@ -2726,6 +2865,281 @@ def _record_response_token_usage(task_name: str, response: AIMessage) -> None:
         entry["actual_usage_calls"] = int(entry.get("actual_usage_calls", 0)) + 1
 
 
+# Best-effort Hugging Face revision metadata, deduplicated by resolved
+# serving name within the process. Lookups are network-backed and therefore
+# enabled only by the production ``run_pipeline()`` entry (never during UI
+# config preview, generic helper use, or unit tests); failures degrade to
+# explicit unresolved metadata.
+_HF_REVISION_CACHE: dict[str, dict[str, Any]] = {}
+_HF_REVISION_LOOKUP_ENABLED = False
+
+
+# The five configured LLM assignment tasks snapshotted per run. Image Art
+# Direction inherits Title Generation and Story Discovery has no LLM stage;
+# both are represented by explicit records in ``_model_snapshots()``.
+_MODEL_SNAPSHOT_TASKS = (
+    "default",
+    MODEL_TASK_ARTICLE_SUMMARY,
+    MODEL_TASK_STORY_DRAFTING,
+    MODEL_TASK_STORY_SCALE_SCREENING,
+    MODEL_TASK_TITLE_GENERATION,
+)
+
+
+# Logical model-call labels to configured assignment keys. Prefix rules mirror
+# ``_model_call_bucket()`` but resolve to assignment keys: article format
+# retries reuse the same ``analysis for ...`` label, image art direction
+# reuses ``title_generation``, and unknown labels fall back to default.
+_LOGICAL_TASK_ALIASES: tuple[tuple[str, str], ...] = (
+    ("analysis for final synthesis", MODEL_TASK_STORY_DRAFTING),
+    ("analysis for ", MODEL_TASK_ARTICLE_SUMMARY),
+    ("story synthesis for ", MODEL_TASK_STORY_DRAFTING),
+    ("global story scale screening", MODEL_TASK_STORY_SCALE_SCREENING),
+    ("image art prompt generation", MODEL_TASK_TITLE_GENERATION),
+)
+
+
+def _plausible_hf_repository(name: str) -> str | None:
+    """Return ``name`` when it looks like a Hugging Face repo id, else None."""
+    candidate = str(name or "").strip()
+    if not candidate or "://" in candidate or " " in candidate or "/" not in candidate:
+        return None
+    return candidate
+
+
+def _hf_revision_metadata(name: str) -> dict[str, Any]:
+    """Best-effort immutable Hugging Face SHA for a resolved serving name.
+
+    Returns a JSON-ready mapping with ``repository``, ``revision``, and
+    ``revision_status`` (``resolved`` | ``unresolved`` | ``not_huggingface``).
+    External model ids and unset names are ``not_huggingface``; import,
+    network, or repository failures keep the configured identity and mark the
+    revision ``unresolved`` with a safe diagnostic reason. Never claims a
+    mutable branch name is a revision.
+    """
+    clean_name = str(name or "").strip()
+    if clean_name in _HF_REVISION_CACHE:
+        return dict(_HF_REVISION_CACHE[clean_name])
+    repository = _plausible_hf_repository(clean_name)
+    if repository is None:
+        result = {
+            "repository": None,
+            "revision": None,
+            "revision_status": "not_huggingface",
+        }
+        _HF_REVISION_CACHE[clean_name] = result
+        return dict(result)
+    if not _HF_REVISION_LOOKUP_ENABLED:
+        # Offline/helper context: never hit the network outside a production run.
+        return {
+            "repository": repository,
+            "revision": None,
+            "revision_status": "unresolved",
+            "revision_reason": "revision lookup is disabled outside the production run entry",
+        }
+    try:
+        from huggingface_hub import HfApi
+
+        info = HfApi().model_info(repo_id=repository, expand=["sha"])
+        revision = str(getattr(info, "sha", "") or "")
+        if revision:
+            result = {
+                "repository": repository,
+                "revision": revision,
+                "revision_status": "resolved",
+            }
+        else:
+            result = {
+                "repository": repository,
+                "revision": None,
+                "revision_status": "unresolved",
+                "revision_reason": "model_info returned no immutable sha",
+            }
+    except Exception as error:  # pragma: no cover - network path
+        result = {
+            "repository": repository,
+            "revision": None,
+            "revision_status": "unresolved",
+            "revision_reason": f"{type(error).__name__}: {error}",
+        }
+    _HF_REVISION_CACHE[clean_name] = result
+    return dict(result)
+
+
+def _model_snapshot_for_task(task: str) -> dict[str, Any]:
+    """Normalized JSON-ready identity snapshot for one configured task."""
+    normalized_task = _normalized_model_task(task)
+    assignment = _task_model_assignment(normalized_task)
+    revision = _hf_revision_metadata(assignment.name)
+    snapshot = {
+        "task": normalized_task,
+        "reference": assignment.reference,
+        "repository": revision["repository"],
+        "model_id": assignment.name,
+        "revision": revision["revision"],
+        "revision_status": revision["revision_status"],
+        "backend": assignment.backend,
+        "base_url": assignment.base_url,
+        "tuning": _json_ready(assignment.tuning),
+    }
+    if revision.get("revision_reason"):
+        snapshot["revision_reason"] = revision["revision_reason"]
+    return snapshot
+
+
+def _model_snapshots() -> dict[str, Any]:
+    """Per-task model snapshots plus explicit inheritance/no-LLM records.
+
+    Image Art Direction is produced by the same LLM call as Title Generation
+    and inherits that assignment; Story Discovery has no LLM stage and
+    inherits the default assignment. Neither invents extra model calls.
+    """
+    snapshots = {task: _model_snapshot_for_task(task) for task in _MODEL_SNAPSHOT_TASKS}
+    title = snapshots[MODEL_TASK_TITLE_GENERATION]
+    snapshots[MODEL_TASK_IMAGE_ART_DIRECTION] = {
+        "inherits_task": MODEL_TASK_TITLE_GENERATION,
+        "reference": title["reference"],
+        "repository": title["repository"],
+        "model_id": title["model_id"],
+        "revision": title["revision"],
+        "revision_status": title["revision_status"],
+        "backend": title["backend"],
+    }
+    default = snapshots["default"]
+    snapshots[MODEL_TASK_STORY_DISCOVERY] = {
+        "llm_stage": False,
+        "inherits_task": "default",
+        "reference": default["reference"],
+        "model_id": default["model_id"],
+        "revision_status": default["revision_status"],
+    }
+    return snapshots
+
+
+def _translation_policy_snapshot() -> dict[str, Any]:
+    """Snapshot the currently effective translation policy (metadata only).
+
+    The branch has no translation stage (issue #33 owns it): active sources
+    are filtered to declared English sources and no translation model is
+    assigned. This records that effective behavior without changing it.
+    """
+    return {
+        "enabled": False,
+        "status": "disabled_not_implemented",
+        "target_language": "en",
+        "source_gate": {
+            "rule": "language == 'en'",
+            "language": "en",
+            "unknown_language_sources_excluded": True,
+        },
+        "translation_model_assignment": None,
+        "note": (
+            "Translation is not implemented; active sources are filtered to "
+            "declared English sources and content is not retagged."
+        ),
+    }
+
+
+def _logical_task_assignment_key(task_name: str) -> str:
+    """Map a logical model-call label to its configured assignment key."""
+    label = str(task_name or "").strip().lower()
+    for prefix, assignment_key in _LOGICAL_TASK_ALIASES:
+        if label.startswith(prefix):
+            return assignment_key
+    normalized = _normalized_model_task(label)
+    if normalized in MODEL_ASSIGNMENTS:
+        return normalized
+    return "default"
+
+
+def _prompt_snapshot_content(content: Any) -> Any:
+    """JSON-safe message content for prompt snapshots.
+
+    Strings stay byte-identical; list/dict content normalizes through
+    ``_json_ready``; anything non-serializable degrades to a string
+    representation so capture can never block the model call.
+    """
+    if isinstance(content, str):
+        return content
+    try:
+        ready = _json_ready(content)
+        json.dumps(ready)
+        return ready
+    except (TypeError, ValueError):
+        return str(content or "")
+
+
+def _prompt_snapshot_messages(messages: list[BaseMessage]) -> list[dict[str, Any]]:
+    """Serialize the exact final message role/type and content per call."""
+    snapshot_messages: list[dict[str, Any]] = []
+    for message in messages:
+        snapshot_messages.append(
+            {
+                "type": str(getattr(message, "type", None) or type(message).__name__.lower()),
+                "content": _prompt_snapshot_content(getattr(message, "content", None)),
+            }
+        )
+    return snapshot_messages
+
+
+def _record_prompt_snapshot_for_call(
+    *,
+    messages: list[BaseMessage],
+    task_name: str,
+    estimated_input_tokens: int,
+    max_output_tokens: int | None,
+) -> int | None:
+    """Capture one JSON-ready logical prompt snapshot at the model boundary.
+
+    Returns the assigned sequence (or ``None`` when no active diagnostics
+    exist, e.g. generic helper use). Capture failures never prevent the model
+    call. Never includes responses, fallback content, API keys, or client
+    objects; transient retries reuse the same record via metadata updates.
+    """
+    diagnostics = ACTIVE_RUN_DIAGNOSTICS
+    if diagnostics is None:
+        return None
+    try:
+        model_task = _logical_task_assignment_key(task_name)
+        snapshot = {
+            "captured_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "task": model_task,
+            "task_name": str(task_name),
+            "model_task": model_task,
+            "model_snapshot": _model_snapshot_for_task(model_task),
+            "max_tokens": max_output_tokens,
+            "estimated_input_tokens": int(estimated_input_tokens or 0),
+            "messages": _prompt_snapshot_messages(messages),
+            "retry_attempts": 0,
+            "used_fallback": False,
+        }
+        return diagnostics.record_prompt_snapshot(snapshot)
+    except Exception:
+        return None
+
+
+def _update_prompt_snapshot_for_call(
+    sequence: int | None,
+    *,
+    retry_attempts: int,
+    used_fallback: bool,
+) -> None:
+    """Apply actual transient-retry/fallback metadata to a recorded snapshot."""
+    if sequence is None:
+        return
+    diagnostics = ACTIVE_RUN_DIAGNOSTICS
+    if diagnostics is None:
+        return
+    try:
+        diagnostics.update_prompt_snapshot(
+            sequence,
+            retry_attempts=int(retry_attempts or 0),
+            used_fallback=bool(used_fallback),
+        )
+    except Exception:
+        pass
+
+
 def invoke_with_retries(
     llm,
     messages,
@@ -2737,6 +3151,13 @@ def invoke_with_retries(
     last_error = None
     estimated_input_tokens = sum(estimate_message_token_count(message) for message in messages)
     max_output_tokens = _coerce_int(getattr(llm, "max_tokens", None))
+    prompt_snapshot_sequence = _record_prompt_snapshot_for_call(
+        messages=messages,
+        task_name=task_name,
+        estimated_input_tokens=estimated_input_tokens,
+        max_output_tokens=max_output_tokens,
+    )
+    transient_retries = 0
     with MODEL_CALL_STATS_LOCK:
         calls = MODEL_CALL_STATS.setdefault("calls", {})
         calls[task_name] = int(calls.get(task_name, 0)) + 1
@@ -2745,29 +3166,38 @@ def invoke_with_retries(
             estimated_input_tokens=estimated_input_tokens,
             max_output_tokens=max_output_tokens,
         )
-    for attempt in range(1, attempts + 1):
-        try:
-            _raise_if_managed_model_server_exited()
-            response = llm.invoke(messages)
-            if isinstance(response, AIMessage):
-                _record_response_token_usage(task_name, response)
-                return response
-            response_message = AIMessage(content=str(getattr(response, "content", response)))
-            _record_response_token_usage(task_name, response_message)
-            return response_message
-        except ManagedModelServerExited:
-            raise
-        except Exception as error:
-            last_error = error
-            _raise_if_managed_model_server_exited()
-            if not _is_transient_model_error(error) or attempt == attempts:
-                break
-            delay = MODEL_RETRY_BASE_DELAY_SECONDS * attempt
-            with MODEL_CALL_STATS_LOCK:
-                MODEL_CALL_STATS["retries"] = int(MODEL_CALL_STATS.get("retries", 0)) + 1
-            progress_tracker.retrying(task_name, attempt, attempts, delay, error)
-            time.sleep(delay)
-
+    try:
+        for attempt in range(1, attempts + 1):
+            try:
+                _raise_if_managed_model_server_exited()
+                response = llm.invoke(messages)
+                if isinstance(response, AIMessage):
+                    _record_response_token_usage(task_name, response)
+                    last_error = None
+                    return response
+                response_message = AIMessage(content=str(getattr(response, "content", response)))
+                _record_response_token_usage(task_name, response_message)
+                last_error = None
+                return response_message
+            except ManagedModelServerExited:
+                raise
+            except Exception as error:
+                last_error = error
+                _raise_if_managed_model_server_exited()
+                if not _is_transient_model_error(error) or attempt == attempts:
+                    break
+                transient_retries += 1
+                delay = MODEL_RETRY_BASE_DELAY_SECONDS * attempt
+                with MODEL_CALL_STATS_LOCK:
+                    MODEL_CALL_STATS["retries"] = int(MODEL_CALL_STATS.get("retries", 0)) + 1
+                progress_tracker.retrying(task_name, attempt, attempts, delay, error)
+                time.sleep(delay)
+    finally:
+        _update_prompt_snapshot_for_call(
+            prompt_snapshot_sequence,
+            retry_attempts=transient_retries,
+            used_fallback=last_error is not None,
+        )
     progress_tracker.warning(f"{task_name[:40]} failed after {attempts} attempts")
     with MODEL_CALL_STATS_LOCK:
         MODEL_CALL_STATS["fallbacks"] = int(MODEL_CALL_STATS.get("fallbacks", 0)) + 1
@@ -3011,26 +3441,73 @@ def maybe_email_report(
     image_art: dict[str, Any] | None = None,
     citation_sources: list[dict[str, Any]] | None = None,
     citation_groups: list[dict[str, Any]] | None = None,
+    delivery_profile: DeliveryProfile | None = None,
 ) -> dict[str, Any]:
     """Send the completed report by email and return the normalized outcome.
 
-    The returned mapping uses the ADR 0012 delivery vocabulary
-    (``sent`` or ``skipped: not_configured`` here; ``failed`` is recorded by
-    ``_attempt_email_delivery`` when the transport raises) and never contains
-    SMTP passwords, secrets, or full tracebacks. Delivery outcomes are
-    independent from the Run Session outcome.
+    The returned mapping uses the ADR 0012 delivery vocabulary (``sent``,
+    ``skipped: not_configured``, ``skipped: user_disabled``, or ``failed``
+    via ``_attempt_email_delivery`` when the transport raises) and never
+    contains SMTP passwords, secrets, or full tracebacks. Delivery outcomes
+    are independent from the Run Session outcome.
+
+    When ``delivery_profile`` is supplied, recipient policy and transport
+    values come from the profile: the target list is re-resolved from the
+    profile (disabled/all-paused/placeholder decisions included), and
+    placeholder/missing sender, host, username, and password produce
+    ``skipped: not_configured`` before any SMTP object is constructed.
+    Without a profile, the legacy module-global missing-configuration check
+    applies unchanged.
     """
-    missing = []
-    if not recipients:
-        missing.append("recipient list")
-    if not EMAIL_FROM:
-        missing.append("NEWS_EMAIL_FROM")
-    if not SMTP_HOST:
-        missing.append("NEWS_SMTP_HOST")
-    if not SMTP_USERNAME:
-        missing.append("NEWS_SMTP_USERNAME")
-    if not SMTP_PASSWORD:
-        missing.append("NEWS_SMTP_PASSWORD")
+    if delivery_profile is not None:
+        targets, plan_status, plan_reason = _resolve_delivery_plan(delivery_profile)
+        if plan_status:
+            progress_tracker.detail(f"[email] Skipping email. {plan_reason}")
+            return {
+                "status": plan_status,
+                "recipients": [target.email for target in targets],
+                "reason": plan_reason,
+                "error_type": "",
+                "error_message": "",
+                "phase": "",
+                "accepted_recipients": [],
+                "rejected_recipients": [],
+            }
+        recipients = [target.email for target in targets]
+        recipient_names = [target.name for target in targets]
+        email_from = delivery_profile.sender
+        smtp_host = delivery_profile.smtp_host
+        smtp_port = delivery_profile.smtp_port
+        smtp_username = delivery_profile.smtp_username
+        smtp_password = delivery_profile.smtp_password
+        smtp_use_ssl = delivery_profile.smtp_use_ssl
+        missing = []
+        if not email_from or is_placeholder_address(email_from):
+            missing.append("NEWS_EMAIL_FROM")
+        if not smtp_host or is_placeholder_credential(smtp_host):
+            missing.append("NEWS_SMTP_HOST")
+        if not smtp_username or is_placeholder_credential(smtp_username):
+            missing.append("NEWS_SMTP_USERNAME")
+        if not smtp_password or is_placeholder_credential(smtp_password):
+            missing.append("NEWS_SMTP_PASSWORD")
+    else:
+        email_from = EMAIL_FROM
+        smtp_host = SMTP_HOST
+        smtp_port = SMTP_PORT
+        smtp_username = SMTP_USERNAME
+        smtp_password = SMTP_PASSWORD
+        smtp_use_ssl = SMTP_USE_SSL
+        missing = []
+        if not recipients:
+            missing.append("recipient list")
+        if not email_from:
+            missing.append("NEWS_EMAIL_FROM")
+        if not smtp_host:
+            missing.append("NEWS_SMTP_HOST")
+        if not smtp_username:
+            missing.append("NEWS_SMTP_USERNAME")
+        if not smtp_password:
+            missing.append("NEWS_SMTP_PASSWORD")
 
     if missing:
         progress_tracker.detail(f"[email] Skipping email. Missing configuration: {', '.join(missing)}")
@@ -3040,6 +3517,9 @@ def maybe_email_report(
             "reason": f"missing configuration: {', '.join(missing)}",
             "error_type": "",
             "error_message": "",
+            "phase": "",
+            "accepted_recipients": [],
+            "rejected_recipients": [],
         }
 
     # Read the image attachment once up front; a read failure degrades the
@@ -3065,10 +3545,22 @@ def maybe_email_report(
 
     def build_message(recipient_email: str, recipient_name: str) -> EmailMessage:
         first_name = _extract_first_name(recipient_name or recipient_email)
-        unsubscribe_url = build_unsubscribe_url(recipient_email)
+        if delivery_profile is not None:
+            signing_secret = (
+                delivery_profile.unsubscribe_secret
+                or delivery_profile.smtp_password
+                or delivery_profile.sender
+            )
+            unsubscribe_url = build_unsubscribe_url(
+                recipient_email,
+                base_url=delivery_profile.unsubscribe_base_url,
+                signing_secret=signing_secret,
+            )
+        else:
+            unsubscribe_url = build_unsubscribe_url(recipient_email)
         message = EmailMessage()
         message["Subject"] = build_email_subject()
-        message["From"] = EMAIL_FROM
+        message["From"] = email_from
         message["To"] = recipient_email
         message["List-Unsubscribe"] = f"<{unsubscribe_url}>"
         message["List-Unsubscribe-Post"] = "List-Unsubscribe=One-Click"
@@ -3107,29 +3599,55 @@ def maybe_email_report(
         recipient_name = recipient_names[index] if index < len(recipient_names) else recipient_email
         messages.append((recipient_email, build_message(recipient_email, recipient_name)))
 
-    def send_messages(smtp: Any) -> list[str]:
-        sent: list[str] = []
+    accepted_recipients: list[str] = []
+    rejected_recipients: dict[str, str] = {}
+
+    def send_messages(smtp: Any) -> None:
         for index, (recipient_email, message) in enumerate(messages):
             try:
-                smtp.send_message(message)
+                refused = smtp.send_message(message)
             except Exception as error:
                 raise _EmailDeliveryError(
                     error,
-                    sent,
+                    list(accepted_recipients),
                     [email for email, _message in messages[index:]],
                 ) from error
-            sent.append(recipient_email)
-        return sent
+            if refused:
+                rejected_recipients.update(
+                    {str(key): str(value) for key, value in refused.items()}
+                )
+            else:
+                accepted_recipients.append(recipient_email)
 
-    if SMTP_USE_SSL:
-        with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, timeout=30) as smtp:
-            smtp.login(SMTP_USERNAME, SMTP_PASSWORD)
+    if smtp_use_ssl:
+        with smtplib.SMTP_SSL(smtp_host, smtp_port, timeout=30) as smtp:
+            smtp.login(smtp_username, smtp_password)
             send_messages(smtp)
     else:
-        with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=30) as smtp:
+        with smtplib.SMTP(smtp_host, smtp_port, timeout=30) as smtp:
             smtp.starttls()
-            smtp.login(SMTP_USERNAME, SMTP_PASSWORD)
+            smtp.login(smtp_username, smtp_password)
             send_messages(smtp)
+
+    if rejected_recipients:
+        # ``send_message`` reports refused recipients by returning a mapping
+        # instead of raising; a message is only ``sent`` when every selected
+        # target was accepted (partial SMTP rejection is ``failed``).
+        reason = "delivery refused for: " + ", ".join(sorted(rejected_recipients))
+        progress_tracker.warning(
+            f"[email] Delivery refused for {', '.join(sorted(rejected_recipients))}; "
+            "the completed report remains available for review."
+        )
+        return {
+            "status": "failed",
+            "recipients": list(recipients),
+            "reason": reason,
+            "error_type": "SMTPRecipientsRefused",
+            "error_message": "refused recipient(s): " + ", ".join(sorted(rejected_recipients)),
+            "phase": "send",
+            "accepted_recipients": accepted_recipients,
+            "rejected_recipients": sorted(rejected_recipients),
+        }
 
     progress_tracker.detail(f"[email] Sent report to {', '.join(recipients)}")
     return {
@@ -3138,6 +3656,9 @@ def maybe_email_report(
         "reason": "",
         "error_type": "",
         "error_message": "",
+        "phase": "send",
+        "accepted_recipients": accepted_recipients,
+        "rejected_recipients": [],
     }
 
 
@@ -3153,86 +3674,81 @@ def _attempt_email_delivery(
     image_art: dict[str, Any] | None = None,
     citation_sources: list[dict[str, Any]] | None = None,
     citation_groups: list[dict[str, Any]] | None = None,
+    delivery_profile: DeliveryProfile | None = None,
+    preflight_status: str = "",
+    preflight_reason: str = "",
 ) -> dict[str, Any]:
     """Run optional email delivery and record its outcome independently.
 
-    Delivery exceptions are isolated at this boundary: a failed send records a
-    ``failed`` delivery result and a progress warning, then returns normally so
-    the already-constructed report body, ``completed`` event, and finalizer
-    still run. Report construction itself stays outside this helper's ``try``.
+    A non-empty ``preflight_status`` (disabled/all-paused/placeholder policy
+    resolved before transport) records the canonical skip outcome without
+    constructing an SMTP object. Otherwise delivery is attempted and
+    exceptions are isolated at this boundary: a failed send records a
+    ``failed`` delivery result and a progress warning, then returns normally
+    so the already-constructed report body, ``completed`` event, and
+    finalizer still run. Report construction itself stays outside this
+    helper's ``try``, and error text is redacted against the profile secrets.
     """
-    try:
-        result = maybe_email_report(
-            report_title,
-            report_body,
-            synthesis_body,
-            final_reports,
-            recipient_list,
-            recipient_names,
-            image_art,
-            citation_sources,
-            citation_groups,
-        )
-    except _EmailDeliveryError as error:
+    if preflight_status:
         result = {
-            "status": "failed",
+            "status": preflight_status,
             "recipients": list(recipient_list),
-            "reason": "email transport failed",
-            "error_type": error.cause_type,
-            "error_message": "email transport failed",
-            "sent_recipients": error.sent_recipients,
-            "failed_recipients": error.failed_recipients,
+            "reason": preflight_reason,
+            "error_type": "",
+            "error_message": "",
+            "phase": "",
+            "accepted_recipients": [],
+            "rejected_recipients": [],
         }
-        if error.expected_transport:
-            progress_tracker.warning(
-                f"[email] Delivery failed ({error.cause_type}); "
-                f"{len(error.sent_recipients)} sent, "
-                f"{len(error.failed_recipients)} not sent; the completed report "
-                "remains available for review."
+        progress_tracker.detail(f"[email] Skipping email. {preflight_reason}")
+    else:
+        try:
+            result = maybe_email_report(
+                report_title,
+                report_body,
+                synthesis_body,
+                final_reports,
+                recipient_list,
+                recipient_names,
+                image_art,
+                citation_sources,
+                citation_groups,
+                delivery_profile,
             )
-        else:
-            logger.exception(
-                "[email] Unexpected exception while sending email (%s)",
-                error.cause_type,
-            )
+        except _EmailDeliveryError as error:
+            redacted_message = _redact_delivery_error(str(error), delivery_profile)
+            result = {
+                "status": "failed",
+                "recipients": list(recipient_list),
+                "reason": "delivery failed after report construction",
+                "error_type": error.cause_type,
+                "error_message": redacted_message,
+                "phase": "send",
+                "accepted_recipients": list(error.sent_recipients),
+                "rejected_recipients": [],
+                "sent_recipients": list(error.sent_recipients),
+                "failed_recipients": list(error.failed_recipients),
+            }
             progress_tracker.warning(
-                f"[email] Unexpected delivery error ({error.cause_type}); "
+                f"[email] Delivery failed ({error.cause_type}: {redacted_message}); "
                 "the completed report remains available for review."
             )
-    except (smtplib.SMTPException, OSError, TimeoutError) as error:
-        result = {
-            "status": "failed",
-            "recipients": list(recipient_list),
-            "reason": "email transport failed",
-            "error_type": type(error).__name__,
-            "error_message": "email transport failed",
-            "sent_recipients": [],
-            "failed_recipients": list(recipient_list),
-        }
-        progress_tracker.warning(
-            f"[email] Delivery failed ({type(error).__name__}); "
-            "the completed report remains available for review."
-        )
-    except Exception as error:
-        # Keep report completion independent from unexpected delivery bugs, but
-        # put the full traceback only in the local log, never in durable UI data.
-        logger.exception(
-            "[email] Unexpected exception before email transport (%s)",
-            type(error).__name__,
-        )
-        result = {
-            "status": "failed",
-            "recipients": list(recipient_list),
-            "reason": "unexpected delivery error",
-            "error_type": type(error).__name__,
-            "error_message": "unexpected delivery error; see the run log",
-            "sent_recipients": [],
-            "failed_recipients": list(recipient_list),
-        }
-        progress_tracker.warning(
-            f"[email] Unexpected delivery error ({type(error).__name__}); "
-            "the completed report remains available for review."
-        )
+        except Exception as error:
+            redacted_message = _redact_delivery_error(str(error), delivery_profile)
+            result = {
+                "status": "failed",
+                "recipients": list(recipient_list),
+                "reason": "delivery failed after report construction",
+                "error_type": type(error).__name__,
+                "error_message": redacted_message,
+                "phase": "send",
+                "accepted_recipients": [],
+                "rejected_recipients": [],
+            }
+            progress_tracker.warning(
+                f"[email] Delivery failed ({type(error).__name__}: {redacted_message}); "
+                "the completed report remains available for review."
+            )
     diagnostics.record_delivery(**result)
     return result
 
@@ -4065,6 +4581,11 @@ def _new_run_diagnostics(source_count: int) -> RunDiagnostics:
             "model_tuning": _json_ready(MODEL_TUNING),
             "pipeline_budget": _json_ready(PIPELINE_BUDGET),
             "model_server_settings": _json_ready(MODEL_SERVER_SETTINGS),
+            "prompt_profile_id": PROMPT_PROFILE_ID,
+            "prompt_instruction_overrides": _json_ready(CONFIG.prompt_instruction_overrides),
+            "prompt_instructions": _json_ready(PROMPT_INSTRUCTIONS),
+            "model_snapshots": _model_snapshots(),
+            "translation_policy": _translation_policy_snapshot(),
             "model_max_input_tokens": MODEL_MAX_INPUT_TOKENS,
             "model_default_sampling": _sampling_to_dict(MODEL_DEFAULT_SAMPLING),
             "model_reasoning_sampling": _sampling_to_dict(MODEL_REASONING_SAMPLING),
@@ -4351,7 +4872,13 @@ def _finalize_failed_run(error: Exception, traceback_text: str, config: RuntimeC
 
 
 def run_pipeline() -> None:
-    RunSession(CONFIG).run()
+    global _HF_REVISION_LOOKUP_ENABLED
+    previous_lookup_enabled = _HF_REVISION_LOOKUP_ENABLED
+    _HF_REVISION_LOOKUP_ENABLED = True
+    try:
+        RunSession(CONFIG).run()
+    finally:
+        _HF_REVISION_LOOKUP_ENABLED = previous_lookup_enabled
 
 
 @contextmanager
@@ -5018,12 +5545,16 @@ def _run_pipeline() -> None:
     _active_run_finalizer(diagnostics, CONFIG).record_selected_articles(selected_articles)
     _active_run_finalizer(diagnostics, CONFIG).record_story_summary_records(story_summary_records)
 
-    recipient_config = get_active_recipient_config(load_recipient_config())
-    recipient_list = list(recipient_config.keys())
-    recipient_names = [
-        recipient_config[email].get("name") or email
-        for email in recipient_list
-    ]
+    # Delivery Profile target resolution replaces the implicit legacy
+    # primary-only behavior at the delivery call site: the profile decides
+    # disabled/owner/recipients policy, and any canonical skip outcome flows
+    # through delivery_context so diagnostics still record it before the
+    # completed event.
+    delivery_plan_targets, delivery_plan_status, delivery_plan_reason = (
+        _resolve_delivery_plan(CONFIG.delivery_profile)
+    )
+    recipient_list = [recipient.email for recipient in delivery_plan_targets]
+    recipient_names = [recipient.name for recipient in delivery_plan_targets]
 
     if not recipient_list:
         progress_tracker.detail(
@@ -5140,6 +5671,9 @@ def _run_pipeline() -> None:
             "image_art": image_art,
             "citation_sources": citation_sources,
             "citation_groups": citation_groups,
+            "delivery_profile": CONFIG.delivery_profile,
+            "preflight_status": delivery_plan_status,
+            "preflight_reason": delivery_plan_reason,
         }
 
         if token_stats:
