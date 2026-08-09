@@ -91,6 +91,11 @@ import httpx
 from openai import APIConnectionError, APITimeoutError, InternalServerError, RateLimitError
 
 from .config import (
+    DELIVERY_MODE_DISABLED,
+    DELIVERY_MODE_OWNER,
+    DELIVERY_MODE_RECIPIENTS,
+    DeliveryProfile,
+    DeliveryRecipient,
     ModelSamplingSettings,
     RuntimeConfig,
     DEFAULT_TITLE_GENERATION_MAX_TOKENS,
@@ -101,6 +106,8 @@ from .config import (
     configured_model_api_key,
     ensure_codex_safe_model_reference,
     is_managed_model_backend,
+    is_placeholder_address,
+    is_placeholder_credential,
     managed_model_conflict_message,
     same_model_endpoint,
     is_gemma_4_model_reference,
@@ -997,6 +1004,8 @@ def _compat_runtime_values(config: RuntimeConfig) -> dict[str, Any]:
         "MODEL_BACKEND": config.model_backend,
         "MODEL_SERVER_COMMAND": config.model_server_command,
         "PRIMARY_RECIPIENT": config.primary_recipient,
+        "DELIVERY_PROFILE": config.delivery_profile,
+        "DELIVERY_MODE": config.delivery_profile.mode,
         "RECENT_WINDOW_HOURS": config.recent_window_hours,
         "MAX_ARTICLES_PER_SOURCE": config.max_articles_per_source,
         "RUN_STARTED_AT": config.run_started_at,
@@ -1708,12 +1717,16 @@ def _base64url_decode(encoded_value: str) -> bytes:
     return base64.urlsafe_b64decode((encoded_value + padding).encode("ascii"))
 
 
-def _unsubscribe_signing_secret() -> bytes:
-    secret = UNSUBSCRIBE_SECRET or SMTP_PASSWORD or EMAIL_FROM
+def _unsubscribe_signing_secret(signing_secret: str | None = None) -> bytes:
+    secret = signing_secret if signing_secret is not None else (UNSUBSCRIBE_SECRET or SMTP_PASSWORD or EMAIL_FROM)
     return secret.encode("utf-8")
 
 
-def build_unsubscribe_token(recipient_email: str) -> str:
+def build_unsubscribe_token(
+    recipient_email: str,
+    *,
+    signing_secret: str | None = None,
+) -> str:
     payload = json.dumps(
         {"email": recipient_email.strip().lower()},
         separators=(",", ":"),
@@ -1721,7 +1734,7 @@ def build_unsubscribe_token(recipient_email: str) -> str:
     ).encode("utf-8")
     payload_part = _base64url_encode(payload)
     signature = hmac.new(
-        _unsubscribe_signing_secret(),
+        _unsubscribe_signing_secret(signing_secret),
         payload_part.encode("ascii"),
         hashlib.sha256,
     ).digest()
@@ -1750,10 +1763,16 @@ def parse_unsubscribe_token(token: str) -> str:
     return email
 
 
-def build_unsubscribe_url(recipient_email: str) -> str:
-    token = build_unsubscribe_token(recipient_email)
-    separator = "&" if "?" in UNSUBSCRIBE_BASE_URL else "?"
-    return f"{UNSUBSCRIBE_BASE_URL}{separator}{urlencode({'token': token})}"
+def build_unsubscribe_url(
+    recipient_email: str,
+    *,
+    base_url: str | None = None,
+    signing_secret: str | None = None,
+) -> str:
+    token = build_unsubscribe_token(recipient_email, signing_secret=signing_secret)
+    effective_base_url = base_url if base_url is not None else UNSUBSCRIBE_BASE_URL
+    separator = "&" if "?" in effective_base_url else "?"
+    return f"{effective_base_url}{separator}{urlencode({'token': token})}"
 
 
 def update_client_pause_setting(target_email: str, pause: bool = True) -> int:
@@ -1844,6 +1863,118 @@ def get_active_recipient_config(recipient_config: dict[str, dict]) -> dict[str, 
     }
 
 
+def _dedupe_delivery_recipients(
+    recipients: list[DeliveryRecipient],
+) -> list[DeliveryRecipient]:
+    """Deduplicate targets case-insensitively, retaining first order/name."""
+    seen: set[str] = set()
+    deduped: list[DeliveryRecipient] = []
+    for recipient in recipients:
+        key = (recipient.email or "").strip().lower()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        deduped.append(recipient)
+    return deduped
+
+
+def _select_delivery_targets(
+    profile: DeliveryProfile,
+) -> tuple[list[DeliveryRecipient], str, str]:
+    """Resolve the recipient target list and canonical skip state from a profile.
+
+    Returns ``(targets, status, reason)`` where a non-empty ``status`` is the
+    ADR 0012 canonical skip outcome (``skipped: user_disabled`` for explicit
+    disabled/all-paused policy, ``skipped: not_configured`` for missing or
+    placeholder targets) and ``reason`` is the actionable preflight detail.
+    ``owner`` mode selects only the owner; ``recipients`` mode selects active
+    additional-recipient catalog entries (owner included only when listed).
+    An explicitly configured legacy fallback is used only when the catalog is
+    empty; targets are deduplicated case-insensitively.
+    """
+    mode = profile.mode
+    if mode == DELIVERY_MODE_DISABLED:
+        return [], "skipped: user_disabled", "delivery disabled by profile"
+
+    if mode == DELIVERY_MODE_OWNER:
+        owner_email = (profile.owner_recipient or "").strip()
+        if not owner_email:
+            return [], "skipped: not_configured", "missing configuration: NEWS_PRIMARY_RECIPIENT"
+        owner_key = owner_email.lower()
+        for recipient in profile.additional_recipients:
+            if (recipient.email or "").strip().lower() == owner_key and recipient.pause:
+                return [], "skipped: user_disabled", "owner recipient is paused"
+        return [DeliveryRecipient(email=owner_email, name=owner_email, pause=False)], "", ""
+
+    # recipients mode: active additional-recipient catalog entries first,
+    # then the legacy fallback list when the catalog has no active entries.
+    active = [
+        recipient
+        for recipient in profile.additional_recipients
+        if not recipient.pause
+    ]
+    if active:
+        return _dedupe_delivery_recipients(active), "", ""
+    if profile.additional_recipients:
+        return [], "skipped: user_disabled", "all configured recipients are paused"
+    if profile.legacy_fallback_explicit and profile.legacy_fallback_recipients:
+        fallback = [
+            DeliveryRecipient(email=email, name=email, pause=False)
+            for email in profile.legacy_fallback_recipients
+        ]
+        return _dedupe_delivery_recipients(fallback), "", ""
+    return [], "skipped: not_configured", "missing configuration: recipient list"
+
+
+def _resolve_delivery_plan(
+    profile: DeliveryProfile,
+) -> tuple[list[DeliveryRecipient], str, str]:
+    """Resolve targets plus the transport-independent preflight decision.
+
+    Filters exact repository placeholder addresses before transport (ADR 0012
+    placeholder rule): a fully-placeholder target list can never look
+    configured, so it resolves to ``skipped: not_configured``. A non-empty
+    ``status`` means delivery must be skipped with that canonical outcome;
+    otherwise ``targets`` are the deduplicated active recipients ready for
+    transport evaluation.
+    """
+    targets, status, reason = _select_delivery_targets(profile)
+    if status:
+        return targets, status, reason
+    real_targets = [
+        target for target in targets if not is_placeholder_address(target.email)
+    ]
+    if not real_targets:
+        return [], "skipped: not_configured", "placeholder recipient address"
+    return real_targets, "", ""
+
+
+def _redact_delivery_error(
+    error_message: str,
+    profile: DeliveryProfile | None = None,
+) -> str:
+    """Redact credential values and bound the persisted/logged error text.
+
+    Replaces every non-empty profile or module-level transport credential
+    wherever it appears in an exception message, then truncates the result.
+    Never returns a traceback or raw credential value; configured values remain
+    protected even when they are short.
+    """
+    message = str(error_message or "")
+    secrets: list[str] = []
+    if profile is not None:
+        secrets.extend([profile.smtp_password, profile.unsubscribe_secret])
+    secrets.extend([SMTP_PASSWORD, UNSUBSCRIBE_SECRET])
+    secret_values = sorted(
+        {str(secret) for secret in secrets if str(secret)},
+        key=len,
+        reverse=True,
+    )
+    for secret in secret_values:
+        message = message.replace(secret, "***")
+    if len(message) > 500:
+        message = message[:500].rsplit(" ", 1)[0] + "..."
+    return message
 
 
 def _resolve_google_news_url_details(url: str) -> dict[str, str]:
@@ -2993,26 +3124,73 @@ def maybe_email_report(
     image_art: dict[str, Any] | None = None,
     citation_sources: list[dict[str, Any]] | None = None,
     citation_groups: list[dict[str, Any]] | None = None,
+    delivery_profile: DeliveryProfile | None = None,
 ) -> dict[str, Any]:
     """Send the completed report by email and return the normalized outcome.
 
-    The returned mapping uses the ADR 0012 delivery vocabulary
-    (``sent`` or ``skipped: not_configured`` here; ``failed`` is recorded by
-    ``_attempt_email_delivery`` when the transport raises) and never contains
-    SMTP passwords, secrets, or full tracebacks. Delivery outcomes are
-    independent from the Run Session outcome.
+    The returned mapping uses the ADR 0012 delivery vocabulary (``sent``,
+    ``skipped: not_configured``, ``skipped: user_disabled``, or ``failed``
+    via ``_attempt_email_delivery`` when the transport raises) and never
+    contains SMTP passwords, secrets, or full tracebacks. Delivery outcomes
+    are independent from the Run Session outcome.
+
+    When ``delivery_profile`` is supplied, recipient policy and transport
+    values come from the profile: the target list is re-resolved from the
+    profile (disabled/all-paused/placeholder decisions included), and
+    placeholder/missing sender, host, username, and password produce
+    ``skipped: not_configured`` before any SMTP object is constructed.
+    Without a profile, the legacy module-global missing-configuration check
+    applies unchanged.
     """
-    missing = []
-    if not recipients:
-        missing.append("recipient list")
-    if not EMAIL_FROM:
-        missing.append("NEWS_EMAIL_FROM")
-    if not SMTP_HOST:
-        missing.append("NEWS_SMTP_HOST")
-    if not SMTP_USERNAME:
-        missing.append("NEWS_SMTP_USERNAME")
-    if not SMTP_PASSWORD:
-        missing.append("NEWS_SMTP_PASSWORD")
+    if delivery_profile is not None:
+        targets, plan_status, plan_reason = _resolve_delivery_plan(delivery_profile)
+        if plan_status:
+            progress_tracker.detail(f"[email] Skipping email. {plan_reason}")
+            return {
+                "status": plan_status,
+                "recipients": [target.email for target in targets],
+                "reason": plan_reason,
+                "error_type": "",
+                "error_message": "",
+                "phase": "",
+                "accepted_recipients": [],
+                "rejected_recipients": [],
+            }
+        recipients = [target.email for target in targets]
+        recipient_names = [target.name for target in targets]
+        email_from = delivery_profile.sender
+        smtp_host = delivery_profile.smtp_host
+        smtp_port = delivery_profile.smtp_port
+        smtp_username = delivery_profile.smtp_username
+        smtp_password = delivery_profile.smtp_password
+        smtp_use_ssl = delivery_profile.smtp_use_ssl
+        missing = []
+        if not email_from or is_placeholder_address(email_from):
+            missing.append("NEWS_EMAIL_FROM")
+        if not smtp_host or is_placeholder_credential(smtp_host):
+            missing.append("NEWS_SMTP_HOST")
+        if not smtp_username or is_placeholder_credential(smtp_username):
+            missing.append("NEWS_SMTP_USERNAME")
+        if not smtp_password or is_placeholder_credential(smtp_password):
+            missing.append("NEWS_SMTP_PASSWORD")
+    else:
+        email_from = EMAIL_FROM
+        smtp_host = SMTP_HOST
+        smtp_port = SMTP_PORT
+        smtp_username = SMTP_USERNAME
+        smtp_password = SMTP_PASSWORD
+        smtp_use_ssl = SMTP_USE_SSL
+        missing = []
+        if not recipients:
+            missing.append("recipient list")
+        if not email_from:
+            missing.append("NEWS_EMAIL_FROM")
+        if not smtp_host:
+            missing.append("NEWS_SMTP_HOST")
+        if not smtp_username:
+            missing.append("NEWS_SMTP_USERNAME")
+        if not smtp_password:
+            missing.append("NEWS_SMTP_PASSWORD")
 
     if missing:
         progress_tracker.detail(f"[email] Skipping email. Missing configuration: {', '.join(missing)}")
@@ -3022,6 +3200,9 @@ def maybe_email_report(
             "reason": f"missing configuration: {', '.join(missing)}",
             "error_type": "",
             "error_message": "",
+            "phase": "",
+            "accepted_recipients": [],
+            "rejected_recipients": [],
         }
 
     # Read the image attachment once up front; a read failure degrades the
@@ -3047,10 +3228,22 @@ def maybe_email_report(
 
     def build_message(recipient_email: str, recipient_name: str) -> EmailMessage:
         first_name = _extract_first_name(recipient_name or recipient_email)
-        unsubscribe_url = build_unsubscribe_url(recipient_email)
+        if delivery_profile is not None:
+            signing_secret = (
+                delivery_profile.unsubscribe_secret
+                or delivery_profile.smtp_password
+                or delivery_profile.sender
+            )
+            unsubscribe_url = build_unsubscribe_url(
+                recipient_email,
+                base_url=delivery_profile.unsubscribe_base_url,
+                signing_secret=signing_secret,
+            )
+        else:
+            unsubscribe_url = build_unsubscribe_url(recipient_email)
         message = EmailMessage()
         message["Subject"] = build_email_subject()
-        message["From"] = EMAIL_FROM
+        message["From"] = email_from
         message["To"] = recipient_email
         message["List-Unsubscribe"] = f"<{unsubscribe_url}>"
         message["List-Unsubscribe-Post"] = "List-Unsubscribe=One-Click"
@@ -3082,19 +3275,53 @@ def maybe_email_report(
             )
         return message
 
-    if SMTP_USE_SSL:
-        with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, timeout=30) as smtp:
-            smtp.login(SMTP_USERNAME, SMTP_PASSWORD)
+    accepted_recipients: list[str] = []
+    rejected_recipients: dict[str, str] = {}
+    if smtp_use_ssl:
+        with smtplib.SMTP_SSL(smtp_host, smtp_port, timeout=30) as smtp:
+            smtp.login(smtp_username, smtp_password)
             for index, recipient_email in enumerate(recipients):
                 recipient_name = recipient_names[index] if index < len(recipient_names) else recipient_email
-                smtp.send_message(build_message(recipient_email, recipient_name))
+                refused = smtp.send_message(build_message(recipient_email, recipient_name))
+                if refused:
+                    rejected_recipients.update(
+                        {str(key): str(value) for key, value in refused.items()}
+                    )
+                else:
+                    accepted_recipients.append(recipient_email)
     else:
-        with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=30) as smtp:
+        with smtplib.SMTP(smtp_host, smtp_port, timeout=30) as smtp:
             smtp.starttls()
-            smtp.login(SMTP_USERNAME, SMTP_PASSWORD)
+            smtp.login(smtp_username, smtp_password)
             for index, recipient_email in enumerate(recipients):
                 recipient_name = recipient_names[index] if index < len(recipient_names) else recipient_email
-                smtp.send_message(build_message(recipient_email, recipient_name))
+                refused = smtp.send_message(build_message(recipient_email, recipient_name))
+                if refused:
+                    rejected_recipients.update(
+                        {str(key): str(value) for key, value in refused.items()}
+                    )
+                else:
+                    accepted_recipients.append(recipient_email)
+
+    if rejected_recipients:
+        # ``send_message`` reports refused recipients by returning a mapping
+        # instead of raising; a message is only ``sent`` when every selected
+        # target was accepted (partial SMTP rejection is ``failed``).
+        reason = "delivery refused for: " + ", ".join(sorted(rejected_recipients))
+        progress_tracker.warning(
+            f"[email] Delivery refused for {', '.join(sorted(rejected_recipients))}; "
+            "the completed report remains available for review."
+        )
+        return {
+            "status": "failed",
+            "recipients": list(recipients),
+            "reason": reason,
+            "error_type": "SMTPRecipientsRefused",
+            "error_message": "refused recipient(s): " + ", ".join(sorted(rejected_recipients)),
+            "phase": "send",
+            "accepted_recipients": accepted_recipients,
+            "rejected_recipients": sorted(rejected_recipients),
+        }
 
     progress_tracker.detail(f"[email] Sent report to {', '.join(recipients)}")
     return {
@@ -3103,6 +3330,9 @@ def maybe_email_report(
         "reason": "",
         "error_type": "",
         "error_message": "",
+        "phase": "send",
+        "accepted_recipients": accepted_recipients,
+        "rejected_recipients": [],
     }
 
 
@@ -3118,38 +3348,63 @@ def _attempt_email_delivery(
     image_art: dict[str, Any] | None = None,
     citation_sources: list[dict[str, Any]] | None = None,
     citation_groups: list[dict[str, Any]] | None = None,
+    delivery_profile: DeliveryProfile | None = None,
+    preflight_status: str = "",
+    preflight_reason: str = "",
 ) -> dict[str, Any]:
     """Run optional email delivery and record its outcome independently.
 
-    Delivery exceptions are isolated at this boundary: a failed send records a
-    ``failed`` delivery result and a progress warning, then returns normally so
-    the already-constructed report body, ``completed`` event, and finalizer
-    still run. Report construction itself stays outside this helper's ``try``.
+    A non-empty ``preflight_status`` (disabled/all-paused/placeholder policy
+    resolved before transport) records the canonical skip outcome without
+    constructing an SMTP object. Otherwise delivery is attempted and
+    exceptions are isolated at this boundary: a failed send records a
+    ``failed`` delivery result and a progress warning, then returns normally
+    so the already-constructed report body, ``completed`` event, and
+    finalizer still run. Report construction itself stays outside this
+    helper's ``try``, and error text is redacted against the profile secrets.
     """
-    try:
-        result = maybe_email_report(
-            report_title,
-            report_body,
-            synthesis_body,
-            final_reports,
-            recipient_list,
-            recipient_names,
-            image_art,
-            citation_sources,
-            citation_groups,
-        )
-    except Exception as error:
+    if preflight_status:
         result = {
-            "status": "failed",
+            "status": preflight_status,
             "recipients": list(recipient_list),
-            "reason": "delivery failed after report construction",
-            "error_type": type(error).__name__,
-            "error_message": str(error),
+            "reason": preflight_reason,
+            "error_type": "",
+            "error_message": "",
+            "phase": "",
+            "accepted_recipients": [],
+            "rejected_recipients": [],
         }
-        progress_tracker.warning(
-            f"[email] Delivery failed ({type(error).__name__}: {error}); "
-            "the completed report remains available for review."
-        )
+        progress_tracker.detail(f"[email] Skipping email. {preflight_reason}")
+    else:
+        try:
+            result = maybe_email_report(
+                report_title,
+                report_body,
+                synthesis_body,
+                final_reports,
+                recipient_list,
+                recipient_names,
+                image_art,
+                citation_sources,
+                citation_groups,
+                delivery_profile,
+            )
+        except Exception as error:
+            redacted_message = _redact_delivery_error(str(error), delivery_profile)
+            result = {
+                "status": "failed",
+                "recipients": list(recipient_list),
+                "reason": "delivery failed after report construction",
+                "error_type": type(error).__name__,
+                "error_message": redacted_message,
+                "phase": "send",
+                "accepted_recipients": [],
+                "rejected_recipients": [],
+            }
+            progress_tracker.warning(
+                f"[email] Delivery failed ({type(error).__name__}: {redacted_message}); "
+                "the completed report remains available for review."
+            )
     diagnostics.record_delivery(**result)
     return result
 
@@ -4935,12 +5190,16 @@ def _run_pipeline() -> None:
     _active_run_finalizer(diagnostics, CONFIG).record_selected_articles(selected_articles)
     _active_run_finalizer(diagnostics, CONFIG).record_story_summary_records(story_summary_records)
 
-    recipient_config = get_active_recipient_config(load_recipient_config())
-    recipient_list = list(recipient_config.keys())
-    recipient_names = [
-        recipient_config[email].get("name") or email
-        for email in recipient_list
-    ]
+    # Delivery Profile target resolution replaces the implicit legacy
+    # primary-only behavior at the delivery call site: the profile decides
+    # disabled/owner/recipients policy, and any canonical skip outcome flows
+    # through delivery_context so diagnostics still record it before the
+    # completed event.
+    delivery_plan_targets, delivery_plan_status, delivery_plan_reason = (
+        _resolve_delivery_plan(CONFIG.delivery_profile)
+    )
+    recipient_list = [recipient.email for recipient in delivery_plan_targets]
+    recipient_names = [recipient.name for recipient in delivery_plan_targets]
 
     if not recipient_list:
         progress_tracker.detail(
@@ -5057,6 +5316,9 @@ def _run_pipeline() -> None:
             "image_art": image_art,
             "citation_sources": citation_sources,
             "citation_groups": citation_groups,
+            "delivery_profile": CONFIG.delivery_profile,
+            "preflight_status": delivery_plan_status,
+            "preflight_reason": delivery_plan_reason,
         }
 
         if token_stats:

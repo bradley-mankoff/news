@@ -101,14 +101,18 @@ class RunDiagnostics:
         reason: str = "",
         error_type: str = "",
         error_message: str = "",
+        phase: str = "",
+        accepted_recipients: list[str] | None = None,
+        rejected_recipients: list[str] | None = None,
     ) -> None:
-        """Record the optional delivery outcome independently from run status.
+        """Record a normalized delivery outcome independently from run status.
 
-        ``status`` is one of ``sent``, ``skipped: not_configured``,
-        ``skipped: user_disabled``, or ``failed``. The mapping never carries
-        SMTP passwords, secrets, or full delivery tracebacks, and recording a
-        delivery outcome never adds a run event: ``run_status_from_events``
-        keeps describing report/run generation only.
+        Callers must pass redacted, address-only delivery metadata. This method
+        normalizes supplied values but does not sanitize arbitrary exception or
+        SMTP payload text. ``status`` is one of ``sent``,
+        ``skipped: not_configured``, ``skipped: user_disabled``, or ``failed``.
+        Recording a delivery outcome never adds a run event:
+        ``run_status_from_events`` keeps describing report/run generation only.
         """
         self.delivery = {
             "status": str(status or "").strip(),
@@ -116,6 +120,13 @@ class RunDiagnostics:
             "reason": str(reason or ""),
             "error_type": str(error_type or ""),
             "error_message": str(error_message or ""),
+            "phase": str(phase or ""),
+            "accepted_recipients": [
+                str(recipient) for recipient in (accepted_recipients or [])
+            ],
+            "rejected_recipients": [
+                str(recipient) for recipient in (rejected_recipients or [])
+            ],
         }
 
     def to_dict(self) -> dict[str, Any]:
@@ -562,6 +573,18 @@ class RunDiagnostics:
                 f"| Reason | {_table_value(delivery.get('reason') or '')} |",
             ]
         )
+        if delivery.get("phase"):
+            lines.append(f"| Phase | {_table_value(delivery.get('phase'))} |")
+        if delivery.get("accepted_recipients"):
+            lines.append(
+                "| Accepted | "
+                f"{_table_value(', '.join(delivery.get('accepted_recipients') or []))} |"
+            )
+        if delivery.get("rejected_recipients"):
+            lines.append(
+                "| Rejected | "
+                f"{_table_value(', '.join(delivery.get('rejected_recipients') or []))} |"
+            )
         if delivery.get("error_type") or delivery.get("error_message"):
             lines.append(
                 "| Error | "

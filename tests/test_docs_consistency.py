@@ -60,7 +60,7 @@ class DocsConsistencyTests(unittest.TestCase):
 
         # Slice B's summary must not use the compressed form that collapses
         # the two skip reasons or elevates `user_disabled` to a sibling state.
-        slice_b = adr.split("### Follow-up slices")[1].split("## Consequences")[0]
+        slice_b = adr.split("### Delivery slices")[1].split("## Consequences")[0]
         self.assertIn("skipped: not_configured", slice_b)
         self.assertIn("skipped: user_disabled", slice_b)
         self.assertNotIn("`user_disabled`", slice_b)

@@ -303,6 +303,9 @@ class DiagnosticsTests(unittest.TestCase):
                 "reason": "",
                 "error_type": "",
                 "error_message": "",
+                "phase": "",
+                "accepted_recipients": [],
+                "rejected_recipients": [],
             },
         )
         self.assertEqual(run_status_from_events(diagnostics.events), "completed")
@@ -314,6 +317,61 @@ class DiagnosticsTests(unittest.TestCase):
 
         summary_markdown = diagnostics.to_summary_markdown()
         self.assertIn("- Delivery: sent", summary_markdown)
+
+    def test_record_delivery_rich_metadata_renders_and_keeps_status(self) -> None:
+        diagnostics = RunDiagnostics(
+            run_started_at="2026-06-01T10:00:00",
+            settings={},
+            events=[{"at": "2026-06-01T10:01:00", "label": "completed"}],
+        )
+        diagnostics.record_delivery(
+            "failed",
+            recipients=["reader@example.com", "editor@example.com"],
+            reason="delivery refused for: editor@example.com",
+            error_type="SMTPRecipientsRefused",
+            error_message="refused recipient",
+            phase="send",
+            accepted_recipients=["reader@example.com"],
+            rejected_recipients=["editor@example.com"],
+        )
+
+        recorded = diagnostics.to_dict()["delivery"]
+        self.assertEqual(recorded["phase"], "send")
+        self.assertEqual(recorded["accepted_recipients"], ["reader@example.com"])
+        self.assertEqual(recorded["rejected_recipients"], ["editor@example.com"])
+
+        # Run status remains independent: no failed run event is added.
+        self.assertEqual(run_status_from_events(diagnostics.events), "completed")
+        self.assertFalse(any(event["label"] == "failed" for event in diagnostics.events))
+
+        review_markdown = diagnostics.to_run_review_markdown()
+        self.assertIn("| Delivery | failed |", review_markdown)
+        self.assertIn("| Phase | send |", review_markdown)
+        self.assertIn("| Accepted | reader@example.com |", review_markdown)
+        self.assertIn("| Rejected | editor@example.com |", review_markdown)
+        self.assertIn(
+            "| Error | SMTPRecipientsRefused: refused recipient |",
+            review_markdown,
+        )
+
+        # Collections are normalized to lists of strings on re-record.
+        self.assertIsNone(
+            diagnostics.record_delivery(
+                "sent",
+                recipients=["a@example.com"],
+                phase="send",
+                accepted_recipients=None,
+            )
+        )
+
+        # Empty rich collections stay compact: no rows for unrecorded data.
+        plain = RunDiagnostics(run_started_at="2026-06-01T10:00:00", settings={})
+        plain.record_delivery("skipped: user_disabled", reason="delivery disabled by profile")
+        plain_markdown = plain.to_run_review_markdown()
+        self.assertIn("| Status | skipped: user_disabled |", plain_markdown)
+        self.assertNotIn("| Phase |", plain_markdown)
+        self.assertNotIn("| Accepted |", plain_markdown)
+        self.assertNotIn("| Rejected |", plain_markdown)
 
     def test_record_delivery_failed_keeps_run_status_and_adds_no_event(self) -> None:
         diagnostics = RunDiagnostics(

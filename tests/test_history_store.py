@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -250,6 +251,46 @@ class HistoryStoreTests(unittest.TestCase):
                 ).fetchone()
             self.assertEqual(row[0], "sent")
             self.assertIn("reader@example.com", row[1])
+
+    def test_delivery_rich_fields_survive_json_round_trip(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "history.duckdb"
+            diagnostics = self._diagnostics("2026-06-01T10:00:00", preset_id="daily")
+            diagnostics.record_delivery(
+                "failed",
+                recipients=["reader@example.com", "editor@example.com"],
+                reason="delivery refused for: editor@example.com",
+                error_type="SMTPRecipientsRefused",
+                error_message="refused recipient",
+                phase="send",
+                accepted_recipients=["reader@example.com"],
+                rejected_recipients=["editor@example.com"],
+            )
+            write_run_history(
+                db_path,
+                run_id="2026-06-01_10-00-00",
+                diagnostics=diagnostics,
+                export_csv=False,
+            )
+
+            details = get_run_details(
+                db_path, run_id="2026-06-01_10-00-00"
+            )
+            self.assertEqual(details["delivery_status"], "failed")
+            self.assertEqual(details["delivery"]["phase"], "send")
+            self.assertEqual(
+                details["delivery"]["accepted_recipients"],
+                ["reader@example.com"],
+            )
+            self.assertEqual(
+                details["delivery"]["rejected_recipients"],
+                ["editor@example.com"],
+            )
+            # The durable JSON never stores refusal payloads raw; only the
+            # redacted reason/error text and address lists are kept.
+            serialized = json.dumps(details["delivery"])
+            self.assertNotIn("relay denied", serialized)
+            self.assertNotIn("secret", serialized.lower())
 
     def test_delivery_failed_persists_independent_from_run_status(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

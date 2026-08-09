@@ -652,7 +652,139 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
         self.assertEqual(env["NEWS_SOURCE_SCOPE"], "peripheral")
         self.assertEqual(preview["runtime"]["source_scope"], "peripheral")
 
-    def test_ui_schema_groups_and_task_models_are_explicit(self) -> None:
+    def test_delivery_mode_resolution_and_profile_snapshot(self) -> None:
+        # Default mode is owner-first with public example values only.
+        config = load_runtime_config(
+            environ={},
+            materialize_outputs=False,
+            run_started_at=datetime(2026, 6, 14, 12, 0, 0),
+        )
+        profile = config.delivery_profile
+        self.assertEqual(profile.mode, "owner")
+        self.assertEqual(profile.owner_recipient, "primary@example.com")
+        self.assertEqual(profile.sender, "news@example.com")
+        self.assertEqual(profile.legacy_fallback_recipients, ("primary@example.com",))
+        self.assertNotIn("mankoff", profile.owner_recipient)
+        self.assertNotIn("gmail", profile.sender)
+        # The checked-in template recipient is captured as an additional
+        # recipient snapshot (it is paused/placeholder-safe at delivery time).
+        self.assertGreaterEqual(len(profile.additional_recipients), 1)
+        self.assertTrue(
+            any(r.email == "you@example.com" for r in profile.additional_recipients)
+        )
+
+    def test_delivery_mode_explicit_and_legacy_precedence(self) -> None:
+        # Explicit disabled mode resolves without requiring recipients or
+        # transport configuration.
+        config = load_runtime_config(
+            environ={"NEWS_DELIVERY_MODE": "disabled"},
+            materialize_outputs=False,
+            run_started_at=datetime(2026, 6, 14, 12, 0, 0),
+        )
+        self.assertEqual(config.delivery_profile.mode, "disabled")
+
+        # Explicit owner mode, case/whitespace-normalized.
+        config = load_runtime_config(
+            environ={"NEWS_DELIVERY_MODE": " Owner_only "},
+            materialize_outputs=False,
+            run_started_at=datetime(2026, 6, 14, 12, 0, 0),
+        )
+        self.assertEqual(config.delivery_profile.mode, "owner")
+
+        # Explicit recipients mode is an opt-in and keeps the legacy
+        # fallback list snapshot.
+        config = load_runtime_config(
+            environ={"NEWS_DELIVERY_MODE": "recipients"},
+            materialize_outputs=False,
+            run_started_at=datetime(2026, 6, 14, 12, 0, 0),
+        )
+        self.assertEqual(config.delivery_profile.mode, "recipients")
+
+        # Legacy NEWS_RECIPIENT_SCOPE=all maps to the configured-recipients
+        # mode and does not automatically prepend the owner.
+        config = load_runtime_config(
+            environ={"NEWS_RECIPIENT_SCOPE": "all"},
+            materialize_outputs=False,
+            run_started_at=datetime(2026, 6, 14, 12, 0, 0),
+        )
+        self.assertEqual(config.delivery_profile.mode, "recipients")
+
+        # Explicit new setting wins over a legacy scope value.
+        config = load_runtime_config(
+            environ={"NEWS_DELIVERY_MODE": "owner", "NEWS_RECIPIENT_SCOPE": "all"},
+            materialize_outputs=False,
+            run_started_at=datetime(2026, 6, 14, 12, 0, 0),
+        )
+        self.assertEqual(config.delivery_profile.mode, "owner")
+
+        # Empty explicit mode behaves as unset, so the legacy scope applies.
+        config = load_runtime_config(
+            environ={"NEWS_DELIVERY_MODE": "", "NEWS_RECIPIENT_SCOPE": "all"},
+            materialize_outputs=False,
+            run_started_at=datetime(2026, 6, 14, 12, 0, 0),
+        )
+        self.assertEqual(config.delivery_profile.mode, "recipients")
+
+        # Invalid non-empty explicit mode fails fast with allowed values.
+        with self.assertRaisesRegex(ValueError, "NEWS_DELIVERY_MODE must be one of"):
+            load_runtime_config(
+                environ={"NEWS_DELIVERY_MODE": "everyone"},
+                materialize_outputs=False,
+                run_started_at=datetime(2026, 6, 14, 12, 0, 0),
+            )
+
+    def test_placeholder_and_secret_safe_runtime_profile(self) -> None:
+        # A sender equal to the owner is accepted at config resolution, and
+        # placeholder values never raise (they resolve to skipped:
+        # not_configured at delivery time, not a config error).
+        config = load_runtime_config(
+            environ={
+                "NEWS_PRIMARY_RECIPIENT": "owner@example.com",
+                "NEWS_EMAIL_FROM": "owner@example.com",
+                "NEWS_SMTP_HOST": "smtp.example.com",
+                "NEWS_SMTP_PASSWORD": "s3cret",
+                "NEWS_UNSUBSCRIBE_SECRET": "unsub-token",
+            },
+            materialize_outputs=False,
+            run_started_at=datetime(2026, 6, 14, 12, 0, 0),
+        )
+        profile = config.delivery_profile
+        self.assertEqual(profile.sender, profile.owner_recipient)
+        self.assertEqual(config.email_from, config.primary_recipient)
+        snapshot = profile.public_snapshot()
+        self.assertTrue(snapshot["smtp_password_set"])
+        self.assertTrue(snapshot["unsubscribe_secret_set"])
+        serialized = str(snapshot)
+        self.assertNotIn("s3cret", serialized)
+        self.assertNotIn("unsub-token", serialized)
+        self.assertNotIn(profile.smtp_password, serialized)
+        # RuntimeConfig itself keeps the password in memory only for
+        # transport; the redacted projection is what UI consumers use.
+        self.assertEqual(config.smtp_password, "s3cret")
+
+        # Placeholder credential values count as not configured in the
+        # public snapshot even though resolution succeeds.
+        config = load_runtime_config(
+            environ={"NEWS_SMTP_PASSWORD": "password", "NEWS_SMTP_USERNAME": "news@example.com"},
+            materialize_outputs=False,
+            run_started_at=datetime(2026, 6, 14, 12, 0, 0),
+        )
+        snapshot = config.delivery_profile.public_snapshot()
+        self.assertFalse(snapshot["smtp_password_set"])
+
+    def test_ui_schema_surfaces_delivery_mode_knob(self) -> None:
+        with patch.dict(os.environ, {"NEWS_MODEL": CODEX_TEST_MODEL_ALIAS}, clear=True):
+            schema = schema_payload()
+        knobs = {knob["env"]: knob for knob in schema["knobs"]}
+        self.assertIn("NEWS_DELIVERY_MODE", knobs)
+        self.assertEqual(knobs["NEWS_DELIVERY_MODE"]["type"], "select")
+        self.assertEqual(knobs["NEWS_DELIVERY_MODE"]["default"], "owner")
+        self.assertEqual(
+            set(knobs["NEWS_DELIVERY_MODE"]["options"]),
+            {"disabled", "owner", "recipients"},
+        )
+
+
         with patch.dict(os.environ, {"NEWS_MODEL": CODEX_TEST_MODEL_ALIAS}, clear=True):
             schema = schema_payload()
 
