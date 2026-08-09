@@ -15,6 +15,9 @@ direct fix sessions). It is not a project-management constitution.
 - Sources / recipients / presets → `config/*.yaml`
 - Security audit / history scrub → `docs/security/` +
   `automation/security_audit.py` / `scrub_history.sh` (human-gated execute)
+- Secret-prevention (Gitleaks pre-commit hook) →
+  `docs/security/secret-prevention.md` + `.pre-commit-config.yaml`
+  (pinned `v8.30.1`; staged-only prevention, distinct from history audit/scrub)
 - Archon workflow inventory / machine setup → `docs/archon-workflows.md`,
   `docs/archon-setup.md`
 - Vendored matt skills (wrapper: `~/.claude/skills/`; archon commands:

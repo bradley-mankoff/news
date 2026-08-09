@@ -7,6 +7,7 @@ commands from the repo root so `uv` uses this project environment.
 git clone https://github.com/bradley-mankoff/news.git
 cd news
 uv sync
+uv run pre-commit install   # secret-scanning hook (Gitleaks); runbook: docs/security/secret-prevention.md
 uv run python -c 'import platform; print(platform.machine())'
 ```
 
@@ -62,6 +63,10 @@ listener on the UI port.
 
 History scrub is human-gated: `automation/scrub_history.sh --dry-run`, review,
 then `--execute`. Runbook: `docs/security/history-scrub.md`.
+Secret prevention is automatic through the Gitleaks pre-commit hook in
+`.pre-commit-config.yaml`, pinned to `v8.30.1`; install it with
+`uv run pre-commit install`. It scans staged changes only and uses redacted
+output. Runbook: `docs/security/secret-prevention.md`.
 
 
 ## UI
