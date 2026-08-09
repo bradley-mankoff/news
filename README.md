@@ -108,6 +108,16 @@ the live stream closes and the review/history panels refresh automatically; a
 completed report navigates to Report Review, while a failed run without a
 report leaves you on Run Setup with the failure visible.
 
+The **Run log** shows a concise, normalized projection of the child process:
+progress meters update one line per active stage (with a small spinner glyph
+while the stage is live), stage headers, warnings, retries, errors, and final
+summaries append in order, and carriage returns/terminal control sequences
+never reach the pane. The stream always ends with an explicit terminal line
+using a restrained text glyph: `✓ [ui] completed`, `✗ [ui] failed`, or
+`■ [ui] stopped` (a user-requested stop is never reported as a failure). The
+glyphs are decoration only; plain counts and status words remain readable even
+when glyphs are unavailable.
+
 Report-generation status and optional email delivery status are independent:
 a run with no sender/recipient/SMTP configuration finishes with delivery
 `skipped: not_configured`, an explicitly disabled or all-paused delivery
@@ -416,18 +426,27 @@ variables and source topic fields are rejected when present.
 Current run review files are written under `output/daily_outputs/`:
 
 - `latest_run.md`: latest human-readable report.
-- `latest_run.log`: latest captured terminal log.
+- `latest_run.log`: latest concise normalized run log. Progress meters are
+  compacted to stage start/final counts, carriage returns and ANSI control
+  sequences are removed, and warnings, retries, errors, final summaries, and
+  full failure tracebacks remain readable. The per-run timestamped counterpart
+  is written to `.staging/<run-date>/run_log_<run-id>.log` with the same
+  concise policy and is passed to DuckDB history.
 - `latest_run_details.json`: latest backend audit details (includes the
   normalized delivery outcome — status, reason, phase, and
-  accepted/rejected recipients — when a delivery attempt was possible).
+  accepted/rejected recipients — when a delivery attempt was possible). This
+  and the managed `model_server.log` are the detailed diagnostic sources; the
+  concise run log is not a raw transcript.
 
 Durable run history is written to `output/history/news_history.duckdb`, with CSV
-exports in `output/history/` for quick review. Each `runs` row carries the
-run status, report metadata, and an independent `delivery_status`/`delivery`
-record (`sent`, `skipped: not_configured`, `skipped: user_disabled`, or
-`failed`; older rows read as `not recorded`). A run with a non-empty newsletter
-body also writes paste-ready Markdown to `output/beehiiv/YYYY-MM-DD.md` for
-manual publication.
+exports in `output/history/` for quick review. The DuckDB `run_logs` table
+stores the normalized concise log content (CR/ANSI artifacts and repeated meter
+snapshots removed at ingest, including for backfilled runs) and its `byte_count`
+is the stored UTF-8 length. Each `runs` row carries the run status, report
+metadata, and an independent `delivery_status`/`delivery` record (`sent`,
+`skipped: not_configured`, `skipped: user_disabled`, or `failed`; older rows
+read as `not recorded`). A run with a non-empty newsletter body also writes
+paste-ready Markdown to `output/beehiiv/YYYY-MM-DD.md` for manual publication.
 
 ### Open Knowledge Format projections
 
@@ -436,7 +455,7 @@ The pipeline also writes two portable OKF v0.2 bundle forms:
 - `knowledge/` is the checked-in system/domain knowledge bundle. It documents current concepts and links back to `CONTEXT.md`, accepted ADRs, `news_pipeline/`, `config/`, and runtime stores; it contains no generated run output.
 - `output/history/okf/<run_id>/` is the generated **OKF Run Bundle** for one run, derived from structured Article Summary Record and Story Record data plus the rendered report body. It contains `report.md`, `articles/`, `stories/`, progressive-disclosure indexes, and `log.md`.
 
-These are portable projections, not a second source of truth. Runtime behavior remains in `news_pipeline/`, vocabulary and accepted decisions remain in `CONTEXT.md` and `docs/adr/`, editable inputs remain in `config/`, the report remains the rendered output, and DuckDB/CSV remain canonical run history. A completed diagnostic run is `stable`; failed, aborted, or unknown runs are `draft`.
+These are portable projections, not a second source of truth. Runtime behavior remains in `news_pipeline/`, vocabulary and accepted decisions remain in `CONTEXT.md` and `docs/adr/`, editable inputs remain in `config/`, the report remains the rendered output, and DuckDB/CSV remain canonical run history. The generated `log.md` is a short directory-update projection (per ADR 0008) and is never used as a run-log sink. A completed diagnostic run is `stable`; failed, aborted, or unknown runs are `draft`.
 
 History maintenance:
 

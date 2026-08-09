@@ -175,6 +175,72 @@ class TerminalProgressTests(unittest.TestCase):
         self.assertNotIn("Source 57", output)
         self.assertNotIn("Article headline 139", output)
 
+    def test_pipe_output_contains_no_ansi_clear_line_sequence(self) -> None:
+        stream = FakePipe()
+        tracker = ProgressTracker(stream=stream)
+
+        tracker.start_story_clustering(200_000, detail="Clustering 139 candidate articles.")
+        for done in range(1_000, 200_001, 1_000):
+            tracker.story_clustering_progress(
+                "similarity_pair",
+                {
+                    "phase": "pairwise similarity",
+                    "done": done,
+                    "total": 200_000,
+                    "linked_pairs": done // 10_000,
+                },
+            )
+        tracker.finish_meter(detail="47 story groups")
+
+        output = stream.getvalue()
+        self.assertNotIn("\033[K", output)
+        self.assertNotIn("\x1b", output)
+        self.assertIn("\r", output)
+        self.assertIn("200000/200000 steps", output)
+
+    def test_tty_output_keeps_clear_line_for_in_place_updates(self) -> None:
+        stream = FakeTTY()
+        tracker = ProgressTracker(stream=stream)
+
+        tracker.start_story_clustering(200_000, detail="Clustering.")
+        tracker.story_clustering_progress(
+            "similarity_pair",
+            {
+                "phase": "pairwise similarity",
+                "done": 1_000,
+                "total": 200_000,
+                "linked_pairs": 1,
+            },
+        )
+        tracker.finish_meter(detail="47 story groups")
+
+        output = stream.getvalue()
+        self.assertIn("\033[K", output)
+        self.assertIn("200000/200000 steps", output)
+        self.assertEqual(output.count("\n"), 1)
+
+    def test_high_frequency_clustering_renders_initial_and_final_only(self) -> None:
+        stream = FakePipe()
+        tracker = ProgressTracker(stream=stream)
+
+        tracker.start_story_clustering(200_000, detail="Clustering 139 candidate articles.")
+        for done in range(1, 200_001, 500):
+            tracker.story_clustering_progress(
+                "similarity_pair",
+                {
+                    "phase": "pairwise similarity",
+                    "done": done,
+                    "total": 200_000,
+                    "linked_pairs": done // 10_000,
+                },
+            )
+        tracker.finish_meter(detail="47 story groups")
+
+        output = stream.getvalue()
+        self.assertIn("0/200000 steps", output)
+        self.assertIn("200000/200000 steps", output)
+        self.assertLessEqual(len(output.split("\n")), 3, output)
+
     def test_story_drafting_progress_reports_concurrent_completions(self) -> None:
         events: list[tuple[str, dict]] = []
         blocks = [

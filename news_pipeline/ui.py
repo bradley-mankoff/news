@@ -21,6 +21,7 @@ from urllib.parse import parse_qs, urlparse
 
 import yaml
 
+from . import run_log
 from .config import (
     MODEL_TUNING_PRESETS_PATH,
     REMOVED_TOPIC_ENV_VARS,
@@ -869,15 +870,67 @@ class RunRecord:
         self.command = command
         self.env = env
         self.started_at = time.time()
-        self.lines: list[str] = []
+        # Normalized structured events (message/progress) in arrival order.
+        # Progress snapshots replace the previous snapshot of the same stage
+        # in place, so the event history stays bounded by meaningful messages
+        # plus one line per active stage.
+        self.events: list[dict[str, Any]] = []
+        self._event_sequences: list[int] = []
+        self._next_event_sequence = 0
+        self._progress_index: dict[str, int] = {}
         self.status = "starting"
+        self.stop_requested = False
         self.returncode: int | None = None
         self.process: subprocess.Popen[str] | None = None
         self.lock = threading.Lock()
 
     def append(self, line: str) -> None:
         with self.lock:
-            self.lines.append(line)
+            for event in run_log.parse_stream(line):
+                if event.kind == "progress":
+                    self._append_progress(event)
+                else:
+                    self.events.append(event.to_dict())
+                    self._event_sequences.append(self._next_sequence())
+
+    def _next_sequence(self) -> int:
+        self._next_event_sequence += 1
+        return self._next_event_sequence
+
+    def _append_progress(self, event: run_log.RunLogEvent) -> None:
+        payload = event.to_dict()
+        index = self._progress_index.get(event.stage or "")
+        if index is not None:
+            if self.events[index].get("line") == payload["line"]:
+                return  # exact duplicate snapshot
+            payload["replace"] = True
+            self.events[index] = payload
+            self._event_sequences[index] = self._next_sequence()
+        else:
+            self._progress_index[event.stage or ""] = len(self.events)
+            self.events.append(payload)
+            self._event_sequences.append(self._next_sequence())
+
+    def stream_state(self, sequence: int) -> tuple[list[dict[str, Any]], int, str, bool]:
+        """Return current events newer than a stream's transport cursor.
+
+        Events are coalesced for replay, so a progress replacement can keep the
+        same list index.  The sequence cursor makes each replacement visible
+        to existing streams while retaining bounded in-memory event state.
+        """
+        with self.lock:
+            updates = sorted(
+                (
+                    (event_sequence, dict(event))
+                    for event, event_sequence in zip(self.events, self._event_sequences)
+                    if event_sequence > sequence
+                ),
+                key=lambda item: item[0],
+            )
+            next_sequence = self._next_event_sequence
+            status = self.status
+            done = status in {"completed", "failed", "stopped"}
+        return [event for _, event in updates], next_sequence, status, done
 
     def snapshot(self) -> dict[str, Any]:
         with self.lock:
@@ -888,7 +941,7 @@ class RunRecord:
                 "started_at": self.started_at,
                 "status": self.status,
                 "returncode": self.returncode,
-                "line_count": len(self.lines),
+                "line_count": len(self.events),
             }
 
     def is_active(self) -> bool:
@@ -947,16 +1000,53 @@ class RunManager:
         record = self.get(run_id)
         if record is None:
             raise ValueError(f"Run {run_id!r} not found.")
-        process = record.process
-        if process and process.poll() is None:
-            process.terminate()
-            record.append("[ui] terminate requested\n")
-            record.status = "stopping"
+        with record.lock:
+            if record.status in {"completed", "failed", "stopped"} or record.stop_requested:
+                process = None
+                should_request = False
+            else:
+                # Record the intent before inspecting or terminating the child
+                # so the worker owns the eventual terminal transition. This
+                # also covers a stop click that arrives before Popen() returns.
+                record.stop_requested = True
+                record.status = "stopping"
+                process = record.process
+                should_request = True
+        if should_request:
+            self._append_process_event(record, "[ui] terminate requested\n")
+        if should_request and process is not None:
+            try:
+                if process.poll() is None:
+                    process.terminate()
+            except Exception as exc:
+                self._append_process_event(record, f"[ui] terminate request failed: {exc}\n")
         return record.snapshot()
+
+    @staticmethod
+    def _append_process_event(record: RunRecord, line: str) -> None:
+        """Report a lifecycle detail without masking the process outcome."""
+        try:
+            record.append(line)
+        except Exception:
+            # A logging/normalization failure must not prevent child cleanup.
+            pass
+
+    @staticmethod
+    def _terminate_process(process: subprocess.Popen[str]) -> Exception | None:
+        try:
+            if process.poll() is None:
+                process.terminate()
+        except Exception as exc:
+            return exc
+        return None
 
     def _run_process(self, record: RunRecord) -> None:
         env = dict(os.environ)
         env.update(record.env)
+
+        # Spawn is its own phase so only spawn failures are described as start
+        # failures.  In particular, a stop request can safely arrive while
+        # Popen is in flight and is honored immediately after assignment.
         try:
             process = subprocess.Popen(
                 record.command,
@@ -967,18 +1057,68 @@ class RunManager:
                 text=True,
                 bufsize=1,
             )
+        except Exception as exc:
+            with record.lock:
+                record.returncode = -1
+                record.status = "failed"
+            self._append_process_event(record, f"[ui] failed to start process: {exc}\n")
+            return
+
+        with record.lock:
             record.process = process
-            record.status = "running"
-            assert process.stdout is not None
+            stop_requested = record.stop_requested
+            if not stop_requested:
+                record.status = "running"
+
+        if stop_requested:
+            termination_error = self._terminate_process(process)
+            if termination_error is not None:
+                self._append_process_event(record, f"[ui] terminate request failed: {termination_error}\n")
+
+        # Stream is a separate phase.  If reading or normalization fails,
+        # terminate the child before the reap phase so it cannot outlive the
+        # failed UI run.
+        stream_error: Exception | None = None
+        try:
+            if process.stdout is None:
+                raise RuntimeError("process did not provide stdout")
             for line in process.stdout:
                 record.append(line)
-            record.returncode = process.wait()
-            record.status = "completed" if record.returncode == 0 else "failed"
-            record.append(f"[ui] process exited with code {record.returncode}\n")
         except Exception as exc:
-            record.status = "failed"
-            record.returncode = -1
-            record.append(f"[ui] failed to start process: {exc}\n")
+            stream_error = exc
+            self._append_process_event(record, f"[ui] process output failed: {exc}\n")
+            termination_error = self._terminate_process(process)
+            if termination_error is not None:
+                self._append_process_event(record, f"[ui] failed to terminate process after output error: {termination_error}\n")
+
+        # Reap is deliberately separate from both spawn and stream handling so
+        # its error retains the actual phase and does not become a fake start
+        # failure.  A failed wait gets one cleanup attempt before returning.
+        try:
+            returncode = process.wait()
+        except Exception as exc:
+            termination_error = self._terminate_process(process)
+            if termination_error is not None:
+                self._append_process_event(record, f"[ui] failed to terminate process after wait error: {termination_error}\n")
+            try:
+                process.wait()
+            except Exception as reap_exc:
+                self._append_process_event(record, f"[ui] failed to reap process: {reap_exc}\n")
+            with record.lock:
+                record.returncode = -1
+                record.status = "stopped" if record.stop_requested else "failed"
+            self._append_process_event(record, f"[ui] failed to wait for process: {exc}\n")
+            return
+
+        with record.lock:
+            record.returncode = returncode
+            if record.stop_requested:
+                record.status = "stopped"
+            elif stream_error is not None:
+                record.status = "failed"
+            else:
+                record.status = "completed" if returncode == 0 else "failed"
+        self._append_process_event(record, f"[ui] process exited with code {returncode}\n")
 
 
 RUN_MANAGER = RunManager()
@@ -1212,16 +1352,23 @@ class NewsUIHandler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-cache")
         self.send_header("Connection", "keep-alive")
         self.end_headers()
+        sequence = 0
         index = 0
         while True:
-            with record.lock:
-                lines = record.lines[index:]
-                index = len(record.lines)
-                status = record.status
-                done = status in {"completed", "failed"}
+            stream_state = getattr(record, "stream_state", None)
+            if stream_state is not None:
+                events, sequence, status, done = stream_state(sequence)
+            else:
+                # Keep the small fake-record compatibility path used by
+                # handler tests; production records use revision-aware state.
+                with record.lock:
+                    events = record.events[index:]
+                    index = len(record.events)
+                    status = record.status
+                    done = status in {"completed", "failed", "stopped"}
             try:
-                for line in lines:
-                    payload = json.dumps({"line": line, "status": status})
+                for event in events:
+                    payload = json.dumps({**event, "status": status})
                     self.wfile.write(f"data: {payload}\n\n".encode("utf-8"))
                 self.wfile.flush()
             except (BrokenPipeError, ConnectionResetError):
@@ -1424,7 +1571,13 @@ HTML = r"""<!doctype html>
       border-radius: 8px;
       white-space: pre-wrap;
     }
-    #logPane { min-height: 280px; max-height: 52vh; }
+    #logPane {
+      min-height: 280px;
+      max-height: 52vh;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+      font-size: 13px;
+      line-height: 1.55;
+    }
     .knob-group { margin-bottom: 18px; }
     .knobs { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 10px; }
     .knob { border: 1px solid var(--line); border-radius: 14px; padding: 10px; background: #fff; box-shadow: 0 6px 16px rgba(36, 44, 60, 0.05); }
@@ -2415,7 +2568,7 @@ HTML = r"""<!doctype html>
           </section>
           <section class="panel">
             <div class="toolbar"><h2 style="margin-right:auto">Run log</h2><button id="stopBtn" class="danger">Stop</button></div>
-            <pre id="logPane"></pre>
+            <pre id="logPane" role="log" aria-live="polite" aria-label="Run log"></pre>
           </section>
         </div>
       `;
@@ -2882,6 +3035,91 @@ HTML = r"""<!doctype html>
         $("previewPane").textContent = `Preview unavailable: ${err.message}`;
       }
     }
+    // Run log rendering: one mutable progress row per active stage, plain
+    // message rows appended, and a restrained spinner while a stage is live.
+    // Glyphs are decoration only: numeric counts and status words stay in
+    // every line so the log reads fine when glyphs are unavailable.
+    const SPINNER_GLYPHS = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+    const TERMINAL_GLYPHS = { completed: "✓", failed: "✗", stopped: "■" };
+    const TERMINAL_STATUSES = ["completed", "failed", "stopped"];
+    const logState = { rows: [], progressByStage: new Map(), spinnerIndex: 0, spinnerTimer: null };
+    function resetLog() {
+      stopSpinner();
+      logState.rows = [];
+      logState.progressByStage = new Map();
+      logState.spinnerIndex = 0;
+      $("logPane").textContent = "";
+    }
+    function stopSpinner() {
+      if (logState.spinnerTimer !== null) {
+        clearInterval(logState.spinnerTimer);
+        logState.spinnerTimer = null;
+      }
+    }
+    function renderLog() {
+      const pane = $("logPane");
+      const rows = [];
+      for (const row of logState.rows) {
+        let text = row.text;
+        if (row.stage) {
+          if (row.live) {
+            text = `${SPINNER_GLYPHS[logState.spinnerIndex % SPINNER_GLYPHS.length]} ${text}`;
+          } else if (row.complete) {
+            text = `✓ ${text}`;
+          }
+        }
+        rows.push(text);
+      }
+      pane.textContent = rows.join("\n");
+      pane.scrollTop = pane.scrollHeight;
+    }
+    function startSpinner() {
+      stopSpinner();
+      logState.spinnerTimer = setInterval(() => {
+        logState.spinnerIndex += 1;
+        renderLog();
+      }, 160);
+    }
+    function appendLogEvent(payload) {
+      const parts = String(payload.line || "").split("\n");
+      for (const line of parts) {
+        if (!line) continue;
+        if (payload.kind === "progress" && payload.stage) {
+          const index = logState.progressByStage.get(payload.stage);
+          const live = !payload.complete;
+          const complete = Boolean(payload.complete);
+          if (index !== undefined) {
+            if (logState.rows[index].text === line) continue; // defensive duplicate
+            logState.rows[index].text = line;
+            logState.rows[index].live = live;
+            logState.rows[index].complete = complete;
+          } else {
+            logState.progressByStage.set(payload.stage, logState.rows.length);
+            logState.rows.push({ stage: payload.stage, text: line, live: live, complete: complete });
+          }
+        } else {
+          logState.rows.push({ stage: null, text: line });
+        }
+      }
+      renderLog();
+    }
+    function terminalGlyph(status) {
+      return TERMINAL_GLYPHS[status] || "•";
+    }
+    function finalizeRun(payload, events) {
+      if (!TERMINAL_STATUSES.includes(payload.status)) return false;
+      stopSpinner();
+      for (const row of logState.rows) {
+        if (row.stage) row.live = false;
+      }
+      appendLogEvent({ line: `${terminalGlyph(payload.status)} [ui] ${payload.status}` });
+      state.activeRun = null;
+      updateRunControls();
+      setStatus(`Run ${payload.run_id} ${payload.status}.`, payload.status === "failed" ? "bad" : "muted");
+      events.close();
+      refreshReviewData();
+      return true;
+    }
     async function runAction(action="run") {
       if (state.activeRun) {
         setStatus(`A run is already active (${state.activeRun}); stop it or wait for it to finish.`, "warn");
@@ -2890,24 +3128,48 @@ HTML = r"""<!doctype html>
       const data = await api("/api/run", { method: "POST", body: JSON.stringify(requestBody(action)) });
       state.activeRun = data.run_id;
       updateRunControls();
-      $("logPane").textContent = "";
+      resetLog();
+      startSpinner();
       const events = new EventSource(`/api/runs/${data.run_id}/events`);
+      let recoveryStarted = false;
+      const pollRunStatus = async () => {
+        if (state.activeRun !== data.run_id) return;
+        try {
+          const payload = await api(`/api/runs/${encodeURIComponent(data.run_id)}`);
+          if (finalizeRun(payload, events)) return;
+        } catch (err) {
+          setStatus(`Live stream unavailable; status check failed: ${err.message}`, "bad");
+        }
+        window.setTimeout(pollRunStatus, 1000);
+      };
+      const recoverFromStream = () => {
+        if (recoveryStarted || state.activeRun !== data.run_id) return;
+        recoveryStarted = true;
+        events.close();
+        stopSpinner();
+        setStatus("Live run stream disconnected; checking run status…", "warn");
+        void pollRunStatus();
+      };
       events.onmessage = event => {
-        const payload = JSON.parse(event.data);
-        $("logPane").textContent += payload.line;
-        $("logPane").scrollTop = $("logPane").scrollHeight;
+        try {
+          appendLogEvent(JSON.parse(event.data));
+        } catch (err) {
+          setStatus(`Live run stream sent invalid data: ${err.message}`, "bad");
+          recoverFromStream();
+        }
+      };
+      events.onerror = () => {
+        recoverFromStream();
       };
       events.addEventListener("status", event => {
-        const payload = JSON.parse(event.data);
-        $("logPane").textContent += `\n[ui] ${payload.status}\n`;
-        if (payload.status === "completed" || payload.status === "failed") {
-          state.activeRun = null;
-          updateRunControls();
-          setStatus(`Run ${payload.run_id} ${payload.status}.`, payload.status === "completed" ? "muted" : "bad");
-        }
-        events.close();
-        if (payload.status === "completed" || payload.status === "failed") {
-          refreshReviewData();
+        try {
+          const payload = JSON.parse(event.data);
+          if (!finalizeRun(payload, events) && !TERMINAL_STATUSES.includes(payload.status)) {
+            setStatus(`Run status: ${payload.status}`, "warn");
+          }
+        } catch (err) {
+          setStatus(`Run status stream sent invalid data: ${err.message}`, "bad");
+          recoverFromStream();
         }
       });
     }
@@ -3408,7 +3670,13 @@ HTML = r"""<!doctype html>
       $("runBtn").onclick = () => runAction("run").catch(err => setStatus(err.message, "bad"));
       $("utilityPreviewBtn").onclick = () => preview(value("actionSelect") || "run").catch(err => setStatus(err.message, "bad"));
       $("utilityRunBtn").onclick = () => runAction(value("actionSelect") || "run").catch(err => setStatus(err.message, "bad"));
-      $("stopBtn").onclick = () => state.activeRun && api(`/api/runs/${state.activeRun}/stop`, { method: "POST", body: "{}" });
+      $("stopBtn").onclick = () => {
+        const runId = state.activeRun;
+        if (!runId) return;
+        api(`/api/runs/${encodeURIComponent(runId)}/stop`, { method: "POST", body: "{}" })
+          .then(() => setStatus("Stop requested; waiting for the run to finish…", "warn"))
+          .catch(err => setStatus(`Stop failed: ${err.message}`, "bad"));
+      };
       $("openRunPresetDrawerBtn").onclick = () => { renderRunPresetDrawer(); openRunPresetDialog(); };
       $("savePresetBtn").onclick = () => { prepRunPresetEditorFromCurrent(); renderRunPresetDrawer(); openRunPresetDialog(); };
       $("closeRunPresetDialogBtn").onclick = closeRunPresetDialog;
