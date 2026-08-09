@@ -143,6 +143,10 @@ Most Run Settings are controlled by `NEWS_` environment variables. The core
 ones are Run Preset selection, delivery mode and source scope, URL reuse
 blocking, model selection, and image generation.
 
+The accepted vocabulary separating Run Presets, Task Model Assignment, Model
+Tuning, Pipeline Budget, and Model Server Settings is defined in
+[`docs/adr/0007-model-configuration-vocabulary.md`](docs/adr/0007-model-configuration-vocabulary.md).
+
 When running from a shell, put `NEWS_` assignments on the same command line or
 export them first:
 
@@ -196,7 +200,10 @@ Key Run Settings:
 Prompt Profiles are built-in editorial tone bundles for the five LLM prompt
 stages (article summary, story scale screening, story drafting, title
 generation, image art direction). They swap editorial instruction sentences
-only; the pipeline's machine-required output contracts are unchanged.
+only; the pipeline's machine-required output contracts are unchanged. Prompt
+Profile ownership is governed by the Prompt Catalog ADR
+([`docs/adr/0010-prompt-catalog-owns-editorial-instructions.md`](docs/adr/0010-prompt-catalog-owns-editorial-instructions.md)),
+not by Model Tuning.
 
 ```bash
 uv run news run --prompt-profile playful
