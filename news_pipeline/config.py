@@ -2146,7 +2146,7 @@ def _build_runtime_config(
     # CLI/UI semantics. Strict validation of non-empty ids happens below.
     prompt_profile_id = _str_env(PROMPT_PROFILE_ENV_VAR, DEFAULT_PROMPT_PROFILE_ID) or DEFAULT_PROMPT_PROFILE_ID
     # Resolved once at import time in pipeline.py; fails fast on unknown ids.
-    get_prompt_profile(prompt_profile_id)
+    profile = get_prompt_profile(prompt_profile_id)
     # Per-stage prompt overrides (NEWS_PROMPT_OVERRIDE_<TASK>): non-empty
     # values only; empty-but-present counts as unset like sibling knobs.
     prompt_instruction_overrides = {
@@ -2156,13 +2156,28 @@ def _build_runtime_config(
     }
     # Editorial sentences must never weaken the pipeline-owned output contracts
     # (parsers, retries, citation renderers, sanitizers depend on them); a
-    # violating profile fails fast at config resolution, not mid-run.
-    profile_violations = validate_editorial_instructions(get_prompt_profile(prompt_profile_id).prompts)
-    if profile_violations:
+    # violating profile or override fails fast at config resolution, not
+    # mid-run. Validate the profile strictly, then validate the effective map
+    # with the screening override's existing brace-safe rendering allowance.
+    profile_violations = validate_editorial_instructions(profile.prompts)
+    effective_instructions = {**profile.prompts, **prompt_instruction_overrides}
+    effective_violations = validate_editorial_instructions(
+        effective_instructions,
+        allow_braces_for=(
+            {"story_scale_screening"}
+            if "story_scale_screening" in prompt_instruction_overrides
+            else frozenset()
+        ),
+    )
+    violations = profile_violations + [
+        violation for violation in effective_violations if violation not in profile_violations
+    ]
+    if violations:
         raise ValueError(
             f"Prompt profile {prompt_profile_id!r} violates pipeline-owned output contracts: "
-            + "; ".join(profile_violations)
+            + "; ".join(violations)
         )
+
     tracked_urls_filename = "tracked_urls.txt"
     blocking_urls_filename = "blocking_urls.txt"
     run_used_urls_filename = (
@@ -2405,3 +2420,4 @@ def load_runtime_config(
 
 def _coerce_pause_value(value: Any) -> bool:
     return _coerce_bool_value(value, False)
+

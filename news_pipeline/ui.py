@@ -97,13 +97,21 @@ def _config_path_from_env(name: str, default: str) -> Path:
     return path if path.is_absolute() else ROOT_DIR / path
 
 
+_SECRET_ENV_PARTS = ("PASSWORD", "SECRET", "API_KEY", "TOKEN", "PRIVATE_KEY")
+
+
 def _mask_secret(value: str | None) -> str:
     return "********" if value else ""
 
 
 def _is_secret_env_key(key: str) -> bool:
-    upper_key = key.upper()
-    return any(token in upper_key for token in ("PASSWORD", "SECRET", "API_KEY", "TOKEN"))
+    return _is_secret_env(key)
+
+
+def _is_secret_env(name: str) -> bool:
+    """Return whether an environment variable name likely contains a secret."""
+    upper = name.upper()
+    return any(part in upper for part in _SECRET_ENV_PARTS)
 
 
 def _display_env(env: dict[str, str]) -> dict[str, str]:
@@ -112,6 +120,9 @@ def _display_env(env: dict[str, str]) -> dict[str, str]:
         key: _mask_secret(value) if _is_secret_env_key(key) else value
         for key, value in env.items()
     }
+
+
+_public_env = _display_env
 
 
 def _now_iso_local() -> str:
@@ -1651,6 +1662,7 @@ HTML = r"""<!doctype html>
       "NEWS_MODEL",  // dedicated "Default model" knob in Run Setup; suppress the Advanced-tab duplicate
       "NEWS_SOURCE_SCOPE",
       "NEWS_DELIVERY_MODE",  // dedicated "Delivery mode" control in Run Setup; suppress the Advanced-tab duplicate
+      "NEWS_RECIPIENT_SCOPE", // legacy delivery control; suppress the raw-list duplicate
       "NEWS_PROMPT_PROFILE",  // has a dedicated panel control; suppress the Advanced-tab duplicate
       "NEWS_PROMPT_OVERRIDE_ARTICLE_SUMMARY",       // dedicated per-stage editors in the
       "NEWS_PROMPT_OVERRIDE_STORY_SCALE_SCREENING", // Editorial approach panel; suppress
@@ -2088,7 +2100,8 @@ HTML = r"""<!doctype html>
       const entry = links[value];
       if (!entry) {
         // Only fires for values set outside the offered options (external or
-        // typed-in ids) — drift-guard tests pin that every option has a link.
+        // typed-in ids, e.g. saved env / preset apply / setControlValue) —
+        // drift-guard tests pin that every option has a link.
         container.innerHTML = `<span class="muted">No Hugging Face page for this external model</span>`;
         return;
       }
@@ -2378,6 +2391,7 @@ HTML = r"""<!doctype html>
             </details>
           </section>
           <section class="panel">
+
             <details class="details">
               <summary>Utilities</summary>
               <div class="form-grid">
@@ -2721,7 +2735,7 @@ HTML = r"""<!doctype html>
       renderModelTuningPanels();
       renderPromptProfilePanel();
       refreshModelKnobLinks();
-      preview("run").catch(() => {});
+      previewQuietly("run");
     }
     function resetAllOverrides() {
       document.querySelectorAll("[data-env]").forEach(el => {
@@ -2733,7 +2747,7 @@ HTML = r"""<!doctype html>
       renderModelTuningPanels();
       renderPromptProfilePanel();
       refreshModelKnobLinks();
-      preview("run").catch(() => {});
+      previewQuietly("run");
     }
     function setKnobEnv(env) {
       document.querySelectorAll("[data-env]").forEach(el => {
@@ -3132,6 +3146,7 @@ HTML = r"""<!doctype html>
       document.querySelectorAll("#sourceTable tr[data-key]").forEach(row => row.onclick = () => editSource(row.dataset.key));
     }
     function sourceInput(field, src) {
+      const val = src[field] ?? "";
       if (["can_enrich_coverage","strict_source_match"].includes(field)) {
         return `<label>${field}<select id="source_${field}"><option value=""></option><option value="false" ${val === false ? "selected" : ""}>false</option><option value="true" ${val === true ? "selected" : ""}>true</option></select></label>`;
       }
@@ -3495,7 +3510,13 @@ HTML = r"""<!doctype html>
       document.addEventListener("change", (event) => {
         const el = event.target;
         if (el && el.matches && el.matches("select[data-env]")) {
-          renderKnobLinks(el.dataset.env);
+          // Only knobs that carry option_links have a .knob-links container;
+          // calling renderKnobLinks for every select would hit the
+          // missing-container console.warn on each non-model knob change.
+          const knob = knobByEnv(el.dataset.env);
+          if (knob && knob.option_links && Object.keys(knob.option_links).length) {
+            renderKnobLinks(el.dataset.env);
+          }
         }
       });
       await loadSources();
@@ -3557,3 +3578,4 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+

@@ -2,7 +2,7 @@
 
 The drift-guard tests assert that the `balanced` profile strings appear
 verbatim in the rendered prompts of each stage module, and golden snapshot
-tests assert the exact rendered bytes (ADR 0011), so the default behavior
+tests assert the exact rendered bytes (ADR 0012), so the default behavior
 stays byte-identical to the pre-catalog prompts.
 """
 
@@ -147,7 +147,7 @@ class PromptCatalogTests(unittest.TestCase):
 
     def test_balanced_article_summary_prompt_is_byte_identical(self) -> None:
         # Golden byte-identity snapshot: the rendered prompts must stay
-        # byte-identical to the pre-catalog prompts (ADR 0011). Substring
+        # byte-identical to the pre-catalog prompts (ADR 0012). Substring
         # checks alone let whitespace drift through (dedent-margin collapse),
         # so lock the exact bytes the LLM receives.
         messages = build_article_summary_prompt_messages(
@@ -197,7 +197,7 @@ Summary:
         )
 
     def test_balanced_story_drafting_prompts_are_byte_identical(self) -> None:
-        # Golden byte-identity snapshot (ADR 0011). Note the historical
+        # Golden byte-identity snapshot (ADR 0012). Note the historical
         # layout: the source block's first line renders at the 8-space
         # placeholder position while its remaining lines sit at column 0, and
         # the output-contract block renders 8-space indented.
@@ -452,6 +452,13 @@ Citation precedence: Cite this source only for facts it directly supports.
             "image_art_direction": "Depict the event.",
         }
         self.assertEqual(prompt_contracts.validate_editorial_instructions(clean), [])
+        self.assertEqual(
+            prompt_contracts.validate_editorial_instructions(
+                {**clean, "story_scale_screening": "Use {literal} guidance."},
+                allow_braces_for={"story_scale_screening"},
+            ),
+            [],
+        )
 
         violating = dict(clean)
         violating["story_drafting"] = "Do not use [[S1]] markers"

@@ -3413,6 +3413,24 @@ def build_email_subject(run_datetime: datetime | None = None) -> str:
     return f"Daily LLM News, {subject_date}"
 
 
+class _EmailDeliveryError(Exception):
+    """Internal error carrying bounded recipient accounting across the boundary."""
+
+    def __init__(
+        self,
+        cause: Exception,
+        sent_recipients: list[str],
+        failed_recipients: list[str],
+    ) -> None:
+        super().__init__(type(cause).__name__)
+        self.cause_type = type(cause).__name__
+        self.sent_recipients = sent_recipients
+        self.failed_recipients = failed_recipients
+        self.expected_transport = isinstance(
+            cause, (smtplib.SMTPException, OSError, TimeoutError)
+        )
+
+
 def maybe_email_report(
     report_title: str,
     report_body: str,
@@ -3574,33 +3592,42 @@ def maybe_email_report(
             )
         return message
 
+    # Build every message before opening the transport. A programming error in
+    # message construction must not occur after an earlier recipient was sent.
+    messages = []
+    for index, recipient_email in enumerate(recipients):
+        recipient_name = recipient_names[index] if index < len(recipient_names) else recipient_email
+        messages.append((recipient_email, build_message(recipient_email, recipient_name)))
+
     accepted_recipients: list[str] = []
     rejected_recipients: dict[str, str] = {}
+
+    def send_messages(smtp: Any) -> None:
+        for index, (recipient_email, message) in enumerate(messages):
+            try:
+                refused = smtp.send_message(message)
+            except Exception as error:
+                raise _EmailDeliveryError(
+                    error,
+                    list(accepted_recipients),
+                    [email for email, _message in messages[index:]],
+                ) from error
+            if refused:
+                rejected_recipients.update(
+                    {str(key): str(value) for key, value in refused.items()}
+                )
+            else:
+                accepted_recipients.append(recipient_email)
+
     if smtp_use_ssl:
         with smtplib.SMTP_SSL(smtp_host, smtp_port, timeout=30) as smtp:
             smtp.login(smtp_username, smtp_password)
-            for index, recipient_email in enumerate(recipients):
-                recipient_name = recipient_names[index] if index < len(recipient_names) else recipient_email
-                refused = smtp.send_message(build_message(recipient_email, recipient_name))
-                if refused:
-                    rejected_recipients.update(
-                        {str(key): str(value) for key, value in refused.items()}
-                    )
-                else:
-                    accepted_recipients.append(recipient_email)
+            send_messages(smtp)
     else:
         with smtplib.SMTP(smtp_host, smtp_port, timeout=30) as smtp:
             smtp.starttls()
             smtp.login(smtp_username, smtp_password)
-            for index, recipient_email in enumerate(recipients):
-                recipient_name = recipient_names[index] if index < len(recipient_names) else recipient_email
-                refused = smtp.send_message(build_message(recipient_email, recipient_name))
-                if refused:
-                    rejected_recipients.update(
-                        {str(key): str(value) for key, value in refused.items()}
-                    )
-                else:
-                    accepted_recipients.append(recipient_email)
+            send_messages(smtp)
 
     if rejected_recipients:
         # ``send_message`` reports refused recipients by returning a mapping
@@ -3687,6 +3714,24 @@ def _attempt_email_delivery(
                 citation_sources,
                 citation_groups,
                 delivery_profile,
+            )
+        except _EmailDeliveryError as error:
+            redacted_message = _redact_delivery_error(str(error), delivery_profile)
+            result = {
+                "status": "failed",
+                "recipients": list(recipient_list),
+                "reason": "delivery failed after report construction",
+                "error_type": error.cause_type,
+                "error_message": redacted_message,
+                "phase": "send",
+                "accepted_recipients": list(error.sent_recipients),
+                "rejected_recipients": [],
+                "sent_recipients": list(error.sent_recipients),
+                "failed_recipients": list(error.failed_recipients),
+            }
+            progress_tracker.warning(
+                f"[email] Delivery failed ({error.cause_type}: {redacted_message}); "
+                "the completed report remains available for review."
             )
         except Exception as error:
             redacted_message = _redact_delivery_error(str(error), delivery_profile)

@@ -150,6 +150,24 @@ class DocsConsistencyTests(unittest.TestCase):
             for required in _ADR_SECTIONS:
                 self.assertIn(required, text, f"{path.name} missing {required}")
 
+    def test_readme_runtime_matrix_is_unique_and_consistent(self) -> None:
+        readme = (_REPO / "README.md").read_text(encoding="utf-8")
+        # Regression for PR #157 conflict resolution: the merge kept BOTH
+        # parents' Runtime Matrix sections. The stale (main-side) section
+        # claimed "GGUF files run through mlx-vlm", contradicting the
+        # surviving section and the shipped fail-fast config.
+        self.assertEqual(
+            readme.count("### Runtime Matrix"),
+            1,
+            "README.md must contain exactly one Runtime Matrix section",
+        )
+        self.assertNotIn("GGUF files run through", readme)
+        self.assertIn(
+            "GGUF files are not launchable by any managed backend",
+            readme,
+            "README Runtime Matrix must state the GGUF restriction",
+        )
+
     def test_context_vocabulary_sections_have_knowledge_concepts(self) -> None:
         context = (_REPO / "CONTEXT.md").read_text(encoding="utf-8")
         sections = set(re.findall(r"^## (.+)$", context, re.M))

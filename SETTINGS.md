@@ -172,3 +172,4 @@ bundles.
 | `uv run news source-languages` | Detect or verify source language tags. |
 | `uv run news serve-unsubscribe` | Start the local unsubscribe endpoint. |
 | `uv run news history backfill|cleanup|export` | Maintain DuckDB-backed run history and CSV exports. |
+

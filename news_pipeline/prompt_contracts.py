@@ -157,14 +157,19 @@ def assert_prompt_contract(task: str, rendered_text: str) -> None:
         raise ValueError(f"Prompt contract violation for {task!r}; missing markers: {missing!r}")
 
 
-def validate_editorial_instructions(instructions: Mapping[str, str]) -> list[str]:
+def validate_editorial_instructions(
+    instructions: Mapping[str, str],
+    *,
+    allow_braces_for: set[str] | frozenset[str] = frozenset(),
+) -> list[str]:
     """Return profile-safety violations for an editorial instruction map.
 
     Checks that every task slot is present and non-empty, that the
-    ``story_scale_screening`` slot is free of braces (the screening template
-    renders via ``.format()``), and that no slot contains blocklisted contract
-    language. Returns violations instead of raising so callers control how the
-    profile error surfaces (config resolution fail-fasts; tests assert).
+    ``story_scale_screening`` slot is free of braces unless explicitly allowed
+    for a rendering path that escapes them, and that no slot contains
+    blocklisted contract language. Returns violations instead of raising so
+    callers control how the profile error surfaces (config resolution
+    fail-fasts; tests assert).
     """
     violations: list[str] = []
     for task in PROTOCOL_TASKS:
@@ -172,7 +177,7 @@ def validate_editorial_instructions(instructions: Mapping[str, str]) -> list[str
         if not instruction or not str(instruction).strip():
             violations.append(f"missing or empty instructions for {task}")
             continue
-        if task == "story_scale_screening" and (
+        if task == "story_scale_screening" and task not in allow_braces_for and (
             "{" in instruction or "}" in instruction
         ):
             violations.append(

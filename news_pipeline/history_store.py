@@ -1334,7 +1334,6 @@ def _prompt_snapshots(value: Any) -> list[dict[str, Any]]:
         return [item for item in payload if isinstance(item, dict)]
     return []
 
-
 def _run_started_at_from_id(run_id: str) -> str:
     if TIMESTAMP_RE.fullmatch(run_id):
         date_part, time_part = run_id.split("_", 1)
