@@ -441,6 +441,155 @@ class HistoryStoreTests(unittest.TestCase):
             self.assertEqual(details["artifacts"], [])
             self.assertEqual(details["delivery"]["recipients"], ["reader@example.com"])
 
+    def test_prompt_snapshots_persist_decode_and_idempotent_rewrite(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "history.duckdb"
+            diagnostics = self._diagnostics("2026-06-01T10:00:00", preset_id="daily")
+            diagnostics.record_prompt_snapshot(
+                {
+                    "captured_at": "2026-06-01T10:00:01Z",
+                    "task": "article_summary",
+                    "task_name": "analysis for Headline",
+                    "model_task": "article_summary",
+                    "max_tokens": 1000,
+                    "estimated_input_tokens": 120,
+                    "messages": [
+                        {"type": "system", "content": "Summarize exactly."},
+                        {"type": "human", "content": "Article body"},
+                    ],
+                    "retry_attempts": 1,
+                    "used_fallback": False,
+                }
+            )
+            diagnostics.record_prompt_snapshot(
+                {
+                    "captured_at": "2026-06-01T10:00:02Z",
+                    "task": "story_drafting",
+                    "task_name": "story synthesis for Story",
+                    "messages": [{"type": "system", "content": "Draft."}],
+                }
+            )
+            diagnostics.settings.update(
+                {
+                    "prompt_profile_id": "balanced",
+                    "prompt_instruction_overrides": {},
+                    "prompt_instructions": {"article_summary": "Summarize."},
+                    "model_snapshots": {
+                        "default": {
+                            "reference": "gemma-4-12b-it-4bit",
+                            "repository": "mlx-community/gemma-4-12B-it-4bit",
+                            "model_id": "mlx-community/gemma-4-12B-it-4bit",
+                            "revision": "sha123",
+                            "revision_status": "resolved",
+                        }
+                    },
+                    "translation_policy": {
+                        "enabled": False,
+                        "status": "disabled_not_implemented",
+                        "target_language": "en",
+                    },
+                }
+            )
+
+            write_run_history(
+                db_path,
+                run_id="2026-06-01_10-00-00",
+                diagnostics=diagnostics,
+                export_csv=True,
+            )
+            # Same-run rewrite must remain idempotent (no stale snapshots).
+            write_run_history(
+                db_path,
+                run_id="2026-06-01_10-00-00",
+                diagnostics=diagnostics,
+                export_csv=True,
+            )
+
+            with connect(db_path) as con:
+                self.assertEqual(con.execute("SELECT COUNT(*) FROM runs").fetchone()[0], 1)
+                columns = [row[1] for row in con.execute("PRAGMA table_info('runs')").fetchall()]
+                self.assertIn("prompt_snapshots_json", columns)
+                row = con.execute(
+                    "SELECT settings_json, prompt_snapshots_json FROM runs"
+                ).fetchone()
+            self.assertIn("prompt_profile_id", row[0])
+            self.assertIn("model_snapshots", row[0])
+            self.assertIn("translation_policy", row[0])
+            self.assertIn("Summarize exactly.", row[1])
+            self.assertIn("retry_attempts", row[1])
+
+            details = get_run_details(db_path, "2026-06-01_10-00-00")
+            self.assertIsNotNone(details)
+            assert details is not None
+            self.assertEqual(len(details["prompt_snapshots"]), 2)
+            self.assertEqual(details["prompt_snapshots"][0]["sequence"], 1)
+            self.assertEqual(details["prompt_snapshots"][0]["task"], "article_summary")
+            self.assertEqual(
+                details["prompt_snapshots"][0]["messages"][0],
+                {"type": "system", "content": "Summarize exactly."},
+            )
+            self.assertEqual(details["settings"]["prompt_profile_id"], "balanced")
+            self.assertEqual(
+                details["settings"]["model_snapshots"]["default"]["revision"],
+                "sha123",
+            )
+            self.assertFalse(details["settings"]["translation_policy"]["enabled"])
+
+            runs_csv = (db_path.parent / "runs.csv").read_text(encoding="utf-8").splitlines()
+            self.assertIn("prompt_snapshots_json", runs_csv[0])
+            self.assertTrue(any("Summarize exactly." in line for line in runs_csv[1:]))
+
+    def test_prompt_snapshots_column_migrates_and_old_rows_decode_empty(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "history.duckdb"
+            ensure_schema(db_path)
+            with connect(db_path) as con:
+                con.execute("ALTER TABLE runs DROP COLUMN prompt_snapshots_json")
+
+            diagnostics = self._diagnostics("2026-06-01T10:00:00", preset_id="daily")
+            diagnostics.record_prompt_snapshot(
+                {
+                    "task": "article_summary",
+                    "messages": [{"type": "human", "content": "hello"}],
+                }
+            )
+            write_run_history(
+                db_path,
+                run_id="2026-06-01_10-00-00",
+                diagnostics=diagnostics,
+                export_csv=False,
+            )
+
+            with connect(db_path) as con:
+                columns = [row[1] for row in con.execute("PRAGMA table_info('runs')").fetchall()]
+                self.assertIn("prompt_snapshots_json", columns)
+                raw = con.execute(
+                    "SELECT prompt_snapshots_json FROM runs"
+                ).fetchone()[0]
+            self.assertIn("hello", raw)
+            details = get_run_details(db_path, "2026-06-01_10-00-00")
+            self.assertIsNotNone(details)
+            assert details is not None
+            self.assertEqual(details["prompt_snapshots"][0]["messages"][0]["content"], "hello")
+
+    def test_get_run_details_returns_empty_prompt_snapshots_for_old_rows(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "history.duckdb"
+            diagnostics = self._diagnostics("2026-06-01T10:00:00", preset_id="daily")
+            write_run_history(
+                db_path,
+                run_id="2026-06-01_10-00-00",
+                diagnostics=diagnostics,
+                export_csv=False,
+            )
+            with connect(db_path) as con:
+                con.execute("UPDATE runs SET prompt_snapshots_json = NULL")
+
+            details = get_run_details(db_path, "2026-06-01_10-00-00")
+            self.assertIsNotNone(details)
+            assert details is not None
+            self.assertEqual(details["prompt_snapshots"], [])
+
     def _diagnostics(self, started_at: str, *, preset_id: str, blocking: bool = False) -> RunDiagnostics:
         return RunDiagnostics(
             run_started_at=started_at,

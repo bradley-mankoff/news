@@ -100,7 +100,10 @@ from .config import (
     RuntimeConfig,
     DEFAULT_TITLE_GENERATION_MAX_TOKENS,
     MODEL_BACKEND_EXTERNAL,
+    MODEL_TASK_ARTICLE_SUMMARY,
     MODEL_TASK_IMAGE_ART_DIRECTION,
+    MODEL_TASK_STORY_DISCOVERY,
+    MODEL_TASK_STORY_DRAFTING,
     MODEL_TASK_STORY_SCALE_SCREENING,
     MODEL_TASK_TITLE_GENERATION,
     configured_model_api_key,
@@ -1020,6 +1023,11 @@ def _compat_runtime_values(config: RuntimeConfig) -> dict[str, Any]:
         "HISTORY_DB_PATH": str(config.history_db_path),
         "HISTORY_EXPORT_CSV": config.history_export_csv,
         "PRESET_ID": config.preset_id,
+        "PROMPT_PROFILE_ID": config.prompt_profile_id,
+        "PROMPT_INSTRUCTIONS": resolve_prompt_instructions(
+            config.prompt_profile_id,
+            overrides=config.prompt_instruction_overrides,
+        ),
         "SOURCE_SCOPE": config.source_scope,
         "RECIPIENT_SCOPE": config.recipient_scope,
         "URL_REUSE_BLOCKING_ENABLED": config.url_reuse_blocking_enabled,
@@ -2857,6 +2865,281 @@ def _record_response_token_usage(task_name: str, response: AIMessage) -> None:
         entry["actual_usage_calls"] = int(entry.get("actual_usage_calls", 0)) + 1
 
 
+# Best-effort Hugging Face revision metadata, deduplicated by resolved
+# serving name within the process. Lookups are network-backed and therefore
+# enabled only by the production ``run_pipeline()`` entry (never during UI
+# config preview, generic helper use, or unit tests); failures degrade to
+# explicit unresolved metadata.
+_HF_REVISION_CACHE: dict[str, dict[str, Any]] = {}
+_HF_REVISION_LOOKUP_ENABLED = False
+
+
+# The five configured LLM assignment tasks snapshotted per run. Image Art
+# Direction inherits Title Generation and Story Discovery has no LLM stage;
+# both are represented by explicit records in ``_model_snapshots()``.
+_MODEL_SNAPSHOT_TASKS = (
+    "default",
+    MODEL_TASK_ARTICLE_SUMMARY,
+    MODEL_TASK_STORY_DRAFTING,
+    MODEL_TASK_STORY_SCALE_SCREENING,
+    MODEL_TASK_TITLE_GENERATION,
+)
+
+
+# Logical model-call labels to configured assignment keys. Prefix rules mirror
+# ``_model_call_bucket()`` but resolve to assignment keys: article format
+# retries reuse the same ``analysis for ...`` label, image art direction
+# reuses ``title_generation``, and unknown labels fall back to default.
+_LOGICAL_TASK_ALIASES: tuple[tuple[str, str], ...] = (
+    ("analysis for final synthesis", MODEL_TASK_STORY_DRAFTING),
+    ("analysis for ", MODEL_TASK_ARTICLE_SUMMARY),
+    ("story synthesis for ", MODEL_TASK_STORY_DRAFTING),
+    ("global story scale screening", MODEL_TASK_STORY_SCALE_SCREENING),
+    ("image art prompt generation", MODEL_TASK_TITLE_GENERATION),
+)
+
+
+def _plausible_hf_repository(name: str) -> str | None:
+    """Return ``name`` when it looks like a Hugging Face repo id, else None."""
+    candidate = str(name or "").strip()
+    if not candidate or "://" in candidate or " " in candidate or "/" not in candidate:
+        return None
+    return candidate
+
+
+def _hf_revision_metadata(name: str) -> dict[str, Any]:
+    """Best-effort immutable Hugging Face SHA for a resolved serving name.
+
+    Returns a JSON-ready mapping with ``repository``, ``revision``, and
+    ``revision_status`` (``resolved`` | ``unresolved`` | ``not_huggingface``).
+    External model ids and unset names are ``not_huggingface``; import,
+    network, or repository failures keep the configured identity and mark the
+    revision ``unresolved`` with a safe diagnostic reason. Never claims a
+    mutable branch name is a revision.
+    """
+    clean_name = str(name or "").strip()
+    if clean_name in _HF_REVISION_CACHE:
+        return dict(_HF_REVISION_CACHE[clean_name])
+    repository = _plausible_hf_repository(clean_name)
+    if repository is None:
+        result = {
+            "repository": None,
+            "revision": None,
+            "revision_status": "not_huggingface",
+        }
+        _HF_REVISION_CACHE[clean_name] = result
+        return dict(result)
+    if not _HF_REVISION_LOOKUP_ENABLED:
+        # Offline/helper context: never hit the network outside a production run.
+        return {
+            "repository": repository,
+            "revision": None,
+            "revision_status": "unresolved",
+            "revision_reason": "revision lookup is disabled outside the production run entry",
+        }
+    try:
+        from huggingface_hub import HfApi
+
+        info = HfApi().model_info(repo_id=repository, expand=["sha"])
+        revision = str(getattr(info, "sha", "") or "")
+        if revision:
+            result = {
+                "repository": repository,
+                "revision": revision,
+                "revision_status": "resolved",
+            }
+        else:
+            result = {
+                "repository": repository,
+                "revision": None,
+                "revision_status": "unresolved",
+                "revision_reason": "model_info returned no immutable sha",
+            }
+    except Exception as error:  # pragma: no cover - network path
+        result = {
+            "repository": repository,
+            "revision": None,
+            "revision_status": "unresolved",
+            "revision_reason": f"{type(error).__name__}: {error}",
+        }
+    _HF_REVISION_CACHE[clean_name] = result
+    return dict(result)
+
+
+def _model_snapshot_for_task(task: str) -> dict[str, Any]:
+    """Normalized JSON-ready identity snapshot for one configured task."""
+    normalized_task = _normalized_model_task(task)
+    assignment = _task_model_assignment(normalized_task)
+    revision = _hf_revision_metadata(assignment.name)
+    snapshot = {
+        "task": normalized_task,
+        "reference": assignment.reference,
+        "repository": revision["repository"],
+        "model_id": assignment.name,
+        "revision": revision["revision"],
+        "revision_status": revision["revision_status"],
+        "backend": assignment.backend,
+        "base_url": assignment.base_url,
+        "tuning": _json_ready(assignment.tuning),
+    }
+    if revision.get("revision_reason"):
+        snapshot["revision_reason"] = revision["revision_reason"]
+    return snapshot
+
+
+def _model_snapshots() -> dict[str, Any]:
+    """Per-task model snapshots plus explicit inheritance/no-LLM records.
+
+    Image Art Direction is produced by the same LLM call as Title Generation
+    and inherits that assignment; Story Discovery has no LLM stage and
+    inherits the default assignment. Neither invents extra model calls.
+    """
+    snapshots = {task: _model_snapshot_for_task(task) for task in _MODEL_SNAPSHOT_TASKS}
+    title = snapshots[MODEL_TASK_TITLE_GENERATION]
+    snapshots[MODEL_TASK_IMAGE_ART_DIRECTION] = {
+        "inherits_task": MODEL_TASK_TITLE_GENERATION,
+        "reference": title["reference"],
+        "repository": title["repository"],
+        "model_id": title["model_id"],
+        "revision": title["revision"],
+        "revision_status": title["revision_status"],
+        "backend": title["backend"],
+    }
+    default = snapshots["default"]
+    snapshots[MODEL_TASK_STORY_DISCOVERY] = {
+        "llm_stage": False,
+        "inherits_task": "default",
+        "reference": default["reference"],
+        "model_id": default["model_id"],
+        "revision_status": default["revision_status"],
+    }
+    return snapshots
+
+
+def _translation_policy_snapshot() -> dict[str, Any]:
+    """Snapshot the currently effective translation policy (metadata only).
+
+    The branch has no translation stage (issue #33 owns it): active sources
+    are filtered to declared English sources and no translation model is
+    assigned. This records that effective behavior without changing it.
+    """
+    return {
+        "enabled": False,
+        "status": "disabled_not_implemented",
+        "target_language": "en",
+        "source_gate": {
+            "rule": "language == 'en'",
+            "language": "en",
+            "unknown_language_sources_excluded": True,
+        },
+        "translation_model_assignment": None,
+        "note": (
+            "Translation is not implemented; active sources are filtered to "
+            "declared English sources and content is not retagged."
+        ),
+    }
+
+
+def _logical_task_assignment_key(task_name: str) -> str:
+    """Map a logical model-call label to its configured assignment key."""
+    label = str(task_name or "").strip().lower()
+    for prefix, assignment_key in _LOGICAL_TASK_ALIASES:
+        if label.startswith(prefix):
+            return assignment_key
+    normalized = _normalized_model_task(label)
+    if normalized in MODEL_ASSIGNMENTS:
+        return normalized
+    return "default"
+
+
+def _prompt_snapshot_content(content: Any) -> Any:
+    """JSON-safe message content for prompt snapshots.
+
+    Strings stay byte-identical; list/dict content normalizes through
+    ``_json_ready``; anything non-serializable degrades to a string
+    representation so capture can never block the model call.
+    """
+    if isinstance(content, str):
+        return content
+    try:
+        ready = _json_ready(content)
+        json.dumps(ready)
+        return ready
+    except (TypeError, ValueError):
+        return str(content or "")
+
+
+def _prompt_snapshot_messages(messages: list[BaseMessage]) -> list[dict[str, Any]]:
+    """Serialize the exact final message role/type and content per call."""
+    snapshot_messages: list[dict[str, Any]] = []
+    for message in messages:
+        snapshot_messages.append(
+            {
+                "type": str(getattr(message, "type", None) or type(message).__name__.lower()),
+                "content": _prompt_snapshot_content(getattr(message, "content", None)),
+            }
+        )
+    return snapshot_messages
+
+
+def _record_prompt_snapshot_for_call(
+    *,
+    messages: list[BaseMessage],
+    task_name: str,
+    estimated_input_tokens: int,
+    max_output_tokens: int | None,
+) -> int | None:
+    """Capture one JSON-ready logical prompt snapshot at the model boundary.
+
+    Returns the assigned sequence (or ``None`` when no active diagnostics
+    exist, e.g. generic helper use). Capture failures never prevent the model
+    call. Never includes responses, fallback content, API keys, or client
+    objects; transient retries reuse the same record via metadata updates.
+    """
+    diagnostics = ACTIVE_RUN_DIAGNOSTICS
+    if diagnostics is None:
+        return None
+    try:
+        model_task = _logical_task_assignment_key(task_name)
+        snapshot = {
+            "captured_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "task": model_task,
+            "task_name": str(task_name),
+            "model_task": model_task,
+            "model_snapshot": _model_snapshot_for_task(model_task),
+            "max_tokens": max_output_tokens,
+            "estimated_input_tokens": int(estimated_input_tokens or 0),
+            "messages": _prompt_snapshot_messages(messages),
+            "retry_attempts": 0,
+            "used_fallback": False,
+        }
+        return diagnostics.record_prompt_snapshot(snapshot)
+    except Exception:
+        return None
+
+
+def _update_prompt_snapshot_for_call(
+    sequence: int | None,
+    *,
+    retry_attempts: int,
+    used_fallback: bool,
+) -> None:
+    """Apply actual transient-retry/fallback metadata to a recorded snapshot."""
+    if sequence is None:
+        return
+    diagnostics = ACTIVE_RUN_DIAGNOSTICS
+    if diagnostics is None:
+        return
+    try:
+        diagnostics.update_prompt_snapshot(
+            sequence,
+            retry_attempts=int(retry_attempts or 0),
+            used_fallback=bool(used_fallback),
+        )
+    except Exception:
+        pass
+
+
 def invoke_with_retries(
     llm,
     messages,
@@ -2868,6 +3151,13 @@ def invoke_with_retries(
     last_error = None
     estimated_input_tokens = sum(estimate_message_token_count(message) for message in messages)
     max_output_tokens = _coerce_int(getattr(llm, "max_tokens", None))
+    prompt_snapshot_sequence = _record_prompt_snapshot_for_call(
+        messages=messages,
+        task_name=task_name,
+        estimated_input_tokens=estimated_input_tokens,
+        max_output_tokens=max_output_tokens,
+    )
+    transient_retries = 0
     with MODEL_CALL_STATS_LOCK:
         calls = MODEL_CALL_STATS.setdefault("calls", {})
         calls[task_name] = int(calls.get(task_name, 0)) + 1
@@ -2876,29 +3166,38 @@ def invoke_with_retries(
             estimated_input_tokens=estimated_input_tokens,
             max_output_tokens=max_output_tokens,
         )
-    for attempt in range(1, attempts + 1):
-        try:
-            _raise_if_managed_model_server_exited()
-            response = llm.invoke(messages)
-            if isinstance(response, AIMessage):
-                _record_response_token_usage(task_name, response)
-                return response
-            response_message = AIMessage(content=str(getattr(response, "content", response)))
-            _record_response_token_usage(task_name, response_message)
-            return response_message
-        except ManagedModelServerExited:
-            raise
-        except Exception as error:
-            last_error = error
-            _raise_if_managed_model_server_exited()
-            if not _is_transient_model_error(error) or attempt == attempts:
-                break
-            delay = MODEL_RETRY_BASE_DELAY_SECONDS * attempt
-            with MODEL_CALL_STATS_LOCK:
-                MODEL_CALL_STATS["retries"] = int(MODEL_CALL_STATS.get("retries", 0)) + 1
-            progress_tracker.retrying(task_name, attempt, attempts, delay, error)
-            time.sleep(delay)
-
+    try:
+        for attempt in range(1, attempts + 1):
+            try:
+                _raise_if_managed_model_server_exited()
+                response = llm.invoke(messages)
+                if isinstance(response, AIMessage):
+                    _record_response_token_usage(task_name, response)
+                    last_error = None
+                    return response
+                response_message = AIMessage(content=str(getattr(response, "content", response)))
+                _record_response_token_usage(task_name, response_message)
+                last_error = None
+                return response_message
+            except ManagedModelServerExited:
+                raise
+            except Exception as error:
+                last_error = error
+                _raise_if_managed_model_server_exited()
+                if not _is_transient_model_error(error) or attempt == attempts:
+                    break
+                transient_retries += 1
+                delay = MODEL_RETRY_BASE_DELAY_SECONDS * attempt
+                with MODEL_CALL_STATS_LOCK:
+                    MODEL_CALL_STATS["retries"] = int(MODEL_CALL_STATS.get("retries", 0)) + 1
+                progress_tracker.retrying(task_name, attempt, attempts, delay, error)
+                time.sleep(delay)
+    finally:
+        _update_prompt_snapshot_for_call(
+            prompt_snapshot_sequence,
+            retry_attempts=transient_retries,
+            used_fallback=last_error is not None,
+        )
     progress_tracker.warning(f"{task_name[:40]} failed after {attempts} attempts")
     with MODEL_CALL_STATS_LOCK:
         MODEL_CALL_STATS["fallbacks"] = int(MODEL_CALL_STATS.get("fallbacks", 0)) + 1
@@ -4237,6 +4536,11 @@ def _new_run_diagnostics(source_count: int) -> RunDiagnostics:
             "model_tuning": _json_ready(MODEL_TUNING),
             "pipeline_budget": _json_ready(PIPELINE_BUDGET),
             "model_server_settings": _json_ready(MODEL_SERVER_SETTINGS),
+            "prompt_profile_id": PROMPT_PROFILE_ID,
+            "prompt_instruction_overrides": _json_ready(CONFIG.prompt_instruction_overrides),
+            "prompt_instructions": _json_ready(PROMPT_INSTRUCTIONS),
+            "model_snapshots": _model_snapshots(),
+            "translation_policy": _translation_policy_snapshot(),
             "model_max_input_tokens": MODEL_MAX_INPUT_TOKENS,
             "model_default_sampling": _sampling_to_dict(MODEL_DEFAULT_SAMPLING),
             "model_reasoning_sampling": _sampling_to_dict(MODEL_REASONING_SAMPLING),
@@ -4523,7 +4827,13 @@ def _finalize_failed_run(error: Exception, traceback_text: str, config: RuntimeC
 
 
 def run_pipeline() -> None:
-    RunSession(CONFIG).run()
+    global _HF_REVISION_LOOKUP_ENABLED
+    previous_lookup_enabled = _HF_REVISION_LOOKUP_ENABLED
+    _HF_REVISION_LOOKUP_ENABLED = True
+    try:
+        RunSession(CONFIG).run()
+    finally:
+        _HF_REVISION_LOOKUP_ENABLED = previous_lookup_enabled
 
 
 @contextmanager

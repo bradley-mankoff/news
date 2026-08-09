@@ -10,6 +10,7 @@ import sys
 import tempfile
 import types
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from collections import Counter
 from dataclasses import replace
 from io import BytesIO, StringIO
@@ -19,7 +20,7 @@ from unittest.mock import MagicMock, patch
 
 import httpx
 from PIL import Image
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from datetime import datetime
 
 import news_pipeline.pipeline as pipeline
@@ -793,6 +794,454 @@ class PipelineHelperTests(unittest.TestCase):
             diagnostics.settings["source_languages"],
             {"de": 1, "en": 2},  # sorted keys, missing language defaults to "en"
         )
+
+    def test_compat_runtime_values_propagates_prompt_profile_and_instructions(self) -> None:
+        config = replace(
+            pipeline.CONFIG,
+            prompt_profile_id="facts-only",
+            prompt_instruction_overrides={"article_summary": "Custom override text."},
+        )
+        values = pipeline._compat_runtime_values(config)
+        self.assertEqual(values["PROMPT_PROFILE_ID"], "facts-only")
+        instructions = values["PROMPT_INSTRUCTIONS"]
+        self.assertEqual(instructions["article_summary"], "Custom override text.")
+        # Other profile tasks come from the resolved facts-only profile.
+        self.assertTrue(instructions["story_drafting"])
+
+    def test_plausible_hf_repository_and_revision_metadata_offline_branches(self) -> None:
+        self.assertEqual(pipeline._plausible_hf_repository("mlx-community/gemma-4-12B-it-4bit"), "mlx-community/gemma-4-12B-it-4bit")
+        self.assertIsNone(pipeline._plausible_hf_repository("gpt-4o"))
+        self.assertIsNone(pipeline._plausible_hf_repository("https://huggingface.co/org/repo"))
+        self.assertIsNone(pipeline._plausible_hf_repository(""))
+        self.assertIsNone(pipeline._plausible_hf_repository("org name/repo"))
+
+        # External model ids are honestly not_huggingface.
+        external = pipeline._hf_revision_metadata("gpt-4o")
+        self.assertEqual(external["revision_status"], "not_huggingface")
+        self.assertIsNone(external["repository"])
+        self.assertIsNone(external["revision"])
+
+        # Outside the production run entry the lookup stays offline and explicit.
+        offline = pipeline._hf_revision_metadata("mlx-community/gemma-4-12B-it-4bit")
+        self.assertEqual(offline["repository"], "mlx-community/gemma-4-12B-it-4bit")
+        self.assertEqual(offline["revision_status"], "unresolved")
+        self.assertIsNone(offline["revision"])
+        self.assertIn("disabled outside the production run entry", offline["revision_reason"])
+
+    def test_run_pipeline_enables_revision_lookup(self) -> None:
+        original_cache = dict(pipeline._HF_REVISION_CACHE)
+        original_flag = pipeline._HF_REVISION_LOOKUP_ENABLED
+        try:
+            pipeline._HF_REVISION_CACHE.clear()
+            captured: dict[str, dict[str, Any]] = {}
+
+            def fake_run(self) -> None:  # noqa: ANN001
+                captured["flag"] = pipeline._HF_REVISION_LOOKUP_ENABLED
+                captured["result"] = pipeline._hf_revision_metadata(
+                    "mlx-community/gemma-4-12B-it-4bit"
+                )
+
+            with patch("huggingface_hub.HfApi") as fake_api_class, patch.object(
+                pipeline.RunSession, "run", fake_run
+            ):
+                fake_api_class.return_value.model_info.return_value = SimpleNamespace(
+                    id="mlx-community/gemma-4-12B-it-4bit",
+                    sha="sha-production",
+                )
+                pipeline.run_pipeline()
+            # The flag is restored once the run entry completes.
+            self.assertFalse(pipeline._HF_REVISION_LOOKUP_ENABLED)
+            self.assertTrue(captured["flag"])
+            self.assertEqual(captured["result"]["revision_status"], "resolved")
+            self.assertEqual(captured["result"]["revision"], "sha-production")
+        finally:
+            pipeline._HF_REVISION_CACHE.clear()
+            pipeline._HF_REVISION_CACHE.update(original_cache)
+            pipeline._HF_REVISION_LOOKUP_ENABLED = original_flag
+
+    def test_hf_revision_metadata_resolved_and_failure_paths(self) -> None:
+        original_cache = dict(pipeline._HF_REVISION_CACHE)
+        try:
+            pipeline._HF_REVISION_CACHE.clear()
+            with patch("huggingface_hub.HfApi") as fake_api_class, patch.object(
+                pipeline, "_HF_REVISION_LOOKUP_ENABLED", True
+            ):
+                fake_api_class.return_value.model_info.return_value = SimpleNamespace(
+                    id="mlx-community/gemma-4-12B-it-4bit",
+                    sha="abc123def456",
+                )
+                resolved = pipeline._hf_revision_metadata("mlx-community/gemma-4-12B-it-4bit")
+            self.assertEqual(resolved["revision_status"], "resolved")
+            self.assertEqual(resolved["revision"], "abc123def456")
+            self.assertEqual(resolved["repository"], "mlx-community/gemma-4-12B-it-4bit")
+
+            # Deduplicated: a second lookup reuses the cached result.
+            with patch("huggingface_hub.HfApi") as fake_api_class, patch.object(
+                pipeline, "_HF_REVISION_LOOKUP_ENABLED", True
+            ):
+                again = pipeline._hf_revision_metadata("mlx-community/gemma-4-12B-it-4bit")
+            self.assertEqual(again["revision"], "abc123def456")
+            self.assertFalse(fake_api_class.return_value.model_info.called)
+
+            # Repository/network failures are non-fatal unresolved metadata.
+            with patch("huggingface_hub.HfApi") as failing_api, patch.object(
+                pipeline, "_HF_REVISION_LOOKUP_ENABLED", True
+            ):
+                failing_api.return_value.model_info.side_effect = RuntimeError("hub down")
+                failed = pipeline._hf_revision_metadata("other-org/some-repo")
+            self.assertEqual(failed["revision_status"], "unresolved")
+            self.assertEqual(failed["repository"], "other-org/some-repo")
+            self.assertIn("hub down", failed["revision_reason"])
+        finally:
+            pipeline._HF_REVISION_CACHE.clear()
+            pipeline._HF_REVISION_CACHE.update(original_cache)
+
+    def test_model_snapshots_normalize_identity_tuning_and_inheritance(self) -> None:
+        original_cache = dict(pipeline._HF_REVISION_CACHE)
+        try:
+            pipeline._HF_REVISION_CACHE.clear()
+            resolved = {
+                "repository": "mlx-community/gemma-4-12B-it-4bit",
+                "revision": "sha123",
+                "revision_status": "resolved",
+            }
+            with patch.object(pipeline, "_hf_revision_metadata", return_value=resolved):
+                snapshots = pipeline._model_snapshots()
+
+            self.assertEqual(
+                list(snapshots),
+                [
+                    "default",
+                    "article_summary",
+                    "story_drafting",
+                    "story_scale_screening",
+                    "title_generation",
+                    "image_art_direction",
+                    "story_discovery",
+                ],
+            )
+            default = snapshots["default"]
+            self.assertEqual(default["revision"], "sha123")
+            self.assertEqual(default["revision_status"], "resolved")
+            self.assertIn("tuning", default)
+            self.assertIn("backend", default)
+            self.assertIn("base_url", default)
+            self.assertEqual(default["model_id"], default["repository"])
+
+            image_art = snapshots["image_art_direction"]
+            self.assertEqual(image_art["inherits_task"], "title_generation")
+            self.assertEqual(image_art["model_id"], snapshots["title_generation"]["model_id"])
+            story_discovery = snapshots["story_discovery"]
+            self.assertFalse(story_discovery["llm_stage"])
+            self.assertEqual(story_discovery["inherits_task"], "default")
+        finally:
+            pipeline._HF_REVISION_CACHE.clear()
+            pipeline._HF_REVISION_CACHE.update(original_cache)
+
+    def test_new_run_diagnostics_snapshot_settings(self) -> None:
+        resolved = {
+            "repository": "mlx-community/gemma-4-12B-it-4bit",
+            "revision": "sha123",
+            "revision_status": "resolved",
+        }
+        with patch.object(pipeline, "_hf_revision_metadata", return_value=resolved):
+            diagnostics = pipeline._new_run_diagnostics(2)
+        settings = diagnostics.settings
+        self.assertEqual(settings["prompt_profile_id"], pipeline.PROMPT_PROFILE_ID)
+        self.assertEqual(
+            settings["prompt_instruction_overrides"],
+            pipeline._json_ready(pipeline.CONFIG.prompt_instruction_overrides),
+        )
+        self.assertEqual(settings["prompt_instructions"], pipeline._json_ready(pipeline.PROMPT_INSTRUCTIONS))
+        self.assertEqual(settings["model_snapshots"]["default"]["revision_status"], "resolved")
+        self.assertEqual(settings["model_snapshots"]["default"]["revision"], "sha123")
+        self.assertEqual(settings["model_snapshots"]["title_generation"]["revision"], "sha123")
+        self.assertIn("image_art_direction", settings["model_snapshots"])
+        self.assertIn("story_discovery", settings["model_snapshots"])
+        # Existing compatibility keys remain intact.
+        self.assertIn("model_assignments", settings)
+        self.assertIn("model_tuning", settings)
+
+        translation_policy = settings["translation_policy"]
+        self.assertFalse(translation_policy["enabled"])
+        self.assertEqual(translation_policy["status"], "disabled_not_implemented")
+        self.assertEqual(translation_policy["target_language"], "en")
+        self.assertEqual(translation_policy["source_gate"]["rule"], "language == 'en'")
+        self.assertIsNone(translation_policy["translation_model_assignment"])
+
+    def test_logical_task_assignment_key_mapping(self) -> None:
+        self.assertEqual(
+            pipeline._logical_task_assignment_key("analysis for Headline"),
+            "article_summary",
+        )
+        self.assertEqual(
+            pipeline._logical_task_assignment_key("analysis for final synthesis of X"),
+            "story_drafting",
+        )
+        self.assertEqual(
+            pipeline._logical_task_assignment_key("story synthesis for Big Story"),
+            "story_drafting",
+        )
+        self.assertEqual(
+            pipeline._logical_task_assignment_key("global story scale screening"),
+            "story_scale_screening",
+        )
+        self.assertEqual(
+            pipeline._logical_task_assignment_key("image art prompt generation"),
+            "title_generation",
+        )
+        self.assertEqual(pipeline._logical_task_assignment_key("unknown task"), "default")
+        self.assertEqual(pipeline._logical_task_assignment_key(""), "default")
+
+    def test_invoke_with_retries_captures_prompt_snapshots(self) -> None:
+        diagnostics = RunDiagnostics(
+            run_started_at="2026-06-01T10:00:00",
+            settings={"preset_id": "daily"},
+        )
+        original_cache = dict(pipeline._HF_REVISION_CACHE)
+        try:
+            pipeline._HF_REVISION_CACHE.clear()
+
+            class FakeLLM:
+                def __init__(self, outcomes: list[object]) -> None:
+                    self._outcomes = iter(outcomes)
+                    self.max_tokens = 12
+
+                def invoke(self, messages):  # noqa: ANN001
+                    outcome = next(self._outcomes)
+                    if isinstance(outcome, Exception):
+                        raise outcome
+                    return outcome
+
+            with patch.object(pipeline, "ACTIVE_RUN_DIAGNOSTICS", diagnostics), patch.object(
+                pipeline.progress_tracker, "retrying"
+            ), patch.object(pipeline.progress_tracker, "warning"), patch.object(
+                pipeline.time, "sleep", return_value=None
+            ), patch.object(pipeline, "_raise_if_managed_model_server_exited"):
+                response = pipeline.invoke_with_retries(
+                    FakeLLM([httpx.RemoteProtocolError("retry"), AIMessage(content="ok")]),
+                    [
+                        SystemMessage(content="Summarize exactly."),
+                        HumanMessage(content=[{"text": "Article body"}]),
+                    ],
+                    task_name="analysis for Headline",
+                    fallback_content="fallback",
+                    attempts=2,
+                )
+                fallback_response = pipeline.invoke_with_retries(
+                    FakeLLM([RuntimeError("boom")]),
+                    [HumanMessage(content="hello")],
+                    task_name="story synthesis for Story",
+                    fallback_content="fallback content",
+                    attempts=1,
+                )
+
+            self.assertEqual(response.content, "ok")
+            self.assertEqual(fallback_response.content, "fallback content")
+
+            snapshots = diagnostics.to_dict()["prompt_snapshots"]
+            self.assertEqual(len(snapshots), 2)
+            first = snapshots[0]
+            self.assertEqual(first["sequence"], 1)
+            self.assertEqual(first["task"], "article_summary")
+            self.assertEqual(first["model_task"], "article_summary")
+            self.assertEqual(first["task_name"], "analysis for Headline")
+            self.assertEqual(first["max_tokens"], 12)
+            self.assertEqual(first["retry_attempts"], 1)
+            self.assertFalse(first["used_fallback"])
+            self.assertEqual(
+                first["messages"],
+                [
+                    {"type": "system", "content": "Summarize exactly."},
+                    {"type": "human", "content": [{"text": "Article body"}]},
+                ],
+            )
+            self.assertEqual(first["model_snapshot"]["task"], "article_summary")
+
+            second = snapshots[1]
+            self.assertEqual(second["sequence"], 2)
+            self.assertEqual(second["task"], "story_drafting")
+            self.assertEqual(second["retry_attempts"], 0)
+            self.assertTrue(second["used_fallback"])
+            self.assertEqual(second["messages"], [{"type": "human", "content": "hello"}])
+        finally:
+            pipeline._HF_REVISION_CACHE.clear()
+            pipeline._HF_REVISION_CACHE.update(original_cache)
+
+    def test_prompt_capture_failure_does_not_block_model_call(self) -> None:
+        diagnostics = RunDiagnostics(
+            run_started_at="2026-06-01T10:00:00",
+            settings={},
+        )
+        llm = SimpleNamespace(
+            max_tokens=12,
+            invoke=MagicMock(return_value=AIMessage(content="real response")),
+        )
+
+        with patch.object(pipeline, "ACTIVE_RUN_DIAGNOSTICS", diagnostics), patch.object(
+            pipeline, "_model_snapshot_for_task", side_effect=RuntimeError("capture failed")
+        ), patch.object(pipeline, "_raise_if_managed_model_server_exited"):
+            response = pipeline.invoke_with_retries(
+                llm,
+                [HumanMessage(content="hello")],
+                task_name="analysis for Headline",
+                fallback_content="fallback",
+                attempts=1,
+            )
+
+        self.assertEqual(response.content, "real response")
+        llm.invoke.assert_called_once()
+        self.assertEqual(diagnostics.prompt_snapshots, [])
+
+    def test_prompt_snapshot_update_failure_does_not_replace_model_outcome(self) -> None:
+        diagnostics = RunDiagnostics(
+            run_started_at="2026-06-01T10:00:00",
+            settings={},
+        )
+
+        with patch.object(pipeline, "ACTIVE_RUN_DIAGNOSTICS", diagnostics), patch.object(
+            diagnostics,
+            "update_prompt_snapshot",
+            side_effect=RuntimeError("update failed"),
+        ), patch.object(pipeline, "_raise_if_managed_model_server_exited"), patch.object(
+            pipeline.progress_tracker, "warning"
+        ):
+            success = pipeline.invoke_with_retries(
+                SimpleNamespace(
+                    max_tokens=12,
+                    invoke=MagicMock(return_value=AIMessage(content="real response")),
+                ),
+                [HumanMessage(content="hello")],
+                task_name="analysis for Headline",
+                fallback_content="fallback",
+                attempts=1,
+            )
+            fallback = pipeline.invoke_with_retries(
+                SimpleNamespace(
+                    max_tokens=12,
+                    invoke=MagicMock(side_effect=RuntimeError("model failed")),
+                ),
+                [HumanMessage(content="goodbye")],
+                task_name="story synthesis for Story",
+                fallback_content="fallback response",
+                attempts=1,
+            )
+
+        self.assertEqual(success.content, "real response")
+        self.assertEqual(fallback.content, "fallback response")
+
+    def test_concurrent_model_calls_update_their_own_prompt_snapshots(self) -> None:
+        diagnostics = RunDiagnostics(
+            run_started_at="2026-06-01T10:00:00",
+            settings={},
+        )
+
+        class FakeLLM:
+            def __init__(self, outcomes: list[object]) -> None:
+                self._outcomes = iter(outcomes)
+                self.max_tokens = 12
+
+            def invoke(self, messages):  # noqa: ANN001
+                outcome = next(self._outcomes)
+                if isinstance(outcome, Exception):
+                    raise outcome
+                return outcome
+
+        calls = [
+            (
+                "analysis for A",
+                [httpx.RemoteProtocolError("retry"), AIMessage(content="ok A")],
+            ),
+            ("story synthesis for B", [RuntimeError("boom B")]),
+            ("analysis for C", [AIMessage(content="ok C")]),
+        ]
+
+        def call(item: tuple[str, list[object]]) -> object:
+            task_name, outcomes = item
+            return pipeline.invoke_with_retries(
+                FakeLLM(outcomes),
+                [HumanMessage(content=task_name)],
+                task_name=task_name,
+                fallback_content=f"fallback for {task_name}",
+                attempts=2,
+            )
+
+        with patch.object(pipeline, "ACTIVE_RUN_DIAGNOSTICS", diagnostics), patch.object(
+            pipeline, "_raise_if_managed_model_server_exited"
+        ), patch.object(pipeline.time, "sleep", return_value=None), patch.object(
+            pipeline.progress_tracker, "retrying"
+        ), patch.object(pipeline.progress_tracker, "warning"):
+            with ThreadPoolExecutor(max_workers=3) as executor:
+                responses = list(executor.map(call, calls))
+
+        self.assertEqual(
+            [response.content for response in responses],
+            ["ok A", "fallback for story synthesis for B", "ok C"],
+        )
+        snapshots = {
+            item["task_name"]: item
+            for item in diagnostics.to_dict()["prompt_snapshots"]
+        }
+        self.assertEqual(len(snapshots), 3)
+        for task_name in ("analysis for A", "story synthesis for B", "analysis for C"):
+            self.assertEqual(
+                snapshots[task_name]["messages"],
+                [{"type": "human", "content": task_name}],
+            )
+        self.assertEqual(snapshots["analysis for A"]["retry_attempts"], 1)
+        self.assertFalse(snapshots["analysis for A"]["used_fallback"])
+        self.assertEqual(snapshots["story synthesis for B"]["retry_attempts"], 0)
+        self.assertTrue(snapshots["story synthesis for B"]["used_fallback"])
+        self.assertEqual(snapshots["analysis for C"]["retry_attempts"], 0)
+        self.assertFalse(snapshots["analysis for C"]["used_fallback"])
+        self.assertEqual(
+            {snapshot["sequence"] for snapshot in snapshots.values()},
+            {1, 2, 3},
+        )
+
+    def test_invoke_with_retries_skips_capture_without_active_diagnostics(self) -> None:
+        with patch.object(pipeline, "ACTIVE_RUN_DIAGNOSTICS", None), patch.object(
+            pipeline, "_raise_if_managed_model_server_exited"
+        ):
+            response = pipeline.invoke_with_retries(
+                SimpleNamespace(max_tokens=12, invoke=lambda messages: AIMessage(content="ok")),
+                [HumanMessage(content="hello")],
+                task_name="analysis for Headline",
+                fallback_content="fallback",
+                attempts=1,
+            )
+        self.assertEqual(response.content, "ok")
+
+    def test_run_session_activate_propagates_non_default_prompt_profile(self) -> None:
+        config = replace(
+            pipeline.CONFIG,
+            prompt_profile_id="facts-only",
+            prompt_instruction_overrides={"article_summary": "Session override."},
+        )
+        session = pipeline.RunSession(config)
+        with patch.object(pipeline, "_hf_revision_metadata", return_value={
+            "repository": "mlx-community/gemma-4-12B-it-4bit",
+            "revision": "sha123",
+            "revision_status": "resolved",
+        }):
+            with session._activate():
+                self.assertEqual(pipeline.PROMPT_PROFILE_ID, "facts-only")
+                self.assertEqual(
+                    pipeline.PROMPT_INSTRUCTIONS["article_summary"],
+                    "Session override.",
+                )
+                diagnostics = pipeline._new_run_diagnostics(1)
+                self.assertEqual(diagnostics.settings["prompt_profile_id"], "facts-only")
+                self.assertEqual(
+                    diagnostics.settings["prompt_instruction_overrides"],
+                    {"article_summary": "Session override."},
+                )
+                self.assertEqual(
+                    diagnostics.settings["prompt_instructions"]["article_summary"],
+                    "Session override.",
+                )
+        # Globals are restored after the session ends.
+        self.assertEqual(pipeline.PROMPT_PROFILE_ID, pipeline.CONFIG.prompt_profile_id)
 
     def test_rendering_and_finalizer_helpers(self) -> None:
         record = ArticleSummaryRecord(

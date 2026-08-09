@@ -312,6 +312,105 @@ class RunFinalizerTests(unittest.TestCase):
             self.assertIn("\"phase\": \"send\"", delivery_json)
             self.assertIn("editor@example.com", delivery_json)
 
+    def test_finish_writes_prompt_and_provenance_settings(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            finalizer, paths, _progress = self._finalizer(tmpdir)
+            finalizer.diagnostics.settings.update(
+                {
+                    "prompt_profile_id": "balanced",
+                    "prompt_instruction_overrides": {},
+                    "prompt_instructions": {"article_summary": "Summarize."},
+                    "model_snapshots": {
+                        "default": {
+                            "reference": "gemma-4-12b-it-4bit",
+                            "repository": "mlx-community/gemma-4-12B-it-4bit",
+                            "model_id": "mlx-community/gemma-4-12B-it-4bit",
+                            "revision": "sha123",
+                            "revision_status": "resolved",
+                        }
+                    },
+                    "translation_policy": {
+                        "enabled": False,
+                        "status": "disabled_not_implemented",
+                        "target_language": "en",
+                    },
+                }
+            )
+            finalizer.diagnostics.record_prompt_snapshot(
+                {
+                    "captured_at": "2026-06-01T10:00:01Z",
+                    "task": "article_summary",
+                    "task_name": "analysis for Headline",
+                    "model_task": "article_summary",
+                    "max_tokens": 1000,
+                    "estimated_input_tokens": 42,
+                    "messages": [
+                        {"type": "system", "content": "Summarize exactly."},
+                        {"type": "human", "content": "Article body"},
+                    ],
+                    "retry_attempts": 0,
+                    "used_fallback": False,
+                }
+            )
+            finalizer.record_report_body("Daily News Summary\n\nA useful report.")
+            finalizer.diagnostics.event("completed")
+
+            finalizer.finish()
+
+            details = json.loads(paths["latest_details"].read_text(encoding="utf-8"))
+            self.assertEqual(details["settings"]["prompt_profile_id"], "balanced")
+            self.assertEqual(
+                details["settings"]["model_snapshots"]["default"]["revision"],
+                "sha123",
+            )
+            self.assertFalse(details["settings"]["translation_policy"]["enabled"])
+            self.assertEqual(len(details["prompt_snapshots"]), 1)
+            self.assertEqual(details["prompt_snapshots"][0]["sequence"], 1)
+            self.assertEqual(
+                details["prompt_snapshots"][0]["messages"][0],
+                {"type": "system", "content": "Summarize exactly."},
+            )
+
+            with connect(paths["history_db"]) as con:
+                row = con.execute(
+                    "SELECT settings_json, prompt_snapshots_json FROM runs"
+                ).fetchone()
+            self.assertIn("prompt_profile_id", row[0])
+            self.assertIn("model_snapshots", row[0])
+            self.assertIn("translation_policy", row[0])
+            self.assertIn("Summarize exactly.", row[1])
+
+    def test_finish_failed_preserves_prompt_snapshots_and_provenance(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            finalizer, paths, _progress = self._finalizer(tmpdir)
+            finalizer.diagnostics.settings["prompt_profile_id"] = "balanced"
+            finalizer.diagnostics.record_prompt_snapshot(
+                {
+                    "captured_at": "2026-06-01T10:00:01Z",
+                    "task": "story_drafting",
+                    "task_name": "story synthesis for Story",
+                    "messages": [{"type": "system", "content": "Draft the story."}],
+                }
+            )
+
+            finalizer.finish_failed(RuntimeError("synthetic failure"), "Traceback text")
+
+            details = json.loads(paths["latest_details"].read_text(encoding="utf-8"))
+            self.assertEqual(details["events"][-1]["label"], "failed")
+            self.assertEqual(details["settings"]["prompt_profile_id"], "balanced")
+            self.assertEqual(len(details["prompt_snapshots"]), 1)
+            self.assertEqual(
+                details["prompt_snapshots"][0]["messages"][0]["content"],
+                "Draft the story.",
+            )
+            with connect(paths["history_db"]) as con:
+                self.assertEqual(con.execute("SELECT status FROM runs").fetchone()[0], "failed")
+                row = con.execute(
+                    "SELECT settings_json, prompt_snapshots_json FROM runs"
+                ).fetchone()
+            self.assertIn("prompt_profile_id", row[0])
+            self.assertIn("Draft the story.", row[1])
+
     def _finalizer(self, tmpdir: str) -> tuple[RunFinalizer, dict[str, Path], _Progress]:
         root = Path(tmpdir)
         output_dir = root / "daily_outputs"
