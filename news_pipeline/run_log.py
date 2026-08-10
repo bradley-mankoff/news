@@ -67,6 +67,7 @@ _ERROR_RE = re.compile(
     r"^(?:Traceback \(most recent call last\):|.*(?:Error|Exception)\s*:)",
     re.IGNORECASE,
 )
+_UI_ERROR_RE = re.compile(r"^\[ui\]\s+.*\b(?:failed|error)\b", re.IGNORECASE)
 _SUMMARY_RE = re.compile(
     r"(Daily news run (?:complete|failed)|Run (?:log|history|details|review|Bundle).*saved:|process exited with code|Story clustering:)",
     re.IGNORECASE,
@@ -198,7 +199,7 @@ def _classify_message(clean: str) -> MessageCategory:
         return "retry"
     if _WARNING_RE.match(clean):
         return "warning"
-    if _ERROR_RE.match(clean):
+    if _ERROR_RE.match(clean) or _UI_ERROR_RE.match(clean):
         return "error"
     if _SUMMARY_RE.search(clean):
         return "summary"

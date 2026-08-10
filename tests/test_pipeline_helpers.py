@@ -1924,6 +1924,30 @@ class PipelineHelperTests(unittest.TestCase):
             self.assertIsNone(pipeline.RUN_LOG_WRITER)
             self.assertEqual(pipeline.RUN_DIAGNOSTIC_FILES, [])
 
+    def test_optional_diagnostic_open_failure_keeps_primary_logging_available(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            run_log = root / "run.log"
+            latest_log = root / "latest.log"
+            unavailable_diagnostics = root / "diagnostics-directory"
+            unavailable_diagnostics.mkdir()
+            latest_diagnostics = root / "latest-diagnostics.log"
+            tracker = pipeline.ProgressTracker(stream=StringIO())
+            with patch.object(pipeline, "RUN_LOG_PATH", str(run_log)), patch.object(
+                pipeline, "LATEST_RUN_LOG_PATH", str(latest_log)
+            ), patch.object(
+                pipeline, "RUN_DIAGNOSTICS_PATH", str(unavailable_diagnostics)
+            ), patch.object(
+                pipeline, "LATEST_RUN_DIAGNOSTICS_PATH", str(latest_diagnostics)
+            ), patch.object(pipeline, "progress_tracker", tracker):
+                with pipeline.run_logging():
+                    pipeline.progress_tracker.log("primary run remains active")
+
+            self.assertIn("primary run remains active", run_log.read_text(encoding="utf-8"))
+            self.assertIn("WARNING: run diagnostics unavailable", tracker.stream.getvalue())
+            self.assertTrue(latest_diagnostics.exists())
+            self.assertEqual(pipeline.RUN_DIAGNOSTIC_FILES, [])
+
     def test_diagnostic_sink_write_failure_disables_without_masking(self) -> None:
         warnings: list[str] = []
 

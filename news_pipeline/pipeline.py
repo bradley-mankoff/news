@@ -1313,24 +1313,63 @@ def _disable_run_diagnostics(reason: str) -> None:
         pass
 
 
-def _archive_run_diagnostics(config: RuntimeConfig) -> None:
-    """Copy the closed per-run diagnostic transcript into durable history.
+def _archive_run_diagnostics(config: RuntimeConfig) -> dict[str, Any]:
+    """Publish closed diagnostics and make the outcome observable.
 
-    Runs after ``run_logging()`` closes the sink so the final lines are
-    included. The source is the session-derived staging path (mirroring how
-    ``run_logging`` locates its files), so fixtures that ``replace()`` the
-    module config still resolve to their own temporary staging dir. A missing
-    source (no diagnostics produced) is a silent no-op; any copy failure is
-    surfaced as a progress warning and never replaces the run outcome.
+    This runs after ``run_logging()`` closes the sinks, so archive status must
+    use the independent terminal path.  The primary run result is never
+    replaced by this best-effort side effect.  The final details artifact is
+    refreshed with the result so it cannot silently claim a durable file that
+    was not published.
     """
     source = Path(config.run_staging_dir) / f"run_diagnostics_{config.timestamp}.log"
     target = Path(config.history_db_path).parent / "diagnostics" / f"run_diagnostics_{config.timestamp}.log"
-    try:
-        archive_run_diagnostics(source, target)
-        if target.exists():
-            progress_tracker.detail(f"Durable run diagnostics saved: {target}")
-    except Exception as error:
-        progress_tracker.warning(f"Run diagnostics archive failed: {error}")
+    result: dict[str, Any] = {
+        "status": "saved",
+        "source": str(source),
+        "target": str(target),
+    }
+    if not source.exists():
+        result["status"] = "missing_source"
+    else:
+        try:
+            archive_run_diagnostics(source, target)
+            if not target.exists():
+                result["status"] = "failed"
+                result["error_type"] = "ArchiveTargetMissing"
+        except Exception as error:
+            result["status"] = "failed"
+            result["error_type"] = type(error).__name__
+            result["error"] = str(error)
+
+    diagnostics = ACTIVE_RUN_DIAGNOSTICS
+    artifacts = getattr(diagnostics, "artifacts", None) if diagnostics is not None else None
+    if isinstance(artifacts, dict):
+        artifact = artifacts.get("run_diagnostics")
+        if isinstance(artifact, dict):
+            artifact["archive_status"] = result["status"]
+            if result.get("error_type"):
+                artifact["archive_error_type"] = result["error_type"]
+                if result.get("error"):
+                    artifact["archive_error"] = result["error"]
+        write_details_json = getattr(diagnostics, "write_details_json", None)
+        if callable(write_details_json):
+            try:
+                write_details_json(config.latest_run_details_path)
+            except Exception as error:
+                result["details_error_type"] = type(error).__name__
+                progress_tracker.log(
+                    f"WARNING: run diagnostics archive status could not be recorded ({type(error).__name__})",
+                    terminal=True,
+                )
+
+    if result["status"] != "saved":
+        suffix = f" ({result['error_type']})" if result.get("error_type") else ""
+        progress_tracker.log(
+            f"WARNING: run diagnostics archive {result['status']}{suffix}",
+            terminal=True,
+        )
+    return result
 
 
 class ProgressTracker:
@@ -1794,32 +1833,27 @@ def run_logging():
     global RUN_LOG_WRITER
     global RUN_DIAGNOSTIC_FILE
     global RUN_DIAGNOSTIC_FILES
-    for log_path in (
-        RUN_LOG_PATH,
-        LATEST_RUN_LOG_PATH,
-        RUN_DIAGNOSTICS_PATH,
-        LATEST_RUN_DIAGNOSTICS_PATH,
-    ):
-        log_dir = os.path.dirname(log_path)
-        if log_dir:
-            os.makedirs(log_dir, exist_ok=True)
-    with open(RUN_LOG_PATH, "w", encoding="utf-8") as run_log_file, open(
-        LATEST_RUN_LOG_PATH,
-        "w",
-        encoding="utf-8",
-    ) as latest_log_file, open(
-        RUN_DIAGNOSTICS_PATH,
-        "w",
-        encoding="utf-8",
-    ) as run_diagnostic_file, open(
-        LATEST_RUN_DIAGNOSTICS_PATH,
-        "w",
-        encoding="utf-8",
-    ) as latest_diagnostic_file:
-        RUN_LOG_FILE = run_log_file
-        RUN_LOG_FILES = [run_log_file, latest_log_file]
-        RUN_DIAGNOSTIC_FILE = run_diagnostic_file
-        RUN_DIAGNOSTIC_FILES = [run_diagnostic_file, latest_diagnostic_file]
+
+    concise_files: list[TextIO] = []
+    diagnostic_files: list[tuple[str, TextIO]] = []
+    opened_files: list[TextIO] = []
+    diagnostic_failures: list[OSError] = []
+    try:
+        # Concise logs are the primary run record and retain their existing
+        # required-open behavior.  Raw diagnostics are optional side effects;
+        # a failure in either destination must not prevent the run from start.
+        for log_path in (RUN_LOG_PATH, LATEST_RUN_LOG_PATH):
+            log_dir = os.path.dirname(log_path)
+            if log_dir:
+                os.makedirs(log_dir, exist_ok=True)
+            log_file = open(log_path, "w", encoding="utf-8")
+            concise_files.append(log_file)
+            opened_files.append(log_file)
+
+        RUN_LOG_FILE = concise_files[0]
+        RUN_LOG_FILES = concise_files
+        RUN_DIAGNOSTIC_FILE = None
+        RUN_DIAGNOSTIC_FILES = []
         RUN_LOG_WRITER = run_log.ConciseLogWriter(write_line=_write_run_log_line)
         header = (
             "# Daily news run log\n"
@@ -1831,6 +1865,24 @@ def run_logging():
         for log_file in RUN_LOG_FILES:
             log_file.write(header)
             log_file.flush()
+
+        for diagnostic_path in (RUN_DIAGNOSTICS_PATH, LATEST_RUN_DIAGNOSTICS_PATH):
+            try:
+                log_dir = os.path.dirname(diagnostic_path)
+                if log_dir:
+                    os.makedirs(log_dir, exist_ok=True)
+                diagnostic_file = open(diagnostic_path, "w", encoding="utf-8")
+            except OSError as error:
+                diagnostic_failures.append(error)
+                continue
+            diagnostic_files.append((diagnostic_path, diagnostic_file))
+            opened_files.append(diagnostic_file)
+
+        RUN_DIAGNOSTIC_FILES = [handle for _, handle in diagnostic_files]
+        RUN_DIAGNOSTIC_FILE = next(
+            (handle for path, handle in diagnostic_files if path == RUN_DIAGNOSTICS_PATH),
+            None,
+        )
         diagnostic_header = (
             "# Daily news run diagnostics (raw backend transcript)\n"
             f"# Started: {RUN_STARTED_AT.isoformat(timespec='seconds')}\n"
@@ -1839,9 +1891,33 @@ def run_logging():
             f"# Rolling diagnostics: {LATEST_RUN_DIAGNOSTICS_PATH}\n"
             "# Policy: backend-only raw detail; not a concise projection.\n\n"
         )
-        for log_file in RUN_DIAGNOSTIC_FILES:
-            log_file.write(diagnostic_header)
-            log_file.flush()
+        active_diagnostics: list[tuple[str, TextIO]] = []
+        for path, diagnostic_file in diagnostic_files:
+            try:
+                diagnostic_file.write(diagnostic_header)
+                diagnostic_file.flush()
+            except OSError as error:
+                diagnostic_failures.append(error)
+                try:
+                    diagnostic_file.close()
+                except OSError:
+                    pass
+                continue
+            active_diagnostics.append((path, diagnostic_file))
+        diagnostic_files = active_diagnostics
+        RUN_DIAGNOSTIC_FILES = [handle for _, handle in diagnostic_files]
+        RUN_DIAGNOSTIC_FILE = next(
+            (handle for path, handle in diagnostic_files if path == RUN_DIAGNOSTICS_PATH),
+            None,
+        )
+
+        for error in diagnostic_failures:
+            # This goes through the still-active concise/terminal path.  It
+            # is intentionally bounded and omits filesystem exception text.
+            progress_tracker.log(
+                f"WARNING: run diagnostics unavailable ({type(error).__name__})",
+                terminal=True,
+            )
         try:
             yield
         finally:
@@ -1852,11 +1928,17 @@ def run_logging():
             if RUN_LOG_WRITER is not None:
                 RUN_LOG_WRITER.flush()
             _write_run_diagnostics("Run diagnostics saved.")
-            RUN_LOG_WRITER = None
-            RUN_LOG_FILES = []
-            RUN_LOG_FILE = None
-            RUN_DIAGNOSTIC_FILES = []
-            RUN_DIAGNOSTIC_FILE = None
+    finally:
+        RUN_LOG_WRITER = None
+        RUN_LOG_FILES = []
+        RUN_LOG_FILE = None
+        RUN_DIAGNOSTIC_FILES = []
+        RUN_DIAGNOSTIC_FILE = None
+        for log_file in reversed(opened_files):
+            try:
+                log_file.close()
+            except OSError:
+                pass
 
 
 def load_recipient_config() -> dict[str, dict]:

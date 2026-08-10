@@ -123,6 +123,7 @@ class RunFinalizer:
             str(self._durable_run_diagnostics_path()),
             representation="diagnostic",
             policy="raw_backend_transcript",
+            archive_status="pending",
             source=str(source),
             rolling=str(rolling),
         )

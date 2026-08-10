@@ -6,6 +6,7 @@ import argparse
 import dataclasses
 import json
 import os
+import re
 import shlex
 import subprocess
 import threading
@@ -865,6 +866,76 @@ def preview_payload(body: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+_UI_NOTICE_PHASES = (
+    ("failed to start process", "UI worker failed to start the process"),
+    ("process output failed", "UI worker failed while reading process output"),
+    ("failed to reap process", "UI worker failed to reap the process"),
+    ("failed to wait for process", "UI worker failed while waiting for the process"),
+    ("failed to terminate process", "UI worker failed to terminate the process"),
+    ("terminate request failed", "UI worker failed to honor the stop request"),
+)
+_RETRY_ATTEMPT_RE = re.compile(r"\battempt\s+(\d+)/(\d+)\b", re.IGNORECASE)
+_ERROR_TYPE_RE = re.compile(r"\b([A-Z][A-Za-z0-9_]*(?:Error|Exception))\b")
+_PROCESS_EXIT_RE = re.compile(r"\bprocess exited with code\s+(-?\d+)\b", re.IGNORECASE)
+
+
+def _safe_notice_projection(event: run_log.RunLogEvent) -> str:
+    """Project a categorized backend line into a bounded safe UI notice.
+
+    ``event.line`` remains useful to the concise/raw backend writers, but it
+    is deliberately not an API field.  This allowlist keeps exception text,
+    traceback frames, provider responses, and secret-like values off the SSE
+    boundary while retaining the operational category and a small amount of
+    structured context.
+    """
+    line = event.line.strip()
+    if event.category == "error" and line.lower().startswith("[ui]"):
+        lowered = line.lower()
+        for marker, notice in _UI_NOTICE_PHASES:
+            if marker in lowered:
+                return notice
+        return "UI worker reported an error"
+    if event.category == "transition":
+        stage = re.sub(r"[^A-Za-z0-9 _-]", "", event.stage or "").strip()
+        return f"Stage: {stage[:64]}" if stage else "Stage transition"
+    if event.category == "retry":
+        match = _RETRY_ATTEMPT_RE.search(line)
+        if match:
+            return f"Retry scheduled (attempt {match.group(1)}/{match.group(2)})"
+        return "Retry scheduled"
+    if event.category == "error":
+        match = _ERROR_TYPE_RE.search(line)
+        return f"Backend error ({match.group(1)})" if match else "Backend error"
+    if event.category == "summary":
+        match = _PROCESS_EXIT_RE.search(line)
+        if match:
+            return f"Process exited (code {match.group(1)})"
+        lowered = line.lower()
+        if "daily news run complete" in lowered:
+            return "Run complete"
+        if "daily news run failed" in lowered:
+            return "Run failed"
+        return "Run summary"
+    if event.category == "warning":
+        return "Warning reported"
+    return "Notice"
+
+
+def _safe_ui_event_payload(event: run_log.RunLogEvent) -> dict[str, Any]:
+    if event.kind == "progress":
+        payload: dict[str, Any] = {"kind": "progress"}
+        for field in ("stage", "replace", "complete", "done", "total", "unit"):
+            value = getattr(event, field)
+            if value is not None and (field not in {"replace", "complete"} or value):
+                payload[field] = value
+        return payload
+    payload = {"kind": "message", "category": event.category}
+    if event.stage is not None:
+        payload["stage"] = event.stage
+    payload["notice"] = _safe_notice_projection(event)
+    return payload
+
+
 class RunRecord:
     def __init__(self, run_id: str, command: list[str], env: dict[str, str]):
         self.run_id = run_id
@@ -881,6 +952,7 @@ class RunRecord:
         self._event_sequences: list[int] = []
         self._next_event_sequence = 0
         self._progress_index: dict[str, int] = {}
+        self._progress_lines: dict[str, str] = {}
         self.status = "starting"
         self.stop_requested = False
         self.returncode: int | None = None
@@ -898,7 +970,7 @@ class RunRecord:
                 elif event.category == "detail":
                     continue  # low-value detail stays backend-only
                 else:
-                    payload = event.to_dict()
+                    payload = _safe_ui_event_payload(event)
                     payload["at"] = time.time()
                     self.events.append(payload)
                     self._event_sequences.append(self._next_sequence())
@@ -908,19 +980,21 @@ class RunRecord:
         return self._next_event_sequence
 
     def _append_progress(self, event: run_log.RunLogEvent) -> None:
-        payload = event.to_dict()
+        stage = event.stage or ""
+        payload = _safe_ui_event_payload(event)
         payload["at"] = time.time()
-        index = self._progress_index.get(event.stage or "")
+        index = self._progress_index.get(stage)
         if index is not None:
-            if self.events[index].get("line") == payload["line"]:
+            if self._progress_lines.get(stage) == event.line:
                 return  # exact duplicate snapshot
             payload["replace"] = True
             self.events[index] = payload
             self._event_sequences[index] = self._next_sequence()
         else:
-            self._progress_index[event.stage or ""] = len(self.events)
+            self._progress_index[stage] = len(self.events)
             self.events.append(payload)
             self._event_sequences.append(self._next_sequence())
+        self._progress_lines[stage] = event.line
 
     def stream_state(self, sequence: int) -> tuple[list[dict[str, Any]], int, str, bool]:
         """Return current events newer than a stream's transport cursor.
@@ -3193,7 +3267,8 @@ HTML = r"""<!doctype html>
 
     // Stage-keyed reducer: a progress payload upserts one row per stable stage
     // (idempotent under SSE replay), and high-value notices are deduplicated.
-    // ``payload.line`` is never appended to the DOM.
+    // Backend raw lines are never appended to the DOM; visible notices use
+    // the safe ``payload.notice`` projection.
     function appendRunEvent(payload) {
       if (!payload || typeof payload !== "object") return;
       if (payload.kind === "progress" && payload.stage) {
@@ -3208,7 +3283,7 @@ HTML = r"""<!doctype html>
         });
       } else if (payload.kind === "message") {
         const category = payload.category || "detail";
-        const text = String(payload.line || "").trim();
+        const text = String(payload.notice || "").trim();
         if (category === "detail" || !text) return; // defensive: backend already suppresses detail
         const key = `${category}:${text}`;
         if (!progressState.notices.some(notice => notice.key === key)) {

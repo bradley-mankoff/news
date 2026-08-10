@@ -226,6 +226,7 @@ class FailedRunLoggingTests(unittest.TestCase):
             )
             self.assertEqual(run_diagnostics_artifact["representation"], "diagnostic")
             self.assertEqual(run_diagnostics_artifact["policy"], "raw_backend_transcript")
+            self.assertEqual(run_diagnostics_artifact["archive_status"], "saved")
             self.assertEqual(
                 run_diagnostics_artifact["rolling"],
                 str(rolling_diagnostics),
@@ -245,6 +246,42 @@ class FailedRunLoggingTests(unittest.TestCase):
                 self.assertNotIn("\033", log_row[1])
                 self.assertIn("150000/200000 steps", log_row[1])
                 self.assertEqual(log_row[0], len(log_row[1].encode("utf-8")))
+
+    def test_archive_failure_is_reported_and_primary_session_result_is_preserved(self) -> None:
+        timestamp = "2026-06-06_14-00-00"
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            output_dir = root / "daily_outputs"
+            staging = output_dir / ".staging" / timestamp
+            config = replace(
+                pipeline.CONFIG,
+                run_started_at=datetime(2026, 6, 6, 14, 0, 0),
+                run_date="2026-06-06",
+                timestamp=timestamp,
+                output_dir=output_dir,
+                run_output_dir=staging,
+                run_staging_dir=staging,
+                latest_run_markdown_path=output_dir / "latest_run.md",
+                latest_run_log_path=output_dir / "latest_run.log",
+                latest_run_details_path=output_dir / "latest_run_details.json",
+                history_db_path=root / "history" / "news_history.duckdb",
+            )
+            output = StringIO()
+
+            with patch.object(pipeline, "archive_run_diagnostics", side_effect=OSError("disk full")):
+                with redirect_stdout(output):
+                    pipeline.RunSession(config).run(lambda: pipeline.progress_tracker.detail("successful run"))
+                with redirect_stdout(output):
+                    with self.assertRaisesRegex(RuntimeError, "primary failure"):
+                        pipeline.RunSession(config).run(
+                            lambda: (_ for _ in ()).throw(RuntimeError("primary failure"))
+                        )
+
+            self.assertIn("WARNING: run diagnostics archive failed (OSError)", output.getvalue())
+            details = json.loads((output_dir / "latest_run_details.json").read_text(encoding="utf-8"))
+            artifact = details["artifacts"]["run_diagnostics"]
+            self.assertEqual(artifact["archive_status"], "failed")
+            self.assertEqual(artifact["archive_error_type"], "OSError")
 
     def test_session_finalizer_survives_compat_global_drift(self) -> None:
         timestamp = "2026-06-06_11-00-00"

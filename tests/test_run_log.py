@@ -138,6 +138,8 @@ class ParseEventTests(unittest.TestCase):
             "[custom] Starting model server.": ("transition", "custom"),
             "[9/9 finalize] Daily news run complete.": ("summary", None),
             "[ui] process exited with code 0": ("summary", None),
+            "[ui] process output failed: RuntimeError: boom": ("error", None),
+            "[ui] failed to reap process: OSError: boom": ("error", None),
             "WARNING: low coverage": ("warning", None),
             "Retrying task: attempt 1/3 failed (TimeoutError: boom)": ("retry", None),
             "Traceback (most recent call last):": ("error", None),

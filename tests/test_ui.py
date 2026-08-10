@@ -4,6 +4,8 @@ import contextlib
 import http.client
 import json
 import os
+import shutil
+import subprocess
 import tempfile
 import threading
 import unittest
@@ -969,14 +971,19 @@ class UITests(unittest.TestCase):
             manager._run_process(success_record)
         self.assertEqual(success_record.status, "completed")
         self.assertEqual(success_record.returncode, 0)
-        self.assertIn("[ui] process exited with code 0", success_record.events[-1]["line"])
+        self.assertEqual(success_record.events[-1]["category"], "summary")
+        self.assertEqual(success_record.events[-1]["notice"], "Process exited (code 0)")
 
         failure_record = RunRecord("run-3", ["news", "run"], {})
         with patch.object(ui_module.subprocess, "Popen", side_effect=OSError("boom")):
             manager._run_process(failure_record)
         self.assertEqual(failure_record.status, "failed")
         self.assertEqual(failure_record.returncode, -1)
-        self.assertIn("failed to start process", failure_record.events[-1]["line"])
+        self.assertEqual(failure_record.events[-1]["category"], "error")
+        self.assertEqual(
+            failure_record.events[-1]["notice"],
+            "UI worker failed to start the process",
+        )
 
         running_record = RunRecord("run-4", ["news", "run"], {})
         running_record.process = _SuccessProcess()
@@ -1001,14 +1008,13 @@ class UITests(unittest.TestCase):
             ["progress", "message", "progress"],
         )
         # The clustering snapshot was replaced in place, never appended twice.
-        self.assertEqual(record.events[0]["line"], meter_final)
         self.assertEqual(record.events[0]["stage"], "clustering")
         self.assertEqual(record.events[0]["replace"], True)
         self.assertEqual(record.events[0]["complete"], True)
-        self.assertEqual(record.events[1]["line"], "WARNING: low coverage")
-        self.assertEqual(record.events[2]["line"], "[7/9 story drafting] [####----------------] 12/47 stories")
+        self.assertNotIn("line", record.events[0])
+        self.assertEqual(record.events[1]["notice"], "Warning reported")
+        self.assertEqual(record.events[2]["stage"], "story drafting")
         self.assertEqual(record.snapshot()["line_count"], 3)
-        self.assertEqual(record.events[0]["line"], meter_final)
 
     def test_run_record_coalesces_high_frequency_meters_and_suppresses_detail(self) -> None:
         record = RunRecord("run-1", ["news", "run"], {})
@@ -1035,14 +1041,15 @@ class UITests(unittest.TestCase):
         self.assertEqual(progress["unit"], "steps")
         self.assertEqual(progress["complete"], True)
         self.assertEqual(progress["replace"], True)
+        self.assertNotIn("line", progress)
         self.assertIn("at", progress)
         self.assertEqual(record.events[1]["category"], "warning")
+        self.assertEqual(record.events[1]["notice"], "Warning reported")
         self.assertEqual(record.events[2]["category"], "transition")
         self.assertEqual(record.events[2]["stage"], "sources")
         for event in record.events:
-            self.assertNotIn("\r", event["line"])
-            self.assertNotIn("\033", event["line"])
             self.assertIn("at", event)
+            self.assertNotIn("line", event)
 
     def test_run_record_terminal_snapshot_has_duration_and_diagnostic_path(self) -> None:
         record = RunRecord("run-1", ["news", "run"], {})
@@ -1112,7 +1119,7 @@ class UITests(unittest.TestCase):
             def write(self, data: bytes) -> int:
                 text = data.decode("utf-8")
                 self.parts.append(text)
-                if meter_a in text and not self.replaced:
+                if '"done": 1000' in text and not self.replaced:
                     self.replaced = True
                     record.append(meter_b + "\n")
                     with record.lock:
@@ -1136,9 +1143,68 @@ class UITests(unittest.TestCase):
         ):
             handler._stream_run_events(record.run_id)
 
-        self.assertTrue(any(meter_a in part for part in writer.parts))
-        self.assertTrue(any(meter_b in part for part in writer.parts))
+        self.assertTrue(any('"done": 1000' in part for part in writer.parts))
+        self.assertTrue(any('"done": 10000' in part for part in writer.parts))
         self.assertTrue(any('"replace": true' in part for part in writer.parts))
+
+    def test_real_record_sse_omits_raw_details_and_replays_terminal_metadata(self) -> None:
+        record = RunRecord("run-private", ["news", "run"], {})
+        record.diagnostic_path = "/tmp/latest_run_diagnostics.log"
+        record.append("Starting source 1/57: Reuters\n")
+        record.append(
+            "Traceback (most recent call last):\n"
+            "  File \\\"secret-detail.py\\\", line 3, in <module>\n"
+            "RuntimeError: Authorization Bearer SUPER_SECRET\n"
+        )
+        record.append("WARNING: provider token SUPER_SECRET\n")
+        with record.lock:
+            record.status = "failed"
+            record.returncode = 1
+
+        class _Writer:
+            def __init__(self) -> None:
+                self.parts: list[str] = []
+
+            def write(self, data: bytes) -> int:
+                self.parts.append(data.decode("utf-8"))
+                return len(data)
+
+            def flush(self) -> None:
+                return None
+
+        handler = object.__new__(ui_module.NewsUIHandler)
+        handler.path = "/api/runs/run-private/events"
+        handler.headers = {}
+        handler.rfile = BytesIO(b"")
+        writer = _Writer()
+        handler.wfile = writer  # type: ignore[assignment]
+        handler.send_response = lambda *_args, **_kwargs: None
+        handler.send_header = lambda *_args, **_kwargs: None
+        handler.end_headers = lambda: None
+        with patch.object(ui_module.RUN_MANAGER, "get", return_value=record):
+            handler._stream_run_events(record.run_id)
+
+        wire = "".join(writer.parts)
+        self.assertNotIn("SUPER_SECRET", wire)
+        self.assertNotIn("secret-detail.py", wire)
+        self.assertNotIn("Traceback", wire)
+        data_payloads = [
+            json.loads(line[6:])
+            for line in wire.splitlines()
+            if line.startswith("data: ")
+        ]
+        self.assertTrue(any(payload.get("category") == "error" for payload in data_payloads))
+        status_payload = next(
+            json.loads(line[6:])
+            for line in wire.splitlines()
+            if line.startswith("data: ") and '"returncode": 1' in line
+        )
+        self.assertEqual(status_payload["status"], "failed")
+        self.assertIn("duration", status_payload)
+        self.assertEqual(
+            status_payload["diagnostic_path"],
+            "/tmp/latest_run_diagnostics.log",
+        )
 
     def test_stop_requested_process_resolves_to_stopped(self) -> None:
         class _StoppableProcess:
@@ -1167,8 +1233,8 @@ class UITests(unittest.TestCase):
             manager._run_process(record)
         self.assertEqual(record.status, "stopped")
         self.assertEqual(record.returncode, -15)
-        self.assertIn("[ui] terminate requested", record.events[0]["line"])
-        self.assertIn("[ui] process exited with code -15", record.events[-1]["line"])
+        self.assertEqual(record.events[0]["notice"], "Stage: ui")
+        self.assertEqual(record.events[-1]["notice"], "Process exited (code -15)")
 
     def test_stop_after_worker_has_marked_exit_does_not_relabel_finished_run(self) -> None:
         class _FinishedProcess:
@@ -1293,9 +1359,9 @@ class UITests(unittest.TestCase):
         self.assertTrue(process.terminated)
         self.assertEqual(record.status, "failed")
         self.assertEqual(record.returncode, -15)
-        lines = [event["line"] for event in record.events]
-        self.assertTrue(any("process output failed: reader boom" in line for line in lines))
-        self.assertFalse(any("failed to start process" in line for line in lines))
+        notices = [event["notice"] for event in record.events]
+        self.assertIn("UI worker failed while reading process output", notices)
+        self.assertNotIn("UI worker failed to start the process", notices)
 
     def test_run_manager_rejects_overlapping_start(self) -> None:
         class _FakeThread:
@@ -1915,6 +1981,59 @@ class UITests(unittest.TestCase):
                 self.assertIsNone(
                     ui_module.read_historical_report("2026-06-01_10-00-00/../..")
                 )
+
+    def test_run_progress_renderer_executes_stage_and_notice_contract(self) -> None:
+        node = shutil.which("node")
+        if node is None:
+            self.skipTest("node is required for the executable renderer fixture")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            html_path = Path(tmpdir) / "ui.html"
+            html_path.write_text(ui_module.HTML, encoding="utf-8")
+            script = r'''
+const fs = require("fs");
+const vm = require("vm");
+const html = fs.readFileSync(process.argv[1], "utf8");
+const start = html.indexOf("const TERMINAL_STATUSES");
+const end = html.indexOf("function badgeClass", start);
+if (start < 0 || end < 0) throw new Error("progress renderer source markers missing");
+const nodes = { runProgress: { innerHTML: "" } };
+const context = {
+  Date,
+  clearInterval,
+  setInterval,
+  nodes,
+  state: { activeRun: null },
+  $: id => nodes[id] || null,
+  escapeHtml: value => String(value)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;"),
+  setStatus: () => {},
+  updateRunControls: () => {},
+  refreshReviewData: () => {},
+};
+vm.runInNewContext(html.slice(start, end) + `
+resetRunProgress();
+appendRunEvent({kind: "progress", stage: "sources", done: 0, total: 0, unit: "sources", complete: false, at: 100});
+appendRunEvent({kind: "progress", stage: "sources", done: 2, total: 5, unit: "sources", complete: false, at: 100});
+appendRunEvent({kind: "progress", stage: "articles", done: 0, total: 0, unit: "articles", complete: false, at: 100});
+appendRunEvent({kind: "message", category: "warning", notice: "<unsafe>"});
+const output = nodes.runProgress.innerHTML;
+if ((output.match(/class="stage-row"/g) || []).length !== 2) throw new Error("stage rows were not coalesced");
+if (!output.includes('max="5"')) throw new Error("determinate progress was not rendered");
+if (!output.includes("indeterminate")) throw new Error("zero-total progress was not rendered safely");
+if (!output.includes("&lt;unsafe&gt;")) throw new Error("notice escaping failed");
+if (output.includes("<unsafe>")) throw new Error("unsafe notice reached the DOM");
+`, context);
+'''
+            completed = subprocess.run(
+                [node, "-e", script, str(html_path)],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
 
     def test_run_progress_renderer_contracts(self) -> None:
         html = ui_module.HTML
