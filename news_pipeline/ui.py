@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import dataclasses
 import json
+import math
 import os
 import shlex
 import subprocess
@@ -24,8 +25,11 @@ import yaml
 from . import run_log
 from . import scheduler as scheduler_module
 from .config import (
+    MODEL_TASK_IMAGE_ART_DIRECTION,
+    MODEL_TUNING_PRESET_ENV_VARS,
     MODEL_TUNING_PRESETS_PATH,
     REMOVED_TOPIC_ENV_VARS,
+    _MAX_TOKENS_TUNING_FIELDS,
     ROOT_DIR,
     RUN_PRESETS_PATH,
     SOURCE_SCOPES,
@@ -762,6 +766,156 @@ def _coerce_optional_mapping(body: dict[str, Any], field_name: str) -> dict[str,
     return None
 
 
+# Selectable model-tuning preset task scopes mirror MODEL_TUNING_PRESET_ENV_VARS
+# minus the global "default" overlay. Inherited/no-call tasks (story_discovery,
+# image_art_direction) are not selectable preset assignments; image art direction
+# shares the title_generation call (see docs/adr/0007-model-configuration-vocabulary.md).
+_MODEL_TUNING_PRESET_TASK_SCOPES: tuple[str, ...] = tuple(
+    task for task in MODEL_TUNING_PRESET_ENV_VARS if task != "default"
+)
+# The six sampling knobs accepted by the runtime model-tuning overlay.
+_MODEL_TUNING_SAMPLING_FIELDS: frozenset[str] = frozenset(
+    {"temperature", "top_p", "top_k", "min_p", "presence_penalty", "repetition_penalty"}
+)
+# The runtime shorthand max_tokens plus the canonical per-task max-token fields
+# (model_max_input_tokens and the four task *_max_tokens fields), derived from
+# the config task map so the allowed-field set cannot drift from runtime.
+_MODEL_TUNING_MAX_TOKEN_FIELDS: frozenset[str] = frozenset(_MAX_TOKENS_TUNING_FIELDS) | frozenset(
+    {"max_tokens"}
+)
+# Sampling knob ranges mirror runtime_knob_registry(): top_k is a whole number
+# >= 0 with no upper bound; the remaining knobs are finite closed intervals.
+_MODEL_TUNING_SAMPLING_RANGES: dict[str, tuple[float, float | None]] = {
+    "temperature": (0.0, 2.0),
+    "top_p": (0.0, 1.0),
+    "top_k": (0.0, None),
+    "min_p": (0.0, 1.0),
+    "presence_penalty": (-2.0, 2.0),
+    "repetition_penalty": (0.0, 3.0),
+}
+
+
+def _coerce_model_tuning_number(value: Any) -> float:
+    """Coerce a tuning value to a finite float for range/whole-number checks.
+
+    Booleans, non-numeric strings, NaN, and infinity are rejected so the UI
+    write boundary matches runtime numeric coercion exactly.
+    """
+    if isinstance(value, bool):
+        raise ValueError(f"got {value!r}, expected a number")
+    if isinstance(value, str):
+        try:
+            number = float(value.strip())
+        except ValueError:
+            raise ValueError(f"got {value!r}, expected a number") from None
+    elif isinstance(value, (int, float)):
+        number = float(value)
+    else:
+        raise ValueError(f"got {value!r}, expected a number")
+    if math.isnan(number) or math.isinf(number):
+        raise ValueError(f"got {value!r}, expected a finite number")
+    return number
+
+
+def _validate_model_tuning_sampling_value(preset_id: str, field_name: str, value: Any) -> None:
+    try:
+        number = _coerce_model_tuning_number(value)
+    except ValueError:
+        raise ValueError(
+            f"Model tuning preset {preset_id!r} field {field_name!r} must be a number, "
+            f"got {value!r}."
+        ) from None
+    minimum, maximum = _MODEL_TUNING_SAMPLING_RANGES[field_name]
+    if field_name == "top_k" and not number.is_integer():
+        raise ValueError(
+            f"Model tuning preset {preset_id!r} field {field_name!r} must be a "
+            f"whole number, got {value!r}."
+        )
+    if (minimum is not None and number < minimum) or (maximum is not None and number > maximum):
+        bound = (
+            f"at least {minimum:g}"
+            if maximum is None
+            else f"between {minimum:g} and {maximum:g}"
+        )
+        raise ValueError(
+            f"Model tuning preset {preset_id!r} field {field_name!r} must be "
+            f"{bound}, got {value!r}."
+        )
+
+
+def _validate_model_tuning_token_value(preset_id: str, field_name: str, value: Any) -> None:
+    try:
+        number = _coerce_model_tuning_number(value)
+    except ValueError:
+        raise ValueError(
+            f"Model tuning preset {preset_id!r} field {field_name!r} must be a number, "
+            f"got {value!r}."
+        ) from None
+    if not number.is_integer() or number < 1:
+        raise ValueError(
+            f"Model tuning preset {preset_id!r} field {field_name!r} must be a "
+            f"whole number greater than zero, got {value!r}."
+        )
+
+
+def _validate_model_tuning_record(preset_id: str, record: Mapping[str, Any]) -> None:
+    """Validate a complete model-tuning record before it is persisted.
+
+    Mirrors the runtime vocabulary and numeric contract in
+    news_pipeline/config.py so neither the dedicated editor nor the Advanced
+    Settings task panels can write tuning that runtime resolution would reject.
+    The record is validated as-is; accepted field names and values are stored
+    unchanged.
+    """
+    task = str(record.get("task") or "").strip()
+    if task and task not in _MODEL_TUNING_PRESET_TASK_SCOPES:
+        if task == MODEL_TASK_IMAGE_ART_DIRECTION:
+            raise ValueError(
+                f"Model tuning preset {preset_id!r} task {task!r} is not selectable; "
+                "use title_generation because image art direction shares that call."
+            )
+        raise ValueError(
+            f"Model tuning preset {preset_id!r} task {task!r} is not selectable; "
+            f"supported task scopes: {', '.join(_MODEL_TUNING_PRESET_TASK_SCOPES)}."
+        )
+    tuning = record.get("tuning", {})
+    if tuning in (None, ""):
+        tuning = {}
+    if not isinstance(tuning, dict):
+        raise ValueError(f"Model tuning preset {preset_id!r} tuning must be a mapping.")
+    supported_fields = sorted(_MODEL_TUNING_SAMPLING_FIELDS | _MODEL_TUNING_MAX_TOKEN_FIELDS)
+    for field_name, value in tuning.items():
+        field = str(field_name or "").strip()
+        if field in _MODEL_TUNING_SAMPLING_FIELDS:
+            _validate_model_tuning_sampling_value(preset_id, field, value)
+        elif field in _MODEL_TUNING_MAX_TOKEN_FIELDS:
+            _validate_model_tuning_token_value(preset_id, field, value)
+        else:
+            raise ValueError(
+                f"Model tuning preset {preset_id!r} has unsupported tuning field "
+                f"{field_name!r}. Supported fields: {', '.join(supported_fields)}."
+            )
+
+
+def _coerce_model_tuning_mapping(
+    preset_id: str, body: Mapping[str, Any], field_name: str
+) -> dict[str, Any] | None:
+    """Strict tuning coercion for the model-tuning upsert boundary.
+
+    Returns None when the field is omitted so a metadata-only PATCH preserves
+    the existing mapping; an explicit null, array, scalar, or non-empty string
+    raises instead of silently collapsing to an empty mapping.
+    """
+    if field_name not in body:
+        return None
+    raw = body.get(field_name)
+    if raw == "":
+        return {}
+    if raw is None or not isinstance(raw, dict):
+        raise ValueError(f"Model tuning preset {preset_id!r} tuning must be a mapping.")
+    return dict(raw)
+
+
 def upsert_model_tuning_preset(body: dict[str, Any], *, append_only: bool = False) -> dict[str, Any]:
     preset_id = normalize_preset_id(str(body.get("id") or body.get("preset_id") or ""))
     if not preset_id:
@@ -771,9 +925,9 @@ def upsert_model_tuning_preset(body: dict[str, Any], *, append_only: bool = Fals
         raise ValueError(f"Preset {preset_id!r} already exists.")
     existing = records.get(preset_id, {"id": preset_id, "name": preset_id, "description": "", "tuning": {}})
     updates = body.get("updates") if isinstance(body.get("updates"), dict) else body
-    tuning = _coerce_optional_mapping(body, "tuning")
+    tuning = _coerce_model_tuning_mapping(preset_id, body, "tuning")
     if tuning is None and isinstance(updates, dict):
-        tuning = _coerce_optional_mapping(updates, "tuning")
+        tuning = _coerce_model_tuning_mapping(preset_id, updates, "tuning")
     record = {
         "id": preset_id,
         "name": str(updates.get("name") or existing.get("name") or preset_id).strip(),
@@ -783,6 +937,7 @@ def upsert_model_tuning_preset(body: dict[str, Any], *, append_only: bool = Fals
         "tuning": tuning if tuning is not None else dict(existing.get("tuning") or {}),
         "modified_at": _now_iso_local(),
     }
+    _validate_model_tuning_record(preset_id, record)
     records[preset_id] = record
     _write_model_tuning_presets(records)
     return {"path": str(MODEL_TUNING_PRESETS_PATH), "preset": record}
@@ -1907,6 +2062,39 @@ HTML = r"""<!doctype html>
         </div>
       </div>
     </section>
+    <section id="modelTuning" class="view">
+      <div class="toolbar">
+        <button id="newModelTuningPresetBtn">New preset</button>
+        <button id="reloadModelTuningPresetsBtn">Reload</button>
+      </div>
+      <div class="grid cols">
+        <div class="table-wrap"><table id="modelTuningPresetTable"></table></div>
+        <div class="panel">
+          <h2>Model Tuning Preset Editor</h2>
+          <p class="muted">Saved model/task inference overlays. Every preset is listed regardless of the currently selected model or task; the Advanced Settings task cards filter the same records.</p>
+          <div id="modelTuningPresetError" class="bad" role="alert"></div>
+          <div class="form-grid">
+            <label>ID<input id="modelTuningPresetId"></label>
+            <label>Name<input id="modelTuningPresetName"></label>
+            <label>Model (optional)<input id="modelTuningPresetModel" placeholder="Model reference or alias"></label>
+            <label>Supported task (optional)<select id="modelTuningPresetTask">
+              <option value="">Global / all tasks</option>
+              <option value="article_summary">article_summary</option>
+              <option value="story_drafting">story_drafting</option>
+              <option value="story_scale_screening">story_scale_screening</option>
+              <option value="title_generation">title_generation</option>
+            </select></label>
+          </div>
+          <label>Description<textarea id="modelTuningPresetDescription"></textarea></label>
+          <label>Tuning (JSON)<textarea id="modelTuningPresetTuning" spellcheck="false"></textarea></label>
+          <p class="muted">Accepted tuning fields: temperature (0-2), top_p (0-1), top_k (whole number &gt;= 0), min_p (0-1), presence_penalty (-2 to 2), repetition_penalty (0-3), max_tokens, model_max_input_tokens, article_summary_max_tokens, story_drafting_max_tokens, story_scale_screening_max_tokens, title_generation_max_tokens (positive whole numbers).</p>
+          <div class="toolbar" style="margin-top:12px">
+            <button id="saveModelTuningPresetBtn" class="primary">Save preset</button>
+            <button id="deleteModelTuningPresetBtn" class="danger">Delete preset</button>
+          </div>
+        </div>
+      </div>
+    </section>
   </main>
   <dialog id="runPresetDialog">
     <div class="dialog-shell">
@@ -2086,6 +2274,7 @@ HTML = r"""<!doctype html>
       recipients: [],
       activeRun: null,
       selectedRunPresetId: "",
+      selectedModelTuningPresetId: "",
       latestReview: null,
       history: [],
       historyError: null,
@@ -2102,13 +2291,15 @@ HTML = r"""<!doctype html>
       newspaper: `<svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 1.5 17V5.5H18A2.5 2.5 0 0 1 20.5 8v11.5Z"/><path d="M20.5 8H23v9a2.5 2.5 0 0 1-2.5 2.5"/><path d="M5 9h8"/><path d="M5 13h10"/><path d="M5 17h6"/></svg>`,
       clock: `<svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>`,
       book: `<svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 7v14"/><path d="M3 18a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h5a4 4 0 0 1 4 4 4 4 0 0 1 4-4h5a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-6a3 3 0 0 0-3 3 3 3 0 0 0-3-3z"/></svg>`,
-      person: `<svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21a8 8 0 0 0-16 0"/><circle cx="12" cy="7" r="4"/></svg>`
+      person: `<svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21a8 8 0 0 0-16 0"/><circle cx="12" cy="7" r="4"/></svg>`,
+      sliders: `<svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 6h-8"/><path d="M21 12h-8"/><path d="M21 18h-8"/><path d="M8 6H3"/><path d="M8 12H3"/><path d="M8 18H3"/><path d="M8 4v4"/><path d="M8 10v4"/><path d="M8 16v4"/></svg>`
     };
     const tabs = [
       ["runSetup", "Run Setup", "gear"],
       ["review", "Report Review", "book"],
       ["schedule", "Schedule", "clock"],
       ["advanced", "Advanced Settings", "microscope"],
+      ["modelTuning", "Model Tuning", "sliders"],
       ["sources", "Sources", "newspaper"],
       ["recipients", "Recipients", "person"]
     ];
@@ -3094,6 +3285,7 @@ HTML = r"""<!doctype html>
       const data = await api("/api/model-tuning-presets");
       state.modelTuningPresets = data.presets || [];
       renderModelTuningPanels();
+      renderModelTuningEditor();
     }
     function renderAdvancedKnobs() {
       const search = value("knobSearch").toLowerCase();
@@ -3157,6 +3349,117 @@ HTML = r"""<!doctype html>
       $(meta.nameInputId).value = "";
       $(meta.descriptionInputId).value = "";
       renderModelTuningControls(task);
+    }
+    // Dedicated Model Tuning tab: an all-record catalog editor. It lists every
+    // saved preset (no model/task filtering), mirrors the Run Preset drawer's
+    // row-selection/New/Reload/Save/Delete patterns, and edits the nested
+    // tuning map as formatted JSON. The server validator stays authoritative;
+    // client JSON parsing only gives immediate feedback without losing edits.
+    function renderModelTuningEditor() {
+      const rows = state.modelTuningPresets || [];
+      const selected = state.selectedModelTuningPresetId;
+      $("modelTuningPresetTable").innerHTML = `
+        <thead><tr><th>Name</th><th>ID</th><th>Model</th><th>Task</th><th>Modified</th><th>Tuning fields</th></tr></thead>
+        <tbody>
+          ${rows.map(preset => `
+            <tr data-id="${escapeHtml(preset.id || "")}" class="${preset.id === selected ? "selected" : ""}">
+              <td><strong>${escapeHtml(preset.name || preset.id || "")}</strong></td>
+              <td><code>${escapeHtml(preset.id || "")}</code></td>
+              <td>${escapeHtml(preset.model || "")}</td>
+              <td>${escapeHtml(preset.task || "global")}</td>
+              <td>${escapeHtml(preset.modified_at || "Last modified: unknown")}</td>
+              <td>${escapeHtml(Object.keys(preset.tuning || {}).join(", "))}</td>
+            </tr>
+          `).join("")}
+        </tbody>
+      `;
+      document.querySelectorAll("#modelTuningPresetTable tr[data-id]").forEach(row => {
+        row.onclick = () => editModelTuningPreset(row.dataset.id);
+      });
+    }
+    function editModelTuningPreset(id) {
+      const preset = state.modelTuningPresets.find(item => item.id === id) || null;
+      $("modelTuningPresetError").textContent = "";
+      $("modelTuningPresetId").value = preset ? preset.id || "" : "";
+      $("modelTuningPresetName").value = preset ? preset.name || preset.id || "" : "";
+      $("modelTuningPresetDescription").value = preset ? preset.description || "" : "";
+      $("modelTuningPresetModel").value = preset ? preset.model || "" : "";
+      $("modelTuningPresetTask").value = preset ? preset.task || "" : "";
+      $("modelTuningPresetTuning").value = preset ? JSON.stringify(preset.tuning || {}, null, 2) : "{}";
+      state.selectedModelTuningPresetId = id;
+    }
+    function collectModelTuningPresetEditorBody() {
+      const rawTuning = value("modelTuningPresetTuning").trim();
+      let tuning = {};
+      if (rawTuning) {
+        try {
+          tuning = JSON.parse(rawTuning);
+        } catch (err) {
+          throw new Error(`Tuning JSON is not valid: ${err.message}`);
+        }
+      }
+      if (!tuning || typeof tuning !== "object" || Array.isArray(tuning)) {
+        throw new Error("Tuning must be a JSON object (mapping).");
+      }
+      return {
+        id: value("modelTuningPresetId").trim(),
+        name: value("modelTuningPresetName").trim(),
+        description: value("modelTuningPresetDescription").trim(),
+        model: value("modelTuningPresetModel").trim(),
+        task: value("modelTuningPresetTask").trim(),
+        tuning
+      };
+    }
+    async function saveModelTuningEditor() {
+      let body;
+      try {
+        body = collectModelTuningPresetEditorBody();
+      } catch (err) {
+        $("modelTuningPresetError").textContent = err.message;
+        return;
+      }
+      if (!body.id) {
+        $("modelTuningPresetError").textContent = "Model tuning preset id is required.";
+        return;
+      }
+      const exists = state.modelTuningPresets.some(preset => preset.id === body.id);
+      try {
+        await api("/api/model-tuning-presets", { method: exists ? "PATCH" : "POST", body: JSON.stringify(body) });
+        await loadModelTuningPresets();
+        state.selectedModelTuningPresetId = body.id;
+        const preset = state.modelTuningPresets.find(item => item.id === body.id);
+        if (preset) editModelTuningPreset(preset.id);
+        $("modelTuningPresetError").textContent = "";
+        setStatus(`Model tuning preset ${body.id} saved.`, "good");
+      } catch (err) {
+        $("modelTuningPresetError").textContent = err.message;
+      }
+    }
+    async function deleteModelTuningEditor() {
+      const id = value("modelTuningPresetId").trim();
+      if (!id) return;
+      const ok = await confirmAction(`Delete model tuning preset ${id}? This cannot be undone.`);
+      if (!ok) return;
+      try {
+        await api(`/api/model-tuning-presets?id=${encodeURIComponent(id)}`, { method: "DELETE" });
+        await loadModelTuningPresets();
+        if (state.selectedModelTuningPresetId === id) state.selectedModelTuningPresetId = "";
+        editModelTuningPreset("");
+        $("modelTuningPresetError").textContent = "";
+        setStatus(`Model tuning preset ${id} deleted.`, "good");
+      } catch (err) {
+        $("modelTuningPresetError").textContent = err.message;
+      }
+    }
+    async function reloadModelTuningPresets() {
+      await loadModelTuningPresets();
+      if (state.selectedModelTuningPresetId) {
+        const preset = state.modelTuningPresets.find(item => item.id === state.selectedModelTuningPresetId);
+        if (preset) editModelTuningPreset(preset.id);
+        else state.selectedModelTuningPresetId = "";
+      }
+      $("modelTuningPresetError").textContent = "";
+      setStatus("Model tuning presets reloaded.", "good");
     }
     function confirmAction(message) {
       return Promise.resolve(window.confirm(message));
@@ -4010,6 +4313,10 @@ HTML = r"""<!doctype html>
       $("newRecipientBtn").onclick = () => editRecipient("");
       $("saveRecipientBtn").onclick = () => saveRecipient().catch(err => setStatus(err.message, "bad"));
       $("deleteRecipientBtn").onclick = () => deleteSelectedRecipient().catch(err => setStatus(err.message, "bad"));
+      $("newModelTuningPresetBtn").onclick = () => { editModelTuningPreset(""); $("modelTuningPresetTuning").value = "{}"; };
+      $("reloadModelTuningPresetsBtn").onclick = () => reloadModelTuningPresets().catch(err => $("modelTuningPresetError").textContent = err.message);
+      $("saveModelTuningPresetBtn").onclick = () => saveModelTuningEditor().catch(err => $("modelTuningPresetError").textContent = err.message);
+      $("deleteModelTuningPresetBtn").onclick = () => deleteModelTuningEditor().catch(err => $("modelTuningPresetError").textContent = err.message);
       $("actionSelect").onchange = () => $("sourceOptions").classList.toggle("hidden", !["check-sources","prune-sources","source-languages"].includes(value("actionSelect")));
       Object.values(TASK_CONFIG).forEach(meta => {
         const modelSelect = $(meta.modelSelectId);
@@ -4073,6 +4380,7 @@ HTML = r"""<!doctype html>
       await loadSchedule();
       state.presets = (state.schema.presets && state.schema.presets.presets) || [];
       state.modelTuningPresets = (state.schema.model_tuning_presets && state.schema.model_tuning_presets.presets) || [];
+      renderModelTuningEditor();
       if (state.schema.runtime && state.schema.runtime.preset_id && state.schema.runtime.preset_id !== "custom") {
         state.selectedRunPresetId = state.schema.runtime.preset_id;
         applySelectedPresetFromState();
