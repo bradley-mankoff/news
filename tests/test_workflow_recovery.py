@@ -62,16 +62,16 @@ class WorkflowRecoveryCliTests(unittest.TestCase):
             },
         }
         snapshot_runs = [
-            resolved_run,
             {
                 "id": "run-141-b",
                 "workflow_name": "archon-idea-to-pr",
                 "status": "failed",
-                "started_at": "2026-08-06 21:00:00",
+                "started_at": "2026-08-06 23:00:00",
                 "working_path": "/tmp/issue-141",
                 "user_message": "Retry build feature from issue #141",
                 "metadata": {"error": "transient poller failure"},
             },
+            resolved_run,
         ]
         with (
             patch.object(
@@ -84,7 +84,7 @@ class WorkflowRecoveryCliTests(unittest.TestCase):
             ),
             patch.object(
                 workflow_recovery, "fetch_workflow_run", return_value=resolved_run
-            ),
+            ) as direct_lookup,
             patch.object(
                 workflow_recovery,
                 "fetch_workflow_runs",
@@ -102,6 +102,7 @@ class WorkflowRecoveryCliTests(unittest.TestCase):
             ),
         ):
             payload = workflow_recovery._status_payload({}, {}, 141)
+        direct_lookup.assert_called_once_with({}, "run-141")
         self.assertEqual(payload["run"]["run_id"], "run-141")
         self.assertEqual(payload["attempt_count"], 2)
         list_fetch.assert_called_once()
