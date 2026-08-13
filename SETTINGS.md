@@ -27,7 +27,7 @@ is defined in
 |---|---|---|
 | `NEWS_PRESET` | _(none)_ | Selects a saved preset when `--preset NAME` is not used. |
 | `NEWS_PROMPT_PROFILE` | `balanced` | Editorial tone for the five LLM prompt stages. One of `balanced`, `consensus-and-contradiction`, `explain-like-im-five`, `facts-only`, `playful`. |
-| `NEWS_PROMPT_OVERRIDE_<TASK>` | _(unset)_ | Per-stage editorial override layered on top of `NEWS_PROMPT_PROFILE` (override wins). Tasks: `ARTICLE_SUMMARY`, `STORY_SCALE_SCREENING`, `STORY_DRAFTING`, `TITLE_GENERATION`, `IMAGE_ART_DIRECTION`. Unset/empty = use profile text. Editable from the UI's Editorial approach panel. |
+| `NEWS_PROMPT_OVERRIDE_<TASK>` | _(unset)_ | Per-stage editorial override layered on top of `NEWS_PROMPT_PROFILE` and `config/prompt_overrides.yaml` (override wins). Tasks: `ARTICLE_SUMMARY`, `STORY_SCALE_SCREENING`, `STORY_DRAFTING`, `TITLE_GENERATION`, `IMAGE_ART_DIRECTION`. Unset/empty = use profile text. Editable from the UI's Editorial approach panel. |
 | `NEWS_MODEL` | `gemma-4-12b-it-4bit` | Default friendly alias or full model repo/name. Task-specific model assignments inherit this value unless overridden. Stages with no LLM call of their own (story discovery) inherit this value. |
 | `NEWS_SOURCE_SCOPE` | `core` | `core` selects active English core sources. `peripheral` selects core plus peripheral sources. |
 | `NEWS_DELIVERY_MODE` | `owner` | Optional email delivery policy: `disabled` (no delivery, `skipped: user_disabled`), `owner` (sends only to `NEWS_PRIMARY_RECIPIENT`), or `recipients` (explicit opt-in: active `config/recipients.yaml` entries, with the owner included only when listed). An explicitly configured `NEWS_EMAIL_RECIPIENTS` fallback is used only when the catalog is empty; an all-paused catalog records `skipped: user_disabled`. Legacy `NEWS_RECIPIENT_SCOPE` maps to this mode when the new variable is unset. |
@@ -141,6 +141,25 @@ active entries; the owner is configured with `NEWS_PRIMARY_RECIPIENT` and is
 included only when also listed here. An explicitly configured
 `NEWS_EMAIL_RECIPIENTS` fallback applies only to an empty catalog, never to a
 catalog whose entries are all paused.
+
+`config/prompt_overrides.yaml` is a partial editorial-instruction override
+map for the five prompt tasks (article summary, story scale screening, story
+drafting, title generation, image art direction). It is a sentence-level
+override layer, not a template editor: full prompt templates and
+pipeline-owned output contracts (`DATABASE_ENTRY:` blocks, `Headline:`/`Main
+story:`/`Contradictions:` format, `[[S1]]` citation markers, strict JSON)
+cannot be edited there. Precedence is `profile < YAML < env/UI`: the selected
+`NEWS_PROMPT_PROFILE` provides the base text, `overrides` entries replace
+individual task sentences, and `NEWS_PROMPT_OVERRIDE_<TASK>`/UI values win per
+task. Missing files, missing tasks, empty documents, and blank values fall
+back to the profile. Unknown task keys, non-string values, and
+contract-breaking text fail fast at runtime-config resolution with
+path/task-specific errors.
+
+```yaml
+overrides:
+  story_drafting: "Lead with the central event and keep the prose concise."
+```
 
 ## Removed Settings
 

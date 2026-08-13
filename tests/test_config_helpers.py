@@ -950,6 +950,97 @@ class ConfigHelperTests(unittest.TestCase):
             self.assertEqual(effective_env["NEWS_MODEL"], "override")
             self.assertEqual(effective_env[config_module.PRESET_ENV_VAR], "preset")
 
+    def test_load_prompt_overrides_missing_and_empty_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            # Missing file returns {} (established missing-file behavior).
+            self.assertEqual(config_module.load_prompt_overrides(root / "missing.yaml"), {})
+
+            empty = root / "empty.yaml"
+            empty.write_text("", encoding="utf-8")
+            self.assertEqual(config_module.load_prompt_overrides(empty), {})
+
+            no_overrides = root / "no_overrides.yaml"
+            no_overrides.write_text("presets: {}\n", encoding="utf-8")
+            self.assertEqual(config_module.load_prompt_overrides(no_overrides), {})
+
+            null_overrides = root / "null_overrides.yaml"
+            null_overrides.write_text("overrides: null\n", encoding="utf-8")
+            self.assertEqual(config_module.load_prompt_overrides(null_overrides), {})
+
+            empty_mapping = root / "empty_mapping.yaml"
+            empty_mapping.write_text("overrides: {}\n", encoding="utf-8")
+            self.assertEqual(config_module.load_prompt_overrides(empty_mapping), {})
+
+    def test_load_prompt_overrides_valid_partial_mapping_and_normalization(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            overrides_path = root / "prompt_overrides.yaml"
+            overrides_path.write_text(
+                textwrap.dedent(
+                    """\
+                    overrides:
+                      story_drafting: |
+                        Lead with the central event.
+                        Keep the prose concise.
+                      article_summary: "  Summarize factually.  "
+                      title_generation: null
+                      image_art_direction: "   "
+                    """
+                ),
+                encoding="utf-8",
+            )
+            loaded = config_module.load_prompt_overrides(overrides_path)
+            # Multiline text preserves internal newlines; only outer
+            # whitespace is stripped.
+            self.assertEqual(
+                loaded["story_drafting"],
+                "Lead with the central event.\nKeep the prose concise.",
+            )
+            self.assertEqual(loaded["article_summary"], "Summarize factually.")
+            # Blank/null entries are omitted as unset.
+            self.assertNotIn("title_generation", loaded)
+            self.assertNotIn("image_art_direction", loaded)
+            self.assertEqual(
+                set(loaded),
+                {"story_drafting", "article_summary"},
+            )
+
+    def test_load_prompt_overrides_invalid_schemas_fail_deterministically(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+
+            bad_root = root / "bad_root.yaml"
+            bad_root.write_text("- not-a-mapping\n", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "must contain a YAML mapping"):
+                config_module.load_prompt_overrides(bad_root)
+
+            bad_overrides = root / "bad_overrides.yaml"
+            bad_overrides.write_text("overrides: []\n", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "must define overrides as a mapping"):
+                config_module.load_prompt_overrides(bad_overrides)
+
+            unknown_task = root / "unknown_task.yaml"
+            unknown_task.write_text("overrides:\n  story_draftingx: oops\n", encoding="utf-8")
+            with self.assertRaisesRegex(
+                ValueError, "unknown prompt task 'story_draftingx'"
+            ):
+                config_module.load_prompt_overrides(unknown_task)
+
+            non_string = root / "non_string.yaml"
+            non_string.write_text("overrides:\n  story_drafting: [a, b]\n", encoding="utf-8")
+            with self.assertRaisesRegex(
+                ValueError, "prompt task 'story_drafting' must be a string; got list"
+            ):
+                config_module.load_prompt_overrides(non_string)
+
+            numeric_value = root / "numeric_value.yaml"
+            numeric_value.write_text("overrides:\n  title_generation: 42\n", encoding="utf-8")
+            with self.assertRaisesRegex(
+                ValueError, "prompt task 'title_generation' must be a string; got int"
+            ):
+                config_module.load_prompt_overrides(numeric_value)
+
     def test_delivery_mode_and_placeholder_helpers_cover_edge_branches(self) -> None:
         # Closed-set normalization: canonical values, aliases, and
         # case/whitespace/underscore-insensitive forms.
