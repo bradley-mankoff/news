@@ -32,6 +32,10 @@ Usage:
   uv run news codex-model-server-command
   uv run news serve-unsubscribe
   uv run news ui [--host 127.0.0.1] [--port 8766] [--open]
+  uv run news schedule status [--json]
+  uv run news schedule enable --time HH:MM [--preset NAME] [--delivery-mode MODE]
+  uv run news schedule disable
+  uv run news schedule run
   uv run news history backfill [--dry-run|--apply]
   uv run news history cleanup [--dry-run|--apply]
   uv run news history export
@@ -58,6 +62,8 @@ ACTION_ALIASES = {
     "history": "history",
     "models": "models",
     "model-catalog": "models",
+    "schedule": "schedule",
+    "scheduler": "schedule",
     "ui": "ui",
     "local-ui": "ui",
     "control-panel": "ui",
@@ -301,6 +307,138 @@ def _run_history(args: list[str]) -> int:
     return 0
 
 
+def _format_schedule_status(payload: dict[str, object]) -> str:
+    """Compact human-readable schedule status (no env/plist/launchctl text)."""
+    if payload.get("error"):
+        return f"Daily schedule: unavailable — {payload['error']}"
+    last = payload.get("last_run") or {}
+    if not isinstance(last, dict):
+        last = {}
+    lines = [
+        "Daily schedule: "
+        + ("enabled" if payload.get("enabled") else "disabled"),
+        "  Time: " + str(payload.get("time") or "—")
+        + " (local time, once daily)",
+        "  Preset: " + str(payload.get("preset_id") or "default settings"),
+        "  Delivery: " + str(payload.get("delivery_mode") or "owner"),
+        "  launchd: " + str(payload.get("launchd_status") or "unknown"),
+    ]
+    last_status = str(last.get("status") or "never")
+    run_id = str(last.get("run_id") or "")
+    lines.append(
+        "  Last run: " + last_status + (f" (run {run_id})" if run_id else "")
+    )
+    error_message = str(last.get("error_message") or "").strip()
+    if error_message:
+        lines.append(f"  Last error: {error_message}")
+    return "\n".join(lines)
+
+
+def _run_schedule_status(args: list[str]) -> int:
+    from .scheduler import schedule_status
+
+    as_json = "--json" in args
+    unexpected = [arg for arg in args if arg != "--json"]
+    if unexpected:
+        raise ValueError(
+            f"Unexpected arguments for schedule status: {' '.join(unexpected)}"
+        )
+    payload = schedule_status()
+    if as_json:
+        print(json.dumps(payload, indent=2))
+    else:
+        print(_format_schedule_status(payload))
+    return 0
+
+
+def _run_schedule_enable(args: list[str]) -> int:
+    from .scheduler import enable_schedule
+
+    time_value = ""
+    preset = ""
+    delivery_mode: str | None = None
+    index = 0
+    while index < len(args):
+        arg = args[index]
+        if arg == "--time":
+            if index + 1 >= len(args):
+                raise ValueError("--time requires a value (HH:MM).")
+            time_value = args[index + 1]
+            index += 2
+            continue
+        if arg.startswith("--time="):
+            time_value = arg.split("=", 1)[1]
+            index += 1
+            continue
+        if arg == "--preset":
+            if index + 1 >= len(args):
+                raise ValueError("--preset requires a preset name.")
+            preset = args[index + 1]
+            index += 2
+            continue
+        if arg.startswith("--preset="):
+            preset = arg.split("=", 1)[1]
+            index += 1
+            continue
+        if arg == "--delivery-mode":
+            if index + 1 >= len(args):
+                raise ValueError("--delivery-mode requires a mode.")
+            delivery_mode = args[index + 1]
+            index += 2
+            continue
+        if arg.startswith("--delivery-mode="):
+            delivery_mode = arg.split("=", 1)[1]
+            index += 1
+            continue
+        raise ValueError(f"Unexpected argument for schedule enable: {arg}")
+    if not time_value:
+        raise ValueError("schedule enable requires --time HH:MM.")
+    schedule = enable_schedule(
+        time_value, preset_id=preset, delivery_mode=delivery_mode
+    )
+    print(
+        f"Daily schedule enabled: {schedule.hour:02d}:{schedule.minute:02d} "
+        f"(local time, once daily), preset "
+        f"{schedule.preset_id or 'default settings'}, "
+        f"delivery {schedule.delivery_mode}, "
+        f"launchd {schedule.launchd_status}."
+    )
+    return 0
+
+
+def _run_schedule(args: list[str]) -> int:
+    from .scheduler import disable_schedule, run_scheduled
+
+    if not args:
+        raise ValueError(
+            "schedule requires a subcommand: status, enable, disable, run."
+        )
+    subcommand = args[0]
+    rest = args[1:]
+    if subcommand == "status":
+        return _run_schedule_status(rest)
+    if subcommand == "enable":
+        return _run_schedule_enable(rest)
+    if subcommand == "disable":
+        if rest:
+            raise ValueError(
+                f"Unexpected arguments for schedule disable: {' '.join(rest)}"
+            )
+        disable_schedule()
+        print("Daily schedule disabled.")
+        return 0
+    if subcommand == "run":
+        if rest:
+            raise ValueError(
+                f"Unexpected arguments for schedule run: {' '.join(rest)}"
+            )
+        return run_scheduled()
+    raise ValueError(
+        f"Unknown schedule subcommand: {subcommand!r}. "
+        "Valid: status, enable, disable, run."
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
 
@@ -316,6 +454,8 @@ def main(argv: list[str] | None = None) -> int:
         return _run_history(args)
     if action == "models":
         return _run_with_error_report(lambda: _run_models(args))
+    if action == "schedule":
+        return _run_with_error_report(lambda: _run_schedule(args))
 
     reject_removed_topic_env_vars()
 

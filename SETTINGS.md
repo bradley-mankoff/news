@@ -159,6 +159,67 @@ Model backend, cache, concurrency, and image-generation details are derived from
 explicit Run Settings or hard-coded defaults rather than hidden model-size
 bundles.
 
+## Daily Automation
+
+The desktop application supports exactly one daily personal Run Session
+(Daily Automation, ADR 0012 Slice C; operational decision in
+[`docs/adr/0013-local-daily-automation-uses-launchagent.md`](docs/adr/0013-local-daily-automation-uses-launchagent.md)).
+Schedule settings are configured in the **Schedule** tab or via the CLI:
+
+```bash
+uv run news schedule status [--json]
+uv run news schedule enable --time 07:30 [--preset NAME] [--delivery-mode owner|disabled|recipients]
+uv run news schedule disable
+uv run news schedule run
+```
+
+| Setting | Default | Description |
+|---|---|---|
+| Time | `07:00` | One daily `HH:MM` in local machine time; `00:00`–`23:59` valid, malformed values rejected. No weekly recurrence or cron expressions. |
+| Run Preset | _(default settings)_ | Saved Run Preset ID from `config/run_presets.yaml`. Empty means the normal default settings; a non-empty ID must exist or enable/run fails closed. |
+| Delivery mode | `owner` | `owner` (default; owner only), `disabled`, or `recipients` (explicit opt-in via `config/recipients.yaml`). The schedule's mode is forced for scheduled runs and takes precedence over preset/ambient `NEWS_DELIVERY_MODE`. |
+
+Fixed local artifacts:
+
+- Schedule state: `~/.config/news/daily_schedule.json` (atomic writes, `0600`;
+  directory `0700`). Contains the validated time, preset ID, delivery mode, a
+  safe non-secret environment snapshot, fixed paths, and a bounded last-run
+  projection. A malformed record is reported as an error and never executed.
+- LaunchAgent: `~/Library/LaunchAgents/com.bradley-mankoff.news-daily-run.plist`
+  (`0600`), generated with `plistlib`, argv-based `ProgramArguments`,
+  `StartCalendarInterval`, `RunAtLoad: false`, and no `KeepAlive`; loaded in
+  the per-user `gui/<uid>` domain. The plist carries only safe PATH/HOME/stream
+  settings and the absolute Python interpreter.
+- Run logs: `~/.config/news/scheduled/run.stdout.log` and
+  `run.stderr.log`.
+
+Secret boundary: `NEWS_SMTP_PASSWORD`, `NEWS_UNSUBSCRIBE_SECRET`,
+`NEWS_MODEL_API_KEY`, and any future secret-named setting are never copied
+into schedule state, the plist, API responses, or logs. The existing ignored
+`env.json` password fallback (`NEWS_ENV_JSON`) remains the only persisted SMTP
+credential input. `NEWS_PRESET`/`NEWS_ACTIVE_PRESET` markers are never
+persisted; a schedule binds a preset by ID. The state record may contain a
+real owner email address, but never credentials or report text.
+
+Environment snapshot: enabling captures only registered non-secret Run
+Settings plus the known non-secret infrastructure values
+(`NEWS_SOURCES_YAML`, `NEWS_OUTPUT_DIR`, `NEWS_HISTORY_DB`, transport
+host/user, tokenizer encoding, and similar); launchd does not inherit your
+interactive shell's ad-hoc `NEWS_` environment, so the snapshot is what a
+scheduled run starts from. Precedence at run time: saved preset, then safe
+base environment, then explicit overrides, then the forced schedule delivery
+mode. Test path overrides (`NEWS_SCHEDULE_STATE`, `NEWS_SCHEDULE_PLIST`,
+`NEWS_SCHEDULE_LOCK`, `NEWS_SCHEDULE_LOG_DIR`) exist for automation and tests.
+
+Platform and lifecycle limits: macOS-only (launchd required); a non-macOS or
+missing-`launchctl` environment reports `supported=false` and
+`launchd_status=unavailable` instead of pretending the schedule is active.
+The agent runs for the logged-in user session only; logged-out/asleep sessions
+may miss the calendar window, and missed-run backfill is not provided.
+Disabling boots out the agent and removes the plist but never touches existing
+reports, DuckDB/CSV history, or OKF bundles. Product Daily Automation is
+separate from the GitHub-board automation under `automation/`.
+
 ## CLI Commands
 
 | Command | Description |
@@ -171,5 +232,9 @@ bundles.
 | `uv run news check-sources` | Check configured source connectivity. |
 | `uv run news source-languages` | Detect or verify source language tags. |
 | `uv run news serve-unsubscribe` | Start the local unsubscribe endpoint. |
+| `uv run news schedule status [--json]` | Show the daily schedule state: enabled/disabled, time, preset, delivery mode, launchd status, and last-run projection. |
+| `uv run news schedule enable --time HH:MM [--preset NAME] [--delivery-mode MODE]` | Validate and install the daily schedule (idempotent; replaces any existing job). |
+| `uv run news schedule disable` | Boot out the agent, remove the plist, and mark the schedule disabled. |
+| `uv run news schedule run` | Foreground scheduled-run entry point used by launchd; fails closed when disabled/corrupt. |
 | `uv run news history backfill|cleanup|export` | Maintain DuckDB-backed run history and CSV exports. |
 

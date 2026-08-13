@@ -28,6 +28,7 @@ from pathlib import Path
 _REPO = Path(__file__).resolve().parents[1]
 _ADR_0007 = _REPO / "docs/adr/0007-model-configuration-vocabulary.md"
 _ADR_0012 = _REPO / "docs/adr/0012-desktop-first-application-optional-delivery.md"
+_ADR_0013 = _REPO / "docs/adr/0013-local-daily-automation-uses-launchagent.md"
 _DELIVERY_PROFILE = _REPO / "knowledge/domain/delivery-profile.md"
 _README = _REPO / "README.md"
 _SETTINGS = _REPO / "SETTINGS.md"
@@ -187,6 +188,66 @@ class DocsConsistencyTests(unittest.TestCase):
         automation_section = context.split("## Automation")[1].split("## ")[0]
         self.assertIn("board automation", automation_section)
         self.assertIn("`automation/`", automation_section)
+
+    def test_adr_0013_daily_automation_decision_and_links(self) -> None:
+        adr = _ADR_0013.read_text(encoding="utf-8")
+        self.assertTrue(
+            re.search(r"^Status: Accepted$", adr, re.M),
+            "ADR 0013 must have the exact status line 'Status: Accepted'",
+        )
+        for term in (
+            "StartCalendarInterval",
+            "launchctl",
+            "daily_schedule.json",
+            "com.bradley-mankoff.news-daily-run",
+            "RunAtLoad",
+            "KeepAlive",
+            "run_pipeline",
+            "env.json",
+        ):
+            self.assertIn(term, adr, f"ADR 0013 missing vocabulary term {term!r}")
+        # The secret boundary is load-bearing in the ADR text.
+        self.assertIn("NEWS_SMTP_PASSWORD", adr)
+        self.assertIn("NEWS_UNSUBSCRIBE_SECRET", adr)
+        self.assertIn("NEWS_MODEL_API_KEY", adr)
+        # No hosted/cloud scheduler may be shipped; cron appears only as an
+        # explicit exclusion in the decision.
+        self.assertIn("no cron", adr)
+        self.assertIn("no hosted", adr)
+
+    def test_adr_0012_slice_c_is_implemented_and_links_adr_0013(self) -> None:
+        adr = _ADR_0012.read_text(encoding="utf-8")
+        slice_c = adr.split("### Delivery slices")[1].split("## Consequences")[0]
+        self.assertIn("implemented", slice_c)
+        self.assertIn("0013-local-daily-automation-uses-launchagent.md", slice_c)
+        self.assertIn("daily_schedule.json", slice_c)
+        self.assertIn("com.bradley-mankoff.news-daily-run", slice_c)
+        self.assertNotIn("future work", slice_c)
+
+    def test_runtime_docs_document_daily_automation_contract(self) -> None:
+        readme = _README.read_text(encoding="utf-8")
+        settings = _SETTINGS.read_text(encoding="utf-8")
+        for doc, text in (("README.md", readme), ("SETTINGS.md", settings)):
+            self.assertIn("schedule status", text, f"{doc} missing schedule status command")
+            self.assertIn("schedule enable", text, f"{doc} missing schedule enable command")
+            self.assertIn("schedule disable", text, f"{doc} missing schedule disable command")
+            self.assertIn("schedule run", text, f"{doc} missing schedule run command")
+            self.assertIn("owner", text, f"{doc} missing owner-first delivery vocabulary")
+            self.assertIn("launchd", text, f"{doc} missing launchd vocabulary")
+            self.assertIn("automation/", text, f"{doc} missing board-automation disambiguation")
+        # Credential boundary documented in both runtime docs.
+        for doc, text in (("README.md", readme), ("SETTINGS.md", settings)):
+            self.assertIn("env.json", text, f"{doc} missing env.json credential fallback note")
+        self.assertIn("daily_schedule.json", readme)
+        self.assertIn("daily_schedule.json", settings)
+        self.assertIn("com.bradley-mankoff.news-daily-run.plist", settings)
+        # Owner-only scheduled default is explicit, not implied.
+        self.assertIn("owner-only", readme)
+        self.assertTrue(
+            "owner`, `disabled`" in settings or "`owner` (default" in settings
+        )
+        # Product Daily Automation stays distinct from board automation.
+        self.assertIn("board automation", readme)
 
 
 if __name__ == "__main__":

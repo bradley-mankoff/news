@@ -2208,6 +2208,139 @@ assert.ok(controlUpdates >= 3);
 
         self.assertEqual(exc.exception.code, 0)
 
+    # -- Daily Automation schedule API and tab ------------------------------
+
+    def test_schedule_api_routes_success_and_controlled_failures(self) -> None:
+        safe_payload = {
+            "supported": True,
+            "enabled": True,
+            "time": "06:45",
+            "preset_id": "default",
+            "delivery_mode": "owner",
+            "launchd_status": "loaded",
+            "next_run_label": "06:45 (local time, once daily)",
+            "last_run": {"status": "completed", "run_id": "run-1"},
+            "state_path": "/tmp/daily_schedule.json",
+            "plist_path": "/tmp/job.plist",
+            "error": None,
+        }
+
+        def invoke(method: str, path: str, body: str | None = None) -> tuple[int, dict[str, str], str]:
+            payload = (body or "").encode("utf-8")
+            handler = object.__new__(ui_module.NewsUIHandler)
+            state: dict[str, Any] = {"status": None, "headers": {}}
+            handler.path = path
+            handler.headers = {"Content-Length": str(len(payload))}
+            handler.rfile = BytesIO(payload)  # type: ignore[assignment]
+            handler.wfile = BytesIO()  # type: ignore[assignment]
+            handler.send_response = lambda status: state.__setitem__("status", status)
+            handler.send_header = lambda name, value: state["headers"].__setitem__(name, value)
+            handler.end_headers = lambda: None
+            getattr(handler, method)()
+            return state["status"], state["headers"], handler.wfile.getvalue().decode("utf-8")  # type: ignore[attr-defined]
+
+        with patch.object(ui_module, "schedule_payload", return_value=safe_payload), patch.object(
+            ui_module, "update_schedule", return_value=safe_payload
+        ) as update, patch.object(
+            ui_module, "disable_schedule_payload", return_value={**safe_payload, "enabled": False}
+        ) as disable:
+            status, _, body = invoke("do_GET", "/api/schedule")
+            self.assertEqual(status, 200)
+            self.assertEqual(json.loads(body), safe_payload)
+            # The GET payload never leaks stored env maps, plist XML, launchctl
+            # output, or credentials.
+            serialized = json.dumps(safe_payload)
+            for forbidden in ("base_env", "overrides", "launchctl", "stderr", "smtp", "secret", "api_key"):
+                self.assertNotIn(forbidden, serialized)
+
+            status, _, body = invoke(
+                "do_PUT",
+                "/api/schedule",
+                body=json.dumps({"time": "06:45", "preset_id": "default", "delivery_mode": "owner"}),
+            )
+            self.assertEqual(status, 200)
+            self.assertEqual(json.loads(body), safe_payload)
+            update.assert_called_once_with(
+                {"time": "06:45", "preset_id": "default", "delivery_mode": "owner"}
+            )
+
+            with patch.object(
+                ui_module,
+                "update_schedule",
+                side_effect=ValueError("Schedule time is required (HH:MM, 24-hour local time)."),
+            ):
+                status, _, body = invoke("do_PUT", "/api/schedule", body=json.dumps({"time": ""}))
+            self.assertEqual(status, 400)
+            self.assertIn("Schedule time is required", json.loads(body)["error"])
+
+            status, _, body = invoke("do_DELETE", "/api/schedule")
+            self.assertEqual(status, 200)
+            self.assertFalse(json.loads(body)["enabled"])
+            disable.assert_called_once_with()
+
+            with patch.object(
+                ui_module, "disable_schedule_payload", side_effect=RuntimeError("launchctl boom")
+            ):
+                status, _, body = invoke("do_DELETE", "/api/schedule")
+            self.assertEqual(status, 400)
+            self.assertIn("launchctl boom", json.loads(body)["error"])
+
+    def test_schedule_payload_is_bounded_and_secret_free(self) -> None:
+        with tempfile.TemporaryDirectory() as td, patch.dict(
+            os.environ,
+            {
+                "NEWS_SCHEDULE_STATE": str(Path(td) / "daily_schedule.json"),
+                "NEWS_SCHEDULE_PLIST": str(Path(td) / "job.plist"),
+                "NEWS_SCHEDULE_LOCK": str(Path(td) / "lock"),
+                "NEWS_SCHEDULE_LOG_DIR": str(Path(td) / "logs"),
+                "NEWS_SMTP_PASSWORD": "hunter2",
+            },
+            clear=False,
+        ):
+            payload = ui_module.schedule_payload()
+        self.assertFalse(payload["enabled"])
+        self.assertEqual(payload["error"], None)
+        for forbidden in ("base_env", "overrides", "env", "launchctl", "stderr", "hunter2"):
+            self.assertNotIn(forbidden, json.dumps(payload))
+
+    def test_schedule_tab_html_contracts(self) -> None:
+        html = ui_module.HTML
+        # Tab, section, and form controls exist.
+        self.assertIn('["schedule", "Schedule", "clock"]', html)
+        self.assertIn('<section id="schedule" class="view">', html)
+        self.assertIn('id="scheduleMount"', html)
+        self.assertIn('id="schedule_time" type="time"', html)
+        self.assertIn('id="schedule_preset"', html)
+        self.assertIn('id="schedule_delivery_mode"', html)
+        self.assertIn('id="enableScheduleBtn"', html)
+        self.assertIn('id="disableScheduleBtn"', html)
+        self.assertIn('id="openReviewFromScheduleBtn"', html)
+        # API wiring: GET on load, PUT to save, DELETE to disable.
+        self.assertIn('await api("/api/schedule")', html)
+        self.assertIn('await api("/api/schedule", { method: "PUT", body: JSON.stringify(body) })', html)
+        self.assertIn('await api("/api/schedule", { method: "DELETE" })', html)
+        # Boot refresh loads the durable schedule state after UI restart.
+        boot = html.split("async function init()")[1].split("init().catch")[0]
+        self.assertIn("await loadSchedule();", boot)
+        # User-controlled status/errors are escaped through existing helpers.
+        self.assertIn('escapeHtml(last.status || "never")', html)
+        self.assertIn("escapeHtml(last.error_message)", html)
+        self.assertIn("escapeHtml(error)", html)
+        self.assertIn("escapeHtml(s.next_run_label", html)
+        # Unsupported platforms disable the controls instead of pretending.
+        self.assertIn('${!supported ? `<p class="bad"', html)
+        self.assertIn('${canConfigure ? "" : "disabled"}', html)
+        self.assertIn('${canDisable ? "" : "disabled"}', html)
+        # Owner-first default and explicit opt-in vocabulary.
+        self.assertIn("Owner only (default)", html)
+        self.assertIn("Configured recipients", html)
+        self.assertIn("no weekly recurrence or cron expressions", html)
+        self.assertIn("never stored in schedule state or the launchd plist", html)
+        # The tab must not imply the UI process performs the daily run.
+        self.assertIn("macOS launchd starts", html)
+        # Report Review remains the report surface; the tab links to it.
+        self.assertIn('$("openReviewFromScheduleBtn").onclick = () => { showTab("review"); refreshReviewData(); };', html)
+
 
 if __name__ == "__main__":
     unittest.main()
