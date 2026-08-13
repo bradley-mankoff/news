@@ -748,8 +748,12 @@ def get_run_details(db_path: Path, run_id: str) -> dict[str, Any] | None:
     """Return decoded details for one run, or ``None`` when not found.
 
     The detail read may decode the large JSON blobs because it selects a
-    single parameterized run. Report availability is resolved from the stable
-    OKF bundle path rather than cleaned staging report paths.
+    single parameterized run. Each persisted JSON column is decoded
+    independently: malformed or wrong-shaped fields are reported under
+    ``metadata_read_errors`` (normally ``{}``) while scalar status/report
+    columns, relational artifact rows, and valid JSON fields stay available.
+    Report availability is resolved from the stable OKF bundle path rather
+    than cleaned staging report paths.
     """
     if not Path(db_path).exists():
         return None
@@ -781,9 +785,10 @@ def get_run_details(db_path: Path, run_id: str) -> dict[str, Any] | None:
         ).fetchall()
     okf_path = okf_run_bundle_path(db_path, str(row[0] or ""))
     run_status = str(row[5] or "unknown")
-    delivery = _loads(row[14])
-    if not isinstance(delivery, dict):
-        delivery = {}
+    metadata_read_errors: dict[str, str] = {}
+    delivery = _decode_field(
+        row[14], "delivery", default={}, errors=metadata_read_errors
+    )
     artifacts = [
         {
             "name": str(artifact_row[0] or ""),
@@ -815,13 +820,24 @@ def get_run_details(db_path: Path, run_id: str) -> dict[str, Any] | None:
             report_count=_int(row[11]),
         ),
         "okf_path": str(okf_path),
-        "settings": _loads(row[15]),
-        "prompt_snapshots": _prompt_snapshots(row[16]),
-        "stats": _loads(row[17]),
-        "events": _loads(row[18]),
-        "reports": _loads(row[19]),
-        "artifacts_json": _loads(row[20]),
+        "settings": _decode_field(
+            row[15], "settings", default={}, errors=metadata_read_errors
+        ),
+        "prompt_snapshots": _prompt_snapshots(row[16], errors=metadata_read_errors),
+        "stats": _decode_field(
+            row[17], "stats", default={}, errors=metadata_read_errors
+        ),
+        "events": _decode_field(
+            row[18], "events", shape="list", default=[], errors=metadata_read_errors
+        ),
+        "reports": _decode_field(
+            row[19], "reports", shape="list", default=[], errors=metadata_read_errors
+        ),
+        "artifacts_json": _decode_field(
+            row[20], "artifacts", default={}, errors=metadata_read_errors
+        ),
         "artifacts": artifacts,
+        "metadata_read_errors": metadata_read_errors,
         "imported_from_path": str(row[21] or ""),
         "imported_at": str(row[22] or ""),
     }
@@ -1332,12 +1348,80 @@ def _loads(value: Any) -> Any:
         return {}
 
 
-def _prompt_snapshots(value: Any) -> list[dict[str, Any]]:
-    """Decode the prompt snapshot payload; old/missing/invalid rows read []."""
-    payload = _loads(value)
-    if isinstance(payload, list):
-        return [item for item in payload if isinstance(item, dict)]
-    return []
+def _decode_field(
+    value: Any,
+    field: str,
+    *,
+    shape: str = "object",
+    default: Any = None,
+    errors: dict[str, str] | None = None,
+) -> Any:
+    """Decode one persisted metadata field with observable read errors.
+
+    Missing/empty legacy values keep the existing tolerant defaults and are
+    never read errors. Malformed JSON or a syntactically valid payload with
+    an unexpected shape records a bounded, field-specific diagnostic under
+    ``field`` (never the raw document) and returns only that field's safe
+    ``default`` so unrelated valid metadata remains usable.
+    """
+    if value in (None, ""):
+        return default
+    if isinstance(value, (dict, list)):
+        parsed = value
+    else:
+        try:
+            parsed = json.loads(str(value))
+        except (TypeError, ValueError) as exc:
+            if errors is not None and field not in errors:
+                errors[field] = f"invalid JSON metadata ({type(exc).__name__})"
+            return default
+    if shape == "object":
+        if not isinstance(parsed, dict):
+            if errors is not None and field not in errors:
+                errors[field] = "expected object metadata"
+            return default
+        return parsed
+    if shape == "list":
+        if not isinstance(parsed, list):
+            # The writer maps empty collections through ``_json`` to "{}", so
+            # an empty object is the legacy empty marker, not corruption.
+            if parsed == {}:
+                return default
+            if errors is not None and field not in errors:
+                errors[field] = "expected list metadata"
+            return default
+        return parsed
+    return parsed
+
+
+def _prompt_snapshots(
+    value: Any,
+    errors: dict[str, str] | None = None,
+) -> list[dict[str, Any]]:
+    """Decode the prompt snapshot payload; old/missing/invalid rows read [].
+
+    When ``errors`` is supplied, malformed JSON, wrong shapes, and non-object
+    list items are recorded as bounded field diagnostics instead of failing
+    silently; valid list items are always preserved.
+    """
+    payload = _decode_field(
+        value,
+        "prompt_snapshots",
+        shape="list",
+        default=[],
+        errors=errors,
+    )
+    if not isinstance(payload, list):
+        return []
+    snapshots: list[dict[str, Any]] = []
+    for index, item in enumerate(payload):
+        if isinstance(item, dict):
+            snapshots.append(item)
+        elif errors is not None and "prompt_snapshots" not in errors:
+            errors["prompt_snapshots"] = (
+                f"invalid prompt snapshot item at index {index}"
+            )
+    return snapshots
 
 def _run_started_at_from_id(run_id: str) -> str:
     if TIMESTAMP_RE.fullmatch(run_id):
