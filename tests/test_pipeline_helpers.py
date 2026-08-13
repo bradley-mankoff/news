@@ -2030,20 +2030,28 @@ class PipelineHelperTests(unittest.TestCase):
         )
 
     def test_task_model_assignment_resolves_all_stages_and_inheritance(self) -> None:
+        default_assignment = SimpleNamespace(reference="default-ref", name="default-name")
         fake_assignments = {
-            "default": object(),
+            "default": default_assignment,
             "article_summary": object(),
             "story_drafting": object(),
             "story_scale_screening": object(),
             "title_generation": object(),
         }
-        with patch.object(pipeline, "MODEL_ASSIGNMENTS", fake_assignments):
+        with patch.object(pipeline, "MODEL_ASSIGNMENTS", fake_assignments), patch.object(
+            pipeline.progress_tracker, "warning"
+        ) as warning:
             self.assertIs(
                 pipeline._task_model_assignment("article_summary"),
                 fake_assignments["article_summary"],
             )
             self.assertIs(
                 pipeline._task_model_assignment("story_drafting"),
+                fake_assignments["story_drafting"],
+            )
+            # Normalized spelling must stay warning-free.
+            self.assertIs(
+                pipeline._task_model_assignment("story-drafting"),
                 fake_assignments["story_drafting"],
             )
             self.assertIs(
@@ -2064,11 +2072,22 @@ class PipelineHelperTests(unittest.TestCase):
                 pipeline._task_model_assignment("story_discovery"),
                 fake_assignments["default"],
             )
-            # Unknown tasks also fall back to default (never a KeyError).
+            self.assertIs(
+                pipeline._task_model_assignment("default"),
+                fake_assignments["default"],
+            )
+            # Known, aliased, inherited, and default tasks never warn.
+            warning.assert_not_called()
+            # Unknown tasks fall back to default (never a KeyError) and warn.
             self.assertIs(
                 pipeline._task_model_assignment("analysis"),
                 fake_assignments["default"],
             )
+            warning.assert_called_once()
+            message = warning.call_args.args[0]
+            self.assertIn("analysis", message)
+            self.assertIn("default-ref", message)
+            self.assertIn("default-name", message)
 
     def test_model_email_and_art_helpers(self) -> None:
         fake_assignment = SimpleNamespace(
