@@ -283,6 +283,26 @@ profile (override wins). The full per-task prompt templates and diffs against
 `balanced` are under Advanced Settings. Profiles can also be pinned inside a
 Run Preset's `env` map.
 
+Durable per-task edits can be checked into
+[`config/prompt_overrides.yaml`](config/prompt_overrides.yaml): a partial
+`overrides` mapping keyed by the same five tasks, containing editorial
+sentences only (no prompt templates or output contracts). Precedence is
+`profile < YAML < env/UI`: YAML overrides apply on top of the selected
+built-in profile, and `NEWS_PROMPT_OVERRIDE_<TASK>` / UI edits win per task.
+Missing files, missing tasks, and blank values fall back to the profile text.
+
+```yaml
+overrides:
+  story_drafting: "Lead with the central event and keep the prose concise."
+```
+
+The effective profile-plus-override instructions are validated against the
+pipeline-owned output contracts before a run starts; contract-breaking text
+(such as `DATABASE_ENTRY:`, `Headline:`, `[[S1]]`, or strict JSON protocol
+language) fails fast at config resolution, and the machine contracts remain
+code-owned. Literal braces are allowed only in the `story_scale_screening`
+override because its renderer escapes them safely.
+
 ### Model Selection
 
 ```bash
@@ -466,6 +486,9 @@ hard-coded defaults rather than normal Run Settings.
   `skipped: user_disabled`. Real addresses belong in a local file referenced
   by `NEWS_RECIPIENTS_YAML`, never in tracked config.
 - `config/model_tuning_presets.yaml`: saved Model Tuning Presets keyed by id.
+- `config/prompt_overrides.yaml`: optional user-editable per-task editorial
+  instruction overrides (`profile < YAML < env/UI` precedence; see Prompt
+  Profiles above).
 
 Normal collection accepts active English sources. Removed topic-scoped runtime
 variables and source topic fields are rejected when present.
