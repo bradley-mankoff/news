@@ -758,9 +758,8 @@ def _coerce_optional_mapping(body: dict[str, Any], field_name: str) -> dict[str,
 
 
 # Selectable model-tuning preset task scopes mirror MODEL_TUNING_PRESET_ENV_VARS
-# minus the global "default" overlay. Inherited/no-call tasks (story_discovery,
-# image_art_direction) are not selectable preset assignments; image art direction
-# shares the title_generation call (see docs/adr/0007-model-configuration-vocabulary.md).
+# minus the global "default" overlay. Story Discovery has no LLM stage and is
+# not a selectable preset assignment; all five configured LLM tasks are.
 _MODEL_TUNING_PRESET_TASK_SCOPES: tuple[str, ...] = tuple(
     task for task in MODEL_TUNING_PRESET_ENV_VARS if task != "default"
 )

@@ -941,7 +941,6 @@ class UITests(unittest.TestCase):
                         {"id": "new", "tuning": {"max_tokens": "1e3"}},
                         "field 'max_tokens' must be a whole number greater than zero",
                     ),
-                    ({"id": "new", "task": "image_art_direction"}, "task 'image_art_direction' is not selectable"),
                     ({"id": "new", "task": "story_discovery"}, "task 'story_discovery' is not selectable"),
                     ({"id": "new", "task": "default"}, "task 'default' is not selectable"),
                     # PATCH on the existing record: a bad final record fails too.
@@ -955,6 +954,14 @@ class UITests(unittest.TestCase):
                         before,
                         f"YAML mutated by rejected upsert {body}",
                     )
+
+                # Image Art Direction is a first-class selectable preset scope
+                # (independent task assignment with its own tuning preset, #122).
+                scoped = upsert_model_tuning_preset(
+                    {"id": "new", "task": "image_art_direction", "tuning": {"max_tokens": 512}}
+                )
+                self.assertEqual(scoped["preset"]["task"], "image_art_direction")
+                self.assertEqual(scoped["preset"]["tuning"], {"max_tokens": 512})
 
                 # A metadata-only PATCH preserves and revalidates the existing
                 # mapping, and a valid write still succeeds afterward.
