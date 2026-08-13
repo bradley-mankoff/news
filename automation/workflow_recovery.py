@@ -94,9 +94,9 @@ def _mark_recovery(state: dict, issue_number: int, marker: dict) -> None:
 def _status_payload(cfg: dict, env: dict, issue_number: int) -> dict:
     _state_path, state = _load_state(cfg)
     record = _record_for_issue(state, issue_number) or {}
+    runs = fetch_workflow_runs(env)
     run = fetch_workflow_run(env, record.get("run_id"))
     if run is None:
-        runs = fetch_workflow_runs(env)
         run = latest_workflow_run(runs, issue_number=issue_number)
     worktree_info = resolve_worktree_info(env, issue_number)
     stored = record.get("recovery") if isinstance(record.get("recovery"), dict) else {}

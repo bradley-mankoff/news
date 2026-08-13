@@ -25,6 +25,9 @@ class WorkflowRecoveryCliTests(unittest.TestCase):
         }
         with (
             patch.object(workflow_recovery, "_load_state", return_value=(None, {})),
+            patch.object(
+                workflow_recovery, "fetch_workflow_run", return_value=None
+            ),
             patch.object(workflow_recovery, "fetch_workflow_runs", return_value=[run]),
             patch.object(
                 workflow_recovery,
@@ -42,6 +45,66 @@ class WorkflowRecoveryCliTests(unittest.TestCase):
         self.assertEqual(payload["run"]["failed_step"], "validate")
         self.assertTrue(payload["worktree"]["dirty"])
         self.assertEqual(payload["branch"], "archon/task-issue-141")
+
+    def test_status_counts_runs_when_persisted_run_lookup_succeeds(self) -> None:
+        resolved_run = {
+            "id": "run-141",
+            "workflow_name": "archon-idea-to-pr",
+            "status": "failed",
+            "started_at": "2026-08-06 22:00:00",
+            "working_path": "/tmp/issue-141",
+            "user_message": "Build feature from issue #141",
+            "metadata": {
+                "error": (
+                    "DAG workflow completed with failures: 'validate': "
+                    "SDK returned error — Stream ended without finish_reason"
+                )
+            },
+        }
+        snapshot_runs = [
+            resolved_run,
+            {
+                "id": "run-141-b",
+                "workflow_name": "archon-idea-to-pr",
+                "status": "failed",
+                "started_at": "2026-08-06 21:00:00",
+                "working_path": "/tmp/issue-141",
+                "user_message": "Retry build feature from issue #141",
+                "metadata": {"error": "transient poller failure"},
+            },
+        ]
+        with (
+            patch.object(
+                workflow_recovery,
+                "_load_state",
+                return_value=(
+                    None,
+                    {"item-141": {"issue_number": 141, "run_id": "run-141"}},
+                ),
+            ),
+            patch.object(
+                workflow_recovery, "fetch_workflow_run", return_value=resolved_run
+            ),
+            patch.object(
+                workflow_recovery,
+                "fetch_workflow_runs",
+                return_value=snapshot_runs,
+            ) as list_fetch,
+            patch.object(
+                workflow_recovery,
+                "resolve_worktree_info",
+                return_value={"branch": "archon/task-issue-141", "path": "/tmp/issue-141"},
+            ),
+            patch.object(
+                workflow_recovery,
+                "inspect_worktree",
+                return_value={"path": "/tmp/issue-141", "exists": True, "dirty": True},
+            ),
+        ):
+            payload = workflow_recovery._status_payload({}, {}, 141)
+        self.assertEqual(payload["run"]["run_id"], "run-141")
+        self.assertEqual(payload["attempt_count"], 2)
+        list_fetch.assert_called_once()
 
     def test_resume_message_includes_authoritative_issue_context(self) -> None:
         result = CompletedProcess(
