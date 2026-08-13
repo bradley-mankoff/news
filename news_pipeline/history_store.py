@@ -786,8 +786,9 @@ def get_run_details(db_path: Path, run_id: str) -> dict[str, Any] | None:
     okf_path = okf_run_bundle_path(db_path, str(row[0] or ""))
     run_status = str(row[5] or "unknown")
     metadata_read_errors: dict[str, str] = {}
-    delivery = _decode_field(
-        row[14], "delivery", default={}, errors=metadata_read_errors
+    delivery = _normalize_delivery_recipients(
+        _decode_field(row[14], "delivery", default={}, errors=metadata_read_errors),
+        metadata_read_errors,
     )
     artifacts = [
         {
@@ -1344,8 +1345,23 @@ def _loads(value: Any) -> Any:
         return value
     try:
         return json.loads(str(value))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, RecursionError):
         return {}
+
+
+def _normalize_delivery_recipients(
+    delivery: dict[str, Any],
+    errors: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    """Project delivery recipient fields to renderer-safe list values."""
+    normalized = dict(delivery)
+    for key in ("accepted_recipients", "rejected_recipients"):
+        value = normalized.get(key)
+        if value is not None and not isinstance(value, list):
+            if errors is not None and f"delivery.{key}" not in errors:
+                errors[f"delivery.{key}"] = "expected a JSON list"
+            normalized[key] = []
+    return normalized
 
 
 def _decode_field(
@@ -1371,7 +1387,7 @@ def _decode_field(
     else:
         try:
             parsed = json.loads(str(value))
-        except (TypeError, ValueError) as exc:
+        except (TypeError, ValueError, RecursionError) as exc:
             if errors is not None and field not in errors:
                 errors[field] = f"invalid JSON metadata ({type(exc).__name__})"
             return default

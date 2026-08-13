@@ -172,6 +172,16 @@ class HistoryStoreHelperTests(unittest.TestCase):
         self.assertIn("invalid JSON metadata", errors["settings"])
         self.assertIn("JSONDecodeError", errors["settings"])
         self.assertNotIn("{broken", errors["settings"])
+        errors.clear()
+        deep_json = "[" * 10000 + "]" * 10000
+        self.assertEqual(
+            history_module._decode_field(
+                deep_json, "events", shape="list", default=[], errors=errors
+            ),
+            [],
+        )
+        self.assertIn("RecursionError", errors["events"])
+        errors.clear()
         # Syntactically valid but wrong-shape payloads are shape errors.
         self.assertEqual(
             history_module._decode_field('["a"]', "delivery", default={}, errors=errors),
@@ -220,6 +230,28 @@ class HistoryStoreHelperTests(unittest.TestCase):
         )
         self.assertIn("invalid prompt snapshot item at index 1", errors["prompt_snapshots"])
         self.assertNotIn("junk", errors["prompt_snapshots"])
+
+    def test_delivery_recipient_projection_is_renderer_safe(self) -> None:
+        errors: dict[str, str] = {}
+        delivery = {
+            "status": "failed",
+            "accepted_recipients": "reader@example.com",
+            "rejected_recipients": {"recipient": "editor@example.com"},
+        }
+
+        normalized = history_module._normalize_delivery_recipients(delivery, errors)
+
+        self.assertEqual(normalized["accepted_recipients"], [])
+        self.assertEqual(normalized["rejected_recipients"], [])
+        self.assertEqual(normalized["status"], "failed")
+        self.assertEqual(
+            errors,
+            {
+                "delivery.accepted_recipients": "expected a JSON list",
+                "delivery.rejected_recipients": "expected a JSON list",
+            },
+        )
+        self.assertEqual(delivery["accepted_recipients"], "reader@example.com")
 
     def test_insert_and_upsert_helpers_cover_edge_branches(self) -> None:
         class FakeCon:
