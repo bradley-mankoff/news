@@ -100,20 +100,19 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
         )
 
     def test_codex_tiny_model_uses_mlx_lm_backend_and_server(self) -> None:
-        config = load_runtime_config(
-            environ={},
-            overrides={"NEWS_MODEL": CODEX_TEST_MODEL_ALIAS},
-            materialize_outputs=False,
-            run_started_at=datetime(2026, 6, 14, 12, 0, 0),
-        )
-        self.assertEqual(
-            config_module.infer_model_backend(CODEX_TEST_MODEL_NAME),
-            "mlx-lm",
-        )
-        self.assertEqual(config.model_backend, "mlx-lm")
-        self.assertEqual(config.model_name, CODEX_TEST_MODEL_NAME)
-        self.assertIn("python -m mlx_lm server", config.model_server_command)
-        self.assertNotIn("python -m mlx_vlm.server", config.model_server_command)
+        for reference in (CODEX_TEST_MODEL_ALIAS, CODEX_TEST_MODEL_NAME):
+            with self.subTest(reference=reference):
+                config = load_runtime_config(
+                    environ={},
+                    overrides={"NEWS_MODEL": reference},
+                    materialize_outputs=False,
+                    run_started_at=datetime(2026, 6, 14, 12, 0, 0),
+                )
+                self.assertEqual(config.model_reference, reference)
+                self.assertEqual(config.model_backend, "mlx-lm")
+                self.assertEqual(config.model_name, CODEX_TEST_MODEL_NAME)
+                self.assertIn("python -m mlx_lm server", config.model_server_command)
+                self.assertNotIn("python -m mlx_vlm.server", config.model_server_command)
 
     def test_qwythos_aliases_fail_fast_with_actionable_error(self) -> None:
         # The error message must name the replacement so stale configs are
