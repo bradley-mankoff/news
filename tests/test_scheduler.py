@@ -79,7 +79,7 @@ class SchedulerTests(unittest.TestCase):
         ]
         for patcher in patchers:
             patcher.start()
-        self.addCleanup(patcher.stop)  # noqa: B023 - loop-local patcher is bound per iteration
+            self.addCleanup(patcher.stop)
         return patchers
 
     def _enabled_schedule(self, time_value: str = "06:45", **kwargs) -> DailySchedule:
@@ -194,6 +194,30 @@ class SchedulerTests(unittest.TestCase):
         self.assertEqual(store.load().hour, 7)
         self.assertEqual(store.load().last_run.run_id, "run-1")
 
+    def test_schedule_store_rejects_semantically_unsafe_state(self) -> None:
+        valid = self._store().load_or_default().to_dict()
+        invalid_records = [
+            {**valid, "enabled": "false"},
+            {**valid, "schema_version": 99},
+            {**valid, "base_env": {"NEWS_SMTP_PASSWORD": "leak"}},
+            {**valid, "overrides": ["NEWS_MODEL"]},
+            {**valid, "last_run": {**valid["last_run"], "status": "active"}},
+        ]
+        for raw in invalid_records:
+            with self.subTest(raw=raw):
+                self.tmp.joinpath("daily_schedule.json").write_text(
+                    json.dumps(raw), encoding="utf-8"
+                )
+                with self.assertRaises(ScheduleStateError):
+                    self._store().load()
+
+        self.tmp.joinpath("daily_schedule.json").write_text(
+            json.dumps({**valid, "enabled": "false"}), encoding="utf-8"
+        )
+        with patch("news_pipeline.pipeline.run_pipeline") as run_pipeline:
+            self.assertEqual(run_scheduled(), 2)
+            run_pipeline.assert_not_called()
+
     # -- plist generation ---------------------------------------------------
 
     def test_build_plist_shape_and_no_secrets(self) -> None:
@@ -262,6 +286,41 @@ class SchedulerTests(unittest.TestCase):
             with self.assertRaisesRegex(ScheduleError, "bootstrap failed"):
                 adapter.bootstrap(self.tmp / "job.plist")
 
+    def test_launchd_adapter_bounds_calls_and_subprocess_failures(self) -> None:
+        adapter = LaunchdAdapter(launchctl="/fake/launchctl", uid=501)
+        plist = self.tmp / "job.plist"
+        with patch.object(
+            sched.subprocess,
+            "run",
+            return_value=SimpleNamespace(returncode=0),
+        ) as run:
+            adapter.bootstrap(plist)
+        run.assert_called_once_with(
+            ["/fake/launchctl", "bootstrap", "gui/501", str(plist)],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+
+        for operation in ("bootstrap", "bootout"):
+            with self.subTest(operation=operation):
+                with patch.object(
+                    sched.subprocess,
+                    "run",
+                    side_effect=sched.subprocess.TimeoutExpired("launchctl", 15),
+                ):
+                    with self.assertRaisesRegex(ScheduleError, "launchctl is unavailable"):
+                        if operation == "bootstrap":
+                            adapter.bootstrap(plist)
+                        else:
+                            adapter.bootout()
+
+    def test_schedule_lock_fails_closed_when_lock_file_is_unavailable(self) -> None:
+        lock = ScheduleLock(self.tmp / "daily_schedule.lock")
+        with patch.object(Path, "open", side_effect=PermissionError("denied")):
+            with self.assertRaisesRegex(ScheduleError, "lock is unavailable"):
+                lock.acquire(timeout=0.0)
+
     # -- enable/disable lifecycle ------------------------------------------
 
     def test_enable_schedule_persists_state_and_bootstraps(self) -> None:
@@ -286,6 +345,8 @@ class SchedulerTests(unittest.TestCase):
         self.assertEqual(schedule.delivery_mode, "disabled")
         self.assertEqual(schedule.launchd_status, "loaded")
         self.assertTrue((self.tmp / "com.bradley-mankoff.news-daily-run.plist").exists())
+        self.assertTrue((self.tmp / "logs").is_dir())
+        self.assertEqual(os.stat(self.tmp / "logs").st_mode & 0o777, 0o700)
         self.assertEqual(adapter.bootout.call_count, 1)
         self.assertEqual(adapter.bootstrap.call_count, 1)
         # Replacement ordering: bootout the old job before bootstrapping.
@@ -296,6 +357,18 @@ class SchedulerTests(unittest.TestCase):
         self._mock_launchd(adapter, supported=False)
         with self.assertRaisesRegex(ScheduleError, "macOS launchd"):
             enable_schedule("06:45")
+        self.assertFalse((self.tmp / "daily_schedule.json").exists())
+
+    def test_enable_schedule_respects_lifecycle_lock(self) -> None:
+        adapter = self._fake_adapter()
+        self._mock_launchd(adapter)
+        lock = ScheduleLock()
+        self.assertTrue(lock.acquire(timeout=0.0))
+        try:
+            with self.assertRaisesRegex(ScheduleError, "Another schedule operation"):
+                enable_schedule("06:45")
+        finally:
+            lock.release()
         self.assertFalse((self.tmp / "daily_schedule.json").exists())
 
     def test_enable_schedule_bootstrap_failure_is_not_healthy(self) -> None:
@@ -393,7 +466,10 @@ class SchedulerTests(unittest.TestCase):
             run_pipeline.assert_not_called()
         last = self._store().load().last_run
         self.assertEqual(last.status, "failed")
-        self.assertIn("Unknown run preset", last.error_message)
+        self.assertEqual(
+            last.error_message,
+            "Scheduled Run Session failed; inspect canonical run history.",
+        )
 
     def test_run_scheduled_success_projection(self) -> None:
         self._enabled_schedule()
@@ -443,7 +519,36 @@ class SchedulerTests(unittest.TestCase):
         self.assertEqual(last.error_type, "ValueError")
         self.assertNotIn("hunter2", last.error_message)
         self.assertNotIn("api-key-123", last.error_message)
-        self.assertIn("config boom", last.error_message)
+        self.assertEqual(
+            last.error_message,
+            "Scheduled Run Session failed; inspect canonical run history.",
+        )
+
+    def test_run_scheduled_setup_failure_gets_terminal_projection(self) -> None:
+        self._enabled_schedule()
+        with patch.object(
+            sched,
+            "_load_pipeline_module",
+            side_effect=ImportError("pipeline import failed"),
+        ):
+            self.assertEqual(run_scheduled(), 1)
+        last = self._store().load().last_run
+        self.assertEqual(last.status, "failed")
+        self.assertEqual(last.error_type, "ImportError")
+        self.assertNotEqual(last.status, "running")
+
+    def test_run_scheduled_projection_failure_gets_terminal_projection(self) -> None:
+        self._enabled_schedule()
+        with patch("news_pipeline.pipeline.run_pipeline"), patch.object(
+            sched,
+            "_read_latest_run_projection",
+            side_effect=ValueError("malformed details"),
+        ):
+            self.assertEqual(run_scheduled(), 1)
+        last = self._store().load().last_run
+        self.assertEqual(last.status, "failed")
+        self.assertEqual(last.error_type, "ProjectionError")
+        self.assertEqual(last.report_status, "unavailable")
 
     def test_run_scheduled_delivery_mode_forced_and_precedence(self) -> None:
         # Isolate the ambient run settings so the assertions are deterministic.
@@ -501,6 +606,19 @@ class SchedulerTests(unittest.TestCase):
         first.release()
         self.assertTrue(second.acquire(timeout=0.0))
         second.release()
+
+    def test_run_scheduled_uses_lock_derived_from_custom_state_path(self) -> None:
+        custom_state = self.tmp / "custom" / "daily_schedule.json"
+        custom_store = ScheduleStore(custom_state)
+        custom_store.save(replace(custom_store.load_or_default(), enabled=True))
+        custom_lock = ScheduleLock(custom_state.parent / sched.SCHEDULE_LOCK_FILENAME)
+        self.assertTrue(custom_lock.acquire(timeout=0.0))
+        try:
+            with patch("news_pipeline.pipeline.run_pipeline") as run_pipeline:
+                self.assertEqual(run_scheduled(state_path=custom_state), 1)
+                run_pipeline.assert_not_called()
+        finally:
+            custom_lock.release()
 
     # -- status and reconciliation ------------------------------------------
 
