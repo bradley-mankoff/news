@@ -32,6 +32,7 @@ from news_pipeline.config import (
     DeliveryProfile,
     DeliveryRecipient,
     ModelSamplingSettings,
+    MODEL_TASK_IMAGE_ART_DIRECTION,
     MODEL_TASK_STORY_SCALE_SCREENING,
     MODEL_TASK_TITLE_GENERATION,
 )
@@ -929,7 +930,15 @@ class PipelineHelperTests(unittest.TestCase):
             self.assertEqual(default["model_id"], default["repository"])
 
             image_art = snapshots["image_art_direction"]
-            self.assertEqual(image_art["inherits_task"], "title_generation")
+            # Image Art Direction is now an independent assignment (issue #122):
+            # full identity/tuning record, no inheritance marker.
+            self.assertNotIn("inherits_task", image_art)
+            self.assertIn("tuning", image_art)
+            self.assertIn("backend", image_art)
+            self.assertIn("base_url", image_art)
+            self.assertEqual(image_art["model_id"], image_art["repository"])
+            # Same default model as title generation when no override is set,
+            # but via its own independent snapshot record.
             self.assertEqual(image_art["model_id"], snapshots["title_generation"]["model_id"])
             story_discovery = snapshots["story_discovery"]
             self.assertFalse(story_discovery["llm_stage"])
@@ -988,6 +997,10 @@ class PipelineHelperTests(unittest.TestCase):
         )
         self.assertEqual(
             pipeline._logical_task_assignment_key("image art prompt generation"),
+            "image_art_direction",
+        )
+        self.assertEqual(
+            pipeline._logical_task_assignment_key("title generation"),
             "title_generation",
         )
         self.assertEqual(pipeline._logical_task_assignment_key("unknown task"), "default")
@@ -2037,6 +2050,7 @@ class PipelineHelperTests(unittest.TestCase):
             "story_drafting": object(),
             "story_scale_screening": object(),
             "title_generation": object(),
+            "image_art_direction": object(),
         }
         with patch.object(pipeline, "MODEL_ASSIGNMENTS", fake_assignments), patch.object(
             pipeline.progress_tracker, "warning"
@@ -2062,10 +2076,11 @@ class PipelineHelperTests(unittest.TestCase):
                 pipeline._task_model_assignment("title_generation"),
                 fake_assignments["title_generation"],
             )
-            # image_art_direction shares the title_generation LLM call.
+            # image_art_direction is an independent configured assignment
+            # (issue #122); it resolves directly, never through title_generation.
             self.assertIs(
                 pipeline._task_model_assignment("image_art_direction"),
-                fake_assignments["title_generation"],
+                fake_assignments["image_art_direction"],
             )
             # story_discovery has no LLM stage; it inherits default.
             self.assertIs(
@@ -3240,24 +3255,35 @@ class PipelineHelperTests(unittest.TestCase):
             "Daily News Summary\n\nA useful report."
         )
 
-    def test_build_image_art_system_prompt_contains_protocol(self) -> None:
-        # The extracted pure helper must always carry the pipeline-owned JSON
-        # contract and overlay protocol regardless of the editorial sentences
-        # it is given (mirrors the mock-based assertions in the brief tests
-        # above, but directly on the helper).
-        system_text = pipeline._build_image_art_system_prompt("X", "Y")
+    def test_build_image_art_and_title_system_prompts_contain_protocols(self) -> None:
+        # The extracted pure helpers must always carry the pipeline-owned JSON
+        # contracts: the art helper requires only image_prompt, the title
+        # helper requires only overlay_headline plus the code-rendered overlay
+        # protocol (mirrors the mock-based assertions in the brief tests
+        # below, but directly on the helpers).
+        art_text = pipeline._build_image_art_system_prompt("X")
         self.assertIn(
-            "Return ONLY valid JSON with keys image_prompt and overlay_headline",
-            system_text,
+            "Return ONLY valid JSON with the key image_prompt",
+            art_text,
         )
-        self.assertIn("rendered later by code", system_text)
-        self.assertTrue(system_text.endswith("Y"))
+        self.assertNotIn("overlay_headline", art_text)
+        self.assertTrue(art_text.endswith("X"))
+
+        title_text = pipeline._build_title_generation_system_prompt("Y")
+        self.assertIn(
+            "Return ONLY valid JSON with the key overlay_headline",
+            title_text,
+        )
+        self.assertIn("rendered later by code", title_text)
+        self.assertNotIn("image_prompt", title_text)
+        # The profile guidance is injected into the title-only call.
+        self.assertIn("Y", title_text)
 
     def test_generate_image_art_brief_injects_profile_instructions(self) -> None:
-        captured: dict[str, str] = {}
+        captured: dict[str, list[str]] = {"systems": []}
 
         def fake_invoke(_llm, messages, **_kwargs):
-            captured["system"] = str(messages[0].content)
+            captured["systems"].append(str(messages[0].content))
             return AIMessage(content="unused")
 
         with patch.object(pipeline, "build_chat_model", return_value=object()), patch.object(
@@ -3276,25 +3302,36 @@ class PipelineHelperTests(unittest.TestCase):
                     "title_generation": "Prefer a title expressing the day's central shared development.",
                 },
             )
-        system_text = captured["system"]
-        self.assertIn("Depict the central event without sensationalism.", system_text)
+        self.assertEqual(len(captured["systems"]), 2)
+        art_system, title_system = captured["systems"]
+        self.assertIn("Depict the central event without sensationalism.", art_system)
+        self.assertNotIn(
+            "Prefer a title expressing the day's central shared development.",
+            art_system,
+        )
+        self.assertIn(
+            "Return ONLY valid JSON with the key image_prompt",
+            art_system,
+        )
         self.assertIn(
             "Prefer a title expressing the day's central shared development.",
-            system_text,
+            title_system,
         )
+        self.assertNotIn("Depict the central event without sensationalism.", title_system)
         self.assertIn(
-            "Return ONLY valid JSON with keys image_prompt and overlay_headline",
-            system_text,
+            "Return ONLY valid JSON with the key overlay_headline",
+            title_system,
         )
+        self.assertIn("rendered later by code", title_system)
         self.assertTrue(art_brief["image_prompt"].startswith("A documentary scene"))
         self.assertIn("Hard constraints", art_brief["image_prompt"])
         self.assertEqual(art_brief["overlay_headline"], "Today in brief")
 
     def test_generate_image_art_brief_uses_balanced_instructions_by_default(self) -> None:
-        captured: dict[str, str] = {}
+        captured: dict[str, list[str]] = {"systems": []}
 
         def fake_invoke(_llm, messages, **_kwargs):
-            captured["system"] = str(messages[0].content)
+            captured["systems"].append(str(messages[0].content))
             return AIMessage(content="unused")
 
         with patch.object(pipeline, "build_chat_model", return_value=object()), patch.object(
@@ -3306,19 +3343,19 @@ class PipelineHelperTests(unittest.TestCase):
             create=True,
         ):
             art_brief = pipeline.generate_image_art_brief("Summary text", "Report title")
-        system_text = captured["system"]
+        art_system, title_system = captured["systems"]
         self.assertIn(
             "The image_prompt is for FLUX and must request a realistic documentary",
-            system_text,
+            art_system,
         )
-        self.assertIn("Keep overlay_headline punchy, factual, and <= 11 words.", system_text)
+        self.assertIn("Keep overlay_headline punchy, factual, and <= 11 words.", title_system)
         self.assertEqual(art_brief["overlay_headline"], "Today in brief")
 
     def test_generate_image_art_brief_per_key_fallback_and_warning(self) -> None:
-        captured: dict[str, str] = {}
+        captured: dict[str, list[str]] = {"systems": []}
 
         def fake_invoke(_llm, messages, **_kwargs):
-            captured["system"] = str(messages[0].content)
+            captured["systems"].append(str(messages[0].content))
             return AIMessage(content="unused")
 
         with patch.object(pipeline, "build_chat_model", return_value=object()), patch.object(
@@ -3337,9 +3374,9 @@ class PipelineHelperTests(unittest.TestCase):
                     # title_generation intentionally missing: per-key fallback.
                 },
             )
-        system_text = captured["system"]
-        self.assertIn("Depict the central event without sensationalism.", system_text)
-        self.assertIn("Keep overlay_headline punchy, factual, and <= 11 words.", system_text)
+        art_system, title_system = captured["systems"]
+        self.assertIn("Depict the central event without sensationalism.", art_system)
+        self.assertIn("Keep overlay_headline punchy, factual, and <= 11 words.", title_system)
         warning_mock.assert_called_once_with(
             "prompt profile missing title_generation; using balanced default"
         )
@@ -3461,11 +3498,11 @@ class PipelineHelperTests(unittest.TestCase):
             pipeline.story_selection_stage.STORY_SCALE_VALIDATION_MAX_TOKENS,
         )
 
-    def test_generate_image_art_brief_uses_tuned_title_generation_max_tokens(self) -> None:
-        captured: dict[str, object] = {}
+    def test_generate_image_art_brief_uses_tuned_task_max_tokens(self) -> None:
+        captured: dict[str, list[tuple[int, str]]] = {"calls": []}
 
-        def fake_build_chat_model(max_tokens, task="title_generation", **_kwargs):
-            captured["max_tokens"] = max_tokens
+        def fake_build_chat_model(max_tokens, task="default", **_kwargs):
+            captured["calls"].append((max_tokens, task))
             return object()
 
         with patch.object(pipeline, "build_chat_model", side_effect=fake_build_chat_model), patch.object(
@@ -3477,18 +3514,80 @@ class PipelineHelperTests(unittest.TestCase):
         ), patch.object(
             pipeline, "_safe_json_extract", side_effect=lambda s: s, create=True
         ):
-            # Default path: tuned value (700) is used.
+            # Default path: each call gets its own 700-token tuned cap and task.
             pipeline.generate_image_art_brief("Summary text", "Report title")
-            self.assertEqual(captured["max_tokens"], 700)
+            self.assertEqual(
+                captured["calls"],
+                [(700, MODEL_TASK_IMAGE_ART_DIRECTION), (700, MODEL_TASK_TITLE_GENERATION)],
+            )
 
-            # Custom cap reaches the LLM call.
+            # Custom caps reach each LLM call independently.
             fake_assignments = dict(pipeline.MODEL_ASSIGNMENTS)
             fake_assignments[MODEL_TASK_TITLE_GENERATION] = SimpleNamespace(
                 tuning=SimpleNamespace(title_generation_max_tokens=1200)
             )
+            fake_assignments[MODEL_TASK_IMAGE_ART_DIRECTION] = SimpleNamespace(
+                tuning=SimpleNamespace(image_art_direction_max_tokens=640)
+            )
+            captured["calls"].clear()
             with patch.object(pipeline, "MODEL_ASSIGNMENTS", fake_assignments):
                 pipeline.generate_image_art_brief("Summary text", "Report title")
-            self.assertEqual(captured["max_tokens"], 1200)
+            self.assertEqual(
+                captured["calls"],
+                [(640, MODEL_TASK_IMAGE_ART_DIRECTION), (1200, MODEL_TASK_TITLE_GENERATION)],
+            )
+
+    def test_generate_image_art_brief_isolates_sub_call_failures(self) -> None:
+        # The two calls must be independent: an invalid image response falls
+        # back to the deterministic prompt while the headline call succeeds,
+        # and vice versa. Only the failing sub-call contributes to "error".
+        def brief_with_responses(responses: list[str]) -> dict[str, str]:
+            calls: list[str] = []
+
+            def fake_invoke(_llm, messages, *, task_name, **_kwargs):
+                calls.append(task_name)
+                return AIMessage(content=responses.pop(0))
+
+            with patch.object(pipeline, "build_chat_model", return_value=object()), patch.object(
+                pipeline, "invoke_with_retries", side_effect=fake_invoke
+            ), patch.object(
+                pipeline, "_safe_json_extract", side_effect=lambda s: s, create=True
+            ), patch.object(pipeline.progress_tracker, "warning"):
+                result = pipeline.generate_image_art_brief(
+                    "Summary text",
+                    "Report title",
+                    prompt_instructions={
+                        "image_art_direction": "Depict the event.",
+                        "title_generation": "Keep it short.",
+                    },
+                )
+            self.assertEqual(calls, ["image art prompt generation", "title generation"])
+            return result
+
+        # Image call returns an array (not an object): image falls back to the
+        # deterministic text-free prompt; headline still comes from the model.
+        art_failed = brief_with_responses(["[]", '{"overlay_headline":"Today in brief"}'])
+        self.assertIn("Hard constraints", art_failed["image_prompt"])
+        self.assertEqual(art_failed["overlay_headline"], "Today in brief")
+        self.assertIn("image art direction", art_failed["error"])
+        self.assertNotIn("title generation:", art_failed["error"])
+
+        # Title call returns JSON without overlay_headline: headline falls back
+        # to the sanitized report title; the model's image prompt is retained.
+        title_failed = brief_with_responses(
+            ['{"image_prompt":"A documentary scene"}', '{"unrelated":true}']
+        )
+        self.assertTrue(title_failed["image_prompt"].startswith("A documentary scene"))
+        self.assertEqual(title_failed["overlay_headline"], "Report title")
+        self.assertIn("title generation", title_failed["error"])
+        self.assertNotIn("image art direction:", title_failed["error"])
+
+        # Both calls fail: both deterministic fallbacks plus a combined error.
+        both_failed = brief_with_responses(["not json", "[]"])
+        self.assertIn("Hard constraints", both_failed["image_prompt"])
+        self.assertEqual(both_failed["overlay_headline"], "Report title")
+        self.assertIn("image art direction", both_failed["error"])
+        self.assertIn("title generation", both_failed["error"])
 
     def test_image_rendering_and_image_art_helpers(self) -> None:
         with patch("PIL.ImageFont.truetype", return_value="truetype-font"), patch(

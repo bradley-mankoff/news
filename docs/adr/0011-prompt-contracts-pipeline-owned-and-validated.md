@@ -49,5 +49,10 @@ resolution; tests validate all 5 profiles × 5 stages.
   would break a contract, instead of discovering it mid-run.
 - Editorial instructions remain editable via `NEWS_PROMPT_PROFILE`; the
   rendered prompts are unchanged (byte-identical).
+- Image Art Direction and Title Generation are separate pipeline-owned JSON
+  contracts: the image-art call requires only `image_prompt` (text-free FLUX
+  prompt), and the title call requires only `overlay_headline`, which is
+  rendered later by code. Each call validates its own contract independently,
+  so one malformed response never suppresses the other output (issue #122).
 - The `validate_prompt_contract` API is the natural hook for the later
   full-template validation work in Advanced Settings (HANDOFF.md).

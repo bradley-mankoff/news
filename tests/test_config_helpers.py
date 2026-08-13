@@ -42,20 +42,23 @@ class ConfigHelperTests(unittest.TestCase):
                 story_drafting_max_tokens=3,
                 story_scale_screening_max_tokens=3000,
                 title_generation_max_tokens=700,
+                image_art_direction_max_tokens=700,
                 task_sampling={"default": base_sampling},
             ),
             ModelTuningSettings(
                 article_summary_max_tokens=20,
                 title_generation_max_tokens=900,  # overlay wins
+                image_art_direction_max_tokens=640,  # overlay wins
                 task_sampling={"story_drafting": overlay_sampling},
             ),
         )
         self.assertEqual(merged_tuning.article_summary_max_tokens, 20)
         self.assertEqual(merged_tuning.task_sampling["story_drafting"].top_p, 0.8)
-        # Silent-drop prevention for the two new per-task fields: base value
+        # Silent-drop prevention for the per-task fields: base value
         # survives when the overlay leaves it unset, overlay wins when set.
         self.assertEqual(merged_tuning.story_scale_screening_max_tokens, 3000)  # base survives
         self.assertEqual(merged_tuning.title_generation_max_tokens, 900)        # overlay wins
+        self.assertEqual(merged_tuning.image_art_direction_max_tokens, 640)     # overlay wins
 
         with patch.object(config_module, "resolve_model_name", return_value="patched-model"), patch.object(
             config_module,
@@ -64,6 +67,7 @@ class ConfigHelperTests(unittest.TestCase):
                 model_max_input_tokens=123,
                 story_scale_screening_max_tokens=3100,
                 title_generation_max_tokens=710,
+                image_art_direction_max_tokens=640,
                 task_sampling={"default": overlay_sampling},
             )},
         ):
@@ -71,6 +75,7 @@ class ConfigHelperTests(unittest.TestCase):
         self.assertEqual(tuned.model_max_input_tokens, 123)
         self.assertEqual(tuned.story_scale_screening_max_tokens, 3100)
         self.assertEqual(tuned.title_generation_max_tokens, 710)
+        self.assertEqual(tuned.image_art_direction_max_tokens, 640)
         self.assertEqual(tuned.task_sampling["default"].top_p, 0.8)
 
         self.assertEqual(config_module._task_max_tokens_field("default"), "model_max_input_tokens")
@@ -92,7 +97,7 @@ class ConfigHelperTests(unittest.TestCase):
         )
         self.assertEqual(
             config_module._task_max_tokens_field(config_module.MODEL_TASK_IMAGE_ART_DIRECTION),
-            "title_generation_max_tokens",
+            "image_art_direction_max_tokens",
         )
         with self.assertRaises(ValueError):
             config_module._task_max_tokens_field("bogus")
@@ -231,6 +236,7 @@ class ConfigHelperTests(unittest.TestCase):
             "NEWS_STORY_DRAFTING_MAX_TOKENS": "story_drafting_max_tokens",
             "NEWS_STORY_SCALE_SCREENING_MAX_TOKENS": "story_scale_screening_max_tokens",
             "NEWS_TITLE_GENERATION_MAX_TOKENS": "title_generation_max_tokens",
+            "NEWS_IMAGE_ART_DIRECTION_MAX_TOKENS": "image_art_direction_max_tokens",
         }
         for env_name, field_name in env_fields.items():
             for bad_value in (0, -1):
@@ -276,6 +282,7 @@ class ConfigHelperTests(unittest.TestCase):
             "story_drafting_max_tokens",
             "story_scale_screening_max_tokens",
             "title_generation_max_tokens",
+            "image_art_direction_max_tokens",
         )
         for field_name in canonical_fields:
             for bad_value in (0, -1):
@@ -301,7 +308,7 @@ class ConfigHelperTests(unittest.TestCase):
                 "story_scale_screening_max_tokens",
             ),
             (config_module.MODEL_TASK_TITLE_GENERATION, "title_generation_max_tokens"),
-            (config_module.MODEL_TASK_IMAGE_ART_DIRECTION, "title_generation_max_tokens"),
+            (config_module.MODEL_TASK_IMAGE_ART_DIRECTION, "image_art_direction_max_tokens"),
         )
         for assignment_task, field_name in task_fields:
             with self.subTest(task=assignment_task):

@@ -220,6 +220,7 @@ class ModelTuningSettings:
     story_drafting_max_tokens: int | None = None
     story_scale_screening_max_tokens: int | None = None
     title_generation_max_tokens: int | None = None
+    image_art_direction_max_tokens: int | None = None
     task_sampling: dict[str, ModelSamplingSettings] = field(default_factory=dict)
 
 
@@ -437,6 +438,7 @@ DEFAULT_STORY_DRAFTING_MAX_TOKENS = 1800
 # Mirrors story_selection.STORY_SCALE_VALIDATION_MAX_TOKENS; keep in sync.
 DEFAULT_STORY_SCALE_SCREENING_MAX_TOKENS = 3000
 DEFAULT_TITLE_GENERATION_MAX_TOKENS = 700
+DEFAULT_IMAGE_ART_DIRECTION_MAX_TOKENS = 700
 DEFAULT_MODEL_SERVER_PREFILL_STEP_SIZE = 512
 DEFAULT_MODEL_SERVER_PROMPT_CACHE_SIZE = 2
 DEFAULT_MODEL_SERVER_PROMPT_CACHE_BYTES = "512MB"
@@ -450,6 +452,7 @@ MODEL_TASK_SAMPLING_ENV_PREFIXES = {
     MODEL_TASK_ARTICLE_SUMMARY: "NEWS_MODEL_ARTICLE_SUMMARY",
     MODEL_TASK_STORY_DRAFTING: "NEWS_MODEL_STORY_DRAFTING",
     MODEL_TASK_TITLE_GENERATION: "NEWS_MODEL_TITLE_GENERATION",
+    MODEL_TASK_IMAGE_ART_DIRECTION: "NEWS_MODEL_IMAGE_ART_DIRECTION",
 }
 MODEL_TUNING_PRESET_ENV_VARS = {
     "default": "NEWS_MODEL_TUNING_PRESET",
@@ -457,6 +460,7 @@ MODEL_TUNING_PRESET_ENV_VARS = {
     MODEL_TASK_STORY_DRAFTING: "NEWS_MODEL_STORY_DRAFTING_TUNING_PRESET",
     MODEL_TASK_STORY_SCALE_SCREENING: "NEWS_MODEL_STORY_SCALE_SCREENING_TUNING_PRESET",
     MODEL_TASK_TITLE_GENERATION: "NEWS_MODEL_TITLE_GENERATION_TUNING_PRESET",
+    MODEL_TASK_IMAGE_ART_DIRECTION: "NEWS_MODEL_IMAGE_ART_DIRECTION_TUNING_PRESET",
 }
 MODEL_REASONING_SAMPLING_ENV_PREFIX = "NEWS_MODEL_REASONING"
 # Per-task model knobs share env shapes NEWS_MODEL_<TASK>[_TUNING_PRESET|_BASE_URL]
@@ -467,6 +471,7 @@ MODEL_TASK_KNOB_SPECS: tuple[tuple[str, str, str], ...] = (
     (MODEL_TASK_STORY_DRAFTING, "Story Drafting", "Story drafting max tokens"),
     (MODEL_TASK_STORY_SCALE_SCREENING, "Story Scale Screening", "Story scale screening max tokens"),
     (MODEL_TASK_TITLE_GENERATION, "Title Generation", "Title generation max tokens"),
+    (MODEL_TASK_IMAGE_ART_DIRECTION, "Image Art Direction", "Image art direction max tokens"),
 )
 
 
@@ -480,6 +485,7 @@ def _empty_model_sampling_map() -> dict[str, ModelSamplingSettings]:
         MODEL_TASK_ARTICLE_SUMMARY: ModelSamplingSettings(),
         MODEL_TASK_STORY_DRAFTING: ModelSamplingSettings(),
         MODEL_TASK_TITLE_GENERATION: ModelSamplingSettings(),
+        MODEL_TASK_IMAGE_ART_DIRECTION: ModelSamplingSettings(),
         "reasoning": ModelSamplingSettings(),
     }
 
@@ -693,6 +699,10 @@ def _merge_model_tuning_settings(
         title_generation_max_tokens=_merge_optional_value(
             base.title_generation_max_tokens, overlay.title_generation_max_tokens
         ),
+        image_art_direction_max_tokens=_merge_optional_value(
+            base.image_art_direction_max_tokens,
+            overlay.image_art_direction_max_tokens,
+        ),
         task_sampling=task_sampling,
     )
 
@@ -705,6 +715,7 @@ def _base_model_tuning(model_reference: str) -> ModelTuningSettings:
         story_drafting_max_tokens=DEFAULT_STORY_DRAFTING_MAX_TOKENS,
         story_scale_screening_max_tokens=DEFAULT_STORY_SCALE_SCREENING_MAX_TOKENS,
         title_generation_max_tokens=DEFAULT_TITLE_GENERATION_MAX_TOKENS,
+        image_art_direction_max_tokens=DEFAULT_IMAGE_ART_DIRECTION_MAX_TOKENS,
         task_sampling=_empty_model_sampling_map(),
     )
     model_default_tuning = MODEL_SPECIFIC_TUNING_DEFAULTS.get(resolved_name)
@@ -719,9 +730,7 @@ _TASK_MAX_TOKENS_FIELDS: dict[str, str] = {
     MODEL_TASK_STORY_DRAFTING: "story_drafting_max_tokens",
     MODEL_TASK_STORY_SCALE_SCREENING: "story_scale_screening_max_tokens",
     MODEL_TASK_TITLE_GENERATION: "title_generation_max_tokens",
-    # image_art_direction is produced by the same LLM call as title_generation
-    # (generate_image_art_brief); it inherits that task's token cap by design.
-    MODEL_TASK_IMAGE_ART_DIRECTION: "title_generation_max_tokens",
+    MODEL_TASK_IMAGE_ART_DIRECTION: "image_art_direction_max_tokens",
 }
 
 # Canonical model-tuning max-token fields, derived from the task map so the
@@ -1018,6 +1027,10 @@ def _apply_model_tuning_env_overrides(tuning: ModelTuningSettings) -> ModelTunin
         title_generation_max_tokens=_merge_optional_value(
             tuning.title_generation_max_tokens,
             _positive_optional_int_env("NEWS_TITLE_GENERATION_MAX_TOKENS"),
+        ),
+        image_art_direction_max_tokens=_merge_optional_value(
+            tuning.image_art_direction_max_tokens,
+            _positive_optional_int_env("NEWS_IMAGE_ART_DIRECTION_MAX_TOKENS"),
         ),
         task_sampling=task_sampling,
     )

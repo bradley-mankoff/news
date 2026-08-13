@@ -89,14 +89,20 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
         # Generated server command uses the repo id, never a file-qualified path.
         self.assertIn("--model mlx-community/gemma-4-12B-it-4bit", config.model_server_command)
         self.assertNotIn(".gguf", config.model_server_command)
-        # One default model across all four LLM stages.
-        for task in ("article_summary", "story_drafting", "story_scale_screening", "title_generation"):
+        # One default model across all five LLM stages.
+        for task in (
+            "article_summary",
+            "story_drafting",
+            "story_scale_screening",
+            "title_generation",
+            "image_art_direction",
+        ):
             self.assertEqual(config.model_assignments[task].reference, "gemma-4-12b-it-4bit")
-        # No translation assignment; only default + the four stages.
+        # No translation assignment; only default + the five stages.
         self.assertEqual(
             set(config.model_assignments),
             {"default", "article_summary", "story_drafting",
-             "story_scale_screening", "title_generation"},
+             "story_scale_screening", "title_generation", "image_art_direction"},
         )
 
     def test_codex_tiny_model_uses_mlx_lm_backend_and_server(self) -> None:
@@ -598,6 +604,8 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
                 "NEWS_MODEL_ARTICLE_SUMMARY_BASE_URL": "http://127.0.0.1:8090/v1",
                 "NEWS_MODEL_STORY_DRAFTING": GEMMA_4_12B_IT_4BIT_MODEL_ALIAS,
                 "NEWS_MODEL_STORY_DRAFTING_BASE_URL": "http://127.0.0.1:8091/v1",
+                "NEWS_MODEL_IMAGE_ART_DIRECTION": GEMMA_4_12B_IT_4BIT_MODEL_ALIAS,
+                "NEWS_MODEL_IMAGE_ART_DIRECTION_BASE_URL": "http://127.0.0.1:8092/v1",
             },
             materialize_outputs=False,
         )
@@ -631,6 +639,30 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
             config.model_assignments["default"].reference,
             config.model_assignments[MODEL_TASK_STORY_DRAFTING].reference,
         )
+        # Image Art Direction diverges independently from the default model:
+        # its own reference, resolved name, and base URL override win.
+        self.assertEqual(
+            config.model_assignments[MODEL_TASK_IMAGE_ART_DIRECTION].reference,
+            GEMMA_4_12B_IT_4BIT_MODEL_ALIAS,
+        )
+        self.assertEqual(
+            config.model_assignments[MODEL_TASK_IMAGE_ART_DIRECTION].name,
+            GEMMA_4_12B_IT_4BIT_MODEL_REPO,
+        )
+        self.assertEqual(
+            config.model_assignments[MODEL_TASK_IMAGE_ART_DIRECTION].base_url,
+            "http://127.0.0.1:8092/v1",
+        )
+        self.assertNotEqual(
+            config.model_assignments["default"].reference,
+            config.model_assignments[MODEL_TASK_IMAGE_ART_DIRECTION].reference,
+        )
+        # The title assignment is untouched by the image override and still
+        # inherits the default model.
+        self.assertEqual(
+            config.model_assignments[MODEL_TASK_TITLE_GENERATION].reference,
+            CODEX_TEST_MODEL_ALIAS,
+        )
 
     def test_tiny_model_task_assignment_uses_mlx_lm_backend_and_server(self) -> None:
         config = load_runtime_config(
@@ -648,7 +680,7 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
         self.assertIn("python -m mlx_lm server", assignment.server_command)
         self.assertNotIn("python -m mlx_vlm.server", assignment.server_command)
 
-    def test_task_model_assignments_cover_all_four_llm_stages(self) -> None:
+    def test_task_model_assignments_cover_all_five_llm_stages(self) -> None:
         config = load_runtime_config(
             environ={},
             overrides={
@@ -669,6 +701,7 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
                 MODEL_TASK_STORY_DRAFTING,
                 MODEL_TASK_STORY_SCALE_SCREENING,
                 MODEL_TASK_TITLE_GENERATION,
+                MODEL_TASK_IMAGE_ART_DIRECTION,
             },
         )
         self.assertEqual(
@@ -700,10 +733,24 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
             config.model_assignments[MODEL_TASK_ARTICLE_SUMMARY].base_url,
             config.model_assignments["default"].base_url,
         )
-        # image_art_direction inherits the title_generation token cap field.
+        # An unset image assignment inherits NEWS_MODEL and the default base
+        # URL, never the Title Generation override (independent assignment).
+        self.assertEqual(
+            config.model_assignments[MODEL_TASK_IMAGE_ART_DIRECTION].reference,
+            CODEX_TEST_MODEL_ALIAS,
+        )
+        self.assertEqual(
+            config.model_assignments[MODEL_TASK_IMAGE_ART_DIRECTION].base_url,
+            config.model_assignments["default"].base_url,
+        )
+        self.assertNotEqual(
+            config.model_assignments[MODEL_TASK_IMAGE_ART_DIRECTION].reference,
+            config.model_assignments[MODEL_TASK_TITLE_GENERATION].reference,
+        )
+        # Each LLM stage maps to its own max-token tuning field.
         self.assertEqual(
             config_module._task_max_tokens_field(MODEL_TASK_IMAGE_ART_DIRECTION),
-            "title_generation_max_tokens",
+            "image_art_direction_max_tokens",
         )
         self.assertEqual(
             config_module._task_max_tokens_field(MODEL_TASK_STORY_SCALE_SCREENING),
@@ -1267,6 +1314,7 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
                     "NEWS_MODEL_STORY_SCALE_SCREENING_TEMPERATURE": "0.4",
                     "NEWS_STORY_SCALE_SCREENING_MAX_TOKENS": "2600",
                     "NEWS_TITLE_GENERATION_MAX_TOKENS": "800",
+                    "NEWS_IMAGE_ART_DIRECTION_MAX_TOKENS": "640",
                 },
                 clear=True,
             ), patch.object(config_module, "MODEL_TUNING_PRESETS_PATH", preset_path):
@@ -1291,9 +1339,18 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
                     config.model_assignments[MODEL_TASK_TITLE_GENERATION].reference,
                     CODEX_TEST_MODEL_ALIAS,
                 )
+                # Image Art Direction resolves its own independent max-token
+                # cap (640) from the env override, untouched by the title cap.
+                image_tuning = config.model_assignments[MODEL_TASK_IMAGE_ART_DIRECTION].tuning
+                self.assertEqual(image_tuning.image_art_direction_max_tokens, 640)
+                self.assertEqual(
+                    config.model_assignments[MODEL_TASK_IMAGE_ART_DIRECTION].reference,
+                    CODEX_TEST_MODEL_ALIAS,
+                )
                 # Documented defaults are pinned so drift is caught by CI.
                 self.assertEqual(config_module.DEFAULT_STORY_SCALE_SCREENING_MAX_TOKENS, 3000)
                 self.assertEqual(config_module.DEFAULT_TITLE_GENERATION_MAX_TOKENS, 700)
+                self.assertEqual(config_module.DEFAULT_IMAGE_ART_DIRECTION_MAX_TOKENS, 700)
 
     def test_model_tuning_max_tokens_reject_non_positive_env_and_preset(self) -> None:
         # Env path: every model-tuning max-token variable fails fast with an
@@ -1304,6 +1361,7 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
             "NEWS_STORY_DRAFTING_MAX_TOKENS",
             "NEWS_STORY_SCALE_SCREENING_MAX_TOKENS",
             "NEWS_TITLE_GENERATION_MAX_TOKENS",
+            "NEWS_IMAGE_ART_DIRECTION_MAX_TOKENS",
         ]
         for name in env_vars:
             for bad_value in ("0", "-1"):
