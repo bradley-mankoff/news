@@ -100,7 +100,13 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
         )
 
     def test_codex_tiny_model_uses_mlx_lm_backend_and_server(self) -> None:
-        for reference in (CODEX_TEST_MODEL_ALIAS, CODEX_TEST_MODEL_NAME):
+        references = (
+            CODEX_TEST_MODEL_ALIAS,
+            CODEX_TEST_MODEL_NAME,
+            f"https://huggingface.co/{CODEX_TEST_MODEL_NAME}",
+            f"https://hf.co/{CODEX_TEST_MODEL_NAME}",
+        )
+        for reference in references:
             with self.subTest(reference=reference):
                 config = load_runtime_config(
                     environ={},
@@ -444,6 +450,22 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
             config.model_assignments["default"].reference,
             config.model_assignments[MODEL_TASK_STORY_DRAFTING].reference,
         )
+
+    def test_tiny_model_task_assignment_uses_mlx_lm_backend_and_server(self) -> None:
+        config = load_runtime_config(
+            environ={},
+            overrides={
+                "NEWS_MODEL": GEMMA_4_12B_IT_4BIT_MODEL_ALIAS,
+                "NEWS_MODEL_ARTICLE_SUMMARY": CODEX_TEST_MODEL_ALIAS,
+                "NEWS_MODEL_ARTICLE_SUMMARY_BASE_URL": "http://127.0.0.1:8090/v1",
+            },
+            materialize_outputs=False,
+        )
+
+        assignment = config.model_assignments[MODEL_TASK_ARTICLE_SUMMARY]
+        self.assertEqual(assignment.backend, "mlx-lm")
+        self.assertIn("python -m mlx_lm server", assignment.server_command)
+        self.assertNotIn("python -m mlx_vlm.server", assignment.server_command)
 
     def test_task_model_assignments_cover_all_four_llm_stages(self) -> None:
         config = load_runtime_config(

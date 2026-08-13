@@ -130,7 +130,9 @@ class ModelCatalogTests(unittest.TestCase):
         # Translation is the documented honest gap: no verified curated pick.
         self.assertEqual(model_catalog.recommend_models("translation"), [])
         # Speed's curated pick is the tiny test model.
-        self.assertEqual(model_catalog.recommend_models("speed")[0]["alias"], "gemma-e2b-tiny")
+        speed_pick = model_catalog.recommend_models("speed")[0]
+        self.assertEqual(speed_pick["alias"], "gemma-e2b-tiny")
+        self.assertEqual(speed_pick["backend"], "mlx-lm")
         # The default model covers the quality tasks first.
         self.assertEqual(
             model_catalog.recommend_models("synthesis")[0]["alias"],
@@ -153,6 +155,8 @@ class ModelCatalogTests(unittest.TestCase):
             self.assertIn("is_default", record)
         defaults = [record for record in records if record["is_default"]]
         self.assertEqual([record["alias"] for record in defaults], ["gemma-4-12b-it-4bit"])
+        records_by_alias = {record["alias"]: record for record in records}
+        self.assertEqual(records_by_alias["gemma-e2b-tiny"]["backend"], "mlx-lm")
 
     def test_runtime_fit_matrix(self) -> None:
         curated_gemma = "mlx-community/gemma-4-12B-it-4bit"
