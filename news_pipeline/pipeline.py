@@ -1485,7 +1485,7 @@ class ProgressTracker:
         error: Exception | None = None,
     ) -> None:
         error_detail = f" ({type(error).__name__}: {error})" if error else ""
-        self.detail(
+        self.log(
             f"Retrying {task_name}: attempt {attempt}/{attempts} failed{error_detail}; "
             f"sleeping {delay}s before the next attempt."
         )
@@ -1501,7 +1501,7 @@ class ProgressTracker:
         self.retrying(task_name, attempt, attempts, delay, error)
 
     def warning(self, label: str) -> None:
-        self.detail(f"WARNING: {label}")
+        self.log(f"WARNING: {label}")
 
     def set_final_step(self, step_name: str, step_index: int) -> None:
         messages = {
