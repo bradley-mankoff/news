@@ -2072,7 +2072,11 @@ class PipelineHelperTests(unittest.TestCase):
                 pipeline._task_model_assignment("story_discovery"),
                 fake_assignments["default"],
             )
-            # Known, aliased, and inherited tasks never warn.
+            self.assertIs(
+                pipeline._task_model_assignment("default"),
+                fake_assignments["default"],
+            )
+            # Known, aliased, inherited, and default tasks never warn.
             warning.assert_not_called()
             # Unknown tasks fall back to default (never a KeyError) and warn.
             self.assertIs(
