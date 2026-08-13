@@ -131,6 +131,10 @@ class DiagnosticsTests(unittest.TestCase):
                 "| Title Generation model | title_ref (title_model) [mlx-vlm] @ http://localhost:9090 |",
                 review_markdown,
             )
+            self.assertIn(
+                "| Image Art Direction model | image_ref (image_model) [external] @ https://api.example.com |",
+                review_markdown,
+            )
             self.assertIn("| Source languages | {'en': 4} |", review_markdown)
             self.assertIn("## Top-Level KPIs", review_markdown)
             self.assertIn("## Funnel Stats", review_markdown)
@@ -154,7 +158,11 @@ class DiagnosticsTests(unittest.TestCase):
                 details_markdown,
             )
             self.assertIn(
-                "- Image art direction uses the Title Generation model; Story Discovery has no LLM stage (inherits default).",
+                "- Image Art Direction model: image_ref (image_model) [external] @ https://api.example.com",
+                details_markdown,
+            )
+            self.assertIn(
+                "- Image Art Direction is an independent LLM call; Story Discovery has no LLM stage (inherits default).",
                 details_markdown,
             )
             self.assertIn(
@@ -163,6 +171,10 @@ class DiagnosticsTests(unittest.TestCase):
             )
             self.assertIn(
                 "title_generation=mlx-vlm",
+                _model_backend_value(diagnostics.settings),
+            )
+            self.assertIn(
+                "image_art_direction=external",
                 _model_backend_value(diagnostics.settings),
             )
             self.assertIn("## Source Funnel", details_markdown)
@@ -566,6 +578,12 @@ class DiagnosticsTests(unittest.TestCase):
                         "name": "title_model",
                         "backend": "mlx-vlm",
                         "base_url": "http://localhost:9090",
+                    },
+                    "image_art_direction": {
+                        "reference": "image_ref",
+                        "name": "image_model",
+                        "backend": "external",
+                        "base_url": "https://api.example.com",
                     },
                 },
                 "model_max_input_tokens": 2048,

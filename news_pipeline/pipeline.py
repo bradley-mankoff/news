@@ -130,7 +130,11 @@ from .article_collection import (
     collect_article_candidates,
 )
 from . import article_summarization as article_summarization_stage
-from .prompt_contracts import IMAGE_ART_JSON_CONTRACT, IMAGE_ART_OVERLAY_PROTOCOL
+from .prompt_contracts import (
+    IMAGE_ART_JSON_CONTRACT,
+    IMAGE_ART_OVERLAY_PROTOCOL,
+    TITLE_GENERATION_JSON_CONTRACT,
+)
 from . import article_summary_records as article_summary_records_stage
 from . import citations as citations_stage
 from . import embeddings as embeddings_stage
@@ -2688,11 +2692,10 @@ def _normalized_model_task(task: str) -> str:
     return clean_task or "default"
 
 
-# image_art_direction is produced by the same LLM call as title_generation
-# (generate_image_art_brief); it inherits that assignment by design.
-# story_discovery has no LLM stage (TF-IDF/embedding clustering); it inherits default.
+# story_discovery has no LLM stage (TF-IDF/embedding clustering); it inherits
+# the default assignment. image_art_direction is an independent configured
+# assignment (issue #122) and resolves through MODEL_ASSIGNMENTS directly.
 _TASK_MODEL_ASSIGNMENT_ALIASES = {
-    MODEL_TASK_IMAGE_ART_DIRECTION: MODEL_TASK_TITLE_GENERATION,
     MODEL_TASK_STORY_DISCOVERY: "default",
 }
 
@@ -2915,28 +2918,31 @@ _HF_REVISION_CACHE: dict[str, dict[str, Any]] = {}
 _HF_REVISION_LOOKUP_ENABLED = False
 
 
-# The five configured LLM assignment tasks snapshotted per run. Image Art
-# Direction inherits Title Generation and Story Discovery has no LLM stage;
-# both are represented by explicit records in ``_model_snapshots()``.
+# The five configured LLM assignment tasks snapshotted per run. Story
+# Discovery has no LLM stage and is represented by an explicit record in
+# ``_model_snapshots()``.
 _MODEL_SNAPSHOT_TASKS = (
     "default",
     MODEL_TASK_ARTICLE_SUMMARY,
     MODEL_TASK_STORY_DRAFTING,
     MODEL_TASK_STORY_SCALE_SCREENING,
     MODEL_TASK_TITLE_GENERATION,
+    MODEL_TASK_IMAGE_ART_DIRECTION,
 )
 
 
 # Logical model-call labels to configured assignment keys. Prefix rules mirror
 # ``_model_call_bucket()`` but resolve to assignment keys: article format
-# retries reuse the same ``analysis for ...`` label, image art direction
-# reuses ``title_generation``, and unknown labels fall back to default.
+# retries reuse the same ``analysis for ...`` label, image art direction and
+# title generation are distinct independent logical calls, and unknown labels
+# fall back to default.
 _LOGICAL_TASK_ALIASES: tuple[tuple[str, str], ...] = (
     ("analysis for final synthesis", MODEL_TASK_STORY_DRAFTING),
     ("analysis for ", MODEL_TASK_ARTICLE_SUMMARY),
     ("story synthesis for ", MODEL_TASK_STORY_DRAFTING),
     ("global story scale screening", MODEL_TASK_STORY_SCALE_SCREENING),
-    ("image art prompt generation", MODEL_TASK_TITLE_GENERATION),
+    ("image art prompt generation", MODEL_TASK_IMAGE_ART_DIRECTION),
+    ("title generation", MODEL_TASK_TITLE_GENERATION),
 )
 
 
@@ -3029,23 +3035,14 @@ def _model_snapshot_for_task(task: str) -> dict[str, Any]:
 
 
 def _model_snapshots() -> dict[str, Any]:
-    """Per-task model snapshots plus explicit inheritance/no-LLM records.
+    """Per-task model snapshots plus the explicit no-LLM record.
 
-    Image Art Direction is produced by the same LLM call as Title Generation
-    and inherits that assignment; Story Discovery has no LLM stage and
-    inherits the default assignment. Neither invents extra model calls.
+    Every configured LLM assignment — including the independent Image Art
+    Direction assignment (issue #122) — serializes its full model identity
+    and tuning; Story Discovery has no LLM stage and inherits the default
+    assignment via an explicit record.
     """
     snapshots = {task: _model_snapshot_for_task(task) for task in _MODEL_SNAPSHOT_TASKS}
-    title = snapshots[MODEL_TASK_TITLE_GENERATION]
-    snapshots[MODEL_TASK_IMAGE_ART_DIRECTION] = {
-        "inherits_task": MODEL_TASK_TITLE_GENERATION,
-        "reference": title["reference"],
-        "repository": title["repository"],
-        "model_id": title["model_id"],
-        "revision": title["revision"],
-        "revision_status": title["revision_status"],
-        "backend": title["backend"],
-    }
     default = snapshots["default"]
     snapshots[MODEL_TASK_STORY_DISCOVERY] = {
         "llm_stage": False,
@@ -3858,17 +3855,143 @@ def _enforce_text_free_image_prompt(prompt: str) -> str:
     return clean_prompt + guardrails
 
 
-def _build_image_art_system_prompt(image_art_direction: str, title_guidance: str) -> str:
+def _safe_json_extract(raw_text: str) -> str:
+    """Extract the JSON payload from a model response.
+
+    Tolerates fenced code blocks and surrounding prose; bare text is returned
+    unchanged so ``json.loads`` reports the real parse error.
+    """
+    text = str(raw_text or "").strip()
+    if not text:
+        return text
+    fenced = re.search(r"```(?:json)?\s*(.*?)```", text, re.DOTALL | re.IGNORECASE)
+    if fenced:
+        return fenced.group(1).strip()
+    return text
+
+
+def _build_image_art_system_prompt(image_art_direction: str) -> str:
     """Compose the image-art system prompt from the pipeline-owned JSON contract
-    and the profile's editorial art-direction / title-generation sentences.
+    and the profile's editorial art-direction sentences. The art-direction call
+    must return only ``image_prompt``; the headline is produced separately.
     """
     return (
         "You are preparing art direction for a text-to-image news illustration. "
         f"{IMAGE_ART_JSON_CONTRACT} "
-        f"{image_art_direction} "
-        f"{IMAGE_ART_OVERLAY_PROTOCOL} "
-        f"{title_guidance}"
+        f"{image_art_direction}"
     )
+
+
+def _build_title_generation_system_prompt(title_guidance: str) -> str:
+    """Compose the title-generation system prompt from the pipeline-owned JSON
+    contract, the overlay protocol, and the profile's title-generation
+    sentences. The title call must return only ``overlay_headline``.
+    """
+    return (
+        "You are writing the overlay headline for a news report. "
+        f"{TITLE_GENERATION_JSON_CONTRACT} "
+        f"{title_guidance} "
+        f"{IMAGE_ART_OVERLAY_PROTOCOL}"
+    )
+
+
+def _image_art_direction_call(
+    *,
+    synthesis_body: str,
+    image_art_direction: str,
+    fallback_prompt: str,
+) -> tuple[str, str | None]:
+    """Run the isolated Image Art Direction model call.
+
+    Returns ``(image_prompt, error)``. The prompt is sanitized with
+    ``_enforce_text_free_image_prompt``; on transport, parse, or contract
+    failure the deterministic fallback is returned with a warning and an
+    error string, and the Title Generation call is never affected.
+    """
+    try:
+        llm = build_chat_model(
+            # Defensive fallback: tuning is always seeded, but a 0-valued env
+            # override would otherwise produce a zero-token cap. The fallback
+            # references the config constant so a default change propagates.
+            max_tokens=(
+                MODEL_ASSIGNMENTS[
+                    MODEL_TASK_IMAGE_ART_DIRECTION
+                ].tuning.image_art_direction_max_tokens
+                or DEFAULT_IMAGE_ART_DIRECTION_MAX_TOKENS
+            ),
+            task=MODEL_TASK_IMAGE_ART_DIRECTION,
+        )
+        response = invoke_with_retries(
+            llm,
+            [
+                SystemMessage(content=_build_image_art_system_prompt(image_art_direction)),
+                HumanMessage(content=(
+                    "Use the final news output below to create the text-free image prompt.\n\n"
+                    f"Final output:\n{_truncate_for_art_prompt(synthesis_body)}"
+                )),
+            ],
+            task_name="image art prompt generation",
+            fallback_content=json.dumps({"image_prompt": fallback_prompt}),
+        )
+        payload = json.loads(_safe_json_extract(response.content or ""))
+        if not isinstance(payload, dict):
+            raise ValueError("Image art prompt response was not a JSON object.")
+        raw_prompt = payload.get("image_prompt")
+        if not raw_prompt or not str(raw_prompt).strip():
+            raise ValueError("Image art prompt response missing image_prompt.")
+        return _enforce_text_free_image_prompt(str(raw_prompt)), None
+    except Exception as error:
+        progress_tracker.warning("image art prompt fallback")
+        return _enforce_text_free_image_prompt(fallback_prompt), str(error)
+
+
+def _title_generation_call(
+    *,
+    report_title: str,
+    synthesis_body: str,
+    title_guidance: str,
+    fallback_headline: str,
+) -> tuple[str, str | None]:
+    """Run the isolated Title Generation model call.
+
+    Returns ``(overlay_headline, error)``. The headline is sanitized with
+    ``_sanitize_overlay_headline``; on transport, parse, or contract failure
+    the deterministic fallback is returned with a warning and an error
+    string, and the Image Art Direction call is never affected.
+    """
+    try:
+        llm = build_chat_model(
+            max_tokens=(
+                MODEL_ASSIGNMENTS[
+                    MODEL_TASK_TITLE_GENERATION
+                ].tuning.title_generation_max_tokens
+                or DEFAULT_TITLE_GENERATION_MAX_TOKENS
+            ),
+            task=MODEL_TASK_TITLE_GENERATION,
+        )
+        response = invoke_with_retries(
+            llm,
+            [
+                SystemMessage(content=_build_title_generation_system_prompt(title_guidance)),
+                HumanMessage(content=(
+                    "Use the final news output below to create the overlay headline.\n\n"
+                    f"Report title: {report_title}\n\n"
+                    f"Final output:\n{_truncate_for_art_prompt(synthesis_body)}"
+                )),
+            ],
+            task_name="title generation",
+            fallback_content=json.dumps({"overlay_headline": fallback_headline}),
+        )
+        payload = json.loads(_safe_json_extract(response.content or ""))
+        if not isinstance(payload, dict):
+            raise ValueError("Title generation response was not a JSON object.")
+        raw_headline = payload.get("overlay_headline")
+        if not raw_headline or not str(raw_headline).strip():
+            raise ValueError("Title generation response missing overlay_headline.")
+        return _sanitize_overlay_headline(str(raw_headline), fallback_headline), None
+    except Exception as error:
+        progress_tracker.warning("title generation fallback")
+        return fallback_headline, str(error)
 
 
 def generate_image_art_brief(
@@ -3878,6 +4001,14 @@ def generate_image_art_brief(
     prompt_instructions: dict[str, str] | None = None,
 ) -> dict[str, str]:
     """Ask the text model for the FLUX prompt plus a separate overlay headline.
+
+    Runs two independent sequential LLM calls (issue #122): an Image Art
+    Direction call that produces only ``image_prompt`` and a Title Generation
+    call that produces only ``overlay_headline``. Each call uses its own task
+    assignment, token cap, retry/fallback metadata, and prompt snapshot; a
+    failure in one call never prevents the other from running. The merged
+    public result keeps the ``{image_prompt, overlay_headline}`` shape and the
+    ``error`` compatibility key used by ``generate_report_image_art()``.
 
     Consumes two prompt-catalog task slots from ``prompt_instructions``
     (``image_art_direction`` and ``title_generation``). A missing/falsy slot
@@ -3893,55 +4024,32 @@ def generate_image_art_brief(
         progress_tracker.warning("prompt profile missing title_generation; using balanced default")
     image_art_direction = instructions.get("image_art_direction") or DEFAULT_PROMPT_INSTRUCTIONS["image_art_direction"]
     title_guidance = instructions.get("title_generation") or DEFAULT_PROMPT_INSTRUCTIONS["title_generation"]
-    try:
-        llm = build_chat_model(
-            # Defensive fallback: tuning is always seeded, but a 0-valued env
-            # override would otherwise produce a zero-token cap. The fallback
-            # references the config constant so a default change propagates.
-            max_tokens=(
-                MODEL_ASSIGNMENTS[MODEL_TASK_TITLE_GENERATION].tuning.title_generation_max_tokens
-                or DEFAULT_TITLE_GENERATION_MAX_TOKENS
-            ),
-            task=MODEL_TASK_TITLE_GENERATION,
+
+    image_prompt, image_error = _image_art_direction_call(
+        synthesis_body=synthesis_body,
+        image_art_direction=image_art_direction,
+        fallback_prompt=fallback_prompt,
+    )
+    overlay_headline, title_error = _title_generation_call(
+        report_title=report_title,
+        synthesis_body=synthesis_body,
+        title_guidance=title_guidance,
+        fallback_headline=fallback_headline,
+    )
+    result: dict[str, str] = {
+        "image_prompt": image_prompt,
+        "overlay_headline": overlay_headline,
+    }
+    if image_error or title_error:
+        result["error"] = " ".join(
+            part
+            for part in (
+                f"image art direction: {image_error}" if image_error else "",
+                f"title generation: {title_error}" if title_error else "",
+            )
+            if part
         )
-        response = invoke_with_retries(
-            llm,
-            [
-                SystemMessage(content=_build_image_art_system_prompt(image_art_direction, title_guidance)),
-                HumanMessage(content=(
-                    "Use the final news output below to create the image prompt and the separate "
-                    "footer headline.\n\n"
-                    f"Report title: {report_title}\n\n"
-                    f"Final output:\n{_truncate_for_art_prompt(synthesis_body)}"
-                )),
-            ],
-            task_name="image art prompt generation",
-            fallback_content=json.dumps(
-                {
-                    "image_prompt": fallback_prompt,
-                    "overlay_headline": fallback_headline,
-                }
-            ),
-        )
-        payload = json.loads(_safe_json_extract(response.content or ""))
-        if not isinstance(payload, dict):
-            raise ValueError("Image art prompt response was not a JSON object.")
-        image_prompt = _enforce_text_free_image_prompt(str(payload.get("image_prompt") or fallback_prompt))
-        overlay_headline = _sanitize_overlay_headline(
-            str(payload.get("overlay_headline") or ""),
-            fallback_headline,
-        )
-        return {
-            "image_prompt": image_prompt,
-            "overlay_headline": overlay_headline,
-        }
-    except Exception as error:
-        progress_tracker.warning("image art prompt fallback")
-        return {
-            "image_prompt": _enforce_text_free_image_prompt(fallback_prompt),
-            "overlay_headline": fallback_headline,
-            "error": str(error),
-        }
+    return result
 
 
 def _load_overlay_font(size: int) -> object:

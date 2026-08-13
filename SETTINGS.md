@@ -44,7 +44,8 @@ is defined in
 | `NEWS_ARTICLE_SUMMARY_MAX_TOKENS` | `1000` | Model Tuning token limit for each article summary. |
 | `NEWS_STORY_DRAFTING_MAX_TOKENS` | `1800` | Model Tuning token limit for story/newsletter synthesis. |
 | `NEWS_STORY_SCALE_SCREENING_MAX_TOKENS` | `3000` | Model Tuning token limit for each global story scale screening call. |
-| `NEWS_TITLE_GENERATION_MAX_TOKENS` | `700` | Model Tuning token limit for the title generation / image art direction call. |
+| `NEWS_TITLE_GENERATION_MAX_TOKENS` | `700` | Model Tuning token limit for the title generation call. |
+| `NEWS_IMAGE_ART_DIRECTION_MAX_TOKENS` | `700` | Model Tuning token limit for the image art direction call. |
 
 ## Renamed settings (migration note)
 
@@ -68,7 +69,7 @@ The `bradley` terminology was replaced with `primary` (issue #23):
 | `NEWS_MODEL_PRESENCE_PENALTY`, `NEWS_MODEL_REPETITION_PENALTY` | Default repetition controls. |
 | `NEWS_MODEL_REASONING_TEMPERATURE`, `NEWS_MODEL_REASONING_TOP_P`, `NEWS_MODEL_REASONING_TOP_K`, `NEWS_MODEL_REASONING_MIN_P` | Sampling settings for reasoning-heavy tasks. |
 | `NEWS_MODEL_REASONING_PRESENCE_PENALTY`, `NEWS_MODEL_REASONING_REPETITION_PENALTY` | Reasoning-task repetition controls. |
-| `NEWS_MODEL_STORY_DISCOVERY_*`, `NEWS_MODEL_STORY_SCALE_SCREENING_*`, `NEWS_MODEL_ARTICLE_SUMMARY_*`, `NEWS_MODEL_STORY_DRAFTING_*`, `NEWS_MODEL_TITLE_GENERATION_*` | Per-task sampling overrides using the same suffixes as the default sampling group. `NEWS_MODEL_STORY_DISCOVERY_*` is retained for compatibility: story discovery has no LLM stage (embedding/TF-IDF clustering), and image art direction shares the title generation stage, so there is no `NEWS_MODEL_IMAGE_ART_DIRECTION_*` group. |
+| `NEWS_MODEL_STORY_DISCOVERY_*`, `NEWS_MODEL_STORY_SCALE_SCREENING_*`, `NEWS_MODEL_ARTICLE_SUMMARY_*`, `NEWS_MODEL_STORY_DRAFTING_*`, `NEWS_MODEL_TITLE_GENERATION_*`, `NEWS_MODEL_IMAGE_ART_DIRECTION_*` | Per-task sampling overrides using the same suffixes as the default sampling group. `NEWS_MODEL_STORY_DISCOVERY_*` is retained for compatibility: story discovery has no LLM stage (embedding/TF-IDF clustering). Image Art Direction is an independent LLM stage with its own `NEWS_MODEL_IMAGE_ART_DIRECTION_*` group. |
 
 ## Models
 
@@ -89,11 +90,14 @@ Each model page shows Hugging Face's native Hardware Compatibility panel
 | Variable | Default | Description |
 |---|---|---|
 | `NEWS_MODEL_STORY_SCALE_SCREENING` | _(inherits `NEWS_MODEL`)_ | Model assignment for the global story scale screening LLM stage. |
-| `NEWS_MODEL_TITLE_GENERATION` | _(inherits `NEWS_MODEL`)_ | Model assignment for the title generation / image art direction LLM stage. |
+| `NEWS_MODEL_TITLE_GENERATION` | _(inherits `NEWS_MODEL`)_ | Model assignment for the title generation LLM stage (overlay headline). |
+| `NEWS_MODEL_IMAGE_ART_DIRECTION` | _(inherits `NEWS_MODEL`)_ | Model assignment for the image art direction LLM stage (text-free FLUX prompt). |
 | `NEWS_MODEL_STORY_SCALE_SCREENING_BASE_URL` | `http://127.0.0.1:8080/v1` | Model server endpoint for story scale screening calls. |
 | `NEWS_MODEL_TITLE_GENERATION_BASE_URL` | `http://127.0.0.1:8080/v1` | Model server endpoint for title generation calls. |
+| `NEWS_MODEL_IMAGE_ART_DIRECTION_BASE_URL` | `http://127.0.0.1:8080/v1` | Model server endpoint for image art direction calls. |
 | `NEWS_MODEL_STORY_SCALE_SCREENING_TUNING_PRESET` | _(none)_ | Model Tuning Preset for the story scale screening stage. |
 | `NEWS_MODEL_TITLE_GENERATION_TUNING_PRESET` | _(none)_ | Model Tuning Preset for the title generation stage. |
+| `NEWS_MODEL_IMAGE_ART_DIRECTION_TUNING_PRESET` | _(none)_ | Model Tuning Preset for the image art direction stage. |
 | `NEWS_MODEL_BASE_URL` | `http://127.0.0.1:8080/v1` | OpenAI-compatible local model endpoint. |
 | `NEWS_CODEX_TESTING` | `0` | `1` forces Codex-safe model references for model-related verification. |
 

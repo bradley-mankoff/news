@@ -32,11 +32,10 @@ profile is historical pressure, not current runtime behavior.
 - Task Model Assignment: the model selected for a model-using task, including
   its resolved name, backend, base URL, server command, and tuning. Every
   actual LLM stage has its own assignment: Article Summarization, Story
-  Drafting, Story Scale Screening, and Title Generation. Image Art Direction
-  inherits the Title Generation assignment (one shared LLM call produces both
-  outputs), and Story Discovery has no LLM stage (embedding/TF-IDF clustering)
-  so it inherits the default model. There is no image-art-direction model
-  variable.
+  Drafting, Story Scale Screening, Title Generation, and Image Art Direction
+  (a separate LLM call producing the text-free FLUX prompt). Story Discovery
+  has no LLM stage (embedding/TF-IDF clustering) and inherits the default
+  model — the only inheritance case.
 - Model Defaults: model or backend defaults used when no explicit Model Tuning
   is configured.
 - Model Tuning: explicit inference settings for a selected model, such as
@@ -60,12 +59,13 @@ Config Snapshot. It does not infer size-class model profiles from `NEWS_MODEL`.
 Setting ownership is exactly:
 
 1. **Model Selection / Task Model Assignment** — `NEWS_MODEL` is default model
-   selection only. The four LLM stages (Article Summarization, Story Drafting,
-   Story Scale Screening, and Title Generation) have their own assignments via
-   `NEWS_MODEL_<TASK>`. A default run may keep one model for all model-using
-   tasks, but callers can select separate models without forking the rest of
-   the run. Image Art Direction shares the Title Generation LLM call; Story
-   Discovery is algorithmic and inherits the default model.
+   selection only. The five LLM stages (Article Summarization, Story Drafting,
+   Story Scale Screening, Title Generation, and Image Art Direction) have
+   their own assignments via `NEWS_MODEL_<TASK>`. A default run may keep one
+   model for all model-using tasks, but callers can select separate models
+   without forking the rest of the run. Image Art Direction is an independent
+   LLM call with its own assignment; Story Discovery is algorithmic and
+   inherits the default model.
 2. **Model Tuning** — sampling settings and model/task token caps, such as
    `NEWS_MODEL_MAX_INPUT_TOKENS`, `NEWS_<TASK>_MAX_TOKENS`, and
    `NEWS_MODEL_<TASK>_TEMPERATURE`. Precedence is backend/model defaults, then
@@ -107,7 +107,8 @@ Tuning.
   Budget, Model Server Settings — matching the runtime knob registry, so
   controls no longer appear to overlap.
 - `NEWS_MODEL_STORY_DISCOVERY_*` knobs are compatibility-only: story discovery
-  has no LLM stage, and there is no image-art-direction model variable because
-  image art direction shares the Title Generation call.
+  has no LLM stage and inherits the default model — the only inheritance case.
+  Image Art Direction is a first-class assignment with its own
+  `NEWS_MODEL_IMAGE_ART_DIRECTION_*` variable family.
 - Run Presets and Model Tuning Presets remain distinct and are never treated
   as interchangeable.
