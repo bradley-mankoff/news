@@ -23,6 +23,13 @@ the default profile and is byte-identical to the pre-catalog prompts.
 
 ## Consequences
 
-- Easier: tone variation, comparison, UI selection, future per-stage editing.
-- Harder/off-limits: YAML/editable prompt surface until the user-editing issue;
-  profiles may not weaken machine-required output contracts.
+- Easier: tone variation, comparison, UI selection, and per-stage editing via
+  the realized limited YAML layer (`config/prompt_overrides.yaml`), which
+  provides optional user-editable editorial sentence overrides per task with
+  `profile < YAML < env/UI` precedence.
+- Harder/off-limits: full-template editing and arbitrary machine-contract
+  changes; profiles and overrides may not weaken machine-required output
+  contracts. The effective profile-plus-override map is validated by
+  `validate_editorial_instructions()` at runtime-config resolution, so
+  contract-breaking instruction text fails before pipeline execution and the
+  machine contracts remain code-owned.

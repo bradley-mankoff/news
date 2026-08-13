@@ -15,8 +15,9 @@ weaken or collide with a contract.
 This module is deliberately stdlib-only (``collections.abc``, ``typing``) so
 that ``config.py`` can import it without creating an import cycle (it must
 never import stage modules). Built-ins live in Python (not YAML) because they
-are code-reviewed contracts; a user-editable YAML override layer is a later
-issue.
+are code-reviewed contracts; editorial sentence overrides may be supplied by
+``config/prompt_overrides.yaml`` and are validated here before pipeline
+execution.
 """
 
 from __future__ import annotations
@@ -157,23 +158,36 @@ def assert_prompt_contract(task: str, rendered_text: str) -> None:
         raise ValueError(f"Prompt contract violation for {task!r}; missing markers: {missing!r}")
 
 
-def validate_editorial_instructions(instructions: Mapping[str, str]) -> list[str]:
+def validate_editorial_instructions(
+    instructions: Mapping[str, str],
+    *,
+    allow_braces_for: set[str] | frozenset[str] | None = None,
+) -> list[str]:
     """Return profile-safety violations for an editorial instruction map.
 
     Checks that every task slot is present and non-empty, that the
     ``story_scale_screening`` slot is free of braces (the screening template
     renders via ``.format()``), and that no slot contains blocklisted contract
-    language. Returns violations instead of raising so callers control how the
-    profile error surfaces (config resolution fail-fasts; tests assert).
+    language. ``allow_braces_for`` may name tasks whose renderer already
+    escapes literal braces before ``.format()`` (only ``story_scale_screening``
+    today); it is not a general relaxation. Returns violations instead of
+    raising so callers control how the profile error surfaces (config
+    resolution fail-fasts; tests assert).
     """
+    allowed_brace_tasks = set(allow_braces_for or ())
     violations: list[str] = []
     for task in PROTOCOL_TASKS:
         instruction = instructions.get(task)
-        if not instruction or not str(instruction).strip():
+        if instruction is None or not str(instruction).strip():
             violations.append(f"missing or empty instructions for {task}")
             continue
-        if task == "story_scale_screening" and (
-            "{" in instruction or "}" in instruction
+        if not isinstance(instruction, str):
+            violations.append(f"instructions for {task} must be a string")
+            continue
+        if (
+            task == "story_scale_screening"
+            and task not in allowed_brace_tasks
+            and ("{" in instruction or "}" in instruction)
         ):
             violations.append(
                 "story_scale_screening instructions contain a brace that would break .format() rendering"

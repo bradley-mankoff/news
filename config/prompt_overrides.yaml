@@ -1,0 +1,4 @@
+# User-editable editorial instruction overrides for the five LLM stages.
+# Missing or blank task entries inherit the selected NEWS_PROMPT_PROFILE.
+# Do not add full prompt templates or pipeline-owned output contracts here.
+overrides: {}
