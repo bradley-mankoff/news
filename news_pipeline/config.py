@@ -1366,6 +1366,8 @@ def infer_model_backend(model_reference: str) -> str:
     (issue #124 Deviation 3).
     """
     resolved_name = resolve_model_name(model_reference).lower()
+    if is_codex_test_model_reference(model_reference):
+        return MODEL_BACKEND_MLX_LM
     if "qwythos" in resolved_name or "gemma-4" in resolved_name or "gemma4" in resolved_name:
         return MODEL_BACKEND_MLX_VLM
     return MODEL_BACKEND_MLX_LM
