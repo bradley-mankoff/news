@@ -170,6 +170,14 @@ class UITests(unittest.TestCase):
         self.assertEqual(advanced.count('modelTuningPanel("story_scale_screening")'), 1)
         self.assertEqual(advanced.count('modelTuningPanel("title_generation")'), 1)
         self.assertEqual(advanced.count('modelTuningPanel("image_art_direction")'), 1)
+        tuning_editor = html.split('<h2>Model Tuning Preset Editor</h2>', 1)[1].split(
+            '<h2>', 1
+        )[0]
+        self.assertIn(
+            '<option value="image_art_direction">image_art_direction</option>',
+            tuning_editor,
+        )
+        self.assertIn("image_art_direction_max_tokens", tuning_editor)
         # Dedicated envs are suppressed from the raw override list (no duplicates).
         surface = html.split("const SURFACED_ENVS")[1].split("const TASK_CONFIG")[0]
         for env in (

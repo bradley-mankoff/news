@@ -2105,11 +2105,12 @@ HTML = r"""<!doctype html>
               <option value="story_drafting">story_drafting</option>
               <option value="story_scale_screening">story_scale_screening</option>
               <option value="title_generation">title_generation</option>
+              <option value="image_art_direction">image_art_direction</option>
             </select></label>
           </div>
           <label>Description<textarea id="modelTuningPresetDescription"></textarea></label>
           <label>Tuning (JSON)<textarea id="modelTuningPresetTuning" spellcheck="false"></textarea></label>
-          <p class="muted">Accepted tuning fields: temperature (0-2), top_p (0-1), top_k (whole number &gt;= 0), min_p (0-1), presence_penalty (-2 to 2), repetition_penalty (0-3), max_tokens, model_max_input_tokens, article_summary_max_tokens, story_drafting_max_tokens, story_scale_screening_max_tokens, title_generation_max_tokens (positive whole numbers).</p>
+          <p class="muted">Accepted tuning fields: temperature (0-2), top_p (0-1), top_k (whole number &gt;= 0), min_p (0-1), presence_penalty (-2 to 2), repetition_penalty (0-3), max_tokens, model_max_input_tokens, article_summary_max_tokens, story_drafting_max_tokens, story_scale_screening_max_tokens, title_generation_max_tokens, image_art_direction_max_tokens (positive whole numbers).</p>
           <div class="toolbar" style="margin-top:12px">
             <button id="saveModelTuningPresetBtn" class="primary">Save preset</button>
             <button id="deleteModelTuningPresetBtn" class="danger">Delete preset</button>
