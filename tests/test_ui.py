@@ -991,13 +991,17 @@ class UITests(unittest.TestCase):
         record.append("\r" + meter_a + "\033[K\n")
         record.append(meter_a + "\n")  # exact duplicate snapshot
         record.append("WARNING: low coverage\n")
+        record.append(
+            "Retrying article summaries: attempt 2/3 failed (TimeoutError: model timed out); "
+            "sleeping 5s before the next attempt.\n"
+        )
         record.append(meter_b + "\n")
         record.append(meter_final + "\n")
         record.append("[7/9 story drafting] [####----------------] 12/47 stories\n")
 
         self.assertEqual(
             [event["kind"] for event in record.events],
-            ["progress", "message", "progress"],
+            ["progress", "message", "message", "progress"],
         )
         # The clustering snapshot was replaced in place, never appended twice.
         self.assertEqual(record.events[0]["line"], meter_final)
@@ -1005,8 +1009,15 @@ class UITests(unittest.TestCase):
         self.assertEqual(record.events[0]["replace"], True)
         self.assertEqual(record.events[0]["complete"], True)
         self.assertEqual(record.events[1]["line"], "WARNING: low coverage")
-        self.assertEqual(record.events[2]["line"], "[7/9 story drafting] [####----------------] 12/47 stories")
-        self.assertEqual(record.snapshot()["line_count"], 3)
+        # Warnings and retries stay ordinary message events in arrival order
+        # between the coalesced clustering snapshot and the drafting meter.
+        self.assertEqual(
+            record.events[2]["line"],
+            "Retrying article summaries: attempt 2/3 failed (TimeoutError: model timed out); "
+            "sleeping 5s before the next attempt.",
+        )
+        self.assertEqual(record.events[3]["line"], "[7/9 story drafting] [####----------------] 12/47 stories")
+        self.assertEqual(record.snapshot()["line_count"], 4)
         self.assertEqual(record.events[0]["line"], meter_final)
 
     def test_sse_delivers_progress_replacement_after_cursor_advances(self) -> None:
@@ -1763,6 +1774,9 @@ class UITests(unittest.TestCase):
             root = Path(tmpdir)
             output_dir = root / "daily_outputs"
             output_dir.mkdir()
+            (output_dir / "latest_run.md").write_text(
+                "Review survives <script>alert(1)</script>", encoding="utf-8"
+            )
             (output_dir / "latest_run_details.json").write_text(
                 "{broken", encoding="utf-8"
             )
@@ -1774,8 +1788,167 @@ class UITests(unittest.TestCase):
             }
             with patch.object(ui_module, "_review_paths", return_value=paths):
                 payload = ui_module.latest_review_payload()
-            self.assertIsNotNone(payload["error"])
+            self.assertIn("latest_run_details", payload["metadata_read_errors"])
+            self.assertIn(
+                "invalid JSON", payload["metadata_read_errors"]["latest_run_details"]
+            )
+            self.assertNotIn(
+                "{broken", payload["metadata_read_errors"]["latest_run_details"]
+            )
+            # The readable rolling review is preserved despite the broken
+            # details document; status stays conservative, never inferred
+            # from report prose.
+            self.assertEqual(
+                payload["report_text"], "Review survives <script>alert(1)</script>"
+            )
             self.assertEqual(payload["report_status"], "not_generated")
+            self.assertEqual(payload["run_status"], "unknown")
+            self.assertIsNone(payload["error"])
+
+        for raw_details in (b"\xff", b"[" * 10000 + b"]" * 10000):
+            with tempfile.TemporaryDirectory() as tmpdir:
+                root = Path(tmpdir)
+                output_dir = root / "daily_outputs"
+                output_dir.mkdir()
+                (output_dir / "latest_run.md").write_text(
+                    "Readable report", encoding="utf-8"
+                )
+                details_path = output_dir / "latest_run_details.json"
+                details_path.write_bytes(raw_details)
+                paths = {
+                    "output_dir": output_dir,
+                    "history_db": root / "history.duckdb",
+                    "latest_run_markdown": output_dir / "latest_run.md",
+                    "latest_run_details": details_path,
+                }
+                with patch.object(ui_module, "_review_paths", return_value=paths):
+                    payload = ui_module.latest_review_payload()
+                self.assertIn("latest_run_details", payload["metadata_read_errors"])
+                self.assertIsNone(payload["error"])
+                self.assertEqual(payload["report_text"], "Readable report")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            output_dir = root / "daily_outputs"
+            output_dir.mkdir()
+            (output_dir / "latest_run.md").write_text(
+                "Valid report body", encoding="utf-8"
+            )
+            (output_dir / "latest_run_details.json").write_text(
+                json.dumps(
+                    {
+                        "run_started_at": "2026-06-01T10:00:00",
+                        "settings": ["not", "a", "dict"],
+                        "events": {"not": "a list"},
+                        "delivery": "delivered",
+                        "report_generated": "yes",
+                        "reports": "none",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            paths = {
+                "output_dir": output_dir,
+                "history_db": root / "history.duckdb",
+                "latest_run_markdown": output_dir / "latest_run.md",
+                "latest_run_details": output_dir / "latest_run_details.json",
+            }
+            with patch.object(ui_module, "_review_paths", return_value=paths):
+                payload = ui_module.latest_review_payload()
+            self.assertEqual(
+                set(payload["metadata_read_errors"]),
+                {"settings", "events", "delivery", "report_generated", "reports"},
+            )
+            self.assertEqual(payload["metadata_read_errors"]["settings"], "expected a JSON object")
+            self.assertEqual(payload["metadata_read_errors"]["events"], "expected a JSON list")
+            self.assertEqual(payload["run_status"], "unknown")
+            self.assertEqual(payload["delivery_status"], "not recorded")
+            self.assertEqual(payload["delivery"], {})
+            self.assertEqual(payload["report_status"], "not_generated")
+            self.assertEqual(payload["preset_id"], "custom")
+            self.assertEqual(payload["report_text"], "Valid report body")
+            self.assertIsNone(payload["error"])
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            output_dir = root / "daily_outputs"
+            output_dir.mkdir()
+            (output_dir / "latest_run.md").write_text(
+                "Valid report body", encoding="utf-8"
+            )
+            (output_dir / "latest_run_details.json").write_text(
+                json.dumps(
+                    {
+                        "run_started_at": "2026-06-01T10:00:00",
+                        "settings": "corrupted",
+                        "events": [
+                            {"at": "2026-06-01T10:00:30", "label": "completed"}
+                        ],
+                        "report_generated": True,
+                        "delivery": {"status": "failed", "phase": "send"},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            paths = {
+                "output_dir": output_dir,
+                "history_db": root / "history.duckdb",
+                "latest_run_markdown": output_dir / "latest_run.md",
+                "latest_run_details": output_dir / "latest_run_details.json",
+            }
+            with patch.object(ui_module, "_review_paths", return_value=paths):
+                payload = ui_module.latest_review_payload()
+            # One corrupt sibling field does not hide the valid events,
+            # delivery, report, or review text.
+            self.assertEqual(set(payload["metadata_read_errors"]), {"settings"})
+            self.assertEqual(payload["run_status"], "completed")
+            self.assertEqual(payload["report_status"], "available")
+            self.assertEqual(payload["delivery_status"], "failed")
+            self.assertEqual(payload["delivery"]["phase"], "send")
+            self.assertEqual(payload["report_text"], "Valid report body")
+            self.assertEqual(payload["run_id"], "2026-06-01_10-00-00")
+            self.assertIsNone(payload["error"])
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            output_dir = root / "daily_outputs"
+            output_dir.mkdir()
+            (output_dir / "latest_run.md").write_text(
+                "Readable report", encoding="utf-8"
+            )
+            (output_dir / "latest_run_details.json").write_text(
+                json.dumps(
+                    {
+                        "events": [
+                            {"at": "2026-06-01T10:00:30", "label": "completed"}
+                        ],
+                        "report_generated": True,
+                        "delivery": {
+                            "status": "failed",
+                            "accepted_recipients": "reader@example.com",
+                            "rejected_recipients": {"recipient": "editor@example.com"},
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            paths = {
+                "output_dir": output_dir,
+                "history_db": root / "history.duckdb",
+                "latest_run_markdown": output_dir / "latest_run.md",
+                "latest_run_details": output_dir / "latest_run_details.json",
+            }
+            with patch.object(ui_module, "_review_paths", return_value=paths):
+                payload = ui_module.latest_review_payload()
+            self.assertEqual(
+                set(payload["metadata_read_errors"]),
+                {"delivery.accepted_recipients", "delivery.rejected_recipients"},
+            )
+            self.assertEqual(payload["delivery"]["accepted_recipients"], [])
+            self.assertEqual(payload["delivery"]["rejected_recipients"], [])
+            self.assertEqual(payload["delivery_status"], "failed")
+            self.assertEqual(payload["report_status"], "available")
+            self.assertIsNone(payload["error"])
 
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
@@ -1792,6 +1965,7 @@ class UITests(unittest.TestCase):
             self.assertEqual(payload["report_status"], "not_generated")
             self.assertEqual(payload["run_status"], "unknown")
             self.assertEqual(payload["delivery_status"], "not recorded")
+            self.assertEqual(payload["metadata_read_errors"], {})
             self.assertIsNone(payload["error"])
 
     def test_read_historical_report_validates_okf_root(self) -> None:
@@ -1883,20 +2057,33 @@ class UITests(unittest.TestCase):
         self.assertIn('run: ${escapeHtml(runStatus || "unknown")}', html)
         self.assertIn('report: ${escapeHtml(reportStatus || "unavailable")}', html)
         self.assertIn('delivery: ${escapeHtml(deliveryLabel(deliveryStatus))}', html)
-        # Report text is rendered through textContent, never innerHTML.
-        self.assertIn('pane.textContent = review.report_text || "(empty report)";', html)
+        # Report text is rendered through textContent, never innerHTML, and
+        # present review text wins over conservative status fallbacks so
+        # metadata corruption cannot hide a readable report.
+        self.assertIn("if (review.report_text && review.report_text.trim()) {", html)
+        self.assertIn('pane.textContent = review.report_text;', html)
+        self.assertIn('pane.textContent = "(empty report)";', html)
         self.assertIn("pane.textContent = text;", html)
         self.assertIn("pane.textContent = `Report unavailable: ${err.message}`;", html)
+        # Metadata read diagnostics render as an escaped warning list in both
+        # the latest review and selected-run surfaces.
+        self.assertIn("function metadataWarnings(errors) {", html)
+        self.assertIn("Object.entries(errors || {})", html)
+        self.assertIn("${escapeHtml(field)}:</strong> ${escapeHtml(message)}", html)
+        self.assertIn("metadataWarnings(review.metadata_read_errors)", html)
+        self.assertIn("metadataWarnings(run.metadata_read_errors)", html)
         # Rich delivery metadata (phase, accepted/rejected recipients) is
         # rendered in the review and history detail surfaces, escaped through
         # the existing escapeHtml/textContent paths.
         self.assertIn('delivery.phase ? `phase: ${delivery.phase}` : ""', html)
+        self.assertIn("Array.isArray(delivery.accepted_recipients)", html)
+        self.assertIn("Array.isArray(delivery.rejected_recipients)", html)
         self.assertIn(
-            'delivery.accepted_recipients && delivery.accepted_recipients.length ? `accepted: ${delivery.accepted_recipients.join(", ")}` : ""',
+            'acceptedRecipients.length ? `accepted: ${acceptedRecipients.join(", ")}` : ""',
             html,
         )
         self.assertIn(
-            'delivery.rejected_recipients && delivery.rejected_recipients.length ? `rejected: ${delivery.rejected_recipients.join(", ")}` : ""',
+            'rejectedRecipients.length ? `rejected: ${rejectedRecipients.join(", ")}` : ""',
             html,
         )
         # Terminal status closes the stream, then refreshes durable review data.

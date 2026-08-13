@@ -132,6 +132,127 @@ class HistoryStoreHelperTests(unittest.TestCase):
         self.assertEqual(history_module._loads({"status": "sent"}), {"status": "sent"})
         self.assertEqual(history_module._loads('{"status": "sent"}'), {"status": "sent"})
 
+    def test_field_aware_decoder_records_bounded_read_errors(self) -> None:
+        errors: dict[str, str] = {}
+        # Missing/empty legacy values keep defaults and are never errors.
+        self.assertEqual(history_module._decode_field(None, "settings", errors=errors), None)
+        self.assertEqual(history_module._decode_field("", "settings", errors=errors), None)
+        self.assertEqual(
+            history_module._decode_field(None, "delivery", default={}, errors=errors),
+            {},
+        )
+        self.assertEqual(errors, {})
+        # Valid object/list payloads decode unchanged.
+        self.assertEqual(
+            history_module._decode_field('{"a": 1}', "settings", default={}, errors=errors),
+            {"a": 1},
+        )
+        self.assertEqual(
+            history_module._decode_field('["a"]', "events", shape="list", default=[], errors=errors),
+            ["a"],
+        )
+        self.assertEqual(
+            history_module._decode_field({"status": "sent"}, "delivery", default={}, errors=errors),
+            {"status": "sent"},
+        )
+        # "{}" is the writer's legacy empty marker for list columns and is
+        # never a false warning.
+        self.assertEqual(
+            history_module._decode_field("{}", "events", shape="list", default=[], errors=errors),
+            [],
+        )
+        self.assertEqual(history_module._prompt_snapshots("{}", errors), [])
+        self.assertEqual(errors, {})
+        # Malformed JSON records a bounded field-specific diagnostic.
+        self.assertEqual(
+            history_module._decode_field("{broken", "settings", default={}, errors=errors),
+            {},
+        )
+        self.assertEqual(set(errors), {"settings"})
+        self.assertIn("invalid JSON metadata", errors["settings"])
+        self.assertIn("JSONDecodeError", errors["settings"])
+        self.assertNotIn("{broken", errors["settings"])
+        errors.clear()
+        deep_json = "[" * 10000 + "]" * 10000
+        self.assertEqual(
+            history_module._decode_field(
+                deep_json, "events", shape="list", default=[], errors=errors
+            ),
+            [],
+        )
+        self.assertIn("RecursionError", errors["events"])
+        errors.clear()
+        # Syntactically valid but wrong-shape payloads are shape errors.
+        self.assertEqual(
+            history_module._decode_field('["a"]', "delivery", default={}, errors=errors),
+            {},
+        )
+        self.assertEqual(errors["delivery"], "expected object metadata")
+        self.assertEqual(
+            history_module._decode_field('{"a": 1}', "events", shape="list", default=[], errors=errors),
+            [],
+        )
+        self.assertEqual(errors["events"], "expected list metadata")
+        # Non-object/non-list scalars decode to the safe default, not an echo.
+        self.assertEqual(
+            history_module._decode_field('"plain string"', "stats", default={}, errors=errors),
+            {},
+        )
+        self.assertEqual(errors["stats"], "expected object metadata")
+        # Diagnostics never contain raw persisted document contents.
+        for message in errors.values():
+            self.assertNotIn("{broken", message)
+            self.assertNotIn('{"a": 1}', message)
+
+    def test_prompt_snapshots_observable_decoding_records_item_errors(self) -> None:
+        errors: dict[str, str] = {}
+        self.assertEqual(history_module._prompt_snapshots(None, errors), [])
+        self.assertEqual(history_module._prompt_snapshots("", errors), [])
+        self.assertEqual(errors, {})
+        self.assertEqual(
+            history_module._prompt_snapshots(
+                '[{"task": "a"}, {"task": "b"}]', errors
+            ),
+            [{"task": "a"}, {"task": "b"}],
+        )
+        self.assertEqual(errors, {})
+        # Malformed JSON and wrong shapes record named diagnostics.
+        self.assertEqual(history_module._prompt_snapshots("{bad", errors), [])
+        self.assertIn("invalid JSON metadata", errors["prompt_snapshots"])
+        errors.clear()
+        self.assertEqual(history_module._prompt_snapshots('{"not": "list"}', errors), [])
+        self.assertEqual(errors["prompt_snapshots"], "expected list metadata")
+        # Valid items are preserved while invalid items are reported.
+        errors.clear()
+        self.assertEqual(
+            history_module._prompt_snapshots('[{"task": "ok"}, "junk", 7]', errors),
+            [{"task": "ok"}],
+        )
+        self.assertIn("invalid prompt snapshot item at index 1", errors["prompt_snapshots"])
+        self.assertNotIn("junk", errors["prompt_snapshots"])
+
+    def test_delivery_recipient_projection_is_renderer_safe(self) -> None:
+        errors: dict[str, str] = {}
+        delivery = {
+            "status": "failed",
+            "accepted_recipients": "reader@example.com",
+            "rejected_recipients": {"recipient": "editor@example.com"},
+        }
+
+        normalized = history_module._normalize_delivery_recipients(delivery, errors)
+
+        self.assertEqual(normalized["accepted_recipients"], [])
+        self.assertEqual(normalized["rejected_recipients"], [])
+        self.assertEqual(normalized["status"], "failed")
+        self.assertEqual(
+            errors,
+            {
+                "delivery.accepted_recipients": "expected a JSON list",
+                "delivery.rejected_recipients": "expected a JSON list",
+            },
+        )
+        self.assertEqual(delivery["accepted_recipients"], "reader@example.com")
+
     def test_insert_and_upsert_helpers_cover_edge_branches(self) -> None:
         class FakeCon:
             def __init__(self) -> None:
