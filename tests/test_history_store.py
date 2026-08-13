@@ -705,6 +705,26 @@ class HistoryStoreTests(unittest.TestCase):
             self.assertEqual(details["stats"]["report_count"], 1)
             self.assertEqual(details["prompt_snapshots"][0]["task"], "article_summary")
 
+            with connect(db_path) as con:
+                con.execute(
+                    """
+                    UPDATE runs SET delivery_json = '{"status":"failed", "accepted_recipients":"reader@example.com", "rejected_recipients":{"recipient":"editor@example.com"}}'
+                    """
+                )
+            details = get_run_details(db_path, "2026-06-01_10-00-00")
+            self.assertIsNotNone(details)
+            assert details is not None
+            self.assertEqual(details["delivery"]["accepted_recipients"], [])
+            self.assertEqual(details["delivery"]["rejected_recipients"], [])
+            self.assertEqual(
+                details["metadata_read_errors"]["delivery.accepted_recipients"],
+                "expected a JSON list",
+            )
+            self.assertEqual(
+                details["metadata_read_errors"]["delivery.rejected_recipients"],
+                "expected a JSON list",
+            )
+
             # NULL/empty legacy columns remain non-errors with existing defaults.
             with connect(db_path) as con:
                 con.execute("UPDATE runs SET stats_json = NULL, events_json = ''")

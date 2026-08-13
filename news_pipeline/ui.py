@@ -42,7 +42,11 @@ from .config import (
     runtime_knob_registry,
 )
 from .diagnostics import _duration_label, run_status_from_events
-from .history_store import get_run_details, list_recent_run_summaries
+from .history_store import (
+    _normalize_delivery_recipients,
+    get_run_details,
+    list_recent_run_summaries,
+)
 from .okf import okf_run_bundle_path
 from .source_catalog import (
     DeleteSources,
@@ -404,14 +408,14 @@ def latest_review_payload() -> dict[str, Any]:
     if paths["latest_run_details"].exists():
         try:
             raw = paths["latest_run_details"].read_text(encoding="utf-8") or "{}"
-        except OSError as exc:
+        except (OSError, UnicodeError) as exc:
             metadata_read_errors["latest_run_details"] = (
-                f"could not read details file ({type(exc).__name__})"
+                f"could not decode details file ({type(exc).__name__})"
             )
         else:
             try:
                 parsed = json.loads(raw)
-            except ValueError as exc:
+            except (ValueError, RecursionError) as exc:
                 metadata_read_errors["latest_run_details"] = (
                     f"invalid JSON details ({type(exc).__name__})"
                 )
@@ -428,8 +432,11 @@ def latest_review_payload() -> dict[str, Any]:
     settings = _details_field(
         details, "settings", "object", metadata_read_errors, default={}
     )
-    delivery = _details_field(
-        details, "delivery", "object", metadata_read_errors, default={}
+    delivery = _normalize_delivery_recipients(
+        _details_field(
+            details, "delivery", "object", metadata_read_errors, default={}
+        ),
+        metadata_read_errors,
     )
     reports = _details_field(
         details, "reports", "list", metadata_read_errors, default=[]
@@ -3286,11 +3293,15 @@ HTML = r"""<!doctype html>
       const reportStatus = review.report_status || "unavailable";
       const runStatus = review.run_status || "unknown";
       const deliveryStatus = review.delivery_status || "not recorded";
+      const acceptedRecipients = Array.isArray(delivery.accepted_recipients)
+        ? delivery.accepted_recipients : [];
+      const rejectedRecipients = Array.isArray(delivery.rejected_recipients)
+        ? delivery.rejected_recipients : [];
       const deliveryMeta = [
         delivery.reason ? `reason: ${delivery.reason}` : "",
         delivery.phase ? `phase: ${delivery.phase}` : "",
-        delivery.accepted_recipients && delivery.accepted_recipients.length ? `accepted: ${delivery.accepted_recipients.join(", ")}` : "",
-        delivery.rejected_recipients && delivery.rejected_recipients.length ? `rejected: ${delivery.rejected_recipients.join(", ")}` : "",
+        acceptedRecipients.length ? `accepted: ${acceptedRecipients.join(", ")}` : "",
+        rejectedRecipients.length ? `rejected: ${rejectedRecipients.join(", ")}` : "",
         delivery.error_type ? `${delivery.error_type}: ${delivery.error_message}` : ""
       ].filter(Boolean).join(" · ");
       $("reviewMount").innerHTML = `
@@ -3408,11 +3419,15 @@ HTML = r"""<!doctype html>
       }
       const run = state.selectedRun;
       const delivery = run.delivery || {};
+      const acceptedRecipients = Array.isArray(delivery.accepted_recipients)
+        ? delivery.accepted_recipients : [];
+      const rejectedRecipients = Array.isArray(delivery.rejected_recipients)
+        ? delivery.rejected_recipients : [];
       const deliveryMeta = [
         delivery.reason ? `reason: ${delivery.reason}` : "",
         delivery.phase ? `phase: ${delivery.phase}` : "",
-        delivery.accepted_recipients && delivery.accepted_recipients.length ? `accepted: ${delivery.accepted_recipients.join(", ")}` : "",
-        delivery.rejected_recipients && delivery.rejected_recipients.length ? `rejected: ${delivery.rejected_recipients.join(", ")}` : "",
+        acceptedRecipients.length ? `accepted: ${acceptedRecipients.join(", ")}` : "",
+        rejectedRecipients.length ? `rejected: ${rejectedRecipients.join(", ")}` : "",
         delivery.error_type ? `${delivery.error_type}: ${delivery.error_message}` : ""
       ].filter(Boolean).join(" · ");
       container.innerHTML = `

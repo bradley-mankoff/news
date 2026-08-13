@@ -1794,6 +1794,28 @@ class UITests(unittest.TestCase):
             self.assertEqual(payload["run_status"], "unknown")
             self.assertIsNone(payload["error"])
 
+        for raw_details in (b"\xff", b"[" * 10000 + b"]" * 10000):
+            with tempfile.TemporaryDirectory() as tmpdir:
+                root = Path(tmpdir)
+                output_dir = root / "daily_outputs"
+                output_dir.mkdir()
+                (output_dir / "latest_run.md").write_text(
+                    "Readable report", encoding="utf-8"
+                )
+                details_path = output_dir / "latest_run_details.json"
+                details_path.write_bytes(raw_details)
+                paths = {
+                    "output_dir": output_dir,
+                    "history_db": root / "history.duckdb",
+                    "latest_run_markdown": output_dir / "latest_run.md",
+                    "latest_run_details": details_path,
+                }
+                with patch.object(ui_module, "_review_paths", return_value=paths):
+                    payload = ui_module.latest_review_payload()
+                self.assertIn("latest_run_details", payload["metadata_read_errors"])
+                self.assertIsNone(payload["error"])
+                self.assertEqual(payload["report_text"], "Readable report")
+
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
             output_dir = root / "daily_outputs"
@@ -1874,6 +1896,47 @@ class UITests(unittest.TestCase):
             self.assertEqual(payload["delivery"]["phase"], "send")
             self.assertEqual(payload["report_text"], "Valid report body")
             self.assertEqual(payload["run_id"], "2026-06-01_10-00-00")
+            self.assertIsNone(payload["error"])
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            output_dir = root / "daily_outputs"
+            output_dir.mkdir()
+            (output_dir / "latest_run.md").write_text(
+                "Readable report", encoding="utf-8"
+            )
+            (output_dir / "latest_run_details.json").write_text(
+                json.dumps(
+                    {
+                        "events": [
+                            {"at": "2026-06-01T10:00:30", "label": "completed"}
+                        ],
+                        "report_generated": True,
+                        "delivery": {
+                            "status": "failed",
+                            "accepted_recipients": "reader@example.com",
+                            "rejected_recipients": {"recipient": "editor@example.com"},
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            paths = {
+                "output_dir": output_dir,
+                "history_db": root / "history.duckdb",
+                "latest_run_markdown": output_dir / "latest_run.md",
+                "latest_run_details": output_dir / "latest_run_details.json",
+            }
+            with patch.object(ui_module, "_review_paths", return_value=paths):
+                payload = ui_module.latest_review_payload()
+            self.assertEqual(
+                set(payload["metadata_read_errors"]),
+                {"delivery.accepted_recipients", "delivery.rejected_recipients"},
+            )
+            self.assertEqual(payload["delivery"]["accepted_recipients"], [])
+            self.assertEqual(payload["delivery"]["rejected_recipients"], [])
+            self.assertEqual(payload["delivery_status"], "failed")
+            self.assertEqual(payload["report_status"], "available")
             self.assertIsNone(payload["error"])
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -2002,12 +2065,14 @@ class UITests(unittest.TestCase):
         # rendered in the review and history detail surfaces, escaped through
         # the existing escapeHtml/textContent paths.
         self.assertIn('delivery.phase ? `phase: ${delivery.phase}` : ""', html)
+        self.assertIn("Array.isArray(delivery.accepted_recipients)", html)
+        self.assertIn("Array.isArray(delivery.rejected_recipients)", html)
         self.assertIn(
-            'delivery.accepted_recipients && delivery.accepted_recipients.length ? `accepted: ${delivery.accepted_recipients.join(", ")}` : ""',
+            'acceptedRecipients.length ? `accepted: ${acceptedRecipients.join(", ")}` : ""',
             html,
         )
         self.assertIn(
-            'delivery.rejected_recipients && delivery.rejected_recipients.length ? `rejected: ${delivery.rejected_recipients.join(", ")}` : ""',
+            'rejectedRecipients.length ? `rejected: ${rejectedRecipients.join(", ")}` : ""',
             html,
         )
         # Terminal status closes the stream, then refreshes durable review data.
