@@ -121,8 +121,14 @@ never look like configured personal delivery. Placeholder/default values mean
   (`skipped: not_configured` / `skipped: user_disabled` / `sent` / `failed`,
   per the Outcome separation section) separately from run status; owner-only
   default, explicit opt-ins, and placeholder detection are shipped.
-- **Slice C — Daily automation**: future work; scheduled Run Sessions with an
-  optional Delivery Profile; owner-only default; explicit opt-ins.
+- **Slice C — Daily automation**: implemented. One per-user macOS launchd
+  LaunchAgent (`com.bradley-mankoff.news-daily-run`) plus one atomic local
+  schedule record (`~/.config/news/daily_schedule.json`) provide exactly one
+  validated daily local-time Run Session with a saved Run Preset and an
+  optional Delivery Profile; owner-only default and explicit opt-ins are
+  retained, and the schedule records a bounded lifecycle projection only.
+  The operational decision is recorded in
+  [`docs/adr/0013-local-daily-automation-uses-launchagent.md`](0013-local-daily-automation-uses-launchagent.md).
 
 ## Consequences
 
