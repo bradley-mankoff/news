@@ -10,7 +10,40 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import news_pipeline.config as config_module
+from news_pipeline import model_catalog
 from news_pipeline.config import ModelSamplingSettings, ModelTuningSettings, RuntimeConfigRequest
+
+
+_CUSTOM_CATALOG = """\
+models:
+  my-gemma-4-lm:
+    reference: mlx-community/gemma-4-custom-lm
+    name: Custom Gemma LM
+    backend: mlx-lm
+    hf_repo: mlx-community/gemma-4-custom-lm
+    description: Declared mlx-lm despite the gemma-4 name heuristic.
+  my-vlm-model:
+    reference: mlx-community/plain-vlm
+    name: Custom VLM
+    backend: mlx-vlm
+    hf_repo: mlx-community/plain-vlm
+    description: Declared mlx-vlm despite the plain name.
+  my-ext-model:
+    reference: external-org/openai-compatible
+    name: External Model
+    backend: external
+    hf_repo: external-org/openai-compatible
+    description: Declared external backend.
+  my-mlx-model:
+    reference: mlx-community/example-model
+    name: Example MLX Model
+    backend: mlx-lm
+    hf_repo: mlx-community/example-model
+    context_length: 8192
+    description: A user-verified MLX language model.
+    task_notes:
+      speed: Fast local model.
+"""
 
 
 class ConfigHelperTests(unittest.TestCase):
@@ -674,8 +707,13 @@ class ConfigHelperTests(unittest.TestCase):
         self.assertIsNone(config_module.hf_model_page_url("HTTPS://HUGGINGFACE.CO/foo/bar"))
 
     def test_docs_drift_guard_links_match_model_aliases(self) -> None:
-        """Every MODEL_ALIASES HF page URL must appear in README.md and
-        SETTINGS.md (the docs hardcode the same URLs the UI renders)."""
+        """Every built-in MODEL_ALIASES HF page URL must appear in README.md
+        and SETTINGS.md (the docs hardcode the same URLs the UI renders).
+
+        MODEL_ALIASES is the built-in-only baseline; YAML-added aliases never
+        enter it (they are validated structurally in
+        test_custom_catalog_aliases_reach_runtime_surfaces instead, since user
+        URLs are not tracked repository docs)."""
         repo_root = Path(__file__).resolve().parents[1]
         docs_text = "\n".join(
             (repo_root / name).read_text(encoding="utf-8")
@@ -685,6 +723,88 @@ class ConfigHelperTests(unittest.TestCase):
             url = config_module.hf_model_page_url(alias)
             self.assertIsNotNone(url, alias)
             self.assertIn(url, docs_text, f"{alias} page URL missing from README/SETTINGS")
+
+    def test_custom_catalog_aliases_reach_runtime_surfaces(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "custom_catalog.yaml"
+            path.write_text(_CUSTOM_CATALOG, encoding="utf-8")
+            custom = model_catalog.load_model_catalog(path)
+        with patch.object(model_catalog, "_CATALOG_SNAPSHOT", custom):
+            # Alias resolution maps the YAML alias to its declared reference;
+            # raw references keep the identity fallback.
+            self.assertEqual(
+                config_module.resolve_model_name("my-mlx-model"),
+                "mlx-community/example-model",
+            )
+            self.assertEqual(
+                config_module.resolve_model_name("mlx-community/example-model"),
+                "mlx-community/example-model",
+            )
+            # Declared catalog backends win over the name heuristic: the
+            # gemma-4 name would infer mlx-vlm, plain names would infer mlx-lm.
+            self.assertEqual(config_module.infer_model_backend("my-gemma-4-lm"), "mlx-lm")
+            self.assertEqual(config_module.infer_model_backend("my-vlm-model"), "mlx-vlm")
+            self.assertEqual(
+                config_module.infer_model_backend("mlx-community/gemma-4-custom-lm"),
+                "mlx-lm",
+            )
+            self.assertEqual(config_module.infer_model_backend("my-ext-model"), "external")
+            # Selector options and links include the custom aliases.
+            registry = config_module.runtime_knob_registry()
+            model_knob = next(knob for knob in registry if knob["env"] == "NEWS_MODEL")
+            for alias in ("my-mlx-model", "my-gemma-4-lm", "my-vlm-model", "my-ext-model"):
+                self.assertIn(alias, model_knob["options"])
+                self.assertEqual(
+                    model_knob["option_links"][alias]["page"],
+                    f"https://huggingface.co/{custom[alias].hf_repo}",
+                )
+            for env in ("NEWS_MODEL_ARTICLE_SUMMARY", "NEWS_MODEL_STORY_DRAFTING"):
+                task_knob = next(knob for knob in registry if knob["env"] == env)
+                self.assertIn("my-mlx-model", task_knob["options"])
+                self.assertIn("my-mlx-model", task_knob["option_links"])
+            # HF page URLs work for the custom alias and its URL form.
+            self.assertEqual(
+                config_module.hf_model_page_url("my-mlx-model"),
+                "https://huggingface.co/mlx-community/example-model",
+            )
+            self.assertEqual(
+                config_module.hf_model_page_url("https://hf.co/mlx-community/example-model"),
+                "https://huggingface.co/mlx-community/example-model",
+            )
+            # The external entry still gets a model page (owner/repo id).
+            self.assertEqual(
+                config_module.hf_model_page_url("my-ext-model"),
+                "https://huggingface.co/external-org/openai-compatible",
+            )
+        # The default baseline is untouched once the custom snapshot is gone.
+        self.assertEqual(
+            config_module.resolve_model_name("gemma-4-12b-it-4bit"),
+            config_module.GEMMA_4_12B_IT_4BIT_MODEL_REPO,
+        )
+        self.assertNotIn("my-mlx-model", config_module.MODEL_ALIASES)
+
+    def test_custom_catalog_reserved_collision_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "reserved.yaml"
+            path.write_text(
+                "models:\n"
+                "  qwythos-9b-4bit:\n"
+                "    reference: mlx-community/some-model\n"
+                "    name: Collision Model\n"
+                "    backend: mlx-lm\n"
+                "    hf_repo: mlx-community/some-model\n"
+                "    description: Reserved alias collision.\n",
+                encoding="utf-8",
+            )
+            custom = model_catalog.load_model_catalog(path)
+        with patch.object(model_catalog, "_CATALOG_SNAPSHOT", custom):
+            # The legacy unsupported guard still fires first for the alias
+            # itself, and the registry build rejects the collision so the
+            # alias can never become a selector option.
+            with self.assertRaisesRegex(ValueError, "Unsupported model reference"):
+                config_module.resolve_model_name("qwythos-9b-4bit")
+            with self.assertRaisesRegex(ValueError, "unsupported reference"):
+                config_module.runtime_knob_registry()
 
     def test_mlx_vlm_floor_is_gemma_4_capable(self) -> None:
         """The managed mlx-vlm backend must be able to load the default

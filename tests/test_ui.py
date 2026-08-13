@@ -21,6 +21,7 @@ import yaml
 
 import news_pipeline.config as config_module
 from news_pipeline import ui as ui_module
+from news_pipeline import model_catalog
 from news_pipeline.config import (
     CODEX_TEST_MODEL_ALIAS,
     DELIVERY_MODE_OWNER,
@@ -1863,6 +1864,66 @@ class UITests(unittest.TestCase):
         status, _, body = self._invoke_get("/api/models/metadata")
         self.assertEqual(status, 400)
         self.assertIn("Missing model parameter.", json.loads(body)["error"])
+
+    def test_schema_payload_includes_custom_catalog_entries(self) -> None:
+        """The existing schema payload is the integration surface for merged
+        catalog data: custom aliases appear in catalog cards and selector
+        options with no new endpoint (issue #90)."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            catalog_path = Path(tmpdir) / "custom_catalog.yaml"
+            catalog_path.write_text(
+                "models:\n"
+                "  smoke-model:\n"
+                "    reference: mlx-community/smoke-model\n"
+                "    name: Smoke Model\n"
+                "    backend: mlx-lm\n"
+                "    hf_repo: mlx-community/smoke-model\n"
+                "    description: Offline smoke entry\n",
+                encoding="utf-8",
+            )
+            with patch.dict(
+                os.environ,
+                {model_catalog.MODEL_CATALOG_YAML_ENV_VAR: str(catalog_path)},
+                clear=False,
+            ), patch.object(model_catalog, "_CATALOG_SNAPSHOT", None), patch.object(
+                ui_module, "_runtime_snapshot", return_value=({"runtime": "ok"}, None)
+            ), patch.object(
+                ui_module, "configured_removed_topic_env_vars", return_value=set()
+            ), patch.object(
+                ui_module, "list_presets", return_value={"path": "presets.yaml", "presets": []}
+            ), patch.object(
+                ui_module,
+                "list_model_tuning_presets",
+                return_value={"path": "model.yaml", "presets": []},
+            ), patch.object(
+                ui_module, "_source_summary", return_value={"total": 0}
+            ), patch.object(ui_module, "_recipient_summary", return_value={"total": 0}):
+                payload = ui_module.schema_payload()
+
+        self.assertEqual(
+            [entry["alias"] for entry in payload["model_catalog"]],
+            ["gemma-4-12b-it-4bit", "gemma-e2b-tiny", "smoke-model"],
+        )
+        model_knob = next(knob for knob in payload["knobs"] if knob["env"] == "NEWS_MODEL")
+        self.assertIn("smoke-model", model_knob["options"])
+        self.assertEqual(
+            model_knob["option_links"]["smoke-model"]["page"],
+            "https://huggingface.co/mlx-community/smoke-model",
+        )
+        task_knob = next(knob for knob in payload["knobs"] if knob["env"] == "NEWS_MODEL_STORY_DRAFTING")
+        self.assertIn("smoke-model", task_knob["options"])
+
+    def test_schema_malformed_catalog_uses_error_envelope(self) -> None:
+        """A malformed catalog surfaces through the existing /api/schema
+        error JSON (400) instead of a traceback or a silent empty catalog."""
+        with patch.object(
+            ui_module,
+            "list_model_catalog",
+            side_effect=ValueError("/tmp/bad_catalog.yaml must define models as a mapping."),
+        ):
+            status, _, body = self._invoke_get("/api/schema")
+        self.assertEqual(status, 400)
+        self.assertIn("must define models as a mapping", json.loads(body)["error"])
 
     def test_stream_run_events_error_branches(self) -> None:
         class _Writer:

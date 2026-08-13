@@ -8,15 +8,39 @@ the pipeline's single source of truth (mirrors
 
 from __future__ import annotations
 
+import os
+import tempfile
 import unittest
 from datetime import datetime, timezone
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import httpx
+import yaml
 from huggingface_hub import errors
 
 from news_pipeline import config, model_catalog
+
+
+_CUSTOM_ENTRY = """\
+models:
+  my-mlx-model:
+    reference: mlx-community/example-model
+    name: Example MLX Model
+    backend: mlx-lm
+    hf_repo: mlx-community/example-model
+    context_length: 8192
+    description: A user-verified MLX language model.
+    task_notes:
+      speed: Fast local model.
+  my-vlm-model:
+    reference: mlx-community/example-vlm
+    name: Example MLX VLM
+    backend: mlx-vlm
+    hf_repo: mlx-community/example-vlm
+    description: A user-verified MLX vision-language model.
+"""
 
 
 def _fake_model_info(**overrides: object) -> SimpleNamespace:
@@ -116,6 +140,386 @@ class ModelCatalogTests(unittest.TestCase):
         for entry in model_catalog.CATALOG_MODELS.values():
             self.assertEqual(entry.reference, entry.hf_repo)
             # i.e. reference == hf_repo exactly (no file suffix)
+
+    # -- YAML overlay loading and merge (issue #90) -------------------------
+
+    def test_default_yaml_template_is_empty(self) -> None:
+        """The checked-in template must parse to an empty override map so the
+        default merged catalog stays behavior-compatible with the built-ins."""
+        payload = yaml.safe_load(model_catalog.MODEL_CATALOG_PATH.read_text(encoding="utf-8"))
+        self.assertEqual(payload, {"models": {}})
+        self.assertEqual(model_catalog.load_model_catalog(), dict(model_catalog.BUILTIN_CATALOG_MODELS))
+
+    def test_load_model_catalog_missing_file_preserves_builtins(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            merged = model_catalog.load_model_catalog(Path(tmpdir) / "missing.yaml")
+        self.assertEqual(list(merged), list(model_catalog.BUILTIN_CATALOG_MODELS))
+        self.assertEqual(merged, model_catalog.BUILTIN_CATALOG_MODELS)
+
+    def test_load_model_catalog_null_payload_preserves_builtins(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            null_file = root / "null.yaml"
+            null_file.write_text("null\n", encoding="utf-8")
+            self.assertEqual(model_catalog.load_model_catalog(null_file), model_catalog.BUILTIN_CATALOG_MODELS)
+            models_null = root / "models_null.yaml"
+            models_null.write_text("models: null\n", encoding="utf-8")
+            self.assertEqual(
+                model_catalog.load_model_catalog(models_null),
+                model_catalog.BUILTIN_CATALOG_MODELS,
+            )
+            empty_models = root / "empty_models.yaml"
+            empty_models.write_text("models: {}\n", encoding="utf-8")
+            self.assertEqual(
+                model_catalog.load_model_catalog(empty_models),
+                model_catalog.BUILTIN_CATALOG_MODELS,
+            )
+
+    def test_load_model_catalog_rejects_malformed_shapes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            bad_root = root / "bad_root.yaml"
+            bad_root.write_text("- not-a-mapping\n", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "must contain a YAML mapping"):
+                model_catalog.load_model_catalog(bad_root)
+
+            bad_models = root / "bad_models.yaml"
+            bad_models.write_text("models: []\n", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "must define models as a mapping"):
+                model_catalog.load_model_catalog(bad_models)
+
+            unknown_top = root / "unknown_top.yaml"
+            unknown_top.write_text("models: {}\nunknown: 1\n", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "unknown top-level key") as ctx:
+                model_catalog.load_model_catalog(unknown_top)
+            self.assertIn(str(unknown_top), str(ctx.exception))
+
+    def test_load_model_catalog_existing_alias_metadata_override(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "override.yaml"
+            path.write_text(
+                "models:\n"
+                "  gemma-e2b-tiny:\n"
+                "    name: Local Tiny Wording\n"
+                "    description: Local wording for the tiny verification model.\n"
+                "    context_length: 4096\n"
+                "    task_notes:\n"
+                "      speed: Use this entry for fast local checks.\n",
+                encoding="utf-8",
+            )
+            merged = model_catalog.load_model_catalog(path)
+
+        self.assertEqual(list(merged), list(model_catalog.BUILTIN_CATALOG_MODELS))
+        tiny = merged["gemma-e2b-tiny"]
+        self.assertEqual(tiny.name, "Local Tiny Wording")
+        self.assertEqual(tiny.description, "Local wording for the tiny verification model.")
+        self.assertEqual(tiny.context_length, 4096)
+        # Task notes merge by task key; the built-in note is replaced, other
+        # built-in identity is untouched.
+        self.assertEqual(tiny.task_notes, {"speed": "Use this entry for fast local checks."})
+        self.assertEqual(tiny.reference, model_catalog.BUILTIN_CATALOG_MODELS["gemma-e2b-tiny"].reference)
+        self.assertEqual(tiny.backend, "mlx-lm")
+        self.assertEqual(tiny.hf_repo, model_catalog.BUILTIN_CATALOG_MODELS["gemma-e2b-tiny"].hf_repo)
+        # The other built-in entry is untouched and the default is unchanged.
+        self.assertEqual(merged["gemma-4-12b-it-4bit"], model_catalog.BUILTIN_CATALOG_MODELS["gemma-4-12b-it-4bit"])
+        self.assertEqual(merged[model_catalog.DEFAULT_CATALOG_MODEL_ALIAS].backend, "mlx-vlm")
+
+    def test_load_model_catalog_existing_alias_identity_change_rejected(self) -> None:
+        for field, value in (
+            ("reference", "other-org/other-model"),
+            ("backend", "external"),
+            ("hf_repo", "other-org/other-model"),
+        ):
+            with tempfile.TemporaryDirectory() as tmpdir:
+                path = Path(tmpdir) / "identity.yaml"
+                path.write_text(
+                    f"models:\n  gemma-e2b-tiny:\n    {field}: {value}\n",
+                    encoding="utf-8",
+                )
+                with self.assertRaisesRegex(ValueError, "does not match the built-in entry") as ctx:
+                    model_catalog.load_model_catalog(path)
+                self.assertIn(field, str(ctx.exception))
+                self.assertIn(str(path), str(ctx.exception))
+
+    def test_load_model_catalog_existing_alias_unknown_field_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "unknown_field.yaml"
+            path.write_text(
+                "models:\n  gemma-e2b-tiny:\n    temperature: 0.5\n",
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "unknown field") as ctx:
+                model_catalog.load_model_catalog(path)
+            self.assertIn("temperature", str(ctx.exception))
+
+    def test_load_model_catalog_valid_new_entries(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "custom.yaml"
+            path.write_text(_CUSTOM_ENTRY, encoding="utf-8")
+            merged = model_catalog.load_model_catalog(path)
+
+        # Built-ins first (code order), then YAML additions in YAML order.
+        self.assertEqual(
+            list(merged),
+            ["gemma-4-12b-it-4bit", "gemma-e2b-tiny", "my-mlx-model", "my-vlm-model"],
+        )
+        self.assertEqual(merged["my-mlx-model"].reference, "mlx-community/example-model")
+        self.assertEqual(merged["my-mlx-model"].backend, "mlx-lm")
+        self.assertEqual(merged["my-mlx-model"].context_length, 8192)
+        self.assertEqual(merged["my-mlx-model"].task_notes, {"speed": "Fast local model."})
+        self.assertIsNone(merged["my-vlm-model"].context_length)
+        self.assertEqual(merged["my-vlm-model"].task_notes, {})
+
+    def test_load_model_catalog_new_entry_missing_required_fields(self) -> None:
+        for missing in ("reference", "name", "backend", "hf_repo", "description"):
+            with tempfile.TemporaryDirectory() as tmpdir:
+                path = Path(tmpdir) / "missing.yaml"
+                lines = ["models:", "  my-model:"]
+                for field in ("reference", "name", "backend", "hf_repo", "description"):
+                    if field != missing:
+                        lines.append(f"    {field}: {field}-value")
+                path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+                with self.assertRaisesRegex(ValueError, f"must provide: {missing}"):
+                    model_catalog.load_model_catalog(path)
+
+    def test_load_model_catalog_bad_backend_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "bad_backend.yaml"
+            path.write_text(
+                "models:\n"
+                "  my-model:\n"
+                "    reference: owner/repo\n"
+                "    name: My Model\n"
+                "    backend: llama.cpp\n"
+                "    hf_repo: owner/repo\n"
+                "    description: Unsupported backend.\n",
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "backend.*not supported") as ctx:
+                model_catalog.load_model_catalog(path)
+            self.assertIn("mlx-lm", str(ctx.exception))
+
+    def test_load_model_catalog_reference_identity_rules(self) -> None:
+        cases = {
+            "mismatch": (
+                "    reference: owner/one\n"
+                "    hf_repo: owner/two\n",
+                "reference must equal hf_repo",
+            ),
+            "gguf": (
+                "    reference: owner/repo.gguf\n"
+                "    hf_repo: owner/repo.gguf\n",
+                "GGUF",
+            ),
+            "url": (
+                "    reference: https://huggingface.co/owner/repo\n"
+                "    hf_repo: https://huggingface.co/owner/repo\n",
+                "exactly one '/'",
+            ),
+            "file_qualified": (
+                "    reference: owner/repo/file.gguf\n"
+                "    hf_repo: owner/repo/file.gguf\n",
+                "GGUF",
+            ),
+            "bare_org": (
+                "    reference: owner\n"
+                "    hf_repo: owner\n",
+                "exactly one '/'",
+            ),
+        }
+        for label, (lines, expected) in cases.items():
+            with tempfile.TemporaryDirectory() as tmpdir:
+                path = Path(tmpdir) / f"identity_{label}.yaml"
+                path.write_text(
+                    "models:\n"
+                    "  my-model:\n"
+                    f"{lines}"
+                    "    name: My Model\n"
+                    "    backend: mlx-lm\n"
+                    "    description: Identity rule case.\n",
+                    encoding="utf-8",
+                )
+                with self.assertRaisesRegex(ValueError, expected):
+                    model_catalog.load_model_catalog(path)
+
+    def test_load_model_catalog_invalid_context_length(self) -> None:
+        for raw in ("0", "-1", "true", "'8192'", "1.5"):
+            with tempfile.TemporaryDirectory() as tmpdir:
+                path = Path(tmpdir) / "bad_ctx.yaml"
+                path.write_text(
+                    "models:\n"
+                    "  my-model:\n"
+                    "    reference: owner/repo\n"
+                    "    name: My Model\n"
+                    "    backend: mlx-lm\n"
+                    "    hf_repo: owner/repo\n"
+                    "    description: Bad context length.\n"
+                    f"    context_length: {raw}\n",
+                    encoding="utf-8",
+                )
+                with self.assertRaisesRegex(ValueError, "context_length must be") as ctx:
+                    model_catalog.load_model_catalog(path)
+                self.assertIn("my-model", str(ctx.exception))
+
+    def test_load_model_catalog_invalid_task_notes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            unknown_task = root / "unknown_task.yaml"
+            unknown_task.write_text(
+                "models:\n"
+                "  my-model:\n"
+                "    reference: owner/repo\n"
+                "    name: My Model\n"
+                "    backend: mlx-lm\n"
+                "    hf_repo: owner/repo\n"
+                "    description: Bad task note.\n"
+                "    task_notes:\n"
+                "      not-a-task: nope\n",
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "not a known recommendation task") as ctx:
+                model_catalog.load_model_catalog(unknown_task)
+            self.assertIn("factual_extraction", str(ctx.exception))
+
+            empty_note = root / "empty_note.yaml"
+            empty_note.write_text(
+                "models:\n"
+                "  my-model:\n"
+                "    reference: owner/repo\n"
+                "    name: My Model\n"
+                "    backend: mlx-lm\n"
+                "    hf_repo: owner/repo\n"
+                "    description: Empty note.\n"
+                "    task_notes:\n"
+                "      speed: '  '\n",
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "non-empty string"):
+                model_catalog.load_model_catalog(empty_note)
+
+            bad_notes = root / "bad_notes.yaml"
+            bad_notes.write_text(
+                "models:\n"
+                "  my-model:\n"
+                "    reference: owner/repo\n"
+                "    name: My Model\n"
+                "    backend: mlx-lm\n"
+                "    hf_repo: owner/repo\n"
+                "    description: List notes.\n"
+                "    task_notes: []\n",
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "task_notes must be a mapping"):
+                model_catalog.load_model_catalog(bad_notes)
+
+    def test_load_model_catalog_invalid_aliases(self) -> None:
+        bad_aliases = ("Bad Alias", "UPPER", "-leading", "trailing-", " spaced ", "")
+        for alias in bad_aliases:
+            with tempfile.TemporaryDirectory() as tmpdir:
+                path = Path(tmpdir) / "bad_alias.yaml"
+                path.write_text(
+                    f"models:\n  {alias!r}: {{}}\n" if alias else "models:\n  '': {}\n",
+                    encoding="utf-8",
+                )
+                with self.assertRaisesRegex(ValueError, "alias"):
+                    model_catalog.load_model_catalog(path)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "non_string_alias.yaml"
+            path.write_text("models:\n  123: {}\n", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "aliases must be strings"):
+                model_catalog.load_model_catalog(path)
+
+    def test_catalog_model_backend_helper(self) -> None:
+        # Built-in alias/reference lookups.
+        self.assertEqual(model_catalog.catalog_model_backend("gemma-4-12b-it-4bit"), "mlx-vlm")
+        self.assertEqual(
+            model_catalog.catalog_model_backend("mlx-community/gemma-4-12B-it-4bit"),
+            "mlx-vlm",
+        )
+        self.assertEqual(model_catalog.catalog_model_backend("gemma-e2b-tiny"), "mlx-lm")
+        # Exact matching only: bare org and prefix siblings are unknown.
+        self.assertIsNone(model_catalog.catalog_model_backend("mlx-community"))
+        self.assertIsNone(model_catalog.catalog_model_backend("mlx-community/gemma-4-12B-it-4bit-other"))
+        self.assertIsNone(model_catalog.catalog_model_backend("gpt-4o-mini"))
+        self.assertIsNone(model_catalog.catalog_model_backend(""))
+
+    def test_custom_catalog_aliases_and_backend_lookup(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "custom.yaml"
+            path.write_text(_CUSTOM_ENTRY, encoding="utf-8")
+            custom = model_catalog.load_model_catalog(path)
+        with patch.object(model_catalog, "_CATALOG_SNAPSHOT", custom):
+            self.assertEqual(
+                model_catalog.custom_catalog_aliases(),
+                {
+                    "my-mlx-model": "mlx-community/example-model",
+                    "my-vlm-model": "mlx-community/example-vlm",
+                },
+            )
+            self.assertEqual(model_catalog.catalog_model_backend("my-mlx-model"), "mlx-lm")
+            self.assertEqual(model_catalog.catalog_model_backend("mlx-community/example-vlm"), "mlx-vlm")
+            self.assertIsNone(model_catalog.catalog_model_backend("owner/repo"))
+            records = model_catalog.list_model_catalog()
+            self.assertEqual([record["alias"] for record in records][-2:], ["my-mlx-model", "my-vlm-model"])
+            # Runtime-fit matching and recommendations see the merged registry.
+            self.assertEqual(
+                model_catalog.runtime_fit_for_hf_model(
+                    {"id": "mlx-community/example-model", "tags": [], "library_name": "unknown", "pipeline_tag": None}
+                )["status"],
+                model_catalog.RUNTIME_FIT_MANAGED_MLX_LM,
+            )
+            self.assertEqual(
+                model_catalog.runtime_fit_for_hf_model(
+                    {"id": "mlx-community/example-vlm", "tags": [], "library_name": "unknown", "pipeline_tag": None}
+                )["status"],
+                model_catalog.RUNTIME_FIT_MANAGED_MLX_VLM,
+            )
+            picks = model_catalog.recommend_models("speed")
+            self.assertEqual(
+                [pick["alias"] for pick in picks],
+                ["gemma-e2b-tiny", "my-mlx-model", "gemma-4-12b-it-4bit"],
+            )
+            # The default marker stays code-owned: YAML additions are never default.
+            defaults = [record for record in records if record["is_default"]]
+            self.assertEqual([record["alias"] for record in defaults], ["gemma-4-12b-it-4bit"])
+            self.assertTrue(
+                all(record["hf_url"].startswith("https://huggingface.co/") for record in records)
+            )
+
+    def test_env_path_selection_and_relative_resolution(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            custom_path = Path(tmpdir) / "custom_catalog.yaml"
+            custom_path.write_text(_CUSTOM_ENTRY, encoding="utf-8")
+            with patch.dict(os.environ, {model_catalog.MODEL_CATALOG_YAML_ENV_VAR: str(custom_path)}, clear=False):
+                self.assertEqual(model_catalog._catalog_path_from_env(), custom_path)
+                merged = model_catalog.load_model_catalog()
+            self.assertIn("my-mlx-model", merged)
+        # Missing env var: the checked-in default path.
+        with patch.dict(os.environ, {}, clear=False):
+            self.assertEqual(model_catalog._catalog_path_from_env(), model_catalog.MODEL_CATALOG_PATH)
+        # Relative paths resolve from the repository root.
+        with patch.dict(os.environ, {model_catalog.MODEL_CATALOG_YAML_ENV_VAR: "config/model_catalog.yaml"}, clear=False):
+            self.assertEqual(
+                model_catalog._catalog_path_from_env(),
+                model_catalog.ROOT_DIR / "config" / "model_catalog.yaml",
+            )
+
+    def test_merged_snapshot_honors_env_path_and_restores_default(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            custom_path = Path(tmpdir) / "custom_catalog.yaml"
+            custom_path.write_text(_CUSTOM_ENTRY, encoding="utf-8")
+            with patch.dict(os.environ, {model_catalog.MODEL_CATALOG_YAML_ENV_VAR: str(custom_path)}, clear=False):
+                with patch.object(model_catalog, "_CATALOG_SNAPSHOT", None):
+                    snapshot = model_catalog.CATALOG_MODELS
+            self.assertIn("my-mlx-model", snapshot)
+        # The per-process snapshot falls back to the default (built-ins only).
+        self.assertNotIn("my-mlx-model", model_catalog.CATALOG_MODELS)
+
+    def test_catalog_backends_match_config_supported_backends(self) -> None:
+        self.assertEqual(
+            set(model_catalog.CATALOG_MODEL_BACKENDS),
+            set(config.SUPPORTED_MODEL_BACKENDS),
+        )
 
     def test_recommendations_cover_all_tasks(self) -> None:
         for task in model_catalog.MODEL_RECOMMENDATION_TASKS:

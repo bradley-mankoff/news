@@ -1,0 +1,35 @@
+# User-editable Model Catalog overrides.
+#
+# Built-in entries remain available when this mapping is empty. The catalog
+# is loaded once per process (a startup snapshot): restart the CLI or UI
+# after editing this file. Invalid entries fail closed with a path-specific
+# error instead of silently changing the catalog.
+#
+# Existing built-in aliases may override only presentation/recommendation
+# metadata (name, description, context_length, task_notes). Runtime identity
+# (reference, backend, hf_repo) must be absent or match the built-in entry
+# exactly. Example metadata override:
+#
+# models:
+#   gemma-e2b-tiny:
+#     description: "Local wording for the tiny verification model."
+#     task_notes:
+#       speed: "Use this entry for fast local checks."
+#
+# New aliases must provide reference, name, backend, hf_repo, and
+# description; context_length is optional and task_notes defaults to {}.
+# backends are limited to mlx-lm, mlx-vlm, and external; reference must
+# equal hf_repo (an owner/repo id, never a file-qualified .gguf path).
+# Example complete new entry:
+#
+# models:
+#   my-mlx-model:
+#     reference: mlx-community/example-model
+#     name: Example MLX Model
+#     backend: mlx-lm
+#     hf_repo: mlx-community/example-model
+#     context_length: 8192
+#     description: A user-verified MLX language model.
+#     task_notes:
+#       speed: Fast local model.
+models: {}

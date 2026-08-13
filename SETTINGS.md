@@ -111,6 +111,7 @@ These settings are intentionally not part of the normal Run Settings surface.
 |---|---|---|
 | `NEWS_SOURCES_YAML` | `config/sources.yaml` | Source list path. |
 | `NEWS_RECIPIENTS_YAML` | `config/recipients.yaml` | Path to a local recipients file; the checked-in config/recipients.yaml is a public template. |
+| `NEWS_MODEL_CATALOG_YAML` | `config/model_catalog.yaml` | Path to the user-editable Model Catalog overlay. Relative paths resolve from the repository root. It is process configuration, not a Run Setting: it does not alter the default model and is read once per process (restart the CLI/UI after editing). |
 | `NEWS_OUTPUT_DIR` | `output/daily_outputs` | Dated run-output directory. |
 | `NEWS_HISTORY_DB` | `output/history/news_history.duckdb` | DuckDB run and URL history path. |
 | `NEWS_HISTORY_EXPORT_CSV` | `1` | Export readable history CSVs after writes. |
@@ -141,6 +142,17 @@ active entries; the owner is configured with `NEWS_PRIMARY_RECIPIENT` and is
 included only when also listed here. An explicitly configured
 `NEWS_EMAIL_RECIPIENTS` fallback applies only to an empty catalog, never to a
 catalog whose entries are all paused.
+
+`config/model_catalog.yaml` is the user-editable Model Catalog overlay
+(issue #90): metadata overrides for existing built-in entries (only `name`,
+`description`, `context_length`, `task_notes`) plus complete new entries
+(`reference`, `name`, `backend`, `hf_repo`, `description`). Backends are
+limited to `mlx-lm`, `mlx-vlm`, and `external`; `reference` must equal
+`hf_repo` and never point at a file-qualified `.gguf` path. Malformed or
+unsafe entries fail closed with a path-specific error. `NEWS_MODEL_CATALOG_YAML`
+selects an alternate path; the catalog is a per-process snapshot, so restart
+`news` or the UI after editing. It is not a Run Setting and does not change
+the default model (`DEFAULT_MODEL_ALIAS` stays code-owned).
 
 ## Removed Settings
 
