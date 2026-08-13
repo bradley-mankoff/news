@@ -2022,6 +2022,21 @@ def _redact_delivery_error(
     return message
 
 
+def _safe_model_error(error: BaseException | None) -> str:
+    """Return bounded, credential-redacted provenance for a model failure."""
+    if error is None:
+        return "unknown model error"
+    message = f"{type(error).__name__}: {error}"
+    message = re.sub(r"(?i)(bearer\s+)[^\s]+", r"\1***", message)
+    message = re.sub(
+        r"(?i)((?:api[_-]?key|token|password|secret)\s*[=:]\s*)[^,\s]+",
+        r"\1***",
+        message,
+    )
+    message = message.replace(MODEL_API_KEY, "***") if MODEL_API_KEY else message
+    return _redact_delivery_error(message)
+
+
 def _resolve_google_news_url_details(url: str) -> dict[str, str]:
     """Follow Google News redirect links without treating Google pages as articles."""
     original_url = str(url or "").strip()
@@ -3196,6 +3211,7 @@ def invoke_with_retries(
         max_output_tokens=max_output_tokens,
     )
     transient_retries = 0
+    attempts_made = 0
     with MODEL_CALL_STATS_LOCK:
         calls = MODEL_CALL_STATS.setdefault("calls", {})
         calls[task_name] = int(calls.get(task_name, 0)) + 1
@@ -3206,6 +3222,7 @@ def invoke_with_retries(
         )
     try:
         for attempt in range(1, attempts + 1):
+            attempts_made = attempt
             try:
                 _raise_if_managed_model_server_exited()
                 response = llm.invoke(messages)
@@ -3236,14 +3253,20 @@ def invoke_with_retries(
             retry_attempts=transient_retries,
             used_fallback=last_error is not None,
         )
-    progress_tracker.warning(f"{task_name[:40]} failed after {attempts} attempts")
+    progress_tracker.warning(f"{task_name[:40]} failed after {attempts_made} attempts")
     with MODEL_CALL_STATS_LOCK:
         MODEL_CALL_STATS["fallbacks"] = int(MODEL_CALL_STATS.get("fallbacks", 0)) + 1
         failures = MODEL_CALL_STATS.setdefault("failures", {})
-        failures[task_name] = str(last_error) if last_error else "unknown error"
+        failures[task_name] = _safe_model_error(last_error)
         usage = _model_token_usage_entry_locked(task_name)
         usage["fallback_calls"] = int(usage.get("fallback_calls", 0)) + 1
-    return AIMessage(content=fallback_content)
+    return AIMessage(
+        content=fallback_content,
+        response_metadata={
+            "news_pipeline_used_fallback": True,
+            "news_pipeline_fallback_error": _safe_model_error(last_error),
+        },
+    )
 
 
 def _get_token_encoder():
@@ -3940,6 +3963,15 @@ def _build_title_generation_system_prompt(title_guidance: str) -> str:
     )
 
 
+def _fallback_error_from_response(response: AIMessage) -> str | None:
+    """Read retry-boundary fallback provenance without exposing response data."""
+    metadata = getattr(response, "response_metadata", None)
+    if not isinstance(metadata, dict) or not metadata.get("news_pipeline_used_fallback"):
+        return None
+    error = metadata.get("news_pipeline_fallback_error")
+    return str(error or "model call used deterministic fallback")
+
+
 def _image_art_direction_call(
     *,
     synthesis_body: str,
@@ -3953,6 +3985,7 @@ def _image_art_direction_call(
     failure the deterministic fallback is returned with a warning and an
     error string, and the Title Generation call is never affected.
     """
+    response_fallback_error: str | None = None
     try:
         llm = build_chat_model(
             # Defensive fallback: tuning is always seeded, but a 0-valued env
@@ -3978,16 +4011,24 @@ def _image_art_direction_call(
             task_name="image art prompt generation",
             fallback_content=json.dumps({"image_prompt": fallback_prompt}),
         )
+        response_fallback_error = _fallback_error_from_response(response)
         payload = json.loads(_safe_json_extract(response.content or ""))
         if not isinstance(payload, dict):
             raise ValueError("Image art prompt response was not a JSON object.")
-        raw_prompt = payload.get("image_prompt")
-        if not raw_prompt or not str(raw_prompt).strip():
-            raise ValueError("Image art prompt response missing image_prompt.")
-        return _enforce_text_free_image_prompt(str(raw_prompt)), None
-    except Exception as error:
+        if set(payload) != {"image_prompt"}:
+            raise ValueError("Image art prompt response must contain only image_prompt.")
+        raw_prompt = payload["image_prompt"]
+        if not isinstance(raw_prompt, str) or not raw_prompt.strip():
+            raise ValueError("Image art prompt response requires a non-empty string image_prompt.")
+        return _enforce_text_free_image_prompt(raw_prompt), response_fallback_error
+    except ManagedModelServerExited:
+        raise
+    except (ValueError, TypeError) as error:
+        detail = str(error)
+        if response_fallback_error:
+            detail = f"{response_fallback_error}; {detail}"
         progress_tracker.warning("image art prompt fallback")
-        return _enforce_text_free_image_prompt(fallback_prompt), str(error)
+        return _enforce_text_free_image_prompt(fallback_prompt), detail
 
 
 def _title_generation_call(
@@ -4004,6 +4045,7 @@ def _title_generation_call(
     the deterministic fallback is returned with a warning and an error
     string, and the Image Art Direction call is never affected.
     """
+    response_fallback_error: str | None = None
     try:
         llm = build_chat_model(
             max_tokens=(
@@ -4027,16 +4069,24 @@ def _title_generation_call(
             task_name="title generation",
             fallback_content=json.dumps({"overlay_headline": fallback_headline}),
         )
+        response_fallback_error = _fallback_error_from_response(response)
         payload = json.loads(_safe_json_extract(response.content or ""))
         if not isinstance(payload, dict):
             raise ValueError("Title generation response was not a JSON object.")
-        raw_headline = payload.get("overlay_headline")
-        if not raw_headline or not str(raw_headline).strip():
-            raise ValueError("Title generation response missing overlay_headline.")
-        return _sanitize_overlay_headline(str(raw_headline), fallback_headline), None
-    except Exception as error:
+        if set(payload) != {"overlay_headline"}:
+            raise ValueError("Title generation response must contain only overlay_headline.")
+        raw_headline = payload["overlay_headline"]
+        if not isinstance(raw_headline, str) or not raw_headline.strip():
+            raise ValueError("Title generation response requires a non-empty string overlay_headline.")
+        return _sanitize_overlay_headline(raw_headline, fallback_headline), response_fallback_error
+    except ManagedModelServerExited:
+        raise
+    except (ValueError, TypeError) as error:
+        detail = str(error)
+        if response_fallback_error:
+            detail = f"{response_fallback_error}; {detail}"
         progress_tracker.warning("title generation fallback")
-        return fallback_headline, str(error)
+        return fallback_headline, detail
 
 
 def generate_image_art_brief(

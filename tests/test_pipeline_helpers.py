@@ -1051,6 +1051,8 @@ class PipelineHelperTests(unittest.TestCase):
 
             self.assertEqual(response.content, "ok")
             self.assertEqual(fallback_response.content, "fallback content")
+            self.assertTrue(fallback_response.response_metadata["news_pipeline_used_fallback"])
+            self.assertIn("RuntimeError: boom", fallback_response.response_metadata["news_pipeline_fallback_error"])
 
             snapshots = diagnostics.to_dict()["prompt_snapshots"]
             self.assertEqual(len(snapshots), 2)
@@ -1080,6 +1082,94 @@ class PipelineHelperTests(unittest.TestCase):
         finally:
             pipeline._HF_REVISION_CACHE.clear()
             pipeline._HF_REVISION_CACHE.update(original_cache)
+
+    def test_invoke_with_retries_preserves_managed_server_exit(self) -> None:
+        with patch.object(
+            pipeline,
+            "_raise_if_managed_model_server_exited",
+            side_effect=pipeline.ManagedModelServerExited("server exited"),
+        ):
+            with self.assertRaisesRegex(pipeline.ManagedModelServerExited, "server exited"):
+                pipeline.invoke_with_retries(
+                    SimpleNamespace(max_tokens=12, invoke=MagicMock()),
+                    [HumanMessage(content="hello")],
+                    task_name="image art prompt generation",
+                    fallback_content='{"image_prompt":"fallback"}',
+                    attempts=1,
+                )
+
+    def test_image_and_title_calls_record_independent_diagnostics(self) -> None:
+        diagnostics = RunDiagnostics(
+            run_started_at="2026-06-01T10:00:00",
+            settings={},
+        )
+
+        class FakeLLM:
+            def __init__(self, outcomes: list[object], max_tokens: int) -> None:
+                self._outcomes = iter(outcomes)
+                self.max_tokens = max_tokens
+
+            def invoke(self, _messages):  # noqa: ANN001
+                outcome = next(self._outcomes)
+                if isinstance(outcome, Exception):
+                    raise outcome
+                return outcome
+
+        image_llm = FakeLLM(
+            [
+                httpx.RemoteProtocolError("temporary retry"),
+                AIMessage(content='{"image_prompt":"A documentary scene"}'),
+            ],
+            max_tokens=700,
+        )
+        title_llm = FakeLLM([RuntimeError("title transport failed")], max_tokens=700)
+        with pipeline.MODEL_CALL_STATS_LOCK:
+            pipeline.MODEL_CALL_STATS = {
+                "calls": {},
+                "token_usage": {},
+                "retries": 0,
+                "fallbacks": 0,
+                "failures": {},
+            }
+        with patch.object(pipeline, "ACTIVE_RUN_DIAGNOSTICS", diagnostics), patch.object(
+            pipeline, "build_chat_model", side_effect=[image_llm, title_llm]
+        ), patch.object(pipeline, "_raise_if_managed_model_server_exited"), patch.object(
+            pipeline.time, "sleep", return_value=None
+        ), patch.object(pipeline.progress_tracker, "retrying"), patch.object(
+            pipeline.progress_tracker, "warning"
+        ):
+            result = pipeline.generate_image_art_brief("Summary text", "Report title")
+
+        self.assertTrue(result["image_prompt"].startswith("A documentary scene"))
+        self.assertEqual(result["overlay_headline"], "Report title")
+        self.assertIn("title generation", result["error"])
+        snapshots = diagnostics.to_dict()["prompt_snapshots"]
+        self.assertEqual(
+            [snapshot["task"] for snapshot in snapshots],
+            ["image_art_direction", "title_generation"],
+        )
+        self.assertEqual(
+            [snapshot["task_name"] for snapshot in snapshots],
+            ["image art prompt generation", "title generation"],
+        )
+        self.assertEqual([snapshot["retry_attempts"] for snapshot in snapshots], [1, 0])
+        self.assertFalse(snapshots[0]["used_fallback"])
+        self.assertTrue(snapshots[1]["used_fallback"])
+        self.assertEqual(
+            pipeline.MODEL_CALL_STATS["calls"],
+            {"image art prompt generation": 1, "title generation": 1},
+        )
+        self.assertEqual(pipeline.MODEL_CALL_STATS["retries"], 1)
+        self.assertEqual(pipeline.MODEL_CALL_STATS["fallbacks"], 1)
+        self.assertEqual(
+            pipeline.MODEL_CALL_STATS["token_usage"]["image art prompt generation"]["calls"],
+            1,
+        )
+        self.assertEqual(
+            pipeline.MODEL_CALL_STATS["token_usage"]["title generation"]["fallback_calls"],
+            1,
+        )
+        self.assertIn("RuntimeError: title transport failed", result["error"])
 
     def test_prompt_capture_failure_does_not_block_model_call(self) -> None:
         diagnostics = RunDiagnostics(
@@ -2653,14 +2743,15 @@ class PipelineHelperTests(unittest.TestCase):
             "readable headline will be rendered later by code",
         )
 
+        def fake_art_and_title_invoke(_llm, _messages, *, task_name, **_kwargs):
+            if task_name == "image art prompt generation":
+                return AIMessage(content='{"image_prompt":"A documentary scene with text on signs"}')
+            return AIMessage(content='{"overlay_headline":"This headline should be shortened to eleven words total"}')
+
         with patch.object(pipeline, "build_chat_model", return_value=object()), patch.object(
             pipeline,
             "invoke_with_retries",
-            return_value=AIMessage(
-                content=(
-                    '{"image_prompt":"A documentary scene with text on signs","overlay_headline":"This headline should be shortened to eleven words total"}'
-                )
-            ),
+            side_effect=fake_art_and_title_invoke,
         ):
             art_brief = pipeline.generate_image_art_brief("Summary text", "Report title")
         self.assertIn("Hard constraints", art_brief["image_prompt"])
@@ -2677,9 +2768,8 @@ class PipelineHelperTests(unittest.TestCase):
         with patch.object(pipeline, "build_chat_model", side_effect=RuntimeError("boom")), patch.object(
             pipeline.progress_tracker, "warning"
         ):
-            art_brief = pipeline.generate_image_art_brief("Summary text", "Report title")
-        self.assertEqual(art_brief["overlay_headline"], "Report title")
-        self.assertIn("image_prompt", art_brief)
+            with self.assertRaisesRegex(RuntimeError, "boom"):
+                pipeline.generate_image_art_brief("Summary text", "Report title")
 
     def test_delivery_profile_disabled_records_user_disabled_without_smtp(self) -> None:
         # Explicit disabled mode: skipped: user_disabled, no SMTP object is
@@ -3291,7 +3381,10 @@ class PipelineHelperTests(unittest.TestCase):
         ), patch.object(
             pipeline,
             "_safe_json_extract",
-            return_value='{"image_prompt":"A documentary scene","overlay_headline":"Today in brief"}',
+            side_effect=[
+                '{"image_prompt":"A documentary scene"}',
+                '{"overlay_headline":"Today in brief"}',
+            ],
             create=True,
         ):
             art_brief = pipeline.generate_image_art_brief(
@@ -3339,7 +3432,10 @@ class PipelineHelperTests(unittest.TestCase):
         ), patch.object(
             pipeline,
             "_safe_json_extract",
-            return_value='{"image_prompt":"A documentary scene","overlay_headline":"Today in brief"}',
+            side_effect=[
+                '{"image_prompt":"A documentary scene"}',
+                '{"overlay_headline":"Today in brief"}',
+            ],
             create=True,
         ):
             art_brief = pipeline.generate_image_art_brief("Summary text", "Report title")
@@ -3363,7 +3459,10 @@ class PipelineHelperTests(unittest.TestCase):
         ), patch.object(
             pipeline,
             "_safe_json_extract",
-            return_value='{"image_prompt":"A documentary scene","overlay_headline":"Today in brief"}',
+            side_effect=[
+                '{"image_prompt":"A documentary scene"}',
+                '{"overlay_headline":"Today in brief"}',
+            ],
             create=True,
         ), patch.object(pipeline.progress_tracker, "warning") as warning_mock:
             art_brief = pipeline.generate_image_art_brief(
@@ -3512,7 +3611,15 @@ class PipelineHelperTests(unittest.TestCase):
                 {"image_prompt": "A scene", "overlay_headline": "Today"}
             )),
         ), patch.object(
-            pipeline, "_safe_json_extract", side_effect=lambda s: s, create=True
+            pipeline,
+            "_safe_json_extract",
+            side_effect=[
+                '{"image_prompt":"A scene"}',
+                '{"overlay_headline":"Today"}',
+                '{"image_prompt":"A scene"}',
+                '{"overlay_headline":"Today"}',
+            ],
+            create=True,
         ):
             # Default path: each call gets its own 700-token tuned cap and task.
             pipeline.generate_image_art_brief("Summary text", "Report title")
@@ -3588,6 +3695,22 @@ class PipelineHelperTests(unittest.TestCase):
         self.assertEqual(both_failed["overlay_headline"], "Report title")
         self.assertIn("image art direction", both_failed["error"])
         self.assertIn("title generation", both_failed["error"])
+
+        for invalid_value in ('["scene"]', '{"text":"scene"}', "true", '"   "'):
+            invalid_image = brief_with_responses(
+                [f'{{"image_prompt":{invalid_value}}}', '{"overlay_headline":"Today in brief"}']
+            )
+            self.assertIn("Hard constraints", invalid_image["image_prompt"])
+            self.assertEqual(invalid_image["overlay_headline"], "Today in brief")
+            self.assertIn("image art direction", invalid_image["error"])
+
+        for invalid_value in ('["headline"]', '{"text":"headline"}', "false", '"   "'):
+            invalid_title = brief_with_responses(
+                ['{"image_prompt":"A documentary scene"}', f'{{"overlay_headline":{invalid_value}}}']
+            )
+            self.assertTrue(invalid_title["image_prompt"].startswith("A documentary scene"))
+            self.assertEqual(invalid_title["overlay_headline"], "Report title")
+            self.assertIn("title generation", invalid_title["error"])
 
     def test_image_rendering_and_image_art_helpers(self) -> None:
         with patch("PIL.ImageFont.truetype", return_value="truetype-font"), patch(
@@ -3665,7 +3788,7 @@ class PipelineHelperTests(unittest.TestCase):
         ), patch.object(
             pipeline,
             "_safe_json_extract",
-            return_value='{"image_prompt":"Prompt","overlay_headline":"Headline"}',
+            side_effect=['{"image_prompt":"Prompt"}', '{"overlay_headline":"Headline"}'],
             create=True,
         ):
             generated_brief = pipeline.generate_image_art_brief("Summary text", "Report title")
