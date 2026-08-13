@@ -4,6 +4,8 @@ import contextlib
 import http.client
 import json
 import os
+import shutil
+import subprocess
 import tempfile
 import threading
 import unittest
@@ -968,20 +970,247 @@ class UITests(unittest.TestCase):
             manager._run_process(success_record)
         self.assertEqual(success_record.status, "completed")
         self.assertEqual(success_record.returncode, 0)
-        self.assertIn("[ui] process exited with code 0\n", success_record.lines[-1])
+        self.assertIn("[ui] process exited with code 0", success_record.events[-1]["line"])
 
         failure_record = RunRecord("run-3", ["news", "run"], {})
         with patch.object(ui_module.subprocess, "Popen", side_effect=OSError("boom")):
             manager._run_process(failure_record)
         self.assertEqual(failure_record.status, "failed")
         self.assertEqual(failure_record.returncode, -1)
-        self.assertIn("failed to start process", failure_record.lines[-1])
+        self.assertIn("failed to start process", failure_record.events[-1]["line"])
 
         running_record = RunRecord("run-4", ["news", "run"], {})
         running_record.process = _SuccessProcess()
         manager.runs[running_record.run_id] = running_record
         stopped = manager.stop(running_record.run_id)
         self.assertEqual(stopped["status"], "stopping")
+
+    def test_run_record_normalizes_events_and_suppresses_duplicates(self) -> None:
+        record = RunRecord("run-1", ["news", "run"], {})
+        meter_a = "[3/9 clustering] [###-----------------] 1000/200000 steps"
+        meter_b = "[3/9 clustering] [####----------------] 10000/200000 steps"
+        meter_final = "[3/9 clustering] [####################] 200000/200000 steps"
+        record.append("\r" + meter_a + "\033[K\n")
+        record.append(meter_a + "\n")  # exact duplicate snapshot
+        record.append("WARNING: low coverage\n")
+        record.append(meter_b + "\n")
+        record.append(meter_final + "\n")
+        record.append("[7/9 story drafting] [####----------------] 12/47 stories\n")
+
+        self.assertEqual(
+            [event["kind"] for event in record.events],
+            ["progress", "message", "progress"],
+        )
+        # The clustering snapshot was replaced in place, never appended twice.
+        self.assertEqual(record.events[0]["line"], meter_final)
+        self.assertEqual(record.events[0]["stage"], "clustering")
+        self.assertEqual(record.events[0]["replace"], True)
+        self.assertEqual(record.events[0]["complete"], True)
+        self.assertEqual(record.events[1]["line"], "WARNING: low coverage")
+        self.assertEqual(record.events[2]["line"], "[7/9 story drafting] [####----------------] 12/47 stories")
+        self.assertEqual(record.snapshot()["line_count"], 3)
+        self.assertEqual(record.events[0]["line"], meter_final)
+
+    def test_sse_delivers_progress_replacement_after_cursor_advances(self) -> None:
+        record = RunRecord("run-sse", ["news", "run"], {})
+        meter_a = "[3/9 clustering] [###-----------------] 1000/200000 steps"
+        meter_b = "[3/9 clustering] [####----------------] 10000/200000 steps"
+        record.append(meter_a + "\n")
+        with record.lock:
+            record.status = "running"
+
+        class _Writer:
+            def __init__(self) -> None:
+                self.parts: list[str] = []
+                self.replaced = False
+
+            def write(self, data: bytes) -> int:
+                text = data.decode("utf-8")
+                self.parts.append(text)
+                if meter_a in text and not self.replaced:
+                    self.replaced = True
+                    record.append(meter_b + "\n")
+                    with record.lock:
+                        record.status = "completed"
+                return len(data)
+
+            def flush(self) -> None:
+                return None
+
+        handler = object.__new__(ui_module.NewsUIHandler)
+        handler.path = "/api/runs/run-sse/events"
+        handler.headers = {}
+        handler.rfile = BytesIO(b"")
+        writer = _Writer()
+        handler.wfile = writer  # type: ignore[assignment]
+        handler.send_response = lambda *_args, **_kwargs: None
+        handler.send_header = lambda *_args, **_kwargs: None
+        handler.end_headers = lambda: None
+        with patch.object(ui_module.RUN_MANAGER, "get", return_value=record), patch.object(
+            ui_module.time, "sleep", return_value=None
+        ):
+            handler._stream_run_events(record.run_id)
+
+        self.assertTrue(any(meter_a in part for part in writer.parts))
+        self.assertTrue(any(meter_b in part for part in writer.parts))
+        self.assertTrue(any('"replace": true' in part for part in writer.parts))
+
+    def test_stop_requested_process_resolves_to_stopped(self) -> None:
+        class _StoppableProcess:
+            def __init__(self) -> None:
+                self.stdout = iter([])
+                self.terminated = False
+
+            def wait(self) -> int:
+                return -15
+
+            def poll(self) -> int | None:
+                return None
+
+            def terminate(self) -> None:
+                self.terminated = True
+
+        manager = RunManager()
+        process = _StoppableProcess()
+        record = RunRecord("run-5", ["news", "run"], {})
+        record.process = process
+        manager.runs[record.run_id] = record
+        stopped = manager.stop(record.run_id)
+        self.assertEqual(stopped["status"], "stopping")
+        self.assertTrue(process.terminated)
+        with patch.object(ui_module.subprocess, "Popen", return_value=process):
+            manager._run_process(record)
+        self.assertEqual(record.status, "stopped")
+        self.assertEqual(record.returncode, -15)
+        self.assertIn("[ui] terminate requested", record.events[0]["line"])
+        self.assertIn("[ui] process exited with code -15", record.events[-1]["line"])
+
+    def test_stop_after_worker_has_marked_exit_does_not_relabel_finished_run(self) -> None:
+        class _FinishedProcess:
+            def poll(self) -> int:
+                return 0
+
+        manager = RunManager()
+        record = RunRecord("run-6", ["news", "run"], {})
+        record.process = _FinishedProcess()
+        with record.lock:
+            record.status = "completed"
+        manager.runs[record.run_id] = record
+        snapshot = manager.stop(record.run_id)
+        self.assertEqual(snapshot["status"], "completed")
+        self.assertFalse(record.stop_requested)
+
+    def test_stop_before_process_start_is_honored(self) -> None:
+        class _StoppableProcess:
+            def __init__(self) -> None:
+                self.stdout = iter([])
+                self.terminated = False
+
+            def poll(self) -> int | None:
+                return -15 if self.terminated else None
+
+            def terminate(self) -> None:
+                self.terminated = True
+
+            def wait(self) -> int:
+                return -15
+
+        manager = RunManager()
+        record = RunRecord("run-before-start", ["news", "run"], {})
+        manager.runs[record.run_id] = record
+        self.assertEqual(manager.stop(record.run_id)["status"], "stopping")
+        process = _StoppableProcess()
+        with patch.object(ui_module.subprocess, "Popen", return_value=process):
+            manager._run_process(record)
+        self.assertTrue(process.terminated)
+        self.assertEqual(record.status, "stopped")
+        self.assertEqual(record.returncode, -15)
+
+    def test_stop_racing_process_exit_resolves_to_stopped(self) -> None:
+        wait_started = threading.Event()
+        release_wait = threading.Event()
+
+        class _RacingProcess:
+            def __init__(self) -> None:
+                self.stdout = iter([])
+                self.terminated = False
+
+            def poll(self) -> int | None:
+                return -15 if self.terminated else None
+
+            def terminate(self) -> None:
+                self.terminated = True
+
+            def wait(self) -> int:
+                wait_started.set()
+                release_wait.wait(timeout=2)
+                return -15
+
+        manager = RunManager()
+        record = RunRecord("run-race", ["news", "run"], {})
+        manager.runs[record.run_id] = record
+        process = _RacingProcess()
+        with patch.object(ui_module.subprocess, "Popen", return_value=process):
+            worker = threading.Thread(target=manager._run_process, args=(record,))
+            worker.start()
+            self.assertTrue(wait_started.wait(timeout=2))
+            self.assertEqual(manager.stop(record.run_id)["status"], "stopping")
+            release_wait.set()
+            worker.join(timeout=2)
+        self.assertFalse(worker.is_alive())
+        self.assertTrue(process.terminated)
+        self.assertEqual(record.status, "stopped")
+        self.assertEqual(record.returncode, -15)
+
+    def test_unexpected_nonzero_exit_stays_failed(self) -> None:
+        class _FailingProcess:
+            def __init__(self) -> None:
+                self.stdout = iter([])
+
+            def wait(self) -> int:
+                return 7
+
+            def poll(self) -> int | None:
+                return None
+
+        manager = RunManager()
+        record = RunRecord("run-7", ["news", "run"], {})
+        with patch.object(ui_module.subprocess, "Popen", return_value=_FailingProcess()):
+            manager._run_process(record)
+        self.assertEqual(record.status, "failed")
+        self.assertEqual(record.returncode, 7)
+
+    def test_stream_failure_is_not_reported_as_spawn_failure_and_child_is_reaped(self) -> None:
+        class _BrokenOutput:
+            def __iter__(self):
+                raise RuntimeError("reader boom")
+                yield "unreachable"
+
+        class _LeakingProcess:
+            def __init__(self) -> None:
+                self.stdout = _BrokenOutput()
+                self.terminated = False
+
+            def poll(self) -> int | None:
+                return -15 if self.terminated else None
+
+            def terminate(self) -> None:
+                self.terminated = True
+
+            def wait(self) -> int:
+                return -15
+
+        manager = RunManager()
+        record = RunRecord("run-stream-error", ["news", "run"], {})
+        process = _LeakingProcess()
+        with patch.object(ui_module.subprocess, "Popen", return_value=process):
+            manager._run_process(record)
+        self.assertTrue(process.terminated)
+        self.assertEqual(record.status, "failed")
+        self.assertEqual(record.returncode, -15)
+        lines = [event["line"] for event in record.events]
+        self.assertTrue(any("process output failed: reader boom" in line for line in lines))
+        self.assertFalse(any("failed to start process" in line for line in lines))
 
     def test_run_manager_rejects_overlapping_start(self) -> None:
         class _FakeThread:
@@ -1142,7 +1371,7 @@ class UITests(unittest.TestCase):
 
             fake_record = SimpleNamespace(
                 lock=threading.Lock(),
-                lines=["run line\n"],
+                events=[{"line": "run line\n", "kind": "message"}],
                 status="completed",
                 snapshot=lambda: {"run_id": "run-1", "status": "completed"},
             )
@@ -1152,7 +1381,7 @@ class UITests(unittest.TestCase):
                 status, headers, body = invoke("do_GET", "/api/runs/run-1/events")
             self.assertEqual(status, 200)
             self.assertEqual(headers["Content-Type"], "text/event-stream")
-            self.assertIn("data: {\"line\": \"run line\\n\", \"status\": \"completed\"}", body)
+            self.assertIn('data: {"line": "run line\\n", "kind": "message", "status": "completed"}', body)
             self.assertIn("event: status", body)
 
             log_handler = object.__new__(ui_module.NewsUIHandler)
@@ -1367,7 +1596,7 @@ class UITests(unittest.TestCase):
 
         fake_running_record = SimpleNamespace(
             lock=threading.Lock(),
-            lines=["run line\n"],
+            events=[{"line": "run line\n", "kind": "message"}],
             status="running",
             snapshot=lambda: {"run_id": "run-1"},
         )
@@ -1379,7 +1608,7 @@ class UITests(unittest.TestCase):
 
         fake_done_record = SimpleNamespace(
             lock=threading.Lock(),
-            lines=[],
+            events=[],
             status="completed",
             snapshot=lambda: {"run_id": "run-1"},
         )
@@ -1391,7 +1620,7 @@ class UITests(unittest.TestCase):
 
         fake_sleep_record = SimpleNamespace(
             lock=threading.Lock(),
-            lines=[],
+            events=[],
             status="running",
             snapshot=lambda: {"run_id": "run-1"},
         )
@@ -1403,6 +1632,20 @@ class UITests(unittest.TestCase):
             with self.assertRaises(KeyboardInterrupt):
                 handler = make_handler(_Writer())
                 handler._stream_run_events("run-1")
+
+        fake_stopped_record = SimpleNamespace(
+            lock=threading.Lock(),
+            events=[{"line": "line one", "kind": "message"}],
+            status="stopped",
+            snapshot=lambda: {"run_id": "run-1", "status": "stopped"},
+        )
+        with patch.object(ui_module.RUN_MANAGER, "get", return_value=fake_stopped_record):
+            writer = _Writer()
+            handler = make_handler(writer)
+            handler._stream_run_events("run-1")
+        self.assertTrue(any(part.startswith("event: status") for part in writer.parts))
+        self.assertTrue(any("\"status\": \"stopped\"" in part for part in writer.parts))
+        self.assertTrue(any('data: {"line": "line one", "kind": "message", "status": "stopped"}' in part for part in writer.parts))
 
     def test_review_and_history_routes(self) -> None:
         with patch.object(
@@ -1587,6 +1830,143 @@ class UITests(unittest.TestCase):
                 self.assertIsNone(
                     ui_module.read_historical_report("2026-06-01_10-00-00/../..")
                 )
+
+    def test_run_log_renderer_contracts(self) -> None:
+        html = ui_module.HTML
+        # The log pane is an accessible live region rendered via textContent.
+        self.assertIn('<pre id="logPane" role="log" aria-live="polite"', html)
+        # Stage-keyed reducer replaces the active progress row in place.
+        self.assertIn("logState.progressByStage", html)
+        self.assertIn("function appendLogEvent(payload)", html)
+        self.assertIn("function resetLog()", html)
+        self.assertIn("function stopSpinner()", html)
+        self.assertIn("function finalizeRun(payload, events)", html)
+        # Restrained spinner sequence and explicit terminal glyphs/statuses.
+        self.assertIn("SPINNER_GLYPHS", html)
+        self.assertIn('completed: "✓"', html)
+        self.assertIn('failed: "✗"', html)
+        self.assertIn('stopped: "■"', html)
+        self.assertIn('["completed", "failed", "stopped"]', html)
+        # The spinner decorates, never replaces, the numeric progress text.
+        self.assertIn("SPINNER_GLYPHS[logState.spinnerIndex % SPINNER_GLYPHS.length]} ${text}", html)
+        # All three terminal statuses stop the spinner, close the stream,
+        # clear active controls, and refresh durable review data.
+        self.assertIn("events.close();", html)
+        self.assertIn("refreshReviewData();", html)
+        self.assertIn("stopSpinner();", html)
+        self.assertIn("TERMINAL_STATUSES.includes(payload.status)", html)
+        self.assertIn("events.onerror", html)
+        self.assertIn("pollRunStatus", html)
+        self.assertIn("Live run stream disconnected", html)
+        self.assertIn("Live run stream sent invalid data", html)
+        self.assertIn("Stop failed:", html)
+        # No append-only raw rendering path remains.
+        self.assertNotIn("textContent += payload.line", html)
+        self.assertNotIn("textContent += \`\\n[ui] ", html)
+        # Run start clears and reinitializes the reducer state.
+        run_action = html.split("async function runAction")[1].split("events.addEventListener")[0]
+        self.assertIn("resetLog();", run_action)
+        self.assertIn("startSpinner();", run_action)
+        self.assertIn("new EventSource", run_action)
+
+    @unittest.skipUnless(shutil.which("node"), "node runtime required for browser renderer behavior tests")
+    def test_run_log_renderer_behavior(self) -> None:
+        html = ui_module.HTML
+        start = html.index("    const SPINNER_GLYPHS")
+        end = html.index("    function badgeClass", start)
+        renderer_source = html[start:end]
+        script = f"""
+import assert from "node:assert/strict";
+const logPane = {{ textContent: "", scrollTop: 0, scrollHeight: 0 }};
+const elements = new Map([["logPane", logPane]]);
+function $(id) {{
+  return elements.get(id) || {{ disabled: false, title: "" }};
+}}
+const state = {{ activeRun: null }};
+const statuses = [];
+let controlUpdates = 0;
+let reviewRefreshes = 0;
+function setStatus(text, cls) {{ statuses.push({{ text, cls }}); }}
+function updateRunControls() {{ controlUpdates += 1; }}
+function refreshReviewData() {{ reviewRefreshes += 1; }}
+function requestBody() {{ return {{}}; }}
+const apiCalls = [];
+async function api(path) {{
+  apiCalls.push(path);
+  if (path === "/api/run") return {{ run_id: "run-1" }};
+  return {{ run_id: "run-1", status: "completed", returncode: 0 }};
+}}
+globalThis.window = {{ setTimeout: () => 0 }};
+globalThis.setInterval = () => 1;
+globalThis.clearInterval = () => {{}};
+class FakeEventSource {{
+  static instances = [];
+  constructor(url) {{
+    this.url = url;
+    this.closed = false;
+    FakeEventSource.instances.push(this);
+  }}
+  close() {{ this.closed = true; }}
+  addEventListener() {{}}
+}}
+globalThis.EventSource = FakeEventSource;
+
+{renderer_source}
+
+resetLog();
+const firstMeter = "[3/9 clustering] [###-----------------] 1000/200000 steps";
+const finalMeter = "[3/9 clustering] [####################] 200000/200000 steps";
+appendLogEvent({{ kind: "progress", stage: "clustering", line: firstMeter, complete: false }});
+appendLogEvent({{ kind: "message", line: "WARNING: low coverage" }});
+appendLogEvent({{ kind: "progress", stage: "clustering", line: finalMeter, complete: true }});
+assert.equal(logState.rows.length, 2);
+assert.deepEqual(logState.rows.map(row => row.text), [finalMeter, "WARNING: low coverage"]);
+assert.equal(logState.rows[0].live, false);
+assert.equal(logState.rows[0].complete, true);
+assert.equal(logPane.textContent, `✓ ${{finalMeter}}\\nWARNING: low coverage`);
+appendLogEvent({{ kind: "progress", stage: "clustering", line: finalMeter, complete: true }});
+assert.equal(logState.rows.length, 2);
+assert.equal(logPane.textContent, `✓ ${{finalMeter}}\\nWARNING: low coverage`);
+
+for (const [status, glyph] of [["completed", "✓"], ["failed", "✗"], ["stopped", "■"]]) {{
+  resetLog();
+  state.activeRun = `run-${{status}}`;
+  startSpinner();
+  appendLogEvent({{ kind: "progress", stage: "clustering", line: firstMeter, complete: false }});
+  const events = new FakeEventSource("manual");
+  assert.equal(finalizeRun({{ run_id: `run-${{status}}`, status }}, events), true);
+  assert.equal(events.closed, true);
+  assert.equal(state.activeRun, null);
+  assert.equal(logState.spinnerTimer, null);
+  assert.ok(logPane.textContent.includes(`${{glyph}} [ui] ${{status}}`));
+}}
+const pendingEvents = new FakeEventSource("pending");
+state.activeRun = "run-pending";
+assert.equal(finalizeRun({{ run_id: "run-pending", status: "running" }}, pendingEvents), false);
+assert.equal(pendingEvents.closed, false);
+assert.equal(state.activeRun, "run-pending");
+
+state.activeRun = null;
+await runAction();
+assert.equal(state.activeRun, "run-1");
+const liveEvents = FakeEventSource.instances[FakeEventSource.instances.length - 1];
+liveEvents.onerror();
+await new Promise(resolve => setImmediate(resolve));
+assert.equal(liveEvents.closed, true);
+assert.equal(state.activeRun, null);
+assert.ok(statuses.some(item => item.text.startsWith("Live run stream disconnected")));
+assert.ok(apiCalls.includes("/api/runs/run-1"));
+assert.ok(reviewRefreshes >= 3);
+assert.ok(controlUpdates >= 3);
+"""
+        result = subprocess.run(
+            ["node", "--input-type=module"],
+            input=script,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_report_review_tab_contracts(self) -> None:
         html = ui_module.HTML
