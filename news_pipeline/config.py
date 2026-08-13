@@ -1365,8 +1365,13 @@ def infer_model_backend(model_reference: str) -> str:
     fast in resolve_model_name); it exists for legacy/external configs
     (issue #124 Deviation 3).
     """
-    resolved_name = resolve_model_name(model_reference).lower()
-    if "qwythos" in resolved_name or "gemma-4" in resolved_name or "gemma4" in resolved_name:
+    resolved_name = resolve_model_name(model_reference)
+    if resolved_name == CODEX_TEST_MODEL_NAME:
+        # Guard first: the tiny model's repo id also contains "gemma-4" and
+        # would otherwise be misclassified as mlx-vlm.
+        return MODEL_BACKEND_MLX_LM
+    normalized_name = resolved_name.lower()
+    if "qwythos" in normalized_name or "gemma-4" in normalized_name or "gemma4" in normalized_name:
         return MODEL_BACKEND_MLX_VLM
     return MODEL_BACKEND_MLX_LM
 
