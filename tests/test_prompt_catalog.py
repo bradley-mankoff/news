@@ -473,6 +473,86 @@ Citation precedence: Cite this source only for facts it directly supports.
             any("story_drafting" in item and "[[S1]]" in item for item in violations)
         )
 
+    def test_validate_editorial_instructions_rejects_non_string_values(self) -> None:
+        # Untrusted YAML values are reported as violations instead of leaking
+        # a raw TypeError from substring checks.
+        clean = {
+            "article_summary": "Summarize factually.",
+            "story_scale_screening": "Be conservative.",
+            "story_drafting": "Write a factual story.",
+            "title_generation": "Keep it short.",
+            "image_art_direction": "Depict the event.",
+        }
+        non_string = dict(clean)
+        non_string["story_drafting"] = 42
+        violations = prompt_contracts.validate_editorial_instructions(non_string)
+        self.assertTrue(
+            any("instructions for story_drafting must be a string" in item for item in violations)
+        )
+        self.assertFalse(any("TypeError" in item for item in violations))
+
+    def test_validate_editorial_instructions_allow_braces_for_screening_only(self) -> None:
+        clean = {
+            "article_summary": "Summarize factually.",
+            "story_scale_screening": "Screen {these} braces safely",
+            "story_drafting": "Write a factual story.",
+            "title_generation": "Keep it short.",
+            "image_art_direction": "Depict the event.",
+        }
+        # The default validator still rejects the brace text.
+        self.assertTrue(
+            any(
+                "brace" in item
+                for item in prompt_contracts.validate_editorial_instructions(clean)
+            )
+        )
+        # The explicit story-scale exception (its renderer escapes braces)
+        # accepts the same text.
+        self.assertEqual(
+            prompt_contracts.validate_editorial_instructions(
+                clean,
+                allow_braces_for={"story_scale_screening"},
+            ),
+            [],
+        )
+        # The exception is not a general relaxation: allowing braces for
+        # another task does not let story_scale_screening keep its braces.
+        other_allow = dict(clean)
+        other_allow["story_drafting"] = "Use {curly} braces here"
+        violations = prompt_contracts.validate_editorial_instructions(
+            other_allow,
+            allow_braces_for={"story_drafting"},
+        )
+        # story_scale_screening braces are still rejected even though another
+        # task was allowed.
+        self.assertTrue(
+            any("story_scale_screening" in item and "brace" in item for item in violations)
+        )
+        # A brace in a non-screening task is not itself a brace violation
+        # (only the .format()-rendered screening slot checks braces), and the
+        # drafting brace text stays accepted when explicitly allowed.
+        allowed = prompt_contracts.validate_editorial_instructions(
+            other_allow,
+            allow_braces_for={"story_scale_screening", "story_drafting"},
+        )
+        self.assertFalse(any("brace" in item for item in allowed))
+
+    def test_resolve_instructions_preserves_profile_when_one_task_overridden(self) -> None:
+        # The primitive config relies on: a single YAML override replaces one
+        # task and all other instructions stay from the selected profile.
+        playful = prompt_catalog.PROMPT_PROFILES["playful"].prompts
+        resolved = prompt_catalog.resolve_prompt_instructions(
+            "playful", {"article_summary": "YAML text"}
+        )
+        self.assertEqual(resolved["article_summary"], "YAML text")
+        for task in (
+            "story_scale_screening",
+            "story_drafting",
+            "title_generation",
+            "image_art_direction",
+        ):
+            self.assertEqual(resolved[task], playful[task])
+
 
 if __name__ == "__main__":
     unittest.main()

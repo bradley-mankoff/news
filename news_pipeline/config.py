@@ -4,6 +4,8 @@ The pipeline is intentionally driven by small YAML files in ``config/``:
 
 - ``sources.yaml`` defines article feeds searched by run-mode tier and language.
 - ``recipients.yaml`` defines email recipients and optional personal prompts.
+- ``prompt_overrides.yaml`` defines optional per-task editorial instruction
+  overrides layered under the env/UI override surface.
 
 Environment variables can override Run Settings without editing YAML. See
 ``README.md`` for the full command list.
@@ -28,6 +30,7 @@ from .prompt_catalog import (
     DEFAULT_PROMPT_PROFILE_ID,
     PROMPT_PROFILE_ENV_VAR,
     PROMPT_PROFILE_IDS,
+    PROMPT_TASKS,
     PROMPT_TASK_OVERRIDE_ENV_VARS,
     get_prompt_profile,
 )
@@ -39,6 +42,7 @@ ROOT_DIR = Path(__file__).resolve().parent.parent
 CONFIG_DIR = ROOT_DIR / "config"
 RUN_PRESETS_PATH = CONFIG_DIR / "run_presets.yaml"
 MODEL_TUNING_PRESETS_PATH = CONFIG_DIR / "model_tuning_presets.yaml"
+PROMPT_OVERRIDES_PATH = CONFIG_DIR / "prompt_overrides.yaml"
 CURSORIGNORE_MANAGED_START = "# >>> news-pipeline latest output >>>"
 CURSORIGNORE_MANAGED_END = "# <<< news-pipeline latest output <<<"
 ASSISTANT_CONTEXT_MANAGED_START = "# >>> news-pipeline core context >>>"
@@ -62,6 +66,7 @@ ASSISTANT_CONTEXT_CORE_PATTERNS = (
     "!config/run_presets.yaml",
     "!config/sources.yaml",
     "!config/recipients.yaml",
+    "!config/prompt_overrides.yaml",
     "__pycache__/",
     "**/__pycache__/",
     "*.py[cod]",
@@ -1167,6 +1172,49 @@ def load_model_tuning_presets(path: Path | None = None) -> dict[str, dict[str, A
     return presets
 
 
+def load_prompt_overrides(path: Path | None = None) -> dict[str, str]:
+    """Load user-editable editorial instruction overrides from YAML.
+
+    Supported shape (keys are the canonical ``PROMPT_TASKS``):
+
+    overrides:
+      story_drafting: "Lead with the central event."
+
+    A missing file, a missing/empty ``overrides`` mapping, and blank or null
+    task values are no-ops (the selected built-in Prompt Profile text is
+    used). Unknown task keys and non-string values raise path-specific
+    ``ValueError`` errors so typos fail deterministically instead of being
+    silently dropped. Internal multiline text is preserved; only outer
+    whitespace is stripped.
+    """
+    overrides_path = path or PROMPT_OVERRIDES_PATH
+    payload = _load_yaml_mapping(overrides_path)
+    raw_overrides = payload.get("overrides", {})
+    if raw_overrides is None:
+        raw_overrides = {}
+    if not isinstance(raw_overrides, dict):
+        raise ValueError(f"{overrides_path} must define overrides as a mapping.")
+
+    overrides: dict[str, str] = {}
+    for raw_task, raw_value in raw_overrides.items():
+        task = normalize_preset_id(str(raw_task))
+        if task not in PROMPT_TASKS:
+            valid = ", ".join(PROMPT_TASKS)
+            raise ValueError(
+                f"{overrides_path} contains unknown prompt task {raw_task!r}; "
+                f"valid tasks: {valid}."
+            )
+        if raw_value is None or not str(raw_value).strip():
+            continue
+        if not isinstance(raw_value, str):
+            raise ValueError(
+                f"{overrides_path} prompt task {task!r} must be a string; "
+                f"got {type(raw_value).__name__}."
+            )
+        overrides[task] = raw_value.strip()
+    return overrides
+
+
 def run_preset_env(preset_id: str, path: Path | None = None) -> dict[str, str]:
     normalized = normalize_preset_id(preset_id)
     presets = load_run_presets(path)
@@ -2152,13 +2200,17 @@ def _build_runtime_config(
     prompt_profile_id = _str_env(PROMPT_PROFILE_ENV_VAR, DEFAULT_PROMPT_PROFILE_ID) or DEFAULT_PROMPT_PROFILE_ID
     # Resolved once at import time in pipeline.py; fails fast on unknown ids.
     profile = get_prompt_profile(prompt_profile_id)
-    # Per-stage prompt overrides (NEWS_PROMPT_OVERRIDE_<TASK>): non-empty
-    # values only; empty-but-present counts as unset like sibling knobs.
-    prompt_instruction_overrides = {
+    # Per-stage prompt overrides: durable user edits from
+    # config/prompt_overrides.yaml first, then NEWS_PROMPT_OVERRIDE_<TASK>
+    # env/UI values win per task (profile < YAML < env/UI). Non-empty values
+    # only; empty-but-present counts as unset like sibling knobs.
+    yaml_prompt_overrides = load_prompt_overrides()
+    env_prompt_overrides = {
         task: value
         for task, env_var in PROMPT_TASK_OVERRIDE_ENV_VARS.items()
         if (value := _str_env(env_var, "").strip())
     }
+    prompt_instruction_overrides = {**yaml_prompt_overrides, **env_prompt_overrides}
     # Editorial sentences must never weaken the pipeline-owned output contracts
     # (parsers, retries, citation renderers, sanitizers depend on them); a
     # violating profile or override fails fast at config resolution, not
