@@ -626,6 +626,115 @@ class HistoryStoreTests(unittest.TestCase):
             self.assertIsNotNone(details)
             assert details is not None
             self.assertEqual(details["prompt_snapshots"], [])
+            self.assertEqual(details["metadata_read_errors"], {})
+
+    def test_get_run_details_reports_malformed_fields_and_preserves_valid_data(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "history.duckdb"
+            diagnostics = self._diagnostics("2026-06-01T10:00:00", preset_id="daily")
+            diagnostics.record_delivery(
+                "sent",
+                recipients=["reader@example.com"],
+                phase="send",
+            )
+            diagnostics.record_prompt_snapshot(
+                {
+                    "task": "article_summary",
+                    "messages": [{"type": "human", "content": "hello"}],
+                }
+            )
+            diagnostics.record_report(path="output/daily_outputs/latest_run.md")
+            write_run_history(
+                db_path,
+                run_id="2026-06-01_10-00-00",
+                diagnostics=diagnostics,
+                export_csv=False,
+            )
+            okf_report = db_path.parent / "okf" / "2026-06-01_10-00-00" / "report.md"
+            okf_report.parent.mkdir(parents=True)
+            okf_report.write_text("Report body", encoding="utf-8")
+            with connect(db_path) as con:
+                con.execute(
+                    """
+                    UPDATE runs SET
+                        settings_json = '{broken',
+                        delivery_json = '["not", "a", "dict"]',
+                        events_json = '{"not": "a list"}',
+                        reports_json = '{bad',
+                        artifacts_json = 'not json'
+                    """
+                )
+
+            details = get_run_details(db_path, "2026-06-01_10-00-00")
+            self.assertIsNotNone(details)
+            assert details is not None
+            self.assertEqual(
+                set(details["metadata_read_errors"]),
+                {"settings", "delivery", "events", "reports", "artifacts"},
+            )
+            self.assertIn("invalid JSON", details["metadata_read_errors"]["settings"])
+            self.assertEqual(
+                details["metadata_read_errors"]["delivery"],
+                "expected object metadata",
+            )
+            self.assertEqual(
+                details["metadata_read_errors"]["events"],
+                "expected list metadata",
+            )
+            self.assertIn("invalid JSON", details["metadata_read_errors"]["reports"])
+            self.assertIn("invalid JSON", details["metadata_read_errors"]["artifacts"])
+            # Diagnostics are bounded and never echo raw persisted JSON.
+            for message in details["metadata_read_errors"].values():
+                self.assertNotIn("{broken", message)
+                self.assertNotIn("{bad", message)
+                self.assertNotIn("not json", message)
+            # Scalar status/delivery and OKF-derived report availability survive.
+            self.assertEqual(details["run_status"], "completed")
+            self.assertEqual(details["delivery_status"], "sent")
+            self.assertEqual(details["report_status"], "available")
+            self.assertEqual(details["report_count"], 1)
+            # Relational artifact rows survive malformed artifacts_json.
+            self.assertTrue(
+                any(artifact["family"] == "final_report" for artifact in details["artifacts"])
+            )
+            # Safe defaults apply per field; valid siblings stay decoded.
+            self.assertEqual(details["settings"], {})
+            self.assertEqual(details["delivery"], {})
+            self.assertEqual(details["events"], [])
+            self.assertEqual(details["reports"], [])
+            self.assertEqual(details["stats"]["report_count"], 1)
+            self.assertEqual(details["prompt_snapshots"][0]["task"], "article_summary")
+
+            with connect(db_path) as con:
+                con.execute(
+                    """
+                    UPDATE runs SET delivery_json = '{"status":"failed", "accepted_recipients":"reader@example.com", "rejected_recipients":{"recipient":"editor@example.com"}}'
+                    """
+                )
+            details = get_run_details(db_path, "2026-06-01_10-00-00")
+            self.assertIsNotNone(details)
+            assert details is not None
+            self.assertEqual(details["delivery"]["accepted_recipients"], [])
+            self.assertEqual(details["delivery"]["rejected_recipients"], [])
+            self.assertEqual(
+                details["metadata_read_errors"]["delivery.accepted_recipients"],
+                "expected a JSON list",
+            )
+            self.assertEqual(
+                details["metadata_read_errors"]["delivery.rejected_recipients"],
+                "expected a JSON list",
+            )
+
+            # NULL/empty legacy columns remain non-errors with existing defaults.
+            with connect(db_path) as con:
+                con.execute("UPDATE runs SET stats_json = NULL, events_json = ''")
+            details = get_run_details(db_path, "2026-06-01_10-00-00")
+            self.assertIsNotNone(details)
+            assert details is not None
+            self.assertNotIn("stats", details["metadata_read_errors"])
+            self.assertNotIn("events", details["metadata_read_errors"])
+            self.assertEqual(details["stats"], {})
+            self.assertEqual(details["events"], [])
 
     def _diagnostics(self, started_at: str, *, preset_id: str, blocking: bool = False) -> RunDiagnostics:
         return RunDiagnostics(
