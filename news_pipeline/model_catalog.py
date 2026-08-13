@@ -1,11 +1,13 @@
 """Model Catalog: code-owned registry of curated models and Hugging Face search.
 
-The Model Catalog owns the set of models the pipeline's backends can actually
-launch, with per-task recommendations (factual extraction, structured output,
-synthesis, citation fidelity, speed, context length, translation) instead of
-parameter count or popularity. Every Hugging Face search result is annotated
-with a runtime-fit verdict so the picker never offers a repo the configured
-backend cannot launch (HANDOFF: "Model picker must validate runtime support").
+The Model Catalog owns the code-reviewed baseline of models the pipeline's
+backends can actually launch, with per-task recommendations (factual
+extraction, structured output, synthesis, citation fidelity, speed, context
+length, translation) instead of parameter count or popularity. An optional
+user overlay can add advisory entries; every Hugging Face search result is
+annotated with a runtime-fit verdict so the picker never presents a catalog
+entry as project-verified unless it is code-owned (HANDOFF: "Model picker must
+validate runtime support").
 
 This module is deliberately stdlib-only at module level (``dataclasses``,
 ``logging``, ``os``, ``re``, ``pathlib``, ``typing``) so that
@@ -210,8 +212,13 @@ def _load_catalog_yaml(path: Path) -> dict[str, Any]:
             "pyyaml is required to load the model catalog YAML overlay. "
             "Run: uv add pyyaml"
         ) from exc
-    with path.open("r", encoding="utf-8") as handle:
-        payload = yaml.safe_load(handle) or {}
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            payload = yaml.safe_load(handle)
+    except (OSError, UnicodeError, yaml.YAMLError) as exc:
+        raise ValueError(f"Could not load model catalog {path}: {exc}") from exc
+    if payload is None:
+        return {}
     if not isinstance(payload, dict):
         raise ValueError(f"{path} must contain a YAML mapping.")
     return payload
@@ -315,11 +322,11 @@ def _validate_catalog_entry(
     alias = _validate_catalog_alias(raw_alias, path)
     if not isinstance(raw_entry, dict):
         raise ValueError(f"{path} model {alias!r} must be a mapping.")
-    unknown_fields = set(raw_entry) - set(_CATALOG_ALL_FIELDS)
+    unknown_fields = [field for field in raw_entry if field not in _CATALOG_ALL_FIELDS]
     if unknown_fields:
         raise ValueError(
             f"{path} model {alias!r} has unknown field(s): "
-            f"{', '.join(sorted(unknown_fields))}. Valid fields: "
+            f"{', '.join(repr(field) for field in unknown_fields)}. Valid fields: "
             f"{', '.join(_CATALOG_ALL_FIELDS)}."
         )
 
@@ -337,12 +344,17 @@ def _validate_catalog_entry(
                     "code-owned; override only name, description, "
                     "context_length, and task_notes, or add a new alias."
                 )
-        override_fields = set(raw_entry) - set(_CATALOG_OVERRIDE_FIELDS) - {"reference", "backend", "hf_repo"}
+        override_fields = [
+            field
+            for field in raw_entry
+            if field not in _CATALOG_OVERRIDE_FIELDS
+            and field not in {"reference", "backend", "hf_repo"}
+        ]
         if override_fields:
             raise ValueError(
                 f"{path} model {alias!r} may override only "
                 f"{', '.join(_CATALOG_OVERRIDE_FIELDS)}; unexpected field(s): "
-                f"{', '.join(sorted(override_fields))}."
+                f"{', '.join(repr(field) for field in override_fields)}."
             )
         task_notes = builtin.task_notes
         if "task_notes" in raw_entry:
@@ -416,11 +428,11 @@ def load_model_catalog(path: Path | None = None) -> dict[str, CatalogModel]:
     """
     catalog_path = path or _catalog_path_from_env()
     payload = _load_catalog_yaml(catalog_path)
-    unknown_top = set(payload) - {"models"}
+    unknown_top = [key for key in payload if key != "models"]
     if unknown_top:
         raise ValueError(
             f"{catalog_path} contains unknown top-level key(s): "
-            f"{', '.join(sorted(unknown_top))}. Only 'models' is allowed."
+            f"{', '.join(repr(key) for key in unknown_top)}. Only 'models' is allowed."
         )
     raw_models = payload.get("models", {})
     if raw_models is None:
@@ -570,11 +582,12 @@ def runtime_fit_for_hf_model(info: Mapping[str, Any]) -> dict[str, str]:
     """Classify a Hugging Face model repo into a runtime-fit verdict.
 
     Returns ``{"status": ..., "reason": ...}`` where status is one of the
-    ``RUNTIME_FIT_*`` constants. Rules are conservative (ADR 0010): only
-    curated repos, MLX libraries, and transformers+safetensors text/vision
-    repos are launchable by the managed backends; everything else is
+    ``RUNTIME_FIT_*`` constants. Rules are conservative (ADR 0010): code-owned
+    curated repos and user-declared catalog entries are classified by their
+    declared backend, while MLX libraries and transformers+safetensors
+    text/vision repos are classified by metadata; everything else is
     ``external_only`` (never a hard block - only a verdict plus a picker
-    guard).
+    guard). User YAML metadata is advisory, not project verification.
     """
     repo_id = str(info.get("id") or "")
     tags = {str(tag).lower() for tag in (info.get("tags") or [])}
@@ -590,14 +603,35 @@ def runtime_fit_for_hf_model(info: Mapping[str, Any]) -> dict[str, str]:
         # #124 follow-up 0f982ef); the org-id cases in the runtime-fit matrix
         # pin it as regression guards.
         if repo_id == model.hf_repo:
+            is_builtin = model.alias in BUILTIN_CATALOG_MODELS
+            if model.backend == "external":
+                return {
+                    "status": RUNTIME_FIT_EXTERNAL_ONLY,
+                    "reason": "Catalog entry declares external use; runtime fit is advisory.",
+                }
             if model.backend == "mlx-vlm":
                 return {
                     "status": RUNTIME_FIT_MANAGED_MLX_VLM,
-                    "reason": "Curated model, verified for this backend.",
+                    "reason": (
+                        "Curated model, verified for this backend."
+                        if is_builtin
+                        else "Catalog entry declares managed mlx-vlm; runtime fit is advisory."
+                    ),
                 }
+            if model.backend == "mlx-lm":
+                return {
+                    "status": RUNTIME_FIT_MANAGED_MLX_LM,
+                    "reason": (
+                        "Curated model, verified for this backend."
+                        if is_builtin
+                        else "Catalog entry declares managed mlx-lm; runtime fit is advisory."
+                    ),
+                }
+            # Catalog loading allowlists backends; fail closed if a test or
+            # future caller constructs an invalid CatalogModel directly.
             return {
-                "status": RUNTIME_FIT_MANAGED_MLX_LM,
-                "reason": "Curated model, verified for this backend.",
+                "status": RUNTIME_FIT_EXTERNAL_ONLY,
+                "reason": "Catalog entry declares an unsupported backend; runtime fit is advisory.",
             }
 
     if "gguf" in tags:

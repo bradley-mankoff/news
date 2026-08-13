@@ -1614,6 +1614,21 @@ class UITests(unittest.TestCase):
         self.assertEqual(status, 400)
         self.assertIn("must define models as a mapping", json.loads(body)["error"])
 
+    def test_schema_real_malformed_catalog_uses_error_envelope(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            catalog_path = Path(tmpdir) / "bad_catalog.yaml"
+            catalog_path.write_text("models: [\n", encoding="utf-8")
+            with patch.dict(
+                os.environ,
+                {model_catalog.MODEL_CATALOG_YAML_ENV_VAR: str(catalog_path)},
+                clear=False,
+            ), patch.object(model_catalog, "_CATALOG_SNAPSHOT", None):
+                status, _, body = self._invoke_get("/api/schema")
+
+        self.assertEqual(status, 400)
+        self.assertIn(str(catalog_path), json.loads(body)["error"])
+        self.assertIn("Could not load model catalog", json.loads(body)["error"])
+
     def test_stream_run_events_error_branches(self) -> None:
         class _Writer:
             def __init__(self, fail_prefix: str | None = None) -> None:

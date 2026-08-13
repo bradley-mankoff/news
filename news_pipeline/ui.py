@@ -2635,8 +2635,8 @@ HTML = r"""<!doctype html>
           </section>
           <section class="panel">
             <p class="eyebrow">Model catalog</p>
-            <h2>Curated models and Hugging Face search</h2>
-            <p class="muted">Curated models verified for the managed backends, per-task recommendations, and searchable Hugging Face models with runtime-fit verdicts (hardware fitting lives on the Hugging Face model page).</p>
+            <h2>Model catalog and Hugging Face search</h2>
+            <p class="muted">Built-in models are verified for the managed backends; user-overlay entries and searchable Hugging Face models carry advisory runtime-fit verdicts (hardware fitting lives on the Hugging Face model page).</p>
             <div class="form-grid">
               <label class="field"><span>Recommendation task</span>
                 <select id="recommendationTask">
