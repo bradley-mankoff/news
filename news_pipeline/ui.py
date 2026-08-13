@@ -3580,11 +3580,16 @@ HTML = r"""<!doctype html>
     }
     function renderSchedule() {
       const s = state.schedule || {};
-      const supported = s.supported !== false;
+      const loaded = Boolean(state.schedule);
+      const error = state.scheduleError || s.error || "";
+      const supported = loaded && s.supported !== false;
       const enabled = Boolean(s.enabled);
+      const canConfigure = supported && !error;
+      // A valid status payload with a corrupt state error must still expose
+      // Disable so the fixed launchd job can be removed as recovery.
+      const canDisable = supported && (enabled || Boolean(error));
       const launchd = s.launchd_status || "unknown";
       const last = s.last_run || {};
-      const error = state.scheduleError || s.error || "";
       const deliveryMode = s.delivery_mode || "owner";
       const timeValue = s.time || "";
       $("scheduleMount").innerHTML = `
@@ -3605,10 +3610,10 @@ HTML = r"""<!doctype html>
             <p class="eyebrow">Schedule</p>
             <h2>Daily run settings</h2>
             <div class="form-grid">
-              <label class="field"><span>Time (local)</span><input id="schedule_time" type="time" value="${escapeHtml(timeValue)}" ${supported ? "" : "disabled"}><code>HH:MM</code></label>
-              <label class="field"><span>Run preset</span><select id="schedule_preset" ${supported ? "" : "disabled"}>${schedulePresetOptions()}</select><code>preset id</code></label>
+              <label class="field"><span>Time (local)</span><input id="schedule_time" type="time" value="${escapeHtml(timeValue)}" ${canConfigure ? "" : "disabled"}><code>HH:MM</code></label>
+              <label class="field"><span>Run preset</span><select id="schedule_preset" ${canConfigure ? "" : "disabled"}>${schedulePresetOptions()}</select><code>preset id</code></label>
               <label class="field"><span>Delivery</span>
-                <select id="schedule_delivery_mode" ${supported ? "" : "disabled"}>
+                <select id="schedule_delivery_mode" ${canConfigure ? "" : "disabled"}>
                   <option value="owner"${deliveryMode === "owner" ? " selected" : ""}>Owner only (default)</option>
                   <option value="disabled"${deliveryMode === "disabled" ? " selected" : ""}>No delivery</option>
                   <option value="recipients"${deliveryMode === "recipients" ? " selected" : ""}>Configured recipients</option>
@@ -3617,8 +3622,8 @@ HTML = r"""<!doctype html>
               </label>
             </div>
             <div class="toolbar" style="margin-top:12px">
-              <button id="enableScheduleBtn" class="primary" ${supported ? "" : "disabled"}>${enabled ? "Update schedule" : "Enable schedule"}</button>
-              <button id="disableScheduleBtn" class="danger" ${enabled && supported ? "" : "disabled"}>Disable schedule</button>
+              <button id="enableScheduleBtn" class="primary" ${canConfigure ? "" : "disabled"}>${enabled ? "Update schedule" : "Enable schedule"}</button>
+              <button id="disableScheduleBtn" class="danger" ${canDisable ? "" : "disabled"}>Disable schedule</button>
             </div>
             <p class="muted" style="margin:10px 0 0">Exactly one daily schedule at one local time; no weekly recurrence or cron expressions. Credentials are never stored in schedule state or the launchd plist.</p>
           </section>

@@ -2329,7 +2329,8 @@ assert.ok(controlUpdates >= 3);
         self.assertIn("escapeHtml(s.next_run_label", html)
         # Unsupported platforms disable the controls instead of pretending.
         self.assertIn('${!supported ? `<p class="bad"', html)
-        self.assertIn('${supported ? "" : "disabled"}', html)
+        self.assertIn('${canConfigure ? "" : "disabled"}', html)
+        self.assertIn('${canDisable ? "" : "disabled"}', html)
         # Owner-first default and explicit opt-in vocabulary.
         self.assertIn("Owner only (default)", html)
         self.assertIn("Configured recipients", html)
