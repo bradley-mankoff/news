@@ -56,14 +56,25 @@ def _env() -> dict:
     return env
 
 
+class RecoveryStateError(RuntimeError):
+    """Raised when durable recovery state cannot be read or validated."""
+
+
 def _load_state(cfg: dict) -> tuple[Path, dict]:
     path = ROOT / cfg["state_file"]
     if not path.exists():
         return path, {}
     try:
-        return path, json.loads(path.read_text())
-    except (OSError, ValueError):
-        return path, {}
+        state = json.loads(path.read_text())
+    except (OSError, ValueError) as exc:
+        raise RecoveryStateError(
+            f"cannot read recovery state {path}: {exc}"
+        ) from exc
+    if not isinstance(state, dict):
+        raise RecoveryStateError(
+            f"recovery state {path} must contain a JSON object"
+        )
+    return path, state
 
 
 def _save_state(path: Path, state: dict) -> None:
@@ -94,9 +105,9 @@ def _mark_recovery(state: dict, issue_number: int, marker: dict) -> None:
 def _status_payload(cfg: dict, env: dict, issue_number: int) -> dict:
     _state_path, state = _load_state(cfg)
     record = _record_for_issue(state, issue_number) or {}
+    runs = fetch_workflow_runs(env)
     run = fetch_workflow_run(env, record.get("run_id"))
     if run is None:
-        runs = fetch_workflow_runs(env)
         run = latest_workflow_run(runs, issue_number=issue_number)
     worktree_info = resolve_worktree_info(env, issue_number)
     stored = record.get("recovery") if isinstance(record.get("recovery"), dict) else {}
@@ -329,11 +340,15 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     cfg = load_config()
     env = _env()
-    if args.command == "status":
-        return _print_status(_status_payload(cfg, env, args.issue), args.as_json)
-    if args.command == "resume":
-        return _resume(cfg, env, args.issue)
-    return _discard(cfg, env, args.issue, args.force)
+    try:
+        if args.command == "status":
+            return _print_status(_status_payload(cfg, env, args.issue), args.as_json)
+        if args.command == "resume":
+            return _resume(cfg, env, args.issue)
+        return _discard(cfg, env, args.issue, args.force)
+    except RecoveryStateError as exc:
+        print(f"Recovery state error: {exc}", file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":
