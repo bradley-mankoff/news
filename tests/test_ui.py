@@ -4,6 +4,7 @@ import contextlib
 import http.client
 import json
 import os
+import re
 import tempfile
 import threading
 import unittest
@@ -759,6 +760,231 @@ class UITests(unittest.TestCase):
                 self.assertEqual(delete_recipient("alice@example.com")["deleted"], "alice@example.com")
                 with self.assertRaisesRegex(ValueError, "not found"):
                     delete_recipient("alice@example.com")
+
+    def test_model_tuning_round_trip_persists_reloads_and_deletes(self) -> None:
+        # Full record round trip through the real writer/loader: create a
+        # complete valid preset, prove reload-from-disk through the public
+        # listing, update metadata and tuning, then delete it.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tuning_path = Path(tmpdir) / "model_tuning_presets.yaml"
+            _write_yaml_mapping(tuning_path, {"presets": {}})
+            with patch.object(ui_module, "MODEL_TUNING_PRESETS_PATH", tuning_path):
+                self.assertEqual(list_model_tuning_presets()["presets"], [])
+
+                created = upsert_model_tuning_preset(
+                    {
+                        "id": "concise",
+                        "name": "Concise",
+                        "description": "draft preset",
+                        "model": "gemma-3-12b-it",
+                        "task": "story_drafting",
+                        "tuning": {"temperature": 0.2, "top_p": 0.9, "max_tokens": 1400},
+                    }
+                )
+                self.assertEqual(created["preset"]["id"], "concise")
+
+                # Reload from disk proves the write survived the YAML seam.
+                reloaded = list_model_tuning_presets()["presets"]
+                self.assertEqual([item["id"] for item in reloaded], ["concise"])
+                self.assertEqual(reloaded[0]["task"], "story_drafting")
+                self.assertEqual(
+                    reloaded[0]["tuning"],
+                    {"temperature": 0.2, "top_p": 0.9, "max_tokens": 1400},
+                )
+
+                updated = upsert_model_tuning_preset(
+                    {
+                        "id": "concise",
+                        "name": "Concise Drafts",
+                        "tuning": {"temperature": 0.5, "min_p": 0.1, "model_max_input_tokens": 8192},
+                    }
+                )
+                self.assertEqual(updated["preset"]["name"], "Concise Drafts")
+                self.assertEqual(updated["preset"]["task"], "story_drafting")
+                self.assertEqual(
+                    updated["preset"]["tuning"],
+                    {"temperature": 0.5, "min_p": 0.1, "model_max_input_tokens": 8192},
+                )
+
+                self.assertEqual(delete_model_tuning_preset("concise")["deleted"], "concise")
+                self.assertEqual(list_model_tuning_presets()["presets"], [])
+                self.assertEqual(_load_yaml_mapping(tuning_path)["presets"], {})
+
+    def test_model_tuning_validation_fails_before_write(self) -> None:
+        # Every invalid upsert must raise with the preset id and offending
+        # field/rule, and must leave the prior YAML bytes untouched.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tuning_path = Path(tmpdir) / "model_tuning_presets.yaml"
+            _write_yaml_mapping(
+                tuning_path,
+                {
+                    "presets": {
+                        "draft": {
+                            "name": "Draft",
+                            "tuning": {"temperature": 0.2, "max_tokens": 800},
+                        }
+                    }
+                },
+            )
+            with patch.object(ui_module, "MODEL_TUNING_PRESETS_PATH", tuning_path):
+                before = tuning_path.read_bytes()
+                cases = [
+                    ({"id": "new", "tuning": [1, 2]}, "'new' tuning must be a mapping"),
+                    ({"id": "new", "tuning": None}, "'new' tuning must be a mapping"),
+                    ({"id": "new", "tuning": "hot"}, "'new' tuning must be a mapping"),
+                    ({"id": "new", "tuning": {"foo": 1}}, "'new' has unsupported tuning field 'foo'"),
+                    ({"id": "new", "tuning": {"temperature": "warm"}}, "field 'temperature' must be a number"),
+                    ({"id": "new", "tuning": {"top_p": True}}, "field 'top_p' must be a number"),
+                    ({"id": "new", "tuning": {"temperature": 2.5}}, "field 'temperature' must be between 0 and 2"),
+                    ({"id": "new", "tuning": {"top_p": 1.4}}, "field 'top_p' must be between 0 and 1"),
+                    ({"id": "new", "tuning": {"min_p": -0.1}}, "field 'min_p' must be between 0 and 1"),
+                    ({"id": "new", "tuning": {"top_k": 2.5}}, "field 'top_k' must be a whole number"),
+                    ({"id": "new", "tuning": {"top_k": -1}}, "field 'top_k' must be at least 0"),
+                    ({"id": "new", "tuning": {"presence_penalty": -2.5}}, "field 'presence_penalty' must be between -2 and 2"),
+                    ({"id": "new", "tuning": {"repetition_penalty": 3.5}}, "field 'repetition_penalty' must be between 0 and 3"),
+                    ({"id": "new", "tuning": {"max_tokens": 0}}, "field 'max_tokens' must be a whole number greater than zero"),
+                    ({"id": "new", "tuning": {"max_tokens": 1.5}}, "field 'max_tokens' must be a whole number greater than zero"),
+                    ({"id": "new", "tuning": {"max_tokens": -5}}, "field 'max_tokens' must be a whole number greater than zero"),
+                    ({"id": "new", "tuning": {"max_tokens": "nan"}}, "field 'max_tokens' must be a number"),
+                    ({"id": "new", "tuning": {"article_summary_max_tokens": "inf"}}, "field 'article_summary_max_tokens' must be a number"),
+                    ({"id": "new", "task": "image_art_direction"}, "task 'image_art_direction' is not selectable"),
+                    ({"id": "new", "task": "story_discovery"}, "task 'story_discovery' is not selectable"),
+                    ({"id": "new", "task": "default"}, "task 'default' is not selectable"),
+                    # PATCH on the existing record: a bad final record fails too.
+                    ({"id": "draft", "tuning": {"temperature": 9}}, "field 'temperature' must be between 0 and 2"),
+                ]
+                for body, message in cases:
+                    with self.assertRaisesRegex(ValueError, re.escape(message)):
+                        upsert_model_tuning_preset(body)
+                    self.assertEqual(
+                        tuning_path.read_bytes(),
+                        before,
+                        f"YAML mutated by rejected upsert {body}",
+                    )
+
+                # A metadata-only PATCH preserves and revalidates the existing
+                # mapping, and a valid write still succeeds afterward.
+                renamed = upsert_model_tuning_preset({"id": "draft", "name": "Renamed"})
+                self.assertEqual(renamed["preset"]["name"], "Renamed")
+                self.assertEqual(
+                    renamed["preset"]["tuning"],
+                    {"temperature": 0.2, "max_tokens": 800},
+                )
+
+    def test_model_tuning_http_validation_returns_400(self) -> None:
+        # The real upsert helper behind the HTTP handler: invalid POST/PATCH
+        # bodies produce HTTP 400 JSON errors without mutating the file.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tuning_path = Path(tmpdir) / "model_tuning_presets.yaml"
+            _write_yaml_mapping(tuning_path, {"presets": {}})
+            with patch.object(ui_module, "MODEL_TUNING_PRESETS_PATH", tuning_path):
+                def invoke(method: str, path: str, body: str | None = None) -> tuple[int, dict[str, str], str]:
+                    payload = (body or "").encode("utf-8")
+                    handler = object.__new__(ui_module.NewsUIHandler)
+                    state: dict[str, Any] = {"status": None, "headers": {}}
+                    handler.path = path
+                    handler.headers = {"Content-Length": str(len(payload))}
+                    handler.rfile = BytesIO(payload)  # type: ignore[assignment]
+                    handler.wfile = BytesIO()  # type: ignore[assignment]
+                    handler.send_response = lambda status: state.__setitem__("status", status)
+                    handler.send_header = lambda name, value: state["headers"].__setitem__(name, value)
+                    handler.end_headers = lambda: None
+                    getattr(handler, method)()
+                    return state["status"], state["headers"], handler.wfile.getvalue().decode("utf-8")  # type: ignore[attr-defined]
+
+                status, _, body = invoke(
+                    "do_POST",
+                    "/api/model-tuning-presets",
+                    body=json.dumps({"id": "draft", "tuning": [1, 2]}),
+                )
+                self.assertEqual(status, 400)
+                self.assertEqual(
+                    json.loads(body)["error"],
+                    "Model tuning preset 'draft' tuning must be a mapping.",
+                )
+                self.assertEqual(list_model_tuning_presets()["presets"], [])
+
+                status, _, body = invoke(
+                    "do_PATCH",
+                    "/api/model-tuning-presets",
+                    body=json.dumps({"id": "draft", "tuning": {"top_p": 7}}),
+                )
+                self.assertEqual(status, 400)
+                self.assertEqual(
+                    json.loads(body)["error"],
+                    "Model tuning preset 'draft' field 'top_p' must be between 0 and 1, got 7.",
+                )
+                self.assertEqual(list_model_tuning_presets()["presets"], [])
+
+                status, _, body = invoke(
+                    "do_POST",
+                    "/api/model-tuning-presets",
+                    body=json.dumps({"id": "draft", "tuning": {"temperature": 0.2}}),
+                )
+                self.assertEqual(status, 201)
+                self.assertEqual(json.loads(body)["preset"]["id"], "draft")
+                self.assertEqual(list_model_tuning_presets()["presets"][0]["id"], "draft")
+
+    def test_model_tuning_dedicated_tab_static_contracts(self) -> None:
+        html = ui_module.HTML
+        # Navigation entry and section exist exactly once.
+        self.assertIn('["modelTuning", "Model Tuning", "sliders"]', html)
+        self.assertIn('<section id="modelTuning" class="view">', html)
+        self.assertEqual(html.count('id="modelTuningPresetTable"'), 1)
+        self.assertEqual(html.count('id="modelTuningPresetError"'), 1)
+        # Dedicated, collision-free editor field IDs.
+        for element_id in (
+            "modelTuningPresetId",
+            "modelTuningPresetName",
+            "modelTuningPresetDescription",
+            "modelTuningPresetModel",
+            "modelTuningPresetTask",
+            "modelTuningPresetTuning",
+            "newModelTuningPresetBtn",
+            "reloadModelTuningPresetsBtn",
+            "saveModelTuningPresetBtn",
+            "deleteModelTuningPresetBtn",
+        ):
+            self.assertEqual(html.count(f'id="{element_id}"'), 1, element_id)
+        # The table renders every record (no filteredModelTuningPresets) and
+        # escapes every interpolated value.
+        editor = html.split("function renderModelTuningEditor()")[1].split("function editModelTuningPreset(")[0]
+        self.assertIn("state.modelTuningPresets || []", editor)
+        self.assertNotIn("filteredModelTuningPresets", editor)
+        self.assertIn('escapeHtml(preset.name || preset.id || "")', editor)
+        self.assertIn('escapeHtml(preset.id || "")', editor)
+        self.assertIn('escapeHtml(preset.model || "")', editor)
+        self.assertIn('escapeHtml(preset.task || "global")', editor)
+        self.assertIn('escapeHtml(Object.keys(preset.tuning || {}).join(", "))', editor)
+        # CRUD handlers are wired in wireEvents and use the shared API path
+        # with POST for new IDs and PATCH for existing IDs.
+        wired = html.split("function wireEvents()")[1].split("function applySelectedPresetFromState")[0]
+        for handler in (
+            "newModelTuningPresetBtn",
+            "reloadModelTuningPresetsBtn",
+            "saveModelTuningPresetBtn",
+            "deleteModelTuningPresetBtn",
+        ):
+            self.assertIn(f'$("{handler}").onclick', wired)
+        self.assertIn('api("/api/model-tuning-presets"', html)
+        self.assertIn("method: exists ? \"PATCH\" : \"POST\"", html)
+        self.assertIn("function reloadModelTuningPresets", html)
+        self.assertIn("function saveModelTuningEditor", html)
+        self.assertIn("function deleteModelTuningEditor", html)
+        # Errors stay inline in the dedicated editor without discarding edits.
+        self.assertIn('$("modelTuningPresetError").textContent = err.message', html)
+        # The dedicated editor renders only after the schema state assignment.
+        boot = html.split("async function init()")[1].split("init().catch")[0]
+        self.assertIn("state.modelTuningPresets = (state.schema.model_tuning_presets && state.schema.model_tuning_presets.presets) || [];", boot)
+        self.assertIn("renderModelTuningEditor();", boot)
+        self.assertLess(
+            boot.index("state.modelTuningPresets ="),
+            boot.index("renderModelTuningEditor();"),
+        )
+        # Existing Advanced Settings task-panel surface is untouched.
+        self.assertIn("function renderModelTuningControls(task", html)
+        self.assertIn("function filteredModelTuningPresets(task", html)
+        self.assertIn("function loadModelTuningPresets", html)
 
     def test_build_command_and_preview_payload_variants(self) -> None:
         base_resolution = SimpleNamespace(command_env_delta={"NEWS_PRESET": "daily", "BASE": "1"})
