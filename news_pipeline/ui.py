@@ -785,10 +785,11 @@ _MODEL_TUNING_SAMPLING_RANGES: dict[str, tuple[float, float | None]] = {
 
 
 def _coerce_model_tuning_number(value: Any) -> float:
-    """Coerce a tuning value to a finite float for range/whole-number checks.
+    """Coerce a non-integer tuning value to a finite float for range checks.
 
-    Booleans, non-numeric strings, NaN, and infinity are rejected so the UI
-    write boundary matches runtime numeric coercion exactly.
+    Integer-valued fields use :func:`_coerce_model_tuning_integer` instead so
+    their accepted string spellings remain compatible with runtime ``int()``
+    coercion.
     """
     if isinstance(value, bool):
         raise ValueError(f"got {value!r}, expected a number")
@@ -798,7 +799,10 @@ def _coerce_model_tuning_number(value: Any) -> float:
         except ValueError:
             raise ValueError(f"got {value!r}, expected a number") from None
     elif isinstance(value, (int, float)):
-        number = float(value)
+        try:
+            number = float(value)
+        except OverflowError:
+            raise ValueError(f"got {value!r}, expected a finite number") from None
     else:
         raise ValueError(f"got {value!r}, expected a number")
     if math.isnan(number) or math.isinf(number):
@@ -806,20 +810,40 @@ def _coerce_model_tuning_number(value: Any) -> float:
     return number
 
 
+def _coerce_model_tuning_integer(value: Any) -> int:
+    """Coerce an integer-valued tuning field using the runtime ``int()`` contract."""
+    if isinstance(value, bool):
+        raise ValueError(f"got {value!r}, expected a whole number")
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        try:
+            return int(value.strip())
+        except ValueError:
+            raise ValueError(f"got {value!r}, expected a whole number") from None
+    if isinstance(value, float) and math.isfinite(value) and value.is_integer():
+        return int(value)
+    raise ValueError(f"got {value!r}, expected a whole number")
+
+
 def _validate_model_tuning_sampling_value(preset_id: str, field_name: str, value: Any) -> None:
-    try:
-        number = _coerce_model_tuning_number(value)
-    except ValueError:
-        raise ValueError(
-            f"Model tuning preset {preset_id!r} field {field_name!r} must be a number, "
-            f"got {value!r}."
-        ) from None
+    if field_name == "top_k":
+        try:
+            number = _coerce_model_tuning_integer(value)
+        except ValueError:
+            raise ValueError(
+                f"Model tuning preset {preset_id!r} field {field_name!r} must be a "
+                f"whole number, got {value!r}."
+            ) from None
+    else:
+        try:
+            number = _coerce_model_tuning_number(value)
+        except ValueError:
+            raise ValueError(
+                f"Model tuning preset {preset_id!r} field {field_name!r} must be a number, "
+                f"got {value!r}."
+            ) from None
     minimum, maximum = _MODEL_TUNING_SAMPLING_RANGES[field_name]
-    if field_name == "top_k" and not number.is_integer():
-        raise ValueError(
-            f"Model tuning preset {preset_id!r} field {field_name!r} must be a "
-            f"whole number, got {value!r}."
-        )
     if (minimum is not None and number < minimum) or (maximum is not None and number > maximum):
         bound = (
             f"at least {minimum:g}"
@@ -834,13 +858,13 @@ def _validate_model_tuning_sampling_value(preset_id: str, field_name: str, value
 
 def _validate_model_tuning_token_value(preset_id: str, field_name: str, value: Any) -> None:
     try:
-        number = _coerce_model_tuning_number(value)
+        number = _coerce_model_tuning_integer(value)
     except ValueError:
         raise ValueError(
-            f"Model tuning preset {preset_id!r} field {field_name!r} must be a number, "
-            f"got {value!r}."
+            f"Model tuning preset {preset_id!r} field {field_name!r} must be a "
+            f"whole number greater than zero, got {value!r}."
         ) from None
-    if not number.is_integer() or number < 1:
+    if number < 1:
         raise ValueError(
             f"Model tuning preset {preset_id!r} field {field_name!r} must be a "
             f"whole number greater than zero, got {value!r}."
@@ -850,11 +874,11 @@ def _validate_model_tuning_token_value(preset_id: str, field_name: str, value: A
 def _validate_model_tuning_record(preset_id: str, record: Mapping[str, Any]) -> None:
     """Validate a complete model-tuning record before it is persisted.
 
-    Mirrors the runtime vocabulary and numeric contract in
-    news_pipeline/config.py so neither the dedicated editor nor the Advanced
-    Settings task panels can write tuning that runtime resolution would reject.
-    The record is validated as-is; accepted field names and values are stored
-    unchanged.
+    Mirrors the runtime vocabulary and bounds in news_pipeline/config.py while
+    applying the stricter integer spelling contract used by runtime ``int()``
+    coercion. Neither the dedicated editor nor the Advanced Settings task
+    panels can write tuning that runtime resolution would reject. The record is
+    validated as-is; accepted field names and values are stored unchanged.
     """
     task = str(record.get("task") or "").strip()
     if task and task not in _MODEL_TUNING_PRESET_TASK_SCOPES:
@@ -905,6 +929,14 @@ def _coerce_model_tuning_mapping(
     return dict(raw)
 
 
+def _merged_model_tuning_text(
+    existing: Mapping[str, Any], updates: Mapping[str, Any], field_name: str
+) -> str:
+    if field_name in updates:
+        return str(updates.get(field_name) or "").strip()
+    return str(existing.get(field_name) or "").strip()
+
+
 def upsert_model_tuning_preset(body: dict[str, Any], *, append_only: bool = False) -> dict[str, Any]:
     preset_id = normalize_preset_id(str(body.get("id") or body.get("preset_id") or ""))
     if not preset_id:
@@ -920,9 +952,9 @@ def upsert_model_tuning_preset(body: dict[str, Any], *, append_only: bool = Fals
     record = {
         "id": preset_id,
         "name": str(updates.get("name") or existing.get("name") or preset_id).strip(),
-        "description": str(updates.get("description") or existing.get("description") or "").strip(),
-        "model": str(updates.get("model") or existing.get("model") or "").strip(),
-        "task": str(updates.get("task") or existing.get("task") or "").strip(),
+        "description": _merged_model_tuning_text(existing, updates, "description"),
+        "model": _merged_model_tuning_text(existing, updates, "model"),
+        "task": _merged_model_tuning_text(existing, updates, "task"),
         "tuning": tuning if tuning is not None else dict(existing.get("tuning") or {}),
         "modified_at": _now_iso_local(),
     }

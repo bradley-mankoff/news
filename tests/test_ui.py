@@ -17,6 +17,7 @@ from unittest.mock import patch
 
 import yaml
 
+import news_pipeline.config as config_module
 from news_pipeline import ui as ui_module
 from news_pipeline.config import (
     CODEX_TEST_MODEL_ALIAS,
@@ -806,9 +807,73 @@ class UITests(unittest.TestCase):
                     {"temperature": 0.5, "min_p": 0.1, "model_max_input_tokens": 8192},
                 )
 
+                # Explicit empty optional fields clear an existing scope;
+                # omission above still preserves it.
+                cleared = upsert_model_tuning_preset(
+                    {
+                        "id": "concise",
+                        "description": "",
+                        "model": "",
+                        "task": "",
+                        "tuning": {"temperature": 0.5},
+                    }
+                )
+                self.assertEqual(cleared["preset"]["description"], "")
+                self.assertEqual(cleared["preset"]["model"], "")
+                self.assertEqual(cleared["preset"]["task"], "")
+                reloaded_cleared = list_model_tuning_presets()["presets"][0]
+                self.assertEqual(reloaded_cleared.get("description", ""), "")
+                self.assertEqual(reloaded_cleared.get("model", ""), "")
+                self.assertEqual(reloaded_cleared.get("task", ""), "")
+
                 self.assertEqual(delete_model_tuning_preset("concise")["deleted"], "concise")
                 self.assertEqual(list_model_tuning_presets()["presets"], [])
                 self.assertEqual(_load_yaml_mapping(tuning_path)["presets"], {})
+
+    def test_model_tuning_string_values_round_trip_through_runtime(self) -> None:
+        # Advanced Settings controls submit numeric HTML values as strings.
+        # Keep those strings in YAML while proving the runtime resolver accepts
+        # every integer-valued field using its int() coercion contract.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tuning_path = Path(tmpdir) / "model_tuning_presets.yaml"
+            _write_yaml_mapping(tuning_path, {"presets": {}})
+            string_tuning = {
+                "temperature": "0.2",
+                "top_p": "0.9",
+                "top_k": "0",
+                "min_p": "0",
+                "presence_penalty": "-2",
+                "repetition_penalty": "3",
+                "max_tokens": "1400",
+                "model_max_input_tokens": "1",
+                "article_summary_max_tokens": "1",
+                "story_drafting_max_tokens": "1",
+                "story_scale_screening_max_tokens": "1",
+                "title_generation_max_tokens": "1",
+            }
+            with patch.object(ui_module, "MODEL_TUNING_PRESETS_PATH", tuning_path):
+                created = upsert_model_tuning_preset(
+                    {"id": "strings", "task": "story_drafting", "tuning": string_tuning}
+                )
+                self.assertEqual(created["preset"]["tuning"], string_tuning)
+                self.assertEqual(
+                    list_model_tuning_presets()["presets"][0]["tuning"], string_tuning
+                )
+
+                resolved = config_module._apply_model_tuning_preset(
+                    config_module.ModelTuningSettings(task_sampling={}),
+                    preset_id="strings",
+                    preset=created["preset"],
+                    assignment_task="story_drafting",
+                )
+                sampling = resolved.task_sampling["story_drafting"]
+                self.assertEqual(sampling.temperature, 0.2)
+                self.assertEqual(sampling.top_k, 0)
+                self.assertEqual(resolved.model_max_input_tokens, 1)
+                self.assertEqual(resolved.article_summary_max_tokens, 1)
+                self.assertEqual(resolved.story_drafting_max_tokens, 1)
+                self.assertEqual(resolved.story_scale_screening_max_tokens, 1)
+                self.assertEqual(resolved.title_generation_max_tokens, 1)
 
     def test_model_tuning_validation_fails_before_write(self) -> None:
         # Every invalid upsert must raise with the preset id and offending
@@ -845,8 +910,26 @@ class UITests(unittest.TestCase):
                     ({"id": "new", "tuning": {"max_tokens": 0}}, "field 'max_tokens' must be a whole number greater than zero"),
                     ({"id": "new", "tuning": {"max_tokens": 1.5}}, "field 'max_tokens' must be a whole number greater than zero"),
                     ({"id": "new", "tuning": {"max_tokens": -5}}, "field 'max_tokens' must be a whole number greater than zero"),
-                    ({"id": "new", "tuning": {"max_tokens": "nan"}}, "field 'max_tokens' must be a number"),
-                    ({"id": "new", "tuning": {"article_summary_max_tokens": "inf"}}, "field 'article_summary_max_tokens' must be a number"),
+                    (
+                        {"id": "new", "tuning": {"max_tokens": "nan"}},
+                        "field 'max_tokens' must be a whole number greater than zero",
+                    ),
+                    (
+                        {"id": "new", "tuning": {"article_summary_max_tokens": "inf"}},
+                        "field 'article_summary_max_tokens' must be a whole number greater than zero",
+                    ),
+                    (
+                        {"id": "new", "tuning": {"top_k": "1.0"}},
+                        "field 'top_k' must be a whole number",
+                    ),
+                    (
+                        {"id": "new", "tuning": {"max_tokens": "1400.0"}},
+                        "field 'max_tokens' must be a whole number greater than zero",
+                    ),
+                    (
+                        {"id": "new", "tuning": {"max_tokens": "1e3"}},
+                        "field 'max_tokens' must be a whole number greater than zero",
+                    ),
                     ({"id": "new", "task": "image_art_direction"}, "task 'image_art_direction' is not selectable"),
                     ({"id": "new", "task": "story_discovery"}, "task 'story_discovery' is not selectable"),
                     ({"id": "new", "task": "default"}, "task 'default' is not selectable"),
