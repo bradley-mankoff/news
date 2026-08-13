@@ -2451,6 +2451,189 @@ assert.ok(controlUpdates >= 3);
         )
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    @unittest.skipUnless(shutil.which("node"), "node runtime required for model tuning editor behavior tests")
+    def test_model_tuning_editor_behavior(self) -> None:
+        html = ui_module.HTML
+        start = html.index("    function renderModelTuningEditor()")
+        end = html.index("    function confirmAction", start)
+        editor_source = html[start:end]
+        script = f"""
+import assert from "node:assert/strict";
+
+const fieldIds = [
+  "modelTuningPresetTable",
+  "modelTuningPresetError",
+  "modelTuningPresetId",
+  "modelTuningPresetName",
+  "modelTuningPresetDescription",
+  "modelTuningPresetModel",
+  "modelTuningPresetTask",
+  "modelTuningPresetTuning",
+];
+const elements = new Map(fieldIds.map(id => [id, {{ value: "", textContent: "", innerHTML: "", dataset: {{}} }}]));
+const table = elements.get("modelTuningPresetTable");
+let renderedRows = [];
+const serverPresets = [
+  {{
+    id: "concise",
+    name: "Concise",
+    description: "Short drafting output",
+    model: "model-a",
+    task: "story_drafting",
+    tuning: {{ temperature: 0.2 }},
+  }},
+];
+const state = {{
+  modelTuningPresets: structuredClone(serverPresets),
+  selectedModelTuningPresetId: "",
+}};
+const requests = [];
+const statuses = [];
+let failSave = false;
+let failReload = false;
+const clone = value => JSON.parse(JSON.stringify(value));
+function $(id) {{
+  const element = elements.get(id);
+  if (!element) throw new Error(`Unexpected element: ${{id}}`);
+  return element;
+}}
+function value(id) {{ return $(id).value; }}
+function escapeHtml(value) {{
+  return String(value).replace(/[&<>"']/g, char => ({{
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    '"': "&quot;",
+    "'": "&#39;",
+  }})[char]);
+}}
+function renderModelTuningPanels() {{}}
+function setStatus(text, cls) {{ statuses.push({{ text, cls }}); }}
+globalThis.document = {{
+  querySelectorAll(selector) {{
+    assert.equal(selector, "#modelTuningPresetTable tr[data-id]");
+    renderedRows = state.modelTuningPresets.map(preset => ({{ dataset: {{ id: preset.id }}, onclick: null }}));
+    return renderedRows;
+  }},
+}};
+async function api(path, options = {{}}) {{
+  const method = options.method || "GET";
+  const body = options.body ? JSON.parse(options.body) : null;
+  requests.push({{ path, method, body }});
+  if (method === "GET") {{
+    if (failReload) throw new Error("reload unavailable");
+    return {{ presets: clone(serverPresets) }};
+  }}
+  if (method === "POST" || method === "PATCH") {{
+    if (failSave) throw new Error("save unavailable");
+    const index = serverPresets.findIndex(preset => preset.id === body.id);
+    if (method === "POST") assert.equal(index, -1);
+    if (index === -1) serverPresets.push(clone(body));
+    else serverPresets[index] = clone(body);
+    return {{ preset: clone(body) }};
+  }}
+  if (method === "DELETE") {{
+    const id = new URL(`http://localhost${{path}}`).searchParams.get("id");
+    const index = serverPresets.findIndex(preset => preset.id === id);
+    assert.notEqual(index, -1);
+    serverPresets.splice(index, 1);
+    return {{ deleted: id }};
+  }}
+  throw new Error(`Unexpected method: ${{method}}`);
+}}
+async function loadModelTuningPresets() {{
+  const data = await api("/api/model-tuning-presets");
+  state.modelTuningPresets = data.presets || [];
+  renderModelTuningPanels();
+  renderModelTuningEditor();
+}}
+function confirmAction() {{ return Promise.resolve(true); }}
+
+{editor_source}
+
+renderModelTuningEditor();
+assert.equal(renderedRows.length, 1);
+renderedRows[0].onclick();
+assert.equal($("modelTuningPresetId").value, "concise");
+assert.equal($("modelTuningPresetName").value, "Concise");
+assert.equal(state.selectedModelTuningPresetId, "concise");
+assert.ok(table.innerHTML.includes('class="selected"'));
+
+$("modelTuningPresetId").value = "new-preset";
+$("modelTuningPresetName").value = "New preset";
+$("modelTuningPresetDescription").value = "Created in the editor";
+$("modelTuningPresetModel").value = "model-b";
+$("modelTuningPresetTask").value = "title_generation";
+$("modelTuningPresetTuning").value = '{{"temperature":0.4,"max_tokens":1200}}';
+await saveModelTuningEditor();
+const createRequest = requests.find(request => request.method === "POST");
+assert.deepEqual(createRequest.body, {{
+  id: "new-preset",
+  name: "New preset",
+  description: "Created in the editor",
+  model: "model-b",
+  task: "title_generation",
+  tuning: {{ temperature: 0.4, max_tokens: 1200 }},
+}});
+assert.equal(state.selectedModelTuningPresetId, "new-preset");
+assert.equal($("modelTuningPresetError").textContent, "");
+
+$("modelTuningPresetName").value = "Edited preset";
+$("modelTuningPresetTuning").value = '{{"temperature":0.6}}';
+await saveModelTuningEditor();
+const patchRequests = requests.filter(request => request.method === "PATCH");
+assert.equal(patchRequests.length, 1);
+assert.equal(patchRequests[0].body.name, "Edited preset");
+assert.deepEqual(patchRequests[0].body.tuning, {{ temperature: 0.6 }});
+
+const requestCountBeforeInvalidJson = requests.length;
+$("modelTuningPresetTuning").value = "{{";
+await saveModelTuningEditor();
+assert.equal(requests.length, requestCountBeforeInvalidJson);
+assert.match($("modelTuningPresetError").textContent, /^Tuning JSON is not valid:/);
+assert.equal($("modelTuningPresetTuning").value, "{{");
+
+$("modelTuningPresetTuning").value = "[1, 2]";
+await saveModelTuningEditor();
+assert.equal(requests.length, requestCountBeforeInvalidJson);
+assert.equal($("modelTuningPresetError").textContent, "Tuning must be a JSON object (mapping).");
+assert.equal($("modelTuningPresetTuning").value, "[1, 2]");
+
+failSave = true;
+$("modelTuningPresetName").value = "Keep this edit";
+$("modelTuningPresetTuning").value = '{{"temperature":0.7}}';
+await saveModelTuningEditor();
+assert.equal($("modelTuningPresetError").textContent, "save unavailable");
+assert.equal($("modelTuningPresetName").value, "Keep this edit");
+assert.equal($("modelTuningPresetTuning").value, '{{"temperature":0.7}}');
+failSave = false;
+
+serverPresets.length = 0;
+await reloadModelTuningPresets();
+assert.equal(state.selectedModelTuningPresetId, "");
+assert.equal($("modelTuningPresetId").value, "");
+assert.equal($("modelTuningPresetTuning").value, "{{}}");
+assert.equal(table.innerHTML.includes('data-id="new-preset"'), false);
+
+serverPresets.push({{ id: "remove-me", name: "Remove me", tuning: {{}} }});
+await loadModelTuningPresets();
+editModelTuningPreset("remove-me");
+await deleteModelTuningEditor();
+assert.ok(requests.some(request => request.method === "DELETE" && request.path.includes("remove-me")));
+assert.equal(state.modelTuningPresets.length, 0);
+assert.equal($("modelTuningPresetId").value, "");
+assert.equal($("modelTuningPresetTuning").value, "{{}}");
+assert.ok(statuses.some(status => status.text === "Model tuning preset remove-me deleted."));
+"""
+        result = subprocess.run(
+            ["node", "--input-type=module"],
+            input=script,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_report_review_tab_contracts(self) -> None:
         html = ui_module.HTML
         # The tab exists with a dedicated icon and section mounts.

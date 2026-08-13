@@ -3419,6 +3419,7 @@ HTML = r"""<!doctype html>
       $("modelTuningPresetTask").value = preset ? preset.task || "" : "";
       $("modelTuningPresetTuning").value = preset ? JSON.stringify(preset.tuning || {}, null, 2) : "{}";
       state.selectedModelTuningPresetId = id;
+      renderModelTuningEditor();
     }
     function collectModelTuningPresetEditorBody() {
       const rawTuning = value("modelTuningPresetTuning").trim();
@@ -3488,7 +3489,7 @@ HTML = r"""<!doctype html>
       if (state.selectedModelTuningPresetId) {
         const preset = state.modelTuningPresets.find(item => item.id === state.selectedModelTuningPresetId);
         if (preset) editModelTuningPreset(preset.id);
-        else state.selectedModelTuningPresetId = "";
+        else editModelTuningPreset("");
       }
       $("modelTuningPresetError").textContent = "";
       setStatus("Model tuning presets reloaded.", "good");
