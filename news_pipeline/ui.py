@@ -42,7 +42,11 @@ from .config import (
     runtime_knob_registry,
 )
 from .diagnostics import _duration_label, run_status_from_events
-from .history_store import get_run_details, list_recent_run_summaries
+from .history_store import (
+    _normalize_delivery_recipients,
+    get_run_details,
+    list_recent_run_summaries,
+)
 from .okf import okf_run_bundle_path
 from .source_catalog import (
     DeleteSources,
@@ -340,13 +344,52 @@ def _run_id_from_started_at(started_at: str) -> str:
     return started_at.replace("T", "_").replace(":", "-")[:19]
 
 
+def _details_field(
+    details: dict[str, Any],
+    key: str,
+    shape: str,
+    errors: dict[str, str],
+    *,
+    default: Any,
+) -> Any:
+    """Read one latest-details field with a bounded shape diagnostic.
+
+    ``None`` and absent keys keep the safe default without a warning; a
+    wrong top-level shape (or a non-object list item) records a concise
+    field-specific error and returns the default so unrelated fields and
+    the rolling review text remain usable.
+    """
+    value = details.get(key)
+    if value is None:
+        return default
+    if shape == "list":
+        if not isinstance(value, list):
+            if key not in errors:
+                errors[key] = "expected a JSON list"
+            return default
+        items = [item for item in value if isinstance(item, dict)]
+        if len(items) != len(value) and key not in errors:
+            errors[key] = "expected object list items"
+        return items
+    if not isinstance(value, dict):
+        if key not in errors:
+            errors[key] = "expected a JSON object"
+        return default
+    return value
+
+
 def latest_review_payload() -> dict[str, Any]:
     """Combine the rolling ``latest_run.md``/details into one JSON payload.
 
     Tolerant read: a missing DuckDB, details file, or review file degrades to
-    a visible empty/error state instead of failing UI boot.
+    a visible empty/error state instead of failing UI boot. The details
+    document and review Markdown are read independently: recoverable metadata
+    corruption is reported through ``metadata_read_errors`` (normally ``{}``)
+    while readable review text and valid detail fields stay available.
+    ``error`` remains reserved for unexpected whole-operation failures.
     """
     paths = _review_paths()
+    metadata_read_errors: dict[str, str] = {}
     payload: dict[str, Any] = {
         "run_id": "",
         "run_started_at": "",
@@ -357,27 +400,64 @@ def latest_review_payload() -> dict[str, Any]:
         "preset_id": "custom",
         "duration_label": "",
         "report_text": "",
+        "metadata_read_errors": metadata_read_errors,
         "error": None,
         "paths": {key: str(value) for key, value in paths.items()},
     }
-    try:
-        details: dict[str, Any] = {}
-        if paths["latest_run_details"].exists():
-            parsed = json.loads(
-                paths["latest_run_details"].read_text(encoding="utf-8") or "{}"
+    details: dict[str, Any] = {}
+    if paths["latest_run_details"].exists():
+        try:
+            raw = paths["latest_run_details"].read_text(encoding="utf-8") or "{}"
+        except (OSError, UnicodeError) as exc:
+            metadata_read_errors["latest_run_details"] = (
+                f"could not decode details file ({type(exc).__name__})"
             )
-            if isinstance(parsed, dict):
-                details = parsed
-        events = details.get("events") if isinstance(details.get("events"), list) else []
-        settings = details.get("settings") if isinstance(details.get("settings"), dict) else {}
-        started_at = str(details.get("run_started_at") or "")
-        run_status = run_status_from_events(events)
-        delivery = details.get("delivery") if isinstance(details.get("delivery"), dict) else {}
-        report_text = ""
-        if paths["latest_run_markdown"].exists():
+        else:
+            try:
+                parsed = json.loads(raw)
+            except (ValueError, RecursionError) as exc:
+                metadata_read_errors["latest_run_details"] = (
+                    f"invalid JSON details ({type(exc).__name__})"
+                )
+            else:
+                if not isinstance(parsed, dict):
+                    metadata_read_errors["latest_run_details"] = (
+                        "expected a JSON object"
+                    )
+                else:
+                    details = parsed
+    events = _details_field(
+        details, "events", "list", metadata_read_errors, default=[]
+    )
+    settings = _details_field(
+        details, "settings", "object", metadata_read_errors, default={}
+    )
+    delivery = _normalize_delivery_recipients(
+        _details_field(
+            details, "delivery", "object", metadata_read_errors, default={}
+        ),
+        metadata_read_errors,
+    )
+    reports = _details_field(
+        details, "reports", "list", metadata_read_errors, default=[]
+    )
+    report_generated = details.get("report_generated")
+    if report_generated is not None and not isinstance(report_generated, bool):
+        if "report_generated" not in metadata_read_errors:
+            metadata_read_errors["report_generated"] = "expected a boolean"
+    started_at = str(details.get("run_started_at") or "")
+    run_status = run_status_from_events(events)
+    report_text = ""
+    if paths["latest_run_markdown"].exists():
+        try:
             report_text = paths["latest_run_markdown"].read_text(
                 encoding="utf-8", errors="replace"
             )
+        except OSError as exc:
+            metadata_read_errors["latest_run_markdown"] = (
+                f"could not read review file ({type(exc).__name__})"
+            )
+    try:
         payload.update(
             {
                 "run_id": _run_id_from_started_at(started_at),
@@ -3198,17 +3278,30 @@ HTML = r"""<!doctype html>
       }
       renderReview();
     }
+    function metadataWarnings(errors) {
+      const entries = Object.entries(errors || {});
+      if (!entries.length) return "";
+      return `<div class="bad" style="margin:0 0 8px">` +
+        entries.map(([field, message]) =>
+          `<p style="margin:0 0 4px"><strong>${escapeHtml(field)}:</strong> ${escapeHtml(message)}</p>`
+        ).join("") +
+        `</div>`;
+    }
     function renderReview() {
       const review = state.latestReview || {};
       const delivery = review.delivery || {};
       const reportStatus = review.report_status || "unavailable";
       const runStatus = review.run_status || "unknown";
       const deliveryStatus = review.delivery_status || "not recorded";
+      const acceptedRecipients = Array.isArray(delivery.accepted_recipients)
+        ? delivery.accepted_recipients : [];
+      const rejectedRecipients = Array.isArray(delivery.rejected_recipients)
+        ? delivery.rejected_recipients : [];
       const deliveryMeta = [
         delivery.reason ? `reason: ${delivery.reason}` : "",
         delivery.phase ? `phase: ${delivery.phase}` : "",
-        delivery.accepted_recipients && delivery.accepted_recipients.length ? `accepted: ${delivery.accepted_recipients.join(", ")}` : "",
-        delivery.rejected_recipients && delivery.rejected_recipients.length ? `rejected: ${delivery.rejected_recipients.join(", ")}` : "",
+        acceptedRecipients.length ? `accepted: ${acceptedRecipients.join(", ")}` : "",
+        rejectedRecipients.length ? `rejected: ${rejectedRecipients.join(", ")}` : "",
         delivery.error_type ? `${delivery.error_type}: ${delivery.error_message}` : ""
       ].filter(Boolean).join(" · ");
       $("reviewMount").innerHTML = `
@@ -3223,6 +3316,7 @@ HTML = r"""<!doctype html>
           </div>
         </div>
         ${review.error ? `<p class="bad" style="margin:0 0 8px">${escapeHtml(review.error)}</p>` : ""}
+        ${metadataWarnings(review.metadata_read_errors)}
         <div class="stack">
           <section class="panel">
             <p class="eyebrow">Status</p>
@@ -3244,8 +3338,10 @@ HTML = r"""<!doctype html>
       `;
       $("refreshReviewBtn").onclick = () => refreshReviewData();
       const pane = $("reviewReportPane");
-      if (reportStatus === "available") {
-        pane.textContent = review.report_text || "(empty report)";
+      if (review.report_text && review.report_text.trim()) {
+        pane.textContent = review.report_text;
+      } else if (reportStatus === "available") {
+        pane.textContent = "(empty report)";
       } else if (runStatus === "failed" || runStatus === "aborted") {
         pane.textContent = "No report was generated for this run.";
       } else {
@@ -3323,11 +3419,15 @@ HTML = r"""<!doctype html>
       }
       const run = state.selectedRun;
       const delivery = run.delivery || {};
+      const acceptedRecipients = Array.isArray(delivery.accepted_recipients)
+        ? delivery.accepted_recipients : [];
+      const rejectedRecipients = Array.isArray(delivery.rejected_recipients)
+        ? delivery.rejected_recipients : [];
       const deliveryMeta = [
         delivery.reason ? `reason: ${delivery.reason}` : "",
         delivery.phase ? `phase: ${delivery.phase}` : "",
-        delivery.accepted_recipients && delivery.accepted_recipients.length ? `accepted: ${delivery.accepted_recipients.join(", ")}` : "",
-        delivery.rejected_recipients && delivery.rejected_recipients.length ? `rejected: ${delivery.rejected_recipients.join(", ")}` : "",
+        acceptedRecipients.length ? `accepted: ${acceptedRecipients.join(", ")}` : "",
+        rejectedRecipients.length ? `rejected: ${rejectedRecipients.join(", ")}` : "",
         delivery.error_type ? `${delivery.error_type}: ${delivery.error_message}` : ""
       ].filter(Boolean).join(" · ");
       container.innerHTML = `
@@ -3342,6 +3442,7 @@ HTML = r"""<!doctype html>
           <div class="field"><span>OKF bundle</span><code>${escapeHtml(run.okf_path || "—")}</code></div>
         </div>
         ${renderBadges(run.run_status, run.report_status, run.delivery_status)}
+        ${metadataWarnings(run.metadata_read_errors)}
         ${deliveryMeta ? `<p class="muted" style="margin:10px 0 0">${escapeHtml(deliveryMeta)}</p>` : ""}
         <div class="toolbar" style="margin-top:12px">
           <button id="openReportBtn" ${run.report_status === "available" ? "" : "disabled"}>Open report</button>
