@@ -4,6 +4,8 @@ import contextlib
 import http.client
 import json
 import os
+import shutil
+import subprocess
 import tempfile
 import threading
 import unittest
@@ -1866,6 +1868,105 @@ class UITests(unittest.TestCase):
         self.assertIn("resetLog();", run_action)
         self.assertIn("startSpinner();", run_action)
         self.assertIn("new EventSource", run_action)
+
+    @unittest.skipUnless(shutil.which("node"), "node runtime required for browser renderer behavior tests")
+    def test_run_log_renderer_behavior(self) -> None:
+        html = ui_module.HTML
+        start = html.index("    const SPINNER_GLYPHS")
+        end = html.index("    function badgeClass", start)
+        renderer_source = html[start:end]
+        script = f"""
+import assert from "node:assert/strict";
+const logPane = {{ textContent: "", scrollTop: 0, scrollHeight: 0 }};
+const elements = new Map([["logPane", logPane]]);
+function $(id) {{
+  return elements.get(id) || {{ disabled: false, title: "" }};
+}}
+const state = {{ activeRun: null }};
+const statuses = [];
+let controlUpdates = 0;
+let reviewRefreshes = 0;
+function setStatus(text, cls) {{ statuses.push({{ text, cls }}); }}
+function updateRunControls() {{ controlUpdates += 1; }}
+function refreshReviewData() {{ reviewRefreshes += 1; }}
+function requestBody() {{ return {{}}; }}
+const apiCalls = [];
+async function api(path) {{
+  apiCalls.push(path);
+  if (path === "/api/run") return {{ run_id: "run-1" }};
+  return {{ run_id: "run-1", status: "completed", returncode: 0 }};
+}}
+globalThis.window = {{ setTimeout: () => 0 }};
+globalThis.setInterval = () => 1;
+globalThis.clearInterval = () => {{}};
+class FakeEventSource {{
+  static instances = [];
+  constructor(url) {{
+    this.url = url;
+    this.closed = false;
+    FakeEventSource.instances.push(this);
+  }}
+  close() {{ this.closed = true; }}
+  addEventListener() {{}}
+}}
+globalThis.EventSource = FakeEventSource;
+
+{renderer_source}
+
+resetLog();
+const firstMeter = "[3/9 clustering] [###-----------------] 1000/200000 steps";
+const finalMeter = "[3/9 clustering] [####################] 200000/200000 steps";
+appendLogEvent({{ kind: "progress", stage: "clustering", line: firstMeter, complete: false }});
+appendLogEvent({{ kind: "message", line: "WARNING: low coverage" }});
+appendLogEvent({{ kind: "progress", stage: "clustering", line: finalMeter, complete: true }});
+assert.equal(logState.rows.length, 2);
+assert.deepEqual(logState.rows.map(row => row.text), [finalMeter, "WARNING: low coverage"]);
+assert.equal(logState.rows[0].live, false);
+assert.equal(logState.rows[0].complete, true);
+assert.equal(logPane.textContent, `✓ ${{finalMeter}}\\nWARNING: low coverage`);
+appendLogEvent({{ kind: "progress", stage: "clustering", line: finalMeter, complete: true }});
+assert.equal(logState.rows.length, 2);
+assert.equal(logPane.textContent, `✓ ${{finalMeter}}\\nWARNING: low coverage`);
+
+for (const [status, glyph] of [["completed", "✓"], ["failed", "✗"], ["stopped", "■"]]) {{
+  resetLog();
+  state.activeRun = `run-${{status}}`;
+  startSpinner();
+  appendLogEvent({{ kind: "progress", stage: "clustering", line: firstMeter, complete: false }});
+  const events = new FakeEventSource("manual");
+  assert.equal(finalizeRun({{ run_id: `run-${{status}}`, status }}, events), true);
+  assert.equal(events.closed, true);
+  assert.equal(state.activeRun, null);
+  assert.equal(logState.spinnerTimer, null);
+  assert.ok(logPane.textContent.includes(`${{glyph}} [ui] ${{status}}`));
+}}
+const pendingEvents = new FakeEventSource("pending");
+state.activeRun = "run-pending";
+assert.equal(finalizeRun({{ run_id: "run-pending", status: "running" }}, pendingEvents), false);
+assert.equal(pendingEvents.closed, false);
+assert.equal(state.activeRun, "run-pending");
+
+state.activeRun = null;
+await runAction();
+assert.equal(state.activeRun, "run-1");
+const liveEvents = FakeEventSource.instances[FakeEventSource.instances.length - 1];
+liveEvents.onerror();
+await new Promise(resolve => setImmediate(resolve));
+assert.equal(liveEvents.closed, true);
+assert.equal(state.activeRun, null);
+assert.ok(statuses.some(item => item.text.startsWith("Live run stream disconnected")));
+assert.ok(apiCalls.includes("/api/runs/run-1"));
+assert.ok(reviewRefreshes >= 3);
+assert.ok(controlUpdates >= 3);
+"""
+        result = subprocess.run(
+            ["node", "--input-type=module"],
+            input=script,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_report_review_tab_contracts(self) -> None:
         html = ui_module.HTML
