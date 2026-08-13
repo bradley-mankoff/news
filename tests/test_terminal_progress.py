@@ -366,6 +366,49 @@ class TerminalProgressTests(unittest.TestCase):
         self.assertIn("scale screening", output)
         self.assertIn("Running unknown.", output)
 
+    def test_retries_and_warnings_reach_pipe_stream_but_details_stay_hidden(self) -> None:
+        stream = FakePipe()
+        tracker = ProgressTracker(stream=stream)
+
+        tracker.start_story_clustering(200_000, detail="Clustering 139 candidate articles.")
+        tracker.story_clustering_progress(
+            "similarity_pair",
+            {
+                "phase": "pairwise similarity",
+                "done": 1_000,
+                "total": 200_000,
+                "linked_pairs": 1,
+            },
+        )
+        tracker.detail("detail marker: /private/tmp/model-server.log")
+        tracker.retrying("story drafting", 1, 3, 5, TimeoutError("model timed out"))
+        tracker.warning("low coverage for topic")
+        tracker.retry("title generation", 2, 3, 8)
+        tracker.finish_meter(detail="47 story groups")
+
+        output = stream.getvalue()
+        lines = output.split("\n")
+        # The active CR meter is closed by the first notice, so every notice
+        # lands on its own readable line while the detail line stays hidden.
+        self.assertIn(
+            "Retrying story drafting: attempt 1/3 failed (TimeoutError: model timed out); "
+            "sleeping 5s before the next attempt.",
+            lines,
+        )
+        self.assertIn("WARNING: low coverage for topic", lines)
+        # The public retry() alias emits exactly one message through retrying().
+        self.assertIn(
+            "Retrying title generation: attempt 2/3 failed; sleeping 8s before the next attempt.",
+            lines,
+        )
+        self.assertEqual(output.count("Retrying "), 2)
+        # An ordinary detail() call stays file-only and never reaches the stream.
+        self.assertNotIn("detail marker", output)
+        # The meter line that was active when the first notice arrived is closed
+        # exactly once, so the final snapshot begins on a fresh line.
+        self.assertTrue(lines[0].startswith("\r["))
+        self.assertIn("200000/200000 steps", lines[-2])
+
 
 if __name__ == "__main__":
     unittest.main()

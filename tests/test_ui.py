@@ -993,13 +993,17 @@ class UITests(unittest.TestCase):
         record.append("\r" + meter_a + "\033[K\n")
         record.append(meter_a + "\n")  # exact duplicate snapshot
         record.append("WARNING: low coverage\n")
+        record.append(
+            "Retrying article summaries: attempt 2/3 failed (TimeoutError: model timed out); "
+            "sleeping 5s before the next attempt.\n"
+        )
         record.append(meter_b + "\n")
         record.append(meter_final + "\n")
         record.append("[7/9 story drafting] [####----------------] 12/47 stories\n")
 
         self.assertEqual(
             [event["kind"] for event in record.events],
-            ["progress", "message", "progress"],
+            ["progress", "message", "message", "progress"],
         )
         # The clustering snapshot was replaced in place, never appended twice.
         self.assertEqual(record.events[0]["line"], meter_final)
@@ -1007,8 +1011,15 @@ class UITests(unittest.TestCase):
         self.assertEqual(record.events[0]["replace"], True)
         self.assertEqual(record.events[0]["complete"], True)
         self.assertEqual(record.events[1]["line"], "WARNING: low coverage")
-        self.assertEqual(record.events[2]["line"], "[7/9 story drafting] [####----------------] 12/47 stories")
-        self.assertEqual(record.snapshot()["line_count"], 3)
+        # Warnings and retries stay ordinary message events in arrival order
+        # between the coalesced clustering snapshot and the drafting meter.
+        self.assertEqual(
+            record.events[2]["line"],
+            "Retrying article summaries: attempt 2/3 failed (TimeoutError: model timed out); "
+            "sleeping 5s before the next attempt.",
+        )
+        self.assertEqual(record.events[3]["line"], "[7/9 story drafting] [####----------------] 12/47 stories")
+        self.assertEqual(record.snapshot()["line_count"], 4)
         self.assertEqual(record.events[0]["line"], meter_final)
 
     def test_sse_delivers_progress_replacement_after_cursor_advances(self) -> None:
