@@ -2693,13 +2693,21 @@ def _normalized_model_task(task: str) -> str:
 # story_discovery has no LLM stage (TF-IDF/embedding clustering); it inherits default.
 _TASK_MODEL_ASSIGNMENT_ALIASES = {
     MODEL_TASK_IMAGE_ART_DIRECTION: MODEL_TASK_TITLE_GENERATION,
+    MODEL_TASK_STORY_DISCOVERY: "default",
 }
 
 
 def _task_model_assignment(task: str):
     normalized_task = _normalized_model_task(task)
     resolved_task = _TASK_MODEL_ASSIGNMENT_ALIASES.get(normalized_task, normalized_task)
-    return MODEL_ASSIGNMENTS.get(resolved_task, MODEL_ASSIGNMENTS["default"])
+    if resolved_task in MODEL_ASSIGNMENTS:
+        return MODEL_ASSIGNMENTS[resolved_task]
+    default_assignment = MODEL_ASSIGNMENTS["default"]
+    progress_tracker.warning(
+        f"Unknown model task '{normalized_task}'; falling back to default model "
+        f"assignment '{default_assignment.name}' ('{default_assignment.reference}')."
+    )
+    return default_assignment
 
 
 def build_chat_model(max_tokens: int, *, task: str = "default") -> ChatOpenAI:
