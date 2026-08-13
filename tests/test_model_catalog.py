@@ -168,7 +168,7 @@ class ModelCatalogTests(unittest.TestCase):
             ),
             (
                 {"id": "deadbydawn101/gemma-4-E2B-Heretic-Uncensored-mlx-4bit", "tags": ["mlx", "vision"], "library_name": "mlx", "pipeline_tag": "image-text-to-text"},
-                model_catalog.RUNTIME_FIT_MANAGED_MLX_VLM,
+                model_catalog.RUNTIME_FIT_MANAGED_MLX_LM,
             ),
             (
                 {"id": "someone/arbitrary-gguf", "tags": ["gguf", "text-generation"], "library_name": "transformers", "pipeline_tag": "text-generation"},
@@ -221,10 +221,10 @@ class ModelCatalogTests(unittest.TestCase):
                 {"id": "mlx-community/gemma-4-12B-it-4bit-other", "tags": ["mlx"], "library_name": "mlx", "pipeline_tag": "text-generation"},
                 model_catalog.RUNTIME_FIT_MANAGED_MLX_LM,
             ),
-            # Prefix-collision sibling of the mlx-vlm curated entry (issue
+            # Prefix-collision sibling of the mlx-lm curated entry (issue
             # #92): the curated and generic-MLX verdicts coincide here, so
             # this row pins behavior; the deadbydawn101 org-id row above is
-            # the discriminating guard for the mlx-vlm entry.
+            # the discriminating guard for the mlx-lm entry.
             (
                 {"id": "deadbydawn101/gemma-4-E2B-Heretic-Uncensored-mlx-4bit-other", "tags": ["mlx"], "library_name": "mlx", "pipeline_tag": "text-generation"},
                 model_catalog.RUNTIME_FIT_MANAGED_MLX_LM,
