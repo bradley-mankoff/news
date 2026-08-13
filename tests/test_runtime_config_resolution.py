@@ -16,6 +16,7 @@ from news_pipeline import config as config_module
 from news_pipeline.config import (
     ACTIVE_PRESET_ENV_VAR,
     CODEX_TEST_MODEL_ALIAS,
+    CODEX_TEST_MODEL_NAME,
     GEMMA_4_12B_IT_4BIT_MODEL_ALIAS,
     GEMMA_4_12B_IT_4BIT_MODEL_REPO,
     MODEL_TASK_ARTICLE_SUMMARY,
@@ -97,6 +98,22 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
             {"default", "article_summary", "story_drafting",
              "story_scale_screening", "title_generation"},
         )
+
+    def test_codex_tiny_model_uses_mlx_lm_backend_and_server(self) -> None:
+        config = load_runtime_config(
+            environ={},
+            overrides={"NEWS_MODEL": CODEX_TEST_MODEL_ALIAS},
+            materialize_outputs=False,
+            run_started_at=datetime(2026, 6, 14, 12, 0, 0),
+        )
+        self.assertEqual(
+            config_module.infer_model_backend(CODEX_TEST_MODEL_NAME),
+            "mlx-lm",
+        )
+        self.assertEqual(config.model_backend, "mlx-lm")
+        self.assertEqual(config.model_name, CODEX_TEST_MODEL_NAME)
+        self.assertIn("python -m mlx_lm server", config.model_server_command)
+        self.assertNotIn("python -m mlx_vlm.server", config.model_server_command)
 
     def test_qwythos_aliases_fail_fast_with_actionable_error(self) -> None:
         # The error message must name the replacement so stale configs are
@@ -1227,8 +1244,11 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
         )
         self.assertIn("--port 8111", config_one.model_server_command)
         self.assertIn("--max-tokens 777", config_one.model_server_command)
-        self.assertNotIn("--prompt-cache-size", config_one.model_server_command)
-        self.assertNotIn("--prompt-cache-bytes", config_one.model_server_command)
+        # The tiny model runs mlx-lm, whose server honors the prompt-cache
+        # settings declared above (issue #195 backend inference fix).
+        self.assertIn("--prompt-cache-size 2", config_one.model_server_command)
+        self.assertIn("--prompt-cache-bytes 512MB", config_one.model_server_command)
+        # The VLM server branch does not support prompt-cache flags.
         self.assertNotIn("--prompt-cache-size", config_two.model_server_command)
         self.assertNotIn("--prompt-cache-bytes", config_two.model_server_command)
 
