@@ -133,6 +133,47 @@ default model selection. Per-task model selectors, model tuning, pipeline
 budgets, clustering thresholds, server settings, full prompt templates, and raw
 environment overrides live under Advanced Settings.
 
+## Daily Automation (Schedule tab)
+
+The **Schedule** tab enables exactly one daily personal Run Session. Pick a
+local time (`HH:MM`), a saved Run Preset (or default settings), and a delivery
+mode; **Enable schedule** persists the choice and installs a per-user macOS
+LaunchAgent. The UI does not need to stay open: `launchd` starts
+`news schedule run` once per day in your local time zone. Disabling boots out
+the agent and removes the plist; repeated enable/update/disable is idempotent.
+
+```bash
+uv run news schedule status [--json]
+uv run news schedule enable --time 07:30 --preset NAME --delivery-mode owner
+uv run news schedule disable
+uv run news schedule run   # foreground entry point used by launchd
+```
+
+Scheduled runs default to **owner-only** delivery; `disabled` and explicit
+configured-recipient delivery remain available as opt-ins. Delivery outcome
+stays independent of the run/report outcome. A scheduled run writes the same
+canonical artifacts as a manual run: `output/daily_outputs/latest_run.*`,
+DuckDB/CSV history, and the OKF bundle under
+`output/history/okf/<run_id>/`. The Schedule tab shows enabled/disabled,
+launchd loaded/not-loaded/unavailable, next daily time, running state, and the
+last run id/time/run/report/delivery status; Report Review remains the report
+surface and links from the Schedule tab.
+
+Schedule state lives at `~/.config/news/daily_schedule.json` and the plist at
+`~/Library/LaunchAgents/com.bradley-mankoff.news-daily-run.plist` (both `0600`;
+the state directory is `0700`). Credentials and API keys are never written to
+the schedule state, plist, API responses, or logs — the ignored local
+`env.json` password fallback remains the only persisted SMTP credential input.
+Non-macOS or missing `launchctl` reports an unavailable state instead of
+pretending the schedule is active. Exactly one schedule at one local time is
+supported: no weekly recurrence, per-day schedules, or cron expressions, and
+launchd runs only for the logged-in user session.
+
+Product Daily Automation is distinct from the GitHub-board automation under
+`automation/`; the board automation is unchanged. See
+[`docs/adr/0013-local-daily-automation-uses-launchagent.md`](docs/adr/0013-local-daily-automation-uses-launchagent.md)
+for the accepted operational decision.
+
 ## CLI
 
 Run with a saved preset or explicit overrides:
@@ -150,7 +191,11 @@ uv run news check-sources --only-failures
 uv run news prune-sources --recent-days 7
 uv run news source-languages --sources-yaml config/sources.yaml --json
 uv run news serve-unsubscribe
+uv run news schedule status
 ```
+
+Daily Automation commands are documented in the
+[Daily Automation (Schedule tab)](#daily-automation-schedule-tab) section.
 
 ## Run Settings
 

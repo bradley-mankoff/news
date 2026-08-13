@@ -357,6 +357,138 @@ class CliTests(unittest.TestCase):
         self.assertIn("Unknown command: not-a-command", stderr)
         self.assertIn("Usage:", stderr)
 
+    # -- schedule command family -------------------------------------------
+
+    def test_schedule_commands_are_in_usage(self) -> None:
+        code, stdout, stderr = self._invoke(["--help"])
+        self.assertEqual(code, 0)
+        self.assertIn("schedule status", stdout)
+        self.assertIn("schedule enable", stdout)
+        self.assertIn("schedule disable", stdout)
+        self.assertIn("schedule run", stdout)
+
+    def test_schedule_requires_subcommand_and_rejects_unknown(self) -> None:
+        code, stdout, stderr = self._invoke(["schedule"])
+        self.assertEqual(code, 2)
+        self.assertEqual(stdout, "")
+        self.assertIn("requires a subcommand", stderr)
+
+        code, stdout, stderr = self._invoke(["schedule", "bogus"])
+        self.assertEqual(code, 2)
+        self.assertIn("Unknown schedule subcommand: 'bogus'", stderr)
+        self.assertIn("status, enable, disable, run", stderr)
+
+    def test_schedule_status_human_and_json(self) -> None:
+        payload = {
+            "supported": True,
+            "enabled": True,
+            "time": "06:45",
+            "preset_id": "default",
+            "delivery_mode": "owner",
+            "launchd_status": "loaded",
+            "next_run_label": "06:45 (local time, once daily)",
+            "last_run": {"status": "completed", "run_id": "run-1", "error_message": ""},
+            "state_path": "/tmp/daily_schedule.json",
+            "plist_path": "/tmp/job.plist",
+            "error": None,
+        }
+        with patch("news_pipeline.scheduler.schedule_status", return_value=payload):
+            code, stdout, stderr = self._invoke(["schedule", "status"])
+        self.assertEqual(code, 0)
+        self.assertEqual(stderr, "")
+        self.assertIn("Daily schedule: enabled", stdout)
+        self.assertIn("06:45", stdout)
+        self.assertIn("launchd: loaded", stdout)
+        self.assertIn("run-1", stdout)
+        self.assertNotIn("base_env", stdout)
+
+        with patch("news_pipeline.scheduler.schedule_status", return_value=payload):
+            code, stdout, stderr = self._invoke(["schedule", "status", "--json"])
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(stdout), payload)
+
+    def test_schedule_status_rejects_unexpected_args(self) -> None:
+        code, stdout, stderr = self._invoke(["schedule", "status", "extra"])
+        self.assertEqual(code, 2)
+        self.assertIn("Unexpected arguments for schedule status: extra", stderr)
+
+    def test_schedule_enable_requires_time_and_rejects_bad_time(self) -> None:
+        code, stdout, stderr = self._invoke(["schedule", "enable"])
+        self.assertEqual(code, 2)
+        self.assertIn("requires --time HH:MM", stderr)
+
+        code, stdout, stderr = self._invoke(["schedule", "enable", "--time"])
+        self.assertEqual(code, 2)
+        self.assertIn("--time requires a value", stderr)
+
+        with patch(
+            "news_pipeline.scheduler.enable_schedule",
+            side_effect=ValueError("Schedule time must be HH:MM in 24-hour local time (e.g. 07:30)."),
+        ) as enable:
+            code, stdout, stderr = self._invoke(["schedule", "enable", "--time=7:5"])
+        self.assertEqual(code, 2)
+        self.assertIn("HH:MM", stderr)
+        enable.assert_called_once_with("7:5", preset_id="", delivery_mode=None)
+
+        code, stdout, stderr = self._invoke(["schedule", "enable", "--time=06:45", "oops"])
+        self.assertEqual(code, 2)
+        self.assertIn("Unexpected argument for schedule enable: oops", stderr)
+
+    def test_schedule_enable_success_prints_summary(self) -> None:
+        fake_schedule = SimpleNamespace(
+            hour=6, minute=45, preset_id="default", delivery_mode="owner", launchd_status="loaded"
+        )
+        with patch(
+            "news_pipeline.scheduler.enable_schedule", return_value=fake_schedule
+        ) as enable:
+            code, stdout, stderr = self._invoke(
+                ["schedule", "enable", "--time", "06:45", "--preset", "default", "--delivery-mode", "owner"]
+            )
+        self.assertEqual(code, 0)
+        self.assertEqual(stderr, "")
+        self.assertIn("Daily schedule enabled: 06:45", stdout)
+        self.assertIn("launchd loaded", stdout)
+        enable.assert_called_once_with("06:45", preset_id="default", delivery_mode="owner")
+
+    def test_schedule_enable_launchd_failure_returns_error_exit(self) -> None:
+        from news_pipeline.scheduler import ScheduleError
+
+        with patch(
+            "news_pipeline.scheduler.enable_schedule",
+            side_effect=ScheduleError("launchctl bootstrap failed (exit 5); the schedule is not active."),
+        ):
+            code, stdout, stderr = self._invoke(["schedule", "enable", "--time=06:45"])
+        self.assertEqual(code, 2)
+        self.assertEqual(stdout, "")
+        self.assertIn("bootstrap failed", stderr)
+
+    def test_schedule_disable_success_and_rejects_args(self) -> None:
+        with patch("news_pipeline.scheduler.disable_schedule") as disable:
+            code, stdout, stderr = self._invoke(["schedule", "disable"])
+        self.assertEqual(code, 0)
+        self.assertIn("Daily schedule disabled.", stdout)
+        disable.assert_called_once_with()
+
+        code, stdout, stderr = self._invoke(["schedule", "disable", "now"])
+        self.assertEqual(code, 2)
+        self.assertIn("Unexpected arguments for schedule disable: now", stderr)
+
+    def test_schedule_run_delegates_to_runner(self) -> None:
+        with patch("news_pipeline.scheduler.run_scheduled", return_value=5) as run:
+            code, stdout, stderr = self._invoke(["schedule", "run"])
+        self.assertEqual(code, 5)
+        run.assert_called_once_with()
+
+        code, stdout, stderr = self._invoke(["schedule", "run", "--force"])
+        self.assertEqual(code, 2)
+        self.assertIn("Unexpected arguments for schedule run: --force", stderr)
+
+    def test_schedule_alias_routes_to_schedule(self) -> None:
+        with patch("news_pipeline.scheduler.schedule_status", return_value={"error": None}):
+            code, stdout, stderr = self._invoke(["scheduler", "status"])
+        self.assertEqual(code, 0)
+        self.assertIn("Daily schedule:", stdout)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -22,6 +22,7 @@ from urllib.parse import parse_qs, urlparse
 import yaml
 
 from . import run_log
+from . import scheduler as scheduler_module
 from .config import (
     MODEL_TUNING_PRESETS_PATH,
     REMOVED_TOPIC_ENV_VARS,
@@ -531,6 +532,41 @@ def read_historical_report(run_id: str) -> str | None:
     if not report_path.is_file():
         return None
     return report_path.read_text(encoding="utf-8", errors="replace")
+
+
+def schedule_payload() -> dict[str, Any]:
+    """Safe Schedule tab projection (bounded fixed fields only).
+
+    Never returns stored env maps, plist XML, launchctl output, report text,
+    or credentials; the scheduler module owns the redacted shape.
+    """
+    return scheduler_module.schedule_status()
+
+
+def update_schedule(body: dict[str, Any]) -> dict[str, Any]:
+    """Validate and persist schedule changes through the scheduler module.
+
+    The UI endpoint is an adapter, not a second precedence implementation;
+    invalid time/preset/mode raises and the caller returns 400.
+    """
+    time_value = str(body.get("time") or "").strip()
+    preset_id = str(body.get("preset_id") or body.get("preset") or "").strip()
+    raw_mode = body.get("delivery_mode")
+    raw_overrides = body.get("overrides") if isinstance(body.get("overrides"), dict) else {}
+    if not time_value:
+        raise ValueError("Schedule time is required (HH:MM, 24-hour local time).")
+    scheduler_module.enable_schedule(
+        time_value,
+        preset_id=preset_id,
+        delivery_mode=raw_mode if raw_mode not in (None, "") else None,
+        overrides=raw_overrides,
+    )
+    return schedule_payload()
+
+
+def disable_schedule_payload() -> dict[str, Any]:
+    scheduler_module.disable_schedule()
+    return schedule_payload()
 
 
 def schema_payload() -> dict[str, Any]:
@@ -1353,6 +1389,8 @@ class NewsUIHandler(BaseHTTPRequestHandler):
                     self._send_json(details)
             elif parsed.path == "/api/review/latest":
                 self._send_json(latest_review_payload())
+            elif parsed.path == "/api/schedule":
+                self._send_json(schedule_payload())
             elif parsed.path.startswith("/api/runs/") and parsed.path.endswith("/events"):
                 run_id = parsed.path.split("/")[3]
                 self._stream_run_events(run_id)
@@ -1399,6 +1437,17 @@ class NewsUIHandler(BaseHTTPRequestHandler):
         except Exception as exc:
             self._send_error_json(exc)
 
+    def do_PUT(self) -> None:
+        parsed = urlparse(self.path)
+        try:
+            body = self._read_json()
+            if parsed.path == "/api/schedule":
+                self._send_json(update_schedule(body))
+            else:
+                self._send_json({"error": "Not found."}, status=HTTPStatus.NOT_FOUND)
+        except Exception as exc:
+            self._send_error_json(exc)
+
     def do_PATCH(self) -> None:
         parsed = urlparse(self.path)
         try:
@@ -1422,6 +1471,8 @@ class NewsUIHandler(BaseHTTPRequestHandler):
         try:
             if parsed.path == "/api/sources":
                 self._send_json(delete_source((params.get("key") or [""])[0]))
+            elif parsed.path == "/api/schedule":
+                self._send_json(disable_schedule_payload())
             elif parsed.path == "/api/presets":
                 self._send_json(delete_preset((params.get("id") or [""])[0]))
             elif parsed.path == "/api/model-tuning-presets":
@@ -1801,6 +1852,9 @@ HTML = r"""<!doctype html>
       <div id="reviewMount"></div>
       <div id="historyMount"></div>
     </section>
+    <section id="schedule" class="view">
+      <div id="scheduleMount"></div>
+    </section>
     <section id="advanced" class="view">
       <div id="advancedPanels" class="stack"></div>
       <section class="panel">
@@ -2036,7 +2090,9 @@ HTML = r"""<!doctype html>
       history: [],
       historyError: null,
       selectedRunId: null,
-      selectedRun: null
+      selectedRun: null,
+      schedule: null,
+      scheduleError: null
     };
     const icons = {
       chevronLeft: `<svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg>`,
@@ -2044,12 +2100,14 @@ HTML = r"""<!doctype html>
       gear: `<svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.05.05a2 2 0 1 1-2.83 2.83l-.05-.05A1.7 1.7 0 0 0 15 19.4a1.7 1.7 0 0 0-1 .6 1.7 1.7 0 0 0-.4 1.1V21a2 2 0 1 1-4 0v-.08A1.7 1.7 0 0 0 8.6 19.4a1.7 1.7 0 0 0-1.88.34l-.05.05a2 2 0 1 1-2.83-2.83l.05-.05A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-.6-1 1.7 1.7 0 0 0-1.1-.4H3a2 2 0 1 1 0-4h.08A1.7 1.7 0 0 0 4.6 8.6a1.7 1.7 0 0 0-.34-1.88l-.05-.05a2 2 0 1 1 2.83-2.83l.05.05A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-.6 1.7 1.7 0 0 0 .4-1.1V3a2 2 0 1 1 4 0v.08A1.7 1.7 0 0 0 15 4.6a1.7 1.7 0 0 0 1.88-.34l.05-.05a2 2 0 1 1 2.83 2.83l-.05.05A1.7 1.7 0 0 0 19.4 9c.36.24.72.47 1 .6.34.16.72.2 1.1.2h.5a2 2 0 1 1 0 4h-.08A1.7 1.7 0 0 0 20.4 14c-.28.13-.64.36-1 .6Z"/></svg>`,
       microscope: `<svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 18h8"/><path d="M3 22h18"/><path d="M14 22a7 7 0 0 0 7-7"/><path d="M9 14h2"/><path d="M8 6h4"/><path d="m9 6 6 6"/><path d="m11 4 6 6"/><path d="M12 6 9 9"/><path d="m17 10-3 3"/></svg>`,
       newspaper: `<svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 1.5 17V5.5H18A2.5 2.5 0 0 1 20.5 8v11.5Z"/><path d="M20.5 8H23v9a2.5 2.5 0 0 1-2.5 2.5"/><path d="M5 9h8"/><path d="M5 13h10"/><path d="M5 17h6"/></svg>`,
+      clock: `<svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>`,
       book: `<svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 7v14"/><path d="M3 18a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h5a4 4 0 0 1 4 4 4 4 0 0 1 4-4h5a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-6a3 3 0 0 0-3 3 3 3 0 0 0-3-3z"/></svg>`,
       person: `<svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21a8 8 0 0 0-16 0"/><circle cx="12" cy="7" r="4"/></svg>`
     };
     const tabs = [
       ["runSetup", "Run Setup", "gear"],
       ["review", "Report Review", "book"],
+      ["schedule", "Schedule", "clock"],
       ["advanced", "Advanced Settings", "microscope"],
       ["sources", "Sources", "newspaper"],
       ["recipients", "Recipients", "person"]
@@ -3495,6 +3553,121 @@ HTML = r"""<!doctype html>
         }
       }).catch(() => {});
     }
+    // Daily Automation (ADR 0012 Slice C): the Schedule tab is a thin adapter
+    // over GET/PUT/DELETE /api/schedule. launchd owns invocation; this tab
+    // only renders durable state and lifecycle status. No browser timer ever
+    // replaces launchd.
+    function scheduleLaunchdBadge(status) {
+      const cls = status === "loaded" ? "good" : status === "not_loaded" ? "warn" : "bad";
+      return `<span class="badge ${cls}">launchd: ${escapeHtml(status || "unknown")}</span>`;
+    }
+    async function loadSchedule() {
+      try {
+        state.schedule = await api("/api/schedule");
+        state.scheduleError = state.schedule.error || null;
+      } catch (err) {
+        state.schedule = null;
+        state.scheduleError = err.message;
+      }
+      renderSchedule();
+    }
+    function schedulePresetOptions() {
+      const presets = (state.schema && state.schema.presets && state.schema.presets.presets) || [];
+      const selected = state.schedule ? state.schedule.preset_id || "" : "";
+      return `<option value="">default settings</option>` + presets.map(preset =>
+        `<option value="${escapeHtml(preset.id)}"${selected === preset.id ? " selected" : ""}>${escapeHtml(preset.name || preset.id)}</option>`
+      ).join("");
+    }
+    function renderSchedule() {
+      const s = state.schedule || {};
+      const supported = s.supported !== false;
+      const enabled = Boolean(s.enabled);
+      const launchd = s.launchd_status || "unknown";
+      const last = s.last_run || {};
+      const error = state.scheduleError || s.error || "";
+      const deliveryMode = s.delivery_mode || "owner";
+      const timeValue = s.time || "";
+      $("scheduleMount").innerHTML = `
+        <div class="banner panel">
+          <div class="banner-copy">
+            <p class="eyebrow">Daily Automation</p>
+            <h2>One daily personal run</h2>
+            <p class="muted">Enables one daily Run Session in your local time zone. The UI does not need to stay open: macOS launchd starts <code>news schedule run</code>. Delivery defaults to owner only; additional recipients are an explicit opt-in.</p>
+          </div>
+          <div class="banner-actions">
+            <button id="openReviewFromScheduleBtn">Open Report Review</button>
+          </div>
+        </div>
+        ${error ? `<p class="bad" style="margin:0 0 8px">${escapeHtml(error)}</p>` : ""}
+        ${!supported ? `<p class="bad" style="margin:0 0 8px">Daily automation requires macOS launchd; scheduling is unavailable on this platform.</p>` : ""}
+        <div class="stack">
+          <section class="panel">
+            <p class="eyebrow">Schedule</p>
+            <h2>Daily run settings</h2>
+            <div class="form-grid">
+              <label class="field"><span>Time (local)</span><input id="schedule_time" type="time" value="${escapeHtml(timeValue)}" ${supported ? "" : "disabled"}><code>HH:MM</code></label>
+              <label class="field"><span>Run preset</span><select id="schedule_preset" ${supported ? "" : "disabled"}>${schedulePresetOptions()}</select><code>preset id</code></label>
+              <label class="field"><span>Delivery</span>
+                <select id="schedule_delivery_mode" ${supported ? "" : "disabled"}>
+                  <option value="owner"${deliveryMode === "owner" ? " selected" : ""}>Owner only (default)</option>
+                  <option value="disabled"${deliveryMode === "disabled" ? " selected" : ""}>No delivery</option>
+                  <option value="recipients"${deliveryMode === "recipients" ? " selected" : ""}>Configured recipients</option>
+                </select>
+                <code>delivery mode</code>
+              </label>
+            </div>
+            <div class="toolbar" style="margin-top:12px">
+              <button id="enableScheduleBtn" class="primary" ${supported ? "" : "disabled"}>${enabled ? "Update schedule" : "Enable schedule"}</button>
+              <button id="disableScheduleBtn" class="danger" ${enabled && supported ? "" : "disabled"}>Disable schedule</button>
+            </div>
+            <p class="muted" style="margin:10px 0 0">Exactly one daily schedule at one local time; no weekly recurrence or cron expressions. Credentials are never stored in schedule state or the launchd plist.</p>
+          </section>
+          <section class="panel">
+            <p class="eyebrow">Status</p>
+            <h2>Schedule lifecycle</h2>
+            <div class="badge-row">
+              <span class="badge ${enabled ? "good" : "warn"}">schedule: ${enabled ? "enabled" : "disabled"}</span>
+              ${scheduleLaunchdBadge(launchd)}
+              <span class="badge ${badgeClass(last.status)}">last run: ${escapeHtml(last.status || "never")}</span>
+            </div>
+            <div class="form-grid" style="margin-top:12px">
+              <div class="field"><span>Next daily time</span><code>${escapeHtml(s.next_run_label || (s.time ? s.time + " (local time)" : "—"))}</code></div>
+              <div class="field"><span>Schedule state</span><code>${escapeHtml(s.state_path || "—")}</code></div>
+              <div class="field"><span>Last run id</span><code>${escapeHtml(last.run_id || "—")}</code></div>
+              <div class="field"><span>Last run started</span><code>${escapeHtml(last.started_at || "—")}</code></div>
+            </div>
+            ${last.run_status || last.report_status || last.delivery_status ? renderBadges(last.run_status, last.report_status, last.delivery_status) : ""}
+            ${last.error_message ? `<p class="bad" style="margin:10px 0 0">${escapeHtml(last.error_message)}</p>` : ""}
+          </section>
+        </div>
+      `;
+      $("enableScheduleBtn").onclick = () => saveSchedule().catch(err => setStatus(err.message, "bad"));
+      $("disableScheduleBtn").onclick = () => disableSchedule().catch(err => setStatus(err.message, "bad"));
+      $("openReviewFromScheduleBtn").onclick = () => { showTab("review"); refreshReviewData(); };
+    }
+    async function saveSchedule() {
+      const time = value("schedule_time").trim();
+      if (!time) throw new Error("Pick a daily time (HH:MM, 24-hour local time).");
+      const body = {
+        time,
+        preset_id: value("schedule_preset"),
+        delivery_mode: value("schedule_delivery_mode")
+      };
+      const saved = await api("/api/schedule", { method: "PUT", body: JSON.stringify(body) });
+      state.schedule = saved;
+      state.scheduleError = saved.error || null;
+      renderSchedule();
+      setStatus("Daily schedule saved.", "good");
+    }
+    async function disableSchedule() {
+      const ok = await confirmAction("Disable the daily schedule? The launchd job is removed; existing reports and history are kept.");
+      if (!ok) return;
+      const saved = await api("/api/schedule", { method: "DELETE" });
+      state.schedule = saved;
+      state.scheduleError = saved.error || null;
+      renderSchedule();
+      setStatus("Daily schedule disabled.", "muted");
+    }
     async function loadSources() {
       const data = await api("/api/sources");
       state.sources = data.sources || [];
@@ -3892,6 +4065,7 @@ HTML = r"""<!doctype html>
       await loadRecipients();
       await loadReview();
       await loadHistory();
+      await loadSchedule();
       state.presets = (state.schema.presets && state.schema.presets.presets) || [];
       state.modelTuningPresets = (state.schema.model_tuning_presets && state.schema.model_tuning_presets.presets) || [];
       if (state.schema.runtime && state.schema.runtime.preset_id && state.schema.runtime.preset_id !== "custom") {
