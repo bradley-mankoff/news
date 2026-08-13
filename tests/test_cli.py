@@ -331,6 +331,24 @@ class CliTests(unittest.TestCase):
         self.assertIn(str(catalog_path), stderr)
         self.assertIn("must define models as a mapping", stderr)
 
+        for contents, message in (
+            ("false\n", "must contain a YAML mapping"),
+            ("models: [\n", "Could not load model catalog"),
+        ):
+            with tempfile.TemporaryDirectory() as tmpdir:
+                catalog_path = Path(tmpdir) / "bad_catalog.yaml"
+                catalog_path.write_text(contents, encoding="utf-8")
+                with patch.dict(
+                    os.environ,
+                    {model_catalog.MODEL_CATALOG_YAML_ENV_VAR: str(catalog_path)},
+                    clear=False,
+                ), patch.object(model_catalog, "_CATALOG_SNAPSHOT", None):
+                    code, stdout, stderr = self._invoke(["models", "catalog", "--json"])
+            self.assertEqual(code, 2)
+            self.assertEqual(stdout, "")
+            self.assertIn(str(catalog_path), stderr)
+            self.assertIn(message, stderr)
+
     def test_models_catalog_rejects_unexpected_args(self) -> None:
         code, stdout, stderr = self._invoke(["models", "catalog", "oops"])
 

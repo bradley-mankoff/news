@@ -188,11 +188,37 @@ class ModelCatalogTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "must define models as a mapping"):
                 model_catalog.load_model_catalog(bad_models)
 
+            false_root = root / "false_root.yaml"
+            false_root.write_text("false\n", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "must contain a YAML mapping"):
+                model_catalog.load_model_catalog(false_root)
+
             unknown_top = root / "unknown_top.yaml"
             unknown_top.write_text("models: {}\nunknown: 1\n", encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "unknown top-level key") as ctx:
                 model_catalog.load_model_catalog(unknown_top)
             self.assertIn(str(unknown_top), str(ctx.exception))
+
+    def test_load_model_catalog_normalizes_parser_and_safe_loader_errors(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            malformed = root / "malformed.yaml"
+            malformed.write_text("models: [\n", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "Could not load model catalog") as ctx:
+                model_catalog.load_model_catalog(malformed)
+            self.assertIn(str(malformed), str(ctx.exception))
+
+            marker = root / "unsafe-executed"
+            unsafe = root / "unsafe.yaml"
+            unsafe.write_text(
+                "models:\n"
+                f"  exploit: !!python/object/apply:os.system ['touch {marker}']\n",
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "Could not load model catalog") as ctx:
+                model_catalog.load_model_catalog(unsafe)
+            self.assertIn(str(unsafe), str(ctx.exception))
+            self.assertFalse(marker.exists())
 
     def test_load_model_catalog_existing_alias_metadata_override(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -462,12 +488,16 @@ class ModelCatalogTests(unittest.TestCase):
             records = model_catalog.list_model_catalog()
             self.assertEqual([record["alias"] for record in records][-2:], ["my-mlx-model", "my-vlm-model"])
             # Runtime-fit matching and recommendations see the merged registry.
-            self.assertEqual(
-                model_catalog.runtime_fit_for_hf_model(
-                    {"id": "mlx-community/example-model", "tags": [], "library_name": "unknown", "pipeline_tag": None}
-                )["status"],
-                model_catalog.RUNTIME_FIT_MANAGED_MLX_LM,
+            managed_fit = model_catalog.runtime_fit_for_hf_model(
+                {
+                    "id": "mlx-community/example-model",
+                    "tags": [],
+                    "library_name": "unknown",
+                    "pipeline_tag": None,
+                }
             )
+            self.assertEqual(managed_fit["status"], model_catalog.RUNTIME_FIT_MANAGED_MLX_LM)
+            self.assertIn("advisory", managed_fit["reason"])
             self.assertEqual(
                 model_catalog.runtime_fit_for_hf_model(
                     {"id": "mlx-community/example-vlm", "tags": [], "library_name": "unknown", "pipeline_tag": None}
@@ -485,6 +515,32 @@ class ModelCatalogTests(unittest.TestCase):
             self.assertTrue(
                 all(record["hf_url"].startswith("https://huggingface.co/") for record in records)
             )
+
+    def test_custom_external_catalog_entry_is_external_only_and_advisory(self) -> None:
+        custom = dict(model_catalog.BUILTIN_CATALOG_MODELS)
+        custom["my-ext-model"] = model_catalog.CatalogModel(
+            alias="my-ext-model",
+            reference="external-org/openai-compatible",
+            name="External Model",
+            backend="external",
+            hf_repo="external-org/openai-compatible",
+            context_length=None,
+            description="A user-declared external endpoint model.",
+            task_notes={},
+        )
+        with patch.object(model_catalog, "_CATALOG_SNAPSHOT", custom):
+            fit = model_catalog.runtime_fit_for_hf_model(
+                {
+                    "id": "external-org/openai-compatible",
+                    "tags": [],
+                    "library_name": "unknown",
+                    "pipeline_tag": None,
+                }
+            )
+
+        self.assertEqual(fit["status"], model_catalog.RUNTIME_FIT_EXTERNAL_ONLY)
+        self.assertIn("external", fit["reason"])
+        self.assertIn("advisory", fit["reason"])
 
     def test_env_path_selection_and_relative_resolution(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -514,6 +570,22 @@ class ModelCatalogTests(unittest.TestCase):
             self.assertIn("my-mlx-model", snapshot)
         # The per-process snapshot falls back to the default (built-ins only).
         self.assertNotIn("my-mlx-model", model_catalog.CATALOG_MODELS)
+
+    def test_merged_snapshot_is_stable_until_process_restart(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            custom_path = Path(tmpdir) / "custom_catalog.yaml"
+            custom_path.write_text(_CUSTOM_ENTRY, encoding="utf-8")
+            with patch.dict(
+                os.environ,
+                {model_catalog.MODEL_CATALOG_YAML_ENV_VAR: str(custom_path)},
+                clear=False,
+            ), patch.object(model_catalog, "_CATALOG_SNAPSHOT", None):
+                first = model_catalog._merged_catalog_snapshot()
+                custom_path.write_text("models: {}\n", encoding="utf-8")
+                second = model_catalog._merged_catalog_snapshot()
+
+        self.assertIs(first, second)
+        self.assertIn("my-mlx-model", second)
 
     def test_catalog_backends_match_config_supported_backends(self) -> None:
         self.assertEqual(

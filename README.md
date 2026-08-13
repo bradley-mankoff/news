@@ -318,8 +318,9 @@ Each model page shows Hugging Face's native Hardware Compatibility panel
 
 ### Model Catalog
 
-The Model Catalog is the code-owned registry of models verified for the
-supported backends, with recommendations per task — factual extraction,
+The Model Catalog is the code-owned baseline registry: built-in models are
+verified for the supported backends, while user-overlay entries remain
+advisory. It provides recommendations per task — factual extraction,
 structured output, synthesis, citation fidelity, speed, context length, and
 translation — rather than parameter count or popularity:
 

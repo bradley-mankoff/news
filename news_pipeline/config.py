@@ -1260,8 +1260,10 @@ def _catalog_model_aliases() -> dict[str, str]:
 
 
 def resolve_model_name(model_reference: str) -> str:
-    """Resolve a friendly model alias to the Hugging Face repo loaded by mlx.
+    """Resolve a friendly model alias to its configured model reference.
 
+    The returned reference may use a managed MLX backend or an external
+    OpenAI-compatible endpoint; callers use backend inference separately.
     Raises ValueError for references in UNSUPPORTED_MODEL_REFERENCES (the
     legacy qwythos-9b-* aliases, raw GGUF references, and their URL forms) so
     stale configs fail before launch.
@@ -1426,19 +1428,27 @@ def _configured_model_backend(model_reference: str) -> str:
     (validated against SUPPORTED_MODEL_BACKENDS) or inferred from the
     reference. Per-task models always use inference."""
     configured = _str_env("NEWS_MODEL_BACKEND", "").strip().lower()
-    if not configured:
-        return infer_model_backend(model_reference)
-    if configured not in SUPPORTED_MODEL_BACKENDS:
+    if configured:
+        if configured not in SUPPORTED_MODEL_BACKENDS:
+            raise ValueError(
+                "NEWS_MODEL_BACKEND must be one of: " + ", ".join(SUPPORTED_MODEL_BACKENDS)
+            )
+        backend = configured
+    else:
+        backend = infer_model_backend(model_reference)
+
+    if backend == MODEL_BACKEND_EXTERNAL and not _str_env("NEWS_MODEL_BASE_URL", ""):
+        if configured:
+            raise ValueError(
+                "NEWS_MODEL_BACKEND=external requires NEWS_MODEL_BASE_URL to point at an "
+                "OpenAI-compatible endpoint (without it, the pipeline would poll the "
+                "default managed-server loopback URL and time out)."
+            )
         raise ValueError(
-            "NEWS_MODEL_BACKEND must be one of: " + ", ".join(SUPPORTED_MODEL_BACKENDS)
+            "External model backend requires NEWS_MODEL_BASE_URL to point at an "
+            "OpenAI-compatible endpoint."
         )
-    if configured == MODEL_BACKEND_EXTERNAL and not _str_env("NEWS_MODEL_BASE_URL", ""):
-        raise ValueError(
-            "NEWS_MODEL_BACKEND=external requires NEWS_MODEL_BASE_URL to point at an "
-            "OpenAI-compatible endpoint (without it, the pipeline would poll the "
-            "default managed-server loopback URL and time out)."
-        )
-    return configured
+    return backend
 
 
 
