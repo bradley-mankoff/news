@@ -2184,6 +2184,8 @@ const state = { schema: null };
 const searchResults = [
   { id: "owner/future", hf_url: "https://example.test/future", runtime_fit: { status: "future_fit", reason: "future reason" } },
   { id: "owner/unknown", hf_url: "https://example.test/unknown", runtime_fit: { status: "unknown_fit", reason: "unknown reason" } },
+  { id: "owner/missing-status", hf_url: "https://example.test/missing-status", runtime_fit: { reason: "no status" } },
+  { id: "owner/empty-status", hf_url: "https://example.test/empty-status", runtime_fit: { status: "", reason: "empty status" } },
   { id: "owner/external", hf_url: "https://example.test/external", runtime_fit: { status: "external_only", reason: "external reason" } }
 ];
 async function api(path) {
@@ -2223,6 +2225,8 @@ assert(elements.recommendationTask.optionText("raw_task") === "raw_task", "empty
 state.schema = {};
 await searchHuggingFaceModels();
 assert(elements.modelSearchResults.textContent.includes("future_fit"), "empty fit map did not fall back");
+assert(elements.modelSearchResults.textContent.includes("Fit: unknown — no status"), "missing fit status did not fall back to unknown");
+assert(elements.modelSearchResults.textContent.includes("Fit: unknown — empty status"), "empty fit status did not fall back to unknown");
 assert(elements.modelSearchResults.querySelector('button[data-use-hf-model="owner/external"]').disabled, "empty schema enabled external-only model");
 """ )
         node = shutil.which("node")
