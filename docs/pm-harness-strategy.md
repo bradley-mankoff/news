@@ -61,14 +61,13 @@ The previous strategy also identified requirements that were not board issues:
 - `github.py`: Projects/issues/pull-request adapter
 - `dispatch.py`: capacity-bounded launch and resume
 - `recovery.py`: stopped and detached run recovery
-- `deferred.py`: optional deferred-work reconciliation
 - `cycle.py`: one board reconciliation cycle and explicit transition phases
 - `runtime.py`: config, hooks, logging, and durable state
-- `engine.py`: public compatibility exports and bounded poll supervisor
+- `engine.py`: bounded poll supervisor (runs `python3 -m automation.pm_harness`)
 
-`automation/board_poller.py` is now a compatibility entrypoint, not an
-implementation layer. Product behavior must use a configured hook or sibling
-adapter rather than return to `cycle.py`.
+The harness runs through `python3 -m automation.pm_harness` (supervisor with
+isolated per-poll child processes). Product behavior must use a configured
+hook or sibling adapter rather than return to `cycle.py`.
 
 ## Portability check
 

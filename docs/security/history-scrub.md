@@ -127,7 +127,7 @@ git push --force --tags
 
 Then update every local checkout: re-clone (or fetch + `git reset --hard` on each
 branch) and re-create `automation/state.json` (the poller tracks branch names and
-issue state — see `automation/board_poller.py`).
+issue state — see `automation/pm_harness/`).
 
 ### 8. Purge cached views
 
@@ -142,8 +142,9 @@ commits before rewriting — they are gone afterward).
   recreated from the rewritten history.
 - Any clone or fork made before the scrub retains the old data — treat them as
   compromised copies and delete them.
-- The poller (`automation/board_poller.py`) reads `automation/state.json` and branch
-  names; coordinate the scrub so no issue is In Progress and re-init state after push.
+- The poller (`python3 -m automation.pm_harness`) reads `automation/state.json`
+  and branch names; coordinate the scrub so no issue is In Progress and re-init
+  state after push.
 - If any real recipient list was ever committed (it was not — `env.json` was never
   tracked), that data would also need rotation, not just rewriting.
 
