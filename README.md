@@ -34,6 +34,11 @@ not manage the board. Board policy lives outside this product tree.
 - Completion records on issues must include:
   `## What shipped`, `## Decisions`, `## Acceptance criteria`,
   `## How to test`, `## Deferred work`.
+  The `## How to test` section separates `### Machine checks` (commands the
+  run executed, with recorded results) from `### Human checks` (steps that
+  genuinely need a person). The poller mirrors that split in the Ready for
+  Review comment, and the ready-review QA agent reuses recorded evidence
+  instead of re-running checks.
 - Create a shaped Backlog issue:
   `python3 automation/create_issue.py "<title>" --body "<shaped markdown>"`
 - After automation/workflow install changes:
@@ -283,6 +288,47 @@ restores defaults per stage or globally. Per-stage edits are stored in
 profile (override wins). The full per-task prompt templates and diffs against
 `balanced` are under Advanced Settings. Profiles can also be pinned inside a
 Run Preset's `env` map.
+
+### Full prompt templates (Advanced Settings)
+
+Advanced Settings exposes editable **full prompt templates** for the five
+actual LLM stages (article summary, story scale screening, story drafting,
+title generation, image art direction) — one System message and one User
+message per task, using Python `string.Template` placeholders
+(`$name`/`${name}`, `$$` for a literal dollar sign). This is advanced,
+per-task replacement of the prompt *structure*: the selected Prompt
+Profile/editorial sentences are included only when the template contains the
+optional `$editorial_instructions` placeholder, and the pipeline-owned output
+contracts stay code-owned and are injected through required contract
+placeholders (`$output_contract`, `$citation_contract`, `$scale_contract`,
+`$title_contract`, `$overlay_protocol`, `$image_contract`). The full-template
+override decision is recorded in
+([`docs/adr/0015-advanced-prompt-template-overrides.md`](docs/adr/0015-advanced-prompt-template-overrides.md)).
+
+Each task's dynamic inputs remain code-supplied through its required
+placeholders (`$now_label`, `$recent_window_hours`, `$article_payload`,
+`$story_blocks`, `$story_title`, `$source_summary_lines`, `$report_title`,
+`$synthesis_body`). A custom template must include every required dynamic and
+contract placeholder; unknown or malformed placeholders, missing required
+placeholders, and rendered templates that drop a required protocol marker
+fail closed — before a Run Preset can be saved and before a run can launch —
+with task-specific errors. `story_discovery` has no template editor because
+it has no LLM stage.
+
+Full-template overrides travel as per-task JSON env values:
+
+```bash
+NEWS_PROMPT_TEMPLATE_IMAGE_ART_DIRECTION='{"system": "Art direction: $image_contract $editorial_instructions", "user": "Final output:\n$synthesis_body"}' uv run news run
+```
+
+They are carried by Run Presets, command previews, CLI env, and scheduled
+runs through the same validated runtime path. Precedence per task: built-in
+template < full-template override (`NEWS_PROMPT_TEMPLATE_<TASK>` wins for
+that task; a template without `$editorial_instructions` replaces the profile
+sentence entirely). The normal sentence-level editors are unchanged and are
+explicitly not full templates; `config/prompt_overrides.yaml` remains
+sentence-level only. Restoring a task's (or all tasks') default in the UI
+removes the override.
 
 Durable per-task edits can be checked into
 [`config/prompt_overrides.yaml`](config/prompt_overrides.yaml): a partial

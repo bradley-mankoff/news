@@ -11,27 +11,27 @@ import json
 import os
 import sys
 
-if __package__:
-    from . import board_poller as harness
-else:
-    import board_poller as harness
+try:
+    from automation.pm_harness import archon, github, model, policy, runtime
+except ImportError:  # direct `python3 automation/board_health.py`
+    from pm_harness import archon, github, model, policy, runtime
 
-ROOT = harness.ROOT
-dep_gate = harness.dep_gate
-fetch_project = harness.fetch_project
-fetch_workflow_run = harness.fetch_workflow_run
-fetch_workflow_runs = harness.fetch_workflow_runs
-find_issue_pr = harness.find_issue_pr
-find_ship_pr = harness.find_ship_pr
-fmt_deps = harness.fmt_deps
-gh = harness.gh
-inspect_worktree = harness.inspect_worktree
-latest_workflow_run = harness.latest_workflow_run
-load_config = harness.load_config
-parse_dep_refs = harness.parse_dep_refs
-run_status_for = harness.run_status_for
-workflow_run_details = harness.workflow_run_details
-workflow_status_by_message = harness.workflow_status_by_message
+ROOT = runtime.ROOT
+dep_gate = policy.dep_gate
+fetch_project = github.fetch_project
+fetch_workflow_run = archon.fetch_workflow_run
+fetch_workflow_runs = archon.fetch_workflow_runs
+find_issue_pr = github.find_issue_pr
+find_ship_pr = github.find_ship_pr
+fmt_deps = policy.fmt_deps
+gh = runtime.gh
+inspect_worktree = archon.inspect_worktree
+latest_workflow_run = archon.latest_workflow_run
+load_config = runtime.load_config
+parse_dep_refs = policy.parse_dep_refs
+run_status_for = policy.run_status_for
+workflow_run_details = model.workflow_run_details
+workflow_status_by_message = policy.workflow_status_by_message
 
 def recovery_finding(number: int, rec: dict, run: dict) -> str:
     details = workflow_run_details(run, branch=rec.get("branch"))

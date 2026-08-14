@@ -107,7 +107,6 @@ class SchedulerTests(unittest.TestCase):
             ),
             encoding="utf-8",
         )
-
     # -- time and spec validation ------------------------------------------
 
     def test_parse_daily_time_accepts_boundaries_and_rejects_malformed(self) -> None:
@@ -437,7 +436,6 @@ class SchedulerTests(unittest.TestCase):
         self.assertFalse(plist.exists())
         self.assertFalse(self._store().load().enabled)
         adapter.bootout.assert_called_once_with()
-
     def test_disable_schedule_bootout_failure_keeps_state_enabled(self) -> None:
         calls = {"n": 0}
 
@@ -526,7 +524,6 @@ class SchedulerTests(unittest.TestCase):
         )
         store = self._store()
         store.save(replace(store.load(), output_dir=str(out)))
-
         def write_current_details() -> None:
             details = json.loads(details_path.read_text(encoding="utf-8"))
             details["run_started_at"] = "2026-08-13T06:46:00"
@@ -617,7 +614,6 @@ class SchedulerTests(unittest.TestCase):
             side_effect=ImportError("pipeline unavailable"),
         ):
             self.assertEqual(run_scheduled(), 2)
-
     def test_run_scheduled_failure_records_bounded_redacted_error(self) -> None:
         self._enabled_schedule()
         with patch.dict(os.environ, {**_SECRETS}, clear=False), patch(

@@ -261,6 +261,83 @@ class SyncLocalDevelopTest(unittest.TestCase):
         self.assertEqual(request_data["port"], news_ui_runtime.UI_PORT)
         self.assertEqual(state_data["mode"], "cmux")
 
+    def test_sync_failure_writes_error_field_for_mechanic(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            state = Path(tmpdir) / "ui-state.json"
+            with (
+                patch.object(news_ui_runtime, "DRY_RUN", False),
+                patch.object(news_ui_runtime, "UI_RUNTIME_STATE_PATH", state),
+                patch.object(news_ui_runtime, "_run_git",
+                             return_value=_cp(returncode=1,
+                                              stderr="fetch failed")),
+            ):
+                result = news_ui_runtime.sync_local_develop()
+            data = json.loads(state.read_text())
+        self.assertTrue(result.startswith("LOCAL SYNC FAILED"))
+        self.assertIn("error", data)
+        self.assertIn("fetch failed", data["error"])
+        self.assertIn("last_sync_failed_at", data)
+
+    def test_sync_success_clears_error_field(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            state = Path(tmpdir) / "ui-state.json"
+            state.write_text(json.dumps({"mode": "process", "pid": 1,
+                                         "start_marker": "x",
+                                         "error": "old failure"}))
+            with (
+                patch.object(news_ui_runtime, "DRY_RUN", False),
+                patch.object(news_ui_runtime, "UI_RUNTIME_STATE_PATH", state),
+                patch.object(news_ui_runtime, "_run_git", return_value=_cp()),
+                patch.object(news_ui_runtime, "_sync_ui_runtime",
+                             return_value=(True, "ok")),
+            ):
+                result = news_ui_runtime.sync_local_develop()
+            data = json.loads(state.read_text())
+        self.assertTrue(result.startswith("LOCAL SYNC"))
+        self.assertNotIn("error", data)
+        self.assertEqual(data["mode"], "process")
+
+    def test_occupied_port_line_names_the_owner(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            runtime = Path(tmpdir) / "ui-runtime"
+            runtime.mkdir()
+            (runtime / ".git").mkdir()
+            with (
+                patch.object(news_ui_runtime, "UI_RUNTIME_WORKTREE", runtime),
+                patch.object(news_ui_runtime, "_run_git", return_value=_cp()),
+                patch.object(news_ui_runtime, "_ui_running", return_value=False),
+                patch.object(news_ui_runtime, "_port_open", return_value=True),
+                patch.object(news_ui_runtime, "_load_cmux_registration",
+                             return_value=None),
+                patch.object(news_ui_runtime, "_port_owner",
+                             return_value="news pid 42"),
+            ):
+                ok, detail = news_ui_runtime._sync_ui_runtime()
+        self.assertFalse(ok)
+        self.assertIn("news pid 42", detail)
+        self.assertIn("occupied by an unmanaged process", detail)
+
+    def test_start_failure_line_includes_log_tail(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            runtime = Path(tmpdir) / "ui-runtime"
+            runtime.mkdir()
+            (runtime / ".git").mkdir()
+            log_path = Path(tmpdir) / "news-ui.log"
+            log_path.write_text("line1\nline2: boom\n")
+            with (
+                patch.object(news_ui_runtime, "UI_RUNTIME_WORKTREE", runtime),
+                patch.object(news_ui_runtime, "UI_LOG_PATH", log_path),
+                patch.object(news_ui_runtime, "_run_git", return_value=_cp()),
+                patch.object(news_ui_runtime, "_ui_running", return_value=False),
+                patch.object(news_ui_runtime, "_port_open", return_value=False),
+                patch.object(news_ui_runtime, "_restart_ui",
+                             return_value=False),
+            ):
+                ok, detail = news_ui_runtime._sync_ui_runtime()
+        self.assertFalse(ok)
+        self.assertIn("line2: boom", detail)
+        self.assertIn("UI start failed", detail)
+
 
 if __name__ == "__main__":
     unittest.main()
