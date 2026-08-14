@@ -331,20 +331,26 @@ class UITests(unittest.TestCase):
 
     def test_recommendation_renderer_reads_schema_picks(self) -> None:
         html = ui_module.HTML
-        # The embedded recommendation renderer consumes the server-owned pick
-        # list directly (single source of truth, issue #80).
-        self.assertIn("state.schema.model_recommendations", html)
-        self.assertIn("state.schema.model_recommendations[task]", html)
-        self.assertIn("pick.reason", html)
-        self.assertIn("escapeHtml(pick.name)", html)
-        self.assertIn("escapeHtml(pick.alias)", html)
-        self.assertIn("escapeHtml(pick.reason)", html)
-        self.assertIn('data-use-model="${escapeHtml(pick.alias)}"', html)
+        # Keep the bounded source-contract guard focused on the complete
+        # recommendation renderer rather than scattered implementation strings.
+        block = html.split("function renderRecommendations", 1)[1].split(
+            "async function searchHuggingFaceModels", 1
+        )[0]
+        for snippet in (
+            "const picks = (state.schema && state.schema.model_recommendations && state.schema.model_recommendations[task]) || [];",
+            "container.innerHTML = picks.map(pick => `",
+            "escapeHtml(pick.name)",
+            "escapeHtml(pick.alias)",
+            "escapeHtml(pick.reason)",
+            'data-use-model="${escapeHtml(pick.alias)}"',
+            "btn.onclick = () => useModelReference(btn.dataset.useModel);",
+        ):
+            self.assertIn(snippet, block)
         # The renderer no longer re-filters full catalog entries by task notes.
-        self.assertNotIn("entry.task_notes[task]", html)
-        self.assertNotIn("modelCatalogEntries().filter", html)
-        # Empty pick lists keep the documented honest-gap message.
-        self.assertIn("No verified curated model for this task yet", html)
+        self.assertNotIn("entry.task_notes[task]", block)
+        self.assertNotIn("modelCatalogEntries().filter", block)
+        # Empty or partial pick lists keep the documented honest-gap message.
+        self.assertIn("No verified curated model for this task yet", block)
 
     def test_pure_helpers_and_schema_payload(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1934,7 +1940,9 @@ class UITests(unittest.TestCase):
                 "    name: Smoke Model\n"
                 "    backend: mlx-lm\n"
                 "    hf_repo: mlx-community/smoke-model\n"
-                "    description: Offline smoke entry\n",
+                "    description: Offline smoke entry\n"
+                "    task_notes:\n"
+                "      speed: Overlay-specific speed recommendation.\n",
                 encoding="utf-8",
             )
             with patch.dict(
@@ -1965,6 +1973,15 @@ class UITests(unittest.TestCase):
                     },
                 )
                 self.assertEqual(payload["model_recommendations"]["translation"], [])
+                speed_picks = payload["model_recommendations"]["speed"]
+                self.assertEqual(
+                    [pick["alias"] for pick in speed_picks],
+                    ["gemma-e2b-tiny", "smoke-model", model_catalog.DEFAULT_CATALOG_MODEL_ALIAS],
+                )
+                self.assertEqual(
+                    speed_picks[1]["reason"],
+                    "Overlay-specific speed recommendation.",
+                )
 
         self.assertEqual(
             [entry["alias"] for entry in payload["model_catalog"]],
@@ -1990,6 +2007,17 @@ class UITests(unittest.TestCase):
             status, _, body = self._invoke_get("/api/schema")
         self.assertEqual(status, 400)
         self.assertIn("must define models as a mapping", json.loads(body)["error"])
+
+    def test_schema_recommendation_failure_uses_error_envelope(self) -> None:
+        with patch.object(ui_module, "list_model_catalog", return_value=[]), patch.object(
+            ui_module,
+            "recommend_models",
+            side_effect=ValueError("recommendation catalog failure"),
+        ):
+            status, _, body = self._invoke_get("/api/schema")
+
+        self.assertEqual(status, 400)
+        self.assertEqual(json.loads(body)["error"], "recommendation catalog failure")
 
     def test_schema_real_malformed_catalog_uses_error_envelope(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
