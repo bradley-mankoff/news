@@ -4382,7 +4382,7 @@ HTML = r"""<!doctype html>
           const task = el.dataset.templateSystem || el.dataset.templateUser || "";
           if (task) {
             promptTemplateDirty[task] = true;
-            const statusEl = $(`[data-template-status="${task}"]`);
+            const statusEl = document.querySelector(`[data-template-status="${task}"]`);
             if (statusEl) statusEl.innerHTML = "";
           }
         });
@@ -4390,7 +4390,7 @@ HTML = r"""<!doctype html>
       document.querySelectorAll("#promptTemplateEditors .prompt-template-validate").forEach(btn => {
         btn.onclick = () => {
           validatePromptTemplateTask(btn.dataset.task).catch(err => {
-            const statusEl = $(`[data-template-status="${btn.dataset.task}"]`);
+            const statusEl = document.querySelector(`[data-template-status="${btn.dataset.task}"]`);
             if (statusEl) statusEl.innerHTML = `<span class="bad">${escapeHtml(err.message)}</span>`;
           });
         };
@@ -4403,14 +4403,14 @@ HTML = r"""<!doctype html>
     }
     function restorePromptTemplateTask(task) {
       const record = promptTemplateRecord(task);
-      const sysEl = $(`[data-template-system="${task}"]`);
-      const userEl = $(`[data-template-user="${task}"]`);
+      const sysEl = document.querySelector(`[data-template-system="${task}"]`);
+      const userEl = document.querySelector(`[data-template-user="${task}"]`);
       if (!record || !sysEl || !userEl) return;
       sysEl.value = record.system;
       userEl.value = record.user;
       // Restoring counts as an edit: the next collect() omits the override.
       promptTemplateDirty[task] = true;
-      const statusEl = $(`[data-template-status="${task}"]`);
+      const statusEl = document.querySelector(`[data-template-status="${task}"]`);
       if (statusEl) statusEl.innerHTML = "";
     }
     function restoreAllPromptTemplates() {
@@ -4418,14 +4418,14 @@ HTML = r"""<!doctype html>
     }
     async function validatePromptTemplateTask(task) {
       const record = promptTemplateRecord(task);
-      const sysEl = $(`[data-template-system="${task}"]`);
-      const userEl = $(`[data-template-user="${task}"]`);
+      const sysEl = document.querySelector(`[data-template-system="${task}"]`);
+      const userEl = document.querySelector(`[data-template-user="${task}"]`);
       if (!record || !sysEl || !userEl) return;
       const data = await api("/api/prompt-templates/validate", {
         method: "POST",
         body: JSON.stringify({ task, template: { system: sysEl.value, user: userEl.value } })
       });
-      const statusEl = $(`[data-template-status="${task}"]`);
+      const statusEl = document.querySelector(`[data-template-status="${task}"]`);
       if (statusEl) statusEl.innerHTML = `<span class="ok">Template is valid.</span>`;
       return data;
     }
@@ -4437,8 +4437,8 @@ HTML = r"""<!doctype html>
       const env = {};
       const envMap = promptTemplateEnvMap();
       ((state.schema && state.schema.prompt_templates) || []).forEach(t => {
-        const sysEl = $(`[data-template-system="${t.task}"]`);
-        const userEl = $(`[data-template-user="${t.task}"]`);
+        const sysEl = document.querySelector(`[data-template-system="${t.task}"]`);
+        const userEl = document.querySelector(`[data-template-user="${t.task}"]`);
         if (!sysEl || !userEl) return;
         const envVar = envMap[t.task];
         if (!promptTemplateDirty[t.task]) {
@@ -4457,8 +4457,8 @@ HTML = r"""<!doctype html>
         const raw = env[envVar] || "";
         promptTemplateRaw[t.task] = raw;
         promptTemplateDirty[t.task] = false;
-        const sysEl = $(`[data-template-system="${t.task}"]`);
-        const userEl = $(`[data-template-user="${t.task}"]`);
+        const sysEl = document.querySelector(`[data-template-system="${t.task}"]`);
+        const userEl = document.querySelector(`[data-template-user="${t.task}"]`);
         if (!sysEl || !userEl) return;
         sysEl.value = t.system;
         userEl.value = t.user;
