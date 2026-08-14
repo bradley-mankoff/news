@@ -3750,6 +3750,10 @@ class PipelineHelperTests(unittest.TestCase):
             summary_ctor.call_args.kwargs["prompt_instructions"],
             pipeline.PROMPT_INSTRUCTIONS["article_summary"],
         )
+        self.assertIs(
+            summary_ctor.call_args.kwargs["prompt_template"],
+            pipeline.PROMPT_TEMPLATES["article_summary"],
+        )
 
         with patch.object(
             pipeline.story_drafting_stage, "StoryDraftingRuntime"
@@ -3759,6 +3763,10 @@ class PipelineHelperTests(unittest.TestCase):
             draft_ctor.call_args.kwargs["prompt_instructions"],
             pipeline.PROMPT_INSTRUCTIONS["story_drafting"],
         )
+        self.assertIs(
+            draft_ctor.call_args.kwargs["prompt_template"],
+            pipeline.PROMPT_TEMPLATES["story_drafting"],
+        )
 
         with patch.object(
             pipeline.story_selection_stage, "StorySelectionRuntime"
@@ -3767,6 +3775,10 @@ class PipelineHelperTests(unittest.TestCase):
         self.assertEqual(
             selection_ctor.call_args.kwargs["prompt_instructions"],
             pipeline.PROMPT_INSTRUCTIONS["story_scale_screening"],
+        )
+        self.assertIs(
+            selection_ctor.call_args.kwargs["prompt_template"],
+            pipeline.PROMPT_TEMPLATES["story_scale_screening"],
         )
         self.assertEqual(
             selection_ctor.call_args.kwargs["story_scale_screening_max_tokens"],
@@ -4039,7 +4051,7 @@ class PipelineHelperTests(unittest.TestCase):
                 pipeline,
                 "generate_image_art_brief",
                 return_value={"image_prompt": "Prompt", "overlay_headline": "Headline"},
-            ), patch.object(
+            ) as brief_mock, patch.object(
                 pipeline,
                 "generate_image_with_mflux",
                 side_effect=fake_generate_image,
@@ -4059,6 +4071,14 @@ class PipelineHelperTests(unittest.TestCase):
                     synthesis_body="Summary body",
                     report_title="Report title",
                 )
+            self.assertIs(
+                brief_mock.call_args.kwargs["prompt_instructions"],
+                pipeline.PROMPT_INSTRUCTIONS,
+            )
+            self.assertIs(
+                brief_mock.call_args.kwargs["prompt_templates"],
+                pipeline.PROMPT_TEMPLATES,
+            )
             final_path = root / "report_image.png"
             self.assertEqual(art["final_image_path"], str(final_path))
             self.assertEqual(art["overlay_headline"], "Headline")

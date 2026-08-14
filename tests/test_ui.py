@@ -2705,7 +2705,16 @@ const TASKS = """
             + js_function_block("function collectRunPresetEditor() {", "function prepRunPresetEditorFromCurrent")
             + js_function_block("function textToEnv(text) {", "function renderStats")
             + js_function_block("async function savePresetEditor() {", "async function renamePresetDisplayName")
+            + js_function_block("function applyRunPreset(preset) {", "function resetAllOverrides")
             + r"""
+
+// The preset application path also refreshes unrelated panels. Stub those
+// renderers so this harness can exercise the real orchestration function.
+function setKnobEnv(_env) {}
+function renderModelTuningPanels() {}
+function renderPromptProfilePanel() {}
+function refreshModelKnobLinks() {}
+async function previewQuietly(_scope) {}
 
 // ---- Render ---------------------------------------------------------------
 state.schema = { current_env: {}, prompt_templates: TASKS };
@@ -2823,13 +2832,15 @@ assert(
   "edited template is missing from the preset env"
 );
 
-// ---- Apply round-trip: the saved env restores the exact edited pair --------
+// ---- Apply round-trip: the real preset path restores the exact pair -------
 for (const t of TASKS) {
   const sys = templateSys(t.task);
   sys.value = "stale text";
   sys.fire("input");
 }
-setPromptTemplateEnv(savedPresetPayload.env);
+state.presets = [{ id: savedPresetPayload.id, env: savedPresetPayload.env }];
+applyRunPreset(state.presets[0]);
+assert(state.selectedRunPresetId === savedPresetPayload.id, "apply did not select the preset");
 assert(templateSys(editTask.task).value === editedSystem, "apply did not restore the edited system text");
 assert(templateUser(editTask.task).value === editedUser, "apply did not restore the edited user text");
 const envAfter = currentPromptTemplateEnv();

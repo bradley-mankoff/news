@@ -520,6 +520,50 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
             resolved["image_art_direction"].system, override["system"]
         )
 
+    def test_run_preset_template_is_consumed_and_explicit_override_wins(self) -> None:
+        preset_raw = self._valid_template_json(
+            "image_art_direction",
+            "Preset art system: $image_contract $editorial_instructions",
+            "Preset art user: $synthesis_body",
+        )
+        explicit_raw = self._valid_template_json(
+            "image_art_direction",
+            "Explicit art system: $image_contract $editorial_instructions",
+            "Explicit art user: $synthesis_body",
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            presets_path = Path(tmpdir) / "run_presets.yaml"
+            presets_path.write_text(
+                "presets:\n"
+                "  editor-test:\n"
+                "    env:\n"
+                "      NEWS_PROMPT_TEMPLATE_IMAGE_ART_DIRECTION: "
+                + json.dumps(preset_raw)
+                + "\n",
+                encoding="utf-8",
+            )
+            with patch.object(config_module, "RUN_PRESETS_PATH", presets_path):
+                preset_config = load_runtime_config(
+                    preset_id="editor-test",
+                    materialize_outputs=False,
+                )
+                explicit_config = load_runtime_config(
+                    preset_id="editor-test",
+                    overrides={
+                        "NEWS_PROMPT_TEMPLATE_IMAGE_ART_DIRECTION": explicit_raw,
+                    },
+                    materialize_outputs=False,
+                )
+
+        self.assertEqual(
+            preset_config.prompt_template_overrides["image_art_direction"],
+            json.loads(preset_raw),
+        )
+        self.assertEqual(
+            explicit_config.prompt_template_overrides["image_art_direction"],
+            json.loads(explicit_raw),
+        )
+
     def test_prompt_template_empty_and_whitespace_count_as_unset(self) -> None:
         config = load_runtime_config(
             environ={},

@@ -12,8 +12,8 @@ Machine-local archon (archon-pi build, v0.7.0 = stock Archon) lives at
   `provider: pi`, `model: openai-codex/gpt-5.6-luna`, and `effort: max`, matching
   this session's `openai-codex/gpt-5.6-luna` model.
   It covers planning, review, conflict resolution, issue drafting, and the
-  completion records that classify deferred work; the board poller then creates
-  deduped issues mechanically.
+  completion records that classify deferred work for human follow-up; the board
+  poller does not parse this section or create issues from it.
 - Both paths run at their maximum Pi reasoning setting: DeepSeek and the
   OpenAI Codex backend both use `effort: max`.
 - Pi OAuth credentials are configured with the interactive `/login` command.
@@ -90,11 +90,12 @@ YAML is overwritten. If a workflow file is replaced, re-apply:
   (posts `VERDICT: <approve|request-changes|block>` on the PR).
 - `archon-fix-github-issue.yaml`: `completion-comment` node after `report`
   (posts the structured completion record on the issue, including the
-  `## How to test` handoff and the `## Deferred work` section the board poller
-  parses).
+  `## How to test` handoff and the `## Deferred work` section for human
+  follow-up; the board poller does not parse it or create tracking issues).
 - `archon-idea-to-pr.yaml`: `completion-comment` node after `workflow-summary`
   (same structured record + `## How to test` handoff + `## Deferred work`
-  section).
+  section for human follow-up; the board poller does not parse it or create
+  tracking issues).
 - Both implementation workflows: `sync-with-develop` node before the PR node
   (merges develop into the branch, resolves, validates) — `create-pr` /
   `finalize-pr` depend on it.
