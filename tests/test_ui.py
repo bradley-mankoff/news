@@ -2129,6 +2129,20 @@ const elements = {
 };
 function $(id) { return elements[id] || null; }
 function value(id) { return $(id) ? $(id).value : ""; }
+// Mirrors the real currentControlValue when no matching control exists:
+// fall back to state.schema.current_env (see the embedded implementation
+// next to escapeHtml, which is not part of the extracted renderer blocks).
+function currentControlValue(env) {
+  return (state.schema && state.schema.current_env && state.schema.current_env[env]) || "";
+}
+// Minimal document stub: currentControlValue/renderModelBackendHint fall
+// back to state.schema.current_env when no matching control exists, and
+// useModelReference returns early without a NEWS_MODEL select element.
+const document = {
+  querySelector: () => null,
+  getElementById: () => null,
+  querySelectorAll: () => []
+};
 const state = { schema: null };
 const searchResults = [
   { id: "owner/future", hf_url: "https://example.test/future", runtime_fit: { status: "future_fit", reason: "future reason" } },
@@ -2142,7 +2156,7 @@ async function api(path) {
 """
         + js_function_block("function escapeHtml(text) {", "function formatDefault")
         + js_function_block("function modelTaskLabels() {", "function useModelReference")
-        + js_function_block("function useModelReference(reference) {", "function renderModelCatalogPanel")
+        + js_function_block('function useModelReference(reference, requiredBackend = "") {', "function renderModelCatalogPanel")
         + js_function_block("function renderModelCatalogPanel() {", "function renderRecommendations")
         + js_function_block("function renderRecommendations(task) {", "async function searchHuggingFaceModels")
         + js_function_block("async function searchHuggingFaceModels() {", "async function comparePromptProfiles")
