@@ -422,9 +422,153 @@ class UITests(unittest.TestCase):
             html,
         )
         self.assertIn('data-use-hf-backend="${escapeHtml(hfBackend)}"', html)
-        self.assertIn('currentControlValue("NEWS_MODEL_BACKEND") === "external"', html)
+        self.assertIn(
+            'normalizedBackendValue(currentControlValue("NEWS_MODEL_BACKEND")) === "external"',
+            html,
+        )
         # Use must never mutate the backend control.
         self.assertNotIn('setControlValue("NEWS_MODEL_BACKEND"', html)
+
+    @unittest.skipUnless(shutil.which("node"), "node runtime required for model/backend behavior tests")
+    def test_model_backend_hint_and_selection_behavior(self) -> None:
+        html = ui_module.HTML
+        current_start = html.index("    function currentControlValue")
+        current_end = html.index("    function setControlValue", current_start)
+        model_start = html.index("    function modelCatalogEntries")
+        model_end = html.index("    function renderModelCatalogPanel", model_start)
+        refresh_start = html.index("    function refreshHuggingFaceUseButtons")
+        refresh_end = html.index("    async function searchHuggingFaceModels", refresh_start)
+        production_source = "\n".join(
+            [
+                html[current_start:current_end],
+                html[model_start:model_end],
+                html[refresh_start:refresh_end],
+            ]
+        )
+        script = """
+import assert from "node:assert/strict";
+
+function classList() {
+  const values = new Set();
+  return {
+    add(value) { values.add(value); },
+    remove(value) { values.delete(value); },
+    contains(value) { return values.has(value); },
+  };
+}
+function control(env, value = "", options = []) {
+  return {
+    dataset: { env },
+    type: "select",
+    tagName: "SELECT",
+    value,
+    options: options.map(option => ({ value: option })),
+    insertAdjacentHTML(_position, html) {
+      const match = html.match(/<option value="([^"]*)">/);
+      if (match) this.options.unshift({ value: match[1] });
+    },
+    dispatchEvent(event) {
+      assert.equal(event.type, "change");
+      handleChange(this);
+    },
+  };
+}
+const modelSelect = control("NEWS_MODEL", "", ["vlm"]);
+const backendSelect = control("NEWS_MODEL_BACKEND", "mlx-lm", ["mlx-lm", "mlx-vlm", "external"]);
+const hint = { textContent: "", classList: classList() };
+const externalOnlyButton = {
+  dataset: { useHfModel: "org/external", useHfBackend: "external" },
+  disabled: true,
+  textContent: "",
+};
+const elements = new Map([
+  ["modelBackendHint", hint],
+  ["model", modelSelect],
+  ["backend", backendSelect],
+]);
+const state = {
+  schema: {
+    model_catalog: [{ alias: "vlm", reference: "org/vlm", backend: "mlx-vlm" }],
+    current_env: {},
+  },
+  selectedModelReference: "",
+  selectedModelRequiredBackend: "",
+};
+function $(id) {
+  if (id === "NEWS_MODEL") return modelSelect;
+  if (id === "NEWS_MODEL_BACKEND") return backendSelect;
+  return elements.get(id) || null;
+}
+function documentQuery(selector) {
+  if (selector === '[data-env="NEWS_MODEL"]') return modelSelect;
+  if (selector === '[data-env="NEWS_MODEL_BACKEND"]') return backendSelect;
+  return null;
+}
+globalThis.document = {
+  querySelector(selector) {
+    return selector === "#modelBackendHint" ? hint : documentQuery(selector);
+  },
+  getElementById(id) {
+    return elements.get(id) || null;
+  },
+  querySelectorAll(selector) {
+    return selector === "[data-use-hf-model]" ? [externalOnlyButton] : [];
+  },
+};
+globalThis.Event = class Event {
+  constructor(type) { this.type = type; }
+};
+function escapeHtml(value) { return String(value); }
+function handleChange(element) {
+  if (element === modelSelect) {
+    state.selectedModelReference = String(element.value || "").trim();
+    state.selectedModelRequiredBackend = catalogBackendForReference(element.value);
+    renderModelBackendHint(requiredBackendForSelectedModel());
+  } else if (element === backendSelect) {
+    refreshHuggingFaceUseButtons();
+    renderModelBackendHint(requiredBackendForSelectedModel());
+  }
+}
+
+""" + production_source + """
+
+useModelReference("vlm", "mlx-vlm");
+assert.equal(modelSelect.value, "vlm");
+assert.equal(backendSelect.value, "mlx-lm");
+assert.equal(hint.textContent, "This model needs NEWS_MODEL_BACKEND=mlx-vlm");
+assert.equal(hint.classList.contains("hidden"), false);
+
+backendSelect.value = "mlx-vlm";
+renderModelBackendHint(requiredBackendForSelectedModel());
+assert.equal(hint.classList.contains("hidden"), true);
+
+backendSelect.value = "";
+renderModelBackendHint(requiredBackendForSelectedModel());
+assert.equal(hint.classList.contains("hidden"), true);
+
+backendSelect.value = " EXTERNAL ";
+refreshHuggingFaceUseButtons();
+assert.equal(externalOnlyButton.disabled, false);
+assert.equal(externalOnlyButton.textContent, "Use");
+
+backendSelect.value = "mlx-lm";
+refreshHuggingFaceUseButtons();
+assert.equal(externalOnlyButton.disabled, true);
+assert.match(externalOnlyButton.textContent, /^External only/);
+useModelReference("org/external", "external");
+assert.equal(modelSelect.value, "org/external");
+assert.equal(backendSelect.value, "mlx-lm");
+assert.equal(hint.textContent, "This model needs NEWS_MODEL_BACKEND=external");
+assert.equal(hint.classList.contains("hidden"), false);
+"""
+        result = subprocess.run(
+            ["node", "--input-type=module"],
+            input=script,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
 
     def test_pure_helpers_and_schema_payload(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

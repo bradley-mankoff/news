@@ -2464,6 +2464,9 @@ HTML = r"""<!doctype html>
       if (el.type === "checkbox") return el.checked ? "1" : "";
       return el.value;
     }
+    function normalizedBackendValue(value) {
+      return String(value || "").trim().toLowerCase();
+    }
     function setControlValue(env, next) {
       const el = document.querySelector(`[data-env="${env}"]`);
       if (!el) return;
@@ -4282,8 +4285,8 @@ HTML = r"""<!doctype html>
     function renderModelBackendHint(requiredBackend = "") {
       const hint = document.getElementById("modelBackendHint");
       if (!hint) return;
-      const required = String(requiredBackend || "").trim();
-      const current = String(currentControlValue("NEWS_MODEL_BACKEND") || "").trim();
+      const required = normalizedBackendValue(requiredBackend);
+      const current = normalizedBackendValue(currentControlValue("NEWS_MODEL_BACKEND"));
       if (!required || !current) {
         // Unknown model/status or unset override: no conflict to report.
         hint.textContent = "";
@@ -4343,7 +4346,7 @@ HTML = r"""<!doctype html>
       });
     }
     function refreshHuggingFaceUseButtons() {
-      const backendExternal = currentControlValue("NEWS_MODEL_BACKEND") === "external";
+      const backendExternal = normalizedBackendValue(currentControlValue("NEWS_MODEL_BACKEND")) === "external";
       document.querySelectorAll("[data-use-hf-model]").forEach(btn => {
         const disabled = btn.dataset.useHfBackend === "external" && !backendExternal;
         btn.disabled = disabled;
@@ -4374,7 +4377,7 @@ HTML = r"""<!doctype html>
           container.innerHTML = `<p class="muted">No models found.</p>`;
           return;
         }
-        const backendExternal = currentControlValue("NEWS_MODEL_BACKEND") === "external";
+        const backendExternal = normalizedBackendValue(currentControlValue("NEWS_MODEL_BACKEND")) === "external";
         container.innerHTML = models.map(item => {
           const fit = item.runtime_fit || {};
           const fitLabel = RUNTIME_FIT_LABELS[fit.status] || fit.status || "unknown";
