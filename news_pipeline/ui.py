@@ -2339,6 +2339,8 @@ HTML = r"""<!doctype html>
       activeRun: null,
       selectedRunPresetId: "",
       selectedModelTuningPresetId: "",
+      selectedModelReference: "",
+      selectedModelRequiredBackend: "",
       latestReview: null,
       history: [],
       historyError: null,
@@ -2675,7 +2677,10 @@ HTML = r"""<!doctype html>
       renderKnobLinks("NEWS_MODEL_IMAGE_ART_DIRECTION");
       // Preset apply, reset/clear, and startup restore re-render the hint so
       // a stale mismatch message cannot outlive a matching model/backend pair.
-      renderModelBackendHint(catalogBackendForReference(currentControlValue("NEWS_MODEL")));
+      const reference = currentControlValue("NEWS_MODEL");
+      state.selectedModelReference = reference;
+      state.selectedModelRequiredBackend = catalogBackendForReference(reference);
+      renderModelBackendHint(requiredBackendForSelectedModel());
     }
     function renderTabs() {
       $("tabs").innerHTML = `<button id="navToggle" class="nav-toggle" title="Collapse navigation" aria-label="Collapse navigation"><span class="collapse-icon">${icons.chevronLeft}</span><span class="expand-icon">${icons.chevronRight}</span></button>` +
@@ -4246,7 +4251,15 @@ HTML = r"""<!doctype html>
       const entry = modelCatalogEntries().find(entry => entry.alias === clean || entry.reference === clean);
       return (entry && entry.backend) || "";
     }
-    function useModelReference(reference, requiredBackend) {
+    function requiredBackendForSelectedModel() {
+      const reference = String(currentControlValue("NEWS_MODEL") || "").trim();
+      if (reference !== state.selectedModelReference) {
+        state.selectedModelReference = reference;
+        state.selectedModelRequiredBackend = catalogBackendForReference(reference);
+      }
+      return state.selectedModelRequiredBackend;
+    }
+    function useModelReference(reference, requiredBackend = "") {
       const sel = document.querySelector('[data-env="NEWS_MODEL"]');
       if (!sel) return;
       if (!Array.from(sel.options).some(option => option.value === reference)) {
@@ -4256,8 +4269,14 @@ HTML = r"""<!doctype html>
       sel.dispatchEvent(new Event("change"));
       // The delegated change listener derives the required backend from the
       // catalog; an explicit requiredBackend (HF runtime-fit status) wins for
-      // search results that are not catalog entries.
-      renderModelBackendHint(requiredBackend);
+      // search results that are not catalog entries. Store it after dispatch
+      // because the synthetic change event intentionally handles catalog-only
+      // direct selections as well.
+      state.selectedModelReference = String(reference || "").trim();
+      state.selectedModelRequiredBackend = String(
+        requiredBackend || catalogBackendForReference(reference) || ""
+      ).trim();
+      renderModelBackendHint(requiredBackendForSelectedModel());
     }
     // Live compatibility hint under the Default model control: compares the
     // selected model's known backend with the explicit NEWS_MODEL_BACKEND
@@ -4327,6 +4346,16 @@ HTML = r"""<!doctype html>
         btn.onclick = () => useModelReference(btn.dataset.useModel, catalogBackendForReference(btn.dataset.useModel));
       });
     }
+    function refreshHuggingFaceUseButtons() {
+      const backendExternal = currentControlValue("NEWS_MODEL_BACKEND") === "external";
+      document.querySelectorAll("[data-use-hf-model]").forEach(btn => {
+        const disabled = btn.dataset.useHfBackend === "external" && !backendExternal;
+        btn.disabled = disabled;
+        btn.textContent = disabled
+          ? "External only — set NEWS_MODEL_BACKEND=external to use"
+          : "Use";
+      });
+    }
     async function searchHuggingFaceModels() {
       const container = $("modelSearchResults");
       if (!container) return;
@@ -4353,7 +4382,9 @@ HTML = r"""<!doctype html>
         container.innerHTML = models.map(item => {
           const fit = item.runtime_fit || {};
           const fitLabel = RUNTIME_FIT_LABELS[fit.status] || fit.status || "unknown";
-          const hfBackend = RUNTIME_FIT_BACKENDS[fit.status] || "";
+          const hfBackend = Object.prototype.hasOwnProperty.call(RUNTIME_FIT_BACKENDS, fit.status)
+            ? RUNTIME_FIT_BACKENDS[fit.status]
+            : "";
           const externalOnly = fit.status === "external_only";
           const useDisabled = externalOnly && !backendExternal;
           return `
@@ -4466,14 +4497,19 @@ HTML = r"""<!doctype html>
     }
     async function init() {
       state.schema = await api("/api/schema");
+      let bootWarning = "";
+      let activeRunStatus = "";
       try {
         const runsData = await api("/api/runs");
         const active = (runsData.runs || []).find(run => ["starting", "running", "stopping"].includes(run.status));
         if (active) {
           state.activeRun = active.run_id;
-          setStatus(`Run ${active.run_id} is active (${active.status}).`, "warn");
+          activeRunStatus = `Run ${active.run_id} is active (${active.status}).`;
         }
-      } catch (_err) { /* runs endpoint is best-effort at boot */ }
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        bootWarning = `Active run status unavailable: ${message}`;
+      }
       updateRunControls();
       renderTabs();
       renderRunSetup();
@@ -4496,9 +4532,12 @@ HTML = r"""<!doctype html>
           }
           // Model/backend changes additionally refresh the compatibility hint.
           if (el.dataset.env === "NEWS_MODEL") {
-            renderModelBackendHint(catalogBackendForReference(el.value));
+            state.selectedModelReference = String(el.value || "").trim();
+            state.selectedModelRequiredBackend = catalogBackendForReference(el.value);
+            renderModelBackendHint(requiredBackendForSelectedModel());
           } else if (el.dataset.env === "NEWS_MODEL_BACKEND") {
-            renderModelBackendHint(catalogBackendForReference(currentControlValue("NEWS_MODEL")));
+            refreshHuggingFaceUseButtons();
+            renderModelBackendHint(requiredBackendForSelectedModel());
           }
         }
       });
@@ -4517,7 +4556,11 @@ HTML = r"""<!doctype html>
       refreshModelKnobLinks();
       renderRunPresetDrawer();
       renderPresetSummary();
-      if (state.schema.removed_topic_env_vars && state.schema.removed_topic_env_vars.length) {
+      if (bootWarning) {
+        setStatus(bootWarning, "warn");
+      } else if (activeRunStatus) {
+        setStatus(activeRunStatus, "warn");
+      } else if (state.schema.removed_topic_env_vars && state.schema.removed_topic_env_vars.length) {
         setStatus(`Removed topic env vars set: ${state.schema.removed_topic_env_vars.join(", ")}`, "warn");
       } else {
         setStatus("");
