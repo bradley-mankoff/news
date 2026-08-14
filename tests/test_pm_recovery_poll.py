@@ -296,6 +296,7 @@ class TerminalRecoveryPollTest(unittest.TestCase):
                 "dispatch",
                 return_value=DispatchResult(True),
             ),
+            patch.object(recovery_adapter, "fetch_workflow_runs", return_value=WorkflowRuns()),
             patch.object(cycle_adapter, "save_state"),
         ):
             cycle_adapter.poll(self._cfg(), {}, state)
@@ -349,6 +350,7 @@ class TerminalRecoveryPollTest(unittest.TestCase):
                     self._as_runs([old, new]),
                 ],
             ),
+            patch.object(recovery_adapter, "fetch_workflow_runs", return_value=WorkflowRuns()),
             patch.object(recovery_adapter, "inspect_worktree", return_value=False),
             patch.object(recovery_adapter, "comment_issue", return_value=True),
             patch.object(cycle_adapter, "save_state"),
