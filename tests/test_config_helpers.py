@@ -75,20 +75,23 @@ class ConfigHelperTests(unittest.TestCase):
                 story_drafting_max_tokens=3,
                 story_scale_screening_max_tokens=3000,
                 title_generation_max_tokens=700,
+                image_art_direction_max_tokens=700,
                 task_sampling={"default": base_sampling},
             ),
             ModelTuningSettings(
                 article_summary_max_tokens=20,
                 title_generation_max_tokens=900,  # overlay wins
+                image_art_direction_max_tokens=640,  # overlay wins
                 task_sampling={"story_drafting": overlay_sampling},
             ),
         )
         self.assertEqual(merged_tuning.article_summary_max_tokens, 20)
         self.assertEqual(merged_tuning.task_sampling["story_drafting"].top_p, 0.8)
-        # Silent-drop prevention for the two new per-task fields: base value
+        # Silent-drop prevention for the per-task fields: base value
         # survives when the overlay leaves it unset, overlay wins when set.
         self.assertEqual(merged_tuning.story_scale_screening_max_tokens, 3000)  # base survives
         self.assertEqual(merged_tuning.title_generation_max_tokens, 900)        # overlay wins
+        self.assertEqual(merged_tuning.image_art_direction_max_tokens, 640)     # overlay wins
 
         with patch.object(config_module, "resolve_model_name", return_value="patched-model"), patch.object(
             config_module,
@@ -97,6 +100,7 @@ class ConfigHelperTests(unittest.TestCase):
                 model_max_input_tokens=123,
                 story_scale_screening_max_tokens=3100,
                 title_generation_max_tokens=710,
+                image_art_direction_max_tokens=640,
                 task_sampling={"default": overlay_sampling},
             )},
         ):
@@ -104,6 +108,7 @@ class ConfigHelperTests(unittest.TestCase):
         self.assertEqual(tuned.model_max_input_tokens, 123)
         self.assertEqual(tuned.story_scale_screening_max_tokens, 3100)
         self.assertEqual(tuned.title_generation_max_tokens, 710)
+        self.assertEqual(tuned.image_art_direction_max_tokens, 640)
         self.assertEqual(tuned.task_sampling["default"].top_p, 0.8)
 
         self.assertEqual(config_module._task_max_tokens_field("default"), "model_max_input_tokens")
@@ -125,7 +130,7 @@ class ConfigHelperTests(unittest.TestCase):
         )
         self.assertEqual(
             config_module._task_max_tokens_field(config_module.MODEL_TASK_IMAGE_ART_DIRECTION),
-            "title_generation_max_tokens",
+            "image_art_direction_max_tokens",
         )
         with self.assertRaises(ValueError):
             config_module._task_max_tokens_field("bogus")
@@ -264,6 +269,7 @@ class ConfigHelperTests(unittest.TestCase):
             "NEWS_STORY_DRAFTING_MAX_TOKENS": "story_drafting_max_tokens",
             "NEWS_STORY_SCALE_SCREENING_MAX_TOKENS": "story_scale_screening_max_tokens",
             "NEWS_TITLE_GENERATION_MAX_TOKENS": "title_generation_max_tokens",
+            "NEWS_IMAGE_ART_DIRECTION_MAX_TOKENS": "image_art_direction_max_tokens",
         }
         for env_name, field_name in env_fields.items():
             for bad_value in (0, -1):
@@ -309,6 +315,7 @@ class ConfigHelperTests(unittest.TestCase):
             "story_drafting_max_tokens",
             "story_scale_screening_max_tokens",
             "title_generation_max_tokens",
+            "image_art_direction_max_tokens",
         )
         for field_name in canonical_fields:
             for bad_value in (0, -1):
@@ -334,7 +341,7 @@ class ConfigHelperTests(unittest.TestCase):
                 "story_scale_screening_max_tokens",
             ),
             (config_module.MODEL_TASK_TITLE_GENERATION, "title_generation_max_tokens"),
-            (config_module.MODEL_TASK_IMAGE_ART_DIRECTION, "title_generation_max_tokens"),
+            (config_module.MODEL_TASK_IMAGE_ART_DIRECTION, "image_art_direction_max_tokens"),
         )
         for assignment_task, field_name in task_fields:
             with self.subTest(task=assignment_task):
@@ -1069,6 +1076,97 @@ class ConfigHelperTests(unittest.TestCase):
             self.assertEqual(preset_env, {"NEWS_MODEL": "preset-model"})
             self.assertEqual(effective_env["NEWS_MODEL"], "override")
             self.assertEqual(effective_env[config_module.PRESET_ENV_VAR], "preset")
+
+    def test_load_prompt_overrides_missing_and_empty_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            # Missing file returns {} (established missing-file behavior).
+            self.assertEqual(config_module.load_prompt_overrides(root / "missing.yaml"), {})
+
+            empty = root / "empty.yaml"
+            empty.write_text("", encoding="utf-8")
+            self.assertEqual(config_module.load_prompt_overrides(empty), {})
+
+            no_overrides = root / "no_overrides.yaml"
+            no_overrides.write_text("presets: {}\n", encoding="utf-8")
+            self.assertEqual(config_module.load_prompt_overrides(no_overrides), {})
+
+            null_overrides = root / "null_overrides.yaml"
+            null_overrides.write_text("overrides: null\n", encoding="utf-8")
+            self.assertEqual(config_module.load_prompt_overrides(null_overrides), {})
+
+            empty_mapping = root / "empty_mapping.yaml"
+            empty_mapping.write_text("overrides: {}\n", encoding="utf-8")
+            self.assertEqual(config_module.load_prompt_overrides(empty_mapping), {})
+
+    def test_load_prompt_overrides_valid_partial_mapping_and_normalization(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            overrides_path = root / "prompt_overrides.yaml"
+            overrides_path.write_text(
+                textwrap.dedent(
+                    """\
+                    overrides:
+                      story_drafting: |
+                        Lead with the central event.
+                        Keep the prose concise.
+                      article_summary: "  Summarize factually.  "
+                      title_generation: null
+                      image_art_direction: "   "
+                    """
+                ),
+                encoding="utf-8",
+            )
+            loaded = config_module.load_prompt_overrides(overrides_path)
+            # Multiline text preserves internal newlines; only outer
+            # whitespace is stripped.
+            self.assertEqual(
+                loaded["story_drafting"],
+                "Lead with the central event.\nKeep the prose concise.",
+            )
+            self.assertEqual(loaded["article_summary"], "Summarize factually.")
+            # Blank/null entries are omitted as unset.
+            self.assertNotIn("title_generation", loaded)
+            self.assertNotIn("image_art_direction", loaded)
+            self.assertEqual(
+                set(loaded),
+                {"story_drafting", "article_summary"},
+            )
+
+    def test_load_prompt_overrides_invalid_schemas_fail_deterministically(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+
+            bad_root = root / "bad_root.yaml"
+            bad_root.write_text("- not-a-mapping\n", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "must contain a YAML mapping"):
+                config_module.load_prompt_overrides(bad_root)
+
+            bad_overrides = root / "bad_overrides.yaml"
+            bad_overrides.write_text("overrides: []\n", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "must define overrides as a mapping"):
+                config_module.load_prompt_overrides(bad_overrides)
+
+            unknown_task = root / "unknown_task.yaml"
+            unknown_task.write_text("overrides:\n  story_draftingx: oops\n", encoding="utf-8")
+            with self.assertRaisesRegex(
+                ValueError, "unknown prompt task 'story_draftingx'"
+            ):
+                config_module.load_prompt_overrides(unknown_task)
+
+            non_string = root / "non_string.yaml"
+            non_string.write_text("overrides:\n  story_drafting: [a, b]\n", encoding="utf-8")
+            with self.assertRaisesRegex(
+                ValueError, "prompt task 'story_drafting' must be a string; got list"
+            ):
+                config_module.load_prompt_overrides(non_string)
+
+            numeric_value = root / "numeric_value.yaml"
+            numeric_value.write_text("overrides:\n  title_generation: 42\n", encoding="utf-8")
+            with self.assertRaisesRegex(
+                ValueError, "prompt task 'title_generation' must be a string; got int"
+            ):
+                config_module.load_prompt_overrides(numeric_value)
 
     def test_delivery_mode_and_placeholder_helpers_cover_edge_branches(self) -> None:
         # Closed-set normalization: canonical values, aliases, and

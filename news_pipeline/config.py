@@ -4,6 +4,8 @@ The pipeline is intentionally driven by small YAML files in ``config/``:
 
 - ``sources.yaml`` defines article feeds searched by run-mode tier and language.
 - ``recipients.yaml`` defines email recipients and optional personal prompts.
+- ``prompt_overrides.yaml`` defines optional per-task editorial instruction
+  overrides layered under the env/UI override surface.
 
 Environment variables can override Run Settings without editing YAML. See
 ``README.md`` for the full command list.
@@ -29,6 +31,7 @@ from .prompt_catalog import (
     DEFAULT_PROMPT_PROFILE_ID,
     PROMPT_PROFILE_ENV_VAR,
     PROMPT_PROFILE_IDS,
+    PROMPT_TASKS,
     PROMPT_TASK_OVERRIDE_ENV_VARS,
     get_prompt_profile,
 )
@@ -40,6 +43,7 @@ ROOT_DIR = Path(__file__).resolve().parent.parent
 CONFIG_DIR = ROOT_DIR / "config"
 RUN_PRESETS_PATH = CONFIG_DIR / "run_presets.yaml"
 MODEL_TUNING_PRESETS_PATH = CONFIG_DIR / "model_tuning_presets.yaml"
+PROMPT_OVERRIDES_PATH = CONFIG_DIR / "prompt_overrides.yaml"
 CURSORIGNORE_MANAGED_START = "# >>> news-pipeline latest output >>>"
 CURSORIGNORE_MANAGED_END = "# <<< news-pipeline latest output <<<"
 ASSISTANT_CONTEXT_MANAGED_START = "# >>> news-pipeline core context >>>"
@@ -63,6 +67,7 @@ ASSISTANT_CONTEXT_CORE_PATTERNS = (
     "!config/run_presets.yaml",
     "!config/sources.yaml",
     "!config/recipients.yaml",
+    "!config/prompt_overrides.yaml",
     "__pycache__/",
     "**/__pycache__/",
     "*.py[cod]",
@@ -220,6 +225,7 @@ class ModelTuningSettings:
     story_drafting_max_tokens: int | None = None
     story_scale_screening_max_tokens: int | None = None
     title_generation_max_tokens: int | None = None
+    image_art_direction_max_tokens: int | None = None
     task_sampling: dict[str, ModelSamplingSettings] = field(default_factory=dict)
 
 
@@ -437,6 +443,7 @@ DEFAULT_STORY_DRAFTING_MAX_TOKENS = 1800
 # Mirrors story_selection.STORY_SCALE_VALIDATION_MAX_TOKENS; keep in sync.
 DEFAULT_STORY_SCALE_SCREENING_MAX_TOKENS = 3000
 DEFAULT_TITLE_GENERATION_MAX_TOKENS = 700
+DEFAULT_IMAGE_ART_DIRECTION_MAX_TOKENS = 700
 DEFAULT_MODEL_SERVER_PREFILL_STEP_SIZE = 512
 DEFAULT_MODEL_SERVER_PROMPT_CACHE_SIZE = 2
 DEFAULT_MODEL_SERVER_PROMPT_CACHE_BYTES = "512MB"
@@ -450,6 +457,7 @@ MODEL_TASK_SAMPLING_ENV_PREFIXES = {
     MODEL_TASK_ARTICLE_SUMMARY: "NEWS_MODEL_ARTICLE_SUMMARY",
     MODEL_TASK_STORY_DRAFTING: "NEWS_MODEL_STORY_DRAFTING",
     MODEL_TASK_TITLE_GENERATION: "NEWS_MODEL_TITLE_GENERATION",
+    MODEL_TASK_IMAGE_ART_DIRECTION: "NEWS_MODEL_IMAGE_ART_DIRECTION",
 }
 MODEL_TUNING_PRESET_ENV_VARS = {
     "default": "NEWS_MODEL_TUNING_PRESET",
@@ -457,6 +465,7 @@ MODEL_TUNING_PRESET_ENV_VARS = {
     MODEL_TASK_STORY_DRAFTING: "NEWS_MODEL_STORY_DRAFTING_TUNING_PRESET",
     MODEL_TASK_STORY_SCALE_SCREENING: "NEWS_MODEL_STORY_SCALE_SCREENING_TUNING_PRESET",
     MODEL_TASK_TITLE_GENERATION: "NEWS_MODEL_TITLE_GENERATION_TUNING_PRESET",
+    MODEL_TASK_IMAGE_ART_DIRECTION: "NEWS_MODEL_IMAGE_ART_DIRECTION_TUNING_PRESET",
 }
 MODEL_REASONING_SAMPLING_ENV_PREFIX = "NEWS_MODEL_REASONING"
 # Per-task model knobs share env shapes NEWS_MODEL_<TASK>[_TUNING_PRESET|_BASE_URL]
@@ -467,6 +476,7 @@ MODEL_TASK_KNOB_SPECS: tuple[tuple[str, str, str], ...] = (
     (MODEL_TASK_STORY_DRAFTING, "Story Drafting", "Story drafting max tokens"),
     (MODEL_TASK_STORY_SCALE_SCREENING, "Story Scale Screening", "Story scale screening max tokens"),
     (MODEL_TASK_TITLE_GENERATION, "Title Generation", "Title generation max tokens"),
+    (MODEL_TASK_IMAGE_ART_DIRECTION, "Image Art Direction", "Image art direction max tokens"),
 )
 
 
@@ -480,6 +490,7 @@ def _empty_model_sampling_map() -> dict[str, ModelSamplingSettings]:
         MODEL_TASK_ARTICLE_SUMMARY: ModelSamplingSettings(),
         MODEL_TASK_STORY_DRAFTING: ModelSamplingSettings(),
         MODEL_TASK_TITLE_GENERATION: ModelSamplingSettings(),
+        MODEL_TASK_IMAGE_ART_DIRECTION: ModelSamplingSettings(),
         "reasoning": ModelSamplingSettings(),
     }
 
@@ -693,6 +704,10 @@ def _merge_model_tuning_settings(
         title_generation_max_tokens=_merge_optional_value(
             base.title_generation_max_tokens, overlay.title_generation_max_tokens
         ),
+        image_art_direction_max_tokens=_merge_optional_value(
+            base.image_art_direction_max_tokens,
+            overlay.image_art_direction_max_tokens,
+        ),
         task_sampling=task_sampling,
     )
 
@@ -705,6 +720,7 @@ def _base_model_tuning(model_reference: str) -> ModelTuningSettings:
         story_drafting_max_tokens=DEFAULT_STORY_DRAFTING_MAX_TOKENS,
         story_scale_screening_max_tokens=DEFAULT_STORY_SCALE_SCREENING_MAX_TOKENS,
         title_generation_max_tokens=DEFAULT_TITLE_GENERATION_MAX_TOKENS,
+        image_art_direction_max_tokens=DEFAULT_IMAGE_ART_DIRECTION_MAX_TOKENS,
         task_sampling=_empty_model_sampling_map(),
     )
     model_default_tuning = MODEL_SPECIFIC_TUNING_DEFAULTS.get(resolved_name)
@@ -719,9 +735,7 @@ _TASK_MAX_TOKENS_FIELDS: dict[str, str] = {
     MODEL_TASK_STORY_DRAFTING: "story_drafting_max_tokens",
     MODEL_TASK_STORY_SCALE_SCREENING: "story_scale_screening_max_tokens",
     MODEL_TASK_TITLE_GENERATION: "title_generation_max_tokens",
-    # image_art_direction is produced by the same LLM call as title_generation
-    # (generate_image_art_brief); it inherits that task's token cap by design.
-    MODEL_TASK_IMAGE_ART_DIRECTION: "title_generation_max_tokens",
+    MODEL_TASK_IMAGE_ART_DIRECTION: "image_art_direction_max_tokens",
 }
 
 # Canonical model-tuning max-token fields, derived from the task map so the
@@ -1019,6 +1033,10 @@ def _apply_model_tuning_env_overrides(tuning: ModelTuningSettings) -> ModelTunin
             tuning.title_generation_max_tokens,
             _positive_optional_int_env("NEWS_TITLE_GENERATION_MAX_TOKENS"),
         ),
+        image_art_direction_max_tokens=_merge_optional_value(
+            tuning.image_art_direction_max_tokens,
+            _positive_optional_int_env("NEWS_IMAGE_ART_DIRECTION_MAX_TOKENS"),
+        ),
         task_sampling=task_sampling,
     )
 
@@ -1170,6 +1188,49 @@ def load_model_tuning_presets(path: Path | None = None) -> dict[str, dict[str, A
             preset["task"] = raw_task
         presets[preset_id] = preset
     return presets
+
+
+def load_prompt_overrides(path: Path | None = None) -> dict[str, str]:
+    """Load user-editable editorial instruction overrides from YAML.
+
+    Supported shape (keys are the canonical ``PROMPT_TASKS``):
+
+    overrides:
+      story_drafting: "Lead with the central event."
+
+    A missing file, a missing/empty ``overrides`` mapping, and blank or null
+    task values are no-ops (the selected built-in Prompt Profile text is
+    used). Unknown task keys and non-string values raise path-specific
+    ``ValueError`` errors so typos fail deterministically instead of being
+    silently dropped. Internal multiline text is preserved; only outer
+    whitespace is stripped.
+    """
+    overrides_path = path or PROMPT_OVERRIDES_PATH
+    payload = _load_yaml_mapping(overrides_path)
+    raw_overrides = payload.get("overrides", {})
+    if raw_overrides is None:
+        raw_overrides = {}
+    if not isinstance(raw_overrides, dict):
+        raise ValueError(f"{overrides_path} must define overrides as a mapping.")
+
+    overrides: dict[str, str] = {}
+    for raw_task, raw_value in raw_overrides.items():
+        task = normalize_preset_id(str(raw_task))
+        if task not in PROMPT_TASKS:
+            valid = ", ".join(PROMPT_TASKS)
+            raise ValueError(
+                f"{overrides_path} contains unknown prompt task {raw_task!r}; "
+                f"valid tasks: {valid}."
+            )
+        if raw_value is None or not str(raw_value).strip():
+            continue
+        if not isinstance(raw_value, str):
+            raise ValueError(
+                f"{overrides_path} prompt task {task!r} must be a string; "
+                f"got {type(raw_value).__name__}."
+            )
+        overrides[task] = raw_value.strip()
+    return overrides
 
 
 def run_preset_env(preset_id: str, path: Path | None = None) -> dict[str, str]:
@@ -2196,22 +2257,39 @@ def _build_runtime_config(
     # CLI/UI semantics. Strict validation of non-empty ids happens below.
     prompt_profile_id = _str_env(PROMPT_PROFILE_ENV_VAR, DEFAULT_PROMPT_PROFILE_ID) or DEFAULT_PROMPT_PROFILE_ID
     # Resolved once at import time in pipeline.py; fails fast on unknown ids.
-    get_prompt_profile(prompt_profile_id)
-    # Per-stage prompt overrides (NEWS_PROMPT_OVERRIDE_<TASK>): non-empty
-    # values only; empty-but-present counts as unset like sibling knobs.
-    prompt_instruction_overrides = {
+    prompt_profile = get_prompt_profile(prompt_profile_id)
+    # Per-stage prompt overrides: durable user edits from
+    # config/prompt_overrides.yaml first, then NEWS_PROMPT_OVERRIDE_<TASK>
+    # env/UI values win per task (profile < YAML < env/UI). Non-empty values
+    # only; empty-but-present counts as unset like sibling knobs.
+    yaml_prompt_overrides = load_prompt_overrides()
+    env_prompt_overrides = {
         task: value
         for task, env_var in PROMPT_TASK_OVERRIDE_ENV_VARS.items()
         if (value := _str_env(env_var, "").strip())
     }
+    prompt_instruction_overrides = {**yaml_prompt_overrides, **env_prompt_overrides}
     # Editorial sentences must never weaken the pipeline-owned output contracts
-    # (parsers, retries, citation renderers, sanitizers depend on them); a
-    # violating profile fails fast at config resolution, not mid-run.
-    profile_violations = validate_editorial_instructions(get_prompt_profile(prompt_profile_id).prompts)
-    if profile_violations:
+    # (parsers, retries, citation renderers, sanitizers depend on them). The
+    # built-in profile is validated strictly, then the effective
+    # profile-plus-overrides map; only the effective story_scale_screening
+    # override may use literal braces because its renderer escapes them safely
+    # (story_selection.py). A violating profile or override fails fast at
+    # config resolution, not mid-run.
+    profile_violations = validate_editorial_instructions(prompt_profile.prompts)
+    effective_violations = validate_editorial_instructions(
+        {**prompt_profile.prompts, **prompt_instruction_overrides},
+        allow_braces_for=(
+            {"story_scale_screening"}
+            if "story_scale_screening" in prompt_instruction_overrides
+            else set()
+        ),
+    )
+    prompt_violations = list(dict.fromkeys([*profile_violations, *effective_violations]))
+    if prompt_violations:
         raise ValueError(
             f"Prompt profile {prompt_profile_id!r} violates pipeline-owned output contracts: "
-            + "; ".join(profile_violations)
+            + "; ".join(prompt_violations)
         )
     tracked_urls_filename = "tracked_urls.txt"
     blocking_urls_filename = "blocking_urls.txt"

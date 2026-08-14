@@ -12,7 +12,8 @@ editorial sentences.
 This module is deliberately stdlib-only (``dataclasses``, ``difflib``,
 ``typing``) so that ``config.py`` can import it without creating an import
 cycle. Built-ins live in Python (not YAML) because they are code-reviewed
-contracts; a user-editable YAML override layer is a later issue.
+contracts; user-editable sentence overrides may be supplied by
+``config/prompt_overrides.yaml`` and are merged here at the resolver.
 """
 
 from __future__ import annotations

@@ -18,6 +18,7 @@
 !config/run_presets.yaml
 !config/sources.yaml
 !config/recipients.yaml
+!config/prompt_overrides.yaml
 __pycache__/
 **/__pycache__/
 *.py[cod]

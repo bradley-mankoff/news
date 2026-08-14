@@ -4,6 +4,7 @@ import contextlib
 import http.client
 import json
 import os
+import re
 import tempfile
 import threading
 import unittest
@@ -16,6 +17,7 @@ from unittest.mock import patch
 
 import yaml
 
+import news_pipeline.config as config_module
 from news_pipeline import ui as ui_module
 from news_pipeline import model_catalog
 from news_pipeline.config import (
@@ -166,6 +168,17 @@ class UITests(unittest.TestCase):
         self.assertEqual(advanced.count('id="comparePromptProfileBtn"'), 1)
         self.assertEqual(advanced.count('modelTuningPanel("article_summary")'), 1)
         self.assertEqual(advanced.count('modelTuningPanel("story_drafting")'), 1)
+        self.assertEqual(advanced.count('modelTuningPanel("story_scale_screening")'), 1)
+        self.assertEqual(advanced.count('modelTuningPanel("title_generation")'), 1)
+        self.assertEqual(advanced.count('modelTuningPanel("image_art_direction")'), 1)
+        tuning_editor = html.split('<h2>Model Tuning Preset Editor</h2>', 1)[1].split(
+            '<h2>', 1
+        )[0]
+        self.assertIn(
+            '<option value="image_art_direction">image_art_direction</option>',
+            tuning_editor,
+        )
+        self.assertIn("image_art_direction_max_tokens", tuning_editor)
         # Dedicated envs are suppressed from the raw override list (no duplicates).
         surface = html.split("const SURFACED_ENVS")[1].split("const TASK_CONFIG")[0]
         for env in (
@@ -193,7 +206,7 @@ class UITests(unittest.TestCase):
         )
         prefixes = re.findall(r'taskSamplingPrefix: "(NEWS_MODEL_[A-Z_]+)"', html)
         composed = {f"{p}_{s}" for p in prefixes for s in suffixes}
-        self.assertEqual(len(composed), 24)
+        self.assertEqual(len(composed), 30)
         for env in composed:
             self.assertIn(
                 f'"{env}"', surface, f"composed sampling env {env} not suppressed"
@@ -203,7 +216,7 @@ class UITests(unittest.TestCase):
         # NEWS_MODEL has a dedicated "Default model" knob in Run Setup, so it
         # must be suppressed from the Advanced raw list (no duplicate inputs).
         self.assertIn('"NEWS_MODEL"', surface)
-        # The four per-task model envs moved OUT of Run Setup into Advanced,
+        # The five per-task model envs moved OUT of Run Setup into Advanced,
         # so they must NOT be suppressed: each appears exactly once, in the
         # Advanced raw override list.
         for env in (
@@ -211,6 +224,7 @@ class UITests(unittest.TestCase):
             "NEWS_MODEL_STORY_DRAFTING",
             "NEWS_MODEL_STORY_SCALE_SCREENING",
             "NEWS_MODEL_TITLE_GENERATION",
+            "NEWS_MODEL_IMAGE_ART_DIRECTION",
         ):
             self.assertNotIn(f'"{env}"', surface, f"{env} must stay in the Advanced raw list")
 
@@ -235,6 +249,7 @@ class UITests(unittest.TestCase):
             "NEWS_MODEL_STORY_DRAFTING",
             "NEWS_MODEL_STORY_SCALE_SCREENING",
             "NEWS_MODEL_TITLE_GENERATION",
+            "NEWS_MODEL_IMAGE_ART_DIRECTION",
         ):
             self.assertNotIn(f'knobField("{env}"', run_setup)
         # The readout binds to the top-level runtime.model {name, reference}.
@@ -429,6 +444,7 @@ class UITests(unittest.TestCase):
                         "story_drafting": {"reference": "gemma-2b"},
                         "story_scale_screening": {"reference": "gemma-2b"},
                         "title_generation": {"reference": "gemma-2b"},
+                        "image_art_direction": {"reference": "gemma-2b"},
                     },
                     model_tuning={"default": "base"},
                     pipeline_budget={
@@ -497,6 +513,7 @@ class UITests(unittest.TestCase):
                 self.assertEqual(snapshot["model"]["reference"], "gemma-2b")
                 self.assertEqual(snapshot["model"]["story_scale_screening"]["reference"], "gemma-2b")
                 self.assertEqual(snapshot["model"]["title_generation"]["reference"], "gemma-2b")
+                self.assertEqual(snapshot["model"]["image_art_direction"]["reference"], "gemma-2b")
                 self.assertEqual(snapshot["delivery"]["mode"], "owner")
                 self.assertEqual(snapshot["delivery"]["unsubscribe_secret_set"], True)
                 # Raw credential values never appear in the redacted snapshot.
@@ -623,12 +640,16 @@ class UITests(unittest.TestCase):
         for env in (
             "NEWS_MODEL_STORY_SCALE_SCREENING",
             "NEWS_MODEL_TITLE_GENERATION",
+            "NEWS_MODEL_IMAGE_ART_DIRECTION",
             "NEWS_MODEL_STORY_SCALE_SCREENING_TUNING_PRESET",
             "NEWS_MODEL_TITLE_GENERATION_TUNING_PRESET",
+            "NEWS_MODEL_IMAGE_ART_DIRECTION_TUNING_PRESET",
             "NEWS_MODEL_STORY_SCALE_SCREENING_BASE_URL",
             "NEWS_MODEL_TITLE_GENERATION_BASE_URL",
+            "NEWS_MODEL_IMAGE_ART_DIRECTION_BASE_URL",
             "NEWS_STORY_SCALE_SCREENING_MAX_TOKENS",
             "NEWS_TITLE_GENERATION_MAX_TOKENS",
+            "NEWS_IMAGE_ART_DIRECTION_MAX_TOKENS",
         ):
             self.assertIn(env, js_source)
             self.assertIn(env, knob_envs)
@@ -760,6 +781,320 @@ class UITests(unittest.TestCase):
                 self.assertEqual(delete_recipient("alice@example.com")["deleted"], "alice@example.com")
                 with self.assertRaisesRegex(ValueError, "not found"):
                     delete_recipient("alice@example.com")
+
+    def test_model_tuning_round_trip_persists_reloads_and_deletes(self) -> None:
+        # Full record round trip through the real writer/loader: create a
+        # complete valid preset, prove reload-from-disk through the public
+        # listing, update metadata and tuning, then delete it.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tuning_path = Path(tmpdir) / "model_tuning_presets.yaml"
+            _write_yaml_mapping(tuning_path, {"presets": {}})
+            with patch.object(ui_module, "MODEL_TUNING_PRESETS_PATH", tuning_path):
+                self.assertEqual(list_model_tuning_presets()["presets"], [])
+
+                created = upsert_model_tuning_preset(
+                    {
+                        "id": "concise",
+                        "name": "Concise",
+                        "description": "draft preset",
+                        "model": "gemma-3-12b-it",
+                        "task": "story_drafting",
+                        "tuning": {"temperature": 0.2, "top_p": 0.9, "max_tokens": 1400},
+                    }
+                )
+                self.assertEqual(created["preset"]["id"], "concise")
+
+                # Reload from disk proves the write survived the YAML seam.
+                reloaded = list_model_tuning_presets()["presets"]
+                self.assertEqual([item["id"] for item in reloaded], ["concise"])
+                self.assertEqual(reloaded[0]["task"], "story_drafting")
+                self.assertEqual(
+                    reloaded[0]["tuning"],
+                    {"temperature": 0.2, "top_p": 0.9, "max_tokens": 1400},
+                )
+
+                updated = upsert_model_tuning_preset(
+                    {
+                        "id": "concise",
+                        "name": "Concise Drafts",
+                        "tuning": {"temperature": 0.5, "min_p": 0.1, "model_max_input_tokens": 8192},
+                    }
+                )
+                self.assertEqual(updated["preset"]["name"], "Concise Drafts")
+                self.assertEqual(updated["preset"]["task"], "story_drafting")
+                self.assertEqual(
+                    updated["preset"]["tuning"],
+                    {"temperature": 0.5, "min_p": 0.1, "model_max_input_tokens": 8192},
+                )
+
+                # Explicit empty optional fields clear an existing scope;
+                # omission above still preserves it.
+                cleared = upsert_model_tuning_preset(
+                    {
+                        "id": "concise",
+                        "description": "",
+                        "model": "",
+                        "task": "",
+                        "tuning": {"temperature": 0.5},
+                    }
+                )
+                self.assertEqual(cleared["preset"]["description"], "")
+                self.assertEqual(cleared["preset"]["model"], "")
+                self.assertEqual(cleared["preset"]["task"], "")
+                reloaded_cleared = list_model_tuning_presets()["presets"][0]
+                self.assertEqual(reloaded_cleared.get("description", ""), "")
+                self.assertEqual(reloaded_cleared.get("model", ""), "")
+                self.assertEqual(reloaded_cleared.get("task", ""), "")
+
+                self.assertEqual(delete_model_tuning_preset("concise")["deleted"], "concise")
+                self.assertEqual(list_model_tuning_presets()["presets"], [])
+                self.assertEqual(_load_yaml_mapping(tuning_path)["presets"], {})
+
+    def test_model_tuning_string_values_round_trip_through_runtime(self) -> None:
+        # Advanced Settings controls submit numeric HTML values as strings.
+        # Keep those strings in YAML while proving the runtime resolver accepts
+        # every integer-valued field using its int() coercion contract.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tuning_path = Path(tmpdir) / "model_tuning_presets.yaml"
+            _write_yaml_mapping(tuning_path, {"presets": {}})
+            string_tuning = {
+                "temperature": "0.2",
+                "top_p": "0.9",
+                "top_k": "0",
+                "min_p": "0",
+                "presence_penalty": "-2",
+                "repetition_penalty": "3",
+                "max_tokens": "1400",
+                "model_max_input_tokens": "1",
+                "article_summary_max_tokens": "1",
+                "story_drafting_max_tokens": "1",
+                "story_scale_screening_max_tokens": "1",
+                "title_generation_max_tokens": "1",
+            }
+            with patch.object(ui_module, "MODEL_TUNING_PRESETS_PATH", tuning_path):
+                created = upsert_model_tuning_preset(
+                    {"id": "strings", "task": "story_drafting", "tuning": string_tuning}
+                )
+                self.assertEqual(created["preset"]["tuning"], string_tuning)
+                self.assertEqual(
+                    list_model_tuning_presets()["presets"][0]["tuning"], string_tuning
+                )
+
+                resolved = config_module._apply_model_tuning_preset(
+                    config_module.ModelTuningSettings(task_sampling={}),
+                    preset_id="strings",
+                    preset=created["preset"],
+                    assignment_task="story_drafting",
+                )
+                sampling = resolved.task_sampling["story_drafting"]
+                self.assertEqual(sampling.temperature, 0.2)
+                self.assertEqual(sampling.top_k, 0)
+                self.assertEqual(resolved.model_max_input_tokens, 1)
+                self.assertEqual(resolved.article_summary_max_tokens, 1)
+                self.assertEqual(resolved.story_drafting_max_tokens, 1)
+                self.assertEqual(resolved.story_scale_screening_max_tokens, 1)
+                self.assertEqual(resolved.title_generation_max_tokens, 1)
+
+    def test_model_tuning_validation_fails_before_write(self) -> None:
+        # Every invalid upsert must raise with the preset id and offending
+        # field/rule, and must leave the prior YAML bytes untouched.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tuning_path = Path(tmpdir) / "model_tuning_presets.yaml"
+            _write_yaml_mapping(
+                tuning_path,
+                {
+                    "presets": {
+                        "draft": {
+                            "name": "Draft",
+                            "tuning": {"temperature": 0.2, "max_tokens": 800},
+                        }
+                    }
+                },
+            )
+            with patch.object(ui_module, "MODEL_TUNING_PRESETS_PATH", tuning_path):
+                before = tuning_path.read_bytes()
+                cases = [
+                    ({"id": "new", "tuning": [1, 2]}, "'new' tuning must be a mapping"),
+                    ({"id": "new", "tuning": None}, "'new' tuning must be a mapping"),
+                    ({"id": "new", "tuning": "hot"}, "'new' tuning must be a mapping"),
+                    ({"id": "new", "tuning": {"foo": 1}}, "'new' has unsupported tuning field 'foo'"),
+                    ({"id": "new", "tuning": {"temperature": "warm"}}, "field 'temperature' must be a number"),
+                    ({"id": "new", "tuning": {"top_p": True}}, "field 'top_p' must be a number"),
+                    ({"id": "new", "tuning": {"temperature": 2.5}}, "field 'temperature' must be between 0 and 2"),
+                    ({"id": "new", "tuning": {"top_p": 1.4}}, "field 'top_p' must be between 0 and 1"),
+                    ({"id": "new", "tuning": {"min_p": -0.1}}, "field 'min_p' must be between 0 and 1"),
+                    ({"id": "new", "tuning": {"top_k": 2.5}}, "field 'top_k' must be a whole number"),
+                    ({"id": "new", "tuning": {"top_k": -1}}, "field 'top_k' must be at least 0"),
+                    ({"id": "new", "tuning": {"presence_penalty": -2.5}}, "field 'presence_penalty' must be between -2 and 2"),
+                    ({"id": "new", "tuning": {"repetition_penalty": 3.5}}, "field 'repetition_penalty' must be between 0 and 3"),
+                    ({"id": "new", "tuning": {"max_tokens": 0}}, "field 'max_tokens' must be a whole number greater than zero"),
+                    ({"id": "new", "tuning": {"max_tokens": 1.5}}, "field 'max_tokens' must be a whole number greater than zero"),
+                    ({"id": "new", "tuning": {"max_tokens": -5}}, "field 'max_tokens' must be a whole number greater than zero"),
+                    (
+                        {"id": "new", "tuning": {"max_tokens": "nan"}},
+                        "field 'max_tokens' must be a whole number greater than zero",
+                    ),
+                    (
+                        {"id": "new", "tuning": {"article_summary_max_tokens": "inf"}},
+                        "field 'article_summary_max_tokens' must be a whole number greater than zero",
+                    ),
+                    (
+                        {"id": "new", "tuning": {"top_k": "1.0"}},
+                        "field 'top_k' must be a whole number",
+                    ),
+                    (
+                        {"id": "new", "tuning": {"max_tokens": "1400.0"}},
+                        "field 'max_tokens' must be a whole number greater than zero",
+                    ),
+                    (
+                        {"id": "new", "tuning": {"max_tokens": "1e3"}},
+                        "field 'max_tokens' must be a whole number greater than zero",
+                    ),
+                    ({"id": "new", "task": "story_discovery"}, "task 'story_discovery' is not selectable"),
+                    ({"id": "new", "task": "default"}, "task 'default' is not selectable"),
+                    # PATCH on the existing record: a bad final record fails too.
+                    ({"id": "draft", "tuning": {"temperature": 9}}, "field 'temperature' must be between 0 and 2"),
+                ]
+                for body, message in cases:
+                    with self.assertRaisesRegex(ValueError, re.escape(message)):
+                        upsert_model_tuning_preset(body)
+                    self.assertEqual(
+                        tuning_path.read_bytes(),
+                        before,
+                        f"YAML mutated by rejected upsert {body}",
+                    )
+
+                # Image Art Direction is a first-class selectable preset scope
+                # (independent task assignment with its own tuning preset, #122).
+                scoped = upsert_model_tuning_preset(
+                    {"id": "new", "task": "image_art_direction", "tuning": {"max_tokens": 512}}
+                )
+                self.assertEqual(scoped["preset"]["task"], "image_art_direction")
+                self.assertEqual(scoped["preset"]["tuning"], {"max_tokens": 512})
+
+                # A metadata-only PATCH preserves and revalidates the existing
+                # mapping, and a valid write still succeeds afterward.
+                renamed = upsert_model_tuning_preset({"id": "draft", "name": "Renamed"})
+                self.assertEqual(renamed["preset"]["name"], "Renamed")
+                self.assertEqual(
+                    renamed["preset"]["tuning"],
+                    {"temperature": 0.2, "max_tokens": 800},
+                )
+
+    def test_model_tuning_http_validation_returns_400(self) -> None:
+        # The real upsert helper behind the HTTP handler: invalid POST/PATCH
+        # bodies produce HTTP 400 JSON errors without mutating the file.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tuning_path = Path(tmpdir) / "model_tuning_presets.yaml"
+            _write_yaml_mapping(tuning_path, {"presets": {}})
+            with patch.object(ui_module, "MODEL_TUNING_PRESETS_PATH", tuning_path):
+                def invoke(method: str, path: str, body: str | None = None) -> tuple[int, dict[str, str], str]:
+                    payload = (body or "").encode("utf-8")
+                    handler = object.__new__(ui_module.NewsUIHandler)
+                    state: dict[str, Any] = {"status": None, "headers": {}}
+                    handler.path = path
+                    handler.headers = {"Content-Length": str(len(payload))}
+                    handler.rfile = BytesIO(payload)  # type: ignore[assignment]
+                    handler.wfile = BytesIO()  # type: ignore[assignment]
+                    handler.send_response = lambda status: state.__setitem__("status", status)
+                    handler.send_header = lambda name, value: state["headers"].__setitem__(name, value)
+                    handler.end_headers = lambda: None
+                    getattr(handler, method)()
+                    return state["status"], state["headers"], handler.wfile.getvalue().decode("utf-8")  # type: ignore[attr-defined]
+
+                status, _, body = invoke(
+                    "do_POST",
+                    "/api/model-tuning-presets",
+                    body=json.dumps({"id": "draft", "tuning": [1, 2]}),
+                )
+                self.assertEqual(status, 400)
+                self.assertEqual(
+                    json.loads(body)["error"],
+                    "Model tuning preset 'draft' tuning must be a mapping.",
+                )
+                self.assertEqual(list_model_tuning_presets()["presets"], [])
+
+                status, _, body = invoke(
+                    "do_PATCH",
+                    "/api/model-tuning-presets",
+                    body=json.dumps({"id": "draft", "tuning": {"top_p": 7}}),
+                )
+                self.assertEqual(status, 400)
+                self.assertEqual(
+                    json.loads(body)["error"],
+                    "Model tuning preset 'draft' field 'top_p' must be between 0 and 1, got 7.",
+                )
+                self.assertEqual(list_model_tuning_presets()["presets"], [])
+
+                status, _, body = invoke(
+                    "do_POST",
+                    "/api/model-tuning-presets",
+                    body=json.dumps({"id": "draft", "tuning": {"temperature": 0.2}}),
+                )
+                self.assertEqual(status, 201)
+                self.assertEqual(json.loads(body)["preset"]["id"], "draft")
+                self.assertEqual(list_model_tuning_presets()["presets"][0]["id"], "draft")
+
+    def test_model_tuning_dedicated_tab_static_contracts(self) -> None:
+        html = ui_module.HTML
+        # Navigation entry and section exist exactly once.
+        self.assertIn('["modelTuning", "Model Tuning", "sliders"]', html)
+        self.assertIn('<section id="modelTuning" class="view">', html)
+        self.assertEqual(html.count('id="modelTuningPresetTable"'), 1)
+        self.assertEqual(html.count('id="modelTuningPresetError"'), 1)
+        # Dedicated, collision-free editor field IDs.
+        for element_id in (
+            "modelTuningPresetId",
+            "modelTuningPresetName",
+            "modelTuningPresetDescription",
+            "modelTuningPresetModel",
+            "modelTuningPresetTask",
+            "modelTuningPresetTuning",
+            "newModelTuningPresetBtn",
+            "reloadModelTuningPresetsBtn",
+            "saveModelTuningPresetBtn",
+            "deleteModelTuningPresetBtn",
+        ):
+            self.assertEqual(html.count(f'id="{element_id}"'), 1, element_id)
+        # The table renders every record (no filteredModelTuningPresets) and
+        # escapes every interpolated value.
+        editor = html.split("function renderModelTuningEditor()")[1].split("function editModelTuningPreset(")[0]
+        self.assertIn("state.modelTuningPresets || []", editor)
+        self.assertNotIn("filteredModelTuningPresets", editor)
+        self.assertIn('escapeHtml(preset.name || preset.id || "")', editor)
+        self.assertIn('escapeHtml(preset.id || "")', editor)
+        self.assertIn('escapeHtml(preset.model || "")', editor)
+        self.assertIn('escapeHtml(preset.task || "global")', editor)
+        self.assertIn('escapeHtml(Object.keys(preset.tuning || {}).join(", "))', editor)
+        # CRUD handlers are wired in wireEvents and use the shared API path
+        # with POST for new IDs and PATCH for existing IDs.
+        wired = html.split("function wireEvents()")[1].split("function applySelectedPresetFromState")[0]
+        for handler in (
+            "newModelTuningPresetBtn",
+            "reloadModelTuningPresetsBtn",
+            "saveModelTuningPresetBtn",
+            "deleteModelTuningPresetBtn",
+        ):
+            self.assertIn(f'$("{handler}").onclick', wired)
+        self.assertIn('api("/api/model-tuning-presets"', html)
+        self.assertIn("method: exists ? \"PATCH\" : \"POST\"", html)
+        self.assertIn("function reloadModelTuningPresets", html)
+        self.assertIn("function saveModelTuningEditor", html)
+        self.assertIn("function deleteModelTuningEditor", html)
+        # Errors stay inline in the dedicated editor without discarding edits.
+        self.assertIn('$("modelTuningPresetError").textContent = err.message', html)
+        # The dedicated editor renders only after the schema state assignment.
+        boot = html.split("async function init()")[1].split("init().catch")[0]
+        self.assertIn("state.modelTuningPresets = (state.schema.model_tuning_presets && state.schema.model_tuning_presets.presets) || [];", boot)
+        self.assertIn("renderModelTuningEditor();", boot)
+        self.assertLess(
+            boot.index("state.modelTuningPresets ="),
+            boot.index("renderModelTuningEditor();"),
+        )
+        # Existing Advanced Settings task-panel surface is untouched.
+        self.assertIn("function renderModelTuningControls(task", html)
+        self.assertIn("function filteredModelTuningPresets(task", html)
+        self.assertIn("function loadModelTuningPresets", html)
 
     def test_build_command_and_preview_payload_variants(self) -> None:
         base_resolution = SimpleNamespace(command_env_delta={"NEWS_PRESET": "daily", "BASE": "1"})
