@@ -331,6 +331,23 @@ class UITests(unittest.TestCase):
         self.assertIn("escapeHtml(entry.hardware)", ui_module.HTML)
         self.assertIn('data-links-for="${escapeHtml(knob.env)}"', ui_module.HTML)
 
+    def test_recommendation_renderer_reads_schema_picks(self) -> None:
+        html = ui_module.HTML
+        # The embedded recommendation renderer consumes the server-owned pick
+        # list directly (single source of truth, issue #80).
+        self.assertIn("state.schema.model_recommendations", html)
+        self.assertIn("state.schema.model_recommendations[task]", html)
+        self.assertIn("pick.reason", html)
+        self.assertIn("escapeHtml(pick.name)", html)
+        self.assertIn("escapeHtml(pick.alias)", html)
+        self.assertIn("escapeHtml(pick.reason)", html)
+        self.assertIn('data-use-model="${escapeHtml(pick.alias)}"', html)
+        # The renderer no longer re-filters full catalog entries by task notes.
+        self.assertNotIn("entry.task_notes[task]", html)
+        self.assertNotIn("modelCatalogEntries().filter", html)
+        # Empty pick lists keep the documented honest-gap message.
+        self.assertIn("No verified curated model for this task yet", html)
+
     def test_pure_helpers_and_schema_payload(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
@@ -600,6 +617,21 @@ class UITests(unittest.TestCase):
             self.assertEqual(payload["model_catalog"][0]["alias"], "gemma-4-12b-it-4bit")
             self.assertIn("factual_extraction", payload["model_recommendation_tasks"])
             self.assertEqual(len(payload["model_recommendation_tasks"]), 7)
+            # Server-owned recommendations: every task maps exactly to the
+            # authoritative helper output (default fallback, no duplicates,
+            # and the intentional empty translation list).
+            self.assertEqual(
+                payload["model_recommendations"],
+                {
+                    task: model_catalog.recommend_models(task)
+                    for task in model_catalog.MODEL_RECOMMENDATION_TASKS
+                },
+            )
+            self.assertEqual(payload["model_recommendations"]["translation"], [])
+            self.assertEqual(
+                [pick["alias"] for pick in payload["model_recommendations"]["speed"]],
+                ["gemma-e2b-tiny", model_catalog.DEFAULT_CATALOG_MODEL_ALIAS],
+            )
 
             helper_file = root / "nested" / "payload.yaml"
             helper_file.parent.mkdir(parents=True)
@@ -1925,6 +1957,16 @@ class UITests(unittest.TestCase):
                 ui_module, "_source_summary", return_value={"total": 0}
             ), patch.object(ui_module, "_recipient_summary", return_value={"total": 0}):
                 payload = ui_module.schema_payload()
+                # Recommendations come from the same merged snapshot and
+                # exactly match the authoritative helper (issue #80).
+                self.assertEqual(
+                    payload["model_recommendations"],
+                    {
+                        task: model_catalog.recommend_models(task)
+                        for task in model_catalog.MODEL_RECOMMENDATION_TASKS
+                    },
+                )
+                self.assertEqual(payload["model_recommendations"]["translation"], [])
 
         self.assertEqual(
             [entry["alias"] for entry in payload["model_catalog"]],
