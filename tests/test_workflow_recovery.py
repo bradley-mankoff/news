@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+from contextlib import redirect_stderr
+from io import StringIO
+from pathlib import Path
+import tempfile
 import unittest
 from subprocess import CompletedProcess
 from unittest.mock import patch
@@ -8,6 +12,46 @@ from automation import workflow_recovery
 
 
 class WorkflowRecoveryCliTests(unittest.TestCase):
+    def test_load_state_rejects_malformed_json(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "state.json"
+            path.write_text("{\"item-141\":")
+            with patch.object(workflow_recovery, "ROOT", Path(tmp)):
+                with self.assertRaisesRegex(
+                    workflow_recovery.RecoveryStateError,
+                    r"cannot read recovery state .*state\.json",
+                ):
+                    workflow_recovery._load_state({"state_file": "state.json"})
+
+    def test_load_state_rejects_non_object_json(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "state.json"
+            path.write_text("[]")
+            with patch.object(workflow_recovery, "ROOT", Path(tmp)):
+                with self.assertRaisesRegex(
+                    workflow_recovery.RecoveryStateError,
+                    r"recovery state .*state\.json must contain a JSON object",
+                ):
+                    workflow_recovery._load_state({"state_file": "state.json"})
+
+    def test_main_reports_recovery_state_errors_without_traceback(self) -> None:
+        error = workflow_recovery.RecoveryStateError(
+            "cannot read recovery state /tmp/state.json"
+        )
+        stderr = StringIO()
+        with (
+            patch.object(workflow_recovery, "load_config", return_value={}),
+            patch.object(workflow_recovery, "_env", return_value={}),
+            patch.object(workflow_recovery, "_status_payload", side_effect=error),
+            redirect_stderr(stderr),
+        ):
+            result = workflow_recovery.main(["status", "141"])
+        self.assertEqual(result, 1)
+        self.assertEqual(
+            stderr.getvalue(),
+            "Recovery state error: cannot read recovery state /tmp/state.json\n",
+        )
+
     def test_status_marks_dirty_failed_worktree_as_resume_required(self) -> None:
         run = {
             "id": "run-141",

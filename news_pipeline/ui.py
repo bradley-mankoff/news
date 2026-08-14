@@ -117,13 +117,21 @@ def _config_path_from_env(name: str, default: str) -> Path:
     return path if path.is_absolute() else ROOT_DIR / path
 
 
+_SECRET_ENV_PARTS = ("PASSWORD", "SECRET", "API_KEY", "TOKEN", "PRIVATE_KEY")
+
+
 def _mask_secret(value: str | None) -> str:
     return "********" if value else ""
 
 
 def _is_secret_env_key(key: str) -> bool:
-    upper_key = key.upper()
-    return any(token in upper_key for token in ("PASSWORD", "SECRET", "API_KEY", "TOKEN"))
+    return _is_secret_env(key)
+
+
+def _is_secret_env(name: str) -> bool:
+    """Return whether an environment variable name likely contains a secret."""
+    upper = name.upper()
+    return any(part in upper for part in _SECRET_ENV_PARTS)
 
 
 def _display_env(env: dict[str, str]) -> dict[str, str]:
@@ -132,6 +140,9 @@ def _display_env(env: dict[str, str]) -> dict[str, str]:
         key: _mask_secret(value) if _is_secret_env_key(key) else value
         for key, value in env.items()
     }
+
+
+_public_env = _display_env
 
 
 def _now_iso_local() -> str:
@@ -2253,6 +2264,7 @@ HTML = r"""<!doctype html>
       "NEWS_MODEL",  // dedicated "Default model" knob in Run Setup; suppress the Advanced-tab duplicate
       "NEWS_SOURCE_SCOPE",
       "NEWS_DELIVERY_MODE",  // dedicated "Delivery mode" control in Run Setup; suppress the Advanced-tab duplicate
+      "NEWS_RECIPIENT_SCOPE", // legacy delivery control; suppress the raw-list duplicate
       "NEWS_PROMPT_PROFILE",  // has a dedicated panel control; suppress the Advanced-tab duplicate
       "NEWS_PROMPT_OVERRIDE_ARTICLE_SUMMARY",       // dedicated per-stage editors in the
       "NEWS_PROMPT_OVERRIDE_STORY_SCALE_SCREENING", // Editorial approach panel; suppress
@@ -2550,6 +2562,9 @@ HTML = r"""<!doctype html>
       if (el.type === "checkbox") return el.checked ? "1" : "";
       return el.value;
     }
+    function normalizedBackendValue(value) {
+      return String(value || "").trim().toLowerCase();
+    }
     function setControlValue(env, next) {
       const el = document.querySelector(`[data-env="${env}"]`);
       if (!el) return;
@@ -2734,7 +2749,8 @@ HTML = r"""<!doctype html>
       const entry = links[value];
       if (!entry) {
         // Only fires for values set outside the offered options (external or
-        // typed-in ids) — drift-guard tests pin that every option has a link.
+        // typed-in ids, e.g. saved env / preset apply / setControlValue) —
+        // drift-guard tests pin that every option has a link.
         container.innerHTML = `<span class="muted">No Hugging Face page for this external model</span>`;
         return;
       }
@@ -3034,6 +3050,7 @@ HTML = r"""<!doctype html>
             </details>
           </section>
           <section class="panel">
+
             <details class="details">
               <summary>Utilities</summary>
               <div class="form-grid">
@@ -3569,6 +3586,7 @@ HTML = r"""<!doctype html>
       $("modelTuningPresetTask").value = preset ? preset.task || "" : "";
       $("modelTuningPresetTuning").value = preset ? JSON.stringify(preset.tuning || {}, null, 2) : "{}";
       state.selectedModelTuningPresetId = id;
+      renderModelTuningEditor();
     }
     function collectModelTuningPresetEditorBody() {
       const rawTuning = value("modelTuningPresetTuning").trim();
@@ -3638,7 +3656,7 @@ HTML = r"""<!doctype html>
       if (state.selectedModelTuningPresetId) {
         const preset = state.modelTuningPresets.find(item => item.id === state.selectedModelTuningPresetId);
         if (preset) editModelTuningPreset(preset.id);
-        else state.selectedModelTuningPresetId = "";
+        else editModelTuningPreset("");
       }
       $("modelTuningPresetError").textContent = "";
       setStatus("Model tuning presets reloaded.", "good");
@@ -4065,11 +4083,16 @@ HTML = r"""<!doctype html>
     }
     function renderSchedule() {
       const s = state.schedule || {};
-      const supported = s.supported !== false;
+      const loaded = Boolean(state.schedule);
+      const error = state.scheduleError || s.error || "";
+      const supported = loaded && s.supported !== false;
       const enabled = Boolean(s.enabled);
+      const canConfigure = supported && !error;
+      // A valid status payload with a corrupt state error must still expose
+      // Disable so the fixed launchd job can be removed as recovery.
+      const canDisable = supported && (enabled || Boolean(error));
       const launchd = s.launchd_status || "unknown";
       const last = s.last_run || {};
-      const error = state.scheduleError || s.error || "";
       const deliveryMode = s.delivery_mode || "owner";
       const timeValue = s.time || "";
       $("scheduleMount").innerHTML = `
@@ -4090,10 +4113,10 @@ HTML = r"""<!doctype html>
             <p class="eyebrow">Schedule</p>
             <h2>Daily run settings</h2>
             <div class="form-grid">
-              <label class="field"><span>Time (local)</span><input id="schedule_time" type="time" value="${escapeHtml(timeValue)}" ${supported ? "" : "disabled"}><code>HH:MM</code></label>
-              <label class="field"><span>Run preset</span><select id="schedule_preset" ${supported ? "" : "disabled"}>${schedulePresetOptions()}</select><code>preset id</code></label>
+              <label class="field"><span>Time (local)</span><input id="schedule_time" type="time" value="${escapeHtml(timeValue)}" ${canConfigure ? "" : "disabled"}><code>HH:MM</code></label>
+              <label class="field"><span>Run preset</span><select id="schedule_preset" ${canConfigure ? "" : "disabled"}>${schedulePresetOptions()}</select><code>preset id</code></label>
               <label class="field"><span>Delivery</span>
-                <select id="schedule_delivery_mode" ${supported ? "" : "disabled"}>
+                <select id="schedule_delivery_mode" ${canConfigure ? "" : "disabled"}>
                   <option value="owner"${deliveryMode === "owner" ? " selected" : ""}>Owner only (default)</option>
                   <option value="disabled"${deliveryMode === "disabled" ? " selected" : ""}>No delivery</option>
                   <option value="recipients"${deliveryMode === "recipients" ? " selected" : ""}>Configured recipients</option>
@@ -4102,8 +4125,8 @@ HTML = r"""<!doctype html>
               </label>
             </div>
             <div class="toolbar" style="margin-top:12px">
-              <button id="enableScheduleBtn" class="primary" ${supported ? "" : "disabled"}>${enabled ? "Update schedule" : "Enable schedule"}</button>
-              <button id="disableScheduleBtn" class="danger" ${enabled && supported ? "" : "disabled"}>Disable schedule</button>
+              <button id="enableScheduleBtn" class="primary" ${canConfigure ? "" : "disabled"}>${enabled ? "Update schedule" : "Enable schedule"}</button>
+              <button id="disableScheduleBtn" class="danger" ${canDisable ? "" : "disabled"}>Disable schedule</button>
             </div>
             <p class="muted" style="margin:10px 0 0">Exactly one daily schedule at one local time; no weekly recurrence or cron expressions. Credentials are never stored in schedule state or the launchd plist.</p>
           </section>
@@ -4167,6 +4190,7 @@ HTML = r"""<!doctype html>
       document.querySelectorAll("#sourceTable tr[data-key]").forEach(row => row.onclick = () => editSource(row.dataset.key));
     }
     function sourceInput(field, src) {
+      const val = src[field] ?? "";
       if (["can_enrich_coverage","strict_source_match"].includes(field)) {
         return `<label>${field}<select id="source_${field}"><option value=""></option><option value="false" ${val === false ? "selected" : ""}>false</option><option value="true" ${val === true ? "selected" : ""}>true</option></select></label>`;
       }
@@ -4552,8 +4576,8 @@ HTML = r"""<!doctype html>
     function renderModelBackendHint(requiredBackend = "") {
       const hint = document.getElementById("modelBackendHint");
       if (!hint) return;
-      const required = String(requiredBackend || "").trim();
-      const current = String(currentControlValue("NEWS_MODEL_BACKEND") || "").trim();
+      const required = normalizedBackendValue(requiredBackend);
+      const current = normalizedBackendValue(currentControlValue("NEWS_MODEL_BACKEND"));
       if (!required || !current) {
         // Unknown model/status or unset override: no conflict to report.
         hint.textContent = "";
@@ -4610,13 +4634,11 @@ HTML = r"""<!doctype html>
         </div>
       `).join("");
       container.querySelectorAll("[data-use-model]").forEach(btn => {
-        // The catalog-aware call below is equivalent to the original
-        // btn.onclick = () => useModelReference(btn.dataset.useModel);
         btn.onclick = () => useModelReference(btn.dataset.useModel, catalogBackendForReference(btn.dataset.useModel));
       });
     }
     function refreshHuggingFaceUseButtons() {
-      const backendExternal = currentControlValue("NEWS_MODEL_BACKEND") === "external";
+      const backendExternal = normalizedBackendValue(currentControlValue("NEWS_MODEL_BACKEND")) === "external";
       document.querySelectorAll("[data-use-hf-model]").forEach(btn => {
         const disabled = btn.dataset.useHfBackend === "external" && !backendExternal;
         btn.disabled = disabled;
@@ -4647,7 +4669,7 @@ HTML = r"""<!doctype html>
           container.innerHTML = `<p class="muted">No models found.</p>`;
           return;
         }
-        const backendExternal = currentControlValue("NEWS_MODEL_BACKEND") === "external";
+        const backendExternal = normalizedBackendValue(currentControlValue("NEWS_MODEL_BACKEND")) === "external";
         container.innerHTML = models.map(item => {
           const fit = item.runtime_fit || {};
           const fitLabel = runtimeFitLabels()[fit.status] || fit.status || "unknown";
@@ -4792,12 +4814,14 @@ HTML = r"""<!doctype html>
       document.addEventListener("change", (event) => {
         const el = event.target;
         if (el && el.matches && el.matches("select[data-env]")) {
-          // Only selects with a links container render links; unrelated
-          // selects (e.g. the backend knob) must not warn. Model/backend
-          // changes additionally refresh the compatibility hint below.
-          if (document.querySelector(`[data-links-for="${el.dataset.env}"]`)) {
+          // Only knobs that carry option_links have a .knob-links container;
+          // calling renderKnobLinks for every select would hit the
+          // missing-container console.warn on each non-model knob change.
+          const knob = knobByEnv(el.dataset.env);
+          if (knob && knob.option_links && Object.keys(knob.option_links).length) {
             renderKnobLinks(el.dataset.env);
           }
+          // Model/backend changes additionally refresh the compatibility hint.
           if (el.dataset.env === "NEWS_MODEL") {
             state.selectedModelReference = String(el.value || "").trim();
             state.selectedModelRequiredBackend = catalogBackendForReference(el.value);

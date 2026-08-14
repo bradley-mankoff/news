@@ -549,7 +549,7 @@ class UITests(unittest.TestCase):
             "escapeHtml(pick.alias)",
             "escapeHtml(pick.reason)",
             'data-use-model="${escapeHtml(pick.alias)}"',
-            "btn.onclick = () => useModelReference(btn.dataset.useModel);",
+            "btn.onclick = () => useModelReference(btn.dataset.useModel, catalogBackendForReference(btn.dataset.useModel));",
         ):
             self.assertIn(snippet, block)
         # The renderer no longer re-filters full catalog entries by task notes.
@@ -557,7 +557,6 @@ class UITests(unittest.TestCase):
         self.assertNotIn("modelCatalogEntries().filter", block)
         # Empty or partial pick lists keep the documented honest-gap message.
         self.assertIn("No verified curated model for this task yet", block)
-
     def test_model_backend_hint_markup_contract(self) -> None:
         """The Default model panel exposes an accessible backend-compatibility
         hint driven by catalog/HF backend metadata (issue #94)."""
@@ -649,10 +648,153 @@ class UITests(unittest.TestCase):
             html,
         )
         self.assertIn('data-use-hf-backend="${escapeHtml(hfBackend)}"', html)
-        self.assertIn('currentControlValue("NEWS_MODEL_BACKEND") === "external"', html)
+        self.assertIn(
+            'normalizedBackendValue(currentControlValue("NEWS_MODEL_BACKEND")) === "external"',
+            html,
+        )
         # Use must never mutate the backend control.
         self.assertNotIn('setControlValue("NEWS_MODEL_BACKEND"', html)
 
+    @unittest.skipUnless(shutil.which("node"), "node runtime required for model/backend behavior tests")
+    def test_model_backend_hint_and_selection_behavior(self) -> None:
+        html = ui_module.HTML
+        current_start = html.index("    function currentControlValue")
+        current_end = html.index("    function setControlValue", current_start)
+        model_start = html.index("    function modelCatalogEntries")
+        model_end = html.index("    function renderModelCatalogPanel", model_start)
+        refresh_start = html.index("    function refreshHuggingFaceUseButtons")
+        refresh_end = html.index("    async function searchHuggingFaceModels", refresh_start)
+        production_source = "\n".join(
+            [
+                html[current_start:current_end],
+                html[model_start:model_end],
+                html[refresh_start:refresh_end],
+            ]
+        )
+        script = """
+import assert from "node:assert/strict";
+
+function classList() {
+  const values = new Set();
+  return {
+    add(value) { values.add(value); },
+    remove(value) { values.delete(value); },
+    contains(value) { return values.has(value); },
+  };
+}
+function control(env, value = "", options = []) {
+  return {
+    dataset: { env },
+    type: "select",
+    tagName: "SELECT",
+    value,
+    options: options.map(option => ({ value: option })),
+    insertAdjacentHTML(_position, html) {
+      const match = html.match(/<option value="([^"]*)">/);
+      if (match) this.options.unshift({ value: match[1] });
+    },
+    dispatchEvent(event) {
+      assert.equal(event.type, "change");
+      handleChange(this);
+    },
+  };
+}
+const modelSelect = control("NEWS_MODEL", "", ["vlm"]);
+const backendSelect = control("NEWS_MODEL_BACKEND", "mlx-lm", ["mlx-lm", "mlx-vlm", "external"]);
+const hint = { textContent: "", classList: classList() };
+const externalOnlyButton = {
+  dataset: { useHfModel: "org/external", useHfBackend: "external" },
+  disabled: true,
+  textContent: "",
+};
+const elements = new Map([
+  ["modelBackendHint", hint],
+  ["model", modelSelect],
+  ["backend", backendSelect],
+]);
+const state = {
+  schema: {
+    model_catalog: [{ alias: "vlm", reference: "org/vlm", backend: "mlx-vlm" }],
+    current_env: {},
+  },
+  selectedModelReference: "",
+  selectedModelRequiredBackend: "",
+};
+function $(id) {
+  if (id === "NEWS_MODEL") return modelSelect;
+  if (id === "NEWS_MODEL_BACKEND") return backendSelect;
+  return elements.get(id) || null;
+}
+function documentQuery(selector) {
+  if (selector === '[data-env="NEWS_MODEL"]') return modelSelect;
+  if (selector === '[data-env="NEWS_MODEL_BACKEND"]') return backendSelect;
+  return null;
+}
+globalThis.document = {
+  querySelector(selector) {
+    return selector === "#modelBackendHint" ? hint : documentQuery(selector);
+  },
+  getElementById(id) {
+    return elements.get(id) || null;
+  },
+  querySelectorAll(selector) {
+    return selector === "[data-use-hf-model]" ? [externalOnlyButton] : [];
+  },
+};
+globalThis.Event = class Event {
+  constructor(type) { this.type = type; }
+};
+function escapeHtml(value) { return String(value); }
+function handleChange(element) {
+  if (element === modelSelect) {
+    state.selectedModelReference = String(element.value || "").trim();
+    state.selectedModelRequiredBackend = catalogBackendForReference(element.value);
+    renderModelBackendHint(requiredBackendForSelectedModel());
+  } else if (element === backendSelect) {
+    refreshHuggingFaceUseButtons();
+    renderModelBackendHint(requiredBackendForSelectedModel());
+  }
+}
+
+""" + production_source + """
+
+useModelReference("vlm", "mlx-vlm");
+assert.equal(modelSelect.value, "vlm");
+assert.equal(backendSelect.value, "mlx-lm");
+assert.equal(hint.textContent, "This model needs NEWS_MODEL_BACKEND=mlx-vlm");
+assert.equal(hint.classList.contains("hidden"), false);
+
+backendSelect.value = "mlx-vlm";
+renderModelBackendHint(requiredBackendForSelectedModel());
+assert.equal(hint.classList.contains("hidden"), true);
+
+backendSelect.value = "";
+renderModelBackendHint(requiredBackendForSelectedModel());
+assert.equal(hint.classList.contains("hidden"), true);
+
+backendSelect.value = " EXTERNAL ";
+refreshHuggingFaceUseButtons();
+assert.equal(externalOnlyButton.disabled, false);
+assert.equal(externalOnlyButton.textContent, "Use");
+
+backendSelect.value = "mlx-lm";
+refreshHuggingFaceUseButtons();
+assert.equal(externalOnlyButton.disabled, true);
+assert.match(externalOnlyButton.textContent, /^External only/);
+useModelReference("org/external", "external");
+assert.equal(modelSelect.value, "org/external");
+assert.equal(backendSelect.value, "mlx-lm");
+assert.equal(hint.textContent, "This model needs NEWS_MODEL_BACKEND=external");
+assert.equal(hint.classList.contains("hidden"), false);
+"""
+        result = subprocess.run(
+            ["node", "--input-type=module"],
+            input=script,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
     def test_pure_helpers_and_schema_payload(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
@@ -2365,6 +2507,7 @@ async function api(path) {
 """
         + js_function_block("function escapeHtml(text) {", "function formatDefault")
         + js_function_block("function modelTaskLabels() {", "function useModelReference")
+        + js_function_block("function normalizedBackendValue(value) {", "function setControlValue")
         + js_function_block('function useModelReference(reference, requiredBackend = "") {', "function renderModelCatalogPanel")
         + js_function_block("function renderModelCatalogPanel() {", "function renderRecommendations")
         + js_function_block("function renderRecommendations(task) {", "async function searchHuggingFaceModels")
@@ -2743,7 +2886,6 @@ for (const malformedRaw of malformedValues) {
             check=False,
         )
         self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
-
     def test_schema_payload_includes_custom_catalog_entries(self) -> None:
         """The existing schema payload is the integration surface for merged
         catalog data: custom aliases appear in catalog cards and selector
@@ -2843,7 +2985,6 @@ for (const malformedRaw of malformedValues) {
 
         self.assertEqual(status, 400)
         self.assertEqual(json.loads(body)["error"], "recommendation catalog failure")
-
     def test_schema_real_malformed_catalog_uses_error_envelope(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             catalog_path = Path(tmpdir) / "bad_catalog.yaml"
@@ -3347,6 +3488,287 @@ for (const malformedRaw of malformedValues) {
         self.assertIn("startSpinner();", run_action)
         self.assertIn("new EventSource", run_action)
 
+    @unittest.skipUnless(shutil.which("node"), "node runtime required for browser renderer behavior tests")
+    def test_run_log_renderer_behavior(self) -> None:
+        html = ui_module.HTML
+        start = html.index("    const SPINNER_GLYPHS")
+        end = html.index("    function badgeClass", start)
+        renderer_source = html[start:end]
+        script = f"""
+import assert from "node:assert/strict";
+const logPane = {{ textContent: "", scrollTop: 0, scrollHeight: 0 }};
+const elements = new Map([["logPane", logPane]]);
+function $(id) {{
+  return elements.get(id) || {{ disabled: false, title: "" }};
+}}
+const state = {{ activeRun: null }};
+const statuses = [];
+let controlUpdates = 0;
+let reviewRefreshes = 0;
+function setStatus(text, cls) {{ statuses.push({{ text, cls }}); }}
+function updateRunControls() {{ controlUpdates += 1; }}
+function refreshReviewData() {{ reviewRefreshes += 1; }}
+function requestBody() {{ return {{}}; }}
+const apiCalls = [];
+async function api(path) {{
+  apiCalls.push(path);
+  if (path === "/api/run") return {{ run_id: "run-1" }};
+  return {{ run_id: "run-1", status: "completed", returncode: 0 }};
+}}
+globalThis.window = {{ setTimeout: () => 0 }};
+globalThis.setInterval = () => 1;
+globalThis.clearInterval = () => {{}};
+class FakeEventSource {{
+  static instances = [];
+  constructor(url) {{
+    this.url = url;
+    this.closed = false;
+    FakeEventSource.instances.push(this);
+  }}
+  close() {{ this.closed = true; }}
+  addEventListener() {{}}
+}}
+globalThis.EventSource = FakeEventSource;
+
+{renderer_source}
+
+resetLog();
+const firstMeter = "[3/9 clustering] [###-----------------] 1000/200000 steps";
+const finalMeter = "[3/9 clustering] [####################] 200000/200000 steps";
+appendLogEvent({{ kind: "progress", stage: "clustering", line: firstMeter, complete: false }});
+appendLogEvent({{ kind: "message", line: "WARNING: low coverage" }});
+appendLogEvent({{ kind: "progress", stage: "clustering", line: finalMeter, complete: true }});
+assert.equal(logState.rows.length, 2);
+assert.deepEqual(logState.rows.map(row => row.text), [finalMeter, "WARNING: low coverage"]);
+assert.equal(logState.rows[0].live, false);
+assert.equal(logState.rows[0].complete, true);
+assert.equal(logPane.textContent, `✓ ${{finalMeter}}\\nWARNING: low coverage`);
+appendLogEvent({{ kind: "progress", stage: "clustering", line: finalMeter, complete: true }});
+assert.equal(logState.rows.length, 2);
+assert.equal(logPane.textContent, `✓ ${{finalMeter}}\\nWARNING: low coverage`);
+
+for (const [status, glyph] of [["completed", "✓"], ["failed", "✗"], ["stopped", "■"]]) {{
+  resetLog();
+  state.activeRun = `run-${{status}}`;
+  startSpinner();
+  appendLogEvent({{ kind: "progress", stage: "clustering", line: firstMeter, complete: false }});
+  const events = new FakeEventSource("manual");
+  assert.equal(finalizeRun({{ run_id: `run-${{status}}`, status }}, events), true);
+  assert.equal(events.closed, true);
+  assert.equal(state.activeRun, null);
+  assert.equal(logState.spinnerTimer, null);
+  assert.ok(logPane.textContent.includes(`${{glyph}} [ui] ${{status}}`));
+}}
+const pendingEvents = new FakeEventSource("pending");
+state.activeRun = "run-pending";
+assert.equal(finalizeRun({{ run_id: "run-pending", status: "running" }}, pendingEvents), false);
+assert.equal(pendingEvents.closed, false);
+assert.equal(state.activeRun, "run-pending");
+
+state.activeRun = null;
+await runAction();
+assert.equal(state.activeRun, "run-1");
+const liveEvents = FakeEventSource.instances[FakeEventSource.instances.length - 1];
+liveEvents.onerror();
+await new Promise(resolve => setImmediate(resolve));
+assert.equal(liveEvents.closed, true);
+assert.equal(state.activeRun, null);
+assert.ok(statuses.some(item => item.text.startsWith("Live run stream disconnected")));
+assert.ok(apiCalls.includes("/api/runs/run-1"));
+assert.ok(reviewRefreshes >= 3);
+assert.ok(controlUpdates >= 3);
+"""
+        result = subprocess.run(
+            ["node", "--input-type=module"],
+            input=script,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    @unittest.skipUnless(shutil.which("node"), "node runtime required for model tuning editor behavior tests")
+    def test_model_tuning_editor_behavior(self) -> None:
+        html = ui_module.HTML
+        start = html.index("    function renderModelTuningEditor()")
+        end = html.index("    function confirmAction", start)
+        editor_source = html[start:end]
+        script = f"""
+import assert from "node:assert/strict";
+
+const fieldIds = [
+  "modelTuningPresetTable",
+  "modelTuningPresetError",
+  "modelTuningPresetId",
+  "modelTuningPresetName",
+  "modelTuningPresetDescription",
+  "modelTuningPresetModel",
+  "modelTuningPresetTask",
+  "modelTuningPresetTuning",
+];
+const elements = new Map(fieldIds.map(id => [id, {{ value: "", textContent: "", innerHTML: "", dataset: {{}} }}]));
+const table = elements.get("modelTuningPresetTable");
+let renderedRows = [];
+const serverPresets = [
+  {{
+    id: "concise",
+    name: "Concise",
+    description: "Short drafting output",
+    model: "model-a",
+    task: "story_drafting",
+    tuning: {{ temperature: 0.2 }},
+  }},
+];
+const state = {{
+  modelTuningPresets: structuredClone(serverPresets),
+  selectedModelTuningPresetId: "",
+}};
+const requests = [];
+const statuses = [];
+let failSave = false;
+let failReload = false;
+const clone = value => JSON.parse(JSON.stringify(value));
+function $(id) {{
+  const element = elements.get(id);
+  if (!element) throw new Error(`Unexpected element: ${{id}}`);
+  return element;
+}}
+function value(id) {{ return $(id).value; }}
+function escapeHtml(value) {{
+  return String(value).replace(/[&<>"']/g, char => ({{
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    '"': "&quot;",
+    "'": "&#39;",
+  }})[char]);
+}}
+function renderModelTuningPanels() {{}}
+function setStatus(text, cls) {{ statuses.push({{ text, cls }}); }}
+globalThis.document = {{
+  querySelectorAll(selector) {{
+    assert.equal(selector, "#modelTuningPresetTable tr[data-id]");
+    renderedRows = state.modelTuningPresets.map(preset => ({{ dataset: {{ id: preset.id }}, onclick: null }}));
+    return renderedRows;
+  }},
+}};
+async function api(path, options = {{}}) {{
+  const method = options.method || "GET";
+  const body = options.body ? JSON.parse(options.body) : null;
+  requests.push({{ path, method, body }});
+  if (method === "GET") {{
+    if (failReload) throw new Error("reload unavailable");
+    return {{ presets: clone(serverPresets) }};
+  }}
+  if (method === "POST" || method === "PATCH") {{
+    if (failSave) throw new Error("save unavailable");
+    const index = serverPresets.findIndex(preset => preset.id === body.id);
+    if (method === "POST") assert.equal(index, -1);
+    if (index === -1) serverPresets.push(clone(body));
+    else serverPresets[index] = clone(body);
+    return {{ preset: clone(body) }};
+  }}
+  if (method === "DELETE") {{
+    const id = new URL(`http://localhost${{path}}`).searchParams.get("id");
+    const index = serverPresets.findIndex(preset => preset.id === id);
+    assert.notEqual(index, -1);
+    serverPresets.splice(index, 1);
+    return {{ deleted: id }};
+  }}
+  throw new Error(`Unexpected method: ${{method}}`);
+}}
+async function loadModelTuningPresets() {{
+  const data = await api("/api/model-tuning-presets");
+  state.modelTuningPresets = data.presets || [];
+  renderModelTuningPanels();
+  renderModelTuningEditor();
+}}
+function confirmAction() {{ return Promise.resolve(true); }}
+
+{editor_source}
+
+renderModelTuningEditor();
+assert.equal(renderedRows.length, 1);
+renderedRows[0].onclick();
+assert.equal($("modelTuningPresetId").value, "concise");
+assert.equal($("modelTuningPresetName").value, "Concise");
+assert.equal(state.selectedModelTuningPresetId, "concise");
+assert.ok(table.innerHTML.includes('class="selected"'));
+
+$("modelTuningPresetId").value = "new-preset";
+$("modelTuningPresetName").value = "New preset";
+$("modelTuningPresetDescription").value = "Created in the editor";
+$("modelTuningPresetModel").value = "model-b";
+$("modelTuningPresetTask").value = "title_generation";
+$("modelTuningPresetTuning").value = '{{"temperature":0.4,"max_tokens":1200}}';
+await saveModelTuningEditor();
+const createRequest = requests.find(request => request.method === "POST");
+assert.deepEqual(createRequest.body, {{
+  id: "new-preset",
+  name: "New preset",
+  description: "Created in the editor",
+  model: "model-b",
+  task: "title_generation",
+  tuning: {{ temperature: 0.4, max_tokens: 1200 }},
+}});
+assert.equal(state.selectedModelTuningPresetId, "new-preset");
+assert.equal($("modelTuningPresetError").textContent, "");
+
+$("modelTuningPresetName").value = "Edited preset";
+$("modelTuningPresetTuning").value = '{{"temperature":0.6}}';
+await saveModelTuningEditor();
+const patchRequests = requests.filter(request => request.method === "PATCH");
+assert.equal(patchRequests.length, 1);
+assert.equal(patchRequests[0].body.name, "Edited preset");
+assert.deepEqual(patchRequests[0].body.tuning, {{ temperature: 0.6 }});
+
+const requestCountBeforeInvalidJson = requests.length;
+$("modelTuningPresetTuning").value = "{{";
+await saveModelTuningEditor();
+assert.equal(requests.length, requestCountBeforeInvalidJson);
+assert.match($("modelTuningPresetError").textContent, /^Tuning JSON is not valid:/);
+assert.equal($("modelTuningPresetTuning").value, "{{");
+
+$("modelTuningPresetTuning").value = "[1, 2]";
+await saveModelTuningEditor();
+assert.equal(requests.length, requestCountBeforeInvalidJson);
+assert.equal($("modelTuningPresetError").textContent, "Tuning must be a JSON object (mapping).");
+assert.equal($("modelTuningPresetTuning").value, "[1, 2]");
+
+failSave = true;
+$("modelTuningPresetName").value = "Keep this edit";
+$("modelTuningPresetTuning").value = '{{"temperature":0.7}}';
+await saveModelTuningEditor();
+assert.equal($("modelTuningPresetError").textContent, "save unavailable");
+assert.equal($("modelTuningPresetName").value, "Keep this edit");
+assert.equal($("modelTuningPresetTuning").value, '{{"temperature":0.7}}');
+failSave = false;
+
+serverPresets.length = 0;
+await reloadModelTuningPresets();
+assert.equal(state.selectedModelTuningPresetId, "");
+assert.equal($("modelTuningPresetId").value, "");
+assert.equal($("modelTuningPresetTuning").value, "{{}}");
+assert.equal(table.innerHTML.includes('data-id="new-preset"'), false);
+
+serverPresets.push({{ id: "remove-me", name: "Remove me", tuning: {{}} }});
+await loadModelTuningPresets();
+editModelTuningPreset("remove-me");
+await deleteModelTuningEditor();
+assert.ok(requests.some(request => request.method === "DELETE" && request.path.includes("remove-me")));
+assert.equal(state.modelTuningPresets.length, 0);
+assert.equal($("modelTuningPresetId").value, "");
+assert.equal($("modelTuningPresetTuning").value, "{{}}");
+assert.ok(statuses.some(status => status.text === "Model tuning preset remove-me deleted."));
+"""
+        result = subprocess.run(
+            ["node", "--input-type=module"],
+            input=script,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
     def test_report_review_tab_contracts(self) -> None:
         html = ui_module.HTML
         # The tab exists with a dedicated icon and section mounts.
@@ -3534,7 +3956,8 @@ for (const malformedRaw of malformedValues) {
         self.assertIn("escapeHtml(s.next_run_label", html)
         # Unsupported platforms disable the controls instead of pretending.
         self.assertIn('${!supported ? `<p class="bad"', html)
-        self.assertIn('${supported ? "" : "disabled"}', html)
+        self.assertIn('${canConfigure ? "" : "disabled"}', html)
+        self.assertIn('${canDisable ? "" : "disabled"}', html)
         # Owner-first default and explicit opt-in vocabulary.
         self.assertIn("Owner only (default)", html)
         self.assertIn("Configured recipients", html)

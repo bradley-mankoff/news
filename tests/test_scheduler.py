@@ -90,6 +90,23 @@ class SchedulerTests(unittest.TestCase):
     def _store(self) -> ScheduleStore:
         return ScheduleStore()
 
+    def _write_success_projection(self) -> None:
+        schedule = self._store().load()
+        output = Path(schedule.output_dir)
+        output.mkdir(parents=True, exist_ok=True)
+        (output / "latest_run.md").write_text("# Report\n", encoding="utf-8")
+        (output / "latest_run_details.json").write_text(
+            json.dumps(
+                {
+                    "run_started_at": "2026-08-13T06:45:00",
+                    "report_generated": True,
+                    "reports": [{"title": "x"}],
+                    "events": [{"label": "completed"}],
+                    "delivery": {"status": "skipped: not_configured"},
+                }
+            ),
+            encoding="utf-8",
+        )
     # -- time and spec validation ------------------------------------------
 
     def test_parse_daily_time_accepts_boundaries_and_rejects_malformed(self) -> None:
@@ -405,6 +422,20 @@ class SchedulerTests(unittest.TestCase):
         disabled_again = disable_schedule()
         self.assertFalse(disabled_again.enabled)
 
+    def test_disable_schedule_recovers_from_corrupt_state(self) -> None:
+        adapter = self._fake_adapter(load_state="loaded")
+        self._mock_launchd(adapter)
+        plist = self.tmp / "com.bradley-mankoff.news-daily-run.plist"
+        plist.write_text("stale plist", encoding="utf-8")
+        self.tmp.joinpath("daily_schedule.json").write_text("{broken", encoding="utf-8")
+
+        disabled = disable_schedule()
+
+        self.assertFalse(disabled.enabled)
+        self.assertEqual(disabled.launchd_status, "not_loaded")
+        self.assertFalse(plist.exists())
+        self.assertFalse(self._store().load().enabled)
+        adapter.bootout.assert_called_once_with()
     def test_disable_schedule_bootout_failure_keeps_state_enabled(self) -> None:
         calls = {"n": 0}
 
@@ -476,7 +507,8 @@ class SchedulerTests(unittest.TestCase):
         out = self.tmp / "out"
         out.mkdir()
         (out / "latest_run.md").write_text("# Report body\n", encoding="utf-8")
-        (out / "latest_run_details.json").write_text(
+        details_path = out / "latest_run_details.json"
+        details_path.write_text(
             json.dumps(
                 {
                     "run_started_at": "2026-08-13T06:45:00",
@@ -492,19 +524,96 @@ class SchedulerTests(unittest.TestCase):
         )
         store = self._store()
         store.save(replace(store.load(), output_dir=str(out)))
+        def write_current_details() -> None:
+            details = json.loads(details_path.read_text(encoding="utf-8"))
+            details["run_started_at"] = "2026-08-13T06:46:00"
+            details_path.write_text(json.dumps(details), encoding="utf-8")
+
         with patch.dict(os.environ, {}, clear=False), patch(
-            "news_pipeline.pipeline.run_pipeline"
+            "news_pipeline.pipeline.run_pipeline",
+            side_effect=write_current_details,
         ) as run_pipeline:
             self.assertEqual(run_scheduled(), 0)
             run_pipeline.assert_called_once_with()
         last = self._store().load().last_run
         self.assertEqual(last.status, "completed")
-        self.assertEqual(last.run_id, "2026-08-13_06-45-00")
+        self.assertEqual(last.run_id, "2026-08-13_06-46-00")
         self.assertEqual(last.run_status, "completed")
         self.assertEqual(last.report_status, "available")
         self.assertEqual(last.delivery_status, "skipped: not_configured")
         self.assertEqual(last.error_message, "")
 
+    def test_enable_schedule_preset_wins_over_ambient_settings_and_resolves_paths(self) -> None:
+        adapter = self._fake_adapter()
+        self._mock_launchd(adapter)
+        output_dir = self.tmp / "custom-output"
+        history_db = self.tmp / "custom-history" / "news.duckdb"
+        with patch.dict(
+            os.environ,
+            {
+                "NEWS_SOURCE_SCOPE": "core",
+                "NEWS_OUTPUT_DIR": str(output_dir),
+                "NEWS_HISTORY_DB": str(history_db),
+            },
+            clear=False,
+        ):
+            schedule = enable_schedule("06:45", preset_id="default")
+
+        self.assertEqual(schedule.base_env.get("NEWS_SOURCE_SCOPE"), None)
+        self.assertEqual(schedule.output_dir, str(output_dir))
+        self.assertEqual(schedule.history_db_path, str(history_db))
+        with patch.dict(os.environ, {}, clear=False), patch(
+            "news_pipeline.pipeline.run_pipeline"
+        ) as run_pipeline:
+            # The stored path is the path used by projection, not the default.
+            self.assertEqual(run_scheduled(), 1)
+            run_pipeline.assert_called_once_with()
+        self.assertEqual(self._store().load().last_run.error_type, "ProjectionError")
+
+    def test_run_scheduled_failure_does_not_copy_previous_projection(self) -> None:
+        self._enabled_schedule()
+        out = self.tmp / "out"
+        out.mkdir()
+        (out / "latest_run.md").write_text("# Previous report\n", encoding="utf-8")
+        (out / "latest_run_details.json").write_text(
+            json.dumps(
+                {
+                    "run_started_at": "2026-08-12T06:45:00",
+                    "report_generated": True,
+                    "reports": [{"title": "old"}],
+                    "events": [{"label": "completed"}],
+                    "delivery": {"status": "sent"},
+                }
+            ),
+            encoding="utf-8",
+        )
+        store = self._store()
+        store.save(replace(store.load(), output_dir=str(out)))
+        with patch.object(sched, "_load_pipeline_module", side_effect=ImportError("boom")):
+            self.assertEqual(run_scheduled(), 1)
+        last = self._store().load().last_run
+        self.assertEqual(last.status, "failed")
+        self.assertEqual(last.run_id, "")
+        self.assertEqual(last.report_status, "unavailable")
+        self.assertEqual(last.delivery_status, "")
+
+    def test_run_scheduled_terminal_state_write_failure_is_controlled(self) -> None:
+        self._enabled_schedule()
+        store = self._store()
+        with patch.object(
+            sched,
+            "ScheduleStore",
+            return_value=store,
+        ), patch.object(
+            store,
+            "save",
+            side_effect=[None, OSError("disk full")],
+        ), patch.object(
+            sched,
+            "_load_pipeline_module",
+            side_effect=ImportError("pipeline unavailable"),
+        ):
+            self.assertEqual(run_scheduled(), 2)
     def test_run_scheduled_failure_records_bounded_redacted_error(self) -> None:
         self._enabled_schedule()
         with patch.dict(os.environ, {**_SECRETS}, clear=False), patch(
@@ -562,9 +671,12 @@ class SchedulerTests(unittest.TestCase):
             delivery_mode="disabled",
             overrides={"NEWS_MODEL_BASE_URL": "http://127.0.0.1:9999/v1"},
         )
+        store = self._store()
+        store.save(replace(store.load(), output_dir=str(self.tmp / "delivery-out")))
         run_env: dict[str, str] = {}
         with patch.dict(os.environ, {}, clear=False), patch(
-            "news_pipeline.pipeline.run_pipeline"
+            "news_pipeline.pipeline.run_pipeline",
+            side_effect=self._write_success_projection,
         ):
             self.assertEqual(run_scheduled(), 0)
             run_env = dict(os.environ)
@@ -584,6 +696,8 @@ class SchedulerTests(unittest.TestCase):
 
     def test_run_scheduled_lock_prevents_duplicate_execution(self) -> None:
         self._enabled_schedule()
+        store = self._store()
+        store.save(replace(store.load(), output_dir=str(self.tmp / "lock-out")))
         lock = ScheduleLock()
         self.assertTrue(lock.acquire(timeout=0.0))
         try:
@@ -594,7 +708,8 @@ class SchedulerTests(unittest.TestCase):
             lock.release()
         # After release a second invocation proceeds.
         with patch.dict(os.environ, {}, clear=False), patch(
-            "news_pipeline.pipeline.run_pipeline"
+            "news_pipeline.pipeline.run_pipeline",
+            side_effect=self._write_success_projection,
         ):
             self.assertEqual(run_scheduled(), 0)
 

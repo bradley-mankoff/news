@@ -259,9 +259,18 @@ def find_or_create_ship_pr(cfg: dict, env: dict, head: str, title: str,
             "--json", "number,baseRefName"], env)
     if r.returncode != 0:
         log(f"SHIP PR LIST FAILED head={head}: {r.stderr.strip()[:200]}")
-    elif r.returncode == 0:
-        for pr in json.loads(r.stdout):
-            if pr.get("baseRefName") == base:
+        return None
+    else:
+        try:
+            prs = json.loads(r.stdout or "[]")
+        except (TypeError, ValueError) as exc:
+            log(f"SHIP PR LIST PARSE FAILED head={head}: {exc}")
+            return None
+        if not isinstance(prs, list):
+            log(f"SHIP PR LIST PARSE FAILED head={head}: expected a list")
+            return None
+        for pr in prs:
+            if isinstance(pr, dict) and pr.get("baseRefName") == base:
                 return pr
     body = (f"Issue #{issue_number}. Shipped from develop after human testing. "
             "Reviewed by archon-smart-pr-review before merge.")
@@ -402,10 +411,16 @@ def fetch_verdict(cfg: dict, env: dict, pr_number: int) -> tuple[str | None, boo
         return None, False
     try:
         data = json.loads(r.stdout)
-    except ValueError as exc:
+    except (TypeError, ValueError) as exc:
         log(f"VERDICT PARSE FAILED PR #{pr_number}: {exc}")
         return None, False
-    return parse_verdict([c.get("body") or "" for c in data.get("comments", [])]), True
+    comments = data.get("comments") if isinstance(data, dict) else None
+    if not isinstance(comments, list) or not all(
+        isinstance(comment, dict) for comment in comments
+    ):
+        log(f"VERDICT PARSE FAILED PR #{pr_number}: comments is not a list")
+        return None, False
+    return parse_verdict([c.get("body") or "" for c in comments]), True
 
 def find_ship_pr(cfg: dict, env: dict, issue_number: int, base: str) -> dict | None:
     """Open ship PR (head -> base) linked to an issue; None when absent.
@@ -422,8 +437,16 @@ def find_ship_pr(cfg: dict, env: dict, issue_number: int, base: str) -> dict | N
            env)
     if r.returncode != 0:
         return None
-    for p in json.loads(r.stdout or "[]"):
-        if p.get("baseRefName") == base:
+    try:
+        prs = json.loads(r.stdout or "[]")
+    except (TypeError, ValueError) as exc:
+        log(f"SHIP PR LIST PARSE FAILED issue={issue_number}: {exc}")
+        return None
+    if not isinstance(prs, list):
+        log(f"SHIP PR LIST PARSE FAILED issue={issue_number}: expected a list")
+        return None
+    for p in prs:
+        if isinstance(p, dict) and p.get("baseRefName") == base:
             return p
     return None
 
@@ -450,3 +473,20 @@ def try_merge_base_into_head(cfg: dict, env: dict, pr_number: int,
     if "no commits between" in low or "already up to date" in low:
         return True, "no-op (head already contains base)"
     return False, f"transient: {err.strip()[:200]}"
+
+
+def label_exists(cfg: dict, env: dict, label: str) -> bool:
+    """True when `label` already exists in the repo (gh fails on unknown
+    labels, so never pass one through unchecked)."""
+    r = gh(["label", "list", "-R", cfg["repo"], "--json", "name"], env)
+    if r.returncode != 0:
+        return False
+    try:
+        labels = json.loads(r.stdout or "[]")
+    except (TypeError, ValueError) as exc:
+        log(f"LABEL LIST PARSE FAILED: {exc}")
+        return False
+    return isinstance(labels, list) and any(
+        isinstance(label_item, dict) and label_item.get("name") == label
+        for label_item in labels
+    )

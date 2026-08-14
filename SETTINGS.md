@@ -213,7 +213,6 @@ protocol marker fail closed at config resolution, preset save, and the UI
 validate endpoint — never at model runtime. `story_discovery` has no template
 because it has no LLM stage. Full templates are per-run env/preset overrides;
 restoring a task/global default removes the override.
-
 ## Removed Settings
 
 The old topic-scoped controls are rejected when present:

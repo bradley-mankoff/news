@@ -368,6 +368,8 @@ class ScheduleError(ValueError):
     """Controlled scheduler failure (launchd/platform), safe for display."""
 
 
+class _ProjectionError(ScheduleError):
+    """The pipeline completed without producing a current run projection."""
 # ---------------------------------------------------------------------------
 # Time and spec validation
 # ---------------------------------------------------------------------------
@@ -414,7 +416,10 @@ def validate_schedule_spec(
         if delivery_mode in (None, "")
         else _normalize_delivery_mode(delivery_mode)
     )
-    safe_overrides = capture_safe_env(overrides)
+    # ``None`` means no explicit schedule override. Do not accidentally
+    # persist the UI/CLI process environment as overrides, because preset-owned
+    # values must remain authoritative.
+    safe_overrides = capture_safe_env(overrides or {})
     return hour, minute, preset, mode, safe_overrides
 
 
@@ -734,6 +739,19 @@ def enable_schedule(
         store = ScheduleStore(state_path)
         previous = store.load_or_default()
         root_dir = str(ROOT_DIR)
+        base_env = capture_safe_env()
+        preset_env = run_preset_env(preset) if preset else {}
+        # A selected preset owns its declared settings. Keep an ambient value
+        # only when the user supplied the same key as an explicit override.
+        base_env = {
+            name: value
+            for name, value in base_env.items()
+            if name not in preset_env or name in safe_overrides
+        }
+        effective_env = _merge_scheduled_env(preset, base_env, safe_overrides)
+        output_dir, history_db_path = _scheduled_artifact_paths(
+            root_dir, effective_env
+        )
         schedule = DailySchedule(
             schema_version=SCHEMA_VERSION,
             enabled=True,
@@ -741,12 +759,12 @@ def enable_schedule(
             minute=minute,
             preset_id=preset,
             delivery_mode=mode,
-            base_env=capture_safe_env(),
+            base_env=base_env,
             overrides=safe_overrides,
             root_dir=root_dir,
             python_executable=sys.executable,
-            output_dir=str(Path(root_dir) / "output" / "daily_outputs"),
-            history_db_path=str(Path(root_dir) / "output" / "history" / "news_history.duckdb"),
+            output_dir=output_dir,
+            history_db_path=history_db_path,
             updated_at=_now_iso_local(),
             launchd_status="unknown",
             last_run=previous.last_run,
@@ -794,7 +812,17 @@ def disable_schedule(
                 "Another schedule operation is active; no changes were made."
             )
         store = ScheduleStore(state_path)
-        schedule = store.load_or_default()
+        try:
+            schedule = store.load_or_default()
+        except ScheduleStateError:
+            # Disable is the recovery operation: fixed launchd identity and
+            # plist paths remain known even when the JSON cannot be parsed.
+            schedule = DailySchedule(
+                root_dir=str(ROOT_DIR),
+                python_executable=sys.executable,
+                output_dir=str(ROOT_DIR / "output" / "daily_outputs"),
+                history_db_path=str(ROOT_DIR / "output" / "history" / "news_history.duckdb"),
+            )
         adapter = LaunchdAdapter()
         if adapter.supported():
             # A real bootout failure keeps the state enabled/loaded so the user
@@ -973,19 +1001,48 @@ def _redact_message(text: str) -> str:
     return "Scheduled Run Session failed; inspect canonical run history."
 
 
+def _merge_scheduled_env(
+    preset_id: str,
+    base_env: Mapping[str, str],
+    overrides: Mapping[str, str],
+) -> dict[str, str]:
+    """Resolve schedule settings with preset, base, then override precedence."""
+    env: dict[str, str] = {}
+    preset_env = run_preset_env(preset_id) if preset_id else {}
+    env.update(preset_env)
+    for name, value in base_env.items():
+        if name not in preset_env or name in overrides:
+            env[name] = value
+    env.update(overrides)
+    return env
+
+
+def _scheduled_artifact_paths(
+    root_dir: str, effective_env: Mapping[str, str]
+) -> tuple[str, str]:
+    """Resolve artifact paths using the same environment as the pipeline."""
+    root = Path(root_dir)
+    output_value = str(effective_env.get("NEWS_OUTPUT_DIR") or "output/daily_outputs")
+    history_value = str(
+        effective_env.get("NEWS_HISTORY_DB") or "output/history/news_history.duckdb"
+    )
+    output_path = Path(output_value)
+    history_path = Path(history_value)
+    return (
+        str(output_path if output_path.is_absolute() else root / output_path),
+        str(history_path if history_path.is_absolute() else root / history_path),
+    )
+
+
 def _scheduled_run_env(schedule: DailySchedule) -> dict[str, str]:
     """Preset -> safe base env -> explicit overrides -> forced delivery mode.
 
-    Mirrors Runtime Config Resolution precedence (preset_env overlaid by the
-    base environment, then explicit overrides); the persisted schedule
-    delivery mode always wins so a scheduled run can never accidentally send
-    to a wider audience than the schedule recorded.
+    The persisted schedule has already removed ambient values owned by the
+    selected preset. Explicit overrides remain last so they intentionally win.
     """
-    env: dict[str, str] = {}
-    if schedule.preset_id:
-        env.update(run_preset_env(schedule.preset_id))
-    env.update(schedule.base_env)
-    env.update(schedule.overrides)
+    env = _merge_scheduled_env(
+        schedule.preset_id, schedule.base_env, schedule.overrides
+    )
     env[DELIVERY_MODE_ENV_VAR] = schedule.delivery_mode
     if schedule.preset_id:
         env[PRESET_ENV_VAR] = schedule.preset_id
@@ -996,6 +1053,12 @@ def _scheduled_run_env(schedule: DailySchedule) -> dict[str, str]:
     return env
 
 
+def _read_latest_run_details_bytes(output_dir: str) -> bytes | None:
+    """Read the details artifact identity without exposing its contents."""
+    try:
+        return (Path(output_dir) / "latest_run_details.json").read_bytes()
+    except OSError:
+        return None
 def _read_latest_run_projection(output_dir: str) -> dict[str, Any]:
     """Bounded run/report/delivery projection from the existing outputs.
 
@@ -1061,6 +1124,7 @@ def _execute_scheduled_run(schedule: DailySchedule, store: ScheduleStore) -> int
     outcome = "failed"
     projection = _empty_run_projection()
     running_written = False
+    details_before = _read_latest_run_details_bytes(schedule.output_dir)
     try:
         # Apply the resolved environment BEFORE the pipeline import so the
         # module-level Runtime Config snapshot sees the scheduled settings.
@@ -1078,56 +1142,73 @@ def _execute_scheduled_run(schedule: DailySchedule, store: ScheduleStore) -> int
         os.environ.update(_scheduled_run_env(schedule))
         pipeline = _load_pipeline_module()
         pipeline.run_pipeline()
+        details_after = _read_latest_run_details_bytes(schedule.output_dir)
+        if details_after is None or details_after == details_before:
+            raise _ProjectionError(
+                "Scheduled run did not produce a current details artifact."
+            )
         outcome = "completed"
     except Exception as exc:
         outcome = "failed"
-        error_type = type(exc).__name__
+        error_type = "ProjectionError" if isinstance(exc, _ProjectionError) else type(exc).__name__
         error_message = _redact_message(str(exc))
 
-    try:
-        raw_projection = _read_latest_run_projection(schedule.output_dir)
-        projection = {
-            "run_id": str(raw_projection.get("run_id") or ""),
-            "run_status": str(raw_projection.get("run_status") or "unknown"),
-            "report_status": str(
-                raw_projection.get("report_status") or "unavailable"
-            ),
-            "delivery_status": str(raw_projection.get("delivery_status") or ""),
-        }
-    except Exception as exc:
-        # A projection failure must not strand the durable lifecycle marker.
-        if outcome == "completed":
+    if outcome == "completed":
+        try:
+            raw_projection = _read_latest_run_projection(schedule.output_dir)
+            projection = {
+                "run_id": str(raw_projection.get("run_id") or ""),
+                "run_status": str(raw_projection.get("run_status") or "unknown"),
+                "report_status": str(
+                    raw_projection.get("report_status") or "unavailable"
+                ),
+                "delivery_status": str(raw_projection.get("delivery_status") or ""),
+            }
+            if (
+                not projection["run_id"]
+                or projection["run_status"] != "completed"
+                or projection["report_status"] == "unavailable"
+            ):
+                raise _ProjectionError(
+                    "Scheduled run did not produce a complete canonical projection."
+                )
+        except Exception as exc:
+            # A projection failure must not strand the durable lifecycle marker.
             outcome = "failed"
             error_type = "ProjectionError"
             error_message = _redact_message(str(exc))
-        projection = _empty_run_projection()
+            projection = _empty_run_projection()
 
     if not running_written:
         # The initial state write failed, so there is no durable running marker
         # to repair. The caller receives the controlled scheduler error below.
         raise ScheduleError("Could not record the scheduled run state.")
 
-    store.save(
-        replace(
-            schedule,
-            last_run=LastScheduledRun(
-                status=outcome,
-                run_id=projection["run_id"],
-                started_at=started_at,
-                finished_at=_now_iso_local(),
-                run_status=(
-                    projection["run_status"]
-                    if outcome == "completed"
-                    else "failed"
-                ),
-                report_status=projection["report_status"],
-                delivery_status=projection["delivery_status"],
-                error_type=error_type,
-                error_message=error_message,
-                pid=os.getpid(),
-            ),
-        )
+    terminal_schedule = replace(
+        schedule,
+        last_run=LastScheduledRun(
+            status=outcome,
+            run_id=projection["run_id"],
+            started_at=started_at,
+            finished_at=_now_iso_local(),
+            run_status=projection["run_status"] if outcome == "completed" else "failed",
+            report_status=projection["report_status"],
+            delivery_status=projection["delivery_status"],
+            error_type=error_type,
+            error_message=error_message,
+            pid=os.getpid(),
+        ),
     )
+    try:
+        store.save(terminal_schedule)
+    except Exception as exc:
+        print(
+            "schedule: could not persist terminal run state "
+            f"({type(exc).__name__}); inspect the schedule directory and "
+            "canonical run history.",
+            file=sys.stderr,
+        )
+        return 2
     return 0 if outcome == "completed" else 1
 
 

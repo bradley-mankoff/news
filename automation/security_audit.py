@@ -509,8 +509,14 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.report:
         out = Path(args.report)
-        out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_text(report + "\n", encoding="utf-8")
+        try:
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_text(report + "\n", encoding="utf-8")
+        except OSError as exc:
+            # Keep the exit-code contract: a write failure is a scanner
+            # failure (exit 2), never "findings exist" (exit 1).
+            print(f"error: cannot write report to {out}: {exc}", file=sys.stderr)
+            return 2
         print(f"report written to {out}")
     else:
         print(report)

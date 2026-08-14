@@ -1439,7 +1439,6 @@ def _prompt_snapshots(
             )
     return snapshots
 
-
 def _run_started_at_from_id(run_id: str) -> str:
     if TIMESTAMP_RE.fullmatch(run_id):
         date_part, time_part = run_id.split("_", 1)
