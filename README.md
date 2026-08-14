@@ -341,8 +341,9 @@ Each model page shows Hugging Face's native Hardware Compatibility panel
 
 ### Model Catalog
 
-The Model Catalog is the code-owned registry of models verified for the
-supported backends, with recommendations per task — factual extraction,
+The Model Catalog is the code-owned baseline registry: built-in models are
+verified for the supported backends, while user-overlay entries remain
+advisory. It provides recommendations per task — factual extraction,
 structured output, synthesis, citation fidelity, speed, context length, and
 translation — rather than parameter count or popularity:
 
@@ -363,6 +364,49 @@ Hugging Face search results carry runtime-fit verdicts (`managed_mlx_lm`,
 for a managed backend (ADR 0010 runtime matrix); hardware fitting itself lives
 on the Hugging Face model page. The UI's "Model catalog" panel shows curated
 cards, task recommendations, and search with the same verdicts.
+
+#### User-editable YAML overrides
+
+`config/model_catalog.yaml` is an optional, user-editable overlay on top of
+the code-owned built-in entries. The catalog is a per-process snapshot:
+built-ins first, then YAML metadata overrides and new entries. Editing the
+file requires restarting `news` or the UI (no hot reload).
+
+- Existing built-in aliases may override only `name`, `description`,
+  `context_length`, and `task_notes` (task notes merge by task key); runtime
+  identity (`reference`/`backend`/`hf_repo`) must be absent or match the
+  built-in entry exactly.
+- New aliases must provide `reference`, `name`, `backend`, `hf_repo`, and
+  `description`. `backend` is limited to `mlx-lm`, `mlx-vlm`, and `external`;
+  `reference` must equal `hf_repo` (an owner/repo id — file-qualified `.gguf`
+  references are rejected, ADR 0010). `context_length` is optional and
+  `task_notes` defaults to `{}`.
+- Aliases must match the safe pattern (lowercase letters, digits, `.`, `_`,
+  `-`, starting with a letter or digit). Unknown top-level keys, entry
+  fields, and recommendation tasks are errors: malformed or unsafe YAML
+  fails closed with a path-specific message instead of silently changing the
+  catalog.
+- `NEWS_MODEL_CATALOG_YAML` selects an alternate path; relative paths resolve
+  from the repository root. The default path is `config/model_catalog.yaml`.
+- YAML additions are user-verified, not Apple-Silicon verified by this
+  project: they are selectable via `NEWS_MODEL` (or a preset) but never
+  silently become the default, and runtime-fit verdicts stay advisory.
+
+Example overlay:
+
+```yaml
+models:
+  my-mlx-model:
+    reference: mlx-community/example-model
+    name: Example MLX Model
+    backend: mlx-lm
+    hf_repo: mlx-community/example-model
+    context_length: 8192
+    description: A user-verified MLX language model.
+```
+
+See [`docs/adr/0014-model-catalog-yaml-overrides.md`](docs/adr/0014-model-catalog-yaml-overrides.md)
+for the accepted architecture record.
 
 ### Runtime Matrix
 

@@ -10,6 +10,7 @@ from pathlib import Path
 import textwrap
 from unittest.mock import patch
 
+from news_pipeline import model_catalog
 from news_pipeline import prompt_catalog
 from news_pipeline import ui as ui_module
 from news_pipeline import config as config_module
@@ -155,6 +156,81 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
                     materialize_outputs=False,
                 )
 
+    def test_custom_managed_catalog_alias_reaches_runtime_config(self) -> None:
+        custom = dict(model_catalog.BUILTIN_CATALOG_MODELS)
+        custom["custom-managed"] = model_catalog.CatalogModel(
+            alias="custom-managed",
+            reference="mlx-community/custom-managed",
+            name="Custom Managed Model",
+            backend="mlx-lm",
+            hf_repo="mlx-community/custom-managed",
+            context_length=None,
+            description="A custom managed model.",
+            task_notes={},
+        )
+        with patch.object(model_catalog, "_CATALOG_SNAPSHOT", custom):
+            config = load_runtime_config(
+                environ={},
+                overrides={"NEWS_MODEL": "custom-managed"},
+                materialize_outputs=False,
+                run_started_at=datetime(2026, 6, 14, 12, 0, 0),
+            )
+
+        self.assertEqual(config.model_reference, "custom-managed")
+        self.assertEqual(config.model_name, "mlx-community/custom-managed")
+        self.assertEqual(config.model_backend, "mlx-lm")
+        self.assertIn("--model mlx-community/custom-managed", config.model_server_command)
+        self.assertEqual(config.model_assignments["default"].reference, "custom-managed")
+
+    def test_custom_external_catalog_alias_reaches_runtime_config(self) -> None:
+        custom = dict(model_catalog.BUILTIN_CATALOG_MODELS)
+        custom["custom-external"] = model_catalog.CatalogModel(
+            alias="custom-external",
+            reference="external-org/openai-compatible",
+            name="External Compatible Model",
+            backend="external",
+            hf_repo="external-org/openai-compatible",
+            context_length=None,
+            description="A custom external model.",
+            task_notes={},
+        )
+        with patch.object(model_catalog, "_CATALOG_SNAPSHOT", custom):
+            config = load_runtime_config(
+                environ={"NEWS_MODEL_BASE_URL": "https://api.example.com/v1"},
+                overrides={"NEWS_MODEL": "custom-external"},
+                materialize_outputs=False,
+                run_started_at=datetime(2026, 6, 14, 12, 0, 0),
+            )
+
+        self.assertEqual(config.model_reference, "custom-external")
+        self.assertEqual(config.model_name, "external-org/openai-compatible")
+        self.assertEqual(config.model_backend, "external")
+        self.assertEqual(config.model_base_url, "https://api.example.com/v1")
+        self.assertEqual(config.model_server_command, "")
+
+    def test_inferred_external_catalog_alias_requires_base_url(self) -> None:
+        custom = dict(model_catalog.BUILTIN_CATALOG_MODELS)
+        custom["custom-external"] = model_catalog.CatalogModel(
+            alias="custom-external",
+            reference="external-org/openai-compatible",
+            name="External Compatible Model",
+            backend="external",
+            hf_repo="external-org/openai-compatible",
+            context_length=None,
+            description="A custom external model.",
+            task_notes={},
+        )
+        with patch.object(model_catalog, "_CATALOG_SNAPSHOT", custom):
+            with self.assertRaisesRegex(
+                ValueError,
+                "External model backend requires NEWS_MODEL_BASE_URL",
+            ):
+                load_runtime_config(
+                    environ={},
+                    overrides={"NEWS_MODEL": "custom-external"},
+                    materialize_outputs=False,
+                )
+
     def test_news_model_backend_external_override_for_default_model(self) -> None:
         resolution = resolve_runtime_config(
             RuntimeConfigRequest(
@@ -296,31 +372,6 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
                 materialize_outputs=False,
             )
 
-    def test_profile_violating_contracts_fails_config_resolution(self) -> None:
-        # A profile whose editorial instructions contain pipeline-owned
-        # contract language must fail fast at config resolution instead of
-        # silently weakening the parsers/retries/citation renderers mid-run.
-        # All other slots stay valid (balanced strings) so the failure is
-        # specifically the blocklisted drafting sentence.
-        bad_profile = PromptProfile(
-            id="bad",
-            name="Bad",
-            description="Violates the drafting output contract.",
-            prompts={
-                **prompt_catalog.PROMPT_PROFILES["balanced"].prompts,
-                "story_drafting": "Return exactly this format: and nothing else.",
-            },
-        )
-        with patch(
-            "news_pipeline.prompt_catalog.PROMPT_PROFILES",
-            {**prompt_catalog.PROMPT_PROFILES, "bad": bad_profile},
-        ):
-            with self.assertRaisesRegex(ValueError, "violates pipeline-owned output contracts"):
-                load_runtime_config(
-                    environ={},
-                    overrides={"NEWS_PROMPT_PROFILE": "bad"},
-                    materialize_outputs=False,
-                )
     def test_prompt_override_envs_resolve_into_runtime_config(self) -> None:
         config = load_runtime_config(
             environ={},
@@ -351,6 +402,212 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
         )
         self.assertEqual(unset.prompt_instruction_overrides, {})
 
+    def test_missing_prompt_overrides_yaml_is_a_no_op(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            missing = Path(tmpdir) / "missing_prompt_overrides.yaml"
+            with patch.object(config_module, "PROMPT_OVERRIDES_PATH", missing):
+                config = load_runtime_config(
+                    environ={},
+                    overrides={"NEWS_PROMPT_PROFILE": "playful"},
+                    materialize_outputs=False,
+                )
+        # Missing YAML leaves the override map empty and the profile intact.
+        self.assertEqual(config.prompt_instruction_overrides, {})
+        resolved = prompt_catalog.resolve_prompt_instructions(
+            "playful", config.prompt_instruction_overrides
+        )
+        self.assertEqual(resolved, prompt_catalog.PROMPT_PROFILES["playful"].prompts)
+
+    def test_yaml_prompt_override_merges_over_selected_profile(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            overrides_path = Path(tmpdir) / "prompt_overrides.yaml"
+            overrides_path.write_text(
+                textwrap.dedent(
+                    """\
+                    overrides:
+                      story_drafting: "Lead with the central event."
+                    """
+                ),
+                encoding="utf-8",
+            )
+            with patch.object(config_module, "PROMPT_OVERRIDES_PATH", overrides_path):
+                config = load_runtime_config(
+                    environ={},
+                    overrides={"NEWS_PROMPT_PROFILE": "playful"},
+                    materialize_outputs=False,
+                )
+        self.assertEqual(config.prompt_instruction_overrides, {"story_drafting": "Lead with the central event."})
+        resolved = prompt_catalog.resolve_prompt_instructions(
+            "playful", config.prompt_instruction_overrides
+        )
+        # The YAML task wins; the other four inherit the selected profile.
+        self.assertEqual(resolved["story_drafting"], "Lead with the central event.")
+        for task in (
+            "article_summary",
+            "story_scale_screening",
+            "title_generation",
+            "image_art_direction",
+        ):
+            self.assertEqual(
+                resolved[task],
+                prompt_catalog.PROMPT_PROFILES["playful"].prompts[task],
+            )
+
+    def test_env_prompt_override_wins_over_yaml_for_same_task(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            overrides_path = Path(tmpdir) / "prompt_overrides.yaml"
+            overrides_path.write_text(
+                textwrap.dedent(
+                    """\
+                    overrides:
+                      story_drafting: "YAML drafting text"
+                      title_generation: "YAML title text"
+                    """
+                ),
+                encoding="utf-8",
+            )
+            with patch.object(config_module, "PROMPT_OVERRIDES_PATH", overrides_path):
+                config = load_runtime_config(
+                    environ={},
+                    overrides={
+                        "NEWS_PROMPT_OVERRIDE_STORY_DRAFTING": "ENV drafting text"
+                    },
+                    materialize_outputs=False,
+                )
+        # Same-task env/UI override wins over YAML; the untouched YAML task
+        # is retained.
+        self.assertEqual(
+            config.prompt_instruction_overrides,
+            {
+                "story_drafting": "ENV drafting text",
+                "title_generation": "YAML title text",
+            },
+        )
+
+    def test_blank_yaml_prompt_values_inherit_profile_text(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            overrides_path = Path(tmpdir) / "prompt_overrides.yaml"
+            overrides_path.write_text(
+                textwrap.dedent(
+                    """\
+                    overrides:
+                      story_drafting: "   "
+                      title_generation: null
+                    """
+                ),
+                encoding="utf-8",
+            )
+            with patch.object(config_module, "PROMPT_OVERRIDES_PATH", overrides_path):
+                config = load_runtime_config(
+                    environ={},
+                    overrides={"NEWS_PROMPT_PROFILE": "facts-only"},
+                    materialize_outputs=False,
+                )
+        self.assertEqual(config.prompt_instruction_overrides, {})
+        resolved = prompt_catalog.resolve_prompt_instructions(
+            "facts-only", config.prompt_instruction_overrides
+        )
+        self.assertEqual(resolved, prompt_catalog.PROMPT_PROFILES["facts-only"].prompts)
+
+    def test_contract_breaking_yaml_override_fails_config_resolution(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            overrides_path = Path(tmpdir) / "prompt_overrides.yaml"
+            overrides_path.write_text(
+                textwrap.dedent(
+                    """\
+                    overrides:
+                      story_drafting: "Do not use [[S1]] markers"
+                    """
+                ),
+                encoding="utf-8",
+            )
+            with patch.object(config_module, "PROMPT_OVERRIDES_PATH", overrides_path):
+                with self.assertRaisesRegex(
+                    ValueError,
+                    "pipeline-owned contract language:.*\\[\\[S1\\]\\]",
+                ):
+                    load_runtime_config(
+                        environ={},
+                        overrides={},
+                        materialize_outputs=False,
+                    )
+
+    def test_yaml_story_scale_braces_are_accepted_and_byte_preserved(self) -> None:
+        guidance = "Screen {these} braces and {{nested}} too"
+        with tempfile.TemporaryDirectory() as tmpdir:
+            overrides_path = Path(tmpdir) / "prompt_overrides.yaml"
+            overrides_path.write_text(
+                textwrap.dedent(
+                    """\
+                    overrides:
+                      story_scale_screening: "{guidance}"
+                    """.replace("{guidance}", guidance)
+                ),
+                encoding="utf-8",
+            )
+            with patch.object(config_module, "PROMPT_OVERRIDES_PATH", overrides_path):
+                config = load_runtime_config(
+                    environ={},
+                    overrides={},
+                    materialize_outputs=False,
+                )
+        # The story-scale renderer escapes/unescapes braces safely, so the
+        # stored override stays byte-identical.
+        self.assertEqual(
+            config.prompt_instruction_overrides["story_scale_screening"],
+            guidance,
+        )
+
+    def test_yaml_prompt_override_schema_errors_fail_before_runtime(self) -> None:
+        for name, body, pattern in (
+            ("bad_root", "- not-a-mapping\n", "must contain a YAML mapping"),
+            ("bad_overrides", "overrides: []\n", "must define overrides as a mapping"),
+            ("unknown_task", "overrides:\n  story_draftingx: oops\n", "unknown prompt task"),
+            (
+                "non_string",
+                "overrides:\n  story_drafting: [a, b]\n",
+                "must be a string; got list",
+            ),
+        ):
+            with self.subTest(name=name):
+                with tempfile.TemporaryDirectory() as tmpdir:
+                    overrides_path = Path(tmpdir) / "prompt_overrides.yaml"
+                    overrides_path.write_text(body, encoding="utf-8")
+                    with patch.object(
+                        config_module, "PROMPT_OVERRIDES_PATH", overrides_path
+                    ):
+                        with self.assertRaisesRegex(ValueError, pattern):
+                            load_runtime_config(
+                                environ={},
+                                overrides={},
+                                materialize_outputs=False,
+                            )
+
+    def test_profile_violating_contracts_fails_config_resolution(self) -> None:
+        # A profile whose editorial instructions contain pipeline-owned
+        # contract language must fail fast at config resolution instead of
+        # silently weakening the parsers/retries/citation renderers mid-run.
+        # All other slots stay valid (balanced strings) so the failure is
+        # specifically the blocklisted drafting sentence.
+        bad_profile = PromptProfile(
+            id="bad",
+            name="Bad",
+            description="Violates the drafting output contract.",
+            prompts={
+                **prompt_catalog.PROMPT_PROFILES["balanced"].prompts,
+                "story_drafting": "Return exactly this format: and nothing else.",
+            },
+        )
+        with patch(
+            "news_pipeline.prompt_catalog.PROMPT_PROFILES",
+            {**prompt_catalog.PROMPT_PROFILES, "bad": bad_profile},
+        ):
+            with self.assertRaisesRegex(ValueError, "violates pipeline-owned output contracts"):
+                load_runtime_config(
+                    environ={},
+                    overrides={"NEWS_PROMPT_PROFILE": "bad"},
+                    materialize_outputs=False,
+                )
     def test_prompt_override_violating_contract_fails_config_resolution(self) -> None:
         with self.assertRaisesRegex(
             ValueError,

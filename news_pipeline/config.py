@@ -26,6 +26,7 @@ from urllib.parse import urlparse
 
 import yaml
 
+from . import model_catalog as _model_catalog
 from .prompt_catalog import (
     DEFAULT_PROMPT_PROFILE_ID,
     PROMPT_PROFILE_ENV_VAR,
@@ -151,6 +152,10 @@ MODEL_ALIASES = {
     f"https://huggingface.co/{CODEX_TEST_MODEL_NAME}": CODEX_TEST_MODEL_NAME,
     f"https://hf.co/{CODEX_TEST_MODEL_NAME}": CODEX_TEST_MODEL_NAME,
 }
+# Custom aliases added through config/model_catalog.yaml (issue #90) extend
+# this mapping at use time via _catalog_model_aliases(); MODEL_ALIASES itself
+# stays the built-in-only baseline so the README/SETTINGS drift guard covers
+# exactly the documented built-ins.
 # Qwythos GGUF references are NOT launchable by the managed mlx-vlm backend
 # (file-qualified GGUF refs raise HFValidationError) and are not validated for
 # any backend; stale configs fail fast with an actionable error instead of a
@@ -1296,9 +1301,30 @@ def _bounded_env_float(
     return min(upper, max(lower, value))
 
 
-def resolve_model_name(model_reference: str) -> str:
-    """Resolve a friendly model alias to the Hugging Face repo loaded by mlx.
+def _catalog_model_aliases() -> dict[str, str]:
+    """MODEL_ALIASES plus validated YAML catalog additions (issue #90).
 
+    The default empty overlay leaves the mapping identical to MODEL_ALIASES.
+    Custom aliases/references that collide with UNSUPPORTED_MODEL_REFERENCES
+    fail closed so a legacy Qwythos entry can never become a selector option.
+    """
+    aliases = dict(MODEL_ALIASES)
+    for alias, reference in _model_catalog.custom_catalog_aliases().items():
+        if alias in UNSUPPORTED_MODEL_REFERENCES or reference in UNSUPPORTED_MODEL_REFERENCES:
+            raise ValueError(
+                f"Model catalog alias {alias!r} resolves to unsupported reference "
+                f"{reference!r}. Remove it from the model catalog YAML overlay "
+                "or use a different alias/reference."
+            )
+        aliases[alias] = reference
+    return aliases
+
+
+def resolve_model_name(model_reference: str) -> str:
+    """Resolve a friendly model alias to its configured model reference.
+
+    The returned reference may use a managed MLX backend or an external
+    OpenAI-compatible endpoint; callers use backend inference separately.
     Raises ValueError for references in UNSUPPORTED_MODEL_REFERENCES (the
     legacy qwythos-9b-* aliases, raw GGUF references, and their URL forms) so
     stale configs fail before launch.
@@ -1314,7 +1340,7 @@ def resolve_model_name(model_reference: str) -> str:
             "alias, or use NEWS_MODEL_BACKEND=external with an "
             "OpenAI-compatible endpoint (NEWS_MODEL_BASE_URL) for legacy models."
         )
-    return MODEL_ALIASES.get(clean_reference, clean_reference)
+    return _catalog_model_aliases().get(clean_reference, clean_reference)
 
 
 HF_URL_PREFIXES = ("https://huggingface.co/", "https://hf.co/")
@@ -1324,11 +1350,12 @@ def hf_model_page_url(model_choice: str) -> str | None:
     """Return the Hugging Face model-page URL for a model choice, or None.
 
     Aliases and https://huggingface.co/... / https://hf.co/... URL keys in
-    MODEL_ALIASES are normalized through resolve_model_name first. Only
-    repos derived from MODEL_ALIASES values are ever emitted: external ids,
-    unknown URL-shaped ids, and ids without an owner/name shape (no "/")
-    all yield None so callers can render a muted note instead of a broken
-    link. Unsupported references also yield None rather than raising.
+    the merged alias map (built-in MODEL_ALIASES plus validated YAML catalog
+    additions) are normalized through resolve_model_name first. Only repos
+    derived from alias-map values are ever emitted: external ids, unknown
+    URL-shaped ids, and ids without an owner/name shape (no "/") all yield
+    None so callers can render a muted note instead of a broken link.
+    Unsupported references also yield None rather than raising.
     """
     clean = (model_choice or "").strip()
     if not clean:
@@ -1337,15 +1364,16 @@ def hf_model_page_url(model_choice: str) -> str | None:
         resolved = resolve_model_name(clean)
     except ValueError:
         return None
-    # Only URLs derived from known MODEL_ALIASES values are emitted;
-    # anything else (external ids, unknown URLs) yields None so callers
-    # render a muted note instead of a broken link.
-    if resolved not in MODEL_ALIASES.values():
+    # Only URLs derived from known alias values (built-in or YAML-added) are
+    # emitted; anything else (external ids, unknown URLs) yields None so
+    # callers render a muted note instead of a broken link.
+    alias_values = _catalog_model_aliases().values()
+    if resolved not in alias_values:
         if not any(resolved.startswith(prefix) for prefix in HF_URL_PREFIXES):
             return None
         prefix = next(prefix for prefix in HF_URL_PREFIXES if resolved.startswith(prefix))
         resolved = resolved[len(prefix):]
-        if resolved not in MODEL_ALIASES.values():
+        if resolved not in alias_values:
             return None
     repo = resolved
     # No GGUF aliases exist today (issue #124); this branch is a defensive
@@ -1358,8 +1386,8 @@ def hf_model_page_url(model_choice: str) -> str | None:
 
 
 def _model_option_links() -> dict[str, dict[str, str]]:
-    """Map every MODEL_ALIASES key that resolves to a Hugging Face repo to
-    its HF page + hardware links.
+    """Map every model alias option (built-in plus YAML-added) that resolves
+    to a Hugging Face repo to its HF page + hardware links.
 
     Both values are the same URL: Hugging Face's native Hardware
     Compatibility panel is embedded in each model page (typically shown for
@@ -1368,7 +1396,7 @@ def _model_option_links() -> dict[str, dict[str, str]]:
     "#hardware") is a one-line change here.
     """
     links: dict[str, dict[str, str]] = {}
-    for option in MODEL_ALIASES:
+    for option in _catalog_model_aliases():
         url = hf_model_page_url(option)
         if url is None:
             continue
@@ -1421,15 +1449,25 @@ def _configured_model_reference() -> str:
 def infer_model_backend(model_reference: str) -> str:
     """Infer the managed backend for a model reference.
 
-    The retained "qwythos" branch only matches raw references that are not in
-    UNSUPPORTED_MODEL_REFERENCES (aliases, GGUF refs, and URL forms all fail
-    fast in resolve_model_name); it exists for legacy/external configs
-    (issue #124 Deviation 3).
+    Catalog-declared backends win for exact alias/reference matches (issue
+    #90) so a catalog card and the launched server never disagree; YAML
+    entries use the backend they declare. Raw unlisted references keep the
+    legacy heuristic fallback: the retained "qwythos" branch only matches
+    raw references that are not in UNSUPPORTED_MODEL_REFERENCES (aliases,
+    GGUF refs, and URL forms all fail fast in resolve_model_name); it exists
+    for legacy/external configs (issue #124 Deviation 3).
     """
+    clean = (model_reference or "").strip()
+    if not clean:
+        clean = DEFAULT_MODEL_ALIAS
+    catalog_backend = _model_catalog.catalog_model_backend(clean)
+    if catalog_backend is not None:
+        return catalog_backend
     resolved_name = resolve_model_name(model_reference)
     if resolved_name == CODEX_TEST_MODEL_NAME:
-        # Guard first: the tiny model's repo id also contains "gemma-4" and
-        # would otherwise be misclassified as mlx-vlm.
+        # Guard: the tiny model's repo id also contains "gemma-4" and would
+        # otherwise be misclassified as mlx-vlm (its catalog entry already
+        # declares mlx-lm, so this branch only serves raw ids).
         return MODEL_BACKEND_MLX_LM
     normalized_name = resolved_name.lower()
     if "qwythos" in normalized_name or "gemma-4" in normalized_name or "gemma4" in normalized_name:
@@ -1451,19 +1489,27 @@ def _configured_model_backend(model_reference: str) -> str:
     (validated against SUPPORTED_MODEL_BACKENDS) or inferred from the
     reference. Per-task models always use inference."""
     configured = _str_env("NEWS_MODEL_BACKEND", "").strip().lower()
-    if not configured:
-        return infer_model_backend(model_reference)
-    if configured not in SUPPORTED_MODEL_BACKENDS:
+    if configured:
+        if configured not in SUPPORTED_MODEL_BACKENDS:
+            raise ValueError(
+                "NEWS_MODEL_BACKEND must be one of: " + ", ".join(SUPPORTED_MODEL_BACKENDS)
+            )
+        backend = configured
+    else:
+        backend = infer_model_backend(model_reference)
+
+    if backend == MODEL_BACKEND_EXTERNAL and not _str_env("NEWS_MODEL_BASE_URL", ""):
+        if configured:
+            raise ValueError(
+                "NEWS_MODEL_BACKEND=external requires NEWS_MODEL_BASE_URL to point at an "
+                "OpenAI-compatible endpoint (without it, the pipeline would poll the "
+                "default managed-server loopback URL and time out)."
+            )
         raise ValueError(
-            "NEWS_MODEL_BACKEND must be one of: " + ", ".join(SUPPORTED_MODEL_BACKENDS)
+            "External model backend requires NEWS_MODEL_BASE_URL to point at an "
+            "OpenAI-compatible endpoint."
         )
-    if configured == MODEL_BACKEND_EXTERNAL and not _str_env("NEWS_MODEL_BASE_URL", ""):
-        raise ValueError(
-            "NEWS_MODEL_BACKEND=external requires NEWS_MODEL_BASE_URL to point at an "
-            "OpenAI-compatible endpoint (without it, the pipeline would poll the "
-            "default managed-server loopback URL and time out)."
-        )
-    return configured
+    return backend
 
 
 
@@ -1552,7 +1598,7 @@ def runtime_knob_registry() -> list[dict[str, Any]]:
         _runtime_knob("Run Settings", "Relax story drafting guards", "NEWS_RELAX_STORY_DRAFTING_GUARDS", "bool", advanced=True),
         _runtime_knob("Run Settings", "Embedding model", "NEWS_EMBEDDING_MODEL", default="all-mpnet-base-v2", advanced=True),
         _runtime_knob("Run Settings", "Token encoding", "NEWS_TOKEN_ENCODING", default="o200k_base", advanced=True),
-        _runtime_knob("Model Selection", "Default model", "NEWS_MODEL", "select", default=DEFAULT_MODEL_ALIAS, options=sorted(MODEL_ALIASES), option_links=model_links),
+        _runtime_knob("Model Selection", "Default model", "NEWS_MODEL", "select", default=DEFAULT_MODEL_ALIAS, options=sorted(_catalog_model_aliases()), option_links=model_links),
         _runtime_knob("Model Selection", "Model backend", "NEWS_MODEL_BACKEND", "select", options=sorted(SUPPORTED_MODEL_BACKENDS)),
         _runtime_knob("Model Tuning", "Default tuning preset", "NEWS_MODEL_TUNING_PRESET", "select", options=tuning_presets),
         _runtime_knob("Model Tuning", "Model input cap", "NEWS_MODEL_MAX_INPUT_TOKENS", "number", minimum=1, step=1),
@@ -1585,7 +1631,7 @@ def runtime_knob_registry() -> list[dict[str, Any]]:
                 f"{task_label} model",
                 f"NEWS_MODEL_{env_suffix}",
                 "select",
-                options=sorted(MODEL_ALIASES),
+                options=sorted(_catalog_model_aliases()),
                 option_links=model_links,
             )
         )
@@ -2212,7 +2258,7 @@ def _build_runtime_config(
     # CLI/UI semantics. Strict validation of non-empty ids happens below.
     prompt_profile_id = _str_env(PROMPT_PROFILE_ENV_VAR, DEFAULT_PROMPT_PROFILE_ID) or DEFAULT_PROMPT_PROFILE_ID
     # Resolved once at import time in pipeline.py; fails fast on unknown ids.
-    profile = get_prompt_profile(prompt_profile_id)
+    prompt_profile = get_prompt_profile(prompt_profile_id)
     # Per-stage prompt overrides: durable user edits from
     # config/prompt_overrides.yaml first, then NEWS_PROMPT_OVERRIDE_<TASK>
     # env/UI values win per task (profile < YAML < env/UI). Non-empty values
@@ -2229,8 +2275,8 @@ def _build_runtime_config(
     # violating profile or override fails fast at config resolution, not
     # mid-run. Validate the profile strictly, then validate the effective map
     # with the screening override's existing brace-safe rendering allowance.
-    profile_violations = validate_editorial_instructions(profile.prompts)
-    effective_instructions = {**profile.prompts, **prompt_instruction_overrides}
+    profile_violations = validate_editorial_instructions(prompt_profile.prompts)
+    effective_instructions = {**prompt_profile.prompts, **prompt_instruction_overrides}
     effective_violations = validate_editorial_instructions(
         effective_instructions,
         allow_braces_for=(

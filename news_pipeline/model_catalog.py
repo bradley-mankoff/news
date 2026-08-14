@@ -1,31 +1,63 @@
 """Model Catalog: code-owned registry of curated models and Hugging Face search.
 
-The Model Catalog owns the set of models the pipeline's backends can actually
-launch, with per-task recommendations (factual extraction, structured output,
-synthesis, citation fidelity, speed, context length, translation) instead of
-parameter count or popularity. Every Hugging Face search result is annotated
-with a runtime-fit verdict so the picker never offers a repo the configured
-backend cannot launch (HANDOFF: "Model picker must validate runtime support").
+The Model Catalog owns the code-reviewed baseline of models the pipeline's
+backends can actually launch, with per-task recommendations (factual
+extraction, structured output, synthesis, citation fidelity, speed, context
+length, translation) instead of parameter count or popularity. An optional
+user overlay can add advisory entries; every Hugging Face search result is
+annotated with a runtime-fit verdict so the picker never presents a catalog
+entry as project-verified unless it is code-owned (HANDOFF: "Model picker must
+validate runtime support").
 
 This module is deliberately stdlib-only at module level (``dataclasses``,
-``logging``, ``typing``) so that ``config.py``/``cli.py``/``ui.py`` can import
-it without creating an import cycle. ``huggingface_hub`` is imported lazily
-inside ``_hf_api()`` only (mirrors the lazy ``sentence_transformers`` import in
-``embeddings.py``). Built-ins live in Python (not YAML) because they are
-code-reviewed contracts; a user-editable YAML override layer is a later issue.
-The drift-guard tying catalog aliases to ``config.MODEL_ALIASES`` lives in
-tests (``test_model_catalog.py``), like ``prompt_catalog``'s profile drift
-guard.
+``logging``, ``os``, ``re``, ``pathlib``, ``typing``) so that
+``config.py``/``cli.py``/``ui.py`` can import it without creating an import
+cycle. ``huggingface_hub`` is imported lazily inside ``_hf_api()`` only
+(mirrors the lazy ``sentence_transformers`` import in ``embeddings.py``), and
+``yaml`` is imported lazily inside the catalog loader only. Built-ins live in
+Python (not YAML) because they are code-reviewed contracts; an optional,
+user-editable YAML overlay (``config/model_catalog.yaml``, issue #90) may
+override their descriptive/recommendation metadata and add new HF-backed
+entries, and is validated and merged into the same per-process catalog
+snapshot. The drift-guard tying catalog aliases to ``config.MODEL_ALIASES``
+lives in tests (``test_model_catalog.py``), like ``prompt_catalog``'s profile
+drift guard.
 """
 
 from __future__ import annotations
 
 import logging
+import os
+import re
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Mapping
 
 logger = logging.getLogger(__name__)
+
+ROOT_DIR = Path(__file__).resolve().parent.parent
+MODEL_CATALOG_PATH = ROOT_DIR / "config" / "model_catalog.yaml"
+MODEL_CATALOG_YAML_ENV_VAR = "NEWS_MODEL_CATALOG_YAML"
+# Closed set of backends a YAML entry may declare (drift-guard:
+# test_model_catalog.py pins this to config.SUPPORTED_MODEL_BACKENDS).
+CATALOG_MODEL_BACKENDS = ("mlx-lm", "mlx-vlm", "external")
+# Aliases must be safe for environment/CLI use: lowercase letters, digits,
+# ".", "_", and "-", beginning with a letter or digit.
+_CATALOG_ALIAS_RE = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
+# Metadata-only fields an existing built-in alias may override in YAML.
+_CATALOG_OVERRIDE_FIELDS = ("name", "description", "context_length", "task_notes")
+# Fields a new YAML alias must provide (context_length/task_notes optional).
+_CATALOG_REQUIRED_FIELDS = ("reference", "name", "backend", "hf_repo", "description")
+_CATALOG_ALL_FIELDS = (
+    "reference",
+    "name",
+    "backend",
+    "hf_repo",
+    "context_length",
+    "description",
+    "task_notes",
+)
 
 # Issue #30 task list, in order. Feeds the config knob options / UI selector.
 # Keep in sync with the CATALOG_MODELS task_notes keys (drift-guard:
@@ -101,7 +133,7 @@ class CatalogModel:
 # MODEL_ALIASES. The Qwythos GGUF pair is NOT curated: mlx-vlm cannot launch
 # file-qualified GGUF refs (issue #124). Adding more requires runtime
 # verification on Apple Silicon - out of scope for this issue.
-CATALOG_MODELS: dict[str, CatalogModel] = {
+BUILTIN_CATALOG_MODELS: dict[str, CatalogModel] = {
     "gemma-4-12b-it-4bit": CatalogModel(
         alias="gemma-4-12b-it-4bit",
         reference="mlx-community/gemma-4-12B-it-4bit",
@@ -143,6 +175,321 @@ CATALOG_MODELS: dict[str, CatalogModel] = {
 }
 
 
+# --- YAML overlay loading and merge (issue #90) ------------------------------
+
+# Per-process snapshot: loaded on first catalog use and cached for the life of
+# the process. Editing the YAML file requires restarting the CLI/UI (no hot
+# reload). ``CATALOG_MODELS`` below is exposed through module ``__getattr__``
+# so importing this module never touches the file system and malformed YAML
+# surfaces as an actionable error at the consumer boundary (CLI exit 2 / UI
+# error JSON), never as an import traceback.
+_CATALOG_SNAPSHOT: dict[str, CatalogModel] | None = None
+
+
+def _catalog_path_from_env() -> Path:
+    """Resolve the catalog YAML path: NEWS_MODEL_CATALOG_YAML override or the
+    default ``config/model_catalog.yaml``. Relative paths resolve from the
+    repository root, matching the project's config-file conventions."""
+    raw = os.environ.get(MODEL_CATALOG_YAML_ENV_VAR, "").strip()
+    if not raw:
+        return MODEL_CATALOG_PATH
+    path = Path(raw)
+    if not path.is_absolute():
+        path = ROOT_DIR / path
+    return path
+
+
+def _load_catalog_yaml(path: Path) -> dict[str, Any]:
+    """UTF-8 ``yaml.safe_load``; a missing file or YAML null means no
+    overrides, and a non-mapping root fails closed with a path-specific
+    error (mirrors ``config._load_yaml_mapping``)."""
+    if not path.exists():
+        return {}
+    try:
+        import yaml
+    except ImportError as exc:  # pragma: no cover - pyyaml is a hard dependency
+        raise ImportError(
+            "pyyaml is required to load the model catalog YAML overlay. "
+            "Run: uv add pyyaml"
+        ) from exc
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            payload = yaml.safe_load(handle)
+    except (OSError, UnicodeError, yaml.YAMLError) as exc:
+        raise ValueError(f"Could not load model catalog {path}: {exc}") from exc
+    if payload is None:
+        return {}
+    if not isinstance(payload, dict):
+        raise ValueError(f"{path} must contain a YAML mapping.")
+    return payload
+
+
+def _validate_catalog_alias(raw_alias: Any, path: Path) -> str:
+    if not isinstance(raw_alias, str):
+        raise ValueError(
+            f"{path} model aliases must be strings, got {type(raw_alias).__name__}."
+        )
+    alias = raw_alias.strip()
+    if not alias or alias != raw_alias:
+        raise ValueError(
+            f"{path} model alias {raw_alias!r} must be a non-empty, trimmed string."
+        )
+    if not _CATALOG_ALIAS_RE.match(alias):
+        raise ValueError(
+            f"{path} model alias {alias!r} is not allowed: use lowercase letters, "
+            "digits, '.', '_', and '-', starting with a letter or digit."
+        )
+    return alias
+
+
+def _validate_catalog_repo_id(value: Any, alias: str, path: Path, field: str) -> str:
+    if not isinstance(value, str):
+        raise ValueError(
+            f"{path} model {alias!r} {field} must be a string."
+        )
+    repo_id = value.strip()
+    if not repo_id or repo_id != value or any(ch.isspace() for ch in repo_id):
+        raise ValueError(
+            f"{path} model {alias!r} {field} must be a trimmed owner/repo id "
+            "without whitespace."
+        )
+    if ".gguf" in repo_id.lower():
+        raise ValueError(
+            f"{path} model {alias!r} {field} {repo_id!r} is a file-qualified GGUF "
+            "reference; managed backends cannot launch GGUF files (ADR 0010). "
+            "Use an owner/repo id with an MLX distribution instead."
+        )
+    if repo_id.count("/") != 1 or repo_id.startswith("/") or repo_id.endswith("/"):
+        raise ValueError(
+            f"{path} model {alias!r} {field} {repo_id!r} must be an owner/repo id "
+            "with exactly one '/'. File-qualified references and URLs are not "
+            "allowed in the model catalog."
+        )
+    return repo_id
+
+
+def _validate_catalog_context_length(value: Any, alias: str, path: Path) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(
+            f"{path} model {alias!r} context_length must be null or a positive "
+            f"integer, got {value!r}."
+        )
+    if value <= 0:
+        raise ValueError(
+            f"{path} model {alias!r} context_length must be a positive integer, "
+            f"got {value}."
+        )
+    return value
+
+
+def _validate_catalog_task_notes(value: Any, alias: str, path: Path) -> dict[str, str]:
+    if not isinstance(value, dict):
+        raise ValueError(
+            f"{path} model {alias!r} task_notes must be a mapping."
+        )
+    notes: dict[str, str] = {}
+    for task, note in value.items():
+        if not isinstance(task, str) or task not in MODEL_RECOMMENDATION_TASKS:
+            valid = ", ".join(MODEL_RECOMMENDATION_TASKS)
+            raise ValueError(
+                f"{path} model {alias!r} task_notes key {task!r} is not a known "
+                f"recommendation task. Valid tasks: {valid}."
+            )
+        if not isinstance(note, str) or not note.strip():
+            raise ValueError(
+                f"{path} model {alias!r} task_notes[{task!r}] must be a non-empty "
+                "string."
+            )
+        notes[task] = note.strip()
+    return notes
+
+
+def _validate_catalog_entry(
+    raw_alias: Any,
+    raw_entry: Any,
+    path: Path,
+) -> CatalogModel:
+    """Validate one YAML entry and return its merged CatalogModel.
+
+    Existing built-in aliases may override only ``name``, ``description``,
+    ``context_length``, and ``task_notes`` (task notes merge by task key);
+    ``reference``/``backend``/``hf_repo`` must be absent or match the built-in
+    identity exactly so code-reviewed runtime identity stays immutable. New
+    aliases must provide the full identity plus a description.
+    """
+    alias = _validate_catalog_alias(raw_alias, path)
+    if not isinstance(raw_entry, dict):
+        raise ValueError(f"{path} model {alias!r} must be a mapping.")
+    unknown_fields = [field for field in raw_entry if field not in _CATALOG_ALL_FIELDS]
+    if unknown_fields:
+        raise ValueError(
+            f"{path} model {alias!r} has unknown field(s): "
+            f"{', '.join(repr(field) for field in unknown_fields)}. Valid fields: "
+            f"{', '.join(_CATALOG_ALL_FIELDS)}."
+        )
+
+    builtin = BUILTIN_CATALOG_MODELS.get(alias)
+    if builtin is not None:
+        for field in ("reference", "backend", "hf_repo"):
+            if field not in raw_entry:
+                continue
+            declared = str(raw_entry[field]).strip()
+            expected = getattr(builtin, field)
+            if declared != expected:
+                raise ValueError(
+                    f"{path} model {alias!r} {field} {declared!r} does not match "
+                    f"the built-in entry ({expected!r}). Runtime identity is "
+                    "code-owned; override only name, description, "
+                    "context_length, and task_notes, or add a new alias."
+                )
+        override_fields = [
+            field
+            for field in raw_entry
+            if field not in _CATALOG_OVERRIDE_FIELDS
+            and field not in {"reference", "backend", "hf_repo"}
+        ]
+        if override_fields:
+            raise ValueError(
+                f"{path} model {alias!r} may override only "
+                f"{', '.join(_CATALOG_OVERRIDE_FIELDS)}; unexpected field(s): "
+                f"{', '.join(repr(field) for field in override_fields)}."
+            )
+        task_notes = builtin.task_notes
+        if "task_notes" in raw_entry:
+            task_notes = {**task_notes, **_validate_catalog_task_notes(raw_entry["task_notes"], alias, path)}
+        context_length = builtin.context_length
+        if "context_length" in raw_entry:
+            context_length = _validate_catalog_context_length(raw_entry["context_length"], alias, path)
+        return CatalogModel(
+            alias=builtin.alias,
+            reference=builtin.reference,
+            name=str(raw_entry.get("name", builtin.name)).strip() or builtin.name,
+            backend=builtin.backend,
+            hf_repo=builtin.hf_repo,
+            context_length=context_length,
+            description=str(raw_entry.get("description", builtin.description)).strip() or builtin.description,
+            task_notes=task_notes,
+        )
+
+    missing = [field for field in _CATALOG_REQUIRED_FIELDS if field not in raw_entry]
+    if missing:
+        raise ValueError(
+            f"{path} new model alias {alias!r} must provide: {', '.join(missing)}."
+        )
+    reference = _validate_catalog_repo_id(raw_entry["reference"], alias, path, "reference")
+    hf_repo = _validate_catalog_repo_id(raw_entry["hf_repo"], alias, path, "hf_repo")
+    if reference != hf_repo:
+        raise ValueError(
+            f"{path} model {alias!r} reference must equal hf_repo (issue #92 "
+            f"drift guard); got reference={reference!r}, hf_repo={hf_repo!r}."
+        )
+    backend = str(raw_entry["backend"]).strip().lower()
+    if backend not in CATALOG_MODEL_BACKENDS:
+        raise ValueError(
+            f"{path} model {alias!r} backend {backend!r} is not supported. "
+            f"Valid backends: {', '.join(CATALOG_MODEL_BACKENDS)}."
+        )
+    name = str(raw_entry["name"]).strip()
+    description = str(raw_entry["description"]).strip()
+    if not name:
+        raise ValueError(f"{path} model {alias!r} name must be a non-empty string.")
+    if not description:
+        raise ValueError(
+            f"{path} model {alias!r} description must be a non-empty string."
+        )
+    context_length = None
+    if "context_length" in raw_entry:
+        context_length = _validate_catalog_context_length(raw_entry["context_length"], alias, path)
+    task_notes = {}
+    if "task_notes" in raw_entry:
+        task_notes = _validate_catalog_task_notes(raw_entry["task_notes"], alias, path)
+    return CatalogModel(
+        alias=alias,
+        reference=reference,
+        name=name,
+        backend=backend,
+        hf_repo=hf_repo,
+        context_length=context_length,
+        description=description,
+        task_notes=task_notes,
+    )
+
+
+def load_model_catalog(path: Path | None = None) -> dict[str, CatalogModel]:
+    """Load and validate the YAML overlay, then merge it over the built-ins.
+
+    Built-ins come first (in code order); YAML additions follow in YAML order;
+    metadata overrides keep the built-in entry's position. A missing file,
+    ``models: {}``, or a YAML null payload preserves the built-in catalog
+    exactly. Any malformed or unsafe entry raises a path-specific
+    ``ValueError`` - the catalog never silently falls back.
+    """
+    catalog_path = path or _catalog_path_from_env()
+    payload = _load_catalog_yaml(catalog_path)
+    unknown_top = [key for key in payload if key != "models"]
+    if unknown_top:
+        raise ValueError(
+            f"{catalog_path} contains unknown top-level key(s): "
+            f"{', '.join(repr(key) for key in unknown_top)}. Only 'models' is allowed."
+        )
+    raw_models = payload.get("models", {})
+    if raw_models is None:
+        raw_models = {}
+    if not isinstance(raw_models, dict):
+        raise ValueError(f"{catalog_path} must define models as a mapping.")
+
+    merged: dict[str, CatalogModel] = {}
+    for alias, builtin in BUILTIN_CATALOG_MODELS.items():
+        merged[alias] = builtin
+    for raw_alias, raw_entry in raw_models.items():
+        merged[_validate_catalog_alias(raw_alias, catalog_path)] = _validate_catalog_entry(
+            raw_alias, raw_entry, catalog_path
+        )
+    return merged
+
+
+def _merged_catalog_snapshot() -> dict[str, CatalogModel]:
+    global _CATALOG_SNAPSHOT
+    if _CATALOG_SNAPSHOT is None:
+        _CATALOG_SNAPSHOT = load_model_catalog()
+    return _CATALOG_SNAPSHOT
+
+
+def __getattr__(name: str) -> Any:
+    if name == "CATALOG_MODELS":
+        return _merged_catalog_snapshot()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+def custom_catalog_aliases() -> dict[str, str]:
+    """Alias -> reference for YAML-added entries only (never built-ins)."""
+    return {
+        model.alias: model.reference
+        for model in _merged_catalog_snapshot().values()
+        if model.alias not in BUILTIN_CATALOG_MODELS
+    }
+
+
+def catalog_model_backend(alias_or_reference: str) -> str | None:
+    """Return the catalog-declared backend for an exact alias or reference.
+
+    Matching is exact (issue #92): a bare org id or prefix sibling never
+    matches. Unknown references return None so callers keep their heuristic
+    fallback."""
+    clean = (alias_or_reference or "").strip()
+    if not clean:
+        return None
+    entry = _merged_catalog_snapshot().get(clean)
+    if entry is not None:
+        return entry.backend
+    for model in _merged_catalog_snapshot().values():
+        if model.reference == clean:
+            return model.backend
+    return None
+
+
 def list_model_catalog() -> list[dict[str, Any]]:
     """Return JSON-ready catalog records (no network, offline-first)."""
     return [
@@ -157,7 +504,7 @@ def list_model_catalog() -> list[dict[str, Any]]:
             "task_notes": dict(model.task_notes),
             "is_default": model.alias == DEFAULT_CATALOG_MODEL_ALIAS,
         }
-        for model in CATALOG_MODELS.values()
+        for model in _merged_catalog_snapshot().values()
     ]
 
 
@@ -174,9 +521,9 @@ def recommend_models(task: str) -> list[dict[str, Any]]:
             f"Unknown model recommendation task {task!r}. "
             f"Valid tasks: {', '.join(MODEL_RECOMMENDATION_TASKS)}"
         )
-    picks = [model for model in CATALOG_MODELS.values() if task in model.task_notes]
+    picks = [model for model in _merged_catalog_snapshot().values() if task in model.task_notes]
     if picks:
-        default = CATALOG_MODELS.get(DEFAULT_CATALOG_MODEL_ALIAS)
+        default = _merged_catalog_snapshot().get(DEFAULT_CATALOG_MODEL_ALIAS)
         if default is not None and all(model.alias != default.alias for model in picks):
             picks.append(default)
     return [
@@ -235,18 +582,19 @@ def runtime_fit_for_hf_model(info: Mapping[str, Any]) -> dict[str, str]:
     """Classify a Hugging Face model repo into a runtime-fit verdict.
 
     Returns ``{"status": ..., "reason": ...}`` where status is one of the
-    ``RUNTIME_FIT_*`` constants. Rules are conservative (ADR 0010): only
-    curated repos, MLX libraries, and transformers+safetensors text/vision
-    repos are launchable by the managed backends; everything else is
+    ``RUNTIME_FIT_*`` constants. Rules are conservative (ADR 0010): code-owned
+    curated repos and user-declared catalog entries are classified by their
+    declared backend, while MLX libraries and transformers+safetensors
+    text/vision repos are classified by metadata; everything else is
     ``external_only`` (never a hard block - only a verdict plus a picker
-    guard).
+    guard). User YAML metadata is advisory, not project verification.
     """
     repo_id = str(info.get("id") or "")
     tags = {str(tag).lower() for tag in (info.get("tags") or [])}
     library_name = str(info.get("library_name") or "").lower()
     pipeline_tag = str(info.get("pipeline_tag") or "").lower()
 
-    for model in CATALOG_MODELS.values():
+    for model in _merged_catalog_snapshot().values():
         # Match on hf_repo only (issue #92): the reference clause was
         # redundant because reference == hf_repo for every curated entry
         # (drift-guard: test_catalog_entries_are_complete), so hf_repo
@@ -255,14 +603,35 @@ def runtime_fit_for_hf_model(info: Mapping[str, Any]) -> dict[str, str]:
         # #124 follow-up 0f982ef); the org-id cases in the runtime-fit matrix
         # pin it as regression guards.
         if repo_id == model.hf_repo:
+            is_builtin = model.alias in BUILTIN_CATALOG_MODELS
+            if model.backend == "external":
+                return {
+                    "status": RUNTIME_FIT_EXTERNAL_ONLY,
+                    "reason": "Catalog entry declares external use; runtime fit is advisory.",
+                }
             if model.backend == "mlx-vlm":
                 return {
                     "status": RUNTIME_FIT_MANAGED_MLX_VLM,
-                    "reason": "Curated model, verified for this backend.",
+                    "reason": (
+                        "Curated model, verified for this backend."
+                        if is_builtin
+                        else "Catalog entry declares managed mlx-vlm; runtime fit is advisory."
+                    ),
                 }
+            if model.backend == "mlx-lm":
+                return {
+                    "status": RUNTIME_FIT_MANAGED_MLX_LM,
+                    "reason": (
+                        "Curated model, verified for this backend."
+                        if is_builtin
+                        else "Catalog entry declares managed mlx-lm; runtime fit is advisory."
+                    ),
+                }
+            # Catalog loading allowlists backends; fail closed if a test or
+            # future caller constructs an invalid CatalogModel directly.
             return {
-                "status": RUNTIME_FIT_MANAGED_MLX_LM,
-                "reason": "Curated model, verified for this backend.",
+                "status": RUNTIME_FIT_EXTERNAL_ONLY,
+                "reason": "Catalog entry declares an unsupported backend; runtime fit is advisory.",
             }
 
     if "gguf" in tags:
@@ -343,7 +712,7 @@ def _model_info_to_payload(info: Any) -> dict[str, Any]:
         "context_length": context_length,
         "tags": tags[:12],
         "runtime_fit": runtime_fit,
-        "in_catalog": any(repo_id == model.hf_repo for model in CATALOG_MODELS.values()),
+        "in_catalog": any(repo_id == model.hf_repo for model in _merged_catalog_snapshot().values()),
     }
 
 
