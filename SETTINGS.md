@@ -28,6 +28,7 @@ is defined in
 | `NEWS_PRESET` | _(none)_ | Selects a saved preset when `--preset NAME` is not used. |
 | `NEWS_PROMPT_PROFILE` | `balanced` | Editorial tone for the five LLM prompt stages. One of `balanced`, `consensus-and-contradiction`, `explain-like-im-five`, `facts-only`, `playful`. |
 | `NEWS_PROMPT_OVERRIDE_<TASK>` | _(unset)_ | Per-stage editorial override layered on top of `NEWS_PROMPT_PROFILE` and `config/prompt_overrides.yaml` (override wins). Tasks: `ARTICLE_SUMMARY`, `STORY_SCALE_SCREENING`, `STORY_DRAFTING`, `TITLE_GENERATION`, `IMAGE_ART_DIRECTION`. Unset/empty = use profile text. Editable from the UI's Editorial approach panel. |
+| `NEWS_PROMPT_TEMPLATE_<TASK>` | _(unset)_ | Advanced full-template override (ADR 0015): a JSON object `{"system": ..., "user": ...}` of Python `string.Template` texts replacing the whole system/user prompt for that task. Tasks match `NEWS_PROMPT_OVERRIDE_<TASK>`. Unset/empty = built-in template. Non-empty values must parse and validate (required placeholders, contract markers) or config resolution fails. Editable from the Advanced Settings full-template editors. |
 | `NEWS_MODEL` | `gemma-4-12b-it-4bit` | Default friendly alias or full model repo/name. Task-specific model assignments inherit this value unless overridden. Stages with no LLM call of their own (story discovery) inherit this value. |
 | `NEWS_SOURCE_SCOPE` | `core` | `core` selects active English core sources. `peripheral` selects core plus peripheral sources. |
 | `NEWS_DELIVERY_MODE` | `owner` | Optional email delivery policy: `disabled` (no delivery, `skipped: user_disabled`), `owner` (sends only to `NEWS_PRIMARY_RECIPIENT`), or `recipients` (explicit opt-in: active `config/recipients.yaml` entries, with the owner included only when listed). An explicitly configured `NEWS_EMAIL_RECIPIENTS` fallback is used only when the catalog is empty; an all-paused catalog records `skipped: user_disabled`. Legacy `NEWS_RECIPIENT_SCOPE` maps to this mode when the new variable is unset. |
@@ -177,6 +178,41 @@ overrides:
   story_drafting: "Lead with the central event and keep the prose concise."
 ```
 
+### Full-template overrides (`NEWS_PROMPT_TEMPLATE_<TASK>`)
+
+Advanced Settings edits the complete System/User prompt templates for the
+five actual LLM stages through the separate `NEWS_PROMPT_TEMPLATE_<TASK>`
+namespace (ADR
+[0015](docs/adr/0015-advanced-prompt-template-overrides.md)). Each value is a
+JSON object with non-empty string `system` and `user` fields using Python
+`string.Template` placeholders (`$name`/`${name}`, `$$` for a literal dollar
+sign). These values are full templates, never sentence-level overrides:
+`NEWS_PROMPT_OVERRIDE_<TASK>` and `config/prompt_overrides.yaml` remain
+editorial sentences only.
+
+```bash
+NEWS_PROMPT_TEMPLATE_STORY_DRAFTING='{"system": "Synthesize for $now_label. $citation_contract $output_contract", "user": "Story: $story_title\n$source_summary_lines"}' uv run news run
+```
+
+Every custom template must include its task's required dynamic placeholders
+and code-owned contract placeholders (both are injected by the pipeline):
+
+| Task | Required dynamic placeholders | Required contract placeholders |
+|------|------------------------------|--------------------------------|
+| `ARTICLE_SUMMARY` | `$now_label`, `$recent_window_hours`, `$article_payload` | `$output_contract` |
+| `STORY_SCALE_SCREENING` | `$story_blocks` | `$scale_contract` |
+| `STORY_DRAFTING` | `$now_label`, `$story_title`, `$source_summary_lines` | `$citation_contract`, `$output_contract` |
+| `TITLE_GENERATION` | `$report_title`, `$synthesis_body` | `$title_contract`, `$overlay_protocol` |
+| `IMAGE_ART_DIRECTION` | `$synthesis_body` | `$image_contract` |
+
+`$editorial_instructions` is optional for every task: include it to insert
+the selected Prompt Profile/editorial sentence, or omit it to replace the
+profile text for that task. Unknown placeholders, malformed `$` syntax,
+missing required placeholders, and rendered templates that drop a required
+protocol marker fail closed at config resolution, preset save, and the UI
+validate endpoint — never at model runtime. `story_discovery` has no template
+because it has no LLM stage. Full templates are per-run env/preset overrides;
+restoring a task/global default removes the override.
 ## Removed Settings
 
 The old topic-scoped controls are rejected when present:
@@ -272,4 +308,3 @@ separate from the GitHub-board automation under `automation/`.
 | `uv run news schedule disable` | Boot out the agent, remove the plist, and mark the schedule disabled. |
 | `uv run news schedule run` | Foreground scheduled-run entry point used by launchd; fails closed when disabled/corrupt. |
 | `uv run news history backfill|cleanup|export` | Maintain DuckDB-backed run history and CSV exports. |
-

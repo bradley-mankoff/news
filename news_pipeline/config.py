@@ -36,6 +36,11 @@ from .prompt_catalog import (
     get_prompt_profile,
 )
 from .prompt_contracts import validate_editorial_instructions
+from .prompt_templates import (
+    PROMPT_TEMPLATE_ENV_VARS,
+    parse_prompt_template_override,
+    validate_prompt_template,
+)
 
 
 
@@ -353,6 +358,7 @@ class RuntimeConfig:
     preset_id: str
     prompt_profile_id: str
     prompt_instruction_overrides: dict[str, str]
+    prompt_template_overrides: dict[str, dict[str, str]]
     source_scope: str
     recipient_scope: str
     url_reuse_blocking_enabled: bool
@@ -1463,14 +1469,13 @@ def infer_model_backend(model_reference: str) -> str:
     catalog_backend = _model_catalog.catalog_model_backend(clean)
     if catalog_backend is not None:
         return catalog_backend
-    resolved_name = resolve_model_name(model_reference)
-    if resolved_name == CODEX_TEST_MODEL_NAME:
-        # Guard: the tiny model's repo id also contains "gemma-4" and would
-        # otherwise be misclassified as mlx-vlm (its catalog entry already
-        # declares mlx-lm, so this branch only serves raw ids).
+    if is_codex_test_model_reference(model_reference):
+        # Guard second: the tiny model's repo id also contains "gemma-4" and
+        # would otherwise be misclassified as mlx-vlm (its catalog entry
+        # already declares mlx-lm, so this branch only serves raw ids).
         return MODEL_BACKEND_MLX_LM
-    normalized_name = resolved_name.lower()
-    if "qwythos" in normalized_name or "gemma-4" in normalized_name or "gemma4" in normalized_name:
+    resolved_name = resolve_model_name(model_reference).lower()
+    if "qwythos" in resolved_name or "gemma-4" in resolved_name or "gemma4" in resolved_name:
         return MODEL_BACKEND_MLX_VLM
     return MODEL_BACKEND_MLX_LM
 
@@ -1585,6 +1590,16 @@ def runtime_knob_registry() -> list[dict[str, Any]]:
                 advanced=True,
             )
             for task, env_var in PROMPT_TASK_OVERRIDE_ENV_VARS.items()
+        ],
+        *[
+            _runtime_knob(
+                "Run Settings",
+                f"Prompt template ({task.replace('_', ' ')}) JSON",
+                env_var,
+                "text",
+                advanced=True,
+            )
+            for task, env_var in PROMPT_TEMPLATE_ENV_VARS.items()
         ],
         _runtime_knob("Run Settings", "Relax story drafting guards", "NEWS_RELAX_STORY_DRAFTING_GUARDS", "bool", advanced=True),
         _runtime_knob("Run Settings", "Embedding model", "NEWS_EMBEDDING_MODEL", default="all-mpnet-base-v2", advanced=True),
@@ -2261,28 +2276,50 @@ def _build_runtime_config(
         if (value := _str_env(env_var, "").strip())
     }
     prompt_instruction_overrides = {**yaml_prompt_overrides, **env_prompt_overrides}
+    # Full-template overrides (ADR 0015): the separate NEWS_PROMPT_TEMPLATE_
+    # <TASK> namespace carries validated system/user string.Template JSON
+    # values from Advanced Settings / Run Presets / CLI env. Empty-but-present
+    # values count as unset like sibling knobs; non-empty values must parse
+    # and validate here (fail-closed, before any model call) with the same
+    # pure parser the UI endpoint and preset CRUD use. Sentence-level
+    # NEWS_PROMPT_OVERRIDE_<TASK> values are never reinterpreted as full
+    # templates.
+    prompt_template_overrides: dict[str, dict[str, str]] = {}
+    for _template_task, _template_env_var in PROMPT_TEMPLATE_ENV_VARS.items():
+        raw_template = _str_env(_template_env_var, "").strip()
+        if not raw_template:
+            continue
+        parsed_template = parse_prompt_template_override(
+            _template_task, raw_template, source=_template_env_var
+        )
+        template_violations = validate_prompt_template(_template_task, parsed_template)
+        if template_violations:
+            raise ValueError(
+                f"{_template_env_var} for task {_template_task!r} is invalid: "
+                + "; ".join(template_violations)
+            )
+        prompt_template_overrides[_template_task] = parsed_template
     # Editorial sentences must never weaken the pipeline-owned output contracts
-    # (parsers, retries, citation renderers, sanitizers depend on them); a
-    # violating profile or override fails fast at config resolution, not
-    # mid-run. Validate the profile strictly, then validate the effective map
-    # with the screening override's existing brace-safe rendering allowance.
+    # (parsers, retries, citation renderers, sanitizers depend on them). The
+    # built-in profile is validated strictly, then the effective
+    # profile-plus-overrides map; only the effective story_scale_screening
+    # override may use literal braces because its renderer escapes them safely
+    # (story_selection.py). A violating profile or override fails fast at
+    # config resolution, not mid-run.
     profile_violations = validate_editorial_instructions(prompt_profile.prompts)
-    effective_instructions = {**prompt_profile.prompts, **prompt_instruction_overrides}
     effective_violations = validate_editorial_instructions(
-        effective_instructions,
+        {**prompt_profile.prompts, **prompt_instruction_overrides},
         allow_braces_for=(
             {"story_scale_screening"}
             if "story_scale_screening" in prompt_instruction_overrides
-            else frozenset()
+            else set()
         ),
     )
-    violations = profile_violations + [
-        violation for violation in effective_violations if violation not in profile_violations
-    ]
-    if violations:
+    prompt_violations = list(dict.fromkeys([*profile_violations, *effective_violations]))
+    if prompt_violations:
         raise ValueError(
             f"Prompt profile {prompt_profile_id!r} violates pipeline-owned output contracts: "
-            + "; ".join(violations)
+            + "; ".join(prompt_violations)
         )
 
     tracked_urls_filename = "tracked_urls.txt"
@@ -2416,6 +2453,7 @@ def _build_runtime_config(
         preset_id=preset_id,
         prompt_profile_id=prompt_profile_id,
         prompt_instruction_overrides=prompt_instruction_overrides,
+        prompt_template_overrides=prompt_template_overrides,
         source_scope=source_scope,
         recipient_scope=recipient_scope,
         url_reuse_blocking_enabled=url_reuse_blocking_enabled,
@@ -2527,4 +2565,3 @@ def load_runtime_config(
 
 def _coerce_pause_value(value: Any) -> bool:
     return _coerce_bool_value(value, False)
-

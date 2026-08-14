@@ -370,8 +370,6 @@ class ScheduleError(ValueError):
 
 class _ProjectionError(ScheduleError):
     """The pipeline completed without producing a current run projection."""
-
-
 # ---------------------------------------------------------------------------
 # Time and spec validation
 # ---------------------------------------------------------------------------
@@ -1061,8 +1059,6 @@ def _read_latest_run_details_bytes(output_dir: str) -> bytes | None:
         return (Path(output_dir) / "latest_run_details.json").read_bytes()
     except OSError:
         return None
-
-
 def _read_latest_run_projection(output_dir: str) -> dict[str, Any]:
     """Bounded run/report/delivery projection from the existing outputs.
 

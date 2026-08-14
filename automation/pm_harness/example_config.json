@@ -13,10 +13,6 @@
     "label": "decision-only",
     "move_to": "Needs Input"
   },
-  "deferred_work": {
-    "enabled": false,
-    "fallback_warn": true
-  },
   "hooks": {},
   "lanes": {
     "Backlog": "backlog",

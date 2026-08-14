@@ -25,6 +25,9 @@ from datetime import datetime
 
 import news_pipeline.pipeline as pipeline
 from news_pipeline.article_summary_records import ArticleSummaryRecord
+from news_pipeline import prompt_catalog
+from news_pipeline import prompt_templates
+from news_pipeline.prompt_templates import PromptTemplate
 from news_pipeline.config import (
     DELIVERY_MODE_DISABLED,
     DELIVERY_MODE_OWNER,
@@ -962,6 +965,19 @@ class PipelineHelperTests(unittest.TestCase):
             pipeline._json_ready(pipeline.CONFIG.prompt_instruction_overrides),
         )
         self.assertEqual(settings["prompt_instructions"], pipeline._json_ready(pipeline.PROMPT_INSTRUCTIONS))
+        # Full-template provenance (ADR 0015): override bodies plus a compact
+        # per-task source map; exact rendered prompt snapshots stay separate.
+        self.assertEqual(
+            settings["prompt_template_overrides"],
+            pipeline._json_ready(pipeline.CONFIG.prompt_template_overrides),
+        )
+        self.assertEqual(
+            settings["prompt_template_sources"],
+            {
+                task: "custom" if task in pipeline.CONFIG.prompt_template_overrides else "default"
+                for task in prompt_catalog.PROMPT_TASKS
+            },
+        )
         self.assertEqual(settings["model_snapshots"]["default"]["revision_status"], "resolved")
         self.assertEqual(settings["model_snapshots"]["default"]["revision"], "sha123")
         self.assertEqual(settings["model_snapshots"]["title_generation"]["revision"], "sha123")
@@ -1126,7 +1142,6 @@ class PipelineHelperTests(unittest.TestCase):
         self.assertIn("token=***", fallback_error)
         self.assertLessEqual(len(fallback_error), 503)
         self.assertEqual(stats["failures"]["title generation"], fallback_error)
-
     def test_invoke_with_retries_preserves_managed_server_exit(self) -> None:
         with patch.object(
             pipeline,
@@ -3464,6 +3479,155 @@ class PipelineHelperTests(unittest.TestCase):
         self.assertIn("Hard constraints", art_brief["image_prompt"])
         self.assertEqual(art_brief["overlay_headline"], "Today in brief")
 
+    def test_generate_image_art_brief_default_templates_match_builder_helpers(self) -> None:
+        # The default template render path must stay byte-identical to the
+        # pure builder helpers the drift-guards assert on.
+        captured: dict[str, list[str]] = {"systems": [], "users": []}
+
+        def fake_invoke(_llm, messages, **_kwargs):
+            captured["systems"].append(str(messages[0].content))
+            captured["users"].append(str(messages[1].content))
+            return AIMessage(content="unused")
+
+        with patch.object(pipeline, "build_chat_model", return_value=object()), patch.object(
+            pipeline, "invoke_with_retries", side_effect=fake_invoke
+        ), patch.object(
+            pipeline,
+            "_safe_json_extract",
+            side_effect=[
+                '{"image_prompt":"A scene"}',
+                '{"overlay_headline":"Today in brief"}',
+            ],
+            create=True,
+        ):
+            pipeline.generate_image_art_brief(
+                "Summary text",
+                "Report title",
+                prompt_instructions={
+                    "image_art_direction": "Depict the event.",
+                    "title_generation": "Keep it short.",
+                },
+                prompt_templates={
+                    "image_art_direction": prompt_templates.DEFAULT_PROMPT_TEMPLATES["image_art_direction"],
+                    "title_generation": prompt_templates.DEFAULT_PROMPT_TEMPLATES["title_generation"],
+                },
+            )
+        art_system, title_system = captured["systems"]
+        self.assertEqual(
+            art_system,
+            pipeline._build_image_art_system_prompt("Depict the event."),
+        )
+        self.assertEqual(
+            title_system,
+            pipeline._build_title_generation_system_prompt("Keep it short."),
+        )
+        art_user, title_user = captured["users"]
+        self.assertEqual(
+            art_user,
+            "Use the final news output below to create the text-free image prompt.\n\n"
+            "Final output:\n" + pipeline._truncate_for_art_prompt("Summary text"),
+        )
+        self.assertIn("Report title: Report title", title_user)
+
+    def test_generate_image_art_brief_uses_custom_templates_per_call(self) -> None:
+        # Each independent call renders its own custom template; the art
+        # template never leaks into the title call or vice versa, and the
+        # dynamic values ($report_title/$synthesis_body) reach their own call.
+        captured: dict[str, list[str]] = {"systems": []}
+
+        def fake_invoke(_llm, messages, **_kwargs):
+            captured["systems"].append(str(messages[0].content))
+            return AIMessage(content="unused")
+
+        art_template = PromptTemplate(
+            task="image_art_direction",
+            label="Custom art",
+            system="Art direction: $image_contract $editorial_instructions",
+            user="Art input: $synthesis_body",
+            required_placeholders=("synthesis_body", "image_contract"),
+            optional_placeholders=("editorial_instructions",),
+        )
+        title_template = PromptTemplate(
+            task="title_generation",
+            label="Custom title",
+            system="Headline writer: $title_contract $overlay_protocol",
+            user="Title input for $report_title: $synthesis_body",
+            required_placeholders=(
+                "report_title",
+                "synthesis_body",
+                "title_contract",
+                "overlay_protocol",
+            ),
+            optional_placeholders=("editorial_instructions",),
+        )
+        with patch.object(pipeline, "build_chat_model", return_value=object()), patch.object(
+            pipeline, "invoke_with_retries", side_effect=fake_invoke
+        ), patch.object(
+            pipeline,
+            "_safe_json_extract",
+            side_effect=[
+                '{"image_prompt":"A scene"}',
+                '{"overlay_headline":"Today in brief"}',
+            ],
+            create=True,
+        ):
+            result = pipeline.generate_image_art_brief(
+                "Summary text",
+                "Report title",
+                prompt_instructions={
+                    "image_art_direction": "Depict the event.",
+                    "title_generation": "Keep it short.",
+                },
+                prompt_templates={
+                    "image_art_direction": art_template,
+                    "title_generation": title_template,
+                },
+            )
+        art_system, title_system = captured["systems"]
+        self.assertIn("Art direction:", art_system)
+        self.assertIn("Depict the event.", art_system)
+        self.assertNotIn("Keep it short.", art_system)
+        self.assertIn("Headline writer:", title_system)
+        # The custom title template omits $editorial_instructions, so the
+        # profile sentence is intentionally replaced.
+        self.assertNotIn("Keep it short.", title_system)
+        self.assertNotIn("Headline writer:", art_system)
+        self.assertNotIn("Art direction:", title_system)
+        self.assertEqual(result["overlay_headline"], "Today in brief")
+        self.assertTrue(result["image_prompt"].startswith("A scene"))
+
+    def test_generate_image_art_brief_custom_template_failure_falls_back(self) -> None:
+        # A custom template is still subject to the deterministic fallback
+        # path when the model response is invalid; the other call succeeds.
+        def fake_invoke(_llm, _messages, **_kwargs):
+            return AIMessage(content="not json")
+
+        art_template = PromptTemplate(
+            task="image_art_direction",
+            label="Custom art",
+            system="Art direction: $image_contract",
+            user="Art input: $synthesis_body",
+            required_placeholders=("synthesis_body", "image_contract"),
+            optional_placeholders=("editorial_instructions",),
+        )
+        with patch.object(pipeline, "build_chat_model", return_value=object()), patch.object(
+            pipeline, "invoke_with_retries", side_effect=fake_invoke
+        ), patch.object(
+            pipeline, "_safe_json_extract", side_effect=lambda s: s, create=True
+        ), patch.object(pipeline.progress_tracker, "warning"):
+            result = pipeline.generate_image_art_brief(
+                "Summary text",
+                "Report title",
+                prompt_templates={
+                    "image_art_direction": art_template,
+                    "title_generation": prompt_templates.DEFAULT_PROMPT_TEMPLATES["title_generation"],
+                },
+            )
+        self.assertIn("Hard constraints", result["image_prompt"])
+        self.assertEqual(result["overlay_headline"], "Report title")
+        self.assertIn("image art direction", result["error"])
+        self.assertIn("title generation", result["error"])
+
     def test_generate_image_art_brief_uses_balanced_instructions_by_default(self) -> None:
         captured: dict[str, list[str]] = {"systems": []}
 
@@ -3586,6 +3750,10 @@ class PipelineHelperTests(unittest.TestCase):
             summary_ctor.call_args.kwargs["prompt_instructions"],
             pipeline.PROMPT_INSTRUCTIONS["article_summary"],
         )
+        self.assertIs(
+            summary_ctor.call_args.kwargs["prompt_template"],
+            pipeline.PROMPT_TEMPLATES["article_summary"],
+        )
 
         with patch.object(
             pipeline.story_drafting_stage, "StoryDraftingRuntime"
@@ -3595,6 +3763,10 @@ class PipelineHelperTests(unittest.TestCase):
             draft_ctor.call_args.kwargs["prompt_instructions"],
             pipeline.PROMPT_INSTRUCTIONS["story_drafting"],
         )
+        self.assertIs(
+            draft_ctor.call_args.kwargs["prompt_template"],
+            pipeline.PROMPT_TEMPLATES["story_drafting"],
+        )
 
         with patch.object(
             pipeline.story_selection_stage, "StorySelectionRuntime"
@@ -3603,6 +3775,10 @@ class PipelineHelperTests(unittest.TestCase):
         self.assertEqual(
             selection_ctor.call_args.kwargs["prompt_instructions"],
             pipeline.PROMPT_INSTRUCTIONS["story_scale_screening"],
+        )
+        self.assertIs(
+            selection_ctor.call_args.kwargs["prompt_template"],
+            pipeline.PROMPT_TEMPLATES["story_scale_screening"],
         )
         self.assertEqual(
             selection_ctor.call_args.kwargs["story_scale_screening_max_tokens"],
@@ -3875,7 +4051,7 @@ class PipelineHelperTests(unittest.TestCase):
                 pipeline,
                 "generate_image_art_brief",
                 return_value={"image_prompt": "Prompt", "overlay_headline": "Headline"},
-            ), patch.object(
+            ) as brief_mock, patch.object(
                 pipeline,
                 "generate_image_with_mflux",
                 side_effect=fake_generate_image,
@@ -3895,6 +4071,14 @@ class PipelineHelperTests(unittest.TestCase):
                     synthesis_body="Summary body",
                     report_title="Report title",
                 )
+            self.assertIs(
+                brief_mock.call_args.kwargs["prompt_instructions"],
+                pipeline.PROMPT_INSTRUCTIONS,
+            )
+            self.assertIs(
+                brief_mock.call_args.kwargs["prompt_templates"],
+                pipeline.PROMPT_TEMPLATES,
+            )
             final_path = root / "report_image.png"
             self.assertEqual(art["final_image_path"], str(final_path))
             self.assertEqual(art["overlay_headline"], "Headline")

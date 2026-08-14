@@ -7,15 +7,11 @@
   "poll_interval_seconds": 45,
   "poll_timeout_seconds": 300,
   "state_file": "automation/state.json",
-  "max_concurrent_workflows": 2,
+  "max_concurrent_workflows": 4,
   "runnable_label": "runnable",
   "decision_only": {
     "label": "decision-only",
     "move_to": "Needs Input"
-  },
-  "deferred_work": {
-    "enabled": false,
-    "fallback_warn": true
   },
   "hooks": {
     "after_integration_merge": [

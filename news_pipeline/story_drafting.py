@@ -25,6 +25,11 @@ from .prompt_contracts import (
     STORY_DRAFTING_CITATION_CONTRACT,
     STORY_DRAFTING_OUTPUT_CONTRACT,
 )
+from .prompt_templates import (
+    DEFAULT_PROMPT_TEMPLATES,
+    PromptTemplate,
+    render_prompt_template,
+)
 
 
 ARTICLE_BODY_EVIDENCE_MAX_CHARS = 2000
@@ -50,6 +55,9 @@ class StoryDraftingRuntime:
     story_drafting_word_count: Callable[[str], int]
     progress_callback: Callable[[str, dict[str, Any]], None] | None = None
     prompt_instructions: str | None = None
+    # Resolved full system/user template for this stage (ADR 0015); None uses
+    # the built-in template, keeping the default rendered bytes identical.
+    prompt_template: PromptTemplate | None = None
 
 
 
@@ -152,6 +160,7 @@ def build_story_synthesis_prompt_messages(
     now_label: str,
     *,
     prompt_instructions: str | None = None,
+    prompt_template: PromptTemplate | None = None,
 ) -> list[BaseMessage]:
     story_title = str(story_block.get("story_title") or "Story update")
     summaries = [str(summary or "").strip() for summary in story_block.get("summaries", []) if str(summary or "").strip()]
@@ -182,66 +191,31 @@ def build_story_synthesis_prompt_messages(
         )
     story_guidance = prompt_instructions or DEFAULT_PROMPT_INSTRUCTIONS["story_drafting"]
     citation_contract = STORY_DRAFTING_CITATION_CONTRACT
-    output_contract = STORY_DRAFTING_OUTPUT_CONTRACT
-    # Dedent BEFORE .format(): the multi-line citation_contract value contains
-    # column-0 lines, so dedent-after-interpolation would collapse the margin
-    # and leave every template line indented 8 spaces (byte-identity drift).
-    system_prompt = SystemMessage(content=textwrap.dedent("""
-        Today: {now_label}.
-        You are synthesizing prewritten article summaries and cleaned article evidence into one newsletter story.
-        Use only the supplied source summaries and cleaned article evidence.
-        Write one custom story headline, then one cohesive main story paragraph, roughly 70-130 words.
-        The headline should be factual, specific, 4-10 words, and not copied wholesale from a source headline.
-        {citation_contract}
-        In the main story, try to support important claims with concrete evidence details from the
-        cleaned article evidence when it is available. Paraphrase those details in your own words;
-        do not quote article text, copy distinctive article wording, or use quotation marks around
-        article-body phrasing. Cite the source IDs for the article or articles that supply each
-        paraphrased evidence detail.
-        If a source says it appears to cite another listed source, prefer the listed primary source
-        for shared facts and cite the derivative source only for unique reporting or analysis.
-        {story_guidance}
-        Lead with today's reported development. Include concrete reported claims, named actors,
-        places, timing, figures, damage, statements, deadlines, and uncertainty when supported.
-        Then assess whether the sources directly or materially contradict each other.
-        A reportable contradiction is a factual disagreement about the same claim, count,
-        timeline, attribution, status, quote, or outcome where the cited accounts cannot
-        both be true in the same context. Do not require identical wording.
-        Omission, different focus, routine updates over time, or one source addressing a
-        subject another source does not address is not a contradiction.
-        If there is no direct or material factual contradiction, write exactly 'NONE' for Contradictions.
-        If there is a contradiction, write 1-3 concise prose sentences under Contradictions.
-        Each contradiction sentence must cite the disagreeing sources and must use the cleaned article evidence,
-        not only the source summaries.
-        Do not write bullets, source-material notes, methodology, bibliography, or preamble.
-        Do not merge in background material unless a source summary reports it as part of today's update.
-    """).format(
-        now_label=now_label,
-        citation_contract=citation_contract,
-        story_guidance=story_guidance,
-    ).strip())
-    # User prompt byte-identity notes: the source block's FIRST line historically
-    # rendered at the 8-space placeholder position (the pre-existing
-    # {source_summary_lines} interpolation already forced a no-op dedent), while
-    # its remaining lines sit at column 0; the output-contract block rendered
-    # 8-space indented. Reconstruct that exact layout explicitly.
-    user_prompt = HumanMessage(content=(
-        textwrap.dedent("""
-            Story: {story_title}
-
-        """).format(story_title=story_title).strip()
-        + "\n\n"
-        + textwrap.indent(
-            "Source summaries and cleaned article evidence to paraphrase, not quote:",
-            "        ",
-        )
-        + "\n"
-        + "        "
-        + source_summary_lines
-        + "\n\n"
-        + textwrap.indent(output_contract, "        ")
-    ))
-    return [system_prompt, user_prompt]
+    # Historical byte-identity: the output-contract block renders 8-space
+    # indented, so the VALUE carries per-line indentation (values are inserted
+    # verbatim by string.Template).
+    output_contract = textwrap.indent(STORY_DRAFTING_OUTPUT_CONTRACT, "        ")
+    # The source block's FIRST line historically rendered at the 8-space
+    # placeholder position (a pre-existing no-op dedent), while its remaining
+    # lines sit at column 0; the output-contract block renders 8-space
+    # indented. The built-in user template reconstructs that exact layout and
+    # substitution keeps it byte-identical (golden tests in
+    # tests/test_prompt_catalog.py); multi-line contract values are inserted
+    # verbatim and never re-indented.
+    template = prompt_template or DEFAULT_PROMPT_TEMPLATES["story_drafting"]
+    system_text, user_text = render_prompt_template(
+        "story_drafting",
+        template,
+        {
+            "now_label": now_label,
+            "story_title": story_title,
+            "source_summary_lines": source_summary_lines,
+            "citation_contract": citation_contract,
+            "output_contract": output_contract,
+            "editorial_instructions": story_guidance,
+        },
+    )
+    return [SystemMessage(content=system_text), HumanMessage(content=user_text)]
 
 
 def clean_story_synthesis_headline(
@@ -450,6 +424,7 @@ def run_story_synthesis_block(
         story_block,
         now_label,
         prompt_instructions=runtime.prompt_instructions,
+        prompt_template=runtime.prompt_template,
     )
     estimated_input_tokens = sum(runtime.estimate_message_token_count(message) for message in prompt_messages)
     response = runtime.invoke_with_retries(

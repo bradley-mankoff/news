@@ -12,8 +12,8 @@ Machine-local archon (archon-pi build, v0.7.0 = stock Archon) lives at
   `provider: pi`, `model: openai-codex/gpt-5.6-luna`, and `effort: max`, matching
   this session's `openai-codex/gpt-5.6-luna` model.
   It covers planning, review, conflict resolution, issue drafting, and the
-  completion records that classify deferred work; the board poller then creates
-  deduped issues mechanically.
+  completion records that classify deferred work for human follow-up; the board
+  poller does not parse this section or create issues from it.
 - Both paths run at their maximum Pi reasoning setting: DeepSeek and the
   OpenAI Codex backend both use `effort: max`.
 - Pi OAuth credentials are configured with the interactive `/login` command.
@@ -32,7 +32,7 @@ Machine-local archon (archon-pi build, v0.7.0 = stock Archon) lives at
 
 | Workflow | Intent |
 |---|---|
-| `archon-fix-github-issue` | Classify issue → investigate (bug) or plan (feature) → implement → validate → **draft PR** → smart review (code-review always + conditional error-handling/test-coverage/comment-quality/docs-impact) → self-fix → report on the issue. Leaves the PR draft — the human tests locally, then moves the issue to In Review. Local copy adds a `completion-comment` node: posts `## What shipped` / `## Decisions` / `## Acceptance criteria` / `## How to test` (with evidence) on the issue. |
+| `archon-fix-github-issue` | Classify issue → investigate (bug) or plan (feature) → implement → validate → **draft PR** → smart review (code-review always + conditional error-handling/test-coverage/comment-quality/docs-impact) → self-fix → report on the issue. Leaves the PR draft — the machine runs the recorded checks (implementation run + ready-review QA) and the human covers only the `### Human checks` steps, then the issue moves to In Review. Local copy adds a `completion-comment` node: posts `## What shipped` / `## Decisions` / `## Acceptance criteria` / `## How to test` (with evidence) on the issue; the `## How to test` section separates `### Machine checks` (commands + recorded results) from `### Human checks` (steps that need a person), and the poller partitions it the same way for the Ready for Review comment. |
 | `archon-idea-to-pr` | Feature idea/issue → plan → implement → validate → ready PR → comprehensive review block (5 parallel review agents) → synthesize → fix → summary comment. Local copy adds a `completion-comment` node with the same structured record as fix-github-issue. |
 | `archon-plan-to-pr` | Execute an existing plan file end to end (same review block as idea-to-pr). |
 | `archon-feature-development` | Implement from a plan file or a GitHub issue containing a plan. |
@@ -90,11 +90,12 @@ YAML is overwritten. If a workflow file is replaced, re-apply:
   (posts `VERDICT: <approve|request-changes|block>` on the PR).
 - `archon-fix-github-issue.yaml`: `completion-comment` node after `report`
   (posts the structured completion record on the issue, including the
-  `## How to test` handoff and the `## Deferred work` section the board poller
-  parses).
+  `## How to test` handoff and the `## Deferred work` section for human
+  follow-up; the board poller does not parse it or create tracking issues).
 - `archon-idea-to-pr.yaml`: `completion-comment` node after `workflow-summary`
   (same structured record + `## How to test` handoff + `## Deferred work`
-  section).
+  section for human follow-up; the board poller does not parse it or create
+  tracking issues).
 - Both implementation workflows: `sync-with-develop` node before the PR node
   (merges develop into the branch, resolves, validates) — `create-pr` /
   `finalize-pr` depend on it.

@@ -13,6 +13,8 @@ from news_pipeline.article_summarization import (
     run_article_summary_pass,
 )
 from news_pipeline.article_summary_records import ArticleSummaryRecord
+from news_pipeline import prompt_contracts
+from news_pipeline.prompt_templates import PromptTemplate
 
 
 def _runtime(*, structured: bool = True, fallback_summary: str = "fallback") -> tuple[ArticleSummarizationRuntime, list[Any]]:
@@ -168,6 +170,89 @@ class ArticleSummarizationTests(unittest.TestCase):
         self.assertIn("DATABASE_ENTRY:", prompt_text)
         self.assertIn("Do not call tools", prompt_text)
         self.assertIn("7. Playful summary guidance.", prompt_text)
+
+    def test_custom_full_template_controls_structure_with_dynamic_payload(self) -> None:
+        # A validated custom template must replace the system structure while
+        # still receiving the article payload and the code-owned contract;
+        # omitting $editorial_instructions bypasses the profile sentence.
+        custom = PromptTemplate(
+            task="article_summary",
+            label="Custom summary",
+            system=(
+                "Summarize this article for the daily brief. Today: $now_label. "
+                "Window: $recent_window_hours hours.\n$output_contract"
+            ),
+            user="ARTICLE: $article_payload",
+            required_placeholders=(
+                "now_label",
+                "recent_window_hours",
+                "article_payload",
+                "output_contract",
+            ),
+            optional_placeholders=("editorial_instructions",),
+        )
+        runtime, _ = _runtime()
+        runtime = replace(
+            runtime,
+            prompt_instructions="This sentence must NOT appear.",
+            prompt_template=custom,
+        )
+        messages = build_article_summary_prompt_messages(
+            {
+                "title": "Flood plan expands",
+                "source": "Fixture Wire",
+                "pub_date": "Sat, 16 May 2026 15:30:00 GMT",
+                "url": "https://example.com/flood",
+                "description": "Flooding reported.",
+                "text": "Flood waters rose.",
+            },
+            "May 30, 2026",
+            runtime,
+        )
+        system_text = str(messages[0].content)
+        user_text = str(messages[1].content)
+        self.assertIn("Summarize this article for the daily brief.", system_text)
+        self.assertIn("Today: May 30, 2026.", system_text)
+        self.assertIn("Window: 24 hours.", system_text)
+        self.assertIn("Start your response with 'DATABASE_ENTRY:'", system_text)
+        self.assertNotIn("This sentence must NOT appear.", system_text)
+        self.assertIn("ARTICLE: Selected article:", user_text)
+        self.assertIn("DATABASE_ENTRY:", user_text)
+        self.assertIn("### Flood plan expands", user_text)
+        # The rendered pair still satisfies the machine contract.
+        prompt_contracts.assert_prompt_contract(
+            "article_summary", f"{system_text}\n\n{user_text}"
+        )
+
+    def test_custom_full_template_includes_editorial_instructions_when_used(self) -> None:
+        custom = PromptTemplate(
+            task="article_summary",
+            label="Custom with editorial",
+            system=(
+                "You summarize. Today: $now_label (window $recent_window_hours h). "
+                "$editorial_instructions\n$output_contract"
+            ),
+            user="$article_payload",
+            required_placeholders=(
+                "now_label",
+                "recent_window_hours",
+                "article_payload",
+                "output_contract",
+            ),
+            optional_placeholders=("editorial_instructions",),
+        )
+        runtime, _ = _runtime()
+        runtime = replace(
+            runtime,
+            prompt_instructions="Profile sentence wins.",
+            prompt_template=custom,
+        )
+        messages = build_article_summary_prompt_messages(
+            {"title": "T", "source": "Fixture Wire"},
+            "May 30, 2026",
+            runtime,
+        )
+        self.assertIn("Profile sentence wins.", str(messages[0].content))
 
 
 if __name__ == "__main__":

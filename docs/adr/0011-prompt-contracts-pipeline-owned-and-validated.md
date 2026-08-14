@@ -54,5 +54,9 @@ resolution; tests validate all 5 profiles × 5 stages.
   prompt), and the title call requires only `overlay_headline`, which is
   rendered later by code. Each call validates its own contract independently,
   so one malformed response never suppresses the other output (issue #122).
-- The `validate_prompt_contract` API is the natural hook for the later
-  full-template validation work in Advanced Settings (HANDOFF.md).
+- The `validate_prompt_contract` API is the authoritative rendered-contract
+  check for the implemented full-template validation surface in Advanced
+  Settings (ADR 0015): every custom `NEWS_PROMPT_TEMPLATE_<TASK>`
+  override is validated by the same pure parser/validator at config
+  resolution, preset CRUD, and the UI validation endpoint, so a template
+  that drops a protocol marker fails before any model call.

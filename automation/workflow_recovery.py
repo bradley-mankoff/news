@@ -17,35 +17,22 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 try:
-    from .board_poller import (
-        ACTIVE_WORKFLOW_STATUSES,
-        ROOT,
-        fetch_workflow_runs,
-        fetch_workflow_run,
-        gh,
-        inspect_worktree,
-        latest_workflow_run,
-        load_config,
-        issue_number_from_message,
-        resolve_worktree_info,
-        resume_existing_worktree,
-        workflow_run_details,
-    )
+    from automation.pm_harness import archon, dispatch, model, runtime
 except ImportError:  # direct `python3 automation/workflow_recovery.py`
-    from board_poller import (
-        ACTIVE_WORKFLOW_STATUSES,
-        ROOT,
-        fetch_workflow_runs,
-        fetch_workflow_run,
-        gh,
-        inspect_worktree,
-        issue_number_from_message,
-        latest_workflow_run,
-        load_config,
-        resolve_worktree_info,
-        resume_existing_worktree,
-        workflow_run_details,
-    )
+    from pm_harness import archon, dispatch, model, runtime
+
+ACTIVE_WORKFLOW_STATUSES = model.ACTIVE_WORKFLOW_STATUSES
+ROOT = runtime.ROOT
+fetch_workflow_runs = archon.fetch_workflow_runs
+fetch_workflow_run = archon.fetch_workflow_run
+gh = runtime.gh
+inspect_worktree = archon.inspect_worktree
+latest_workflow_run = archon.latest_workflow_run
+load_config = runtime.load_config
+issue_number_from_message = model.issue_number_from_message
+resolve_worktree_info = archon.resolve_worktree_info
+resume_existing_worktree = dispatch.resume_existing_worktree
+workflow_run_details = model.workflow_run_details
 
 
 def _env() -> dict:

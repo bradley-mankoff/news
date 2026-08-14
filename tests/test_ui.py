@@ -22,6 +22,8 @@ import yaml
 import news_pipeline.config as config_module
 from news_pipeline import ui as ui_module
 from news_pipeline import model_catalog
+from news_pipeline import prompt_catalog
+from news_pipeline import prompt_templates
 from news_pipeline.config import (
     CODEX_TEST_MODEL_ALIAS,
     DELIVERY_MODE_OWNER,
@@ -74,6 +76,57 @@ from news_pipeline.ui import (
     delete_source,
 )
 
+
+_FAKE_DOM_ELEMENT_JS = r'''
+const decodeEntities = (text) => String(text)
+  .replaceAll("&lt;", "<")
+  .replaceAll("&gt;", ">")
+  .replaceAll("&quot;", '"')
+  .replaceAll("&amp;", "&");
+class FakeElement {
+  constructor(id = "", value = "") {
+    this.id = id;
+    this.value = value;
+    this.dataset = {};
+    this._innerHTML = "";
+    this.disabled = false;
+    this._listeners = {};
+    this.onclick = null;
+  }
+  set innerHTML(value) { this._innerHTML = String(value); }
+  get innerHTML() { return this._innerHTML; }
+  get textContent() {
+    return decodeEntities(this._innerHTML.replace(/<[^>]*>/g, ""));
+  }
+  optionText(value) {
+    const marker = `<option value="${value}">`;
+    const start = this._innerHTML.indexOf(marker);
+    if (start < 0) return null;
+    const contentStart = start + marker.length;
+    const end = this._innerHTML.indexOf("</option>", contentStart);
+    return end < 0 ? null : decodeEntities(this._innerHTML.slice(contentStart, end));
+  }
+  querySelector(selector) {
+    const prefix = 'button[data-use-hf-model="';
+    if (!selector.startsWith(prefix) || !selector.endsWith('"]')) return null;
+    const modelId = selector.slice(prefix.length, -2);
+    const marker = `data-use-hf-model="${modelId}"`;
+    const markerStart = this._innerHTML.indexOf(marker);
+    if (markerStart < 0) return null;
+    const buttonStart = this._innerHTML.lastIndexOf("<button", markerStart);
+    const buttonEnd = this._innerHTML.indexOf(">", markerStart);
+    const button = this._innerHTML.slice(buttonStart, buttonEnd + 1);
+    return { disabled: button.includes(" disabled") };
+  }
+  querySelectorAll(_selector) { return []; }
+  addEventListener(type, fn) {
+    (this._listeners[type] = this._listeners[type] || []).push(fn);
+  }
+  fire(type) {
+    for (const fn of this._listeners[type] || []) fn.call(this, { target: this });
+  }
+}
+'''
 
 @dataclass
 class _Sample:
@@ -319,6 +372,157 @@ class UITests(unittest.TestCase):
         # Empty editors still mean "no override" (matches collectEnv's
         # suppression of empty/unset override env vars).
         self.assertIn("if (!value) return;", ui_module.HTML)
+
+    def test_prompt_template_editors_markup_and_surfaced_envs(self) -> None:
+        html = ui_module.HTML
+        # The Advanced panel hosts the full-template editors rendered from
+        # schema.prompt_templates (not a second hard-coded task list).
+        advanced = html.split("function renderAdvancedPanels")[1].split("function renderAdvancedKnobs")[0]
+        self.assertEqual(advanced.count('id="promptTemplateEditors"'), 1)
+        self.assertIn("renderPromptTemplateEditors();", advanced)
+        self.assertIn("promptTemplateEnvMap", html)
+        self.assertIn('data-template-system="${escapeHtml(t.task)}"', html)
+        self.assertIn('data-template-user="${escapeHtml(t.task)}"', html)
+        self.assertIn('class="prompt-template-validate"', html)
+        self.assertIn('class="prompt-template-restore"', html)
+        self.assertIn("restoreAllPromptTemplatesBtn", html)
+        # The sentence-level profile editors remain in their own panel.
+        self.assertEqual(advanced.count('id="promptProfileReadouts"'), 1)
+        self.assertEqual(advanced.count('id="comparePromptProfileBtn"'), 1)
+        # All five template envs are suppressed from the raw Advanced list
+        # (the dedicated editors are the single surface; no duplicates).
+        surfaced_block = html.split("const SURFACED_ENVS = new Set([", 1)[1].split("]);", 1)[0]
+        for env_var in (
+            "NEWS_PROMPT_TEMPLATE_ARTICLE_SUMMARY",
+            "NEWS_PROMPT_TEMPLATE_STORY_SCALE_SCREENING",
+            "NEWS_PROMPT_TEMPLATE_STORY_DRAFTING",
+            "NEWS_PROMPT_TEMPLATE_TITLE_GENERATION",
+            "NEWS_PROMPT_TEMPLATE_IMAGE_ART_DIRECTION",
+        ):
+            self.assertIn(env_var, surfaced_block)
+        # The editor DOM never carries data-env on the role textareas (two
+        # inputs with the same env name would duplicate collectEnv() values).
+        self.assertNotIn("data-env=\"${escapeHtml(envVar)}\"", html)
+        # Changed-only JSON serialization and raw round-trip helpers exist.
+        self.assertIn("function currentPromptTemplateEnv()", html)
+        self.assertIn("JSON.stringify({ system: sysEl.value, user: userEl.value })", html)
+        self.assertIn("function setPromptTemplateEnv(env)", html)
+        self.assertIn("function restorePromptTemplateTask(task)", html)
+        # Preset save validates the current template values first.
+        self.assertIn("await validatePromptTemplateEnv(body.env);", html)
+        self.assertIn("/api/prompt-templates/validate", html)
+        # The editor's data-template-* elements are looked up with CSS
+        # selectors via document.querySelector; the ID-only $ helper must
+        # never receive a selector string (issue #227). The executable Node
+        # harness below is the behavioral guard; this is only a source drift
+        # guard for the same contract.
+        prompt_block = html.split("// Advanced full-template editors (ADR 0015).", 1)[1].split("function modelTaskLabels()", 1)[0]
+        self.assertNotIn("$(`[data-template-", prompt_block)
+        self.assertIn(
+            'const sysEl = document.querySelector(`[data-template-system="${t.task}"]`);',
+            prompt_block,
+        )
+        self.assertIn(
+            'const userEl = document.querySelector(`[data-template-user="${t.task}"]`);',
+            prompt_block,
+        )
+        self.assertIn(
+            'const statusEl = document.querySelector(`[data-template-status="${task}"]`);',
+            prompt_block,
+        )
+
+    def test_prompt_template_validation_endpoint_and_preset_rejection(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            presets_path = Path(tmpdir) / "run_presets.yaml"
+            _write_yaml_mapping(presets_path, {"presets": {}})
+            with patch.object(ui_module, "RUN_PRESETS_PATH", presets_path):
+                def invoke(method: str, path: str, body: str | None = None) -> tuple[int, dict[str, str], str]:
+                    payload = (body or "").encode("utf-8")
+                    handler = object.__new__(ui_module.NewsUIHandler)
+                    state: dict[str, Any] = {"status": None, "headers": {}}
+                    handler.path = path
+                    handler.headers = {"Content-Length": str(len(payload))}
+                    handler.rfile = BytesIO(payload)  # type: ignore[assignment]
+                    handler.wfile = BytesIO()  # type: ignore[assignment]
+                    handler.send_response = lambda status: state.__setitem__("status", status)
+                    handler.send_header = lambda name, value: state["headers"].__setitem__(name, value)
+                    handler.end_headers = lambda: None
+                    getattr(handler, method)()
+                    return state["status"], state["headers"], handler.wfile.getvalue().decode("utf-8")  # type: ignore[attr-defined]
+
+                good_template = {
+                    "system": "Custom art: $image_contract $editorial_instructions",
+                    "user": "$synthesis_body",
+                }
+                status, _, body = invoke(
+                    "do_POST",
+                    "/api/prompt-templates/validate",
+                    body=json.dumps({"templates": {"image_art_direction": good_template}}),
+                )
+                self.assertEqual(status, 200)
+                self.assertEqual(json.loads(body), {"valid": True, "errors": {}})
+
+                status, _, body = invoke(
+                    "do_POST",
+                    "/api/prompt-templates/validate",
+                    body=json.dumps(
+                        {"templates": {"story_drafting": {"system": "x", "user": "y"}}}
+                    ),
+                )
+                self.assertEqual(status, 400)
+                error = json.loads(body)["error"]
+                self.assertIn("story_drafting", error)
+                self.assertIn("missing required placeholder", error)
+                # The error must not echo the untrusted template body.
+                self.assertNotIn('"x"', error)
+
+                status, _, body = invoke(
+                    "do_POST",
+                    "/api/prompt-templates/validate",
+                    body=json.dumps({"task": "story_discovery", "template": good_template}),
+                )
+                self.assertEqual(status, 400)
+                self.assertIn("story_discovery", json.loads(body)["error"])
+
+                # Preset CRUD rejects an invalid full-template env value before
+                # writing; a valid one round-trips.
+                env_var = prompt_templates.PROMPT_TEMPLATE_ENV_VARS["image_art_direction"]
+                status, _, body = invoke(
+                    "do_POST",
+                    "/api/presets",
+                    body=json.dumps({"id": "bad-tpl", "env": {env_var: '{"system":"x"}'}}),
+                )
+                self.assertEqual(status, 400)
+                self.assertIn(env_var, json.loads(body)["error"])
+                self.assertEqual(list_presets()["presets"], [])
+
+                status, _, body = invoke(
+                    "do_POST",
+                    "/api/presets",
+                    body=json.dumps({"id": "good-tpl", "env": {env_var: json.dumps(good_template)}}),
+                )
+                self.assertEqual(status, 201)
+                saved_env = json.loads(body)["preset"]["env"]
+                self.assertEqual(json.loads(saved_env[env_var]), good_template)
+
+    def test_prompt_template_schema_metadata(self) -> None:
+        schema = schema_payload()
+        templates = schema["prompt_templates"]
+        self.assertEqual(
+            [record["task"] for record in templates],
+            list(prompt_catalog.PROMPT_TASKS),
+        )
+        self.assertNotIn(
+            "story_discovery", [record["task"] for record in templates]
+        )
+        for record in templates:
+            self.assertIn(record["env_var"], schema["current_env"])
+            self.assertIn(record["env_var"], {knob["env"] for knob in schema["knobs"]})
+            self.assertTrue(record["system"].strip())
+            self.assertTrue(record["user"].strip())
+            self.assertTrue(record["required_placeholders"])
+            self.assertIn("editorial_instructions", record["placeholder_descriptions"])
+
     def test_model_knob_links_markup_contract(self) -> None:
         self.assertIn("data-links-for", ui_module.HTML)
         self.assertIn("renderKnobLinks", ui_module.HTML)
@@ -331,6 +535,28 @@ class UITests(unittest.TestCase):
         self.assertIn("escapeHtml(entry.hardware)", ui_module.HTML)
         self.assertIn('data-links-for="${escapeHtml(knob.env)}"', ui_module.HTML)
 
+    def test_recommendation_renderer_reads_schema_picks(self) -> None:
+        html = ui_module.HTML
+        # Keep the bounded source-contract guard focused on the complete
+        # recommendation renderer rather than scattered implementation strings.
+        block = html.split("function renderRecommendations", 1)[1].split(
+            "async function searchHuggingFaceModels", 1
+        )[0]
+        for snippet in (
+            "const picks = (state.schema && state.schema.model_recommendations && state.schema.model_recommendations[task]) || [];",
+            "container.innerHTML = picks.map(pick => `",
+            "escapeHtml(pick.name)",
+            "escapeHtml(pick.alias)",
+            "escapeHtml(pick.reason)",
+            'data-use-model="${escapeHtml(pick.alias)}"',
+            "btn.onclick = () => useModelReference(btn.dataset.useModel, catalogBackendForReference(btn.dataset.useModel));",
+        ):
+            self.assertIn(snippet, block)
+        # The renderer no longer re-filters full catalog entries by task notes.
+        self.assertNotIn("entry.task_notes[task]", block)
+        self.assertNotIn("modelCatalogEntries().filter", block)
+        # Empty or partial pick lists keep the documented honest-gap message.
+        self.assertIn("No verified curated model for this task yet", block)
     def test_model_backend_hint_markup_contract(self) -> None:
         """The Default model panel exposes an accessible backend-compatibility
         hint driven by catalog/HF backend metadata (issue #94)."""
@@ -569,7 +795,6 @@ assert.equal(hint.classList.contains("hidden"), false);
             check=False,
         )
         self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
-
     def test_pure_helpers_and_schema_payload(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
@@ -839,6 +1064,21 @@ assert.equal(hint.classList.contains("hidden"), false);
             self.assertEqual(payload["model_catalog"][0]["alias"], "gemma-4-12b-it-4bit")
             self.assertIn("factual_extraction", payload["model_recommendation_tasks"])
             self.assertEqual(len(payload["model_recommendation_tasks"]), 7)
+            # Server-owned recommendations: every task maps exactly to the
+            # authoritative helper output (default fallback, no duplicates,
+            # and the intentional empty translation list).
+            self.assertEqual(
+                payload["model_recommendations"],
+                {
+                    task: model_catalog.recommend_models(task)
+                    for task in model_catalog.MODEL_RECOMMENDATION_TASKS
+                },
+            )
+            self.assertEqual(payload["model_recommendations"]["translation"], [])
+            self.assertEqual(
+                [pick["alias"] for pick in payload["model_recommendations"]["speed"]],
+                ["gemma-e2b-tiny", model_catalog.DEFAULT_CATALOG_MODEL_ALIAS],
+            )
 
             helper_file = root / "nested" / "payload.yaml"
             helper_file.parent.mkdir(parents=True)
@@ -2130,6 +2370,533 @@ assert.equal(hint.classList.contains("hidden"), false);
         self.assertEqual(status, 400)
         self.assertIn("Missing model parameter.", json.loads(body)["error"])
 
+    def test_schema_label_maps_and_drift_contract(self) -> None:
+        """The schema serves the canonical model-catalog label maps and the
+        embedded JavaScript reads them from state.schema at render time
+        (issue #82): a label added on the Python side renders without a
+        second UI edit, and no duplicate hardcoded map literals remain."""
+        with patch.object(
+            ui_module, "_runtime_snapshot", return_value=({"runtime": "ok"}, None)
+        ), patch.object(
+            ui_module, "configured_removed_topic_env_vars", return_value=set()
+        ), patch.object(
+            ui_module, "list_presets", return_value={"path": "presets.yaml", "presets": []}
+        ), patch.object(
+            ui_module,
+            "list_model_tuning_presets",
+            return_value={"path": "model.yaml", "presets": []},
+        ), patch.object(
+            ui_module, "_source_summary", return_value={"total": 0}
+        ), patch.object(ui_module, "_recipient_summary", return_value={"total": 0}):
+            payload = ui_module.schema_payload()
+
+        # The canonical dictionaries are served verbatim as copied projections.
+        self.assertEqual(payload["model_task_labels"], model_catalog.MODEL_TASK_LABELS)
+        self.assertEqual(payload["runtime_fit_labels"], model_catalog.RUNTIME_FIT_LABELS)
+        self.assertEqual(payload["model_task_labels"]["translation"], "Translation")
+        self.assertEqual(payload["runtime_fit_labels"]["external_only"], "External only")
+
+        # A label added on the Python side appears in the schema response
+        # without any UI code change and survives JSON encoding.
+        with patch.dict(ui_module.MODEL_TASK_LABELS, {"future_task": "Future task"}), patch.dict(
+            ui_module.RUNTIME_FIT_LABELS, {"future_fit": "Future fit"}
+        ), patch.object(
+            ui_module,
+            "MODEL_RECOMMENDATION_TASKS",
+            (*ui_module.MODEL_RECOMMENDATION_TASKS, "future_task"),
+        ):
+            payload = ui_module.schema_payload()
+        self.assertEqual(payload["model_task_labels"]["future_task"], "Future task")
+        self.assertEqual(payload["runtime_fit_labels"]["future_fit"], "Future fit")
+        self.assertIn("future_task", payload["model_recommendation_tasks"])
+        json.dumps(payload)  # must stay JSON-serializable for _send_json
+
+        # Drift guard: the embedded JS holds no duplicate map literals and
+        # resolves both vocabularies from state.schema, keeping the existing
+        # raw-key/unknown fallbacks and the status-keyed behavior gate.
+        html = ui_module.HTML
+        self.assertNotIn("const MODEL_TASK_LABELS = {", html)
+        self.assertNotIn("const RUNTIME_FIT_LABELS = {", html)
+        self.assertIn("state.schema.model_task_labels", html)
+        self.assertIn("state.schema.runtime_fit_labels", html)
+        self.assertIn("labels[task] || task", html)
+        self.assertIn('fit.status || "unknown"', html)
+        self.assertIn('fit.status === "external_only"', html)
+
+    def test_schema_endpoint_serves_label_maps(self) -> None:
+        """The public schema route serializes both canonical label maps."""
+        with patch.object(
+            ui_module, "_runtime_snapshot", return_value=({"runtime": "ok"}, None)
+        ), patch.object(
+            ui_module, "configured_removed_topic_env_vars", return_value=set()
+        ), patch.object(
+            ui_module, "list_presets", return_value={"path": "presets.yaml", "presets": []}
+        ), patch.object(
+            ui_module,
+            "list_model_tuning_presets",
+            return_value={"path": "model.yaml", "presets": []},
+        ), patch.object(
+            ui_module, "_source_summary", return_value={"total": 0}
+        ), patch.object(ui_module, "_recipient_summary", return_value={"total": 0}):
+            status, headers, body = self._invoke_get("/api/schema")
+
+        payload = json.loads(body)
+        self.assertEqual(status, 200)
+        self.assertIn("application/json", headers["Content-Type"])
+        self.assertEqual(payload["model_task_labels"], model_catalog.MODEL_TASK_LABELS)
+        self.assertEqual(payload["runtime_fit_labels"], model_catalog.RUNTIME_FIT_LABELS)
+
+    def test_schema_label_renderers_execute_in_node_dom_harness(self) -> None:
+        """Execute the embedded catalog renderers against schema and search fixtures.
+
+        The project has no browser test dependency, so this uses Node's runtime
+        with a small DOM-shaped fixture. The JavaScript functions are extracted
+        from HTML itself, rather than reimplemented in the test, so label
+        rendering, escaping, fallbacks, and the raw status gate are exercised.
+        """
+        html = ui_module.HTML
+
+        def js_function_block(start: str, end: str) -> str:
+            return html[html.index(start) : html.index(end, html.index(start))]
+
+        js = (
+            r"""
+const assert = (condition, message) => {
+  if (!condition) throw new Error(message);
+};
+"""
+            + _FAKE_DOM_ELEMENT_JS
+            + r"""
+const elements = {
+  recommendationTask: new FakeElement("recommendationTask"),
+  catalogCards: new FakeElement("catalogCards"),
+  recommendationReadout: new FakeElement("recommendationReadout"),
+  modelSearchResults: new FakeElement("modelSearchResults"),
+  modelSearchQuery: new FakeElement("modelSearchQuery", "catalog"),
+  modelSearchPipeline: new FakeElement("modelSearchPipeline", "text-generation"),
+  modelSearchLimit: new FakeElement("modelSearchLimit", "10")
+};
+function $(id) { return elements[id] || null; }
+function value(id) { return $(id) ? $(id).value : ""; }
+// Mirrors the real currentControlValue when no matching control exists:
+// fall back to state.schema.current_env (see the embedded implementation
+// next to escapeHtml, which is not part of the extracted renderer blocks).
+function currentControlValue(env) {
+  return (state.schema && state.schema.current_env && state.schema.current_env[env]) || "";
+}
+// Minimal document stub: currentControlValue/renderModelBackendHint fall
+// back to state.schema.current_env when no matching control exists, and
+// useModelReference returns early without a NEWS_MODEL select element.
+const document = {
+  querySelector: () => null,
+  getElementById: () => null,
+  querySelectorAll: () => []
+};
+const state = { schema: null };
+const searchResults = [
+  { id: "owner/future", hf_url: "https://example.test/future", runtime_fit: { status: "future_fit", reason: "future reason" } },
+  { id: "owner/unknown", hf_url: "https://example.test/unknown", runtime_fit: { status: "unknown_fit", reason: "unknown reason" } },
+  { id: "owner/missing-status", hf_url: "https://example.test/missing-status", runtime_fit: { reason: "no status" } },
+  { id: "owner/empty-status", hf_url: "https://example.test/empty-status", runtime_fit: { status: "", reason: "empty status" } },
+  { id: "owner/external", hf_url: "https://example.test/external", runtime_fit: { status: "external_only", reason: "external reason" } }
+];
+async function api(path) {
+  assert(path.startsWith("/api/models/search?"), `unexpected API path: ${path}`);
+  return { models: searchResults, error: null };
+}
+"""
+        + js_function_block("function escapeHtml(text) {", "function formatDefault")
+        + js_function_block("function modelTaskLabels() {", "function useModelReference")
+        + js_function_block("function normalizedBackendValue(value) {", "function setControlValue")
+        + js_function_block('function useModelReference(reference, requiredBackend = "") {', "function renderModelCatalogPanel")
+        + js_function_block("function renderModelCatalogPanel() {", "function renderRecommendations")
+        + js_function_block("function renderRecommendations(task) {", "async function searchHuggingFaceModels")
+        + js_function_block("async function searchHuggingFaceModels() {", "async function comparePromptProfiles")
+        + r"""
+state.schema = {
+  model_recommendation_tasks: ["future_task", "unknown_task"],
+  model_task_labels: { future_task: "Future <task> & choice" },
+  runtime_fit_labels: { future_fit: "Future <fit> & choice" },
+  model_catalog: [],
+  current_env: { NEWS_MODEL_BACKEND: "mlx-lm" }
+};
+renderModelCatalogPanel();
+assert(elements.recommendationTask.optionText("future_task") === "Future <task> & choice", "known task label was not rendered");
+assert(elements.recommendationTask.optionText("unknown_task") === "unknown_task", "unknown task did not fall back to its key");
+assert(elements.recommendationTask.innerHTML.includes("Future &lt;task&gt; &amp; choice"), "task label was not escaped");
+
+await searchHuggingFaceModels();
+assert(elements.modelSearchResults.textContent.includes("Future <fit> & choice"), "known fit label was not rendered");
+assert(elements.modelSearchResults.textContent.includes("unknown_fit"), "unknown fit did not fall back to its status");
+assert(elements.modelSearchResults.innerHTML.includes("Future &lt;fit&gt; &amp; choice"), "fit label was not escaped");
+assert(elements.modelSearchResults.querySelector('button[data-use-hf-model="owner/external"]').disabled, "external-only model was enabled");
+
+// Partial/empty schema state remains usable and keeps raw fallbacks.
+state.schema = { model_recommendation_tasks: ["raw_task"] };
+renderModelCatalogPanel();
+assert(elements.recommendationTask.optionText("raw_task") === "raw_task", "empty label map did not fall back");
+state.schema = {};
+await searchHuggingFaceModels();
+assert(elements.modelSearchResults.textContent.includes("future_fit"), "empty fit map did not fall back");
+assert(elements.modelSearchResults.textContent.includes("Fit: unknown — no status"), "missing fit status did not fall back to unknown");
+assert(elements.modelSearchResults.textContent.includes("Fit: unknown — empty status"), "empty fit status did not fall back to unknown");
+assert(elements.modelSearchResults.querySelector('button[data-use-hf-model="owner/external"]').disabled, "empty schema enabled external-only model");
+""" )
+        node = shutil.which("node")
+        if node is None:
+            self.skipTest("Node.js is required for the embedded UI renderer harness")
+        result = subprocess.run(
+            [node, "--input-type=module", "-"],
+            input=js,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
+
+    def test_prompt_template_editor_actions_execute_in_node_dom_harness(self) -> None:
+        """Execute the Advanced full-template editors in a DOM-shaped Node harness.
+
+        The source-text assertions elsewhere prove the markup and function
+        strings exist, which is exactly what let the ID-only ``$`` helper
+        receive CSS selector strings and silently short-circuit Validate,
+        Restore, changed-env collection, and preset application (issue #227).
+        This harness renders the real schema-driven editor markup through the
+        real production functions and drives them: each Validate click must
+        POST to the validate endpoint and update its status, Restore must
+        reset the textareas and serialization state, an edited pair must reach
+        the /api/presets body through the real savePresetEditor(), and the
+        saved env must round-trip through the real setPromptTemplateEnv().
+        Any console.error call fails the harness, so a null selector lookup
+        cannot be hidden behind a swallowed error.
+        """
+        html = ui_module.HTML
+
+        def js_function_block(start: str, end: str) -> str:
+            return html[html.index(start) : html.index(end, html.index(start))]
+
+        tasks_json = json.dumps(prompt_templates.list_prompt_templates())
+        js = (
+            r"""
+const assert = (condition, message) => {
+  if (!condition) throw new Error(message);
+};
+// A selector failure (or any unexpected path) must fail the run instead of
+// being swallowed into a console message.
+console.error = (...args) => { throw new Error("console.error: " + args.join(" ")); };
+"""
+            + _FAKE_DOM_ELEMENT_JS
+            + r"""
+
+// ---- Fake DOM ------------------------------------------------------------
+// getElementById only recognizes real IDs (promptTemplateEditors, preset
+// fields, restoreAllPromptTemplatesBtn); a CSS selector string is NOT an ID,
+// so the old $(`[data-template-...]`) calls resolve to null here exactly as
+// they do in a browser.
+// Parse the schema-driven markup renderPromptTemplateEditors() generates, so
+// the harness exercises the real renderer (escaping, defaults, malformed
+// flags) instead of hand-built controls.
+const textareas = new Map();    // "system:<task>" / "user:<task>" -> element
+const statusEls = new Map();    // "<task>" -> status element
+const validateBtns = new Map(); // "<task>" -> Validate button
+const restoreBtns = new Map();  // "<task>" -> Restore default button
+function parseEditorMarkup(markup) {
+  textareas.clear();
+  statusEls.clear();
+  validateBtns.clear();
+  restoreBtns.clear();
+  let match;
+  const textareaRe = /<textarea data-template-(system|user)="([^"]*)"[^>]*>([\s\S]*?)<\/textarea>/g;
+  while ((match = textareaRe.exec(markup)) !== null) {
+    const role = match[1];
+    const task = match[2];
+    const el = new FakeElement();
+    el.value = decodeEntities(match[3]);
+    el.dataset[role === "system" ? "templateSystem" : "templateUser"] = task;
+    textareas.set(role + ":" + task, el);
+  }
+  const statusRe = /<p class="prompt-template-status" data-template-status="([^"]*)">([\s\S]*?)<\/p>/g;
+  while ((match = statusRe.exec(markup)) !== null) {
+    const el = new FakeElement();
+    el.innerHTML = match[2];
+    statusEls.set(match[1], el);
+  }
+  const buttonRe = /<button type="button" class="prompt-template-(validate|restore)" data-task="([^"]*)">/g;
+  while ((match = buttonRe.exec(markup)) !== null) {
+    const el = new FakeElement();
+    el.dataset.task = match[2];
+    if (match[1] === "validate") validateBtns.set(match[2], el);
+    else restoreBtns.set(match[2], el);
+  }
+}
+const byId = {};
+function registerElement(id, el) { byId[id] = el; return el; }
+const editorContainer = registerElement("promptTemplateEditors", new FakeElement("promptTemplateEditors"));
+// Re-parse the generated editor markup whenever the container is (re)rendered.
+const baseInnerHTMLSetter = Object.getOwnPropertyDescriptor(FakeElement.prototype, "innerHTML").set;
+Object.defineProperty(editorContainer, "innerHTML", {
+  set(value) { baseInnerHTMLSetter.call(this, value); parseEditorMarkup(String(value)); },
+  get() { return this._innerHTML; }
+});
+registerElement("restoreAllPromptTemplatesBtn", new FakeElement("restoreAllPromptTemplatesBtn"));
+for (const id of ["preset_id", "preset_name", "preset_description", "preset_env"]) {
+  registerElement(id, new FakeElement(id));
+}
+const document = {
+  getElementById(id) {
+    // Deliberately ID-only: a CSS selector string must not resolve here.
+    return byId[id] || null;
+  },
+  querySelector(selector) {
+    const m = /^\[data-template-(system|user|status)="([^"]*)"\]$/.exec(selector);
+    if (!m) throw new Error(`unexpected querySelector: ${selector}`);
+    if (m[1] === "system") return textareas.get("system:" + m[2]) || null;
+    if (m[1] === "user") return textareas.get("user:" + m[2]) || null;
+    return statusEls.get(m[2]) || null;
+  },
+  querySelectorAll(selector) {
+    if (selector === "#promptTemplateEditors textarea") return [...textareas.values()];
+    if (selector === "#promptTemplateEditors .prompt-template-validate") return [...validateBtns.values()];
+    if (selector === "#promptTemplateEditors .prompt-template-restore") return [...restoreBtns.values()];
+    throw new Error(`unexpected querySelectorAll: ${selector}`);
+  }
+};
+function $(id) { return document.getElementById(id); }
+function value(id) { const el = $(id); return el ? el.value : ""; }
+// The editor's textareas are addressed by CSS selector; keep the lookups
+// short instead of repeating the template literal at every call site.
+const templateSys = task => document.querySelector(`[data-template-system="${task}"]`);
+const templateUser = task => document.querySelector(`[data-template-user="${task}"]`);
+const flush = () => new Promise(resolve => setTimeout(resolve, 0));
+
+// ---- API and preset-save stubs (only the network edge is stubbed) --------
+const requests = [];
+let savedPresetPayload = null;
+let presetsReloaded = 0;
+let rejectValidation = false;
+async function api(path, options = {}) {
+  requests.push({ path, method: options.method || "GET", body: options.body || "" });
+  if (path === "/api/prompt-templates/validate") {
+    const body = JSON.parse(options.body);
+    if (rejectValidation && body.task === TASKS[0].task) {
+      throw new Error("invalid template <test>");
+    }
+    return { valid: true, errors: {} };
+  }
+  if (path === "/api/presets") {
+    savedPresetPayload = JSON.parse(options.body);
+    return { ok: true };
+  }
+  throw new Error(`unexpected API path: ${path}`);
+}
+async function loadPresets() { presetsReloaded++; }
+function renderPresetSummary() {}
+function renderRunPresetDrawer() {}
+const state = { schema: null, presets: [] };
+
+// The five canonical task records, serialized from the production catalog so
+// the harness stays schema-driven (same shape /api/schema serves).
+const TASKS = """
+            + tasks_json
+            + r""";
+"""
+            + js_function_block("function escapeHtml(text) {", "function formatDefault")
+            + js_function_block("// Advanced full-template editors (ADR 0015).", "function modelTaskLabels()")
+            + js_function_block("function collectRunPresetEditor() {", "function prepRunPresetEditorFromCurrent")
+            + js_function_block("function textToEnv(text) {", "function renderStats")
+            + js_function_block("async function savePresetEditor() {", "async function renamePresetDisplayName")
+            + js_function_block("function applyRunPreset(preset) {", "function resetAllOverrides")
+            + r"""
+
+// The preset application path also refreshes unrelated panels. Stub those
+// renderers so this harness can exercise the real orchestration function.
+function setKnobEnv(_env) {}
+function renderModelTuningPanels() {}
+function renderPromptProfilePanel() {}
+function refreshModelKnobLinks() {}
+async function previewQuietly(_scope) {}
+
+// ---- Render ---------------------------------------------------------------
+state.schema = { current_env: {}, prompt_templates: TASKS };
+renderPromptTemplateEditors();
+assert(textareas.size === TASKS.length * 2, "editor textareas were not rendered");
+assert(validateBtns.size === TASKS.length, "Validate buttons were not rendered");
+assert(restoreBtns.size === TASKS.length, "Restore buttons were not rendered");
+
+// ---- Validate: each task POSTs its rendered pair and reports success ------
+for (const t of TASKS) {
+  validateBtns.get(t.task).onclick();
+  await flush();
+  const posts = requests.filter(
+    r => r.path === "/api/prompt-templates/validate" && JSON.parse(r.body).task === t.task
+  );
+  assert(posts.length === 1, `${t.task}: expected exactly one validate request`);
+  const body = JSON.parse(posts[0].body);
+  assert(body.template.system === t.system, `${t.task}: validate did not send the rendered system text`);
+  assert(body.template.user === t.user, `${t.task}: validate did not send the rendered user text`);
+  const statusEl = statusEls.get(t.task);
+  assert(statusEl.innerHTML.includes("Template is valid."), `${t.task}: status did not report valid`);
+  assert(!statusEl.innerHTML.includes("bad"), `${t.task}: status reported an error`);
+}
+
+// ---- Validate rejection: the task-specific error status is escaped --------
+rejectValidation = true;
+const failureTask = TASKS[0];
+statusEls.get(failureTask.task).innerHTML = '<span class="ok">Template is valid.</span>';
+validateBtns.get(failureTask.task).onclick();
+await flush();
+assert(
+  statusEls.get(failureTask.task).innerHTML.includes('class="bad"'),
+  "validation failure was not shown"
+);
+assert(
+  statusEls.get(failureTask.task).innerHTML.includes("invalid template &lt;test&gt;"),
+  "validation failure was not escaped or surfaced"
+);
+
+// ---- Restore: edited pair returns to defaults and drops its override ------
+const restoreTask = TASKS[0];
+const sysEl = templateSys(restoreTask.task);
+const userEl = templateUser(restoreTask.task);
+sysEl.value = "custom system text";
+userEl.value = "custom user text";
+sysEl.fire("input");
+assert(statusEls.get(restoreTask.task).innerHTML === "", "input did not clear the status");
+restoreBtns.get(restoreTask.task).onclick();
+assert(sysEl.value === restoreTask.system, "restore did not reset the system textarea");
+assert(userEl.value === restoreTask.user, "restore did not reset the user textarea");
+assert(statusEls.get(restoreTask.task).innerHTML === "", "restore did not clear the status");
+const envAfterRestore = currentPromptTemplateEnv();
+assert(envAfterRestore[restoreTask.env_var] === undefined, "restored default pair was serialized as an override");
+
+// ---- Restore all defaults ------------------------------------------------
+for (const t of TASKS) {
+  const sys = templateSys(t.task);
+  const usr = templateUser(t.task);
+  sys.value = `edited system ${t.task}`;
+  usr.value = `edited user ${t.task}`;
+  sys.fire("input");
+}
+$("restoreAllPromptTemplatesBtn").onclick();
+const envAll = currentPromptTemplateEnv();
+assert(Object.keys(envAll).length === 0, "restore-all left overrides behind");
+for (const t of TASKS) {
+  assert(
+    templateSys(t.task).value === t.system,
+    `${t.task}: restore-all did not reset the system textarea`
+  );
+}
+
+// ---- User-only edit: it marks the task dirty and serializes both values ----
+const userOnlyTask = TASKS[3];
+setPromptTemplateEnv({});
+const userOnly = templateUser(userOnlyTask.task);
+statusEls.get(userOnlyTask.task).innerHTML = '<span class="ok">Template is valid.</span>';
+userOnly.value = "user-only edit";
+userOnly.fire("input");
+assert(statusEls.get(userOnlyTask.task).innerHTML === "", "User input did not clear the status");
+const userOnlyEnv = currentPromptTemplateEnv();
+assert(
+  JSON.parse(userOnlyEnv[userOnlyTask.env_var]).system === userOnlyTask.system,
+  "User-only edit did not retain the system default"
+);
+assert(
+  JSON.parse(userOnlyEnv[userOnlyTask.env_var]).user === "user-only edit",
+  "User-only edit was not serialized"
+);
+
+// ---- Edit + save preset: the real savePresetEditor() must carry the pair --
+const editTask = TASKS[1];
+const editedSystem = `Custom $editorial_instructions system for ${editTask.task}`;
+const editedUser = `Custom user text for ${editTask.task}`;
+const sysEdit = templateSys(editTask.task);
+const usrEdit = templateUser(editTask.task);
+sysEdit.value = editedSystem;
+usrEdit.value = editedUser;
+sysEdit.fire("input");
+document.getElementById("preset_id").value = "editor-test-preset";
+document.getElementById("preset_name").value = "Editor Test";
+document.getElementById("preset_description").value = "";
+document.getElementById("preset_env").value = "";
+const envBefore = currentPromptTemplateEnv();
+assert(
+  envBefore[editTask.env_var] === JSON.stringify({ system: editedSystem, user: editedUser }),
+  "edited pair was not serialized into the env"
+);
+await savePresetEditor();
+assert(savedPresetPayload !== null, "preset save did not POST /api/presets");
+assert(savedPresetPayload.id === "editor-test-preset", "preset id was not sent");
+assert(presetsReloaded === 1, "preset save did not reload presets");
+assert(
+  savedPresetPayload.env[editTask.env_var] === envBefore[editTask.env_var],
+  "edited template is missing from the preset env"
+);
+
+// ---- Apply round-trip: the real preset path restores the exact pair -------
+for (const t of TASKS) {
+  const sys = templateSys(t.task);
+  sys.value = "stale text";
+  sys.fire("input");
+}
+state.presets = [{ id: savedPresetPayload.id, env: savedPresetPayload.env }];
+applyRunPreset(state.presets[0]);
+assert(state.selectedRunPresetId === savedPresetPayload.id, "apply did not select the preset");
+assert(templateSys(editTask.task).value === editedSystem, "apply did not restore the edited system text");
+assert(templateUser(editTask.task).value === editedUser, "apply did not restore the edited user text");
+const envAfter = currentPromptTemplateEnv();
+assert(
+  envAfter[editTask.env_var] === envBefore[editTask.env_var],
+  "applied env did not round-trip the exact JSON value"
+);
+
+// ---- Malformed overrides stay visible and round-trip raw ------------------
+const malformedTask = TASKS[2];
+const malformedValues = [
+  '{"system": "broken"',
+  JSON.stringify({ system: "broken" })
+];
+for (const malformedRaw of malformedValues) {
+  state.schema = {
+    current_env: { [malformedTask.env_var]: malformedRaw },
+    prompt_templates: TASKS
+  };
+  renderPromptTemplateEditors();
+  assert(
+    statusEls.get(malformedTask.task).innerHTML.includes("malformed"),
+    "malformed override was not flagged"
+  );
+  assert(
+    templateSys(malformedTask.task).value === malformedTask.system,
+    "malformed override replaced the built-in defaults"
+  );
+  setPromptTemplateEnv({ [malformedTask.env_var]: malformedRaw });
+  assert(
+    templateSys(malformedTask.task).value === malformedTask.system,
+    "applying malformed override changed the system default"
+  );
+  assert(
+    templateUser(malformedTask.task).value === malformedTask.user,
+    "applying malformed override changed the user default"
+  );
+  const envMalformed = currentPromptTemplateEnv();
+  assert(
+    envMalformed[malformedTask.env_var] === malformedRaw,
+    "malformed raw override was not preserved for round-trip"
+  );
+}
+"""
+        )
+        node = shutil.which("node")
+        if node is None:
+            self.skipTest("Node.js is required for the embedded UI renderer harness")
+        result = subprocess.run(
+            [node, "--input-type=module", "-"],
+            input=js,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
     def test_schema_payload_includes_custom_catalog_entries(self) -> None:
         """The existing schema payload is the integration surface for merged
         catalog data: custom aliases appear in catalog cards and selector
@@ -2143,7 +2910,9 @@ assert.equal(hint.classList.contains("hidden"), false);
                 "    name: Smoke Model\n"
                 "    backend: mlx-lm\n"
                 "    hf_repo: mlx-community/smoke-model\n"
-                "    description: Offline smoke entry\n",
+                "    description: Offline smoke entry\n"
+                "    task_notes:\n"
+                "      speed: Overlay-specific speed recommendation.\n",
                 encoding="utf-8",
             )
             with patch.dict(
@@ -2164,6 +2933,25 @@ assert.equal(hint.classList.contains("hidden"), false);
                 ui_module, "_source_summary", return_value={"total": 0}
             ), patch.object(ui_module, "_recipient_summary", return_value={"total": 0}):
                 payload = ui_module.schema_payload()
+                # Recommendations come from the same merged snapshot and
+                # exactly match the authoritative helper (issue #80).
+                self.assertEqual(
+                    payload["model_recommendations"],
+                    {
+                        task: model_catalog.recommend_models(task)
+                        for task in model_catalog.MODEL_RECOMMENDATION_TASKS
+                    },
+                )
+                self.assertEqual(payload["model_recommendations"]["translation"], [])
+                speed_picks = payload["model_recommendations"]["speed"]
+                self.assertEqual(
+                    [pick["alias"] for pick in speed_picks],
+                    ["gemma-e2b-tiny", "smoke-model", model_catalog.DEFAULT_CATALOG_MODEL_ALIAS],
+                )
+                self.assertEqual(
+                    speed_picks[1]["reason"],
+                    "Overlay-specific speed recommendation.",
+                )
 
         self.assertEqual(
             [entry["alias"] for entry in payload["model_catalog"]],
@@ -2198,6 +2986,16 @@ assert.equal(hint.classList.contains("hidden"), false);
         self.assertEqual(status, 400)
         self.assertIn("must define models as a mapping", json.loads(body)["error"])
 
+    def test_schema_recommendation_failure_uses_error_envelope(self) -> None:
+        with patch.object(ui_module, "list_model_catalog", return_value=[]), patch.object(
+            ui_module,
+            "recommend_models",
+            side_effect=ValueError("recommendation catalog failure"),
+        ):
+            status, _, body = self._invoke_get("/api/schema")
+
+        self.assertEqual(status, 400)
+        self.assertEqual(json.loads(body)["error"], "recommendation catalog failure")
     def test_schema_real_malformed_catalog_uses_error_envelope(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             catalog_path = Path(tmpdir) / "bad_catalog.yaml"
@@ -2694,7 +3492,7 @@ assert.equal(hint.classList.contains("hidden"), false);
         self.assertIn("Stop failed:", html)
         # No append-only raw rendering path remains.
         self.assertNotIn("textContent += payload.line", html)
-        self.assertNotIn("textContent += \`\\n[ui] ", html)
+        self.assertNotIn('textContent += `\\n[ui] ', html)
         # Run start clears and reinitializes the reducer state.
         run_action = html.split("async function runAction")[1].split("events.addEventListener")[0]
         self.assertIn("resetLog();", run_action)
@@ -2982,7 +3780,6 @@ assert.ok(statuses.some(status => status.text === "Model tuning preset remove-me
             check=False,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
-
     def test_report_review_tab_contracts(self) -> None:
         html = ui_module.HTML
         # The tab exists with a dedicated icon and section mounts.
