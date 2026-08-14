@@ -266,6 +266,48 @@ class FetchWorkflowRunsTest(unittest.TestCase):
         self.assertIsNone(records.error)
         self.assertEqual([r["id"] for r in records], ["r1", "r2"])
 
+    def test_limit_500_parses_complete_snapshot_over_200_rows(self) -> None:
+        rows = [
+            {
+                "id": f"r{i}",
+                "status": "completed" if i % 2 else "failed",
+                "user_message": f"Build feature from issue #{i}",
+                "started_at": "2026-08-07T10:00:00Z",
+            }
+            for i in range(1, 202)
+        ]
+        payload = json.dumps({"total": len(rows), "runs": rows})
+        seen_cmd: list[str] = []
+
+        def fake(cmd, **kwargs):
+            seen_cmd.extend(cmd)
+            stdout = kwargs.get("stdout")
+            if hasattr(stdout, "write"):
+                stdout.write(payload)
+                stdout.flush()
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+
+        with patch(
+            "automation.pm_harness.archon.subprocess.run",
+            side_effect=fake,
+        ):
+            records = archon.fetch_workflow_runs({})
+        self.assertEqual(
+            seen_cmd,
+            ["archon", "workflow", "runs", "--json", "--limit", "500"],
+        )
+        self.assertIsNone(records.error)
+        self.assertEqual(len(records), 201)
+        self.assertEqual(records[0]["id"], "r1")
+        self.assertEqual(records[200]["id"], "r201")
+        # The complete snapshot is searchable by the existing status helpers.
+        newest = archon.latest_workflow_run(records, issue_number=201)
+        self.assertEqual(newest["id"], "r201")
+        by_message = archon.runs_by_message_from(records)
+        self.assertIsNone(by_message.error)
+        self.assertEqual(
+            by_message["Build feature from issue #201"], "completed")
+
     def test_normalizes_unusable_match_fields(self) -> None:
         payload = json.dumps({
             "runs": [{
