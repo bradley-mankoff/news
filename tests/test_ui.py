@@ -331,6 +331,245 @@ class UITests(unittest.TestCase):
         self.assertIn("escapeHtml(entry.hardware)", ui_module.HTML)
         self.assertIn('data-links-for="${escapeHtml(knob.env)}"', ui_module.HTML)
 
+    def test_model_backend_hint_markup_contract(self) -> None:
+        """The Default model panel exposes an accessible backend-compatibility
+        hint driven by catalog/HF backend metadata (issue #94)."""
+        html = ui_module.HTML
+        # Markup and accessibility: the hint sits under the Default model
+        # control and is announced politely; the hidden class starts it empty.
+        self.assertIn('id="modelBackendHint"', html)
+        self.assertIn('aria-live="polite"', html)
+        self.assertIn("renderModelBackendHint", html)
+
+        # Scope assertions to the lookup and renderer so unrelated occurrences
+        # cannot keep this source-level contract green after a wiring change.
+        lookup = html.split("function catalogBackendForReference", 1)[1].split(
+            "function requiredBackendForSelectedModel", 1
+        )[0]
+        hint = html.split("function renderModelBackendHint", 1)[1].split(
+            "function renderModelCatalogPanel", 1
+        )[0]
+        self.assertIn('const clean = (reference || "").trim();', lookup)
+        self.assertIn('if (!clean) return "";', lookup)
+        self.assertIn("entry.alias === clean || entry.reference === clean", lookup)
+        self.assertIn("if (!required || !current) {", hint)
+        self.assertIn("if (required === current) {", hint)
+        self.assertIn("This model needs NEWS_MODEL_BACKEND=${required}", hint)
+        self.assertIn('hint.textContent = "";', hint)
+        self.assertIn('hint.classList.add("hidden")', hint)
+        self.assertIn('hint.classList.remove("hidden")', hint)
+        self.assertIn('currentControlValue("NEWS_MODEL_BACKEND")', hint)
+        self.assertNotIn("hint.innerHTML", hint)
+
+    def test_model_backend_hint_wiring_covers_each_path(self) -> None:
+        html = ui_module.HTML
+        catalog = html.split("function renderModelCatalogPanel", 1)[1].split(
+            "function renderRecommendations", 1
+        )[0]
+        recommendations = html.split("function renderRecommendations", 1)[1].split(
+            "async function searchHuggingFaceModels", 1
+        )[0]
+        search = html.split("async function searchHuggingFaceModels", 1)[1].split(
+            "async function comparePromptProfiles", 1
+        )[0]
+        hf_buttons = html.split("function refreshHuggingFaceUseButtons", 1)[1].split(
+            "async function searchHuggingFaceModels", 1
+        )[0]
+        presets = html.split("function applyRunPreset", 1)[1].split(
+            "function resetAllOverrides", 1
+        )[0]
+        reset = html.split("function resetAllOverrides", 1)[1].split(
+            "function setKnobEnv", 1
+        )[0]
+        delegated = html.split('document.addEventListener("change"', 1)[1].split(
+            "await loadSources", 1
+        )[0]
+        boot = html.split("async function init()", 1)[1].split("init().catch", 1)[0]
+
+        expected_catalog_call = (
+            "useModelReference(btn.dataset.useModel, "
+            "catalogBackendForReference(btn.dataset.useModel));"
+        )
+        self.assertIn(expected_catalog_call, catalog)
+        self.assertIn(expected_catalog_call, recommendations)
+        self.assertIn(
+            'useModelReference(btn.dataset.useHfModel, btn.dataset.useHfBackend || "");',
+            search,
+        )
+        self.assertIn('btn.disabled = disabled;', hf_buttons)
+        self.assertIn('btn.textContent = disabled', hf_buttons)
+        self.assertIn("refreshModelKnobLinks();", presets)
+        self.assertIn('void previewQuietly("run");', presets)
+        self.assertIn("refreshModelKnobLinks();", reset)
+        self.assertIn('void previewQuietly("run");', reset)
+        self.assertIn('state.selectedModelRequiredBackend = catalogBackendForReference(el.value);', delegated)
+        self.assertIn("requiredBackendForSelectedModel()", delegated)
+        self.assertIn("refreshHuggingFaceUseButtons();", delegated)
+        self.assertIn("refreshModelKnobLinks();", boot)
+
+    def test_runtime_fit_backend_map_matches_catalog_vocabulary(self) -> None:
+        html = ui_module.HTML
+        block = html.split("const RUNTIME_FIT_BACKENDS = {", 1)[1].split("};", 1)[0]
+        expected = {
+            model_catalog.RUNTIME_FIT_MANAGED_MLX_LM: "mlx-lm",
+            model_catalog.RUNTIME_FIT_MANAGED_MLX_VLM: "mlx-vlm",
+            model_catalog.RUNTIME_FIT_EXTERNAL_ONLY: "external",
+        }
+        for status, backend in expected.items():
+            self.assertIn(f'{status}: "{backend}"', block)
+        self.assertIn(
+            "Object.prototype.hasOwnProperty.call(RUNTIME_FIT_BACKENDS, fit.status)",
+            html,
+        )
+        self.assertIn('data-use-hf-backend="${escapeHtml(hfBackend)}"', html)
+        self.assertIn(
+            'normalizedBackendValue(currentControlValue("NEWS_MODEL_BACKEND")) === "external"',
+            html,
+        )
+        # Use must never mutate the backend control.
+        self.assertNotIn('setControlValue("NEWS_MODEL_BACKEND"', html)
+
+    @unittest.skipUnless(shutil.which("node"), "node runtime required for model/backend behavior tests")
+    def test_model_backend_hint_and_selection_behavior(self) -> None:
+        html = ui_module.HTML
+        current_start = html.index("    function currentControlValue")
+        current_end = html.index("    function setControlValue", current_start)
+        model_start = html.index("    function modelCatalogEntries")
+        model_end = html.index("    function renderModelCatalogPanel", model_start)
+        refresh_start = html.index("    function refreshHuggingFaceUseButtons")
+        refresh_end = html.index("    async function searchHuggingFaceModels", refresh_start)
+        production_source = "\n".join(
+            [
+                html[current_start:current_end],
+                html[model_start:model_end],
+                html[refresh_start:refresh_end],
+            ]
+        )
+        script = """
+import assert from "node:assert/strict";
+
+function classList() {
+  const values = new Set();
+  return {
+    add(value) { values.add(value); },
+    remove(value) { values.delete(value); },
+    contains(value) { return values.has(value); },
+  };
+}
+function control(env, value = "", options = []) {
+  return {
+    dataset: { env },
+    type: "select",
+    tagName: "SELECT",
+    value,
+    options: options.map(option => ({ value: option })),
+    insertAdjacentHTML(_position, html) {
+      const match = html.match(/<option value="([^"]*)">/);
+      if (match) this.options.unshift({ value: match[1] });
+    },
+    dispatchEvent(event) {
+      assert.equal(event.type, "change");
+      handleChange(this);
+    },
+  };
+}
+const modelSelect = control("NEWS_MODEL", "", ["vlm"]);
+const backendSelect = control("NEWS_MODEL_BACKEND", "mlx-lm", ["mlx-lm", "mlx-vlm", "external"]);
+const hint = { textContent: "", classList: classList() };
+const externalOnlyButton = {
+  dataset: { useHfModel: "org/external", useHfBackend: "external" },
+  disabled: true,
+  textContent: "",
+};
+const elements = new Map([
+  ["modelBackendHint", hint],
+  ["model", modelSelect],
+  ["backend", backendSelect],
+]);
+const state = {
+  schema: {
+    model_catalog: [{ alias: "vlm", reference: "org/vlm", backend: "mlx-vlm" }],
+    current_env: {},
+  },
+  selectedModelReference: "",
+  selectedModelRequiredBackend: "",
+};
+function $(id) {
+  if (id === "NEWS_MODEL") return modelSelect;
+  if (id === "NEWS_MODEL_BACKEND") return backendSelect;
+  return elements.get(id) || null;
+}
+function documentQuery(selector) {
+  if (selector === '[data-env="NEWS_MODEL"]') return modelSelect;
+  if (selector === '[data-env="NEWS_MODEL_BACKEND"]') return backendSelect;
+  return null;
+}
+globalThis.document = {
+  querySelector(selector) {
+    return selector === "#modelBackendHint" ? hint : documentQuery(selector);
+  },
+  getElementById(id) {
+    return elements.get(id) || null;
+  },
+  querySelectorAll(selector) {
+    return selector === "[data-use-hf-model]" ? [externalOnlyButton] : [];
+  },
+};
+globalThis.Event = class Event {
+  constructor(type) { this.type = type; }
+};
+function escapeHtml(value) { return String(value); }
+function handleChange(element) {
+  if (element === modelSelect) {
+    state.selectedModelReference = String(element.value || "").trim();
+    state.selectedModelRequiredBackend = catalogBackendForReference(element.value);
+    renderModelBackendHint(requiredBackendForSelectedModel());
+  } else if (element === backendSelect) {
+    refreshHuggingFaceUseButtons();
+    renderModelBackendHint(requiredBackendForSelectedModel());
+  }
+}
+
+""" + production_source + """
+
+useModelReference("vlm", "mlx-vlm");
+assert.equal(modelSelect.value, "vlm");
+assert.equal(backendSelect.value, "mlx-lm");
+assert.equal(hint.textContent, "This model needs NEWS_MODEL_BACKEND=mlx-vlm");
+assert.equal(hint.classList.contains("hidden"), false);
+
+backendSelect.value = "mlx-vlm";
+renderModelBackendHint(requiredBackendForSelectedModel());
+assert.equal(hint.classList.contains("hidden"), true);
+
+backendSelect.value = "";
+renderModelBackendHint(requiredBackendForSelectedModel());
+assert.equal(hint.classList.contains("hidden"), true);
+
+backendSelect.value = " EXTERNAL ";
+refreshHuggingFaceUseButtons();
+assert.equal(externalOnlyButton.disabled, false);
+assert.equal(externalOnlyButton.textContent, "Use");
+
+backendSelect.value = "mlx-lm";
+refreshHuggingFaceUseButtons();
+assert.equal(externalOnlyButton.disabled, true);
+assert.match(externalOnlyButton.textContent, /^External only/);
+useModelReference("org/external", "external");
+assert.equal(modelSelect.value, "org/external");
+assert.equal(backendSelect.value, "mlx-lm");
+assert.equal(hint.textContent, "This model needs NEWS_MODEL_BACKEND=external");
+assert.equal(hint.classList.contains("hidden"), false);
+"""
+        result = subprocess.run(
+            ["node", "--input-type=module"],
+            input=script,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
+
     def test_pure_helpers_and_schema_payload(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
@@ -1929,6 +2168,14 @@ class UITests(unittest.TestCase):
         self.assertEqual(
             [entry["alias"] for entry in payload["model_catalog"]],
             ["gemma-4-12b-it-4bit", "gemma-e2b-tiny", "smoke-model"],
+        )
+        self.assertEqual(
+            {entry["alias"]: entry["backend"] for entry in payload["model_catalog"]},
+            {
+                "gemma-4-12b-it-4bit": "mlx-vlm",
+                "gemma-e2b-tiny": "mlx-lm",
+                "smoke-model": "mlx-lm",
+            },
         )
         model_knob = next(knob for knob in payload["knobs"] if knob["env"] == "NEWS_MODEL")
         self.assertIn("smoke-model", model_knob["options"])

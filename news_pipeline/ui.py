@@ -2335,6 +2335,8 @@ HTML = r"""<!doctype html>
       activeRun: null,
       selectedRunPresetId: "",
       selectedModelTuningPresetId: "",
+      selectedModelReference: "",
+      selectedModelRequiredBackend: "",
       latestReview: null,
       history: [],
       historyError: null,
@@ -2461,6 +2463,9 @@ HTML = r"""<!doctype html>
       if (!el) return (state.schema && state.schema.current_env && state.schema.current_env[env]) || "";
       if (el.type === "checkbox") return el.checked ? "1" : "";
       return el.value;
+    }
+    function normalizedBackendValue(value) {
+      return String(value || "").trim().toLowerCase();
     }
     function setControlValue(env, next) {
       const el = document.querySelector(`[data-env="${env}"]`);
@@ -2669,6 +2674,12 @@ HTML = r"""<!doctype html>
       renderKnobLinks("NEWS_MODEL_STORY_SCALE_SCREENING");
       renderKnobLinks("NEWS_MODEL_TITLE_GENERATION");
       renderKnobLinks("NEWS_MODEL_IMAGE_ART_DIRECTION");
+      // Preset apply, reset/clear, and startup restore re-render the hint so
+      // a stale mismatch message cannot outlive a matching model/backend pair.
+      const reference = currentControlValue("NEWS_MODEL");
+      state.selectedModelReference = reference;
+      state.selectedModelRequiredBackend = catalogBackendForReference(reference);
+      renderModelBackendHint(requiredBackendForSelectedModel());
     }
     function renderTabs() {
       $("tabs").innerHTML = `<button id="navToggle" class="nav-toggle" title="Collapse navigation" aria-label="Collapse navigation"><span class="collapse-icon">${icons.chevronLeft}</span><span class="expand-icon">${icons.chevronRight}</span></button>` +
@@ -2902,6 +2913,7 @@ HTML = r"""<!doctype html>
             <div class="form-grid">
               ${defaultModel}
             </div>
+            <p id="modelBackendHint" class="muted hidden" aria-live="polite"></p>
             <p class="muted">Per-task model alternatives and sampling are in Advanced Settings.</p>
           </section>
           <section class="panel">
@@ -3286,7 +3298,7 @@ HTML = r"""<!doctype html>
       renderModelTuningPanels();
       renderPromptProfilePanel();
       refreshModelKnobLinks();
-      previewQuietly("run");
+      void previewQuietly("run");
     }
     function resetAllOverrides() {
       document.querySelectorAll("[data-env]").forEach(el => {
@@ -3298,7 +3310,7 @@ HTML = r"""<!doctype html>
       renderModelTuningPanels();
       renderPromptProfilePanel();
       refreshModelKnobLinks();
-      previewQuietly("run");
+      void previewQuietly("run");
     }
     function setKnobEnv(env) {
       document.querySelectorAll("[data-env]").forEach(el => {
@@ -4219,10 +4231,34 @@ HTML = r"""<!doctype html>
       managed_mlx_vlm: "Managed mlx-vlm",
       external_only: "External only"
     };
+    // Runtime-fit status -> required NEWS_MODEL_BACKEND value for the
+    // compatibility hint (mirrors model_catalog.py's RUNTIME_FIT_* verdicts;
+    // any other status maps to no hint rather than a guessed backend).
+    const RUNTIME_FIT_BACKENDS = {
+      managed_mlx_lm: "mlx-lm",
+      managed_mlx_vlm: "mlx-vlm",
+      external_only: "external"
+    };
     function modelCatalogEntries() {
       return (state.schema && state.schema.model_catalog) || [];
     }
-    function useModelReference(reference) {
+    // Exact alias/reference lookup mirroring catalog_model_backend (issue
+    // #92): unknown references return "" so callers keep their fallback.
+    function catalogBackendForReference(reference) {
+      const clean = (reference || "").trim();
+      if (!clean) return "";
+      const entry = modelCatalogEntries().find(entry => entry.alias === clean || entry.reference === clean);
+      return (entry && entry.backend) || "";
+    }
+    function requiredBackendForSelectedModel() {
+      const reference = String(currentControlValue("NEWS_MODEL") || "").trim();
+      if (reference !== state.selectedModelReference) {
+        state.selectedModelReference = reference;
+        state.selectedModelRequiredBackend = catalogBackendForReference(reference);
+      }
+      return state.selectedModelRequiredBackend;
+    }
+    function useModelReference(reference, requiredBackend = "") {
       const sel = document.querySelector('[data-env="NEWS_MODEL"]');
       if (!sel) return;
       if (!Array.from(sel.options).some(option => option.value === reference)) {
@@ -4230,6 +4266,40 @@ HTML = r"""<!doctype html>
       }
       sel.value = reference;
       sel.dispatchEvent(new Event("change"));
+      // The delegated change listener derives the required backend from the
+      // catalog; an explicit requiredBackend (HF runtime-fit status) wins for
+      // search results that are not catalog entries. Store it after dispatch
+      // because the synthetic change event intentionally handles catalog-only
+      // direct selections as well.
+      state.selectedModelReference = String(reference || "").trim();
+      state.selectedModelRequiredBackend = String(
+        requiredBackend || catalogBackendForReference(reference) || ""
+      ).trim();
+      renderModelBackendHint(requiredBackendForSelectedModel());
+    }
+    // Live compatibility hint under the Default model control: compares the
+    // selected model's known backend with the explicit NEWS_MODEL_BACKEND
+    // override (unsaved Advanced Settings edits included via
+    // currentControlValue). Never mutates the backend control; an empty
+    // override means config.py infers the backend from the model.
+    function renderModelBackendHint(requiredBackend = "") {
+      const hint = document.getElementById("modelBackendHint");
+      if (!hint) return;
+      const required = normalizedBackendValue(requiredBackend);
+      const current = normalizedBackendValue(currentControlValue("NEWS_MODEL_BACKEND"));
+      if (!required || !current) {
+        // Unknown model/status or unset override: no conflict to report.
+        hint.textContent = "";
+        hint.classList.add("hidden");
+        return;
+      }
+      if (required === current) {
+        hint.textContent = "";
+        hint.classList.add("hidden");
+        return;
+      }
+      hint.textContent = `This model needs NEWS_MODEL_BACKEND=${required}`;
+      hint.classList.remove("hidden");
     }
     function renderModelCatalogPanel() {
       const select = $("recommendationTask");
@@ -4248,7 +4318,7 @@ HTML = r"""<!doctype html>
         </div>
       `).join("");
       cards.querySelectorAll("[data-use-model]").forEach(btn => {
-        btn.onclick = () => useModelReference(btn.dataset.useModel);
+        btn.onclick = () => useModelReference(btn.dataset.useModel, catalogBackendForReference(btn.dataset.useModel));
       });
       renderRecommendations(select.value);
     }
@@ -4272,7 +4342,17 @@ HTML = r"""<!doctype html>
         </div>
       `).join("");
       container.querySelectorAll("[data-use-model]").forEach(btn => {
-        btn.onclick = () => useModelReference(btn.dataset.useModel);
+        btn.onclick = () => useModelReference(btn.dataset.useModel, catalogBackendForReference(btn.dataset.useModel));
+      });
+    }
+    function refreshHuggingFaceUseButtons() {
+      const backendExternal = normalizedBackendValue(currentControlValue("NEWS_MODEL_BACKEND")) === "external";
+      document.querySelectorAll("[data-use-hf-model]").forEach(btn => {
+        const disabled = btn.dataset.useHfBackend === "external" && !backendExternal;
+        btn.disabled = disabled;
+        btn.textContent = disabled
+          ? "External only — set NEWS_MODEL_BACKEND=external to use"
+          : "Use";
       });
     }
     async function searchHuggingFaceModels() {
@@ -4297,10 +4377,13 @@ HTML = r"""<!doctype html>
           container.innerHTML = `<p class="muted">No models found.</p>`;
           return;
         }
-        const backendExternal = (state.schema && state.schema.current_env && state.schema.current_env.NEWS_MODEL_BACKEND) === "external";
+        const backendExternal = normalizedBackendValue(currentControlValue("NEWS_MODEL_BACKEND")) === "external";
         container.innerHTML = models.map(item => {
           const fit = item.runtime_fit || {};
           const fitLabel = RUNTIME_FIT_LABELS[fit.status] || fit.status || "unknown";
+          const hfBackend = Object.prototype.hasOwnProperty.call(RUNTIME_FIT_BACKENDS, fit.status)
+            ? RUNTIME_FIT_BACKENDS[fit.status]
+            : "";
           const externalOnly = fit.status === "external_only";
           const useDisabled = externalOnly && !backendExternal;
           return `
@@ -4309,13 +4392,13 @@ HTML = r"""<!doctype html>
               <p class="muted">${escapeHtml(item.pipeline_tag || "-")} · ${escapeHtml(item.library_name || "-")} · downloads ${escapeHtml(String(item.downloads ?? "-"))} · likes ${escapeHtml(String(item.likes ?? "-"))} · context ${item.context_length != null ? escapeHtml(String(item.context_length)) : "-"}</p>
               <p class="muted">Fit: ${escapeHtml(fitLabel)} — ${escapeHtml(fit.reason || "")}</p>
               <div class="toolbar">
-                <button data-use-hf-model="${escapeHtml(item.id)}" ${useDisabled ? "disabled" : ""}>${useDisabled ? "External only — set NEWS_MODEL_BACKEND=external to use" : "Use"}</button>
+                <button data-use-hf-model="${escapeHtml(item.id)}" data-use-hf-backend="${escapeHtml(hfBackend)}" ${useDisabled ? "disabled" : ""}>${useDisabled ? "External only — set NEWS_MODEL_BACKEND=external to use" : "Use"}</button>
               </div>
             </div>
           `;
         }).join("");
         container.querySelectorAll("[data-use-hf-model]").forEach(btn => {
-          btn.onclick = () => useModelReference(btn.dataset.useHfModel);
+          btn.onclick = () => useModelReference(btn.dataset.useHfModel, btn.dataset.useHfBackend || "");
         });
       } catch (err) {
         container.innerHTML = `<p class="muted">${escapeHtml(err.message)}</p>`;
@@ -4413,14 +4496,19 @@ HTML = r"""<!doctype html>
     }
     async function init() {
       state.schema = await api("/api/schema");
+      let bootWarning = "";
+      let activeRunStatus = "";
       try {
         const runsData = await api("/api/runs");
         const active = (runsData.runs || []).find(run => ["starting", "running", "stopping"].includes(run.status));
         if (active) {
           state.activeRun = active.run_id;
-          setStatus(`Run ${active.run_id} is active (${active.status}).`, "warn");
+          activeRunStatus = `Run ${active.run_id} is active (${active.status}).`;
         }
-      } catch (_err) { /* runs endpoint is best-effort at boot */ }
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        bootWarning = `Active run status unavailable: ${message}`;
+      }
       updateRunControls();
       renderTabs();
       renderRunSetup();
@@ -4441,6 +4529,15 @@ HTML = r"""<!doctype html>
           if (knob && knob.option_links && Object.keys(knob.option_links).length) {
             renderKnobLinks(el.dataset.env);
           }
+          // Model/backend changes additionally refresh the compatibility hint.
+          if (el.dataset.env === "NEWS_MODEL") {
+            state.selectedModelReference = String(el.value || "").trim();
+            state.selectedModelRequiredBackend = catalogBackendForReference(el.value);
+            renderModelBackendHint(requiredBackendForSelectedModel());
+          } else if (el.dataset.env === "NEWS_MODEL_BACKEND") {
+            refreshHuggingFaceUseButtons();
+            renderModelBackendHint(requiredBackendForSelectedModel());
+          }
         }
       });
       await loadSources();
@@ -4458,7 +4555,11 @@ HTML = r"""<!doctype html>
       refreshModelKnobLinks();
       renderRunPresetDrawer();
       renderPresetSummary();
-      if (state.schema.removed_topic_env_vars && state.schema.removed_topic_env_vars.length) {
+      if (bootWarning) {
+        setStatus(bootWarning, "warn");
+      } else if (activeRunStatus) {
+        setStatus(activeRunStatus, "warn");
+      } else if (state.schema.removed_topic_env_vars && state.schema.removed_topic_env_vars.length) {
         setStatus(`Removed topic env vars set: ${state.schema.removed_topic_env_vars.join(", ")}`, "warn");
       } else {
         setStatus("");
