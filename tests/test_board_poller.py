@@ -299,6 +299,52 @@ class MatchIssuePrTest(unittest.TestCase):
         }
         self.assertEqual(match_issue_pr([pr], 21)["number"], 11)
 
+    def test_branch_fallback_matches_worktree_pr(self):
+        pr = {
+            "number": 220,
+            "baseRefName": "develop",
+            "headRefName": "archon/task-issue-80",
+            "body": "Plan ... (Build feature from issue #80)",
+            "title": "Serve model recommendations via the UI schema",
+        }
+        self.assertEqual(match_issue_pr([pr], 80, "develop")["number"], 220)
+
+    def test_branch_fallback_matches_implements_keyword_body(self):
+        pr = {
+            "number": 221,
+            "baseRefName": "develop",
+            "headRefName": "archon/task-issue-82",
+            "body": "Implements #82.",
+            "title": "Serve model task and runtime-fit labels",
+        }
+        self.assertEqual(match_issue_pr([pr], 82, "develop")["number"], 221)
+
+    def test_branch_fallback_matches_body_without_reference(self):
+        pr = {
+            "number": 223,
+            "baseRefName": "develop",
+            "headRefName": "archon/task-issue-100",
+            "body": "## Summary\nReplaces prompt readouts.",
+            "title": "Full-template LLM prompt editors",
+        }
+        self.assertEqual(match_issue_pr([pr], 100, "develop")["number"], 223)
+
+    def test_branch_fallback_respects_base_filter(self):
+        ship = {"number": 219, "baseRefName": "main",
+                "headRefName": "archon/task-issue-90", "body": "", "title": "Ship: x"}
+        dev = {"number": 213, "baseRefName": "develop",
+               "headRefName": "archon/task-issue-90", "body": "", "title": "x"}
+        self.assertEqual(
+            match_issue_pr([ship, dev], 90, "develop")["number"], 213)
+        self.assertEqual(
+            match_issue_pr([ship, dev], 90, "main")["number"], 219)
+
+    def test_branch_fallback_does_not_confuse_similar_issue_numbers(self):
+        pr = {"number": 220, "baseRefName": "develop",
+              "headRefName": "archon/task-issue-80", "body": "", "title": "x"}
+        self.assertIsNone(match_issue_pr([pr], 8, "develop"))
+        self.assertIsNone(match_issue_pr([pr], 800, "develop"))
+
 
 class ConflictEpisodeActionTest(unittest.TestCase):
     def test_mergeable_no_episode(self):

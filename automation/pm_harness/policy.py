@@ -438,6 +438,10 @@ def match_issue_pr(prs: list[dict], issue_number: int,
     An issue can have several PRs (develop PR, ship PR, re-review duplicates);
     the `base` filter pins the role (e.g. the develop PR vs the ship PR), so
     the develop-merge passes never grab the ship PR and retarget it.
+
+    Fallback: the dispatch branch is `issue-<N>` and Archon's worktree PR
+    branch is `archon/task-issue-<N>` — either one in the head ref links the
+    PR to the issue even when the generated body has no keyword line.
     """
     pat = re.compile(
         rf"(?im)^[ \t]*(?:fix(?:es)?|clos(?:es|e)|resolv(?:es|e)|issue)"
@@ -452,6 +456,13 @@ def match_issue_pr(prs: list[dict], issue_number: int,
         if base and pr.get("baseRefName") != base:
             continue
         if re.search(rf"\(#{issue_number}\)\s*$", pr.get("title") or ""):
+            return pr
+    branch_pat = re.compile(
+        rf"(?:^|[^0-9])issue-{issue_number}(?:$|[^0-9])", re.I)
+    for pr in prs:
+        if base and pr.get("baseRefName") != base:
+            continue
+        if branch_pat.search(pr.get("headRefName") or ""):
             return pr
     return None
 
