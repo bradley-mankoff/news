@@ -331,6 +331,49 @@ class UITests(unittest.TestCase):
         self.assertIn("escapeHtml(entry.hardware)", ui_module.HTML)
         self.assertIn('data-links-for="${escapeHtml(knob.env)}"', ui_module.HTML)
 
+    def test_model_backend_hint_markup_contract(self) -> None:
+        """The Default model panel exposes an accessible backend-compatibility
+        hint driven by catalog/HF backend metadata (issue #94)."""
+        # Markup and accessibility: the hint sits under the Default model
+        # control and is announced politely; the hidden class starts it empty.
+        self.assertIn('id="modelBackendHint"', ui_module.HTML)
+        self.assertIn('aria-live="polite"', ui_module.HTML)
+        self.assertIn("renderModelBackendHint", ui_module.HTML)
+        # Mismatch branch renders the exact required value via textContent;
+        # matching backends, an unset override, and unknown sources clear it.
+        self.assertIn("This model needs NEWS_MODEL_BACKEND=${required}", ui_module.HTML)
+        self.assertIn('hint.textContent = "";', ui_module.HTML)
+        self.assertIn('hint.classList.add("hidden")', ui_module.HTML)
+        self.assertIn('hint.classList.remove("hidden")', ui_module.HTML)
+        # Both matching and mismatching branches are represented, including
+        # the blank-override no-warning condition.
+        self.assertIn("if (!required || !current) {", ui_module.HTML)
+        self.assertIn("if (required === current) {", ui_module.HTML)
+        # The live backend control is the comparison source (unsaved Advanced
+        # Settings edits), never the initial schema snapshot.
+        self.assertIn('currentControlValue("NEWS_MODEL_BACKEND")', ui_module.HTML)
+        self.assertIn("catalogBackendForReference", ui_module.HTML)
+        # Fixed runtime-fit status -> backend map for the HF search path.
+        self.assertIn('managed_mlx_lm: "mlx-lm"', ui_module.HTML)
+        self.assertIn('managed_mlx_vlm: "mlx-vlm"', ui_module.HTML)
+        self.assertIn('external_only: "external"', ui_module.HTML)
+        # Every selection path wires the hint: curated catalog cards,
+        # recommendations, HF search results, delegated model/backend
+        # changes, and preset/reset programmatic refreshes.
+        self.assertIn("renderModelBackendHint(requiredBackend)", ui_module.HTML)
+        self.assertIn('data-use-hf-backend="${escapeHtml(hfBackend)}"', ui_module.HTML)
+        self.assertIn('el.dataset.env === "NEWS_MODEL"', ui_module.HTML)
+        self.assertIn('el.dataset.env === "NEWS_MODEL_BACKEND"', ui_module.HTML)
+        self.assertIn(
+            'renderModelBackendHint(catalogBackendForReference(currentControlValue("NEWS_MODEL")))',
+            ui_module.HTML,
+        )
+        # The HF external-only guard reads the live backend so unsaved edits
+        # are honored instead of the stale schema snapshot.
+        self.assertIn('currentControlValue("NEWS_MODEL_BACKEND") === "external"', ui_module.HTML)
+        # Use must never mutate the backend control.
+        self.assertNotIn('setControlValue("NEWS_MODEL_BACKEND"', ui_module.HTML)
+
     def test_pure_helpers_and_schema_payload(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
@@ -1929,6 +1972,14 @@ class UITests(unittest.TestCase):
         self.assertEqual(
             [entry["alias"] for entry in payload["model_catalog"]],
             ["gemma-4-12b-it-4bit", "gemma-e2b-tiny", "smoke-model"],
+        )
+        self.assertEqual(
+            {entry["alias"]: entry["backend"] for entry in payload["model_catalog"]},
+            {
+                "gemma-4-12b-it-4bit": "mlx-vlm",
+                "gemma-e2b-tiny": "mlx-lm",
+                "smoke-model": "mlx-lm",
+            },
         )
         model_knob = next(knob for knob in payload["knobs"] if knob["env"] == "NEWS_MODEL")
         self.assertIn("smoke-model", model_knob["options"])
