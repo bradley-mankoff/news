@@ -374,13 +374,13 @@ class UITests(unittest.TestCase):
         self.assertIn('const clean = (reference || "").trim();', lookup)
         self.assertIn('if (!clean) return "";', lookup)
         self.assertIn("entry.alias === clean || entry.reference === clean", lookup)
-        self.assertIn("if (!required || !current) {", hint)
-        self.assertIn("if (required === current) {", hint)
+        self.assertIn("if (!required || !backendRequirementMismatch(required)) {", hint)
+        self.assertIn("function backendRequirementMismatch(requiredBackend)", html)
         self.assertIn("This model needs NEWS_MODEL_BACKEND=${required}", hint)
         self.assertIn('hint.textContent = "";', hint)
         self.assertIn('hint.classList.add("hidden")', hint)
         self.assertIn('hint.classList.remove("hidden")', hint)
-        self.assertIn('currentControlValue("NEWS_MODEL_BACKEND")', hint)
+        self.assertIn('currentControlValue("NEWS_MODEL_BACKEND")', html)
         self.assertNotIn("hint.innerHTML", hint)
 
     def test_model_backend_hint_wiring_covers_each_path(self) -> None:
@@ -444,7 +444,7 @@ class UITests(unittest.TestCase):
             html,
         )
         self.assertIn('data-use-hf-backend="${escapeHtml(hfBackend)}"', html)
-        self.assertIn('currentControlValue("NEWS_MODEL_BACKEND") === "external"', html)
+        self.assertIn("function backendRequirementMismatch(requiredBackend)", html)
         # Use must never mutate the backend control.
         self.assertNotIn('setControlValue("NEWS_MODEL_BACKEND"', html)
 
@@ -2078,7 +2078,10 @@ class UITests(unittest.TestCase):
         self.assertIn("state.schema.runtime_fit_labels", html)
         self.assertIn("labels[task] || task", html)
         self.assertIn('fit.status || "unknown"', html)
-        self.assertIn('fit.status === "external_only"', html)
+        self.assertIn(
+            "Object.prototype.hasOwnProperty.call(RUNTIME_FIT_BACKENDS, fit.status)",
+            html,
+        )
 
     def test_schema_endpoint_serves_label_maps(self) -> None:
         """The public schema route serializes both canonical label maps."""
@@ -2232,6 +2235,108 @@ assert(elements.modelSearchResults.textContent.includes("future_fit"), "empty fi
 assert(elements.modelSearchResults.textContent.includes("Fit: unknown — no status"), "missing fit status did not fall back to unknown");
 assert(elements.modelSearchResults.textContent.includes("Fit: unknown — empty status"), "empty fit status did not fall back to unknown");
 assert(elements.modelSearchResults.querySelector('button[data-use-hf-model="owner/external"]').disabled, "empty schema enabled external-only model");
+""" )
+        node = shutil.which("node")
+        if node is None:
+            self.skipTest("Node.js is required for the embedded UI renderer harness")
+        result = subprocess.run(
+            [node, "--input-type=module", "-"],
+            input=js,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
+
+    def test_model_backend_compatibility_transitions_in_node_dom_harness(self) -> None:
+        """Exercise backend mismatch warnings and HF Use-button transitions."""
+        html = ui_module.HTML
+
+        def js_function_block(start: str, end: str) -> str:
+            return html[html.index(start) : html.index(end, html.index(start))]
+
+        js = (r"""
+const assert = (condition, message) => {
+  if (!condition) throw new Error(message);
+};
+class ClassList {
+  constructor() { this.hidden = true; }
+  add(name) { if (name === "hidden") this.hidden = true; }
+  remove(name) { if (name === "hidden") this.hidden = false; }
+}
+const hint = { textContent: "", classList: new ClassList() };
+const backend = { value: "" };
+const model = {
+  value: "",
+  options: [],
+  insertAdjacentHTML(_position, markup) {
+    const match = markup.match(/<option value="([^"]*)">/);
+    if (match) this.options.unshift({ value: match[1] });
+  },
+  dispatchEvent(event) { this.lastEvent = event.type; }
+};
+const buttons = [
+  { dataset: { useHfBackend: "mlx-vlm" }, disabled: false, textContent: "Use" },
+  { dataset: { useHfBackend: "" }, disabled: false, textContent: "Use" }
+];
+const document = {
+  getElementById: id => id === "modelBackendHint" ? hint : null,
+  querySelector: selector => {
+    if (selector === '[data-env="NEWS_MODEL_BACKEND"]') return backend;
+    if (selector === '[data-env="NEWS_MODEL"]') return model;
+    return null;
+  },
+  querySelectorAll: selector => selector === "[data-use-hf-model]" ? buttons : []
+};
+const state = {
+  schema: {
+    model_catalog: [{ alias: "tiny", reference: "owner/tiny", backend: "mlx-lm" }]
+  },
+  selectedModelReference: "",
+  selectedModelRequiredBackend: ""
+};
+function currentControlValue(env) {
+  if (env === "NEWS_MODEL_BACKEND") return backend.value;
+  if (env === "NEWS_MODEL") return model.value;
+  return "";
+}
+globalThis.Event = class Event {
+  constructor(type) { this.type = type; }
+};
+"""
+        + js_function_block("function escapeHtml(text) {", "function formatDefault")
+        + js_function_block("function modelCatalogEntries() {", "function requiredBackendForSelectedModel")
+        + js_function_block("function requiredBackendForSelectedModel()", "function useModelReference")
+        + js_function_block("function useModelReference(reference, requiredBackend = \"\") {", "function renderModelBackendHint")
+        + js_function_block("function renderModelBackendHint(requiredBackend = \"\") {", "function renderModelCatalogPanel")
+        + js_function_block("function refreshHuggingFaceUseButtons() {", "async function searchHuggingFaceModels")
+        + r"""
+assert(catalogBackendForReference("owner/tiny") === "mlx-lm", "reference lookup failed");
+assert(catalogBackendForReference("tiny") === "mlx-lm", "alias lookup failed");
+
+renderModelBackendHint("mlx-vlm");
+assert(!hint.classList.hidden, "unset backend did not show mismatch hint");
+assert(hint.textContent === "This model needs NEWS_MODEL_BACKEND=mlx-vlm", "hint text was not actionable");
+backend.value = "mlx-vlm";
+renderModelBackendHint("mlx-vlm");
+assert(hint.classList.hidden && hint.textContent === "", "matching backend did not clear hint");
+
+backend.value = "mlx-lm";
+refreshHuggingFaceUseButtons();
+assert(buttons[0].disabled, "mismatched managed backend button was enabled");
+assert(buttons[0].textContent === "Set NEWS_MODEL_BACKEND=mlx-vlm to use", "managed mismatch text was wrong");
+backend.value = "mlx-vlm";
+refreshHuggingFaceUseButtons();
+assert(!buttons[0].disabled && buttons[0].textContent === "Use", "matching managed backend did not re-enable button");
+backend.value = "";
+refreshHuggingFaceUseButtons();
+assert(buttons[0].disabled, "unset backend enabled a managed HF button");
+
+backend.value = "mlx-vlm";
+useModelReference("owner/hf-vision", "mlx-vlm");
+assert(model.value === "owner/hf-vision", "HF reference was not selected");
+assert(state.selectedModelRequiredBackend === "mlx-vlm", "HF backend metadata was lost");
+assert(hint.classList.hidden, "matching HF backend left a warning visible");
 """ )
         node = shutil.which("node")
         if node is None:
