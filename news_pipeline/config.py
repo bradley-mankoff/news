@@ -1494,25 +1494,16 @@ def _configured_model_backend(model_reference: str) -> str:
     (validated against SUPPORTED_MODEL_BACKENDS) or inferred from the
     reference. Per-task models always use inference."""
     configured = _str_env("NEWS_MODEL_BACKEND", "").strip().lower()
-    if configured:
-        if configured not in SUPPORTED_MODEL_BACKENDS:
-            raise ValueError(
-                "NEWS_MODEL_BACKEND must be one of: " + ", ".join(SUPPORTED_MODEL_BACKENDS)
-            )
-        backend = configured
-    else:
-        backend = infer_model_backend(model_reference)
-
-    if backend == MODEL_BACKEND_EXTERNAL and not _str_env("NEWS_MODEL_BASE_URL", ""):
-        if configured:
-            raise ValueError(
-                "NEWS_MODEL_BACKEND=external requires NEWS_MODEL_BASE_URL to point at an "
-                "OpenAI-compatible endpoint (without it, the pipeline would poll the "
-                "default managed-server loopback URL and time out)."
-            )
+    if configured and configured not in SUPPORTED_MODEL_BACKENDS:
         raise ValueError(
-            "External model backend requires NEWS_MODEL_BASE_URL to point at an "
-            "OpenAI-compatible endpoint."
+            "NEWS_MODEL_BACKEND must be one of: " + ", ".join(SUPPORTED_MODEL_BACKENDS)
+        )
+    backend = configured or infer_model_backend(model_reference)
+    if backend == MODEL_BACKEND_EXTERNAL and not _str_env("NEWS_MODEL_BASE_URL", ""):
+        raise ValueError(
+            "NEWS_MODEL_BACKEND=external requires NEWS_MODEL_BASE_URL to point at an "
+            "OpenAI-compatible endpoint (without it, the pipeline would poll the "
+            "default managed-server loopback URL and time out)."
         )
     return backend
 
