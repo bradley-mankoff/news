@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import tempfile
 import unittest
@@ -12,6 +13,7 @@ from unittest.mock import patch
 
 from news_pipeline import model_catalog
 from news_pipeline import prompt_catalog
+from news_pipeline import prompt_templates
 from news_pipeline import ui as ui_module
 from news_pipeline import config as config_module
 from news_pipeline.config import (
@@ -477,6 +479,127 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
                 "title_generation": "YAML title text",
             },
         )
+
+    # --- Full-template overrides (ADR 0015) --------------------------------
+
+    def _valid_template_json(self, task: str, system: str, user: str) -> str:
+        return json.dumps({"system": system, "user": user})
+
+    def test_prompt_template_env_resolves_into_runtime_config(self) -> None:
+        raw = self._valid_template_json(
+            "image_art_direction",
+            "Custom art system: $image_contract $editorial_instructions",
+            "Custom art user: $synthesis_body",
+        )
+        config = load_runtime_config(
+            environ={},
+            overrides={"NEWS_PROMPT_TEMPLATE_IMAGE_ART_DIRECTION": raw},
+            materialize_outputs=False,
+        )
+        override = config.prompt_template_overrides["image_art_direction"]
+        self.assertIn("Custom art system", override["system"])
+        self.assertIn("Custom art user", override["user"])
+        self.assertEqual(
+            set(config.prompt_template_overrides), {"image_art_direction"}
+        )
+        # The same resolved override is what pipeline import consumes.
+        resolved = prompt_templates.resolve_prompt_templates(
+            config.prompt_template_overrides
+        )
+        self.assertIs(
+            resolved["article_summary"],
+            prompt_templates.DEFAULT_PROMPT_TEMPLATES["article_summary"],
+        )
+        self.assertEqual(
+            resolved["image_art_direction"].system, override["system"]
+        )
+
+    def test_prompt_template_empty_and_whitespace_count_as_unset(self) -> None:
+        config = load_runtime_config(
+            environ={},
+            overrides={
+                "NEWS_PROMPT_TEMPLATE_ARTICLE_SUMMARY": "",
+                "NEWS_PROMPT_TEMPLATE_TITLE_GENERATION": "   ",
+            },
+            materialize_outputs=False,
+        )
+        self.assertEqual(config.prompt_template_overrides, {})
+
+    def test_malformed_template_json_fails_config_resolution(self) -> None:
+        with self.assertRaisesRegex(
+            ValueError,
+            "NEWS_PROMPT_TEMPLATE_STORY_DRAFTING.*not valid JSON",
+        ):
+            load_runtime_config(
+                environ={},
+                overrides={"NEWS_PROMPT_TEMPLATE_STORY_DRAFTING": "{not json"},
+                materialize_outputs=False,
+            )
+
+    def test_template_unknown_role_key_fails_config_resolution(self) -> None:
+        raw = json.dumps({"system": "s", "user": "u", "systemPrompt": "x"})
+        with self.assertRaisesRegex(ValueError, "unknown key"):
+            load_runtime_config(
+                environ={},
+                overrides={"NEWS_PROMPT_TEMPLATE_STORY_DRAFTING": raw},
+                materialize_outputs=False,
+            )
+
+    def test_template_missing_placeholder_fails_config_resolution(self) -> None:
+        raw = json.dumps({"system": "No placeholders here.", "user": "None either."})
+        with self.assertRaisesRegex(ValueError, "missing required placeholder"):
+            load_runtime_config(
+                environ={},
+                overrides={"NEWS_PROMPT_TEMPLATE_STORY_DRAFTING": raw},
+                materialize_outputs=False,
+            )
+
+    def test_template_contract_loss_fails_config_resolution(self) -> None:
+        # A template that drops a code-owned contract placeholder must fail
+        # closed even when dynamic placeholders are present.
+        raw = json.dumps(
+            {
+                "system": "Custom system: $editorial_instructions",
+                "user": "$article_payload",
+            }
+        )
+        with self.assertRaisesRegex(ValueError, "output_contract"):
+            load_runtime_config(
+                environ={},
+                overrides={"NEWS_PROMPT_TEMPLATE_ARTICLE_SUMMARY": raw},
+                materialize_outputs=False,
+            )
+
+    def test_template_override_is_separate_from_instruction_override(self) -> None:
+        # The full-template namespace must never be reinterpreted as a
+        # sentence-level override and vice versa.
+        raw = self._valid_template_json(
+            "story_scale_screening",
+            "$editorial_instructions\n$scale_contract",
+            "$story_blocks",
+        )
+        config = load_runtime_config(
+            environ={},
+            overrides={
+                "NEWS_PROMPT_TEMPLATE_STORY_SCALE_SCREENING": raw,
+                "NEWS_PROMPT_OVERRIDE_STORY_SCALE_SCREENING": "Be conservative.",
+            },
+            materialize_outputs=False,
+        )
+        self.assertEqual(
+            config.prompt_instruction_overrides,
+            {"story_scale_screening": "Be conservative."},
+        )
+        self.assertEqual(
+            set(config.prompt_template_overrides), {"story_scale_screening"}
+        )
+
+    def test_template_knobs_are_registered_advanced_text_settings(self) -> None:
+        knobs = {knob["env"]: knob for knob in config_module.runtime_knob_registry()}
+        for task, env_var in prompt_templates.PROMPT_TEMPLATE_ENV_VARS.items():
+            knob = knobs[env_var]
+            self.assertTrue(knob["advanced"])
+            self.assertEqual(knob["type"], "text")
 
     def test_blank_yaml_prompt_values_inherit_profile_text(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

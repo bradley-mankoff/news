@@ -5,7 +5,9 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from news_pipeline import prompt_contracts
 from news_pipeline.article_summary_records import render_markdown_entry
+from news_pipeline.prompt_templates import PromptTemplate
 from news_pipeline.story_records import StoryRecord
 import news_pipeline.story_selection as ss
 
@@ -107,6 +109,60 @@ class StorySelectionTests(unittest.TestCase):
         self.assertEqual(parsed["alpha"]["scale"], ss.STORY_SCALE_OBVIOUSLY_LARGE)
         self.assertEqual(parsed["beta"]["scale"], ss.STORY_SCALE_OBVIOUSLY_LARGE)
         self.assertEqual(stats["entry_count"], 2)
+
+    def test_custom_full_template_receives_story_blocks_and_contract(self) -> None:
+        custom = PromptTemplate(
+            task="story_scale_screening",
+            label="Custom screening",
+            system=(
+                "Strict scale editor.\n$editorial_instructions\n$scale_contract"
+            ),
+            user="Candidates:\n$story_blocks",
+            required_placeholders=("story_blocks", "scale_contract"),
+            optional_placeholders=("editorial_instructions",),
+        )
+        messages = ss._global_scale_screening_prompt_messages(
+            [
+                {
+                    "story_key": "alpha",
+                    "story_title": "Chip export controls",
+                    "paragraph": "A draft with {literal} braces.",
+                    "summaries": ["A summary."],
+                }
+            ],
+            prompt_instructions="Be conservative.",
+            prompt_template=custom,
+        )
+        system_text = str(messages[0].content)
+        user_text = str(messages[1].content)
+        self.assertIn("Strict scale editor.", system_text)
+        self.assertIn("Be conservative.", system_text)
+        self.assertIn("Return only valid JSON", system_text)
+        self.assertIn("obviously_large_scale", system_text)
+        self.assertIn("Candidates:\nStory key: alpha", user_text)
+        self.assertIn("Chip export controls", user_text)
+        # Literal braces in draft text and guidance survive substitution
+        # without breaking the JSON contract (string.Template values).
+        self.assertIn("{literal}", user_text)
+        prompt_contracts.assert_prompt_contract(
+            "story_scale_screening", f"{system_text}\n\n{user_text}"
+        )
+
+    def test_custom_full_template_without_editorial_slot_drops_profile_text(self) -> None:
+        custom = PromptTemplate(
+            task="story_scale_screening",
+            label="No editorial",
+            system="Scale the stories. $scale_contract",
+            user="$story_blocks",
+            required_placeholders=("story_blocks", "scale_contract"),
+            optional_placeholders=("editorial_instructions",),
+        )
+        messages = ss._global_scale_screening_prompt_messages(
+            [{"story_key": "alpha", "story_title": "T", "paragraph": "D.", "summaries": []}],
+            prompt_instructions="Must not appear.",
+            prompt_template=custom,
+        )
+        self.assertNotIn("Must not appear.", str(messages[0].content))
 
         parsed, stats = ss.parse_story_scale_screening_response("not valid json")
         self.assertEqual(parsed, {})

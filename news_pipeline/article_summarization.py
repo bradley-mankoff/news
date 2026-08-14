@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import textwrap
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
@@ -17,6 +16,11 @@ from .prompt_contracts import (
     ARTICLE_SUMMARY_BLOCK_INTRO,
     ARTICLE_SUMMARY_FORMAT_ERROR_MESSAGE,
     ARTICLE_SUMMARY_OUTPUT_CONTRACT,
+)
+from .prompt_templates import (
+    DEFAULT_PROMPT_TEMPLATES,
+    PromptTemplate,
+    render_prompt_template,
 )
 
 @dataclass(frozen=True)
@@ -34,6 +38,9 @@ class ArticleSummarizationRuntime:
     normalize_report_entry: Callable[[dict, str], ArticleSummaryRecord]
     article_completed: Callable[..., None]
     prompt_instructions: str | None = None
+    # Resolved full system/user template for this stage (ADR 0015); None uses
+    # the built-in template, keeping the default rendered bytes identical.
+    prompt_template: PromptTemplate | None = None
 
 
 def _notify_article_completed(runtime: ArticleSummarizationRuntime, article: dict) -> None:
@@ -57,31 +64,7 @@ def build_article_summary_prompt_messages(
     )
     display_name = str(current_article.get("source_display_name") or display_name)
     target = runtime.build_article_heading(current_article)
-    selection_guidance = f"7. {runtime.prompt_instructions or DEFAULT_PROMPT_INSTRUCTIONS['article_summary']}"
-    output_contract = ARTICLE_SUMMARY_OUTPUT_CONTRACT
     block_intro = ARTICLE_SUMMARY_BLOCK_INTRO
-    # Dedent BEFORE .format(): the multi-line output_contract value contains
-    # column-0 lines, so dedent-after-interpolation would collapse the margin
-    # and leave every template line indented 8 spaces (byte-identity drift).
-    system_prompt = SystemMessage(content=textwrap.dedent("""
-        Today: {now_label}.
-        Current Task: Summarize one preselected article from the last {recent_window_hours} hours
-        for story discovery, selection, and synthesis.
-        1. Use only the provided article metadata, URL, description, and article text.
-        2. Do not call tools in this step.
-        3. Ignore outlet style and focus on concrete reported claims.
-        4. Include key facts: what reportedly happened, where, timeline, named actors, casualties or damage if reported, and what remains unconfirmed.
-        5. If the article text is thin, summarize only what is actually supported by the provided text and metadata.
-        6. Do not recap the general history of a longstanding subject or conflict; include background only
-           when the article reports a new fact about it or one short clause is needed for orientation.
-        {selection_guidance}
-        {output_contract}
-    """).format(
-        now_label=now_label,
-        recent_window_hours=runtime.recent_window_hours,
-        selection_guidance=selection_guidance,
-        output_contract=output_contract,
-    ).strip())
     story_line = f"Story: {current_article.get('story_title')}\n" if current_article.get("story_title") else ""
     article_payload = (
         "Selected article:\n\n"
@@ -102,7 +85,22 @@ def build_article_summary_prompt_messages(
         "Summary:\n"
         "<4-7 sentence article summary in plain prose, no brackets>"
     )
-    return [system_prompt, HumanMessage(content=article_payload)]
+    template = runtime.prompt_template or DEFAULT_PROMPT_TEMPLATES["article_summary"]
+    system_text, user_text = render_prompt_template(
+        "article_summary",
+        template,
+        {
+            "now_label": now_label,
+            "recent_window_hours": str(runtime.recent_window_hours),
+            "article_payload": article_payload,
+            "output_contract": ARTICLE_SUMMARY_OUTPUT_CONTRACT,
+            "editorial_instructions": (
+                runtime.prompt_instructions
+                or DEFAULT_PROMPT_INSTRUCTIONS["article_summary"]
+            ),
+        },
+    )
+    return [SystemMessage(content=system_text), HumanMessage(content=user_text)]
 
 
 def _summarize_single_article(runtime: ArticleSummarizationRuntime, current_article: dict) -> ArticleSummaryRecord:

@@ -36,6 +36,11 @@ from .prompt_catalog import (
     get_prompt_profile,
 )
 from .prompt_contracts import validate_editorial_instructions
+from .prompt_templates import (
+    PROMPT_TEMPLATE_ENV_VARS,
+    parse_prompt_template_override,
+    validate_prompt_template,
+)
 
 
 
@@ -353,6 +358,7 @@ class RuntimeConfig:
     preset_id: str
     prompt_profile_id: str
     prompt_instruction_overrides: dict[str, str]
+    prompt_template_overrides: dict[str, dict[str, str]]
     source_scope: str
     recipient_scope: str
     url_reuse_blocking_enabled: bool
@@ -1594,6 +1600,16 @@ def runtime_knob_registry() -> list[dict[str, Any]]:
             )
             for task, env_var in PROMPT_TASK_OVERRIDE_ENV_VARS.items()
         ],
+        *[
+            _runtime_knob(
+                "Run Settings",
+                f"Prompt template ({task.replace('_', ' ')}) JSON",
+                env_var,
+                "text",
+                advanced=True,
+            )
+            for task, env_var in PROMPT_TEMPLATE_ENV_VARS.items()
+        ],
         _runtime_knob("Run Settings", "Relax story drafting guards", "NEWS_RELAX_STORY_DRAFTING_GUARDS", "bool", advanced=True),
         _runtime_knob("Run Settings", "Embedding model", "NEWS_EMBEDDING_MODEL", default="all-mpnet-base-v2", advanced=True),
         _runtime_knob("Run Settings", "Token encoding", "NEWS_TOKEN_ENCODING", default="o200k_base", advanced=True),
@@ -2269,6 +2285,29 @@ def _build_runtime_config(
         if (value := _str_env(env_var, "").strip())
     }
     prompt_instruction_overrides = {**yaml_prompt_overrides, **env_prompt_overrides}
+    # Full-template overrides (ADR 0015): the separate NEWS_PROMPT_TEMPLATE_
+    # <TASK> namespace carries validated system/user string.Template JSON
+    # values from Advanced Settings / Run Presets / CLI env. Empty-but-present
+    # values count as unset like sibling knobs; non-empty values must parse
+    # and validate here (fail-closed, before any model call) with the same
+    # pure parser the UI endpoint and preset CRUD use. Sentence-level
+    # NEWS_PROMPT_OVERRIDE_<TASK> values are never reinterpreted as full
+    # templates.
+    prompt_template_overrides: dict[str, dict[str, str]] = {}
+    for _template_task, _template_env_var in PROMPT_TEMPLATE_ENV_VARS.items():
+        raw_template = _str_env(_template_env_var, "").strip()
+        if not raw_template:
+            continue
+        parsed_template = parse_prompt_template_override(
+            _template_task, raw_template, source=_template_env_var
+        )
+        template_violations = validate_prompt_template(_template_task, parsed_template)
+        if template_violations:
+            raise ValueError(
+                f"{_template_env_var} for task {_template_task!r} is invalid: "
+                + "; ".join(template_violations)
+            )
+        prompt_template_overrides[_template_task] = parsed_template
     # Editorial sentences must never weaken the pipeline-owned output contracts
     # (parsers, retries, citation renderers, sanitizers depend on them). The
     # built-in profile is validated strictly, then the effective
@@ -2422,6 +2461,7 @@ def _build_runtime_config(
         preset_id=preset_id,
         prompt_profile_id=prompt_profile_id,
         prompt_instruction_overrides=prompt_instruction_overrides,
+        prompt_template_overrides=prompt_template_overrides,
         source_scope=source_scope,
         recipient_scope=recipient_scope,
         url_reuse_blocking_enabled=url_reuse_blocking_enabled,

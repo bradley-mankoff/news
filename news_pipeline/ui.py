@@ -64,6 +64,12 @@ from .prompt_catalog import (
     compare_prompt_profiles,
     list_prompt_profiles,
 )
+from .prompt_templates import (
+    PROMPT_TEMPLATE_ENV_VARS,
+    list_prompt_templates,
+    parse_prompt_template_override,
+    validate_prompt_template,
+)
 from .model_catalog import (
     MODEL_RECOMMENDATION_TASKS,
     fetch_model_metadata,
@@ -592,6 +598,7 @@ def schema_payload() -> dict[str, Any]:
         "presets": list_presets(),
         "model_tuning_presets": list_model_tuning_presets(),
         "prompt_profiles": list_prompt_profiles(),
+        "prompt_templates": list_prompt_templates(),
         "model_catalog": list_model_catalog(),
         "model_recommendation_tasks": list(MODEL_RECOMMENDATION_TASKS),
         "sources": _source_summary(),
@@ -643,6 +650,46 @@ def list_presets() -> dict[str, Any]:
     }
 
 
+def validate_prompt_templates_payload(body: dict[str, Any]) -> dict[str, Any]:
+    """Pure validation adapter for the ``/api/prompt-templates/validate``
+    endpoint and preset CRUD.
+
+    Accepts either ``{"task": ..., "template": {...}}`` (validate one task)
+    or ``{"templates": {task: {...}, ...}}`` (validate the given tasks;
+    omitted tasks are not checked). Uses the exact same parser/validator as
+    runtime config resolution so UI, preset, preview, and CLI never diverge.
+    Never writes files and never echoes untrusted template bodies.
+    """
+    templates: dict[str, Any] = {}
+    raw_templates = body.get("templates")
+    if isinstance(raw_templates, dict):
+        templates.update(raw_templates)
+    if body.get("task") is not None:
+        templates[str(body.get("task"))] = body.get("template")
+    errors: dict[str, list[str]] = {}
+    for task, template in templates.items():
+        if task not in PROMPT_TEMPLATE_ENV_VARS:
+            errors[task] = [
+                f"unknown prompt task {task!r}; "
+                f"valid tasks: {', '.join(sorted(PROMPT_TEMPLATE_ENV_VARS))}."
+            ]
+            continue
+        try:
+            raw_json = (
+                template if isinstance(template, str) else json.dumps(template)
+            )
+            parsed = parse_prompt_template_override(
+                task, raw_json, source="template validation"
+            )
+        except ValueError as exc:
+            errors[task] = [str(exc)]
+            continue
+        violations = validate_prompt_template(task, parsed)
+        if violations:
+            errors[task] = violations
+    return {"valid": not errors, "errors": errors}
+
+
 def _coerce_preset_env(raw: Any) -> dict[str, str]:
     if not isinstance(raw, dict):
         return {}
@@ -668,6 +715,25 @@ def upsert_preset(body: dict[str, Any], *, append_only: bool = False) -> dict[st
     updates = body.get("updates") if isinstance(body.get("updates"), dict) else body
     env_source = body if "env" in body else updates if isinstance(updates, dict) and "env" in updates else None
     env = _coerce_preset_env(env_source.get("env")) if env_source is not None else dict(existing.get("env") or {})
+    # Full-template overrides (ADR 0015) must pass the same pure parser and
+    # placeholder/contract validation as runtime config before they can be
+    # persisted; a non-browser caller cannot bypass the UI validation step.
+    # Values are validated against the final env map, so removing an override
+    # from a preset is never blocked.
+    for env_var in PROMPT_TEMPLATE_ENV_VARS.values():
+        raw_value = env.get(env_var)
+        if not raw_value:
+            continue
+        task = next(
+            task for task, name in PROMPT_TEMPLATE_ENV_VARS.items() if name == env_var
+        )
+        parsed = parse_prompt_template_override(task, raw_value, source=env_var)
+        violations = validate_prompt_template(task, parsed)
+        if violations:
+            raise ValueError(
+                f"{env_var} for task {task!r} is invalid: "
+                + "; ".join(violations)
+            )
     record = {
         "id": preset_id,
         "name": str(updates.get("name") or existing.get("name") or preset_id).strip(),
@@ -1602,6 +1668,19 @@ class NewsUIHandler(BaseHTTPRequestHandler):
                 self._send_json(upsert_model_tuning_preset(body, append_only=True), status=HTTPStatus.CREATED)
             elif parsed.path == "/api/presets/duplicate":
                 self._send_json(duplicate_preset(body), status=HTTPStatus.CREATED)
+            elif parsed.path == "/api/prompt-templates/validate":
+                result = validate_prompt_templates_payload(body)
+                if result["valid"]:
+                    self._send_json(result)
+                else:
+                    detail = "; ".join(
+                        f"{task}: {'; '.join(violations)}"
+                        for task, violations in sorted(result["errors"].items())
+                    )
+                    self._send_error_json(
+                        ValueError(f"Invalid prompt template override: {detail}"),
+                        status=HTTPStatus.BAD_REQUEST,
+                    )
             elif parsed.path.startswith("/api/runs/") and parsed.path.endswith("/stop"):
                 run_id = parsed.path.split("/")[3]
                 self._send_json(RUN_MANAGER.stop(run_id))
@@ -2166,6 +2245,11 @@ HTML = r"""<!doctype html>
       "NEWS_PROMPT_OVERRIDE_STORY_DRAFTING",        // the Advanced-tab duplicates
       "NEWS_PROMPT_OVERRIDE_TITLE_GENERATION",
       "NEWS_PROMPT_OVERRIDE_IMAGE_ART_DIRECTION",
+      "NEWS_PROMPT_TEMPLATE_ARTICLE_SUMMARY",       // dedicated full-template
+      "NEWS_PROMPT_TEMPLATE_STORY_SCALE_SCREENING", // editors in the Advanced
+      "NEWS_PROMPT_TEMPLATE_STORY_DRAFTING",        // Settings panel; suppress
+      "NEWS_PROMPT_TEMPLATE_TITLE_GENERATION",      // the Advanced-tab duplicates
+      "NEWS_PROMPT_TEMPLATE_IMAGE_ART_DIRECTION",
       "NEWS_MODEL_ARTICLE_SUMMARY_TUNING_PRESET",
       "NEWS_MODEL_STORY_DRAFTING_TUNING_PRESET",
       "NEWS_MODEL_STORY_SCALE_SCREENING_TUNING_PRESET",
@@ -2695,7 +2779,7 @@ HTML = r"""<!doctype html>
         }
         if (val) env[name] = val;
       });
-      return env;
+      return { ...currentPromptTemplateEnv(), ...env };
     }
     function collectOptions() {
       return {
@@ -3076,7 +3160,16 @@ HTML = r"""<!doctype html>
         <section class="panel">
           <p class="eyebrow">Prompt templates</p>
           <h2>Full prompt templates</h2>
-          <p class="muted">Read-only preview of the exact instructions the selected profile supplies to each LLM stage.</p>
+          <p class="muted">Advanced per-task system/user template overrides. A valid override replaces the stage's prompt structure; the pipeline-owned output contracts stay code-owned and are injected through the contract placeholders. Use $$ for a literal dollar sign.</p>
+          <div id="promptTemplateEditors" class="stack"></div>
+          <div class="toolbar">
+            <button id="restoreAllPromptTemplatesBtn">Restore all defaults</button>
+          </div>
+        </section>
+        <section class="panel">
+          <p class="eyebrow">Editorial approach</p>
+          <h2>Per-stage editorial sentences</h2>
+          <p class="muted">Editable per-stage editorial instruction sentences supplied by the selected Prompt Profile. These are sentence-level only; a full-template override above takes precedence for that task unless it includes $editorial_instructions.</p>
           <div id="promptProfileReadouts" class="stack"></div>
           <div class="toolbar">
             <button id="comparePromptProfileBtn">Compare with balanced</button>
@@ -3089,6 +3182,7 @@ HTML = r"""<!doctype html>
       `;
       decorateEnvHints($("advancedPanels"));
       renderPromptProfilePanel();
+      renderPromptTemplateEditors();
     }
     function renderModelTuningControls(task, { preserveEditor = false } = {}) {
       const meta = TASK_CONFIG[task];
@@ -3268,6 +3362,7 @@ HTML = r"""<!doctype html>
     function applyRunPreset(preset) {
       state.selectedRunPresetId = preset.id || "";
       setKnobEnv(preset.env || {});
+      setPromptTemplateEnv(preset.env || {});
       renderPresetSummary();
       renderModelTuningPanels();
       renderPromptProfilePanel();
@@ -3278,6 +3373,10 @@ HTML = r"""<!doctype html>
       document.querySelectorAll("[data-env]").forEach(el => {
         if (el.type === "checkbox") el.checked = false;
         else el.value = "";
+      });
+      ((state.schema && state.schema.prompt_templates) || []).forEach(t => {
+        promptTemplateRaw[t.task] = "";
+        restorePromptTemplateTask(t.task);
       });
       state.selectedRunPresetId = "";
       renderPresetSummary();
@@ -3302,6 +3401,11 @@ HTML = r"""<!doctype html>
     async function savePresetEditor() {
       const body = collectRunPresetEditor();
       if (!body.id) throw new Error("Preset id is required.");
+      // Merge the Advanced full-template editors into the saved env and run
+      // the same authoritative validation the runtime uses, so an invalid
+      // template can never be persisted.
+      body.env = { ...currentPromptTemplateEnv(), ...body.env };
+      await validatePromptTemplateEnv(body.env);
       const exists = state.presets.some(preset => preset.id === body.id);
       await api("/api/presets", { method: exists ? "PATCH" : "POST", body: JSON.stringify(body) });
       await loadPresets();
@@ -4182,6 +4286,187 @@ HTML = r"""<!doctype html>
           const editor = document.querySelector(`[data-env="${PROMPT_OVERRIDE_ENVS[task]}"]`);
           if (editor) editor.value = (profile.prompts && profile.prompts[task]) || "";
         };
+      });
+    }
+    // ---------------------------------------------------------------------
+    // Advanced full-template editors (ADR 0015). One System + User textarea
+    // pair per LLM task, rendered from schema.prompt_templates (never a second
+    // hard-coded task list). Changed pairs serialize as one JSON value under
+    // NEWS_PROMPT_TEMPLATE_<TASK>; untouched pairs round-trip the raw current
+    // value so a malformed override is never silently dropped. The textareas
+    // intentionally do NOT carry data-env (two inputs with the same env name
+    // would produce duplicate/invalid collectEnv() values); collection is
+    // handled by currentPromptTemplateEnv() below.
+    let promptTemplateDirty = {};
+    let promptTemplateRaw = {};
+    function promptTemplateEnvMap() {
+      const map = {};
+      ((state.schema && state.schema.prompt_templates) || []).forEach(t => { map[t.task] = t.env_var; });
+      return map;
+    }
+    function promptTemplateRecord(task) {
+      return ((state.schema && state.schema.prompt_templates) || []).find(t => t.task === task) || null;
+    }
+    function renderPromptTemplateEditors() {
+      const container = $("promptTemplateEditors");
+      if (!container) return;
+      const envMap = promptTemplateEnvMap();
+      container.innerHTML = ((state.schema && state.schema.prompt_templates) || []).map(t => {
+        const envVar = envMap[t.task];
+        const envRaw = (state.schema && state.schema.current_env && state.schema.current_env[envVar]) || "";
+        promptTemplateRaw[t.task] = envRaw;
+        promptTemplateDirty[t.task] = false;
+        let system = t.system;
+        let user = t.user;
+        let invalidText = "";
+        if (envRaw) {
+          try {
+            const parsed = JSON.parse(envRaw);
+            if (parsed && typeof parsed.system === "string" && typeof parsed.user === "string") {
+              system = parsed.system;
+              user = parsed.user;
+            } else {
+              invalidText = "Current override is malformed; the runtime will reject it until fixed or restored.";
+            }
+          } catch (_err) {
+            invalidText = "Current override is malformed; the runtime will reject it until fixed or restored.";
+          }
+        }
+        const required = (t.required_placeholders || []).map(p => `$${p}`).join(", ");
+        const optional = (t.optional_placeholders || []).map(p => `$${p}`).join(", ");
+        const helpEntries = Object.entries(t.placeholder_descriptions || {});
+        return `<div class="knob" data-prompt-template-card="${escapeHtml(t.task)}">
+          <label>${escapeHtml(t.label)} <code>${escapeHtml(envVar)}</code></label>
+          <label class="field"><span>System message</span>
+            <textarea data-template-system="${escapeHtml(t.task)}" rows="8" spellcheck="false">${escapeHtml(system)}</textarea></label>
+          <label class="field"><span>User message</span>
+            <textarea data-template-user="${escapeHtml(t.task)}" rows="6" spellcheck="false">${escapeHtml(user)}</textarea></label>
+          <p class="muted">Required placeholders: ${escapeHtml(required)}${optional ? ` · Optional: ${escapeHtml(optional)}` : ""}</p>
+          <details class="details">
+            <summary>Placeholder reference</summary>
+            <ul>${helpEntries.map(([name, desc]) => `<li><code>$${escapeHtml(name)}</code> — ${escapeHtml(desc)}</li>`).join("")}</ul>
+          </details>
+          <p class="muted">A custom template replaces this task's Prompt Profile/editorial sentences unless it includes $editorial_instructions. Use $$ for a literal dollar sign.</p>
+          <p class="prompt-template-status" data-template-status="${escapeHtml(t.task)}">${invalidText ? `<span class="bad">${escapeHtml(invalidText)}</span>` : ""}</p>
+          <div class="toolbar">
+            <button type="button" class="prompt-template-validate" data-task="${escapeHtml(t.task)}">Validate</button>
+            <button type="button" class="prompt-template-restore" data-task="${escapeHtml(t.task)}">Restore default</button>
+          </div>
+        </div>`;
+      }).join("");
+      document.querySelectorAll("#promptTemplateEditors textarea").forEach(el => {
+        el.addEventListener("input", () => {
+          const task = el.dataset.templateSystem || el.dataset.templateUser || "";
+          if (task) {
+            promptTemplateDirty[task] = true;
+            const statusEl = $(`[data-template-status="${task}"]`);
+            if (statusEl) statusEl.innerHTML = "";
+          }
+        });
+      });
+      document.querySelectorAll("#promptTemplateEditors .prompt-template-validate").forEach(btn => {
+        btn.onclick = () => {
+          validatePromptTemplateTask(btn.dataset.task).catch(err => {
+            const statusEl = $(`[data-template-status="${btn.dataset.task}"]`);
+            if (statusEl) statusEl.innerHTML = `<span class="bad">${escapeHtml(err.message)}</span>`;
+          });
+        };
+      });
+      document.querySelectorAll("#promptTemplateEditors .prompt-template-restore").forEach(btn => {
+        btn.onclick = () => restorePromptTemplateTask(btn.dataset.task);
+      });
+      const restoreAll = $("restoreAllPromptTemplatesBtn");
+      if (restoreAll) restoreAll.onclick = restoreAllPromptTemplates;
+    }
+    function restorePromptTemplateTask(task) {
+      const record = promptTemplateRecord(task);
+      const sysEl = $(`[data-template-system="${task}"]`);
+      const userEl = $(`[data-template-user="${task}"]`);
+      if (!record || !sysEl || !userEl) return;
+      sysEl.value = record.system;
+      userEl.value = record.user;
+      // Restoring counts as an edit: the next collect() omits the override.
+      promptTemplateDirty[task] = true;
+      const statusEl = $(`[data-template-status="${task}"]`);
+      if (statusEl) statusEl.innerHTML = "";
+    }
+    function restoreAllPromptTemplates() {
+      ((state.schema && state.schema.prompt_templates) || []).forEach(t => restorePromptTemplateTask(t.task));
+    }
+    async function validatePromptTemplateTask(task) {
+      const record = promptTemplateRecord(task);
+      const sysEl = $(`[data-template-system="${task}"]`);
+      const userEl = $(`[data-template-user="${task}"]`);
+      if (!record || !sysEl || !userEl) return;
+      const data = await api("/api/prompt-templates/validate", {
+        method: "POST",
+        body: JSON.stringify({ task, template: { system: sysEl.value, user: userEl.value } })
+      });
+      const statusEl = $(`[data-template-status="${task}"]`);
+      if (statusEl) statusEl.innerHTML = `<span class="ok">Template is valid.</span>`;
+      return data;
+    }
+    function currentPromptTemplateEnv() {
+      // Serialize only changed task pairs as JSON; untouched tasks round-trip
+      // the raw current value (so malformed overrides stay visible to the
+      // runtime instead of being silently replaced), and pairs that equal the
+      // built-in default are omitted entirely (no override).
+      const env = {};
+      const envMap = promptTemplateEnvMap();
+      ((state.schema && state.schema.prompt_templates) || []).forEach(t => {
+        const sysEl = $(`[data-template-system="${t.task}"]`);
+        const userEl = $(`[data-template-user="${t.task}"]`);
+        if (!sysEl || !userEl) return;
+        const envVar = envMap[t.task];
+        if (!promptTemplateDirty[t.task]) {
+          const raw = promptTemplateRaw[t.task] || "";
+          if (raw) env[envVar] = raw;
+          return;
+        }
+        if (sysEl.value.trim() === t.system && userEl.value.trim() === t.user) return;
+        env[envVar] = JSON.stringify({ system: sysEl.value, user: userEl.value });
+      });
+      return env;
+    }
+    function setPromptTemplateEnv(env) {
+      ((state.schema && state.schema.prompt_templates) || []).forEach(t => {
+        const envVar = promptTemplateEnvMap()[t.task];
+        const raw = env[envVar] || "";
+        promptTemplateRaw[t.task] = raw;
+        promptTemplateDirty[t.task] = false;
+        const sysEl = $(`[data-template-system="${t.task}"]`);
+        const userEl = $(`[data-template-user="${t.task}"]`);
+        if (!sysEl || !userEl) return;
+        sysEl.value = t.system;
+        userEl.value = t.user;
+        if (!raw) return;
+        try {
+          const parsed = JSON.parse(raw);
+          if (parsed && typeof parsed.system === "string" && typeof parsed.user === "string") {
+            sysEl.value = parsed.system;
+            userEl.value = parsed.user;
+          }
+        } catch (_err) { /* defaults stay; raw is preserved for round-trip */ }
+      });
+    }
+    async function validatePromptTemplateEnv(env) {
+      const templates = {};
+      let any = false;
+      const envMap = promptTemplateEnvMap();
+      ((state.schema && state.schema.prompt_templates) || []).forEach(t => {
+        const raw = env[envMap[t.task]];
+        if (!raw) return;
+        any = true;
+        try {
+          templates[t.task] = JSON.parse(raw);
+        } catch (_err) {
+          templates[t.task] = raw;
+        }
+      });
+      if (!any) return;
+      await api("/api/prompt-templates/validate", {
+        method: "POST",
+        body: JSON.stringify({ templates })
       });
     }
     const MODEL_TASK_LABELS = {

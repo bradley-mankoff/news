@@ -4,6 +4,8 @@ from dataclasses import replace
 from types import SimpleNamespace
 import unittest
 
+from news_pipeline import prompt_contracts
+from news_pipeline.prompt_templates import PromptTemplate
 from news_pipeline.story_drafting import (
     StoryDraftingRuntime,
     article_summary_lookup_by_id,
@@ -139,6 +141,86 @@ class StoryDraftingTests(unittest.TestCase):
         self.assertIn("Main story:", prompt_text)
         self.assertIn("Contradictions:", prompt_text)
         self.assertIn("[[S1]]", prompt_text)
+
+    def test_custom_full_template_receives_title_sources_and_contracts(self) -> None:
+        custom = PromptTemplate(
+            task="story_drafting",
+            label="Custom story",
+            system=(
+                "Synthesize a story for $now_label. Title: $story_title.\n"
+                "$citation_contract\n$editorial_instructions\n$output_contract"
+            ),
+            user="Sources:\n$source_summary_lines",
+            required_placeholders=(
+                "now_label",
+                "story_title",
+                "source_summary_lines",
+                "citation_contract",
+                "output_contract",
+            ),
+            optional_placeholders=("editorial_instructions",),
+        )
+        messages = build_story_synthesis_prompt_messages(
+            {
+                "topic_title": "Weather",
+                "story_title": "Storm damage",
+                "summaries": ["Officials reported storm damage."],
+                "citation_sources": [
+                    _source(
+                        "S1",
+                        body_evidence=(
+                            "County logs listed ten damaged homes and two closed roads."
+                        ),
+                    )
+                ],
+            },
+            "May 30, 2026",
+            prompt_instructions="Write playfully.",
+            prompt_template=custom,
+        )
+        system_text = str(messages[0].content)
+        user_text = str(messages[1].content)
+        self.assertIn("Synthesize a story for May 30, 2026.", system_text)
+        self.assertIn("Title: Storm damage.", system_text)
+        self.assertIn("Write playfully.", system_text)
+        self.assertIn("Use only listed source IDs and do not invent sources.", system_text)
+        self.assertIn("Return exactly this format:", system_text)
+        self.assertIn("Sources:\nS1:", user_text)
+        self.assertIn("County logs listed ten damaged homes", user_text)
+        prompt_contracts.assert_prompt_contract(
+            "story_drafting", f"{system_text}\n\n{user_text}"
+        )
+
+    def test_custom_full_template_without_editorial_slot_drops_profile_text(self) -> None:
+        custom = PromptTemplate(
+            task="story_drafting",
+            label="No editorial",
+            system=(
+                "Synthesize for $now_label. $citation_contract $output_contract"
+            ),
+            user="$story_title\n$source_summary_lines",
+            required_placeholders=(
+                "now_label",
+                "story_title",
+                "source_summary_lines",
+                "citation_contract",
+                "output_contract",
+            ),
+            optional_placeholders=("editorial_instructions",),
+        )
+        messages = build_story_synthesis_prompt_messages(
+            {
+                "story_title": "Storm damage",
+                "summaries": ["Officials reported storm damage."],
+                "citation_sources": [
+                    _source("S1", body_evidence="County logs listed damage.")
+                ],
+            },
+            "May 30, 2026",
+            prompt_instructions="Must not appear.",
+            prompt_template=custom,
+        )
+        self.assertNotIn("Must not appear.", str(messages[0].content))
 
     def test_story_prompt_includes_citation_precedence_without_reordering_sources(self) -> None:
         messages = build_story_synthesis_prompt_messages(
