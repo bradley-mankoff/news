@@ -412,17 +412,22 @@ Citation precedence: Cite this source only for facts it directly supports.
 
             art_system_prompt = pipeline._build_image_art_system_prompt(
                 profile.prompts["image_art_direction"],
+            )
+            title_system_prompt = pipeline._build_title_generation_system_prompt(
                 profile.prompts["title_generation"],
             )
             prompt_contracts.assert_prompt_contract("image_art_direction", art_system_prompt)
-            prompt_contracts.assert_prompt_contract("title_generation", art_system_prompt)
+            prompt_contracts.assert_prompt_contract("title_generation", title_system_prompt)
             # Marker-only drift guard is vacuous for these two tasks: every
             # marker lives in the unconditionally-injected JSON contract, so a
             # template edit that drops the {image_art_direction}/{title_guidance}
             # interpolation would pass the checks above. Require the profile's
-            # own editorial sentences to be present in the rendered prompt.
+            # own editorial sentences to be present in the rendered prompt AND
+            # isolated to their own call (issue #122 split).
             self.assertIn(profile.prompts["image_art_direction"], art_system_prompt)
-            self.assertIn(profile.prompts["title_generation"], art_system_prompt)
+            self.assertIn(profile.prompts["title_generation"], title_system_prompt)
+            self.assertNotIn(profile.prompts["title_generation"], art_system_prompt)
+            self.assertNotIn(profile.prompts["image_art_direction"], title_system_prompt)
 
     def test_validate_prompt_contract_reports_missing_markers(self) -> None:
         missing = prompt_contracts.validate_prompt_contract("story_drafting", "no markers here")
