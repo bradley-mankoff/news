@@ -12,7 +12,6 @@ from .archon import (
     latest_workflow_run,
     runs_by_message_from,
 )
-from .deferred import reconcile_deferred_work
 from .dispatch import dispatch, prepare_dispatch_budget, resume_issue
 from .github import (
     branch_empty_vs_main,
@@ -328,20 +327,30 @@ def _reconcile_completions(
                             if not ok and note == "conflict":
                                 rec["dev_conflict_mech"] = True
                         elif act == "dispatch":
-                            dmsg = (f"Resolve merge conflicts on develop PR #{pr_num} "
-                                    f"(issue #{issue_number}).")
-                            if dispatch(cfg, env, dev_wf,
-                                        f"fix-develop-issue-{issue_number}", dmsg,
-                                        item_id, issue_number):
-                                rec["dev_conflict_fix_msg"] = dmsg
-                                rec["dev_conflict_noted"] = False
-                                comment_issue(
-                                    cfg, env, issue_number,
-                                    f"Develop PR #{pr_num} has merge conflicts. "
-                                    f"Resolving automatically (merging develop into "
-                                    f"the branch, then {dev_wf} if needed).")
-                                log(f"DEVELOP CONFLICT DISPATCH PR #{pr_num} "
-                                    f"issue={issue_number} wf={dev_wf}")
+                            if _conflict_fixer_active(
+                                    runs_by_msg, _POLL_CONFLICT_FIXERS):
+                                if not rec.get("dev_conflict_deferred"):
+                                    log(f"DEVELOP CONFLICT DISPATCH DEFERRED PR #{pr_num} "
+                                        f"issue={issue_number} — another conflict fix "
+                                        "run is active")
+                                    rec["dev_conflict_deferred"] = True
+                            else:
+                                dmsg = (f"Resolve merge conflicts on develop PR #{pr_num} "
+                                        f"(issue #{issue_number}).")
+                                if dispatch(cfg, env, dev_wf,
+                                            f"fix-develop-issue-{issue_number}", dmsg,
+                                            item_id, issue_number):
+                                    _POLL_CONFLICT_FIXERS.add(dmsg)
+                                    rec["dev_conflict_fix_msg"] = dmsg
+                                    rec["dev_conflict_noted"] = False
+                                    rec.pop("dev_conflict_deferred", None)
+                                    comment_issue(
+                                        cfg, env, issue_number,
+                                        f"Develop PR #{pr_num} has merge conflicts. "
+                                        f"Resolving automatically (merging develop into "
+                                        f"the branch, then {dev_wf} if needed).")
+                                    log(f"DEVELOP CONFLICT DISPATCH PR #{pr_num} "
+                                        f"issue={issue_number} wf={dev_wf}")
                         elif act == "failed":
                             if not rec.get("dev_conflict_noted"):
                                 comment_issue(
@@ -368,19 +377,10 @@ def _reconcile_completions(
                         "dev_conflict_mech",
                         "dev_conflict_fix_msg",
                         "dev_conflict_noted",
+                        "dev_conflict_deferred",
                     ):
                         rec.pop(marker, None)
                     log(run_hook(cfg, "after_integration_merge"))
-                # Deferred-work guard: anything deferred by this run must be
-                # tracked as an issue before the item moves to Ready for Review.
-                dw_cfg = cfg.get("deferred_work") or {}
-                if (issue_number and dw_cfg.get("enabled", True)
-                        and not reconcile_deferred_work(
-                            cfg, env, issue_number, pr_num, rec, msg,
-                            project_id, field_id, status_options)):
-                    log(f"DEFERRED RETRY item={item_id} issue={issue_number} "
-                        "(guard incomplete; will retry next poll)")
-                    continue
                 option_id = status_options.get(complete_move_to)
                 if option_id and move_to_lane(
                         cfg, env, project_id, item_id, field_id, option_id):
@@ -646,6 +646,9 @@ def _complete_reviews(ctx: PollContext, runs_snapshot: WorkflowRuns | None, runs
             held = held or (rstatus == "completed" and verdict is None)
             if held:
                 held_value = verdict or "none"
+                # Log SHIP HELD once per hold episode (rising edge of the
+                # notice marker), not every poll: the item stays held until a
+                # human re-drag or a conflict-clear requeue.
                 if rec.get("review_held_notice") != held_value:
                     if issue_number and not comment_issue(
                             cfg, env, issue_number,
@@ -654,10 +657,10 @@ def _complete_reviews(ctx: PollContext, runs_snapshot: WorkflowRuns | None, runs
                             "to re-review."):
                         continue
                     rec["review_held_notice"] = held_value
+                    log(f"SHIP HELD PR #{ship_num}: verdict={held_value}")
                 rec["review_held"] = True
                 rec.pop("review_msg", None)
                 state[item_id] = rec
-                log(f"SHIP HELD PR #{ship_num}: verdict={held_value}")
             elif rstatus in {"failed", "cancelled"}:
                 details, worktree, _action = update_recovery_state(
                     rec, review_run, branch=rec.get("branch"))
@@ -667,9 +670,12 @@ def _complete_reviews(ctx: PollContext, runs_snapshot: WorkflowRuns | None, runs
                         cfg, env, issue_number, rec, details, worktree,
                         "manual_review")
                 rec["review_held"] = True
+                run_id = str((review_run or {}).get("id") or "")
+                if rec.get("review_failed_logged_run_id") != run_id:
+                    log(f"REVIEW {rstatus.upper()} item={item_id}; "
+                        f"left in {review_lane_name} for human re-drag")
+                    rec["review_failed_logged_run_id"] = run_id
                 state[item_id] = rec
-                log(f"REVIEW {rstatus.upper()} item={item_id}; "
-                    f"left in {review_lane_name} for human re-drag")
     return runs_snapshot, runs_by_msg, review_lane_name, ship_to
 
 
@@ -697,7 +703,9 @@ def _remediate_ship_conflicts(ctx: PollContext, runs_by_msg: dict[str, str] | No
             # Never remediate while a review run is active — its sync/fix
             # nodes also write to the branch; concurrent writers race.
             rmsg = rec.get("review_msg")
-            if runs_by_msg is None and (rmsg or rec.get("conflict_fix_msg")):
+            if runs_by_msg is None and (
+                    rmsg or rec.get("conflict_fix_msg")
+                    or rec.get("conflict_mech_failed")):
                 runs_by_msg = fetch_runs_by_message(env)
             lookup_error = (
                 getattr(runs_by_msg, "error", None)
@@ -736,18 +744,26 @@ def _remediate_ship_conflicts(ctx: PollContext, runs_by_msg: dict[str, str] | No
                 elif not ok:
                     action = "wait"  # transient error — retry next poll
             if action == "dispatch":
-                msg = (f"Resolve merge conflicts on ship PR #{ship_num} "
-                       f"(issue #{issue_number}).")
-                branch = f"fix-ship-issue-{issue_number}"
-                if dispatch(cfg, env, fix_wf, branch, msg, item_id, issue_number):
-                    rec["conflict_fix_msg"] = msg
-                    rec["conflict_fix_noted"] = False
-                    comment_issue(
-                        cfg, env, issue_number,
-                        f"Ship PR #{ship_num} has merge conflicts. Resolving automatically "
-                        f"(merging main into the branch, then {fix_wf} if needed).")
-                    log(f"SHIP CONFLICT DISPATCH PR #{ship_num} issue={issue_number} "
-                        f"wf={fix_wf}")
+                if _conflict_fixer_active(runs_by_msg, _POLL_CONFLICT_FIXERS):
+                    if not rec.get("conflict_fix_deferred"):
+                        log(f"SHIP CONFLICT DISPATCH DEFERRED PR #{ship_num} "
+                            f"issue={issue_number} — another conflict fix run is active")
+                        rec["conflict_fix_deferred"] = True
+                else:
+                    msg = (f"Resolve merge conflicts on ship PR #{ship_num} "
+                           f"(issue #{issue_number}).")
+                    branch = f"fix-ship-issue-{issue_number}"
+                    if dispatch(cfg, env, fix_wf, branch, msg, item_id, issue_number):
+                        _POLL_CONFLICT_FIXERS.add(msg)
+                        rec["conflict_fix_msg"] = msg
+                        rec["conflict_fix_noted"] = False
+                        rec.pop("conflict_fix_deferred", None)
+                        comment_issue(
+                            cfg, env, issue_number,
+                            f"Ship PR #{ship_num} has merge conflicts. Resolving automatically "
+                            f"(merging main into the branch, then {fix_wf} if needed).")
+                        log(f"SHIP CONFLICT DISPATCH PR #{ship_num} issue={issue_number} "
+                            f"wf={fix_wf}")
             elif action == "failed":
                 if not rec.get("conflict_fix_noted"):
                     if comment_issue(
@@ -775,6 +791,7 @@ def _remediate_ship_conflicts(ctx: PollContext, runs_by_msg: dict[str, str] | No
                 rec.pop("conflict_fix_msg", None)
                 rec.pop("conflict_mech_failed", None)
                 rec.pop("conflict_fix_noted", None)
+                rec.pop("conflict_fix_deferred", None)
             state[item_id] = rec
 
 def ensure_ship_review(cfg: dict, env: dict, item_id: str, issue_number: int,
@@ -825,8 +842,15 @@ def ensure_ship_review(cfg: dict, env: dict, item_id: str, issue_number: int,
     msg = (f"Review PR #{ship['number']} (ship to {ship_to} for issue "
            f"#{issue_number}: {title}).")
     branch = f"review/issue-{issue_number}"
-    if not dispatch(cfg, env, cfg["dispatch"]["review"]["workflow"],
-                    branch, msg, item_id, issue_number):
+    result = dispatch(cfg, env, cfg["dispatch"]["review"]["workflow"],
+                      branch, msg, item_id, issue_number)
+    if not result:
+        if getattr(result, "reason", "") == "capacity":
+            # Expected backpressure, not a failure: the budget gate already
+            # logged DISPATCH DEFERRED; surface the hold on the issue once
+            # and retry next poll without touching any review state.
+            note_capacity_deferred(cfg, env, issue_number, rec)
+            return None
         log(f"SHIP REVIEW DISPATCH FAILED issue={issue_number} — retrying next poll")
         return None
     rec.pop("review_held", None)
@@ -838,6 +862,7 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
     hydrate_state_for_items(state, items)
     prepare_dispatch_budget(cfg, env)
     first_run = not state.get("_meta", {}).get("snapshot_done")
+    _POLL_CONFLICT_FIXERS.clear()
 
     lane_names = {v: k for k, v in cfg["lanes"].items()}
     done_lane_name = lane_names.get("done")
@@ -1158,3 +1183,25 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
 def fetch_runs_by_message(env: dict) -> WorkflowRunStatusMap:
     """Map exact run messages to newest statuses without losing lookup health."""
     return runs_by_message_from(fetch_workflow_runs(env))
+
+
+# Conflict-fix serialization: at most one conflict-resolver run (ship or
+# develop) may be active at a time; sibling conflict episodes defer with a
+# once-per-episode note instead of stacking concurrent resolvers on the same
+# branches. `_POLL_CONFLICT_FIXERS` tracks messages dispatched within the
+# current poll (their run rows appear asynchronously, so runs_by_msg cannot
+# see them yet).
+_POLL_CONFLICT_FIXERS: set[str] = set()
+
+def _conflict_fixer_active(runs_by_msg: dict | None,
+                           fresh_messages: set[str]) -> bool:
+    """True when a conflict-resolver run is in flight or dispatched this poll."""
+    if fresh_messages:
+        return True
+    if not runs_by_msg:
+        return False
+    return any(
+        "Resolve merge conflicts" in str(msg or "")
+        and status in ACTIVE_WORKFLOW_STATUSES
+        for msg, status in runs_by_msg.items()
+    )

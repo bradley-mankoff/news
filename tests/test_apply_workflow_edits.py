@@ -85,7 +85,7 @@ class EnsureContractTest(unittest.TestCase):
                 + TESTING_CONTRACT + CONTRACT), encoding="utf-8")
             self.assertIsNone(ensure_contract(path, "completion-comment"))
 
-    def test_updates_existing_testing_contract_with_command_rule(self) -> None:
+    def test_refreshes_outdated_testing_contract(self) -> None:
         legacy_testing = TESTING_CONTRACT.replace(TESTING_COMMAND_RULE, "")
         with tempfile.TemporaryDirectory() as tmpdir:
             path = Path(tmpdir) / "wf.yaml"
@@ -94,8 +94,12 @@ class EnsureContractTest(unittest.TestCase):
                 "      Post a completion record.\n"
                 + legacy_testing + CONTRACT), encoding="utf-8")
             note = ensure_contract(path, "completion-comment")
-            self.assertIn("copy-paste command", note)
-            self.assertIn("Keep copy-paste commands standalone", path.read_text())
+            self.assertIn("How-to-test", note)
+            text = path.read_text()
+            self.assertEqual(text.count("## How to test"), 1)
+            self.assertEqual(text.count("## Deferred work"), 1)
+            self.assertIn("Keep copy-paste commands standalone", text)
+            self.assertIn("### Machine checks", text)
 
     def test_missing_node_returns_none(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

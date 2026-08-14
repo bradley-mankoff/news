@@ -6,51 +6,56 @@ import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import call, patch
-import automation.board_poller as board_poller
 import automation.pm_harness.archon as archon_adapter
 import automation.pm_harness.cycle as cycle_adapter
-import automation.pm_harness.deferred as deferred_adapter
 import automation.pm_harness.dispatch as dispatch_adapter
 import automation.pm_harness.github as github_adapter
+import automation.pm_harness.model as model_adapter
+import automation.pm_harness.policy as policy_adapter
 import automation.pm_harness.recovery as recovery_adapter
-from automation.board_poller import (
-    branch_empty_vs_main,
-    build_recovery_comment,
-    build_ready_for_review_comment,
-    classify_workflow_failure,
-    conflict_episode_action,
-    dedupe_deferred,
-    dep_gate,
-    dispatch,
-    develop_conflict_action,
-    extract_test_guidance,
-    failed_workflow_step,
-    fetch_active_workflow_count,
-    fetch_project,
-    find_unchecked_criteria,
-    fmt_deps,
-    has_deferral_language,
-    issue_number_from_message,
-    issue_is_runnable,
+from automation.pm_harness.archon import (
     latest_workflow_run,
-    fresh_issue_dispatch_guard,
+    parse_isolation_list,
+)
+from automation.pm_harness.dispatch import (
+    dispatch,
+    fetch_active_workflow_count,
+    prepare_dispatch_budget,
+)
+from automation.pm_harness.github import (
+    branch_empty_vs_main,
+    fetch_project,
     match_issue_pr,
     merge_pr_to_base,
-    pick_workflow,
-    normalize_title,
-    parse_dep_refs,
-    parse_deferred_work,
-    parse_isolation_list,
-    parse_verdict,
     post_ready_for_review_comment,
-    prepare_dispatch_budget,
-    recovery_action,
-    reconcile_deferred_work,
-    run_status_for,
     sync_runnable_labels,
     try_merge_base_into_head,
+)
+from automation.pm_harness.model import (
+    DispatchResult,
+    WorkflowRuns,
+    build_recovery_comment,
+    classify_workflow_failure,
+    failed_workflow_step,
+    issue_number_from_message,
+    recovery_action,
     workflow_run_details,
 )
+from automation.pm_harness.policy import (
+    build_ready_for_review_comment,
+    conflict_episode_action,
+    dep_gate,
+    develop_conflict_action,
+    extract_test_guidance,
+    fmt_deps,
+    issue_is_runnable,
+    parse_dep_refs,
+    parse_verdict,
+    pick_workflow,
+    run_status_for,
+    split_test_guidance,
+)
+from automation.pm_harness.recovery import fresh_issue_dispatch_guard
 
 
 class DispatchCapacityTest(unittest.TestCase):
@@ -66,6 +71,29 @@ class DispatchCapacityTest(unittest.TestCase):
         )
         with patch("automation.pm_harness.dispatch.subprocess.run", return_value=result):
             self.assertEqual(fetch_active_workflow_count({}), 2)
+
+    def test_active_workflow_count_scopes_to_this_repo(self):
+        result = subprocess.CompletedProcess(
+            ["archon"], 0,
+            json.dumps({"runs": [
+                {"status": "running",
+                 "working_path": "/Users/x/.local/share/archon-pi/archon-home/"
+                                 "workspaces/bradley-mankoff/news/worktrees/archon/task-1"},
+                {"status": "running",
+                 "working_path": str(dispatch_adapter.ROOT)},  # no-worktree run
+                {"status": "running",
+                 "working_path": "/Users/x/.local/share/archon-pi/archon-home/"
+                                 "workspaces/_local/piyaz_trial/worktrees/archon/task-2"},
+                {"status": "paused"},  # unlocatable: counted (fail toward holding)
+                {"status": "completed",
+                 "working_path": "/Users/x/.local/share/archon-pi/archon-home/"
+                                 "workspaces/bradley-mankoff/news/worktrees/archon/task-3"},
+            ]}),
+            "",
+        )
+        with patch("automation.pm_harness.dispatch.subprocess.run", return_value=result):
+            self.assertEqual(
+                fetch_active_workflow_count({}, "bradley-mankoff/news"), 3)
 
     def test_active_workflow_count_fails_closed(self):
         result = subprocess.CompletedProcess(["archon"], 1, "", "unavailable")
@@ -182,7 +210,7 @@ class WorkflowRecoveryTest(unittest.TestCase):
             return_value={"issue-61": {"path": "/tmp/issue-61"}},
         ):
             self.assertEqual(
-                board_poller.resolve_worktree_info({}, 61),
+                archon_adapter.resolve_worktree_info({}, 61),
                 {"branch": "issue-61", "path": "/tmp/issue-61"},
             )
 
@@ -540,6 +568,24 @@ class ReadyForReviewCommentTest(unittest.TestCase):
         self.assertIn(
             'python3 automation/move_item.py 92 "In Review"', body)
 
+    def test_build_splits_machine_checks_from_human_steps(self):
+        body = build_ready_for_review_comment(
+            92,
+            "develop",
+            153,
+            "From the merged `develop` checkout:\n\n"
+            "```bash\nuv run pytest -q tests/test_model_catalog.py\n```\n\n"
+            "Passing output confirms the catalog contract; passed 12 tests.\n\n"
+            "Review the generated report for tone before shipping.\n",
+        )
+        self.assertIn("### Machine checks", body)
+        self.assertIn("### Human checks", body)
+        self.assertIn("uv run pytest -q tests/test_model_catalog.py", body)
+        self.assertIn("passed 12 tests", body)
+        self.assertIn(
+            "Review the generated report for tone before shipping.", body)
+        self.assertIn("re-runs only a check that lacks recorded evidence", body)
+
     def test_build_removes_inline_shell_comments_from_commands(self):
         body = build_ready_for_review_comment(
             92,
@@ -556,7 +602,21 @@ class ReadyForReviewCommentTest(unittest.TestCase):
     def test_build_is_explicit_when_no_test_path_was_recorded(self):
         body = build_ready_for_review_comment(7, "develop", None, None)
         self.assertIn("no linked develop PR was available", body)
-        self.assertIn("No runnable issue-specific instructions", body)
+        self.assertIn("No runnable machine checks were recorded", body)
+        self.assertIn(
+            "After the machine checks pass, the ready-review QA agent moves "
+            "this issue to In Review.", body)
+
+    def test_build_says_no_manual_steps_when_all_checks_are_machine(self):
+        body = build_ready_for_review_comment(
+            92,
+            "develop",
+            153,
+            "```bash\nuv run pytest -q tests/test_model_catalog.py\n```\n",
+        )
+        self.assertIn(
+            "No manual steps are required — every recorded check is "
+            "machine-runnable.", body)
 
     @patch("automation.pm_harness.github.gh")
     def test_post_fetches_guidance_then_comments(self, gh):
@@ -575,6 +635,63 @@ class ReadyForReviewCommentTest(unittest.TestCase):
         comment_args = gh.call_args_list[1].args[0]
         self.assertEqual(comment_args[:2], ["issue", "comment"])
         self.assertIn("Run the focused check.", comment_args[-1])
+
+
+class SplitTestGuidanceTest(unittest.TestCase):
+    def test_commands_and_evidence_are_machine_checks(self):
+        guidance = (
+            "From the merged `develop` checkout:\n\n"
+            "```bash\nuv run pytest -q tests/test_x.py\n```\n\n"
+            "Passing output confirms the behavior; the latest run passed 12 "
+            "tests.\n\n"
+            "Review the generated report for tone.\n"
+        )
+        machine, human = split_test_guidance(guidance)
+        self.assertIn("uv run pytest -q tests/test_x.py", machine)
+        self.assertIn("passed 12 tests", machine)
+        self.assertEqual("Review the generated report for tone.", human)
+
+    def test_prose_only_guidance_is_all_human(self):
+        machine, human = split_test_guidance(
+            "Run `news ui` and open http://localhost:8766.\n"
+            "### Expected\nThe page loads.")
+        self.assertIsNone(machine)
+        self.assertIn("Run `news ui`", human)
+        self.assertIn("The page loads.", human)
+
+    def test_explicit_subsections_win(self):
+        guidance = (
+            "### Machine checks\n"
+            "- `uv run pytest -q tests/test_y.py` — passed (10 tests)\n\n"
+            "### Human checks\n"
+            "- Review the report visually.\n"
+        )
+        machine, human = split_test_guidance(guidance)
+        self.assertIn("tests/test_y.py", machine)
+        self.assertEqual("- Review the report visually.", human)
+
+    def test_machine_subsection_without_human_heading(self):
+        guidance = (
+            "### Automated checks\n"
+            "- `uv run pytest -q tests/test_z.py` — passed (7 tests)\n"
+        )
+        machine, human = split_test_guidance(guidance)
+        self.assertIn("tests/test_z.py", machine)
+        self.assertIsNone(human)
+
+    def test_human_step_after_commands_is_not_swallowed(self):
+        guidance = (
+            "```bash\nuv run news run\n```\n\n"
+            "Open the generated report and confirm the tone matches the "
+            "profile.\n"
+        )
+        machine, human = split_test_guidance(guidance)
+        self.assertIn("uv run news run", machine)
+        self.assertIn("confirm the tone matches the profile", human)
+
+    def test_no_guidance(self):
+        self.assertEqual(split_test_guidance(None), (None, None))
+        self.assertEqual(split_test_guidance(""), (None, None))
 
 
 class ReadyForReviewTransitionTest(unittest.TestCase):
@@ -616,7 +733,6 @@ class ReadyForReviewTransitionTest(unittest.TestCase):
                     "done_lane": "Done",
                 },
             },
-            "deferred_work": {"enabled": True},
         }
         state = {
             "_meta": {"snapshot_done": True},
@@ -644,7 +760,7 @@ class ReadyForReviewTransitionTest(unittest.TestCase):
             patch.object(
                 cycle_adapter,
                 "fetch_workflow_runs",
-                return_value=board_poller.WorkflowRuns(error="archon_json"),
+                return_value=WorkflowRuns(error="archon_json"),
             ),
             patch.object(cycle_adapter, "issue_has_label", return_value=False),
             patch.object(cycle_adapter, "find_issue_pr", side_effect=[
@@ -656,8 +772,6 @@ class ReadyForReviewTransitionTest(unittest.TestCase):
             patch.object(
                 cycle_adapter, "merge_pr_to_base", return_value=(True, "merged")),
             patch.object(cycle_adapter, "run_hook", return_value="hook skipped"),
-            patch.object(
-                cycle_adapter, "reconcile_deferred_work", return_value=True),
             patch.object(cycle_adapter, "move_to_lane", return_value=True) as move,
             patch.object(
                 cycle_adapter,
@@ -672,173 +786,308 @@ class ReadyForReviewTransitionTest(unittest.TestCase):
         self.assertTrue(state[item_id]["ready_test_comment"])
 
 
-class ParseDeferredWorkTest(unittest.TestCase):
-    def _record(self, section):
-        return ("## What shipped\nStuff.\n\n## Deferred work\n" + section
-                + "\n\n## Decisions\nNone.")
+class TransientClassifierPrecedenceTest(unittest.TestCase):
+    """Validation and orchestration failures are never transient, even when
+    the error blob also mentions transport text (websocket/timeout)."""
 
-    def test_full_section(self):
-        body = self._record(
-            "- **Title:** Add llama.cpp/GGUF backend support\n"
-            "  **Description:** Port the model layer to llama.cpp.\n"
-            "  **Reason:** Packaging work beyond this decision.\n"
-            "  **Label:** feature\n"
-            "- **Title:** Extract shared readiness helper\n"
-            "  **Description:** Merge the two readiness loops.\n")
-        self.assertEqual(parse_deferred_work(body), [
-            {"title": "Add llama.cpp/GGUF backend support",
-             "description": "Port the model layer to llama.cpp.",
-             "reason": "Packaging work beyond this decision.",
-             "label": "feature",
-             "links_to": None, "supersedes": None, "skip": "",
-             "out_of_scope": ""},
-            {"title": "Extract shared readiness helper",
-             "description": "Merge the two readiness loops.",
-             "reason": "", "label": "",
-             "links_to": None, "supersedes": None, "skip": "",
-             "out_of_scope": ""},
-        ])
+    def test_test_coverage_step_with_websocket_error_is_validation(self):
+        error = "SDK returned error — WebSocket closed 1006"
+        step = "review__test-coverage"
+        self.assertEqual(classify_workflow_failure("failed", error, step),
+                         "validation")
 
-    def test_none_marker(self):
-        self.assertEqual(parse_deferred_work(self._record("*None.*")), [])
-        self.assertEqual(parse_deferred_work(self._record("\n*none*\n")), [])
+    def test_transport_error_without_validation_step_stays_transient(self):
+        error = "SDK returned error — WebSocket closed 1006"
+        step = "web-research"
+        self.assertEqual(classify_workflow_failure("failed", error, step),
+                         "transient")
 
-    def test_absent_section(self):
-        self.assertIsNone(parse_deferred_work("## What shipped\nNo deferrals."))
-        self.assertIsNone(parse_deferred_work(""))
+    def test_validation_blob_beats_transport_text(self):
+        error = "test coverage failed: SDK returned error — WebSocket closed 1006"
+        self.assertEqual(classify_workflow_failure("failed", error), "validation")
 
-    def test_section_terminates_at_next_heading(self):
-        body = self._record(
-            "- **Title:** First\n  **Description:** one\n\n## Decisions\n"
-            "- **Title:** Not mine\n")
-        self.assertEqual(parse_deferred_work(body), [
-            {"title": "First", "description": "one",
-             "reason": "", "label": "",
-             "links_to": None, "supersedes": None, "skip": "",
-             "out_of_scope": ""}])
-
-    def test_case_insensitive_heading(self):
-        body = "## DEFERRED WORK\n- **Title:** X\n"
-        self.assertEqual(parse_deferred_work(body)[0]["title"], "X")
-
-    def test_malformed_item_skipped(self):
-        body = self._record(
-            "- **Title:** Good one\n  **Description:** fine\n"
-            "- **Description:** orphan (no title)\n")
-        items = parse_deferred_work(body)
-        self.assertEqual(len(items), 1)
-        self.assertEqual(items[0]["title"], "Good one")
-
-    def test_links_to_field(self):
-        body = self._record(
-            "- **Title:** GGUF backend\n"
-            "  **Description:** port to llama.cpp\n"
-            "  **Links to:** #75\n")
-        item = parse_deferred_work(body)[0]
-        self.assertEqual(item["links_to"], 75)
-        self.assertIsNone(item["supersedes"])
-        self.assertEqual(item["skip"], "")
-
-    def test_links_to_bare_number(self):
-        body = self._record("- **Title:** X\n  **Links to:** 52\n")
-        self.assertEqual(parse_deferred_work(body)[0]["links_to"], 52)
-
-    def test_supersedes_field(self):
-        body = self._record("- **Title:** X\n  **Supersedes:** #9\n")
-        item = parse_deferred_work(body)[0]
-        self.assertEqual(item["supersedes"], 9)
-        self.assertIsNone(item["links_to"])
-
-    def test_skip_field(self):
-        body = self._record("- **Title:** X\n  **Skip:** HANDOFF forbids this\n")
-        item = parse_deferred_work(body)[0]
-        self.assertEqual(item["skip"], "HANDOFF forbids this")
-
-    def test_out_of_scope_field(self):
-        body = self._record("- **Title:** X\n  **Out of scope:** dark-mode\n")
-        item = parse_deferred_work(body)[0]
-        self.assertEqual(item["out_of_scope"], "dark-mode")
-        self.assertEqual(item["skip"], "")
-
-    def test_bare_item_has_no_stamps(self):
-        body = self._record("- **Title:** X\n  **Description:** d\n")
-        item = parse_deferred_work(body)[0]
-        self.assertIsNone(item["links_to"])
-        self.assertIsNone(item["supersedes"])
-        self.assertEqual(item["skip"], "")
-
-    def test_multiple_items_keep_stamps_separate(self):
-        body = self._record(
-            "- **Title:** A\n  **Links to:** #30\n"
-            "- **Title:** B\n  **Skip:** already covered\n")
-        a, b = parse_deferred_work(body)
-        self.assertEqual(a["links_to"], 30)
-        self.assertEqual(b["skip"], "already covered")
-        self.assertIsNone(b["links_to"])
+    def test_orchestration_blob_beats_transport_text(self):
+        error = "No open PR found for branch archon/task-issue-61; " \
+                "SDK returned error — WebSocket closed 1006"
+        self.assertEqual(classify_workflow_failure("failed", error),
+                         "orchestration")
 
 
-class DeferredDedupeTest(unittest.TestCase):
-    def test_open_match_links(self):
-        item = {"title": "Add llama.cpp/GGUF backend support"}
-        open_issues = [{"number": 52, "title": "add llama.cpp GGUF backend support!"}]
-        self.assertEqual(dedupe_deferred(item, open_issues, []), ("link", 52))
+class ShipHeldLogSpamTest(unittest.TestCase):
+    """SHIP HELD logs once per hold episode, not every poll."""
 
-    def test_closed_match_creates_with_ref(self):
-        item = {"title": "Extract shared readiness helper"}
-        closed = [{"number": 9, "title": "Extract shared readiness helper"}]
-        self.assertEqual(dedupe_deferred(item, [], closed), ("create-ref", 9))
+    def _ctx(self, state):
+        cfg = {
+            "repo": "o/r",
+            "lanes": {"In Review": "review", "Done": "done"},
+            "dispatch": {"review": {
+                "ship_to": "main",
+                "done_lane": "Done",
+                "merge_ship_on_approve": True,
+            }},
+        }
+        return cycle_adapter.PollContext(
+            cfg=cfg, env={}, state=state, project_id="p", field_id="f",
+            status_options={"Done": "done-opt"}, items=[],
+            first_run=False, done_lane_name="Done", todo_lane_name="Todo",
+            blocked_lane_name="Blocked", ready_lane_name="Ready for Review",
+            in_progress_lane_name="In Progress",
+            number_lane={}, number_state={}, seen=set(), fresh_dispatched=set())
 
-    def test_no_match_creates(self):
-        self.assertEqual(
-            dedupe_deferred({"title": "Brand new thing"}, [], []),
-            ("create", None))
+    def test_repeat_hold_logs_once_per_episode(self):
+        state = {"item-5": {
+            "status": "In Review",
+            "issue_number": 5,
+            "ship_pr": 51,
+            "review_msg": "Review PR #51 (ship to main for issue #5: X).",
+            "review_run_id": "r1",
+        }}
+        ctx = self._ctx(state)
+        run = {"id": "r1", "status": "completed"}
+        with (
+            patch.object(cycle_adapter, "gh") as gh,
+            patch.object(cycle_adapter, "fetch_workflow_run", return_value=run),
+            patch.object(cycle_adapter, "fetch_verdict", return_value=(None, True)),
+            patch.object(cycle_adapter, "comment_issue", return_value=True) as comment,
+            patch.object(cycle_adapter, "log") as log,
+        ):
+            gh.return_value = _cp(stdout=json.dumps(
+                {"number": 51, "state": "OPEN", "baseRefName": "main"}))
+            cycle_adapter._complete_reviews(ctx, None, None)
+            cycle_adapter._complete_reviews(ctx, None, None)
+        held_logs = [
+            c.args[0] for c in log.call_args_list if "SHIP HELD" in c.args[0]]
+        self.assertEqual(len(held_logs), 1)
+        comment.assert_called_once()
+        self.assertTrue(state["item-5"]["review_held"])
+        self.assertEqual(state["item-5"]["review_held_notice"], "none")
 
-    def test_punctuation_and_case_insensitive(self):
-        item = {"title": "Update OR supersede ADR 0007"}
-        open_issues = [{"number": 35, "title": "Update or supersede ADR-0007"}]
-        self.assertEqual(dedupe_deferred(item, open_issues, []), ("link", 35))
+    def test_failed_review_run_logs_once_per_run(self):
+        state = {"item-6": {
+            "status": "In Review",
+            "issue_number": 6,
+            "ship_pr": 61,
+            "review_msg": "Review PR #61 (ship to main for issue #6: X).",
+            "review_run_id": "r6",
+        }}
+        ctx = self._ctx(state)
+        run = {"id": "r6", "status": "failed"}
+        with (
+            patch.object(cycle_adapter, "gh") as gh,
+            patch.object(cycle_adapter, "fetch_workflow_run", return_value=run),
+            patch.object(cycle_adapter, "fetch_verdict", return_value=(None, True)),
+            patch.object(cycle_adapter, "update_recovery_state",
+                         return_value=({"failure_class": "unknown"}, {"dirty": True}, "manual_review")),
+            patch.object(cycle_adapter, "notify_workflow_recovery",
+                         return_value=True),
+            patch.object(cycle_adapter, "log") as log,
+        ):
+            gh.return_value = _cp(stdout=json.dumps(
+                {"number": 61, "state": "OPEN", "baseRefName": "main"}))
+            cycle_adapter._complete_reviews(ctx, None, None)
+            cycle_adapter._complete_reviews(ctx, None, None)
+        failed_logs = [
+            c.args[0] for c in log.call_args_list if "REVIEW FAILED" in c.args[0]]
+        self.assertEqual(len(failed_logs), 1)
 
-    def test_open_wins_over_closed(self):
-        item = {"title": "Same title"}
-        open_issues = [{"number": 1, "title": "Same title"}]
-        closed = [{"number": 2, "title": "Same title"}]
-        self.assertEqual(dedupe_deferred(item, open_issues, closed), ("link", 1))
+    def test_requeue_after_clear_dispatches_review(self):
+        state = {"item-11": {"status": "In Review", "issue_number": 11}}
+        item = {
+            "id": "item-11",
+            "status": "In Review",
+            "content": {
+                "__typename": "Issue",
+                "number": 11,
+                "title": "X",
+                "repository": {"nameWithOwner": "o/r"},
+            },
+        }
+        cfg = {
+            "repo": "o/r",
+            "lanes": {"In Review": "review", "Done": "done"},
+        }
+        ctx = cycle_adapter.PollContext(
+            cfg=cfg, env={}, state=state, project_id="p", field_id="f",
+            status_options={"Done": "done-opt"}, items=[item],
+            first_run=False, done_lane_name="Done", todo_lane_name="Todo",
+            blocked_lane_name="Blocked", ready_lane_name="Ready for Review",
+            in_progress_lane_name="In Progress",
+            number_lane={}, number_state={}, seen=set(), fresh_dispatched=set())
+        with patch.object(
+            cycle_adapter, "ensure_ship_review",
+            return_value=("ok", "m", 111),
+        ) as ensure:
+            cycle_adapter._recheck_review_dispatch(ctx)
+        ensure.assert_called_once()
 
-    def test_empty_title_creates(self):
-        self.assertEqual(dedupe_deferred({"title": ""}, [], []), ("create", None))
 
-    def test_normalize_title(self):
-        self.assertEqual(normalize_title("  Add GGUF (v2) support! "), "addggufv2support")
-        self.assertEqual(normalize_title(""), "")
+class ShipReviewCapacityTest(unittest.TestCase):
+    def test_capacity_deferral_is_not_dispatch_failure(self):
+        cfg = {
+            "repo": "o/r",
+            "max_concurrent_workflows": 1,
+            "lanes": {"Done": "done"},
+            "dispatch": {"todo": {"merge_develop_base": "develop"},
+                         "review": {"workflow": "archon-smart-pr-review",
+                                    "ship_to": "main"}},
+        }
+        rec = {}
+        with (
+            patch.object(cycle_adapter, "find_issue_pr", return_value=(None, True)),
+            patch.object(cycle_adapter, "branch_empty_vs_main",
+                         return_value=False),
+            patch.object(cycle_adapter, "find_or_create_ship_pr",
+                         return_value={"number": 51}),
+            patch.object(cycle_adapter, "dispatch",
+                         return_value=DispatchResult(False, "capacity")),
+            patch.object(cycle_adapter, "note_capacity_deferred") as note,
+            patch.object(cycle_adapter, "log") as log,
+        ):
+            result = cycle_adapter.ensure_ship_review(
+                cfg, {}, "item-5", 5, "Title", "p", "f", {}, None, rec)
+        self.assertIsNone(result)
+        note.assert_called_once()
+        failed = [
+            c.args[0] for c in log.call_args_list
+            if "SHIP REVIEW DISPATCH FAILED" in c.args[0]]
+        self.assertEqual(failed, [])
+
+    def test_real_spawn_failure_still_logs_failed(self):
+        cfg = {
+            "repo": "o/r",
+            "max_concurrent_workflows": 1,
+            "lanes": {"Done": "done"},
+            "dispatch": {"todo": {"merge_develop_base": "develop"},
+                         "review": {"workflow": "archon-smart-pr-review",
+                                    "ship_to": "main"}},
+        }
+        rec = {}
+        with (
+            patch.object(cycle_adapter, "find_issue_pr", return_value=(None, True)),
+            patch.object(cycle_adapter, "branch_empty_vs_main",
+                         return_value=False),
+            patch.object(cycle_adapter, "find_or_create_ship_pr",
+                         return_value={"number": 51}),
+            patch.object(cycle_adapter, "dispatch",
+                         return_value=DispatchResult(False, "spawn_failed")),
+            patch.object(cycle_adapter, "log") as log,
+        ):
+            result = cycle_adapter.ensure_ship_review(
+                cfg, {}, "item-5", 5, "Title", "p", "f", {}, None, rec)
+        self.assertIsNone(result)
+        failed = [
+            c.args[0] for c in log.call_args_list
+            if "SHIP REVIEW DISPATCH FAILED" in c.args[0]]
+        self.assertEqual(len(failed), 1)
 
 
-class HasDeferralLanguageTest(unittest.TestCase):
-    def test_matches_deferral_phrasing(self):
-        for text in ("explicitly deferred", "this is deferred to a later phase",
-                     "out of scope for this issue", "not in scope",
-                     "recorded as a follow-up issue", "deferring the packaging work"):
-            self.assertTrue(has_deferral_language(text), text)
+class ConflictDispatchSerializationTest(unittest.TestCase):
+    """At most one conflict-resolver run at a time; siblings defer."""
 
-    def test_clean_text_does_not_match(self):
-        for text in ("All review findings were addressed in the PR.",
-                     "249 passed + 25 subtests", "README.md updated", ""):
-            self.assertFalse(has_deferral_language(text), text)
+    def setUp(self):
+        cycle_adapter._POLL_CONFLICT_FIXERS.clear()
 
+    def _cfg(self):
+        return {
+            "repo": "o/r",
+            "lanes": {"In Review": "review", "Done": "done"},
+            "dispatch": {"review": {
+                "conflict_fix_workflow": "archon-fix-ship-conflicts",
+                "ship_to": "main",
+                "done_lane": "Done",
+                "merge_ship_on_approve": True,
+            }},
+        }
 
-class FindUncheckedCriteriaTest(unittest.TestCase):
-    def test_extracts_unchecked_lines(self):
-        body = ("## Acceptance criteria\n"
-                "- [x] MLX backend works — test_mlx\n"
-                "- [ ] llama.cpp adapter — not built\n"
-                "- [ ] GGUF loading — deferred\n")
-        self.assertEqual(find_unchecked_criteria(body),
-                         ["llama.cpp adapter — not built", "GGUF loading — deferred"])
+    def _ctx(self, state):
+        return cycle_adapter.PollContext(
+            cfg=self._cfg(), env={}, state=state, project_id="p", field_id="f",
+            status_options={}, items=[],
+            first_run=False, done_lane_name="Done", todo_lane_name="Todo",
+            blocked_lane_name="Blocked", ready_lane_name="Ready for Review",
+            in_progress_lane_name="In Progress",
+            number_lane={}, number_state={}, seen=set(), fresh_dispatched=set())
 
-    def test_checked_lines_ignored(self):
-        self.assertEqual(find_unchecked_criteria("- [x] done\n[x] bare\n"), [])
+    def _ship(self, cfg, env, number, base):
+        return {"number": 100 + number, "mergeable": "CONFLICTING",
+                "headRefName": f"issue-{number}"}
 
-    def test_empty_body(self):
-        self.assertEqual(find_unchecked_criteria(""), [])
+    def test_second_conflicting_item_defers_while_fixer_active(self):
+        state = {
+            "item-1": {
+                "status": "In Review", "issue_number": 1,
+                "conflict_fix_msg": "Resolve merge conflicts on ship PR #101 "
+                                    "(issue #1).",
+                "conflict_mech_failed": True,
+            },
+            "item-2": {
+                "status": "In Review", "issue_number": 2,
+                "conflict_mech_failed": True,
+            },
+        }
+        runs_by_msg = {
+            "Resolve merge conflicts on ship PR #101 (issue #1).": "running",
+        }
+        ctx = self._ctx(state)
+        with (
+            patch.object(cycle_adapter, "find_ship_pr",
+                         side_effect=self._ship) as find,
+            patch.object(cycle_adapter, "dispatch") as disp,
+            patch.object(cycle_adapter, "comment_issue", return_value=True),
+            patch.object(cycle_adapter, "log") as log,
+        ):
+            cycle_adapter._remediate_ship_conflicts(ctx, runs_by_msg,
+                                                    "In Review", "main")
+        disp.assert_not_called()
+        self.assertTrue(state["item-2"]["conflict_fix_deferred"])
+        deferred_logs = [
+            c.args[0] for c in log.call_args_list
+            if "SHIP CONFLICT DISPATCH DEFERRED" in c.args[0]]
+        self.assertEqual(len(deferred_logs), 1)
+
+    def test_two_fresh_conflicts_dispatch_only_one_per_poll(self):
+        state = {
+            "item-1": {"status": "In Review", "issue_number": 1,
+                       "conflict_mech_failed": True},
+            "item-2": {"status": "In Review", "issue_number": 2,
+                       "conflict_mech_failed": True},
+        }
+        ctx = self._ctx(state)
+        with (
+            patch.object(cycle_adapter, "find_ship_pr",
+                         side_effect=self._ship),
+            patch.object(cycle_adapter, "dispatch",
+                         return_value=DispatchResult(True, pid=1)) as disp,
+            patch.object(cycle_adapter, "comment_issue", return_value=True),
+            patch.object(cycle_adapter, "log"),
+        ):
+            cycle_adapter._remediate_ship_conflicts(ctx, {}, "In Review", "main")
+        disp.assert_called_once()
+        self.assertIn("conflict_fix_msg", state["item-1"])
+        self.assertTrue(state["item-2"]["conflict_fix_deferred"])
+
+    def test_clear_ends_deferral_marker(self):
+        state = {
+            "item-3": {
+                "status": "In Review", "issue_number": 3,
+                "conflict_fix_deferred": True,
+                "conflict_fix_msg": "fix",
+                "conflict_mech_failed": True,
+                "conflict_fix_noted": True,
+                "ship_pr": 103,
+            },
+        }
+        ctx = self._ctx(state)
+        with (
+            patch.object(cycle_adapter, "find_ship_pr",
+                         return_value={"number": 103, "mergeable": "MERGEABLE",
+                                       "headRefName": "issue-3"}),
+            patch.object(cycle_adapter, "fetch_verdict",
+                         return_value=(None, True)),
+            patch.object(cycle_adapter, "log"),
+        ):
+            cycle_adapter._remediate_ship_conflicts(ctx, {}, "In Review", "main")
+        self.assertNotIn("conflict_fix_deferred", state["item-3"])
 
 
 class FmtDepsTest(unittest.TestCase):
@@ -991,98 +1240,6 @@ class TryMergeBaseIntoHeadTest(unittest.TestCase):
         self.assertFalse(ok)
         self.assertTrue(note.startswith("transient:"))
 
-
-class ReconcileDeferredWorkTest(unittest.TestCase):
-    def _cfg(self):
-        return {"deferred_work": {"fallback_warn": True},
-                "default_lane": "Backlog", "repo": "o/r"}
-
-    def _env(self):
-        return {}
-
-    def _run(self, comments, rec=None, runs_msg="run-1"):
-        rec = {} if rec is None else rec
-        calls = []
-
-        def fake_gh(args, env, timeout=90):
-            calls.append(args)
-            if args[0:2] == ["issue", "view"]:
-                return _cp(stdout=json.dumps({"title": "T",
-                                              "comments": comments}))
-            if args[0:2] == ["issue", "comment"]:
-                return _cp()
-            if args[0:2] == ["issue", "list"]:
-                return _cp(stdout="[]")
-            return _cp(returncode=1)
-        with (
-            patch("automation.pm_harness.deferred.gh", side_effect=fake_gh),
-            patch("automation.pm_harness.github.gh", side_effect=fake_gh),
-        ):
-            ok = reconcile_deferred_work(
-                self._cfg(), self._env(), 5, None, rec,
-                runs_msg, "p", "f", {"Backlog": "o1"})
-        return ok, rec, calls
-
-    def test_fallback_warn_posts_once_and_marks_handled(self):
-        comments = [{"body": "Completed. Some work explicitly deferred to a later phase."}]
-        ok, rec, calls = self._run(comments)
-        self.assertTrue(ok)
-        self.assertTrue(rec["deferred_warned"])
-        self.assertEqual(rec["deferred_handled"], "run-1")
-        self.assertEqual(
-            sum(1 for a in calls if a[0:2] == ["issue", "comment"]), 1)
-        self.assertIn("has no `## Deferred work` section",
-                      calls[-1][-1])
-
-    def test_handled_marker_skips_entirely(self):
-        rec = {"deferred_handled": "run-1"}
-        with patch("automation.pm_harness.deferred.gh") as m:
-            ok = reconcile_deferred_work(
-                self._cfg(), self._env(), 5, None, rec,
-                "run-1", "p", "f", {"Backlog": "o1"})
-        self.assertTrue(ok)
-        m.assert_not_called()
-
-    def test_fetch_failure_returns_false_without_markers(self):
-        def fake_gh(args, env, timeout=90):
-            if args[0:2] == ["issue", "view"]:
-                return _cp(returncode=1, stderr="rate limited")
-            return _cp(returncode=1)
-        with patch("automation.pm_harness.deferred.gh", side_effect=fake_gh):
-            rec = {}
-            ok = reconcile_deferred_work(
-                self._cfg(), self._env(), 5, None, rec,
-                "run-1", "p", "f", {"Backlog": "o1"})
-        self.assertFalse(ok)
-        self.assertEqual(rec, {})
-
-    def test_none_section_with_deferral_language_does_not_warn(self):
-        comments = [{"body": ("Completed.\n\n## Deferred work\n*None.*\n\n"
-                               "Nothing deferred to a later phase.")}]
-        ok, rec, calls = self._run(comments)
-        self.assertTrue(ok)
-        self.assertNotIn("deferred_warned", rec)
-        self.assertEqual(rec["deferred_handled"], "run-1")
-        self.assertEqual(
-            sum(1 for a in calls if a[0:2] == ["issue", "comment"]), 0)
-
-    def test_empty_section_is_not_fallback_warn(self):
-        comments = [{"body": "## Deferred work\n\n(nothing)\n"}]
-        ok, rec, _ = self._run(comments)
-        self.assertTrue(ok)
-        self.assertNotIn("deferred_warned", rec)
-
-    def test_newest_comment_with_section_wins_over_older_items(self):
-        comments = [
-            {"body": "## Deferred work\n- **Title:** Old item\n"},
-            {"body": "## Deferred work\n*None.*\n"},
-        ]
-        ok, rec, calls = self._run(comments)
-        self.assertTrue(ok)
-        self.assertEqual(rec["deferred_handled"], "run-1")
-        # newest *None.* section must NOT resurface the older run's items
-        self.assertNotIn("Deferred work from this run",
-                         " ".join(a[-1] for a in calls if a[0:2] == ["issue", "comment"]))
 
 class FetchProjectTest(unittest.TestCase):
     def _cfg(self):

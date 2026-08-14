@@ -38,6 +38,13 @@ VALIDATION_WORKFLOW_ERROR_RE = re.compile(
 )
 
 
+STEP_VALIDATION_RE = re.compile(
+    r"(?:^|[^a-z])(?:tests?|coverage|lint|type[-_ ]?check|validation|"
+    r"pytest|compileall)(?:[^a-z]|$)",
+    re.I,
+)
+
+
 RECOVERY_ACTIONS = frozenset({
     "monitoring",
     "retry_available",
@@ -127,19 +134,26 @@ def failed_workflow_step(error: str) -> str | None:
     return match.group(1) if match else None
 
 
-def classify_workflow_failure(status: str, error: str = "") -> str:
-    """Classify a terminal Archon failure for safe recovery."""
+def classify_workflow_failure(status: str, error: str = "", step: str = "") -> str:
+    """Classify a terminal Archon failure for safe recovery.
+
+    Validation and orchestration failures are never transient: a test,
+    coverage, lint, or type-check failure (or a broken PR/verification
+    handoff) must not be auto-retried even when the error blob also
+    mentions transport text like websocket/timeout.
+    """
     normalized_status = (status or "").lower()
     if normalized_status == "cancelled":
         return "transient"
     if normalized_status != "failed":
         return "unknown"
+    blob = f"{step or ''}\n{error or ''}"
+    if STEP_VALIDATION_RE.search(step or "") or VALIDATION_WORKFLOW_ERROR_RE.search(blob):
+        return "validation"
+    if ORCHESTRATION_WORKFLOW_ERROR_RE.search(blob):
+        return "orchestration"
     if TRANSIENT_WORKFLOW_ERROR_RE.search(error or ""):
         return "transient"
-    if ORCHESTRATION_WORKFLOW_ERROR_RE.search(error or ""):
-        return "orchestration"
-    if VALIDATION_WORKFLOW_ERROR_RE.search(error or ""):
-        return "validation"
     return "unknown"
 
 
@@ -157,7 +171,8 @@ def workflow_run_details(run: dict, *, branch: str | None = None) -> dict:
         "last_activity_at": str(run.get("last_activity_at") or ""),
         "working_path": str(run.get("working_path") or ""),
         "failed_step": metadata_step or failed_workflow_step(error) or "",
-        "failure_class": classify_workflow_failure(status, error),
+        "failure_class": classify_workflow_failure(
+            status, error, metadata_step or failed_workflow_step(error) or ""),
         "error": error,
     }
     if branch:

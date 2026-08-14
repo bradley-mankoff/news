@@ -2972,7 +2972,7 @@ assert(elements.modelSearchResults.querySelector('button[data-use-hf-model="owne
         self.assertIn("Stop failed:", html)
         # No append-only raw rendering path remains.
         self.assertNotIn("textContent += payload.line", html)
-        self.assertNotIn("textContent += \`\\n[ui] ", html)
+        self.assertNotIn('textContent += `\\n[ui] ', html)
         # Run start clears and reinitializes the reducer state.
         run_action = html.split("async function runAction")[1].split("events.addEventListener")[0]
         self.assertIn("resetLog();", run_action)

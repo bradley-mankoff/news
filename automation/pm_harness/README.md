@@ -18,10 +18,9 @@ product repo docs.
 
 ## Run
 
-Copy `automation/pm_harness/` and the thin `automation/board_poller.py` and
-`automation/board_health.py` adapters into a repository. Edit
-`example_config.json` and store it at `automation/config.json`, or set
-`PM_HARNESS_CONFIG` and `PM_HARNESS_ROOT`.
+Copy `automation/pm_harness/` and the thin `automation/board_health.py`
+adapter into a repository. Edit `example_config.json` and store it at
+`automation/config.json`, or set `PM_HARNESS_CONFIG` and `PM_HARNESS_ROOT`.
 
 ```bash
 python3 -m automation.pm_harness --once
@@ -74,7 +73,6 @@ Backlog -> Todo -> In Progress -> Ready for Review -> In Review -> Done
 - `archon.py`: bounded Archon/run/worktree adapter.
 - `github.py`: GitHub Projects, issue, comment, and pull-request adapter.
 - `dispatch.py`: capacity-bounded workflow launch.
-- `deferred.py`: deferred-work issue reconciliation.
 - `recovery.py`: persisted stopped-run recovery.
 - `cycle.py`: one board reconciliation cycle, split into explicit transition phases.
 - `runtime.py`: config, hooks, logging, and schema-v2 state.

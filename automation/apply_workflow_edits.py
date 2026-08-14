@@ -77,21 +77,31 @@ RIGOROUS_NODES: dict[str, tuple[str, ...]] = {
     "archon-workflow-builder.yaml": ("extract-intent", "generate-yaml"),
 }
 
-# The human-testing contract shared by both completion-comment nodes. The
-# board poller copies this section into the Ready for Review comment.
+# The testing contract shared by both completion-comment nodes. The board
+# poller partitions this section into machine checks and human steps for the
+# Ready for Review comment; the ready-review QA agent reuses recorded
+# evidence instead of re-running checks.
 TESTING_COMMAND_RULE = """      Keep copy-paste commands standalone: put explanations on
       separate prose lines, never after a shell command using `#`.
 """
 TESTING_CONTRACT = """      ## How to test
-      Give concise, human-facing steps for the reviewer who will test this work after
-      it is merged into `develop`.
-      - Start with exact commands, URLs, or setup when a runnable path exists.
-      - For UI/API/CLI changes, state the action, expected result, and which acceptance
-        criterion each step exercises.
-      - For library/config/automation-only changes, name the focused test command and
-        any observable smoke check; say what output means pass.
-      - If no manual test is possible, write `Not manually testable — <reason>` and name
-        the automated validation that is the best available evidence.
+      Record what the MACHINE already verified and what still needs a HUMAN.
+      The board machinery runs every check it can on its own, so a command in
+      this section is executed by the machine (or reused from recorded
+      evidence), never handed to the human as homework.
+      - `### Machine checks` — every automated check this run executed:
+        copy-paste command plus its recorded result on the next prose line
+        (test counts, zero exit, clean compile). The ready-review QA agent
+        re-runs only a check that lacks recorded evidence.
+      - `### Human checks` — only steps that genuinely require a person:
+        product review, taste, visual inspection, decisions. State the action
+        and the expected result. If nothing needs a human, write
+        `None — all recorded checks are machine-runnable.`
+      - For UI/API/CLI changes, name the exact command or URL the ready-review
+        QA agent (not the human) runs to verify each acceptance criterion; say
+        what output means pass.
+      - If no automated validation exists, write `Not manually testable —
+        <reason>` and name the best available evidence.
 """ + TESTING_COMMAND_RULE
 
 # The Deferred-work contract shared by both completion-comment nodes. The
@@ -504,7 +514,8 @@ def ensure_node(path: Path, node_id: str, node_text: str,
 
 
 def ensure_contract(path: Path, node_id: str) -> str | None:
-    """Insert completion-comment contracts into an existing node if missing."""
+    """Insert completion-comment contracts into an existing node if missing,
+    and refresh an outdated How-to-test contract."""
     text = path.read_text()
     start = text.find(f"- id: {node_id}")
     if start == -1:
@@ -513,28 +524,37 @@ def ensure_contract(path: Path, node_id: str) -> str | None:
     if end == -1:
         return f"node {node_id} end not found in {path.name}"
     node = text[start:end]
+    deferred = text.find("      ## Deferred work", start, end)
     needs_testing = "      ## How to test" not in node
     needs_shell_rule = "Keep copy-paste commands standalone" not in node
     needs_deferred = "reads this section and creates a tracking issue" not in node
-    if not needs_testing and not needs_shell_rule and not needs_deferred:
+    stale_testing = False
+    howto = -1
+    if not needs_testing and deferred != -1:
+        howto = text.find("      ## How to test", start, deferred)
+        if howto != -1 and text[howto:deferred] != TESTING_CONTRACT:
+            stale_testing = True
+    if (not needs_testing and not needs_shell_rule
+            and not needs_deferred and not stale_testing):
         return None
     factual = text.find("The comment must be factual", start, end)
     if factual == -1:
         return f"node {node_id} insertion point not found in {path.name}"
-    insertion = text.find("      ## Deferred work", start, end)
-    if insertion == -1:
-        insertion = factual
+    insertion = deferred if deferred != -1 else factual
     addition = ""
-    if needs_testing:
+    if needs_testing or stale_testing:
         addition += TESTING_CONTRACT
     elif needs_shell_rule:
         addition += TESTING_COMMAND_RULE
     if needs_deferred:
         addition += CONTRACT
-    text = text[:insertion] + addition + text[insertion:]
+    if stale_testing:
+        text = text[:howto] + addition + text[deferred:]
+    else:
+        text = text[:insertion] + addition + text[insertion:]
     path.write_text(text)
     added = []
-    if needs_testing:
+    if needs_testing or stale_testing:
         added.append("How-to-test")
     elif needs_shell_rule:
         added.append("copy-paste command")
