@@ -72,8 +72,30 @@ def resume_issue(cfg: dict, env: dict, branch: str, wf: str,
     return ok, msg
 
 
-def fetch_active_workflow_count(env: dict) -> int | None:
-    """Return active Archon runs, or None when the status lookup is unusable."""
+def _run_belongs_to_repo(run: dict, repo: str | None) -> bool:
+    """True when a status run belongs to this repo's poller scope.
+
+    `archon workflow status` is global across every codebase in the archon
+    home, so foreign projects' runs must not consume this repo's dispatch
+    budget. A run is ours when its worktree lives under this repo's
+    workspace slug, or (no-worktree runs) when it executes in this checkout
+    itself. Unlocatable runs count as ours — the poller fails toward holding
+    dispatch, never toward exceeding Archon's conversation cap.
+    """
+    if not repo:
+        return True  # no repo identity: legacy behavior, count everything
+    wp = run.get("working_path") or ""
+    if not wp:
+        return True
+    if f"/workspaces/{repo}/" in wp:
+        return True
+    root = str(ROOT)
+    return wp == root or wp.startswith(root + "/")
+
+
+def fetch_active_workflow_count(env: dict, repo: str | None = None) -> int | None:
+    """Return active Archon runs for this repo, or None when the status
+    lookup is unusable."""
     try:
         result = subprocess.run(
             ["archon", "workflow", "status", "--json"],
@@ -98,6 +120,7 @@ def fetch_active_workflow_count(env: dict) -> int | None:
         1 for run in runs
         if isinstance(run, dict)
         and (run.get("status") or "").lower() in ACTIVE_WORKFLOW_STATUSES
+        and _run_belongs_to_repo(run, repo)
     )
 
 
@@ -111,7 +134,7 @@ def prepare_dispatch_budget(cfg: dict, env: dict) -> None:
         limit = max(0, int(cfg.get("max_concurrent_workflows", 10)))
     except (TypeError, ValueError):
         limit = 10
-    active = fetch_active_workflow_count(env)
+    active = fetch_active_workflow_count(env, cfg.get("repo"))
     if active is None:
         _DISPATCH_BUDGET = 0
         log("DISPATCH HOLD: active Archon workflow count unavailable")

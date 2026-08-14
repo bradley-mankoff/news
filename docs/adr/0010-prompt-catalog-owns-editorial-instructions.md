@@ -27,9 +27,13 @@ the default profile and is byte-identical to the pre-catalog prompts.
   the realized limited YAML layer (`config/prompt_overrides.yaml`), which
   provides optional user-editable editorial sentence overrides per task with
   `profile < YAML < env/UI` precedence.
-- Harder/off-limits: full-template editing and arbitrary machine-contract
-  changes; profiles and overrides may not weaken machine-required output
-  contracts. The effective profile-plus-override map is validated by
+- Harder/off-limits at the sentence level: full-template editing and arbitrary
+  machine-contract changes; profiles and overrides may not weaken
+  machine-required output contracts. Full system/user template editing is a
+  separate advanced surface implemented by ADR 0015
+  (`NEWS_PROMPT_TEMPLATE_<TASK>` overrides) with its own placeholder and
+  contract validation; the Prompt Catalog still owns the editorial sentences.
+  The effective profile-plus-override map is validated by
   `validate_editorial_instructions()` at runtime-config resolution, so
   contract-breaking instruction text fails before pipeline execution and the
   machine contracts remain code-owned.

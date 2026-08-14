@@ -601,6 +601,15 @@ class HistoryStoreHelperTests(unittest.TestCase):
                 self.assertGreater(con.execute("SELECT COUNT(*) FROM run_articles").fetchone()[0], 0)
                 self.assertGreater(con.execute("SELECT COUNT(*) FROM article_summaries").fetchone()[0], 0)
                 self.assertGreater(con.execute("SELECT COUNT(*) FROM artifacts").fetchone()[0], 0)
+                log_row = con.execute("SELECT byte_count, content FROM run_logs").fetchone()
+                self.assertNotIn("\r", log_row[1])
+                self.assertNotIn("\033", log_row[1])
+                self.assertNotIn("2000/200000 steps", log_row[1])
+                self.assertIn("1000/200000 steps", log_row[1])
+                self.assertIn("3000/200000 steps", log_row[1])
+                self.assertIn("200000/200000 steps", log_row[1])
+                self.assertIn("WARNING: low coverage", log_row[1])
+                self.assertEqual(log_row[0], len(log_row[1].encode("utf-8")))
                 row = con.execute(
                     "SELECT prompt_snapshots_json, settings_json FROM runs"
                 ).fetchone()

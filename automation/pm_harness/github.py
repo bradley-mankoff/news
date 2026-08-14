@@ -59,7 +59,6 @@ query($login: String!, $number: Int!, $statusField: String!, $cursor: String) {
 }
 """
 
-
 MOVE_MUTATION = """
 mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $optionId: String!) {
   updateProjectV2ItemFieldValue(input: {
@@ -70,7 +69,6 @@ mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $optionId: String!) {
   }) { projectV2Item { id } }
 }
 """
-
 
 def graphql(cfg: dict, env: dict, cursor: str | None) -> dict:
     cmd = ["gh", "api", "graphql", "-f", f"query={QUERY}",
@@ -83,7 +81,6 @@ def graphql(cfg: dict, env: dict, cursor: str | None) -> dict:
     if r.returncode != 0:
         raise RuntimeError(f"graphql failed: {r.stderr.strip()[:500]}")
     return json.loads(r.stdout)
-
 
 def fetch_project(cfg: dict, env: dict) -> tuple[str, str, dict, list[dict]]:
     """Returns (project_id, status_field_id, status_options: name->id, items).
@@ -117,7 +114,6 @@ def fetch_project(cfg: dict, env: dict) -> tuple[str, str, dict, list[dict]]:
             break
         page = graphql(cfg, env, page["pageInfo"]["endCursor"])["data"]["user"]["projectV2"]["items"]
     return project["id"], field["id"], options, items
-
 
 def sync_runnable_labels(cfg: dict, env: dict, items: list[dict],
                          number_lane: dict[int, str],
@@ -190,7 +186,6 @@ def sync_runnable_labels(cfg: dict, env: dict, items: list[dict],
             continue
         log(f"RUNNABLE LABEL {'ADDED' if desired else 'REMOVED'} issue={number}")
 
-
 def find_issue_pr(cfg: dict, env: dict, issue_number: int,
                   state: str = "all", base: str | None = None) -> tuple[dict | None, bool]:
     """(pr, ok) for the PR linked to an issue (any state).
@@ -214,7 +209,6 @@ def find_issue_pr(cfg: dict, env: dict, issue_number: int,
         log(f"find_issue_pr: unparseable gh output for issue #{issue_number}: {exc}")
         return None, False
     return match_issue_pr(prs, issue_number, base), True
-
 
 def merge_pr_to_base(cfg: dict, env: dict, pr: dict, base: str,
                      issue_number: int | None = None) -> tuple[bool, str]:
@@ -255,7 +249,6 @@ def merge_pr_to_base(cfg: dict, env: dict, pr: dict, base: str,
             return True, f"merged into {base} (issue #{issue_number} reopened)"
     return True, f"merged into {base}"
 
-
 def find_or_create_ship_pr(cfg: dict, env: dict, head: str, title: str,
                            issue_number: int, base: str) -> dict | None:
     """Reuse the open ship PR for this head/base, or create one."""
@@ -290,7 +283,6 @@ def find_or_create_ship_pr(cfg: dict, env: dict, head: str, title: str,
     m = re.search(r"pull/(\d+)", r.stdout or "")
     return {"number": int(m.group(1)), "headRefName": head} if m else None
 
-
 def branch_empty_vs_main(cfg: dict, env: dict, head: str, base: str) -> bool:
     """True when `head` has no commits beyond `base` — its work already
     reached base via another ship PR's develop merge (the #24 case), so a
@@ -302,7 +294,6 @@ def branch_empty_vs_main(cfg: dict, env: dict, head: str, base: str) -> bool:
         return int(json.loads(r.stdout).get("ahead_by", 1)) == 0
     except (ValueError, TypeError):
         return False
-
 
 def move_to_lane(cfg: dict, env: dict, project_id: str, item_id: str,
                  field_id: str, option_id: str) -> bool:
@@ -320,7 +311,6 @@ def move_to_lane(cfg: dict, env: dict, project_id: str, item_id: str,
     )
     return r.returncode == 0
 
-
 def comment_issue(cfg: dict, env: dict, issue_number: int, body: str) -> bool:
     if DRY_RUN:
         log(f"[dry-run] COMMENT issue={issue_number}: {body[:100]}")
@@ -328,7 +318,6 @@ def comment_issue(cfg: dict, env: dict, issue_number: int, body: str) -> bool:
     r = gh(["issue", "comment", str(issue_number), "-R", cfg["repo"],
             "--body", body], env)
     return r.returncode == 0
-
 
 def note_capacity_deferred(
     cfg: dict,
@@ -349,7 +338,6 @@ def note_capacity_deferred(
         rec["capacity_deferred"] = datetime.now(timezone.utc).isoformat(
             timespec="seconds")
 
-
 def note_integration_blocked(
     cfg: dict,
     env: dict,
@@ -368,7 +356,6 @@ def note_integration_blocked(
     )
     if comment_issue(cfg, env, issue_number, body):
         rec["integration_blocked"] = reason
-
 
 def fetch_issue_comments(cfg: dict, env: dict,
                          issue_number: int) -> list[dict] | None:
@@ -390,7 +377,6 @@ def fetch_issue_comments(cfg: dict, env: dict,
         return None
     return comments
 
-
 def post_ready_for_review_comment(cfg: dict, env: dict, issue_number: int,
                                   base: str, pr_number: int | None = None) -> bool:
     """Post the test handoff after an issue reaches Ready for Review."""
@@ -409,12 +395,10 @@ def post_ready_for_review_comment(cfg: dict, env: dict, issue_number: int,
         log(f"READY TEST COMMENT FAILED issue #{issue_number}")
     return ok
 
-
 def issue_has_label(cfg: dict, env: dict, issue_number: int, label: str) -> bool:
     r = gh(["issue", "view", str(issue_number), "-R", cfg["repo"], "--json", "labels",
             "-q", ".labels[].name"], env)
     return r.returncode == 0 and label in r.stdout.split()
-
 
 def fetch_verdict(cfg: dict, env: dict, pr_number: int) -> tuple[str | None, bool]:
     """(verdict, ok). ok=False means the lookup failed (gh error or
@@ -437,7 +421,6 @@ def fetch_verdict(cfg: dict, env: dict, pr_number: int) -> tuple[str | None, boo
         log(f"VERDICT PARSE FAILED PR #{pr_number}: comments is not a list")
         return None, False
     return parse_verdict([c.get("body") or "" for c in comments]), True
-
 
 def find_ship_pr(cfg: dict, env: dict, issue_number: int, base: str) -> dict | None:
     """Open ship PR (head -> base) linked to an issue; None when absent.
@@ -467,7 +450,6 @@ def find_ship_pr(cfg: dict, env: dict, issue_number: int, base: str) -> dict | N
             return p
     return None
 
-
 def try_merge_base_into_head(cfg: dict, env: dict, pr_number: int,
                              head: str, base: str) -> tuple[bool, str]:
     """Merge `base` into the PR head via the GitHub merge API.
@@ -493,26 +475,6 @@ def try_merge_base_into_head(cfg: dict, env: dict, pr_number: int,
     return False, f"transient: {err.strip()[:200]}"
 
 
-def fetch_issue_titles(cfg: dict, env: dict, state: str) -> list[dict] | None:
-    """Open/closed issues as [{number, title}] for the dedupe search."""
-    r = gh(["issue", "list", "-R", cfg["repo"], "--state", state,
-            "--limit", "200", "--json", "number,title"], env)
-    if r.returncode != 0:
-        log(f"DEFERRED: issue list ({state}) failed: {r.stderr.strip()[:200]}")
-        return None
-    try:
-        issues = json.loads(r.stdout or "[]")
-    except (TypeError, ValueError) as exc:
-        log(f"DEFERRED: issue list ({state}) parse failed: {exc}")
-        return None
-    if not isinstance(issues, list) or not all(
-        isinstance(issue, dict) for issue in issues
-    ):
-        log(f"DEFERRED: issue list ({state}) parse failed: expected a list")
-        return None
-    return issues
-
-
 def label_exists(cfg: dict, env: dict, label: str) -> bool:
     """True when `label` already exists in the repo (gh fails on unknown
     labels, so never pass one through unchecked)."""
@@ -528,80 +490,3 @@ def label_exists(cfg: dict, env: dict, label: str) -> bool:
         isinstance(label_item, dict) and label_item.get("name") == label
         for label_item in labels
     )
-
-
-def add_to_board(cfg: dict, env: dict, issue_number: int, lane: str,
-                 project_id: str, field_id: str,
-                 status_options: dict) -> bool:
-    """Add a new issue to the project and move it to `lane` (default Backlog)."""
-    url = f"https://github.com/{cfg['repo']}/issues/{issue_number}"
-    if DRY_RUN:
-        log(f"[dry-run] DEFERRED BOARD issue={issue_number} -> {lane}")
-        return True
-    r = gh(["project", "item-add", str(cfg["project_number"]),
-            "--owner", cfg["project_owner"], "--url", url,
-            "--format", "json"], env)
-    if r.returncode != 0:
-        log(f"DEFERRED BOARD ADD FAILED issue={issue_number}: "
-            f"{r.stderr.strip()[:200]}")
-        return False
-    try:
-        item_id = json.loads(r.stdout)["itemId"]
-    except (TypeError, ValueError, KeyError):
-        m = re.search(r"(PVTI_[A-Za-z0-9_]+)", r.stdout or "")
-        if not m:
-            log(f"DEFERRED BOARD ADD: unexpected output: {r.stdout[:200]!r}")
-            return False
-        item_id = m.group(1)
-    option_id = status_options.get(lane)
-    if not option_id:
-        log(f"DEFERRED BOARD: lane '{lane}' not on board")
-        return False
-    return move_to_lane(cfg, env, project_id, item_id, field_id, option_id)
-
-
-def create_deferred_issue(cfg: dict, env: dict, issue_number: int,
-                          pr_number: int | None, source_title: str,
-                          item: dict, lane: str, project_id: str,
-                          field_id: str, status_options: dict) -> int | None:
-    """Create + board the tracking issue for one deferred item.
-
-    Returns the new issue number, 0 in dry-run (simulated), or None on failure.
-    """
-    title = item["title"]
-    body = (
-        f"Deferred from #{issue_number} during implementation"
-        + (f" (PR #{pr_number})" if pr_number else "") + ".\n\n"
-        + f"**What and why:** {item['description'] or 'TBD.'}\n\n"
-        + (f"**Reason deferred:** {item['reason']}\n\n" if item["reason"] else "")
-        + f"Context: source issue #{issue_number} ({source_title}).\n\n"
-        + "## Ownership\n\n"
-        + "Files/areas: declare before moving this issue to Todo.\n\n"
-        + "## Depends on\n\n"
-        + "None.\n\n"
-        + "Acceptance criteria to be filled when this is planned."
-    )
-    cmd = ["issue", "create", "-R", cfg["repo"], "--title", title,
-           "--body", body]
-    label = item.get("label") or ""
-    if label and label_exists(cfg, env, label):
-        cmd += ["--label", label]
-    if DRY_RUN:
-        log(f"[dry-run] DEFERRED CREATE issue={issue_number}: {title}"
-            + (f" (label {label})" if label else ""))
-        return 0
-    r = gh(cmd, env)
-    if r.returncode != 0:
-        log(f"DEFERRED CREATE FAILED issue={issue_number}: "
-            f"{r.stderr.strip()[:200]}")
-        return None
-    m = re.search(r"issues/(\d+)\s*$", (r.stdout or "").strip())
-    if not m:
-        log(f"DEFERRED CREATE: cannot parse issue number from: {r.stdout[:200]!r}")
-        return None
-    new_num = int(m.group(1))
-    if not add_to_board(cfg, env, new_num, lane, project_id, field_id,
-                        status_options):
-        log(f"DEFERRED BOARD FAILED issue={new_num}; created but not boarded")
-        return None
-    return new_num

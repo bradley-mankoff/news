@@ -4,8 +4,8 @@
 Restores the checklist in docs/archon-workflows.md ("Local edits to usable
 workflows") after an archon reinstall replaces the bundled YAMLs:
 
-  - `completion-comment` node (with the `## Deferred work` contract the board
-    poller parses) in archon-fix-github-issue.yaml and archon-idea-to-pr.yaml
+  - `completion-comment` node (with the `## Deferred work` human-follow-up
+    contract) in archon-fix-github-issue.yaml and archon-idea-to-pr.yaml
   - `report-verdict` node in archon-smart-pr-review.yaml
   - Rigorous nodes use Pi's OpenAI Codex OAuth model (`provider: pi`,
     `model: openai-codex/gpt-5.6-luna`, `effort: max`), matching the current
@@ -77,32 +77,42 @@ RIGOROUS_NODES: dict[str, tuple[str, ...]] = {
     "archon-workflow-builder.yaml": ("extract-intent", "generate-yaml"),
 }
 
-# The human-testing contract shared by both completion-comment nodes. The
-# board poller copies this section into the Ready for Review comment.
+# The testing contract shared by both completion-comment nodes. The board
+# poller partitions this section into machine checks and human steps for the
+# Ready for Review comment; the ready-review QA agent reuses recorded
+# evidence instead of re-running checks.
 TESTING_COMMAND_RULE = """      Keep copy-paste commands standalone: put explanations on
       separate prose lines, never after a shell command using `#`.
 """
 TESTING_CONTRACT = """      ## How to test
-      Give concise, human-facing steps for the reviewer who will test this work after
-      it is merged into `develop`.
-      - Start with exact commands, URLs, or setup when a runnable path exists.
-      - For UI/API/CLI changes, state the action, expected result, and which acceptance
-        criterion each step exercises.
-      - For library/config/automation-only changes, name the focused test command and
-        any observable smoke check; say what output means pass.
-      - If no manual test is possible, write `Not manually testable — <reason>` and name
-        the automated validation that is the best available evidence.
+      Record what the MACHINE already verified and what still needs a HUMAN.
+      The board machinery runs every check it can on its own, so a command in
+      this section is executed by the machine (or reused from recorded
+      evidence), never handed to the human as homework.
+      - `### Machine checks` — every automated check this run executed:
+        copy-paste command plus its recorded result on the next prose line
+        (test counts, zero exit, clean compile). The ready-review QA agent
+        re-runs only a check that lacks recorded evidence.
+      - `### Human checks` — only steps that genuinely require a person:
+        product review, taste, visual inspection, decisions. State the action
+        and the expected result. If nothing needs a human, write
+        `None — all recorded checks are machine-runnable.`
+      - For UI/API/CLI changes, name the exact command or URL the ready-review
+        QA agent (not the human) runs to verify each acceptance criterion; say
+        what output means pass.
+      - If no automated validation exists, write `Not manually testable —
+        <reason>` and name the best available evidence.
 """ + TESTING_COMMAND_RULE
 
-# The Deferred-work contract shared by both completion-comment nodes. The
-# board poller parses the `## Deferred work` section (docs: README, Project
-# Automation -> Deferred work guard).
+# The Deferred-work contract shared by both completion-comment nodes. This
+# records human follow-up; the board poller does not parse the section or create
+# tracking issues from it.
 CONTRACT = """      ## Deferred work
       If ANY work is being deferred — anything intentionally not done now that still
       needs doing later — it MUST be listed here, one bullet per item. This includes:
       - explicit "later"/"future"/"out of scope"/"deferred" decisions, including
         anything you wrote into an ADR, README, or the report above (the board poller
-        reads this section and creates a tracking issue for every item);
+        does not parse this section or create tracking issues from it);
       - NOT-Building / scope-limit exclusions that are future work (not "never");
       - skipped or blocked review findings that warrant follow-up.
       Trace the ORIGINAL issue ask first (the issue body from the Inputs above):
@@ -113,7 +123,7 @@ CONTRACT = """      ## Deferred work
         UNMET acceptance criterion, not deferred work: mark it
         `- [ ] <criterion> — <why not met>` in the Acceptance criteria section
         above. It is part of this issue's delivery — the human will send the
-        issue back, and the poller will not create a tracking issue for it.
+        issue back, and it remains an unmet criterion for human review.
       - anything in the issue's Out of scope section that is future work (not
         "never") IS deferred work and MUST be listed here.
       DEDUPE — judge every item before finalizing the section:
@@ -135,27 +145,25 @@ CONTRACT = """      ## Deferred work
           pending-checklist/ADR item that already has a tracking issue:
           add `**Links to:** #N`.
         - a closed issue covered it (done or abandoned): add `**Supersedes:** #N`
-          (the poller creates a new issue referencing it).
+          (record the relationship for human follow-up).
         - it is genuinely rejected — never-to-be-done, superseded by context:
           stamp `**Out of scope:** <kebab-concept-slug>` (the poller records it
           in `.out-of-scope/<slug>.md` so the same request does not resurrect).
-        - otherwise leave the item bare — the poller creates the tracking issue.
+        - otherwise leave the item bare for human follow-up.
       If you are unsure whether an issue covers the same deliverable, treat them
-      as distinct (bare) — a new tracking issue is cheap and the human can merge.
-      SIZE BAR — not every finding deserves a tracking issue. Apply the
-      "would this ever be scheduled on its own?" test before stamping:
+      as distinct (bare) and explain the uncertainty for the human reviewer.
+      SIZE BAR — not every finding deserves a separate follow-up record. Apply
+      the "would this ever be scheduled on its own?" test before recording:
       - small chores, test tweaks, doc fixes, and cleanups that a competent dev
         would knock out in under ~an hour as part of the parent's follow-up are
-        NOT tracking issues: stamp `**Skip:** folded into #<parent> — <why>`.
-        The completion record preserves them; the backlog does not grow.
+        not separate follow-up work: stamp `**Skip:** folded into #<parent> — <why>`.
       - review findings whose fix belongs with the parent issue's remaining
         scope: same — Skip with the reason.
-      - only items that are genuine, independently schedulable deliverables —
-        features, subsystems, cross-cutting fixes, anything that gates other
-        work — get spawned (left bare).
+      - record only genuine, independently schedulable deliverables — features,
+        subsystems, cross-cutting fixes, or anything that gates other work.
       Err toward Skip for small items (a backlog full of chores is worse than a
       tiny task picked up later); err toward bare only for real deliverables.
-      Format, exactly — the poller parses this:
+      Format, exactly — keep each follow-up item self-contained:
       - **Title:** <imperative title, ≤72 chars, self-contained and searchable>
         **Description:** <1-2 sentences; what "done" looks like>
         **Reason:** <why deferred now>
@@ -504,7 +512,8 @@ def ensure_node(path: Path, node_id: str, node_text: str,
 
 
 def ensure_contract(path: Path, node_id: str) -> str | None:
-    """Insert completion-comment contracts into an existing node if missing."""
+    """Insert completion-comment contracts into an existing node if missing,
+    and refresh an outdated How-to-test contract."""
     text = path.read_text()
     start = text.find(f"- id: {node_id}")
     if start == -1:
@@ -513,32 +522,50 @@ def ensure_contract(path: Path, node_id: str) -> str | None:
     if end == -1:
         return f"node {node_id} end not found in {path.name}"
     node = text[start:end]
+    deferred = text.find("      ## Deferred work", start, end)
     needs_testing = "      ## How to test" not in node
     needs_shell_rule = "Keep copy-paste commands standalone" not in node
-    needs_deferred = "reads this section and creates a tracking issue" not in node
-    if not needs_testing and not needs_shell_rule and not needs_deferred:
+    needs_deferred = "      ## Deferred work" not in node
+    stale_deferred = (
+        "reads this section and creates a tracking issue" in node
+        or "poller creates the tracking issue" in node
+        or "the poller creates a new issue" in node
+        or "the poller parses" in node
+    )
+    stale_testing = False
+    howto = -1
+    if not needs_testing and deferred != -1:
+        howto = text.find("      ## How to test", start, deferred)
+        if howto != -1 and text[howto:deferred] != TESTING_CONTRACT:
+            stale_testing = True
+    if (not needs_testing and not needs_shell_rule
+            and not needs_deferred and not stale_testing and not stale_deferred):
         return None
     factual = text.find("The comment must be factual", start, end)
     if factual == -1:
         return f"node {node_id} insertion point not found in {path.name}"
-    insertion = text.find("      ## Deferred work", start, end)
-    if insertion == -1:
-        insertion = factual
+    insertion = deferred if deferred != -1 else factual
     addition = ""
-    if needs_testing:
+    if needs_testing or stale_testing:
         addition += TESTING_CONTRACT
     elif needs_shell_rule:
         addition += TESTING_COMMAND_RULE
-    if needs_deferred:
+    if needs_deferred or stale_deferred:
         addition += CONTRACT
-    text = text[:insertion] + addition + text[insertion:]
+    if stale_testing:
+        replacement_end = factual if stale_deferred else deferred
+        text = text[:howto] + addition + text[replacement_end:]
+    elif stale_deferred:
+        text = text[:deferred] + addition + text[factual:]
+    else:
+        text = text[:insertion] + addition + text[insertion:]
     path.write_text(text)
     added = []
-    if needs_testing:
+    if needs_testing or stale_testing:
         added.append("How-to-test")
     elif needs_shell_rule:
         added.append("copy-paste command")
-    if needs_deferred:
+    if needs_deferred or stale_deferred:
         added.append("Deferred-work")
     return f"added {' and '.join(added)} contracts to {node_id} in {path.name}"
 

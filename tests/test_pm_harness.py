@@ -490,22 +490,6 @@ class GithubAdapterTest(unittest.TestCase):
             self.assertEqual(github.fetch_verdict(config(), {}, 71), (None, False))
             self.assertFalse(github.label_exists(config(), {}, "needs-input"))
 
-    def test_deferred_issue_is_not_reported_as_tracked_when_board_add_fails(self) -> None:
-        cfg = config()
-        cfg.update({"project_number": 4, "project_owner": "example", "status_field": "Status"})
-        responses = iter([
-            self._result([], "https://github.com/example/widgets/issues/91\n"),
-            self._result(["project", "item-add"], "", returncode=1),
-        ])
-        item = {"title": "Follow-up", "description": "details", "reason": "later"}
-        with patch.object(github, "gh", side_effect=lambda *args: next(responses)):
-            self.assertIsNone(
-                github.create_deferred_issue(
-                    cfg, {}, 7, None, "Issue 7", item, "Backlog",
-                    "project", "field", {"Backlog": "backlog-option"},
-                )
-            )
-
 
 class WorkflowEditCoverageTest(unittest.TestCase):
     def test_new_workflow_edit_helpers_are_idempotent(self) -> None:
