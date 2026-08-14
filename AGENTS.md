@@ -13,6 +13,7 @@ direct fix sessions). It is not a project-management constitution.
 - OKF knowledge bundle → `knowledge/` (tests: `tests/test_okf.py`)
 - ADRs → `docs/adr/`
 - Sources / recipients / presets → `config/*.yaml`
+- Model Catalog (built-ins, YAML overlay, runtime-fit) → `config/model_catalog.yaml` + `news_pipeline/model_catalog.py`
 - Security audit / history scrub → `docs/security/` +
   `automation/security_audit.py` / `scrub_history.sh` (human-gated execute)
 - Secret-prevention (Gitleaks pre-commit hook) →
