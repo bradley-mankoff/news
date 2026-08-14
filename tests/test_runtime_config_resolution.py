@@ -10,6 +10,7 @@ from pathlib import Path
 import textwrap
 from unittest.mock import patch
 
+from news_pipeline import model_catalog
 from news_pipeline import prompt_catalog
 from news_pipeline import ui as ui_module
 from news_pipeline import config as config_module
@@ -146,6 +147,81 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
                 load_runtime_config(
                     environ={},
                     overrides={"NEWS_MODEL": stale},
+                    materialize_outputs=False,
+                )
+
+    def test_custom_managed_catalog_alias_reaches_runtime_config(self) -> None:
+        custom = dict(model_catalog.BUILTIN_CATALOG_MODELS)
+        custom["custom-managed"] = model_catalog.CatalogModel(
+            alias="custom-managed",
+            reference="mlx-community/custom-managed",
+            name="Custom Managed Model",
+            backend="mlx-lm",
+            hf_repo="mlx-community/custom-managed",
+            context_length=None,
+            description="A custom managed model.",
+            task_notes={},
+        )
+        with patch.object(model_catalog, "_CATALOG_SNAPSHOT", custom):
+            config = load_runtime_config(
+                environ={},
+                overrides={"NEWS_MODEL": "custom-managed"},
+                materialize_outputs=False,
+                run_started_at=datetime(2026, 6, 14, 12, 0, 0),
+            )
+
+        self.assertEqual(config.model_reference, "custom-managed")
+        self.assertEqual(config.model_name, "mlx-community/custom-managed")
+        self.assertEqual(config.model_backend, "mlx-lm")
+        self.assertIn("--model mlx-community/custom-managed", config.model_server_command)
+        self.assertEqual(config.model_assignments["default"].reference, "custom-managed")
+
+    def test_custom_external_catalog_alias_reaches_runtime_config(self) -> None:
+        custom = dict(model_catalog.BUILTIN_CATALOG_MODELS)
+        custom["custom-external"] = model_catalog.CatalogModel(
+            alias="custom-external",
+            reference="external-org/openai-compatible",
+            name="External Compatible Model",
+            backend="external",
+            hf_repo="external-org/openai-compatible",
+            context_length=None,
+            description="A custom external model.",
+            task_notes={},
+        )
+        with patch.object(model_catalog, "_CATALOG_SNAPSHOT", custom):
+            config = load_runtime_config(
+                environ={"NEWS_MODEL_BASE_URL": "https://api.example.com/v1"},
+                overrides={"NEWS_MODEL": "custom-external"},
+                materialize_outputs=False,
+                run_started_at=datetime(2026, 6, 14, 12, 0, 0),
+            )
+
+        self.assertEqual(config.model_reference, "custom-external")
+        self.assertEqual(config.model_name, "external-org/openai-compatible")
+        self.assertEqual(config.model_backend, "external")
+        self.assertEqual(config.model_base_url, "https://api.example.com/v1")
+        self.assertEqual(config.model_server_command, "")
+
+    def test_inferred_external_catalog_alias_requires_base_url(self) -> None:
+        custom = dict(model_catalog.BUILTIN_CATALOG_MODELS)
+        custom["custom-external"] = model_catalog.CatalogModel(
+            alias="custom-external",
+            reference="external-org/openai-compatible",
+            name="External Compatible Model",
+            backend="external",
+            hf_repo="external-org/openai-compatible",
+            context_length=None,
+            description="A custom external model.",
+            task_notes={},
+        )
+        with patch.object(model_catalog, "_CATALOG_SNAPSHOT", custom):
+            with self.assertRaisesRegex(
+                ValueError,
+                "External model backend requires NEWS_MODEL_BASE_URL",
+            ):
+                load_runtime_config(
+                    environ={},
+                    overrides={"NEWS_MODEL": "custom-external"},
                     materialize_outputs=False,
                 )
 

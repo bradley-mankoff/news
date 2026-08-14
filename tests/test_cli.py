@@ -4,12 +4,13 @@ import contextlib
 import io
 import json
 import os
+import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from news_pipeline import cli
+from news_pipeline import cli, model_catalog
 
 
 class CliTests(unittest.TestCase):
@@ -269,6 +270,84 @@ class CliTests(unittest.TestCase):
         self.assertEqual(len(entries), 2)
         self.assertEqual(entries[0]["alias"], "gemma-4-12b-it-4bit")
         self.assertTrue(entries[0]["is_default"])
+
+    def test_models_catalog_custom_yaml_entry_offline(self) -> None:
+        """A valid YAML overlay is merged into the offline catalog command
+        without any network activity (issue #90)."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            catalog_path = Path(tmpdir) / "custom_catalog.yaml"
+            catalog_path.write_text(
+                "models:\n"
+                "  smoke-model:\n"
+                "    reference: mlx-community/smoke-model\n"
+                "    name: Smoke Model\n"
+                "    backend: mlx-lm\n"
+                "    hf_repo: mlx-community/smoke-model\n"
+                "    description: Offline smoke entry\n",
+                encoding="utf-8",
+            )
+            with patch.dict(
+                os.environ,
+                {model_catalog.MODEL_CATALOG_YAML_ENV_VAR: str(catalog_path)},
+                clear=False,
+            ), patch.object(model_catalog, "_CATALOG_SNAPSHOT", None):
+                code, stdout, stderr = self._invoke(["models", "catalog", "--json"])
+            self.assertEqual(code, 0)
+            entries = json.loads(stdout)
+            self.assertEqual(
+                [entry["alias"] for entry in entries],
+                ["gemma-4-12b-it-4bit", "gemma-e2b-tiny", "smoke-model"],
+            )
+            self.assertTrue(entries[0]["is_default"])
+            smoke = next(entry for entry in entries if entry["alias"] == "smoke-model")
+            self.assertEqual(smoke["reference"], "mlx-community/smoke-model")
+            self.assertEqual(smoke["backend"], "mlx-lm")
+            self.assertTrue(smoke["hf_url"].startswith("https://huggingface.co/"))
+
+            with patch.dict(
+                os.environ,
+                {model_catalog.MODEL_CATALOG_YAML_ENV_VAR: str(catalog_path)},
+                clear=False,
+            ), patch.object(model_catalog, "_CATALOG_SNAPSHOT", None):
+                code, stdout, stderr = self._invoke(["models", "catalog"])
+            self.assertEqual(code, 0)
+            self.assertIn("smoke-model", stdout)
+            self.assertIn("gemma-e2b-tiny", stdout)
+
+    def test_models_catalog_malformed_yaml_fails_closed(self) -> None:
+        """Malformed catalog YAML uses the CLI error envelope (exit 2) with a
+        path-specific message; it never falls back to an empty catalog."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            catalog_path = Path(tmpdir) / "bad_catalog.yaml"
+            catalog_path.write_text("models: []\n", encoding="utf-8")
+            with patch.dict(
+                os.environ,
+                {model_catalog.MODEL_CATALOG_YAML_ENV_VAR: str(catalog_path)},
+                clear=False,
+            ), patch.object(model_catalog, "_CATALOG_SNAPSHOT", None):
+                code, stdout, stderr = self._invoke(["models", "catalog", "--json"])
+        self.assertEqual(code, 2)
+        self.assertEqual(stdout, "")
+        self.assertIn(str(catalog_path), stderr)
+        self.assertIn("must define models as a mapping", stderr)
+
+        for contents, message in (
+            ("false\n", "must contain a YAML mapping"),
+            ("models: [\n", "Could not load model catalog"),
+        ):
+            with tempfile.TemporaryDirectory() as tmpdir:
+                catalog_path = Path(tmpdir) / "bad_catalog.yaml"
+                catalog_path.write_text(contents, encoding="utf-8")
+                with patch.dict(
+                    os.environ,
+                    {model_catalog.MODEL_CATALOG_YAML_ENV_VAR: str(catalog_path)},
+                    clear=False,
+                ), patch.object(model_catalog, "_CATALOG_SNAPSHOT", None):
+                    code, stdout, stderr = self._invoke(["models", "catalog", "--json"])
+            self.assertEqual(code, 2)
+            self.assertEqual(stdout, "")
+            self.assertIn(str(catalog_path), stderr)
+            self.assertIn(message, stderr)
 
     def test_models_catalog_rejects_unexpected_args(self) -> None:
         code, stdout, stderr = self._invoke(["models", "catalog", "oops"])
