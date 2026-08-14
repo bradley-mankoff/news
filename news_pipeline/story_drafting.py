@@ -424,6 +424,7 @@ def run_story_synthesis_block(
         story_block,
         now_label,
         prompt_instructions=runtime.prompt_instructions,
+        prompt_template=runtime.prompt_template,
     )
     estimated_input_tokens = sum(runtime.estimate_message_token_count(message) for message in prompt_messages)
     response = runtime.invoke_with_retries(

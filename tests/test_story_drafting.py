@@ -191,6 +191,58 @@ class StoryDraftingTests(unittest.TestCase):
             "story_drafting", f"{system_text}\n\n{user_text}"
         )
 
+    def test_story_synthesis_run_uses_custom_full_template(self) -> None:
+        captured: dict[str, list] = {}
+        custom = PromptTemplate(
+            task="story_drafting",
+            label="Runtime custom story",
+            system="CUSTOM SYSTEM $now_label\n$citation_contract\n$output_contract",
+            user="CUSTOM USER $story_title\n$source_summary_lines",
+            required_placeholders=(
+                "now_label",
+                "story_title",
+                "source_summary_lines",
+                "citation_contract",
+                "output_contract",
+            ),
+            optional_placeholders=("editorial_instructions",),
+        )
+
+        def invoke(_model, messages, **_kwargs):
+            captured["messages"] = messages
+            return SimpleNamespace(
+                content=(
+                    "Headline: Storm Cleanup Advances\n"
+                    "Main story: County officials reported storm damage.[[S1]]\n"
+                    "Contradictions: NONE"
+                )
+            )
+
+        runtime = replace(
+            _story_drafting_runtime(),
+            invoke_with_retries=invoke,
+            prompt_template=custom,
+        )
+        run_story_synthesis_block(
+            {
+                "story_title": "Storm damage",
+                "summaries": ["County officials reported storm damage."],
+                "citation_sources": [
+                    _source(
+                        "S1",
+                        summary="County officials reported storm damage.",
+                        body_evidence="County logs listed storm damage.",
+                    )
+                ],
+            },
+            "May 30, 2026",
+            runtime,
+        )
+
+        self.assertEqual(len(captured["messages"]), 2)
+        self.assertTrue(str(captured["messages"][0].content).startswith("CUSTOM SYSTEM May 30, 2026"))
+        self.assertTrue(str(captured["messages"][1].content).startswith("CUSTOM USER Storm damage"))
+
     def test_custom_full_template_without_editorial_slot_drops_profile_text(self) -> None:
         custom = PromptTemplate(
             task="story_drafting",
