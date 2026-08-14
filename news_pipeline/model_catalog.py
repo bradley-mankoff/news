@@ -46,7 +46,6 @@ CATALOG_MODEL_BACKENDS = ("mlx-lm", "mlx-vlm", "external")
 # ".", "_", and "-", beginning with a letter or digit.
 _CATALOG_ALIAS_RE = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
 # Metadata-only fields an existing built-in alias may override in YAML.
-_CATALOG_OVERRIDE_FIELDS = ("name", "description", "context_length", "task_notes")
 # Fields a new YAML alias must provide (context_length/task_notes optional).
 _CATALOG_REQUIRED_FIELDS = ("reference", "name", "backend", "hf_repo", "description")
 _CATALOG_ALL_FIELDS = (
@@ -344,18 +343,6 @@ def _validate_catalog_entry(
                     "code-owned; override only name, description, "
                     "context_length, and task_notes, or add a new alias."
                 )
-        override_fields = [
-            field
-            for field in raw_entry
-            if field not in _CATALOG_OVERRIDE_FIELDS
-            and field not in {"reference", "backend", "hf_repo"}
-        ]
-        if override_fields:
-            raise ValueError(
-                f"{path} model {alias!r} may override only "
-                f"{', '.join(_CATALOG_OVERRIDE_FIELDS)}; unexpected field(s): "
-                f"{', '.join(repr(field) for field in override_fields)}."
-            )
         task_notes = builtin.task_notes
         if "task_notes" in raw_entry:
             task_notes = {**task_notes, **_validate_catalog_task_notes(raw_entry["task_notes"], alias, path)}
@@ -444,9 +431,8 @@ def load_model_catalog(path: Path | None = None) -> dict[str, CatalogModel]:
     for alias, builtin in BUILTIN_CATALOG_MODELS.items():
         merged[alias] = builtin
     for raw_alias, raw_entry in raw_models.items():
-        merged[_validate_catalog_alias(raw_alias, catalog_path)] = _validate_catalog_entry(
-            raw_alias, raw_entry, catalog_path
-        )
+        model = _validate_catalog_entry(raw_alias, raw_entry, catalog_path)
+        merged[model.alias] = model
     return merged
 
 
@@ -609,24 +595,17 @@ def runtime_fit_for_hf_model(info: Mapping[str, Any]) -> dict[str, str]:
                     "status": RUNTIME_FIT_EXTERNAL_ONLY,
                     "reason": "Catalog entry declares external use; runtime fit is advisory.",
                 }
-            if model.backend == "mlx-vlm":
-                return {
-                    "status": RUNTIME_FIT_MANAGED_MLX_VLM,
-                    "reason": (
-                        "Curated model, verified for this backend."
-                        if is_builtin
-                        else "Catalog entry declares managed mlx-vlm; runtime fit is advisory."
-                    ),
-                }
-            if model.backend == "mlx-lm":
-                return {
-                    "status": RUNTIME_FIT_MANAGED_MLX_LM,
-                    "reason": (
-                        "Curated model, verified for this backend."
-                        if is_builtin
-                        else "Catalog entry declares managed mlx-lm; runtime fit is advisory."
-                    ),
-                }
+            if model.backend in ("mlx-vlm", "mlx-lm"):
+                status = (
+                    RUNTIME_FIT_MANAGED_MLX_VLM
+                    if model.backend == "mlx-vlm"
+                    else RUNTIME_FIT_MANAGED_MLX_LM
+                )
+                if is_builtin:
+                    reason = "Curated model, verified for this backend."
+                else:
+                    reason = f"Catalog entry declares managed {model.backend}; runtime fit is advisory."
+                return {"status": status, "reason": reason}
             # Catalog loading allowlists backends; fail closed if a test or
             # future caller constructs an invalid CatalogModel directly.
             return {

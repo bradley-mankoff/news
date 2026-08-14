@@ -217,7 +217,7 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
         with patch.object(model_catalog, "_CATALOG_SNAPSHOT", custom):
             with self.assertRaisesRegex(
                 ValueError,
-                "External model backend requires NEWS_MODEL_BASE_URL",
+                "NEWS_MODEL_BACKEND=external requires NEWS_MODEL_BASE_URL",
             ):
                 load_runtime_config(
                     environ={},
