@@ -318,7 +318,8 @@ def _reconcile_completions(
                         act = develop_conflict_action(
                             bool(rec.get("dev_conflict_mech")), fix_msg,
                             (run_status_for(runs_by_msg, fix_msg)
-                             if fix_msg else None))
+                             if fix_msg else None),
+                            retried=bool(rec.get("dev_conflict_retried")))
                         if act == "mech":
                             ok, note = try_merge_base_into_head(
                                 cfg, env, pr_num, head, merge_base)
@@ -350,6 +351,28 @@ def _reconcile_completions(
                                         f"Resolving automatically (merging develop into "
                                         f"the branch, then {dev_wf} if needed).")
                                     log(f"DEVELOP CONFLICT DISPATCH PR #{pr_num} "
+                                        f"issue={issue_number} wf={dev_wf}")
+                        elif act == "retry":
+                            if _conflict_fixer_active(
+                                    runs_by_msg, _POLL_CONFLICT_FIXERS):
+                                if not rec.get("dev_conflict_deferred"):
+                                    log(f"DEVELOP CONFLICT RETRY DEFERRED PR #{pr_num} "
+                                        f"issue={issue_number} — another conflict fix "
+                                        "run is active")
+                                    rec["dev_conflict_deferred"] = True
+                            else:
+                                dmsg = (f"Resolve merge conflicts on develop PR #{pr_num} "
+                                        f"(issue #{issue_number}). "
+                                        f"Retry {int(bool(rec.get('dev_conflict_retried'))) + 1}.")
+                                if dispatch(cfg, env, dev_wf,
+                                            f"fix-develop-issue-{issue_number}", dmsg,
+                                            item_id, issue_number):
+                                    _POLL_CONFLICT_FIXERS.add(dmsg)
+                                    rec["dev_conflict_fix_msg"] = dmsg
+                                    rec["dev_conflict_noted"] = False
+                                    rec["dev_conflict_retried"] = True
+                                    rec.pop("dev_conflict_deferred", None)
+                                    log(f"DEVELOP CONFLICT RETRY DISPATCH PR #{pr_num} "
                                         f"issue={issue_number} wf={dev_wf}")
                         elif act == "failed":
                             if not rec.get("dev_conflict_noted"):
@@ -733,7 +756,9 @@ def _remediate_ship_conflicts(ctx: PollContext, runs_by_msg: dict[str, str] | No
                 if fix_msg and runs_by_msg
                 else None
             )
-            action = conflict_episode_action(mergeable, fix_msg, fix_status, mech_failed)
+            retried = bool(rec.get("conflict_fix_retried"))
+            action = conflict_episode_action(
+                mergeable, fix_msg, fix_status, mech_failed, retried=retried)
             if action == "update":
                 ok, note = try_merge_base_into_head(
                     cfg, env, ship_num, ship.get("headRefName") or "", ship_to)
@@ -764,6 +789,31 @@ def _remediate_ship_conflicts(ctx: PollContext, runs_by_msg: dict[str, str] | No
                             f"(merging main into the branch, then {fix_wf} if needed).")
                         log(f"SHIP CONFLICT DISPATCH PR #{ship_num} issue={issue_number} "
                             f"wf={fix_wf}")
+            elif action == "retry":
+                # Fix run finished terminal but the PR is still conflicting.
+                # Give the resolver one bounded re-dispatch before escalating:
+                # transport drops (WebSocket 1006 etc.) kill a healthy run
+                # mid-resolution, and the LLM must be allowed to finish.
+                if _conflict_fixer_active(runs_by_msg, _POLL_CONFLICT_FIXERS):
+                    if not rec.get("conflict_fix_deferred"):
+                        log(f"SHIP CONFLICT RETRY DEFERRED PR #{ship_num} "
+                            f"issue={issue_number} — another conflict fix run is active")
+                        rec["conflict_fix_deferred"] = True
+                else:
+                    msg = (f"Resolve merge conflicts on ship PR #{ship_num} "
+                           f"(issue #{issue_number}). Retry {int(retried) + 1}.")
+                    branch = f"fix-ship-issue-{issue_number}"
+                    if dispatch(cfg, env, fix_wf, branch, msg, item_id, issue_number):
+                        _POLL_CONFLICT_FIXERS.add(msg)
+                        rec["conflict_fix_msg"] = msg
+                        rec["conflict_fix_noted"] = False
+                        rec["conflict_fix_retried"] = True
+                        rec.pop("conflict_fix_deferred", None)
+                        log(f"SHIP CONFLICT RETRY DISPATCH PR #{ship_num} "
+                            f"issue={issue_number} wf={fix_wf}")
+                    else:
+                        log(f"SHIP CONFLICT RETRY DISPATCH FAILED PR #{ship_num} "
+                            f"issue={issue_number} — retrying next poll")
             elif action == "failed":
                 if not rec.get("conflict_fix_noted"):
                     if comment_issue(
@@ -792,6 +842,7 @@ def _remediate_ship_conflicts(ctx: PollContext, runs_by_msg: dict[str, str] | No
                 rec.pop("conflict_mech_failed", None)
                 rec.pop("conflict_fix_noted", None)
                 rec.pop("conflict_fix_deferred", None)
+                rec.pop("conflict_fix_retried", None)
             state[item_id] = rec
 
 def ensure_ship_review(cfg: dict, env: dict, item_id: str, issue_number: int,

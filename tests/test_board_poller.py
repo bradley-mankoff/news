@@ -324,11 +324,21 @@ class ConflictEpisodeActionTest(unittest.TestCase):
 
     def test_fix_run_completed_still_conflicting(self):
         self.assertEqual(
-            conflict_episode_action("CONFLICTING", "m", "completed", True), "failed")
+            conflict_episode_action("CONFLICTING", "m", "completed", True), "retry")
 
     def test_fix_run_failed_status(self):
         self.assertEqual(
-            conflict_episode_action("CONFLICTING", "m", "failed", True), "failed")
+            conflict_episode_action("CONFLICTING", "m", "failed", True), "retry")
+
+    def test_fix_run_retried_failed_status_escalates(self):
+        self.assertEqual(
+            conflict_episode_action("CONFLICTING", "m", "failed", True,
+                                    retried=True), "failed")
+
+    def test_fix_run_retried_completed_escalates(self):
+        self.assertEqual(
+            conflict_episode_action("CONFLICTING", "m", "completed", True,
+                                    retried=True), "failed")
 
     def test_unknown_waits(self):
         self.assertEqual(conflict_episode_action("UNKNOWN", None, None, False), "wait")
@@ -377,9 +387,15 @@ class BranchEmptyVsMainTest(unittest.TestCase):
         for st in ("running", "pending", "queued", "scheduled", "paused"):
             self.assertEqual(develop_conflict_action(True, "m", st), "active")
 
-    def test_resolver_done_still_failing_needs_human(self):
-        self.assertEqual(develop_conflict_action(True, "m", "completed"), "failed")
-        self.assertEqual(develop_conflict_action(True, "m", "failed"), "failed")
+    def test_resolver_done_still_failing_retries_once(self):
+        self.assertEqual(develop_conflict_action(True, "m", "completed"), "retry")
+        self.assertEqual(develop_conflict_action(True, "m", "failed"), "retry")
+
+    def test_resolver_retried_done_escalates(self):
+        self.assertEqual(
+            develop_conflict_action(True, "m", "completed", retried=True), "failed")
+        self.assertEqual(
+            develop_conflict_action(True, "m", "failed", retried=True), "failed")
 
 
 class ParseDepRefsTest(unittest.TestCase):
@@ -1088,6 +1104,63 @@ class ConflictDispatchSerializationTest(unittest.TestCase):
         ):
             cycle_adapter._remediate_ship_conflicts(ctx, {}, "In Review", "main")
         self.assertNotIn("conflict_fix_deferred", state["item-3"])
+
+    def test_failed_fix_run_redispatches_once(self):
+        state = {
+            "item-4": {
+                "status": "In Review", "issue_number": 4,
+                "conflict_fix_msg": "Resolve merge conflicts on ship PR #104 "
+                                    "(issue #4).",
+                "conflict_mech_failed": True,
+                "conflict_fix_retried": True,
+            },
+        }
+        runs_by_msg = {
+            "Resolve merge conflicts on ship PR #104 (issue #4).": "failed",
+        }
+        ctx = self._ctx(state)
+        with (
+            patch.object(cycle_adapter, "find_ship_pr",
+                         return_value={"number": 104, "mergeable": "CONFLICTING",
+                                       "headRefName": "issue-4"}),
+            patch.object(cycle_adapter, "dispatch") as disp,
+            patch.object(cycle_adapter, "comment_issue", return_value=True) as cm,
+            patch.object(cycle_adapter, "log"),
+        ):
+            cycle_adapter._remediate_ship_conflicts(ctx, runs_by_msg,
+                                                    "In Review", "main")
+        disp.assert_not_called()
+        cm.assert_called_once()
+        self.assertTrue(state["item-4"]["conflict_fix_noted"])
+
+    def test_failed_fix_run_escalates_after_retry(self):
+        state = {
+            "item-4": {
+                "status": "In Review", "issue_number": 4,
+                "conflict_fix_msg": "Resolve merge conflicts on ship PR #104 "
+                                    "(issue #4).",
+                "conflict_mech_failed": True,
+            },
+        }
+        runs_by_msg = {
+            "Resolve merge conflicts on ship PR #104 (issue #4).": "failed",
+        }
+        ctx = self._ctx(state)
+        with (
+            patch.object(cycle_adapter, "find_ship_pr",
+                         return_value={"number": 104, "mergeable": "CONFLICTING",
+                                       "headRefName": "issue-4"}),
+            patch.object(cycle_adapter, "dispatch",
+                         return_value=DispatchResult(True, pid=1)) as disp,
+            patch.object(cycle_adapter, "comment_issue", return_value=True) as cm,
+            patch.object(cycle_adapter, "log"),
+        ):
+            cycle_adapter._remediate_ship_conflicts(ctx, runs_by_msg,
+                                                    "In Review", "main")
+        disp.assert_called_once()
+        cm.assert_not_called()
+        self.assertTrue(state["item-4"]["conflict_fix_retried"])
+        self.assertFalse(state["item-4"]["conflict_fix_noted"])
 
 
 class FmtDepsTest(unittest.TestCase):

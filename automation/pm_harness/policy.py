@@ -469,7 +469,8 @@ def pick_workflow(cfg: dict, labels: list[str]) -> str:
     return todo_cfg.get("default", "archon-fix-github-issue")
 
 def conflict_episode_action(mergeable: str, fix_msg: str | None,
-                            fix_status: str | None, mech_failed: bool) -> str:
+                            fix_status: str | None, mech_failed: bool,
+                            *, retried: bool = False) -> str:
     """Next step for a conflicting ship PR in the review lane.
 
     mergeable: GitHub's value (CONFLICTING / MERGEABLE / UNKNOWN).
@@ -478,12 +479,16 @@ def conflict_episode_action(mergeable: str, fix_msg: str | None,
     (None with fix_msg set = run not yet registered or status lookup
     failed — treated as "active", never escalated.)
     mech_failed: the mechanical merge API already hit real conflicts.
+    retried: the fix run already got one bounded re-dispatch this episode.
 
     Returns one of:
       "update"   try the mechanical base-into-head merge (no fix run yet)
       "dispatch" mechanical merge failed with real conflicts — start the fix run
       "active"   fix run in flight — wait
-      "failed"   fix run finished but the PR is still conflicting
+      "retry"    fix run finished terminal but the PR is still conflicting
+                 and this episode has not retried yet — re-dispatch once
+      "failed"   fix run terminal (or retried) and the PR is still
+                 conflicting — human escalation
       "clear"    PR no longer conflicting — episode over, drop markers
       "none"     nothing to do (mergeable and no episode markers)
       "wait"     mergeability unknown — recheck next poll
@@ -501,21 +506,28 @@ def conflict_episode_action(mergeable: str, fix_msg: str | None,
         return "active"
     if fix_status in ACTIVE_WORKFLOW_STATUSES:
         return "active"
+    if not retried:
+        return "retry"
     return "failed"
 
 def develop_conflict_action(mech_tried: bool, fix_msg: str | None,
-                            fix_status: str | None) -> str:
+                            fix_status: str | None,
+                            *, retried: bool = False) -> str:
     """Next step for a conflicting develop PR in the completion lane.
 
     mech_tried: the mechanical base-into-head merge already hit real conflicts.
     fix_msg: dispatch message of the develop resolver run, or None.
     fix_status: run status for fix_msg, or None when fix_msg is None.
+    retried: the resolver run already got one bounded re-dispatch this episode.
 
     Returns one of:
       "mech"     try the mechanical base-into-head merge (no fix run yet)
       "dispatch" mechanical merge failed with real conflicts — start the resolver
       "active"   resolver run in flight — wait (the outer merge retries anyway)
-      "failed"   resolver finished but the PR is still conflicting — needs human
+      "retry"    resolver finished terminal but the PR is still conflicting
+                 and this episode has not retried yet — re-dispatch once
+      "failed"   resolver terminal (or retried) and the PR is still
+                 conflicting — needs human
     """
     if not mech_tried:
         return "mech"
@@ -523,6 +535,8 @@ def develop_conflict_action(mech_tried: bool, fix_msg: str | None,
         return "dispatch"
     if fix_status in ACTIVE_WORKFLOW_STATUSES:
         return "active"
+    if not retried:
+        return "retry"
     return "failed"
 
 def workflow_status_by_message(runs: list[dict]) -> dict[str, str]:
