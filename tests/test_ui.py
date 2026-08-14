@@ -77,6 +77,57 @@ from news_pipeline.ui import (
 )
 
 
+_FAKE_DOM_ELEMENT_JS = r'''
+const decodeEntities = (text) => String(text)
+  .replaceAll("&lt;", "<")
+  .replaceAll("&gt;", ">")
+  .replaceAll("&quot;", '"')
+  .replaceAll("&amp;", "&");
+class FakeElement {
+  constructor(id = "", value = "") {
+    this.id = id;
+    this.value = value;
+    this.dataset = {};
+    this._innerHTML = "";
+    this.disabled = false;
+    this._listeners = {};
+    this.onclick = null;
+  }
+  set innerHTML(value) { this._innerHTML = String(value); }
+  get innerHTML() { return this._innerHTML; }
+  get textContent() {
+    return decodeEntities(this._innerHTML.replace(/<[^>]*>/g, ""));
+  }
+  optionText(value) {
+    const marker = `<option value="${value}">`;
+    const start = this._innerHTML.indexOf(marker);
+    if (start < 0) return null;
+    const contentStart = start + marker.length;
+    const end = this._innerHTML.indexOf("</option>", contentStart);
+    return end < 0 ? null : decodeEntities(this._innerHTML.slice(contentStart, end));
+  }
+  querySelector(selector) {
+    const prefix = 'button[data-use-hf-model="';
+    if (!selector.startsWith(prefix) || !selector.endsWith('"]')) return null;
+    const modelId = selector.slice(prefix.length, -2);
+    const marker = `data-use-hf-model="${modelId}"`;
+    const markerStart = this._innerHTML.indexOf(marker);
+    if (markerStart < 0) return null;
+    const buttonStart = this._innerHTML.lastIndexOf("<button", markerStart);
+    const buttonEnd = this._innerHTML.indexOf(">", markerStart);
+    const button = this._innerHTML.slice(buttonStart, buttonEnd + 1);
+    return { disabled: button.includes(" disabled") };
+  }
+  querySelectorAll(_selector) { return []; }
+  addEventListener(type, fn) {
+    (this._listeners[type] = this._listeners[type] || []).push(fn);
+  }
+  fire(type) {
+    for (const fn of this._listeners[type] || []) fn.call(this, { target: this });
+  }
+}
+'''
+
 @dataclass
 class _Sample:
     name: str
@@ -360,6 +411,25 @@ class UITests(unittest.TestCase):
         # Preset save validates the current template values first.
         self.assertIn("await validatePromptTemplateEnv(body.env);", html)
         self.assertIn("/api/prompt-templates/validate", html)
+        # The editor's data-template-* elements are looked up with CSS
+        # selectors via document.querySelector; the ID-only $ helper must
+        # never receive a selector string (issue #227). The executable Node
+        # harness below is the behavioral guard; this is only a source drift
+        # guard for the same contract.
+        prompt_block = html.split("// Advanced full-template editors (ADR 0015).", 1)[1].split("function modelTaskLabels()", 1)[0]
+        self.assertNotIn("$(`[data-template-", prompt_block)
+        self.assertIn(
+            'const sysEl = document.querySelector(`[data-template-system="${t.task}"]`);',
+            prompt_block,
+        )
+        self.assertIn(
+            'const userEl = document.querySelector(`[data-template-user="${t.task}"]`);',
+            prompt_block,
+        )
+        self.assertIn(
+            'const statusEl = document.querySelector(`[data-template-status="${task}"]`);',
+            prompt_block,
+        )
 
     def test_prompt_template_validation_endpoint_and_preset_rejection(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -2247,49 +2317,14 @@ class UITests(unittest.TestCase):
         def js_function_block(start: str, end: str) -> str:
             return html[html.index(start) : html.index(end, html.index(start))]
 
-        js = ("""
+        js = (
+            r"""
 const assert = (condition, message) => {
   if (!condition) throw new Error(message);
 };
-const decodeEntities = (text) => String(text)
-  .replaceAll("&lt;", "<")
-  .replaceAll("&gt;", ">")
-  .replaceAll("&quot;", '"')
-  .replaceAll("&amp;", "&");
-class FakeElement {
-  constructor(id, value = "") {
-    this.id = id;
-    this.value = value;
-    this._innerHTML = "";
-    this.disabled = false;
-  }
-  set innerHTML(value) { this._innerHTML = String(value); }
-  get innerHTML() { return this._innerHTML; }
-  get textContent() {
-    return decodeEntities(this._innerHTML.replace(/<[^>]*>/g, ""));
-  }
-  optionText(value) {
-    const marker = `<option value="${value}">`;
-    const start = this._innerHTML.indexOf(marker);
-    if (start < 0) return null;
-    const contentStart = start + marker.length;
-    const end = this._innerHTML.indexOf("</option>", contentStart);
-    return end < 0 ? null : decodeEntities(this._innerHTML.slice(contentStart, end));
-  }
-  querySelectorAll(_selector) { return []; }
-  querySelector(selector) {
-    const prefix = 'button[data-use-hf-model="';
-    if (!selector.startsWith(prefix) || !selector.endsWith('"]')) return null;
-    const modelId = selector.slice(prefix.length, -2);
-    const marker = `data-use-hf-model="${modelId}"`;
-    const markerStart = this._innerHTML.indexOf(marker);
-    if (markerStart < 0) return null;
-    const buttonStart = this._innerHTML.lastIndexOf("<button", markerStart);
-    const buttonEnd = this._innerHTML.indexOf(">", markerStart);
-    const button = this._innerHTML.slice(buttonStart, buttonEnd + 1);
-    return { disabled: button.includes(" disabled") };
-  }
-}
+"""
+            + _FAKE_DOM_ELEMENT_JS
+            + r"""
 const elements = {
   recommendationTask: new FakeElement("recommendationTask"),
   catalogCards: new FakeElement("catalogCards"),
@@ -2364,6 +2399,339 @@ assert(elements.modelSearchResults.textContent.includes("Fit: unknown — no sta
 assert(elements.modelSearchResults.textContent.includes("Fit: unknown — empty status"), "empty fit status did not fall back to unknown");
 assert(elements.modelSearchResults.querySelector('button[data-use-hf-model="owner/external"]').disabled, "empty schema enabled external-only model");
 """ )
+        node = shutil.which("node")
+        if node is None:
+            self.skipTest("Node.js is required for the embedded UI renderer harness")
+        result = subprocess.run(
+            [node, "--input-type=module", "-"],
+            input=js,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
+
+    def test_prompt_template_editor_actions_execute_in_node_dom_harness(self) -> None:
+        """Execute the Advanced full-template editors in a DOM-shaped Node harness.
+
+        The source-text assertions elsewhere prove the markup and function
+        strings exist, which is exactly what let the ID-only ``$`` helper
+        receive CSS selector strings and silently short-circuit Validate,
+        Restore, changed-env collection, and preset application (issue #227).
+        This harness renders the real schema-driven editor markup through the
+        real production functions and drives them: each Validate click must
+        POST to the validate endpoint and update its status, Restore must
+        reset the textareas and serialization state, an edited pair must reach
+        the /api/presets body through the real savePresetEditor(), and the
+        saved env must round-trip through the real setPromptTemplateEnv().
+        Any console.error call fails the harness, so a null selector lookup
+        cannot be hidden behind a swallowed error.
+        """
+        html = ui_module.HTML
+
+        def js_function_block(start: str, end: str) -> str:
+            return html[html.index(start) : html.index(end, html.index(start))]
+
+        tasks_json = json.dumps(prompt_templates.list_prompt_templates())
+        js = (
+            r"""
+const assert = (condition, message) => {
+  if (!condition) throw new Error(message);
+};
+// A selector failure (or any unexpected path) must fail the run instead of
+// being swallowed into a console message.
+console.error = (...args) => { throw new Error("console.error: " + args.join(" ")); };
+"""
+            + _FAKE_DOM_ELEMENT_JS
+            + r"""
+
+// ---- Fake DOM ------------------------------------------------------------
+// getElementById only recognizes real IDs (promptTemplateEditors, preset
+// fields, restoreAllPromptTemplatesBtn); a CSS selector string is NOT an ID,
+// so the old $(`[data-template-...]`) calls resolve to null here exactly as
+// they do in a browser.
+// Parse the schema-driven markup renderPromptTemplateEditors() generates, so
+// the harness exercises the real renderer (escaping, defaults, malformed
+// flags) instead of hand-built controls.
+const textareas = new Map();    // "system:<task>" / "user:<task>" -> element
+const statusEls = new Map();    // "<task>" -> status element
+const validateBtns = new Map(); // "<task>" -> Validate button
+const restoreBtns = new Map();  // "<task>" -> Restore default button
+function parseEditorMarkup(markup) {
+  textareas.clear();
+  statusEls.clear();
+  validateBtns.clear();
+  restoreBtns.clear();
+  let match;
+  const textareaRe = /<textarea data-template-(system|user)="([^"]*)"[^>]*>([\s\S]*?)<\/textarea>/g;
+  while ((match = textareaRe.exec(markup)) !== null) {
+    const role = match[1];
+    const task = match[2];
+    const el = new FakeElement();
+    el.value = decodeEntities(match[3]);
+    el.dataset[role === "system" ? "templateSystem" : "templateUser"] = task;
+    textareas.set(role + ":" + task, el);
+  }
+  const statusRe = /<p class="prompt-template-status" data-template-status="([^"]*)">([\s\S]*?)<\/p>/g;
+  while ((match = statusRe.exec(markup)) !== null) {
+    const el = new FakeElement();
+    el.innerHTML = match[2];
+    statusEls.set(match[1], el);
+  }
+  const buttonRe = /<button type="button" class="prompt-template-(validate|restore)" data-task="([^"]*)">/g;
+  while ((match = buttonRe.exec(markup)) !== null) {
+    const el = new FakeElement();
+    el.dataset.task = match[2];
+    if (match[1] === "validate") validateBtns.set(match[2], el);
+    else restoreBtns.set(match[2], el);
+  }
+}
+const byId = {};
+function registerElement(id, el) { byId[id] = el; return el; }
+const editorContainer = registerElement("promptTemplateEditors", new FakeElement("promptTemplateEditors"));
+// Re-parse the generated editor markup whenever the container is (re)rendered.
+const baseInnerHTMLSetter = Object.getOwnPropertyDescriptor(FakeElement.prototype, "innerHTML").set;
+Object.defineProperty(editorContainer, "innerHTML", {
+  set(value) { baseInnerHTMLSetter.call(this, value); parseEditorMarkup(String(value)); },
+  get() { return this._innerHTML; }
+});
+registerElement("restoreAllPromptTemplatesBtn", new FakeElement("restoreAllPromptTemplatesBtn"));
+for (const id of ["preset_id", "preset_name", "preset_description", "preset_env"]) {
+  registerElement(id, new FakeElement(id));
+}
+const document = {
+  getElementById(id) {
+    // Deliberately ID-only: a CSS selector string must not resolve here.
+    return byId[id] || null;
+  },
+  querySelector(selector) {
+    const m = /^\[data-template-(system|user|status)="([^"]*)"\]$/.exec(selector);
+    if (!m) throw new Error(`unexpected querySelector: ${selector}`);
+    if (m[1] === "system") return textareas.get("system:" + m[2]) || null;
+    if (m[1] === "user") return textareas.get("user:" + m[2]) || null;
+    return statusEls.get(m[2]) || null;
+  },
+  querySelectorAll(selector) {
+    if (selector === "#promptTemplateEditors textarea") return [...textareas.values()];
+    if (selector === "#promptTemplateEditors .prompt-template-validate") return [...validateBtns.values()];
+    if (selector === "#promptTemplateEditors .prompt-template-restore") return [...restoreBtns.values()];
+    throw new Error(`unexpected querySelectorAll: ${selector}`);
+  }
+};
+function $(id) { return document.getElementById(id); }
+function value(id) { const el = $(id); return el ? el.value : ""; }
+// The editor's textareas are addressed by CSS selector; keep the lookups
+// short instead of repeating the template literal at every call site.
+const templateSys = task => document.querySelector(`[data-template-system="${task}"]`);
+const templateUser = task => document.querySelector(`[data-template-user="${task}"]`);
+const flush = () => new Promise(resolve => setTimeout(resolve, 0));
+
+// ---- API and preset-save stubs (only the network edge is stubbed) --------
+const requests = [];
+let savedPresetPayload = null;
+let presetsReloaded = 0;
+let rejectValidation = false;
+async function api(path, options = {}) {
+  requests.push({ path, method: options.method || "GET", body: options.body || "" });
+  if (path === "/api/prompt-templates/validate") {
+    const body = JSON.parse(options.body);
+    if (rejectValidation && body.task === TASKS[0].task) {
+      throw new Error("invalid template <test>");
+    }
+    return { valid: true, errors: {} };
+  }
+  if (path === "/api/presets") {
+    savedPresetPayload = JSON.parse(options.body);
+    return { ok: true };
+  }
+  throw new Error(`unexpected API path: ${path}`);
+}
+async function loadPresets() { presetsReloaded++; }
+function renderPresetSummary() {}
+function renderRunPresetDrawer() {}
+const state = { schema: null, presets: [] };
+
+// The five canonical task records, serialized from the production catalog so
+// the harness stays schema-driven (same shape /api/schema serves).
+const TASKS = """
+            + tasks_json
+            + r""";
+"""
+            + js_function_block("function escapeHtml(text) {", "function formatDefault")
+            + js_function_block("// Advanced full-template editors (ADR 0015).", "function modelTaskLabels()")
+            + js_function_block("function collectRunPresetEditor() {", "function prepRunPresetEditorFromCurrent")
+            + js_function_block("function textToEnv(text) {", "function renderStats")
+            + js_function_block("async function savePresetEditor() {", "async function renamePresetDisplayName")
+            + r"""
+
+// ---- Render ---------------------------------------------------------------
+state.schema = { current_env: {}, prompt_templates: TASKS };
+renderPromptTemplateEditors();
+assert(textareas.size === TASKS.length * 2, "editor textareas were not rendered");
+assert(validateBtns.size === TASKS.length, "Validate buttons were not rendered");
+assert(restoreBtns.size === TASKS.length, "Restore buttons were not rendered");
+
+// ---- Validate: each task POSTs its rendered pair and reports success ------
+for (const t of TASKS) {
+  validateBtns.get(t.task).onclick();
+  await flush();
+  const posts = requests.filter(
+    r => r.path === "/api/prompt-templates/validate" && JSON.parse(r.body).task === t.task
+  );
+  assert(posts.length === 1, `${t.task}: expected exactly one validate request`);
+  const body = JSON.parse(posts[0].body);
+  assert(body.template.system === t.system, `${t.task}: validate did not send the rendered system text`);
+  assert(body.template.user === t.user, `${t.task}: validate did not send the rendered user text`);
+  const statusEl = statusEls.get(t.task);
+  assert(statusEl.innerHTML.includes("Template is valid."), `${t.task}: status did not report valid`);
+  assert(!statusEl.innerHTML.includes("bad"), `${t.task}: status reported an error`);
+}
+
+// ---- Validate rejection: the task-specific error status is escaped --------
+rejectValidation = true;
+const failureTask = TASKS[0];
+statusEls.get(failureTask.task).innerHTML = '<span class="ok">Template is valid.</span>';
+validateBtns.get(failureTask.task).onclick();
+await flush();
+assert(
+  statusEls.get(failureTask.task).innerHTML.includes('class="bad"'),
+  "validation failure was not shown"
+);
+assert(
+  statusEls.get(failureTask.task).innerHTML.includes("invalid template &lt;test&gt;"),
+  "validation failure was not escaped or surfaced"
+);
+
+// ---- Restore: edited pair returns to defaults and drops its override ------
+const restoreTask = TASKS[0];
+const sysEl = templateSys(restoreTask.task);
+const userEl = templateUser(restoreTask.task);
+sysEl.value = "custom system text";
+userEl.value = "custom user text";
+sysEl.fire("input");
+assert(statusEls.get(restoreTask.task).innerHTML === "", "input did not clear the status");
+restoreBtns.get(restoreTask.task).onclick();
+assert(sysEl.value === restoreTask.system, "restore did not reset the system textarea");
+assert(userEl.value === restoreTask.user, "restore did not reset the user textarea");
+assert(statusEls.get(restoreTask.task).innerHTML === "", "restore did not clear the status");
+const envAfterRestore = currentPromptTemplateEnv();
+assert(envAfterRestore[restoreTask.env_var] === undefined, "restored default pair was serialized as an override");
+
+// ---- Restore all defaults ------------------------------------------------
+for (const t of TASKS) {
+  const sys = templateSys(t.task);
+  const usr = templateUser(t.task);
+  sys.value = `edited system ${t.task}`;
+  usr.value = `edited user ${t.task}`;
+  sys.fire("input");
+}
+$("restoreAllPromptTemplatesBtn").onclick();
+const envAll = currentPromptTemplateEnv();
+assert(Object.keys(envAll).length === 0, "restore-all left overrides behind");
+for (const t of TASKS) {
+  assert(
+    templateSys(t.task).value === t.system,
+    `${t.task}: restore-all did not reset the system textarea`
+  );
+}
+
+// ---- User-only edit: it marks the task dirty and serializes both values ----
+const userOnlyTask = TASKS[3];
+setPromptTemplateEnv({});
+const userOnly = templateUser(userOnlyTask.task);
+statusEls.get(userOnlyTask.task).innerHTML = '<span class="ok">Template is valid.</span>';
+userOnly.value = "user-only edit";
+userOnly.fire("input");
+assert(statusEls.get(userOnlyTask.task).innerHTML === "", "User input did not clear the status");
+const userOnlyEnv = currentPromptTemplateEnv();
+assert(
+  JSON.parse(userOnlyEnv[userOnlyTask.env_var]).system === userOnlyTask.system,
+  "User-only edit did not retain the system default"
+);
+assert(
+  JSON.parse(userOnlyEnv[userOnlyTask.env_var]).user === "user-only edit",
+  "User-only edit was not serialized"
+);
+
+// ---- Edit + save preset: the real savePresetEditor() must carry the pair --
+const editTask = TASKS[1];
+const editedSystem = `Custom $editorial_instructions system for ${editTask.task}`;
+const editedUser = `Custom user text for ${editTask.task}`;
+const sysEdit = templateSys(editTask.task);
+const usrEdit = templateUser(editTask.task);
+sysEdit.value = editedSystem;
+usrEdit.value = editedUser;
+sysEdit.fire("input");
+document.getElementById("preset_id").value = "editor-test-preset";
+document.getElementById("preset_name").value = "Editor Test";
+document.getElementById("preset_description").value = "";
+document.getElementById("preset_env").value = "";
+const envBefore = currentPromptTemplateEnv();
+assert(
+  envBefore[editTask.env_var] === JSON.stringify({ system: editedSystem, user: editedUser }),
+  "edited pair was not serialized into the env"
+);
+await savePresetEditor();
+assert(savedPresetPayload !== null, "preset save did not POST /api/presets");
+assert(savedPresetPayload.id === "editor-test-preset", "preset id was not sent");
+assert(presetsReloaded === 1, "preset save did not reload presets");
+assert(
+  savedPresetPayload.env[editTask.env_var] === envBefore[editTask.env_var],
+  "edited template is missing from the preset env"
+);
+
+// ---- Apply round-trip: the saved env restores the exact edited pair --------
+for (const t of TASKS) {
+  const sys = templateSys(t.task);
+  sys.value = "stale text";
+  sys.fire("input");
+}
+setPromptTemplateEnv(savedPresetPayload.env);
+assert(templateSys(editTask.task).value === editedSystem, "apply did not restore the edited system text");
+assert(templateUser(editTask.task).value === editedUser, "apply did not restore the edited user text");
+const envAfter = currentPromptTemplateEnv();
+assert(
+  envAfter[editTask.env_var] === envBefore[editTask.env_var],
+  "applied env did not round-trip the exact JSON value"
+);
+
+// ---- Malformed overrides stay visible and round-trip raw ------------------
+const malformedTask = TASKS[2];
+const malformedValues = [
+  '{"system": "broken"',
+  JSON.stringify({ system: "broken" })
+];
+for (const malformedRaw of malformedValues) {
+  state.schema = {
+    current_env: { [malformedTask.env_var]: malformedRaw },
+    prompt_templates: TASKS
+  };
+  renderPromptTemplateEditors();
+  assert(
+    statusEls.get(malformedTask.task).innerHTML.includes("malformed"),
+    "malformed override was not flagged"
+  );
+  assert(
+    templateSys(malformedTask.task).value === malformedTask.system,
+    "malformed override replaced the built-in defaults"
+  );
+  setPromptTemplateEnv({ [malformedTask.env_var]: malformedRaw });
+  assert(
+    templateSys(malformedTask.task).value === malformedTask.system,
+    "applying malformed override changed the system default"
+  );
+  assert(
+    templateUser(malformedTask.task).value === malformedTask.user,
+    "applying malformed override changed the user default"
+  );
+  const envMalformed = currentPromptTemplateEnv();
+  assert(
+    envMalformed[malformedTask.env_var] === malformedRaw,
+    "malformed raw override was not preserved for round-trip"
+  );
+}
+"""
+        )
         node = shutil.which("node")
         if node is None:
             self.skipTest("Node.js is required for the embedded UI renderer harness")
