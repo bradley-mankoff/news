@@ -66,6 +66,8 @@ from .prompt_catalog import (
 )
 from .model_catalog import (
     MODEL_RECOMMENDATION_TASKS,
+    MODEL_TASK_LABELS,
+    RUNTIME_FIT_LABELS,
     fetch_model_metadata,
     list_model_catalog,
     search_huggingface_models,
@@ -594,6 +596,8 @@ def schema_payload() -> dict[str, Any]:
         "prompt_profiles": list_prompt_profiles(),
         "model_catalog": list_model_catalog(),
         "model_recommendation_tasks": list(MODEL_RECOMMENDATION_TASKS),
+        "model_task_labels": dict(MODEL_TASK_LABELS),
+        "runtime_fit_labels": dict(RUNTIME_FIT_LABELS),
         "sources": _source_summary(),
         "recipients": _recipient_summary(),
         "source_match_modes": sorted(VALID_SOURCE_MATCH_MODES),
@@ -4193,20 +4197,12 @@ HTML = r"""<!doctype html>
         };
       });
     }
-    const MODEL_TASK_LABELS = {
-      factual_extraction: "Factual extraction",
-      structured_output: "Structured output",
-      synthesis: "Synthesis",
-      citation_fidelity: "Citation fidelity",
-      speed: "Speed",
-      context_length: "Context length",
-      translation: "Translation"
-    };
-    const RUNTIME_FIT_LABELS = {
-      managed_mlx_lm: "Managed mlx-lm",
-      managed_mlx_vlm: "Managed mlx-vlm",
-      external_only: "External only"
-    };
+    function modelTaskLabels() {
+      return (state.schema && state.schema.model_task_labels) || {};
+    }
+    function runtimeFitLabels() {
+      return (state.schema && state.schema.runtime_fit_labels) || {};
+    }
     // Runtime-fit status -> required NEWS_MODEL_BACKEND value for the
     // compatibility hint (mirrors model_catalog.py's RUNTIME_FIT_* verdicts;
     // any other status maps to no hint rather than a guessed backend).
@@ -4281,8 +4277,9 @@ HTML = r"""<!doctype html>
       const select = $("recommendationTask");
       if (!select) return;
       const tasks = (state.schema && state.schema.model_recommendation_tasks) || [];
+      const labels = modelTaskLabels();
       select.innerHTML = `<option value="">Pick a task…</option>` + tasks.map(task =>
-        `<option value="${escapeHtml(task)}">${escapeHtml(MODEL_TASK_LABELS[task] || task)}</option>`
+        `<option value="${escapeHtml(task)}">${escapeHtml(labels[task] || task)}</option>`
       ).join("");
       const cards = $("catalogCards");
       cards.innerHTML = modelCatalogEntries().map(entry => `
@@ -4356,7 +4353,7 @@ HTML = r"""<!doctype html>
         const backendExternal = currentControlValue("NEWS_MODEL_BACKEND") === "external";
         container.innerHTML = models.map(item => {
           const fit = item.runtime_fit || {};
-          const fitLabel = RUNTIME_FIT_LABELS[fit.status] || fit.status || "unknown";
+          const fitLabel = runtimeFitLabels()[fit.status] || fit.status || "unknown";
           const hfBackend = Object.prototype.hasOwnProperty.call(RUNTIME_FIT_BACKENDS, fit.status)
             ? RUNTIME_FIT_BACKENDS[fit.status]
             : "";
