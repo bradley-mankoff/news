@@ -5,6 +5,8 @@ import http.client
 import json
 import os
 import re
+import shutil
+import subprocess
 import tempfile
 import threading
 import unittest
@@ -351,6 +353,101 @@ class UITests(unittest.TestCase):
         self.assertNotIn("modelCatalogEntries().filter", block)
         # Empty or partial pick lists keep the documented honest-gap message.
         self.assertIn("No verified curated model for this task yet", block)
+
+    def test_model_backend_hint_markup_contract(self) -> None:
+        """The Default model panel exposes an accessible backend-compatibility
+        hint driven by catalog/HF backend metadata (issue #94)."""
+        html = ui_module.HTML
+        # Markup and accessibility: the hint sits under the Default model
+        # control and is announced politely; the hidden class starts it empty.
+        self.assertIn('id="modelBackendHint"', html)
+        self.assertIn('aria-live="polite"', html)
+        self.assertIn("renderModelBackendHint", html)
+
+        # Scope assertions to the lookup and renderer so unrelated occurrences
+        # cannot keep this source-level contract green after a wiring change.
+        lookup = html.split("function catalogBackendForReference", 1)[1].split(
+            "function requiredBackendForSelectedModel", 1
+        )[0]
+        hint = html.split("function renderModelBackendHint", 1)[1].split(
+            "function renderModelCatalogPanel", 1
+        )[0]
+        self.assertIn('const clean = (reference || "").trim();', lookup)
+        self.assertIn('if (!clean) return "";', lookup)
+        self.assertIn("entry.alias === clean || entry.reference === clean", lookup)
+        self.assertIn("if (!required || !current) {", hint)
+        self.assertIn("if (required === current) {", hint)
+        self.assertIn("This model needs NEWS_MODEL_BACKEND=${required}", hint)
+        self.assertIn('hint.textContent = "";', hint)
+        self.assertIn('hint.classList.add("hidden")', hint)
+        self.assertIn('hint.classList.remove("hidden")', hint)
+        self.assertIn('currentControlValue("NEWS_MODEL_BACKEND")', hint)
+        self.assertNotIn("hint.innerHTML", hint)
+
+    def test_model_backend_hint_wiring_covers_each_path(self) -> None:
+        html = ui_module.HTML
+        catalog = html.split("function renderModelCatalogPanel", 1)[1].split(
+            "function renderRecommendations", 1
+        )[0]
+        recommendations = html.split("function renderRecommendations", 1)[1].split(
+            "async function searchHuggingFaceModels", 1
+        )[0]
+        search = html.split("async function searchHuggingFaceModels", 1)[1].split(
+            "async function comparePromptProfiles", 1
+        )[0]
+        hf_buttons = html.split("function refreshHuggingFaceUseButtons", 1)[1].split(
+            "async function searchHuggingFaceModels", 1
+        )[0]
+        presets = html.split("function applyRunPreset", 1)[1].split(
+            "function resetAllOverrides", 1
+        )[0]
+        reset = html.split("function resetAllOverrides", 1)[1].split(
+            "function setKnobEnv", 1
+        )[0]
+        delegated = html.split('document.addEventListener("change"', 1)[1].split(
+            "await loadSources", 1
+        )[0]
+        boot = html.split("async function init()", 1)[1].split("init().catch", 1)[0]
+
+        expected_catalog_call = (
+            "useModelReference(btn.dataset.useModel, "
+            "catalogBackendForReference(btn.dataset.useModel));"
+        )
+        self.assertIn(expected_catalog_call, catalog)
+        self.assertIn(expected_catalog_call, recommendations)
+        self.assertIn(
+            'useModelReference(btn.dataset.useHfModel, btn.dataset.useHfBackend || "");',
+            search,
+        )
+        self.assertIn('btn.disabled = disabled;', hf_buttons)
+        self.assertIn('btn.textContent = disabled', hf_buttons)
+        self.assertIn("refreshModelKnobLinks();", presets)
+        self.assertIn('void previewQuietly("run");', presets)
+        self.assertIn("refreshModelKnobLinks();", reset)
+        self.assertIn('void previewQuietly("run");', reset)
+        self.assertIn('state.selectedModelRequiredBackend = catalogBackendForReference(el.value);', delegated)
+        self.assertIn("requiredBackendForSelectedModel()", delegated)
+        self.assertIn("refreshHuggingFaceUseButtons();", delegated)
+        self.assertIn("refreshModelKnobLinks();", boot)
+
+    def test_runtime_fit_backend_map_matches_catalog_vocabulary(self) -> None:
+        html = ui_module.HTML
+        block = html.split("const RUNTIME_FIT_BACKENDS = {", 1)[1].split("};", 1)[0]
+        expected = {
+            model_catalog.RUNTIME_FIT_MANAGED_MLX_LM: "mlx-lm",
+            model_catalog.RUNTIME_FIT_MANAGED_MLX_VLM: "mlx-vlm",
+            model_catalog.RUNTIME_FIT_EXTERNAL_ONLY: "external",
+        }
+        for status, backend in expected.items():
+            self.assertIn(f'{status}: "{backend}"', block)
+        self.assertIn(
+            "Object.prototype.hasOwnProperty.call(RUNTIME_FIT_BACKENDS, fit.status)",
+            html,
+        )
+        self.assertIn('data-use-hf-backend="${escapeHtml(hfBackend)}"', html)
+        self.assertIn('currentControlValue("NEWS_MODEL_BACKEND") === "external"', html)
+        # Use must never mutate the backend control.
+        self.assertNotIn('setControlValue("NEWS_MODEL_BACKEND"', html)
 
     def test_pure_helpers_and_schema_payload(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1927,6 +2024,224 @@ class UITests(unittest.TestCase):
         self.assertEqual(status, 400)
         self.assertIn("Missing model parameter.", json.loads(body)["error"])
 
+    def test_schema_label_maps_and_drift_contract(self) -> None:
+        """The schema serves the canonical model-catalog label maps and the
+        embedded JavaScript reads them from state.schema at render time
+        (issue #82): a label added on the Python side renders without a
+        second UI edit, and no duplicate hardcoded map literals remain."""
+        with patch.object(
+            ui_module, "_runtime_snapshot", return_value=({"runtime": "ok"}, None)
+        ), patch.object(
+            ui_module, "configured_removed_topic_env_vars", return_value=set()
+        ), patch.object(
+            ui_module, "list_presets", return_value={"path": "presets.yaml", "presets": []}
+        ), patch.object(
+            ui_module,
+            "list_model_tuning_presets",
+            return_value={"path": "model.yaml", "presets": []},
+        ), patch.object(
+            ui_module, "_source_summary", return_value={"total": 0}
+        ), patch.object(ui_module, "_recipient_summary", return_value={"total": 0}):
+            payload = ui_module.schema_payload()
+
+        # The canonical dictionaries are served verbatim as copied projections.
+        self.assertEqual(payload["model_task_labels"], model_catalog.MODEL_TASK_LABELS)
+        self.assertEqual(payload["runtime_fit_labels"], model_catalog.RUNTIME_FIT_LABELS)
+        self.assertEqual(payload["model_task_labels"]["translation"], "Translation")
+        self.assertEqual(payload["runtime_fit_labels"]["external_only"], "External only")
+
+        # A label added on the Python side appears in the schema response
+        # without any UI code change and survives JSON encoding.
+        with patch.dict(ui_module.MODEL_TASK_LABELS, {"future_task": "Future task"}), patch.dict(
+            ui_module.RUNTIME_FIT_LABELS, {"future_fit": "Future fit"}
+        ), patch.object(
+            ui_module,
+            "MODEL_RECOMMENDATION_TASKS",
+            (*ui_module.MODEL_RECOMMENDATION_TASKS, "future_task"),
+        ):
+            payload = ui_module.schema_payload()
+        self.assertEqual(payload["model_task_labels"]["future_task"], "Future task")
+        self.assertEqual(payload["runtime_fit_labels"]["future_fit"], "Future fit")
+        self.assertIn("future_task", payload["model_recommendation_tasks"])
+        json.dumps(payload)  # must stay JSON-serializable for _send_json
+
+        # Drift guard: the embedded JS holds no duplicate map literals and
+        # resolves both vocabularies from state.schema, keeping the existing
+        # raw-key/unknown fallbacks and the status-keyed behavior gate.
+        html = ui_module.HTML
+        self.assertNotIn("const MODEL_TASK_LABELS = {", html)
+        self.assertNotIn("const RUNTIME_FIT_LABELS = {", html)
+        self.assertIn("state.schema.model_task_labels", html)
+        self.assertIn("state.schema.runtime_fit_labels", html)
+        self.assertIn("labels[task] || task", html)
+        self.assertIn('fit.status || "unknown"', html)
+        self.assertIn('fit.status === "external_only"', html)
+
+    def test_schema_endpoint_serves_label_maps(self) -> None:
+        """The public schema route serializes both canonical label maps."""
+        with patch.object(
+            ui_module, "_runtime_snapshot", return_value=({"runtime": "ok"}, None)
+        ), patch.object(
+            ui_module, "configured_removed_topic_env_vars", return_value=set()
+        ), patch.object(
+            ui_module, "list_presets", return_value={"path": "presets.yaml", "presets": []}
+        ), patch.object(
+            ui_module,
+            "list_model_tuning_presets",
+            return_value={"path": "model.yaml", "presets": []},
+        ), patch.object(
+            ui_module, "_source_summary", return_value={"total": 0}
+        ), patch.object(ui_module, "_recipient_summary", return_value={"total": 0}):
+            status, headers, body = self._invoke_get("/api/schema")
+
+        payload = json.loads(body)
+        self.assertEqual(status, 200)
+        self.assertIn("application/json", headers["Content-Type"])
+        self.assertEqual(payload["model_task_labels"], model_catalog.MODEL_TASK_LABELS)
+        self.assertEqual(payload["runtime_fit_labels"], model_catalog.RUNTIME_FIT_LABELS)
+
+    def test_schema_label_renderers_execute_in_node_dom_harness(self) -> None:
+        """Execute the embedded catalog renderers against schema and search fixtures.
+
+        The project has no browser test dependency, so this uses Node's runtime
+        with a small DOM-shaped fixture. The JavaScript functions are extracted
+        from HTML itself, rather than reimplemented in the test, so label
+        rendering, escaping, fallbacks, and the raw status gate are exercised.
+        """
+        html = ui_module.HTML
+
+        def js_function_block(start: str, end: str) -> str:
+            return html[html.index(start) : html.index(end, html.index(start))]
+
+        js = ("""
+const assert = (condition, message) => {
+  if (!condition) throw new Error(message);
+};
+const decodeEntities = (text) => String(text)
+  .replaceAll("&lt;", "<")
+  .replaceAll("&gt;", ">")
+  .replaceAll("&quot;", '"')
+  .replaceAll("&amp;", "&");
+class FakeElement {
+  constructor(id, value = "") {
+    this.id = id;
+    this.value = value;
+    this._innerHTML = "";
+    this.disabled = false;
+  }
+  set innerHTML(value) { this._innerHTML = String(value); }
+  get innerHTML() { return this._innerHTML; }
+  get textContent() {
+    return decodeEntities(this._innerHTML.replace(/<[^>]*>/g, ""));
+  }
+  optionText(value) {
+    const marker = `<option value="${value}">`;
+    const start = this._innerHTML.indexOf(marker);
+    if (start < 0) return null;
+    const contentStart = start + marker.length;
+    const end = this._innerHTML.indexOf("</option>", contentStart);
+    return end < 0 ? null : decodeEntities(this._innerHTML.slice(contentStart, end));
+  }
+  querySelectorAll(_selector) { return []; }
+  querySelector(selector) {
+    const prefix = 'button[data-use-hf-model="';
+    if (!selector.startsWith(prefix) || !selector.endsWith('"]')) return null;
+    const modelId = selector.slice(prefix.length, -2);
+    const marker = `data-use-hf-model="${modelId}"`;
+    const markerStart = this._innerHTML.indexOf(marker);
+    if (markerStart < 0) return null;
+    const buttonStart = this._innerHTML.lastIndexOf("<button", markerStart);
+    const buttonEnd = this._innerHTML.indexOf(">", markerStart);
+    const button = this._innerHTML.slice(buttonStart, buttonEnd + 1);
+    return { disabled: button.includes(" disabled") };
+  }
+}
+const elements = {
+  recommendationTask: new FakeElement("recommendationTask"),
+  catalogCards: new FakeElement("catalogCards"),
+  recommendationReadout: new FakeElement("recommendationReadout"),
+  modelSearchResults: new FakeElement("modelSearchResults"),
+  modelSearchQuery: new FakeElement("modelSearchQuery", "catalog"),
+  modelSearchPipeline: new FakeElement("modelSearchPipeline", "text-generation"),
+  modelSearchLimit: new FakeElement("modelSearchLimit", "10")
+};
+function $(id) { return elements[id] || null; }
+function value(id) { return $(id) ? $(id).value : ""; }
+// Mirrors the real currentControlValue when no matching control exists:
+// fall back to state.schema.current_env (see the embedded implementation
+// next to escapeHtml, which is not part of the extracted renderer blocks).
+function currentControlValue(env) {
+  return (state.schema && state.schema.current_env && state.schema.current_env[env]) || "";
+}
+// Minimal document stub: currentControlValue/renderModelBackendHint fall
+// back to state.schema.current_env when no matching control exists, and
+// useModelReference returns early without a NEWS_MODEL select element.
+const document = {
+  querySelector: () => null,
+  getElementById: () => null,
+  querySelectorAll: () => []
+};
+const state = { schema: null };
+const searchResults = [
+  { id: "owner/future", hf_url: "https://example.test/future", runtime_fit: { status: "future_fit", reason: "future reason" } },
+  { id: "owner/unknown", hf_url: "https://example.test/unknown", runtime_fit: { status: "unknown_fit", reason: "unknown reason" } },
+  { id: "owner/missing-status", hf_url: "https://example.test/missing-status", runtime_fit: { reason: "no status" } },
+  { id: "owner/empty-status", hf_url: "https://example.test/empty-status", runtime_fit: { status: "", reason: "empty status" } },
+  { id: "owner/external", hf_url: "https://example.test/external", runtime_fit: { status: "external_only", reason: "external reason" } }
+];
+async function api(path) {
+  assert(path.startsWith("/api/models/search?"), `unexpected API path: ${path}`);
+  return { models: searchResults, error: null };
+}
+"""
+        + js_function_block("function escapeHtml(text) {", "function formatDefault")
+        + js_function_block("function modelTaskLabels() {", "function useModelReference")
+        + js_function_block('function useModelReference(reference, requiredBackend = "") {', "function renderModelCatalogPanel")
+        + js_function_block("function renderModelCatalogPanel() {", "function renderRecommendations")
+        + js_function_block("function renderRecommendations(task) {", "async function searchHuggingFaceModels")
+        + js_function_block("async function searchHuggingFaceModels() {", "async function comparePromptProfiles")
+        + r"""
+state.schema = {
+  model_recommendation_tasks: ["future_task", "unknown_task"],
+  model_task_labels: { future_task: "Future <task> & choice" },
+  runtime_fit_labels: { future_fit: "Future <fit> & choice" },
+  model_catalog: [],
+  current_env: { NEWS_MODEL_BACKEND: "mlx-lm" }
+};
+renderModelCatalogPanel();
+assert(elements.recommendationTask.optionText("future_task") === "Future <task> & choice", "known task label was not rendered");
+assert(elements.recommendationTask.optionText("unknown_task") === "unknown_task", "unknown task did not fall back to its key");
+assert(elements.recommendationTask.innerHTML.includes("Future &lt;task&gt; &amp; choice"), "task label was not escaped");
+
+await searchHuggingFaceModels();
+assert(elements.modelSearchResults.textContent.includes("Future <fit> & choice"), "known fit label was not rendered");
+assert(elements.modelSearchResults.textContent.includes("unknown_fit"), "unknown fit did not fall back to its status");
+assert(elements.modelSearchResults.innerHTML.includes("Future &lt;fit&gt; &amp; choice"), "fit label was not escaped");
+assert(elements.modelSearchResults.querySelector('button[data-use-hf-model="owner/external"]').disabled, "external-only model was enabled");
+
+// Partial/empty schema state remains usable and keeps raw fallbacks.
+state.schema = { model_recommendation_tasks: ["raw_task"] };
+renderModelCatalogPanel();
+assert(elements.recommendationTask.optionText("raw_task") === "raw_task", "empty label map did not fall back");
+state.schema = {};
+await searchHuggingFaceModels();
+assert(elements.modelSearchResults.textContent.includes("future_fit"), "empty fit map did not fall back");
+assert(elements.modelSearchResults.textContent.includes("Fit: unknown — no status"), "missing fit status did not fall back to unknown");
+assert(elements.modelSearchResults.textContent.includes("Fit: unknown — empty status"), "empty fit status did not fall back to unknown");
+assert(elements.modelSearchResults.querySelector('button[data-use-hf-model="owner/external"]').disabled, "empty schema enabled external-only model");
+""" )
+        node = shutil.which("node")
+        if node is None:
+            self.skipTest("Node.js is required for the embedded UI renderer harness")
+        result = subprocess.run(
+            [node, "--input-type=module", "-"],
+            input=js,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
+
     def test_schema_payload_includes_custom_catalog_entries(self) -> None:
         """The existing schema payload is the integration surface for merged
         catalog data: custom aliases appear in catalog cards and selector
@@ -1986,6 +2301,14 @@ class UITests(unittest.TestCase):
         self.assertEqual(
             [entry["alias"] for entry in payload["model_catalog"]],
             ["gemma-4-12b-it-4bit", "gemma-e2b-tiny", "smoke-model"],
+        )
+        self.assertEqual(
+            {entry["alias"]: entry["backend"] for entry in payload["model_catalog"]},
+            {
+                "gemma-4-12b-it-4bit": "mlx-vlm",
+                "gemma-e2b-tiny": "mlx-lm",
+                "smoke-model": "mlx-lm",
+            },
         )
         model_knob = next(knob for knob in payload["knobs"] if knob["env"] == "NEWS_MODEL")
         self.assertIn("smoke-model", model_knob["options"])
