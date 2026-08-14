@@ -119,7 +119,7 @@ def fetch_workflow_runs(env: dict) -> WorkflowRuns:
         try:
             with open(out_path, "w", encoding="utf-8") as out:
                 result = subprocess.run(
-                    ["archon", "workflow", "runs", "--json", "--limit", "200"],
+                    ["archon", "workflow", "runs", "--json", "--limit", "500"],
                     stdout=out,
                     stderr=subprocess.PIPE,
                     text=True,

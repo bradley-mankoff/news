@@ -387,6 +387,38 @@ class TerminalRecoveryPollTest(unittest.TestCase):
         self.assertEqual(rec["dispatch_msg"], "run")
         stack.dispatch.assert_not_called()
 
+    def test_complete_snapshot_over_200_rows_reconciles_terminal_run(self):
+        state = self._state()
+        target = self._run(run_id="run-1")
+        target["started_at"] = "2026-08-07T11:00:00Z"
+        older = [
+            {
+                "id": f"other-{i}",
+                "workflow_name": "archon-idea-to-pr",
+                "user_message": f"Build feature from issue #{i}",
+                "status": "completed",
+                "started_at": "2026-08-07T10:00:00Z",
+                "completed_at": "2026-08-07T10:05:00Z",
+            }
+            for i in range(1, 201)
+        ]
+        runs = WorkflowRuns(older + [target])
+        with self._run_poll(state, runs, False, False) as stack:
+            log = stack.enter_context(patch.object(cycle_adapter, "log"))
+            cycle_adapter.poll(self._cfg(), {}, state)
+        rec = state["item-92"]
+        self.assertEqual(rec["recovery"]["action"], "retry_available")
+        self.assertEqual(rec["recovery"]["run_id"], "run-1")
+        self.assertEqual(rec["recovery_logged_run_id"], "run-1")
+        self.assertEqual(rec["dispatch_msg"], "run")
+        self.assertFalse(any(
+            "RUN LOOKUP UNAVAILABLE" in c.args[0]
+            for c in log.call_args_list))
+        recovery_lines = [c.args[0] for c in log.call_args_list
+                          if "RUN CANCELLED" in c.args[0]]
+        self.assertEqual(len(recovery_lines), 1)
+        self.assertIn("transient -> retry_available", recovery_lines[0])
+
     def test_unavailable_run_lookup_retains_marker_and_does_not_recover(self):
         state = self._state()
         unavailable = WorkflowRuns(error="archon_timeout")
