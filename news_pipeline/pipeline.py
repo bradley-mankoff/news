@@ -3927,6 +3927,14 @@ def _fallback_error_from_response(response: AIMessage) -> str | None:
     return str(error or "model call used deterministic fallback")
 
 
+def _fallback_error_detail(error: BaseException, response_error: str | None) -> str:
+    """Combine a retry-boundary fallback error with the local parse/contract error."""
+    detail = str(error)
+    if response_error:
+        detail = f"{response_error}; {detail}"
+    return detail
+
+
 def _image_art_direction_call(
     *,
     synthesis_body: str,
@@ -3979,11 +3987,11 @@ def _image_art_direction_call(
     except ManagedModelServerExited:
         raise
     except (ValueError, TypeError) as error:
-        detail = str(error)
-        if response_fallback_error:
-            detail = f"{response_fallback_error}; {detail}"
         progress_tracker.warning("image art prompt fallback")
-        return _enforce_text_free_image_prompt(fallback_prompt), detail
+        return (
+            _enforce_text_free_image_prompt(fallback_prompt),
+            _fallback_error_detail(error, response_fallback_error),
+        )
 
 
 def _title_generation_call(
@@ -4037,11 +4045,8 @@ def _title_generation_call(
     except ManagedModelServerExited:
         raise
     except (ValueError, TypeError) as error:
-        detail = str(error)
-        if response_fallback_error:
-            detail = f"{response_fallback_error}; {detail}"
         progress_tracker.warning("title generation fallback")
-        return fallback_headline, detail
+        return fallback_headline, _fallback_error_detail(error, response_fallback_error)
 
 
 def generate_image_art_brief(
@@ -4090,15 +4095,13 @@ def generate_image_art_brief(
         "image_prompt": image_prompt,
         "overlay_headline": overlay_headline,
     }
-    if image_error or title_error:
-        result["error"] = " ".join(
-            part
-            for part in (
-                f"image art direction: {image_error}" if image_error else "",
-                f"title generation: {title_error}" if title_error else "",
-            )
-            if part
-        )
+    error_parts: list[str] = []
+    if image_error:
+        error_parts.append(f"image art direction: {image_error}")
+    if title_error:
+        error_parts.append(f"title generation: {title_error}")
+    if error_parts:
+        result["error"] = " ".join(error_parts)
     return result
 
 
