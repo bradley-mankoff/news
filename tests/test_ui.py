@@ -578,13 +578,17 @@ class UITests(unittest.TestCase):
         self.assertIn('const clean = (reference || "").trim();', lookup)
         self.assertIn('if (!clean) return "";', lookup)
         self.assertIn("entry.alias === clean || entry.reference === clean", lookup)
-        self.assertIn("if (!required || !current) {", hint)
-        self.assertIn("if (required === current) {", hint)
+        self.assertIn("if (!required || !backendRequirementMismatch(required)) {", hint)
+        self.assertIn("function backendRequirementMismatch(requiredBackend)", html)
+        self.assertIn(
+            'normalizedBackendValue(currentControlValue("NEWS_MODEL_BACKEND"))',
+            html,
+        )
         self.assertIn("This model needs NEWS_MODEL_BACKEND=${required}", hint)
         self.assertIn('hint.textContent = "";', hint)
         self.assertIn('hint.classList.add("hidden")', hint)
         self.assertIn('hint.classList.remove("hidden")', hint)
-        self.assertIn('currentControlValue("NEWS_MODEL_BACKEND")', hint)
+        self.assertIn('currentControlValue("NEWS_MODEL_BACKEND")', html)
         self.assertNotIn("hint.innerHTML", hint)
 
     def test_model_backend_hint_wiring_covers_each_path(self) -> None:
@@ -648,8 +652,9 @@ class UITests(unittest.TestCase):
             html,
         )
         self.assertIn('data-use-hf-backend="${escapeHtml(hfBackend)}"', html)
+        self.assertIn("function backendRequirementMismatch(requiredBackend)", html)
         self.assertIn(
-            'normalizedBackendValue(currentControlValue("NEWS_MODEL_BACKEND")) === "external"',
+            'normalizedBackendValue(currentControlValue("NEWS_MODEL_BACKEND"))',
             html,
         )
         # Use must never mutate the backend control.
@@ -770,7 +775,8 @@ assert.equal(hint.classList.contains("hidden"), true);
 
 backendSelect.value = "";
 renderModelBackendHint(requiredBackendForSelectedModel());
-assert.equal(hint.classList.contains("hidden"), true);
+assert.equal(hint.classList.contains("hidden"), false);
+assert.equal(hint.textContent, "This model needs NEWS_MODEL_BACKEND=mlx-vlm");
 
 backendSelect.value = " EXTERNAL ";
 refreshHuggingFaceUseButtons();
@@ -780,7 +786,7 @@ assert.equal(externalOnlyButton.textContent, "Use");
 backendSelect.value = "mlx-lm";
 refreshHuggingFaceUseButtons();
 assert.equal(externalOnlyButton.disabled, true);
-assert.match(externalOnlyButton.textContent, /^External only/);
+assert.equal(externalOnlyButton.textContent, "Set NEWS_MODEL_BACKEND=external to use");
 useModelReference("org/external", "external");
 assert.equal(modelSelect.value, "org/external");
 assert.equal(backendSelect.value, "mlx-lm");
@@ -2421,7 +2427,10 @@ assert.equal(hint.classList.contains("hidden"), false);
         self.assertIn("state.schema.runtime_fit_labels", html)
         self.assertIn("labels[task] || task", html)
         self.assertIn('fit.status || "unknown"', html)
-        self.assertIn('fit.status === "external_only"', html)
+        self.assertIn(
+            "Object.prototype.hasOwnProperty.call(RUNTIME_FIT_BACKENDS, fit.status)",
+            html,
+        )
 
     def test_schema_endpoint_serves_label_maps(self) -> None:
         """The public schema route serializes both canonical label maps."""

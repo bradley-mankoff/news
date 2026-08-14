@@ -4541,6 +4541,12 @@ HTML = r"""<!doctype html>
       const entry = modelCatalogEntries().find(entry => entry.alias === clean || entry.reference === clean);
       return (entry && entry.backend) || "";
     }
+    function backendRequirementMismatch(requiredBackend) {
+      const required = normalizedBackendValue(requiredBackend);
+      if (!required) return false;
+      const current = normalizedBackendValue(currentControlValue("NEWS_MODEL_BACKEND"));
+      return current !== required;
+    }
     function requiredBackendForSelectedModel() {
       const reference = String(currentControlValue("NEWS_MODEL") || "").trim();
       if (reference !== state.selectedModelReference) {
@@ -4577,14 +4583,7 @@ HTML = r"""<!doctype html>
       const hint = document.getElementById("modelBackendHint");
       if (!hint) return;
       const required = normalizedBackendValue(requiredBackend);
-      const current = normalizedBackendValue(currentControlValue("NEWS_MODEL_BACKEND"));
-      if (!required || !current) {
-        // Unknown model/status or unset override: no conflict to report.
-        hint.textContent = "";
-        hint.classList.add("hidden");
-        return;
-      }
-      if (required === current) {
+      if (!required || !backendRequirementMismatch(required)) {
         hint.textContent = "";
         hint.classList.add("hidden");
         return;
@@ -4638,12 +4637,12 @@ HTML = r"""<!doctype html>
       });
     }
     function refreshHuggingFaceUseButtons() {
-      const backendExternal = normalizedBackendValue(currentControlValue("NEWS_MODEL_BACKEND")) === "external";
       document.querySelectorAll("[data-use-hf-model]").forEach(btn => {
-        const disabled = btn.dataset.useHfBackend === "external" && !backendExternal;
+        const requiredBackend = String(btn.dataset.useHfBackend || "").trim();
+        const disabled = backendRequirementMismatch(requiredBackend);
         btn.disabled = disabled;
         btn.textContent = disabled
-          ? "External only — set NEWS_MODEL_BACKEND=external to use"
+          ? `Set NEWS_MODEL_BACKEND=${requiredBackend} to use`
           : "Use";
       });
     }
@@ -4669,22 +4668,23 @@ HTML = r"""<!doctype html>
           container.innerHTML = `<p class="muted">No models found.</p>`;
           return;
         }
-        const backendExternal = normalizedBackendValue(currentControlValue("NEWS_MODEL_BACKEND")) === "external";
         container.innerHTML = models.map(item => {
           const fit = item.runtime_fit || {};
           const fitLabel = runtimeFitLabels()[fit.status] || fit.status || "unknown";
           const hfBackend = Object.prototype.hasOwnProperty.call(RUNTIME_FIT_BACKENDS, fit.status)
             ? RUNTIME_FIT_BACKENDS[fit.status]
             : "";
-          const externalOnly = fit.status === "external_only";
-          const useDisabled = externalOnly && !backendExternal;
+          const useDisabled = backendRequirementMismatch(hfBackend);
+          const useLabel = useDisabled
+            ? `Set NEWS_MODEL_BACKEND=${hfBackend} to use`
+            : "Use";
           return `
             <div class="knob">
               <label><a href="${escapeHtml(item.hf_url)}" target="_blank" rel="noopener">${escapeHtml(item.id)}</a></label>
               <p class="muted">${escapeHtml(item.pipeline_tag || "-")} · ${escapeHtml(item.library_name || "-")} · downloads ${escapeHtml(String(item.downloads ?? "-"))} · likes ${escapeHtml(String(item.likes ?? "-"))} · context ${item.context_length != null ? escapeHtml(String(item.context_length)) : "-"}</p>
               <p class="muted">Fit: ${escapeHtml(fitLabel)} — ${escapeHtml(fit.reason || "")}</p>
               <div class="toolbar">
-                <button data-use-hf-model="${escapeHtml(item.id)}" data-use-hf-backend="${escapeHtml(hfBackend)}" ${useDisabled ? "disabled" : ""}>${useDisabled ? "External only — set NEWS_MODEL_BACKEND=external to use" : "Use"}</button>
+                <button data-use-hf-model="${escapeHtml(item.id)}" data-use-hf-backend="${escapeHtml(hfBackend)}" ${useDisabled ? "disabled" : ""}>${escapeHtml(useLabel)}</button>
               </div>
             </div>
           `;
