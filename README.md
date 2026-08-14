@@ -34,6 +34,11 @@ not manage the board. Board policy lives outside this product tree.
 - Completion records on issues must include:
   `## What shipped`, `## Decisions`, `## Acceptance criteria`,
   `## How to test`, `## Deferred work`.
+  The `## How to test` section separates `### Machine checks` (commands the
+  run executed, with recorded results) from `### Human checks` (steps that
+  genuinely need a person). The poller mirrors that split in the Ready for
+  Review comment, and the ready-review QA agent reuses recorded evidence
+  instead of re-running checks.
 - Create a shaped Backlog issue:
   `python3 automation/create_issue.py "<title>" --body "<shaped markdown>"`
 - After automation/workflow install changes:
