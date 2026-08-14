@@ -579,13 +579,30 @@ class ModelCatalogTests(unittest.TestCase):
                 self.assertTrue(pick["reason"])
         # Translation is the documented honest gap: no verified curated pick.
         self.assertEqual(model_catalog.recommend_models("translation"), [])
-        # Speed's curated pick is the tiny test model.
-        self.assertEqual(model_catalog.recommend_models("speed")[0]["alias"], "gemma-e2b-tiny")
-        # The default model covers the quality tasks first.
+        # Speed's curated pick is the tiny test model, with the default model
+        # appended exactly once as the fallback when it is not already a pick.
+        speed_picks = model_catalog.recommend_models("speed")
         self.assertEqual(
-            model_catalog.recommend_models("synthesis")[0]["alias"],
-            model_catalog.DEFAULT_CATALOG_MODEL_ALIAS,
+            [pick["alias"] for pick in speed_picks],
+            ["gemma-e2b-tiny", model_catalog.DEFAULT_CATALOG_MODEL_ALIAS],
         )
+        self.assertEqual(speed_picks[-1]["alias"], model_catalog.DEFAULT_CATALOG_MODEL_ALIAS)
+        # The default model covers the quality tasks first and is never
+        # duplicated when it is already a curated pick.
+        for task in ("factual_extraction", "structured_output", "synthesis", "citation_fidelity", "context_length"):
+            picks = model_catalog.recommend_models(task)
+            self.assertEqual(
+                [pick["alias"] for pick in picks],
+                [model_catalog.DEFAULT_CATALOG_MODEL_ALIAS],
+            )
+        # Every returned pick record is JSON-ready and carries the lean
+        # recommendation contract fields (no catalog-card-only extras).
+        for task in model_catalog.MODEL_RECOMMENDATION_TASKS:
+            for pick in model_catalog.recommend_models(task):
+                self.assertEqual(
+                    set(pick),
+                    {"alias", "name", "backend", "hf_repo", "reason"},
+                )
 
     def test_recommend_unknown_task_raises_value_error(self) -> None:
         with self.assertRaisesRegex(ValueError, "Unknown model recommendation task"):

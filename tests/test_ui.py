@@ -331,6 +331,29 @@ class UITests(unittest.TestCase):
         self.assertIn("escapeHtml(entry.hardware)", ui_module.HTML)
         self.assertIn('data-links-for="${escapeHtml(knob.env)}"', ui_module.HTML)
 
+    def test_recommendation_renderer_reads_schema_picks(self) -> None:
+        html = ui_module.HTML
+        # Keep the bounded source-contract guard focused on the complete
+        # recommendation renderer rather than scattered implementation strings.
+        block = html.split("function renderRecommendations", 1)[1].split(
+            "async function searchHuggingFaceModels", 1
+        )[0]
+        for snippet in (
+            "const picks = (state.schema && state.schema.model_recommendations && state.schema.model_recommendations[task]) || [];",
+            "container.innerHTML = picks.map(pick => `",
+            "escapeHtml(pick.name)",
+            "escapeHtml(pick.alias)",
+            "escapeHtml(pick.reason)",
+            'data-use-model="${escapeHtml(pick.alias)}"',
+            "btn.onclick = () => useModelReference(btn.dataset.useModel);",
+        ):
+            self.assertIn(snippet, block)
+        # The renderer no longer re-filters full catalog entries by task notes.
+        self.assertNotIn("entry.task_notes[task]", block)
+        self.assertNotIn("modelCatalogEntries().filter", block)
+        # Empty or partial pick lists keep the documented honest-gap message.
+        self.assertIn("No verified curated model for this task yet", block)
+
     def test_model_backend_hint_markup_contract(self) -> None:
         """The Default model panel exposes an accessible backend-compatibility
         hint driven by catalog/HF backend metadata (issue #94)."""
@@ -695,6 +718,21 @@ class UITests(unittest.TestCase):
             self.assertEqual(payload["model_catalog"][0]["alias"], "gemma-4-12b-it-4bit")
             self.assertIn("factual_extraction", payload["model_recommendation_tasks"])
             self.assertEqual(len(payload["model_recommendation_tasks"]), 7)
+            # Server-owned recommendations: every task maps exactly to the
+            # authoritative helper output (default fallback, no duplicates,
+            # and the intentional empty translation list).
+            self.assertEqual(
+                payload["model_recommendations"],
+                {
+                    task: model_catalog.recommend_models(task)
+                    for task in model_catalog.MODEL_RECOMMENDATION_TASKS
+                },
+            )
+            self.assertEqual(payload["model_recommendations"]["translation"], [])
+            self.assertEqual(
+                [pick["alias"] for pick in payload["model_recommendations"]["speed"]],
+                ["gemma-e2b-tiny", model_catalog.DEFAULT_CATALOG_MODEL_ALIAS],
+            )
 
             helper_file = root / "nested" / "payload.yaml"
             helper_file.parent.mkdir(parents=True)
@@ -2217,7 +2255,9 @@ assert(elements.modelSearchResults.querySelector('button[data-use-hf-model="owne
                 "    name: Smoke Model\n"
                 "    backend: mlx-lm\n"
                 "    hf_repo: mlx-community/smoke-model\n"
-                "    description: Offline smoke entry\n",
+                "    description: Offline smoke entry\n"
+                "    task_notes:\n"
+                "      speed: Overlay-specific speed recommendation.\n",
                 encoding="utf-8",
             )
             with patch.dict(
@@ -2238,6 +2278,25 @@ assert(elements.modelSearchResults.querySelector('button[data-use-hf-model="owne
                 ui_module, "_source_summary", return_value={"total": 0}
             ), patch.object(ui_module, "_recipient_summary", return_value={"total": 0}):
                 payload = ui_module.schema_payload()
+                # Recommendations come from the same merged snapshot and
+                # exactly match the authoritative helper (issue #80).
+                self.assertEqual(
+                    payload["model_recommendations"],
+                    {
+                        task: model_catalog.recommend_models(task)
+                        for task in model_catalog.MODEL_RECOMMENDATION_TASKS
+                    },
+                )
+                self.assertEqual(payload["model_recommendations"]["translation"], [])
+                speed_picks = payload["model_recommendations"]["speed"]
+                self.assertEqual(
+                    [pick["alias"] for pick in speed_picks],
+                    ["gemma-e2b-tiny", "smoke-model", model_catalog.DEFAULT_CATALOG_MODEL_ALIAS],
+                )
+                self.assertEqual(
+                    speed_picks[1]["reason"],
+                    "Overlay-specific speed recommendation.",
+                )
 
         self.assertEqual(
             [entry["alias"] for entry in payload["model_catalog"]],
@@ -2271,6 +2330,17 @@ assert(elements.modelSearchResults.querySelector('button[data-use-hf-model="owne
             status, _, body = self._invoke_get("/api/schema")
         self.assertEqual(status, 400)
         self.assertIn("must define models as a mapping", json.loads(body)["error"])
+
+    def test_schema_recommendation_failure_uses_error_envelope(self) -> None:
+        with patch.object(ui_module, "list_model_catalog", return_value=[]), patch.object(
+            ui_module,
+            "recommend_models",
+            side_effect=ValueError("recommendation catalog failure"),
+        ):
+            status, _, body = self._invoke_get("/api/schema")
+
+        self.assertEqual(status, 400)
+        self.assertEqual(json.loads(body)["error"], "recommendation catalog failure")
 
     def test_schema_real_malformed_catalog_uses_error_envelope(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

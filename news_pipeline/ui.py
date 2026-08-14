@@ -70,6 +70,7 @@ from .model_catalog import (
     RUNTIME_FIT_LABELS,
     fetch_model_metadata,
     list_model_catalog,
+    recommend_models,
     search_huggingface_models,
 )
 
@@ -595,6 +596,9 @@ def schema_payload() -> dict[str, Any]:
         "model_tuning_presets": list_model_tuning_presets(),
         "prompt_profiles": list_prompt_profiles(),
         "model_catalog": list_model_catalog(),
+        "model_recommendations": {
+            task: recommend_models(task) for task in MODEL_RECOMMENDATION_TASKS
+        },
         "model_recommendation_tasks": list(MODEL_RECOMMENDATION_TASKS),
         "model_task_labels": dict(MODEL_TASK_LABELS),
         "runtime_fit_labels": dict(RUNTIME_FIT_LABELS),
@@ -4302,16 +4306,16 @@ HTML = r"""<!doctype html>
         container.innerHTML = `<p class="muted">Pick a task to see curated recommendations.</p>`;
         return;
       }
-      const picks = modelCatalogEntries().filter(entry => entry.task_notes && entry.task_notes[task]);
+      const picks = (state.schema && state.schema.model_recommendations && state.schema.model_recommendations[task]) || [];
       if (!picks.length) {
         container.innerHTML = `<p class="muted">No verified curated model for this task yet — search below for a candidate.</p>`;
         return;
       }
-      container.innerHTML = picks.map(entry => `
+      container.innerHTML = picks.map(pick => `
         <div class="knob">
-          <label>${escapeHtml(entry.name)} <code>${escapeHtml(entry.alias)}</code></label>
-          <p class="muted">${escapeHtml(entry.task_notes[task])}</p>
-          <div class="toolbar"><button data-use-model="${escapeHtml(entry.alias)}">Use</button></div>
+          <label>${escapeHtml(pick.name)} <code>${escapeHtml(pick.alias)}</code></label>
+          <p class="muted">${escapeHtml(pick.reason)}</p>
+          <div class="toolbar"><button data-use-model="${escapeHtml(pick.alias)}">Use</button></div>
         </div>
       `).join("");
       container.querySelectorAll("[data-use-model]").forEach(btn => {
