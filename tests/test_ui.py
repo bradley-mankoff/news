@@ -5,6 +5,8 @@ import http.client
 import json
 import os
 import re
+import shutil
+import subprocess
 import tempfile
 import threading
 import unittest
@@ -2036,6 +2038,153 @@ class UITests(unittest.TestCase):
         self.assertIn("labels[task] || task", html)
         self.assertIn('fit.status || "unknown"', html)
         self.assertIn('fit.status === "external_only"', html)
+
+    def test_schema_endpoint_serves_label_maps(self) -> None:
+        """The public schema route serializes both canonical label maps."""
+        with patch.object(
+            ui_module, "_runtime_snapshot", return_value=({"runtime": "ok"}, None)
+        ), patch.object(
+            ui_module, "configured_removed_topic_env_vars", return_value=set()
+        ), patch.object(
+            ui_module, "list_presets", return_value={"path": "presets.yaml", "presets": []}
+        ), patch.object(
+            ui_module,
+            "list_model_tuning_presets",
+            return_value={"path": "model.yaml", "presets": []},
+        ), patch.object(
+            ui_module, "_source_summary", return_value={"total": 0}
+        ), patch.object(ui_module, "_recipient_summary", return_value={"total": 0}):
+            status, headers, body = self._invoke_get("/api/schema")
+
+        payload = json.loads(body)
+        self.assertEqual(status, 200)
+        self.assertIn("application/json", headers["Content-Type"])
+        self.assertEqual(payload["model_task_labels"], model_catalog.MODEL_TASK_LABELS)
+        self.assertEqual(payload["runtime_fit_labels"], model_catalog.RUNTIME_FIT_LABELS)
+
+    def test_schema_label_renderers_execute_in_node_dom_harness(self) -> None:
+        """Execute the embedded catalog renderers against schema and search fixtures.
+
+        The project has no browser test dependency, so this uses Node's runtime
+        with a small DOM-shaped fixture. The JavaScript functions are extracted
+        from HTML itself, rather than reimplemented in the test, so label
+        rendering, escaping, fallbacks, and the raw status gate are exercised.
+        """
+        html = ui_module.HTML
+
+        def js_function_block(start: str, end: str) -> str:
+            return html[html.index(start) : html.index(end, html.index(start))]
+
+        js = ("""
+const assert = (condition, message) => {
+  if (!condition) throw new Error(message);
+};
+const decodeEntities = (text) => String(text)
+  .replaceAll("&lt;", "<")
+  .replaceAll("&gt;", ">")
+  .replaceAll("&quot;", '"')
+  .replaceAll("&amp;", "&");
+class FakeElement {
+  constructor(id, value = "") {
+    this.id = id;
+    this.value = value;
+    this._innerHTML = "";
+    this.disabled = false;
+  }
+  set innerHTML(value) { this._innerHTML = String(value); }
+  get innerHTML() { return this._innerHTML; }
+  get textContent() {
+    return decodeEntities(this._innerHTML.replace(/<[^>]*>/g, ""));
+  }
+  optionText(value) {
+    const marker = `<option value="${value}">`;
+    const start = this._innerHTML.indexOf(marker);
+    if (start < 0) return null;
+    const contentStart = start + marker.length;
+    const end = this._innerHTML.indexOf("</option>", contentStart);
+    return end < 0 ? null : decodeEntities(this._innerHTML.slice(contentStart, end));
+  }
+  querySelectorAll(_selector) { return []; }
+  querySelector(selector) {
+    const prefix = 'button[data-use-hf-model="';
+    if (!selector.startsWith(prefix) || !selector.endsWith('"]')) return null;
+    const modelId = selector.slice(prefix.length, -2);
+    const marker = `data-use-hf-model="${modelId}"`;
+    const markerStart = this._innerHTML.indexOf(marker);
+    if (markerStart < 0) return null;
+    const buttonStart = this._innerHTML.lastIndexOf("<button", markerStart);
+    const buttonEnd = this._innerHTML.indexOf(">", markerStart);
+    const button = this._innerHTML.slice(buttonStart, buttonEnd + 1);
+    return { disabled: button.includes(" disabled") };
+  }
+}
+const elements = {
+  recommendationTask: new FakeElement("recommendationTask"),
+  catalogCards: new FakeElement("catalogCards"),
+  recommendationReadout: new FakeElement("recommendationReadout"),
+  modelSearchResults: new FakeElement("modelSearchResults"),
+  modelSearchQuery: new FakeElement("modelSearchQuery", "catalog"),
+  modelSearchPipeline: new FakeElement("modelSearchPipeline", "text-generation"),
+  modelSearchLimit: new FakeElement("modelSearchLimit", "10")
+};
+function $(id) { return elements[id] || null; }
+function value(id) { return $(id) ? $(id).value : ""; }
+const state = { schema: null };
+const searchResults = [
+  { id: "owner/future", hf_url: "https://example.test/future", runtime_fit: { status: "future_fit", reason: "future reason" } },
+  { id: "owner/unknown", hf_url: "https://example.test/unknown", runtime_fit: { status: "unknown_fit", reason: "unknown reason" } },
+  { id: "owner/external", hf_url: "https://example.test/external", runtime_fit: { status: "external_only", reason: "external reason" } }
+];
+async function api(path) {
+  assert(path.startsWith("/api/models/search?"), `unexpected API path: ${path}`);
+  return { models: searchResults, error: null };
+}
+"""
+        + js_function_block("function escapeHtml(text) {", "function formatDefault")
+        + js_function_block("function modelTaskLabels() {", "function useModelReference")
+        + js_function_block("function useModelReference(reference) {", "function renderModelCatalogPanel")
+        + js_function_block("function renderModelCatalogPanel() {", "function renderRecommendations")
+        + js_function_block("function renderRecommendations(task) {", "async function searchHuggingFaceModels")
+        + js_function_block("async function searchHuggingFaceModels() {", "async function comparePromptProfiles")
+        + r"""
+state.schema = {
+  model_recommendation_tasks: ["future_task", "unknown_task"],
+  model_task_labels: { future_task: "Future <task> & choice" },
+  runtime_fit_labels: { future_fit: "Future <fit> & choice" },
+  model_catalog: [],
+  current_env: { NEWS_MODEL_BACKEND: "mlx-lm" }
+};
+renderModelCatalogPanel();
+assert(elements.recommendationTask.optionText("future_task") === "Future <task> & choice", "known task label was not rendered");
+assert(elements.recommendationTask.optionText("unknown_task") === "unknown_task", "unknown task did not fall back to its key");
+assert(elements.recommendationTask.innerHTML.includes("Future &lt;task&gt; &amp; choice"), "task label was not escaped");
+
+await searchHuggingFaceModels();
+assert(elements.modelSearchResults.textContent.includes("Future <fit> & choice"), "known fit label was not rendered");
+assert(elements.modelSearchResults.textContent.includes("unknown_fit"), "unknown fit did not fall back to its status");
+assert(elements.modelSearchResults.innerHTML.includes("Future &lt;fit&gt; &amp; choice"), "fit label was not escaped");
+assert(elements.modelSearchResults.querySelector('button[data-use-hf-model="owner/external"]').disabled, "external-only model was enabled");
+
+// Partial/empty schema state remains usable and keeps raw fallbacks.
+state.schema = { model_recommendation_tasks: ["raw_task"] };
+renderModelCatalogPanel();
+assert(elements.recommendationTask.optionText("raw_task") === "raw_task", "empty label map did not fall back");
+state.schema = {};
+await searchHuggingFaceModels();
+assert(elements.modelSearchResults.textContent.includes("future_fit"), "empty fit map did not fall back");
+assert(elements.modelSearchResults.querySelector('button[data-use-hf-model="owner/external"]').disabled, "empty schema enabled external-only model");
+""" )
+        node = shutil.which("node")
+        if node is None:
+            self.skipTest("Node.js is required for the embedded UI renderer harness")
+        result = subprocess.run(
+            [node, "--input-type=module", "-"],
+            input=js,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
 
     def test_schema_payload_includes_custom_catalog_entries(self) -> None:
         """The existing schema payload is the integration surface for merged
