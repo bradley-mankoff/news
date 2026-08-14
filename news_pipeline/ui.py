@@ -3303,7 +3303,7 @@ HTML = r"""<!doctype html>
       renderModelTuningPanels();
       renderPromptProfilePanel();
       refreshModelKnobLinks();
-      previewQuietly("run");
+      void previewQuietly("run");
     }
     function resetAllOverrides() {
       document.querySelectorAll("[data-env]").forEach(el => {
@@ -3315,7 +3315,7 @@ HTML = r"""<!doctype html>
       renderModelTuningPanels();
       renderPromptProfilePanel();
       refreshModelKnobLinks();
-      previewQuietly("run");
+      void previewQuietly("run");
     }
     function setKnobEnv(env) {
       document.querySelectorAll("[data-env]").forEach(el => {

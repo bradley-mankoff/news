@@ -345,7 +345,7 @@ class UITests(unittest.TestCase):
             "escapeHtml(pick.alias)",
             "escapeHtml(pick.reason)",
             'data-use-model="${escapeHtml(pick.alias)}"',
-            "btn.onclick = () => useModelReference(btn.dataset.useModel);",
+            "btn.onclick = () => useModelReference(btn.dataset.useModel, catalogBackendForReference(btn.dataset.useModel));",
         ):
             self.assertIn(snippet, block)
         # The renderer no longer re-filters full catalog entries by task notes.
@@ -2057,6 +2057,10 @@ class UITests(unittest.TestCase):
             ui_module,
             "MODEL_RECOMMENDATION_TASKS",
             (*ui_module.MODEL_RECOMMENDATION_TASKS, "future_task"),
+        ), patch.object(
+            model_catalog,
+            "MODEL_RECOMMENDATION_TASKS",
+            (*model_catalog.MODEL_RECOMMENDATION_TASKS, "future_task"),
         ):
             payload = ui_module.schema_payload()
         self.assertEqual(payload["model_task_labels"]["future_task"], "Future task")
