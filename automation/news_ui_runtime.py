@@ -62,6 +62,45 @@ def _port_open(host: str, port: int, timeout: float = 0.5) -> bool:
         return False
 
 
+def _port_owner(host: str, port: int) -> str:
+    """Best-effort identity of the process listening on host:port."""
+    try:
+        result = subprocess.run(
+            ["lsof", "-nP", "-i", f"TCP:{port}", "-sTCP:LISTEN", "-F", "pcu"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    entries: list[dict[str, str]] = []
+    current: dict[str, str] = {}
+    for line in (result.stdout or "").splitlines():
+        if not line:
+            continue
+        if line[0] == "p":
+            if current:
+                entries.append(current)
+            current = {"pid": line[1:]}
+        elif line[0] in ("c", "u"):
+            current[line[0]] = line[1:]
+    if current:
+        entries.append(current)
+    if not entries:
+        return ""
+    first = entries[0]
+    return f"{first.get('c', '?')} pid {first.get('pid', '?')}"
+
+
+def _last_log_lines(path: Path, limit: int = 5) -> list[str]:
+    """Tail of the UI log, for one actionable failure line."""
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return []
+    return lines[-limit:]
+
+
 def _load_json_file(path: Path) -> dict:
     try:
         data = json.loads(path.read_text())
@@ -159,6 +198,23 @@ def _request_cmux_ui(registration: dict, action: str) -> bool:
 
 def _load_ui_state() -> dict:
     return _load_json_file(UI_RUNTIME_STATE_PATH)
+
+
+def _record_sync_error(detail: str) -> None:
+    """Persist one actionable sync-failure line for mechanic/health to read."""
+    state = _load_ui_state()
+    state["error"] = detail
+    state["last_sync_failed_at"] = datetime.now(timezone.utc).isoformat(
+        timespec="seconds")
+    _write_json_file(UI_RUNTIME_STATE_PATH, state)
+
+
+def _record_sync_ok() -> None:
+    """Clear the persisted error field once a sync succeeds."""
+    state = _load_ui_state()
+    if state.pop("error", None) is not None or state.pop(
+            "last_sync_failed_at", None) is not None:
+        _write_json_file(UI_RUNTIME_STATE_PATH, state)
 
 
 def _clear_ui_state() -> None:
@@ -449,13 +505,17 @@ def _sync_ui_runtime() -> tuple[bool, str]:
     if _ui_running():
         return True, f"{version_detail}; UI already running"
     if _port_open(UI_HOST, UI_PORT) and _load_cmux_registration() is None:
+        owner = _port_owner(UI_HOST, UI_PORT)
+        owner_detail = f" (owner: {owner})" if owner else ""
         return False, (
             f"{version_detail}; UI port {UI_HOST}:{UI_PORT} is occupied by "
-            "an unmanaged process"
+            f"an unmanaged process{owner_detail}"
         )
     if _restart_ui():
         return True, f"{version_detail}; UI started/restarted"
-    return False, f"{version_detail}; UI start failed - see {UI_LOG_PATH}"
+    tail = _last_log_lines(UI_LOG_PATH)
+    log_detail = f" - last log: {tail[-1][:200]}" if tail else ""
+    return False, f"{version_detail}; UI start failed - see {UI_LOG_PATH}{log_detail}"
 
 
 def sync_local_develop() -> str:
@@ -464,8 +524,14 @@ def sync_local_develop() -> str:
         return "LOCAL SYNC: dry-run (no fetch/worktree/UI mutations)"
     fetched = _run_git(["fetch", "origin", "develop"], cwd=ROOT, timeout=90)
     if fetched.returncode != 0:
-        return f"LOCAL SYNC FAILED: git fetch: {fetched.stderr.strip()[:250]}"
+        detail = f"git fetch: {fetched.stderr.strip()[:250]}"
+        _record_sync_error(detail)
+        return f"LOCAL SYNC FAILED: {detail}"
     ok, detail = _sync_ui_runtime()
+    if ok:
+        _record_sync_ok()
+    else:
+        _record_sync_error(detail)
     return f"{'LOCAL SYNC' if ok else 'LOCAL SYNC FAILED'}: {detail}"
 
 
