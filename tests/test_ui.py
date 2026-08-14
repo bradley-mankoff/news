@@ -170,6 +170,17 @@ class UITests(unittest.TestCase):
         self.assertEqual(advanced.count('id="comparePromptProfileBtn"'), 1)
         self.assertEqual(advanced.count('modelTuningPanel("article_summary")'), 1)
         self.assertEqual(advanced.count('modelTuningPanel("story_drafting")'), 1)
+        self.assertEqual(advanced.count('modelTuningPanel("story_scale_screening")'), 1)
+        self.assertEqual(advanced.count('modelTuningPanel("title_generation")'), 1)
+        self.assertEqual(advanced.count('modelTuningPanel("image_art_direction")'), 1)
+        tuning_editor = html.split('<h2>Model Tuning Preset Editor</h2>', 1)[1].split(
+            '<h2>', 1
+        )[0]
+        self.assertIn(
+            '<option value="image_art_direction">image_art_direction</option>',
+            tuning_editor,
+        )
+        self.assertIn("image_art_direction_max_tokens", tuning_editor)
         # Dedicated envs are suppressed from the raw override list (no duplicates).
         surface = html.split("const SURFACED_ENVS")[1].split("const TASK_CONFIG")[0]
         for env in (
@@ -197,7 +208,7 @@ class UITests(unittest.TestCase):
         )
         prefixes = re.findall(r'taskSamplingPrefix: "(NEWS_MODEL_[A-Z_]+)"', html)
         composed = {f"{p}_{s}" for p in prefixes for s in suffixes}
-        self.assertEqual(len(composed), 24)
+        self.assertEqual(len(composed), 30)
         for env in composed:
             self.assertIn(
                 f'"{env}"', surface, f"composed sampling env {env} not suppressed"
@@ -207,7 +218,7 @@ class UITests(unittest.TestCase):
         # NEWS_MODEL has a dedicated "Default model" knob in Run Setup, so it
         # must be suppressed from the Advanced raw list (no duplicate inputs).
         self.assertIn('"NEWS_MODEL"', surface)
-        # The four per-task model envs moved OUT of Run Setup into Advanced,
+        # The five per-task model envs moved OUT of Run Setup into Advanced,
         # so they must NOT be suppressed: each appears exactly once, in the
         # Advanced raw override list.
         for env in (
@@ -215,6 +226,7 @@ class UITests(unittest.TestCase):
             "NEWS_MODEL_STORY_DRAFTING",
             "NEWS_MODEL_STORY_SCALE_SCREENING",
             "NEWS_MODEL_TITLE_GENERATION",
+            "NEWS_MODEL_IMAGE_ART_DIRECTION",
         ):
             self.assertNotIn(f'"{env}"', surface, f"{env} must stay in the Advanced raw list")
 
@@ -239,6 +251,7 @@ class UITests(unittest.TestCase):
             "NEWS_MODEL_STORY_DRAFTING",
             "NEWS_MODEL_STORY_SCALE_SCREENING",
             "NEWS_MODEL_TITLE_GENERATION",
+            "NEWS_MODEL_IMAGE_ART_DIRECTION",
         ):
             self.assertNotIn(f'knobField("{env}"', run_setup)
         # The readout binds to the top-level runtime.model {name, reference}.
@@ -433,6 +446,7 @@ class UITests(unittest.TestCase):
                         "story_drafting": {"reference": "gemma-2b"},
                         "story_scale_screening": {"reference": "gemma-2b"},
                         "title_generation": {"reference": "gemma-2b"},
+                        "image_art_direction": {"reference": "gemma-2b"},
                     },
                     model_tuning={"default": "base"},
                     pipeline_budget={
@@ -501,6 +515,7 @@ class UITests(unittest.TestCase):
                 self.assertEqual(snapshot["model"]["reference"], "gemma-2b")
                 self.assertEqual(snapshot["model"]["story_scale_screening"]["reference"], "gemma-2b")
                 self.assertEqual(snapshot["model"]["title_generation"]["reference"], "gemma-2b")
+                self.assertEqual(snapshot["model"]["image_art_direction"]["reference"], "gemma-2b")
                 self.assertEqual(snapshot["delivery"]["mode"], "owner")
                 self.assertEqual(snapshot["delivery"]["unsubscribe_secret_set"], True)
                 # Raw credential values never appear in the redacted snapshot.
@@ -627,12 +642,16 @@ class UITests(unittest.TestCase):
         for env in (
             "NEWS_MODEL_STORY_SCALE_SCREENING",
             "NEWS_MODEL_TITLE_GENERATION",
+            "NEWS_MODEL_IMAGE_ART_DIRECTION",
             "NEWS_MODEL_STORY_SCALE_SCREENING_TUNING_PRESET",
             "NEWS_MODEL_TITLE_GENERATION_TUNING_PRESET",
+            "NEWS_MODEL_IMAGE_ART_DIRECTION_TUNING_PRESET",
             "NEWS_MODEL_STORY_SCALE_SCREENING_BASE_URL",
             "NEWS_MODEL_TITLE_GENERATION_BASE_URL",
+            "NEWS_MODEL_IMAGE_ART_DIRECTION_BASE_URL",
             "NEWS_STORY_SCALE_SCREENING_MAX_TOKENS",
             "NEWS_TITLE_GENERATION_MAX_TOKENS",
+            "NEWS_IMAGE_ART_DIRECTION_MAX_TOKENS",
         ):
             self.assertIn(env, js_source)
             self.assertIn(env, knob_envs)
@@ -933,7 +952,6 @@ class UITests(unittest.TestCase):
                         {"id": "new", "tuning": {"max_tokens": "1e3"}},
                         "field 'max_tokens' must be a whole number greater than zero",
                     ),
-                    ({"id": "new", "task": "image_art_direction"}, "task 'image_art_direction' is not selectable"),
                     ({"id": "new", "task": "story_discovery"}, "task 'story_discovery' is not selectable"),
                     ({"id": "new", "task": "default"}, "task 'default' is not selectable"),
                     # PATCH on the existing record: a bad final record fails too.
@@ -947,6 +965,14 @@ class UITests(unittest.TestCase):
                         before,
                         f"YAML mutated by rejected upsert {body}",
                     )
+
+                # Image Art Direction is a first-class selectable preset scope
+                # (independent task assignment with its own tuning preset, #122).
+                scoped = upsert_model_tuning_preset(
+                    {"id": "new", "task": "image_art_direction", "tuning": {"max_tokens": 512}}
+                )
+                self.assertEqual(scoped["preset"]["task"], "image_art_direction")
+                self.assertEqual(scoped["preset"]["tuning"], {"max_tokens": 512})
 
                 # A metadata-only PATCH preserves and revalidates the existing
                 # mapping, and a valid write still succeeds afterward.

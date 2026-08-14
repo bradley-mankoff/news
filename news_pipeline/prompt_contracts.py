@@ -77,7 +77,11 @@ STORY_SCALE_SCREENING_JSON_CONTRACT = (
     "}]"
 )
 
-IMAGE_ART_JSON_CONTRACT = "Return ONLY valid JSON with keys image_prompt and overlay_headline."
+IMAGE_ART_JSON_CONTRACT = "Return ONLY valid JSON with the key image_prompt."
+
+TITLE_GENERATION_JSON_CONTRACT = (
+    "Return ONLY valid JSON with the key overlay_headline."
+)
 
 IMAGE_ART_OVERLAY_PROTOCOL = (
     "The overlay_headline is readable text that will be rendered later by code, "
@@ -112,10 +116,13 @@ PROTOCOL_MARKERS: dict[str, tuple[str, ...]] = {
         "story_key",
         "scale_reason",
     ),
-    "title_generation": ("overlay_headline",),
-    "image_art_direction": (
-        "Return ONLY valid JSON with keys image_prompt and overlay_headline",
+    "title_generation": (
+        "Return ONLY valid JSON with the key overlay_headline",
+        "overlay_headline",
         "rendered later by code",
+    ),
+    "image_art_direction": (
+        "Return ONLY valid JSON with the key image_prompt",
     ),
 }
 
@@ -133,8 +140,8 @@ EDITORIAL_BLOCKLIST: dict[str, tuple[str, ...]] = {
         "Return exactly this format:",
     ),
     "story_scale_screening": ("Return only valid JSON",),
-    "title_generation": (),
-    "image_art_direction": ("Return ONLY valid JSON with keys image_prompt and overlay_headline",),
+    "title_generation": ("Return ONLY valid JSON with the key overlay_headline",),
+    "image_art_direction": ("Return ONLY valid JSON with the key image_prompt",),
 }
 
 

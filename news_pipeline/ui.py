@@ -208,6 +208,7 @@ def _runtime_snapshot(
             "story_drafting",
             "story_scale_screening",
             "title_generation",
+            "image_art_direction",
         )
         missing = [task for task in task_keys if task not in config.model_assignments]
         if missing:
@@ -242,6 +243,7 @@ def _runtime_snapshot(
                 "story_drafting": assignments["story_drafting"],
                 "story_scale_screening": assignments["story_scale_screening"],
                 "title_generation": assignments["title_generation"],
+                "image_art_direction": assignments["image_art_direction"],
                 "tuning": _json_ready(config.model_tuning),
                 "pipeline_budget": _json_ready(config.pipeline_budget),
                 "server_settings": _json_ready(config.model_server_settings),
@@ -767,9 +769,8 @@ def _coerce_optional_mapping(body: dict[str, Any], field_name: str) -> dict[str,
 
 
 # Selectable model-tuning preset task scopes mirror MODEL_TUNING_PRESET_ENV_VARS
-# minus the global "default" overlay. Inherited/no-call tasks (story_discovery,
-# image_art_direction) are not selectable preset assignments; image art direction
-# shares the title_generation call (see docs/adr/0007-model-configuration-vocabulary.md).
+# minus the global "default" overlay. Story Discovery has no LLM stage and is
+# not a selectable preset assignment; all five configured LLM tasks are.
 _MODEL_TUNING_PRESET_TASK_SCOPES: tuple[str, ...] = tuple(
     task for task in MODEL_TUNING_PRESET_ENV_VARS if task != "default"
 )
@@ -2115,11 +2116,12 @@ HTML = r"""<!doctype html>
               <option value="story_drafting">story_drafting</option>
               <option value="story_scale_screening">story_scale_screening</option>
               <option value="title_generation">title_generation</option>
+              <option value="image_art_direction">image_art_direction</option>
             </select></label>
           </div>
           <label>Description<textarea id="modelTuningPresetDescription"></textarea></label>
           <label>Tuning (JSON)<textarea id="modelTuningPresetTuning" spellcheck="false"></textarea></label>
-          <p class="muted">Accepted tuning fields: temperature (0-2), top_p (0-1), top_k (whole number &gt;= 0), min_p (0-1), presence_penalty (-2 to 2), repetition_penalty (0-3), max_tokens, model_max_input_tokens, article_summary_max_tokens, story_drafting_max_tokens, story_scale_screening_max_tokens, title_generation_max_tokens (positive whole numbers).</p>
+          <p class="muted">Accepted tuning fields: temperature (0-2), top_p (0-1), top_k (whole number &gt;= 0), min_p (0-1), presence_penalty (-2 to 2), repetition_penalty (0-3), max_tokens, model_max_input_tokens, article_summary_max_tokens, story_drafting_max_tokens, story_scale_screening_max_tokens, title_generation_max_tokens, image_art_direction_max_tokens (positive whole numbers).</p>
           <div class="toolbar" style="margin-top:12px">
             <button id="saveModelTuningPresetBtn" class="primary">Save preset</button>
             <button id="deleteModelTuningPresetBtn" class="danger">Delete preset</button>
@@ -2180,16 +2182,19 @@ HTML = r"""<!doctype html>
       "NEWS_MODEL_STORY_DRAFTING_TUNING_PRESET",
       "NEWS_MODEL_STORY_SCALE_SCREENING_TUNING_PRESET",
       "NEWS_MODEL_TITLE_GENERATION_TUNING_PRESET",
+      "NEWS_MODEL_IMAGE_ART_DIRECTION_TUNING_PRESET",
       "NEWS_MODEL_MAX_INPUT_TOKENS",
       "NEWS_ARTICLE_SUMMARY_MAX_TOKENS",
       "NEWS_STORY_DRAFTING_MAX_TOKENS",
       "NEWS_STORY_SCALE_SCREENING_MAX_TOKENS",
       "NEWS_TITLE_GENERATION_MAX_TOKENS",
+      "NEWS_IMAGE_ART_DIRECTION_MAX_TOKENS",
       "NEWS_ARTICLE_TEXT_TOKEN_LIMIT",
       "NEWS_MODEL_ARTICLE_SUMMARY_BASE_URL",
       "NEWS_MODEL_STORY_DRAFTING_BASE_URL",
       "NEWS_MODEL_STORY_SCALE_SCREENING_BASE_URL",
       "NEWS_MODEL_TITLE_GENERATION_BASE_URL",
+      "NEWS_MODEL_IMAGE_ART_DIRECTION_BASE_URL",
       "NEWS_MODEL_ARTICLE_SUMMARY_TEMPERATURE",
       "NEWS_MODEL_ARTICLE_SUMMARY_TOP_P",
       "NEWS_MODEL_ARTICLE_SUMMARY_TOP_K",
@@ -2214,6 +2219,12 @@ HTML = r"""<!doctype html>
       "NEWS_MODEL_TITLE_GENERATION_MIN_P",
       "NEWS_MODEL_TITLE_GENERATION_PRESENCE_PENALTY",
       "NEWS_MODEL_TITLE_GENERATION_REPETITION_PENALTY",
+      "NEWS_MODEL_IMAGE_ART_DIRECTION_TEMPERATURE",
+      "NEWS_MODEL_IMAGE_ART_DIRECTION_TOP_P",
+      "NEWS_MODEL_IMAGE_ART_DIRECTION_TOP_K",
+      "NEWS_MODEL_IMAGE_ART_DIRECTION_MIN_P",
+      "NEWS_MODEL_IMAGE_ART_DIRECTION_PRESENCE_PENALTY",
+      "NEWS_MODEL_IMAGE_ART_DIRECTION_REPETITION_PENALTY",
       "NEWS_SOURCE_COLLECTION_CONCURRENCY",
       "NEWS_ARTICLE_SUMMARY_CONCURRENCY",
       "NEWS_STORY_SYNTHESIS_CONCURRENCY",
@@ -2296,6 +2307,23 @@ HTML = r"""<!doctype html>
         taskMaxTokensEnv: "NEWS_TITLE_GENERATION_MAX_TOKENS",
         taskSamplingPrefix: "NEWS_MODEL_TITLE_GENERATION",
         runtimeKey: "title_generation"
+      },
+      image_art_direction: {
+        label: "Image Art Direction",
+        modelEnv: "NEWS_MODEL_IMAGE_ART_DIRECTION",
+        presetEnv: "NEWS_MODEL_IMAGE_ART_DIRECTION_TUNING_PRESET",
+        baseUrlEnv: "NEWS_MODEL_IMAGE_ART_DIRECTION_BASE_URL",
+        presetSelectId: "image_art_tuning_preset",
+        idInputId: "image_art_tuning_id",
+        nameInputId: "image_art_tuning_name",
+        descriptionInputId: "image_art_tuning_description",
+        modelSelectId: "image_art_model",
+        saveButtonId: "image_art_tuning_save",
+        renameButtonId: "image_art_tuning_rename",
+        deleteButtonId: "image_art_tuning_delete",
+        taskMaxTokensEnv: "NEWS_IMAGE_ART_DIRECTION_MAX_TOKENS",
+        taskSamplingPrefix: "NEWS_MODEL_IMAGE_ART_DIRECTION",
+        runtimeKey: "image_art_direction"
       }
     };
     const state = {
@@ -2343,17 +2371,20 @@ HTML = r"""<!doctype html>
       NEWS_MODEL_ARTICLE_SUMMARY: "Model used for article summarization before story drafting.",
       NEWS_MODEL_STORY_DRAFTING: "Model used for writing the final story drafts.",
       NEWS_MODEL_STORY_SCALE_SCREENING: "Model used for global story scale screening before story selection.",
-      NEWS_MODEL_TITLE_GENERATION: "Model used for the title generation / image art direction call.",
+      NEWS_MODEL_TITLE_GENERATION: "Model used for the title generation call (overlay headline).",
       NEWS_MODEL_TUNING_PRESET: "Default saved tuning overlay applied before direct tuning overrides.",
       NEWS_MODEL_ARTICLE_SUMMARY_TUNING_PRESET: "Saved tuning overlay for the article summarization model.",
       NEWS_MODEL_STORY_DRAFTING_TUNING_PRESET: "Saved tuning overlay for the story writing model.",
       NEWS_MODEL_STORY_SCALE_SCREENING_TUNING_PRESET: "Saved tuning overlay for the story scale screening model.",
       NEWS_MODEL_TITLE_GENERATION_TUNING_PRESET: "Saved tuning overlay for the title generation model.",
+      NEWS_MODEL_IMAGE_ART_DIRECTION: "Model used for the image art direction call (text-free FLUX prompt).",
+      NEWS_MODEL_IMAGE_ART_DIRECTION_TUNING_PRESET: "Saved tuning overlay for the image art direction model.",
       NEWS_MODEL_MAX_INPUT_TOKENS: "Shared input token cap sent to model calls.",
       NEWS_ARTICLE_SUMMARY_MAX_TOKENS: "Maximum generated tokens for each article summary.",
       NEWS_STORY_DRAFTING_MAX_TOKENS: "Maximum generated tokens for each final story draft.",
       NEWS_STORY_SCALE_SCREENING_MAX_TOKENS: "Maximum generated tokens for each story scale screening call.",
-      NEWS_TITLE_GENERATION_MAX_TOKENS: "Maximum generated tokens for the title generation / image art call.",
+      NEWS_TITLE_GENERATION_MAX_TOKENS: "Maximum generated tokens for the title generation call.",
+      NEWS_IMAGE_ART_DIRECTION_MAX_TOKENS: "Maximum generated tokens for the image art direction call.",
       NEWS_ARTICLE_TEXT_TOKEN_LIMIT: "Article text trimmed to this token budget before summarization.",
       NEWS_TOTAL_ARTICLE_SUMMARY_CAP: "Upper bound on article summaries kept for story synthesis.",
       NEWS_RECENT_WINDOW_HOURS: "How far back source collection looks for recent articles.",
@@ -2379,6 +2410,7 @@ HTML = r"""<!doctype html>
       NEWS_MODEL_STORY_DRAFTING_BASE_URL: "Model server endpoint for story writing calls.",
       NEWS_MODEL_STORY_SCALE_SCREENING_BASE_URL: "Model server endpoint for story scale screening calls.",
       NEWS_MODEL_TITLE_GENERATION_BASE_URL: "Model server endpoint for title generation calls.",
+      NEWS_MODEL_IMAGE_ART_DIRECTION_BASE_URL: "Model server endpoint for image art direction calls.",
       NEWS_MODEL_SERVER_PREFILL_STEP_SIZE: "Prefill step size passed to the local MLX model server.",
       NEWS_MODEL_SERVER_PROMPT_CACHE_SIZE: "Prompt cache item count passed to the local model server.",
       NEWS_MODEL_SERVER_PROMPT_CACHE_BYTES: "Prompt cache memory budget passed to the local model server.",
@@ -2636,6 +2668,7 @@ HTML = r"""<!doctype html>
       renderKnobLinks("NEWS_MODEL_STORY_DRAFTING");
       renderKnobLinks("NEWS_MODEL_STORY_SCALE_SCREENING");
       renderKnobLinks("NEWS_MODEL_TITLE_GENERATION");
+      renderKnobLinks("NEWS_MODEL_IMAGE_ART_DIRECTION");
     }
     function renderTabs() {
       $("tabs").innerHTML = `<button id="navToggle" class="nav-toggle" title="Collapse navigation" aria-label="Collapse navigation"><span class="collapse-icon">${icons.chevronLeft}</span><span class="expand-icon">${icons.chevronRight}</span></button>` +
@@ -2725,6 +2758,7 @@ HTML = r"""<!doctype html>
       const storyDrafting = model.story_drafting || assignments.story_drafting || {};
       const scaleScreening = model.story_scale_screening || assignments.story_scale_screening || {};
       const titleGeneration = model.title_generation || assignments.title_generation || {};
+      const imageArtDirection = model.image_art_direction || assignments.image_art_direction || {};
       const items = [
         ["Run preset", state.selectedRunPresetId || runtime.preset_id || "custom"],
         ["Source scope", runtime.source_scope || "-"],
@@ -2738,6 +2772,7 @@ HTML = r"""<!doctype html>
         ["Story Writing", storyDrafting.reference || "-"],
         ["Story Scale Screening", scaleScreening.reference || "-"],
         ["Title Generation", titleGeneration.reference || "-"],
+        ["Image Art Direction", imageArtDirection.reference || "-"],
         ["Article concurrency", model.article_summary_concurrency ?? "-"],
         ["Story concurrency", model.story_synthesis_concurrency ?? "-"],
         ["Images", runtime.image && runtime.image.enabled ? "on" : "off"]
@@ -2971,7 +3006,8 @@ HTML = r"""<!doctype html>
       article_summary: "Article summary max tokens",
       story_drafting: "Story drafting max tokens",
       story_scale_screening: "Scale screening max tokens",
-      title_generation: "Title generation max tokens"
+      title_generation: "Title generation max tokens",
+      image_art_direction: "Image art direction max tokens"
     };
     const SAMPLING_FIELDS = [
       ["TEMPERATURE", "Temperature"],
@@ -3024,6 +3060,7 @@ HTML = r"""<!doctype html>
         ${modelTuningPanel("story_drafting")}
         ${modelTuningPanel("story_scale_screening")}
         ${modelTuningPanel("title_generation")}
+        ${modelTuningPanel("image_art_direction")}
         <section class="panel">
           <p class="eyebrow">Budgets</p>
           <h2>Run budgets and quotas</h2>

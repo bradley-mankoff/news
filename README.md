@@ -250,11 +250,12 @@ Key Run Settings:
   preset enables it.
 - `NEWS_MODEL`: default model selection only. Task models are assigned
   separately with `NEWS_MODEL_ARTICLE_SUMMARY`, `NEWS_MODEL_STORY_DRAFTING`,
-  `NEWS_MODEL_STORY_SCALE_SCREENING`, and `NEWS_MODEL_TITLE_GENERATION`.
-  Stages with no LLM call of their own inherit a task model: image art
-  direction runs on the Title Generation model (one shared LLM call), and
-  story discovery has no LLM stage (embedding/TF-IDF clustering) so it
-  inherits the default model.
+  `NEWS_MODEL_STORY_SCALE_SCREENING`, `NEWS_MODEL_TITLE_GENERATION`, and
+  `NEWS_MODEL_IMAGE_ART_DIRECTION`. Every actual LLM stage has its own
+  assignment; `story_discovery` has no LLM stage (embedding/TF-IDF
+  clustering) so it inherits the default model. Image-enabled runs make two
+  independent calls — Image Art Direction (text-free FLUX prompt) and Title
+  Generation (overlay headline) — each routed to its own assignment.
 - `NEWS_MODEL_BACKEND`: optional backend override for the default model
   (`mlx-lm`, `mlx-vlm`, or `external`; inferred from the model reference
   otherwise — see [Runtime Matrix](#runtime-matrix)).
@@ -316,14 +317,16 @@ NEWS_MODEL_ARTICLE_SUMMARY=gemma-e2b-tiny uv run news run
 NEWS_MODEL_STORY_DRAFTING=gemma-4-12b-it-4bit uv run news run --preset NAME
 NEWS_MODEL_STORY_SCALE_SCREENING=gemma-e2b-tiny uv run news run
 NEWS_MODEL_TITLE_GENERATION=gemma-4-12b-it-4bit uv run news run --preset NAME
+NEWS_MODEL_IMAGE_ART_DIRECTION=gemma-e2b-tiny uv run news run
 ```
 Every actual LLM stage has its own assignment: Article Summarization, Story
-Drafting, Story Scale Screening, and Title Generation. Two stages inherit by
-design: `image_art_direction` shares the Title Generation LLM call (one prompt
-produces both the art direction and the overlay headline, so it runs on the
-Title Generation model), and `story_discovery` has no LLM stage — it is
-algorithmic embedding/TF-IDF clustering and inherits the default model. There
-is no `NEWS_MODEL_IMAGE_ART_DIRECTION` env var.
+Drafting, Story Scale Screening, Title Generation, and Image Art Direction.
+An unset image assignment inherits `NEWS_MODEL` (and the default base URL),
+never `NEWS_MODEL_TITLE_GENERATION`. Image-enabled runs call Image Art
+Direction and Title Generation as two separate, independently routed LLM
+calls; a failure in one never blocks the other. `story_discovery` has no LLM
+stage — it is algorithmic embedding/TF-IDF clustering and inherits the
+default model.
 Built-in aliases:
 
 - `gemma-e2b-tiny`: [`deadbydawn101/gemma-4-E2B-Heretic-Uncensored-mlx-4bit`](https://huggingface.co/deadbydawn101/gemma-4-E2B-Heretic-Uncensored-mlx-4bit) (Codex-safe test model)
@@ -438,7 +441,7 @@ fails fast instead of waiting out the readiness deadline.
 the external backend. Per-task models can also use external endpoints by
 giving that task a distinct base URL (`NEWS_MODEL_ARTICLE_SUMMARY_BASE_URL`,
 `NEWS_MODEL_STORY_DRAFTING_BASE_URL`, `NEWS_MODEL_STORY_SCALE_SCREENING_BASE_URL`,
-`NEWS_MODEL_TITLE_GENERATION_BASE_URL`).
+`NEWS_MODEL_TITLE_GENERATION_BASE_URL`, `NEWS_MODEL_IMAGE_ART_DIRECTION_BASE_URL`).
 
 Normal report runs start the matching local MLX server, wait until it is ready,
 run the pipeline, and stop the managed server when the run exits. To keep a
@@ -448,8 +451,8 @@ server warm manually, print the matching command and run it in another terminal:
 NEWS_MODEL=gemma-4-12b-it-4bit uv run news model-server-command
 ```
 
-If Article Summarization, Story Drafting, Story Scale Screening, or Title
-Generation uses a different model, give that
+If Article Summarization, Story Drafting, Story Scale Screening, Title
+Generation, or Image Art Direction uses a different model, give that
 task a matching base URL or run it on an externally managed server. The current
 runtime supports one managed local server per shared model/base URL; it does not
 automatically coordinate multiple local servers for one run.
@@ -467,6 +470,7 @@ Use these env vars to select a preset:
 - `NEWS_MODEL_STORY_DRAFTING_TUNING_PRESET`
 - `NEWS_MODEL_STORY_SCALE_SCREENING_TUNING_PRESET`
 - `NEWS_MODEL_TITLE_GENERATION_TUNING_PRESET`
+- `NEWS_MODEL_IMAGE_ART_DIRECTION_TUNING_PRESET`
 
 Precedence is:
 
@@ -477,8 +481,10 @@ Precedence is:
 
 Direct tuning overrides still win, such as `NEWS_MODEL_MAX_INPUT_TOKENS`,
 `NEWS_ARTICLE_SUMMARY_MAX_TOKENS`, `NEWS_STORY_DRAFTING_MAX_TOKENS`,
-`NEWS_STORY_SCALE_SCREENING_MAX_TOKENS`, `NEWS_TITLE_GENERATION_MAX_TOKENS`, and
-sampling env vars like `NEWS_MODEL_ARTICLE_SUMMARY_TEMPERATURE`.
+`NEWS_STORY_SCALE_SCREENING_MAX_TOKENS`, `NEWS_TITLE_GENERATION_MAX_TOKENS`,
+`NEWS_IMAGE_ART_DIRECTION_MAX_TOKENS`, and
+sampling env vars like `NEWS_MODEL_ARTICLE_SUMMARY_TEMPERATURE` or
+`NEWS_MODEL_IMAGE_ART_DIRECTION_TEMPERATURE`.
 
 ### Pipeline Budget
 
@@ -496,6 +502,7 @@ configuration:
 - `NEWS_MODEL_STORY_DRAFTING_BASE_URL`
 - `NEWS_MODEL_STORY_SCALE_SCREENING_BASE_URL`
 - `NEWS_MODEL_TITLE_GENERATION_BASE_URL`
+- `NEWS_MODEL_IMAGE_ART_DIRECTION_BASE_URL`
 - `NEWS_MODEL_SERVER_PREFILL_STEP_SIZE`
 - `NEWS_MODEL_SERVER_PROMPT_CACHE_SIZE`
 - `NEWS_MODEL_SERVER_PROMPT_CACHE_BYTES`
