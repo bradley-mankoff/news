@@ -142,7 +142,17 @@ from . import story_clustering as story_clustering_stage
 from . import story_drafting as story_drafting_stage
 from . import story_records as story_records_stage
 from . import story_selection as story_selection_stage
-from .prompt_catalog import DEFAULT_PROMPT_INSTRUCTIONS, resolve_prompt_instructions
+from .prompt_catalog import (
+    DEFAULT_PROMPT_INSTRUCTIONS,
+    PROMPT_TASKS,
+    resolve_prompt_instructions,
+)
+from .prompt_templates import (
+    DEFAULT_PROMPT_TEMPLATES,
+    PromptTemplate,
+    render_prompt_template,
+    resolve_prompt_templates,
+)
 from .feed_utils import (
     decode_google_news_article_path as _decode_google_news_article_path,
     google_news_query_target as _google_news_query_target,
@@ -282,6 +292,17 @@ PROMPT_PROFILE_ID = CONFIG.prompt_profile_id
 PROMPT_INSTRUCTIONS = resolve_prompt_instructions(
     PROMPT_PROFILE_ID, overrides=CONFIG.prompt_instruction_overrides
 )
+# Full prompt templates (ADR 0015): built-in structural templates for tasks
+# without an override, validated custom templates for the rest. Overrides are
+# parsed/validated at config resolution, so reaching here means every template
+# already passed placeholder and contract checks.
+PROMPT_TEMPLATES = resolve_prompt_templates(CONFIG.prompt_template_overrides)
+# Compact per-task provenance: "custom" when a full-template override exists,
+# "default" otherwise. Existing exact prompt snapshots stay authoritative.
+PROMPT_TEMPLATE_SOURCES: dict[str, str] = {
+    task: "custom" if task in CONFIG.prompt_template_overrides else "default"
+    for task in PROMPT_TEMPLATES
+}
 SOURCE_SCOPE = CONFIG.source_scope
 RECIPIENT_SCOPE = CONFIG.recipient_scope
 URL_REUSE_BLOCKING_ENABLED = CONFIG.url_reuse_blocking_enabled
@@ -1037,6 +1058,12 @@ def _compat_runtime_values(config: RuntimeConfig) -> dict[str, Any]:
             config.prompt_profile_id,
             overrides=config.prompt_instruction_overrides,
         ),
+        "PROMPT_TEMPLATES": resolve_prompt_templates(config.prompt_template_overrides),
+        "PROMPT_TEMPLATE_OVERRIDES": dict(config.prompt_template_overrides),
+        "PROMPT_TEMPLATE_SOURCES": {
+            task: "custom" if task in config.prompt_template_overrides else "default"
+            for task in PROMPT_TASKS
+        },
         "SOURCE_SCOPE": config.source_scope,
         "RECIPIENT_SCOPE": config.recipient_scope,
         "URL_REUSE_BLOCKING_ENABLED": config.url_reuse_blocking_enabled,
@@ -1638,6 +1665,7 @@ def _article_summarization_runtime() -> article_summarization_stage.ArticleSumma
         normalize_report_entry=normalize_report_entry,
         article_completed=progress_tracker.article_completed,
         prompt_instructions=PROMPT_INSTRUCTIONS["article_summary"],
+        prompt_template=PROMPT_TEMPLATES["article_summary"],
     )
 
 
@@ -1669,6 +1697,7 @@ def _story_drafting_runtime(
         story_drafting_word_count=_story_drafting_word_count,
         progress_callback=_story_drafting_progress,
         prompt_instructions=PROMPT_INSTRUCTIONS["story_drafting"],
+        prompt_template=PROMPT_TEMPLATES["story_drafting"],
     )
 
 
@@ -1690,6 +1719,7 @@ def _story_selection_runtime() -> story_selection_stage.StorySelectionRuntime:
         report_reference_key=_report_reference_key,
         progress_callback=progress_tracker.story_selection_progress,
         prompt_instructions=PROMPT_INSTRUCTIONS["story_scale_screening"],
+        prompt_template=PROMPT_TEMPLATES["story_scale_screening"],
         story_scale_screening_max_tokens=(
             MODEL_ASSIGNMENTS[MODEL_TASK_STORY_SCALE_SCREENING].tuning.story_scale_screening_max_tokens
             or story_selection_stage.STORY_SCALE_VALIDATION_MAX_TOKENS
@@ -3940,6 +3970,7 @@ def _image_art_direction_call(
     synthesis_body: str,
     image_art_direction: str,
     fallback_prompt: str,
+    prompt_template: PromptTemplate | None = None,
 ) -> tuple[str, str | None]:
     """Run the isolated Image Art Direction model call.
 
@@ -3962,15 +3993,19 @@ def _image_art_direction_call(
             ),
             task=MODEL_TASK_IMAGE_ART_DIRECTION,
         )
+        template = prompt_template or DEFAULT_PROMPT_TEMPLATES["image_art_direction"]
+        system_text, user_text = render_prompt_template(
+            "image_art_direction",
+            template,
+            {
+                "synthesis_body": _truncate_for_art_prompt(synthesis_body),
+                "image_contract": IMAGE_ART_JSON_CONTRACT,
+                "editorial_instructions": image_art_direction,
+            },
+        )
         response = invoke_with_retries(
             llm,
-            [
-                SystemMessage(content=_build_image_art_system_prompt(image_art_direction)),
-                HumanMessage(content=(
-                    "Use the final news output below to create the text-free image prompt.\n\n"
-                    f"Final output:\n{_truncate_for_art_prompt(synthesis_body)}"
-                )),
-            ],
+            [SystemMessage(content=system_text), HumanMessage(content=user_text)],
             task_name="image art prompt generation",
             fallback_content=json.dumps({"image_prompt": fallback_prompt}),
         )
@@ -4000,6 +4035,7 @@ def _title_generation_call(
     synthesis_body: str,
     title_guidance: str,
     fallback_headline: str,
+    prompt_template: PromptTemplate | None = None,
 ) -> tuple[str, str | None]:
     """Run the isolated Title Generation model call.
 
@@ -4019,16 +4055,21 @@ def _title_generation_call(
             ),
             task=MODEL_TASK_TITLE_GENERATION,
         )
+        template = prompt_template or DEFAULT_PROMPT_TEMPLATES["title_generation"]
+        system_text, user_text = render_prompt_template(
+            "title_generation",
+            template,
+            {
+                "report_title": report_title,
+                "synthesis_body": _truncate_for_art_prompt(synthesis_body),
+                "title_contract": TITLE_GENERATION_JSON_CONTRACT,
+                "overlay_protocol": IMAGE_ART_OVERLAY_PROTOCOL,
+                "editorial_instructions": title_guidance,
+            },
+        )
         response = invoke_with_retries(
             llm,
-            [
-                SystemMessage(content=_build_title_generation_system_prompt(title_guidance)),
-                HumanMessage(content=(
-                    "Use the final news output below to create the overlay headline.\n\n"
-                    f"Report title: {report_title}\n\n"
-                    f"Final output:\n{_truncate_for_art_prompt(synthesis_body)}"
-                )),
-            ],
+            [SystemMessage(content=system_text), HumanMessage(content=user_text)],
             task_name="title generation",
             fallback_content=json.dumps({"overlay_headline": fallback_headline}),
         )
@@ -4054,6 +4095,7 @@ def generate_image_art_brief(
     report_title: str,
     *,
     prompt_instructions: dict[str, str] | None = None,
+    prompt_templates: dict[str, PromptTemplate] | None = None,
 ) -> dict[str, str]:
     """Ask the text model for the FLUX prompt plus a separate overlay headline.
 
@@ -4066,7 +4108,8 @@ def generate_image_art_brief(
     ``error`` compatibility key used by ``generate_report_image_art()``.
 
     Consumes two prompt-catalog task slots from ``prompt_instructions``
-    (``image_art_direction`` and ``title_generation``). A missing/falsy slot
+    (``image_art_direction`` and ``title_generation``) and two full templates
+    from ``prompt_templates`` (same tasks, ADR 0015). A missing/falsy slot
     falls back to the ``balanced`` instructions for that task; a missing slot
     in an explicitly provided dict is surfaced as a progress warning.
     """
@@ -4079,17 +4122,22 @@ def generate_image_art_brief(
         progress_tracker.warning("prompt profile missing title_generation; using balanced default")
     image_art_direction = instructions.get("image_art_direction") or DEFAULT_PROMPT_INSTRUCTIONS["image_art_direction"]
     title_guidance = instructions.get("title_generation") or DEFAULT_PROMPT_INSTRUCTIONS["title_generation"]
+    templates = prompt_templates or {}
+    image_template = templates.get("image_art_direction") or DEFAULT_PROMPT_TEMPLATES["image_art_direction"]
+    title_template = templates.get("title_generation") or DEFAULT_PROMPT_TEMPLATES["title_generation"]
 
     image_prompt, image_error = _image_art_direction_call(
         synthesis_body=synthesis_body,
         image_art_direction=image_art_direction,
         fallback_prompt=fallback_prompt,
+        prompt_template=image_template,
     )
     overlay_headline, title_error = _title_generation_call(
         report_title=report_title,
         synthesis_body=synthesis_body,
         title_guidance=title_guidance,
         fallback_headline=fallback_headline,
+        prompt_template=title_template,
     )
     result: dict[str, str] = {
         "image_prompt": image_prompt,
@@ -4239,6 +4287,7 @@ def generate_report_image_art(
         synthesis_body,
         report_title,
         prompt_instructions=PROMPT_INSTRUCTIONS,
+        prompt_templates=PROMPT_TEMPLATES,
     )
     image_prompt = art_brief["image_prompt"]
     overlay_headline = art_brief["overlay_headline"]
@@ -4741,6 +4790,8 @@ def _new_run_diagnostics(source_count: int) -> RunDiagnostics:
             "prompt_profile_id": PROMPT_PROFILE_ID,
             "prompt_instruction_overrides": _json_ready(CONFIG.prompt_instruction_overrides),
             "prompt_instructions": _json_ready(PROMPT_INSTRUCTIONS),
+            "prompt_template_overrides": _json_ready(CONFIG.prompt_template_overrides),
+            "prompt_template_sources": _json_ready(PROMPT_TEMPLATE_SOURCES),
             "model_snapshots": _model_snapshots(),
             "translation_policy": _translation_policy_snapshot(),
             "model_max_input_tokens": MODEL_MAX_INPUT_TOKENS,

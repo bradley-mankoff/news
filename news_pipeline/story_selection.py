@@ -26,6 +26,11 @@ from .story_records import (
 from .config import MODEL_TASK_STORY_SCALE_SCREENING
 from .prompt_catalog import DEFAULT_PROMPT_INSTRUCTIONS
 from .prompt_contracts import STORY_SCALE_SCREENING_JSON_CONTRACT
+from .prompt_templates import (
+    DEFAULT_PROMPT_TEMPLATES,
+    PromptTemplate,
+    render_prompt_template,
+)
 
 
 STORY_SCALE_VERDICTS = {
@@ -81,6 +86,9 @@ class StorySelectionRuntime:
     progress_callback: Callable[[str, dict[str, Any]], None] | None = None
     prompt_instructions: str | None = None
     story_scale_screening_max_tokens: int = STORY_SCALE_VALIDATION_MAX_TOKENS
+    # Resolved full system/user template for this stage (ADR 0015); None uses
+    # the built-in template, keeping the default rendered bytes identical.
+    prompt_template: PromptTemplate | None = None
 
 
 def _compact_gate_text(value: Any, max_chars: int) -> str:
@@ -248,6 +256,7 @@ def _global_scale_screening_prompt_messages(
     candidates: list[dict[str, Any]],
     *,
     prompt_instructions: str | None = None,
+    prompt_template: PromptTemplate | None = None,
 ) -> list[Any]:
     story_blocks: list[str] = []
     for index, candidate in enumerate(candidates):
@@ -269,60 +278,25 @@ def _global_scale_screening_prompt_messages(
             ).strip()
         )
 
-    # The JSON contract and screening guidance are injected as .format() VALUES
-    # (inserted verbatim, never re-parsed as templates), so their single braces
-    # are safe here; only the template itself must stay an f-string-free
-    # .format() block.
-    # .format() must run after dedent() because the injected screening_guidance
-    # is multi-line (byte-identity drift-guard: tests/test_prompt_catalog.py).
-    # User-entered guidance (prompt overrides) may contain literal braces.
-    # str.format() never re-parses substituted values, so the value is escaped
-    # before injection ({{ }}) and unescaped afterwards to keep user text
-    # byte-identical; the template's own JSON braces are already single { }
-    # by then, so the unescape touches only the injected guidance.
-    screening_guidance = (
-        prompt_instructions or DEFAULT_PROMPT_INSTRUCTIONS["story_scale_screening"]
-    ).replace("{", "{{").replace("}", "}}")
-    system_prompt = SystemMessage(
-        content=textwrap.dedent(
-            """
-            You are a strict but conservative scale-screening editor for a global daily
-            news newsletter.
-
-            Your job is to label each drafted story by substantive news scale. The labels
-            are used to avoid obvious small local stories, not to separate good stories
-            from great stories.
-
-            Scale labels:
-            - obviously_large_scale: the story has clear broad stakes, such as effects across
-              multiple countries, cross-border conflict, major civil war or mass displacement,
-              oil, gas, food, semiconductors, shipping lanes, critical minerals, supply chains,
-              sanctions, currency or financial markets, global public health, major migration,
-              multinational regulation, national politics, national economic effects, major
-              national legal effects, or major geopolitical/security implications.
-            - obviously_small_scale: the story is plainly a routine single-country domestic
-              matter, local crime, local accident, city/province dispute, provincial or municipal
-              politics, or ordinary single-company item without broader market, supply-chain,
-              diplomatic, humanitarian, legal, national political, or security effects.
-            - not_obvious: the scale is borderline or the supplied evidence does not justify an
-              obvious large/small conclusion.
-
-            {screening_guidance}
-
-            {scale_contract}
-            """
-        ).format(
-            screening_guidance=screening_guidance,
-            scale_contract=STORY_SCALE_SCREENING_JSON_CONTRACT,
-        ).replace("{{", "{").replace("}}", "}").strip()
+    # The JSON contract and screening guidance are substituted as VALUES
+    # (inserted verbatim, never re-parsed as templates), so single braces in
+    # the contract and literal braces in user-entered guidance stay safe;
+    # string.Template replaces the old brace-escape .format() dance entirely
+    # (byte-identity drift-guard: tests/test_prompt_catalog.py).
+    template = prompt_template or DEFAULT_PROMPT_TEMPLATES["story_scale_screening"]
+    system_text, user_text = render_prompt_template(
+        "story_scale_screening",
+        template,
+        {
+            "story_blocks": "\n\n---\n\n".join(story_blocks),
+            "scale_contract": STORY_SCALE_SCREENING_JSON_CONTRACT,
+            "editorial_instructions": (
+                prompt_instructions
+                or DEFAULT_PROMPT_INSTRUCTIONS["story_scale_screening"]
+            ),
+        },
     )
-    user_prompt = HumanMessage(
-        content=(
-            "Screen these candidate stories for global-news scale.\n\n"
-            + "\n\n---\n\n".join(story_blocks)
-        )
-    )
-    return [system_prompt, user_prompt]
+    return [SystemMessage(content=system_text), HumanMessage(content=user_text)]
 
 
 def _deterministic_global_scale_record(candidate: dict[str, Any]) -> dict[str, str]:
@@ -431,6 +405,7 @@ def apply_global_story_scale_screening(
                 _global_scale_screening_prompt_messages(
                     batch,
                     prompt_instructions=runtime.prompt_instructions,
+                    prompt_template=runtime.prompt_template,
                 ),
                 task_name="global story scale screening",
                 fallback_content=fallback_content,

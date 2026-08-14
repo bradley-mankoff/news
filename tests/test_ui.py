@@ -22,6 +22,8 @@ import yaml
 import news_pipeline.config as config_module
 from news_pipeline import ui as ui_module
 from news_pipeline import model_catalog
+from news_pipeline import prompt_catalog
+from news_pipeline import prompt_templates
 from news_pipeline.config import (
     CODEX_TEST_MODEL_ALIAS,
     DELIVERY_MODE_OWNER,
@@ -319,6 +321,138 @@ class UITests(unittest.TestCase):
         # Empty editors still mean "no override" (matches collectEnv's
         # suppression of empty/unset override env vars).
         self.assertIn("if (!value) return;", ui_module.HTML)
+
+    def test_prompt_template_editors_markup_and_surfaced_envs(self) -> None:
+        html = ui_module.HTML
+        # The Advanced panel hosts the full-template editors rendered from
+        # schema.prompt_templates (not a second hard-coded task list).
+        advanced = html.split("function renderAdvancedPanels")[1].split("function renderAdvancedKnobs")[0]
+        self.assertEqual(advanced.count('id="promptTemplateEditors"'), 1)
+        self.assertIn("renderPromptTemplateEditors();", advanced)
+        self.assertIn("promptTemplateEnvMap", html)
+        self.assertIn('data-template-system="${escapeHtml(t.task)}"', html)
+        self.assertIn('data-template-user="${escapeHtml(t.task)}"', html)
+        self.assertIn('class="prompt-template-validate"', html)
+        self.assertIn('class="prompt-template-restore"', html)
+        self.assertIn("restoreAllPromptTemplatesBtn", html)
+        # The sentence-level profile editors remain in their own panel.
+        self.assertEqual(advanced.count('id="promptProfileReadouts"'), 1)
+        self.assertEqual(advanced.count('id="comparePromptProfileBtn"'), 1)
+        # All five template envs are suppressed from the raw Advanced list
+        # (the dedicated editors are the single surface; no duplicates).
+        surfaced_block = html.split("const SURFACED_ENVS = new Set([", 1)[1].split("]);", 1)[0]
+        for env_var in (
+            "NEWS_PROMPT_TEMPLATE_ARTICLE_SUMMARY",
+            "NEWS_PROMPT_TEMPLATE_STORY_SCALE_SCREENING",
+            "NEWS_PROMPT_TEMPLATE_STORY_DRAFTING",
+            "NEWS_PROMPT_TEMPLATE_TITLE_GENERATION",
+            "NEWS_PROMPT_TEMPLATE_IMAGE_ART_DIRECTION",
+        ):
+            self.assertIn(env_var, surfaced_block)
+        # The editor DOM never carries data-env on the role textareas (two
+        # inputs with the same env name would duplicate collectEnv() values).
+        self.assertNotIn("data-env=\"${escapeHtml(envVar)}\"", html)
+        # Changed-only JSON serialization and raw round-trip helpers exist.
+        self.assertIn("function currentPromptTemplateEnv()", html)
+        self.assertIn("JSON.stringify({ system: sysEl.value, user: userEl.value })", html)
+        self.assertIn("function setPromptTemplateEnv(env)", html)
+        self.assertIn("function restorePromptTemplateTask(task)", html)
+        # Preset save validates the current template values first.
+        self.assertIn("await validatePromptTemplateEnv(body.env);", html)
+        self.assertIn("/api/prompt-templates/validate", html)
+
+    def test_prompt_template_validation_endpoint_and_preset_rejection(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            presets_path = Path(tmpdir) / "run_presets.yaml"
+            _write_yaml_mapping(presets_path, {"presets": {}})
+            with patch.object(ui_module, "RUN_PRESETS_PATH", presets_path):
+                def invoke(method: str, path: str, body: str | None = None) -> tuple[int, dict[str, str], str]:
+                    payload = (body or "").encode("utf-8")
+                    handler = object.__new__(ui_module.NewsUIHandler)
+                    state: dict[str, Any] = {"status": None, "headers": {}}
+                    handler.path = path
+                    handler.headers = {"Content-Length": str(len(payload))}
+                    handler.rfile = BytesIO(payload)  # type: ignore[assignment]
+                    handler.wfile = BytesIO()  # type: ignore[assignment]
+                    handler.send_response = lambda status: state.__setitem__("status", status)
+                    handler.send_header = lambda name, value: state["headers"].__setitem__(name, value)
+                    handler.end_headers = lambda: None
+                    getattr(handler, method)()
+                    return state["status"], state["headers"], handler.wfile.getvalue().decode("utf-8")  # type: ignore[attr-defined]
+
+                good_template = {
+                    "system": "Custom art: $image_contract $editorial_instructions",
+                    "user": "$synthesis_body",
+                }
+                status, _, body = invoke(
+                    "do_POST",
+                    "/api/prompt-templates/validate",
+                    body=json.dumps({"templates": {"image_art_direction": good_template}}),
+                )
+                self.assertEqual(status, 200)
+                self.assertEqual(json.loads(body), {"valid": True, "errors": {}})
+
+                status, _, body = invoke(
+                    "do_POST",
+                    "/api/prompt-templates/validate",
+                    body=json.dumps(
+                        {"templates": {"story_drafting": {"system": "x", "user": "y"}}}
+                    ),
+                )
+                self.assertEqual(status, 400)
+                error = json.loads(body)["error"]
+                self.assertIn("story_drafting", error)
+                self.assertIn("missing required placeholder", error)
+                # The error must not echo the untrusted template body.
+                self.assertNotIn('"x"', error)
+
+                status, _, body = invoke(
+                    "do_POST",
+                    "/api/prompt-templates/validate",
+                    body=json.dumps({"task": "story_discovery", "template": good_template}),
+                )
+                self.assertEqual(status, 400)
+                self.assertIn("story_discovery", json.loads(body)["error"])
+
+                # Preset CRUD rejects an invalid full-template env value before
+                # writing; a valid one round-trips.
+                env_var = prompt_templates.PROMPT_TEMPLATE_ENV_VARS["image_art_direction"]
+                status, _, body = invoke(
+                    "do_POST",
+                    "/api/presets",
+                    body=json.dumps({"id": "bad-tpl", "env": {env_var: '{"system":"x"}'}}),
+                )
+                self.assertEqual(status, 400)
+                self.assertIn(env_var, json.loads(body)["error"])
+                self.assertEqual(list_presets()["presets"], [])
+
+                status, _, body = invoke(
+                    "do_POST",
+                    "/api/presets",
+                    body=json.dumps({"id": "good-tpl", "env": {env_var: json.dumps(good_template)}}),
+                )
+                self.assertEqual(status, 201)
+                saved_env = json.loads(body)["preset"]["env"]
+                self.assertEqual(json.loads(saved_env[env_var]), good_template)
+
+    def test_prompt_template_schema_metadata(self) -> None:
+        schema = schema_payload()
+        templates = schema["prompt_templates"]
+        self.assertEqual(
+            [record["task"] for record in templates],
+            list(prompt_catalog.PROMPT_TASKS),
+        )
+        self.assertNotIn(
+            "story_discovery", [record["task"] for record in templates]
+        )
+        for record in templates:
+            self.assertIn(record["env_var"], schema["current_env"])
+            self.assertIn(record["env_var"], {knob["env"] for knob in schema["knobs"]})
+            self.assertTrue(record["system"].strip())
+            self.assertTrue(record["user"].strip())
+            self.assertTrue(record["required_placeholders"])
+            self.assertIn("editorial_instructions", record["placeholder_descriptions"])
+
     def test_model_knob_links_markup_contract(self) -> None:
         self.assertIn("data-links-for", ui_module.HTML)
         self.assertIn("renderKnobLinks", ui_module.HTML)

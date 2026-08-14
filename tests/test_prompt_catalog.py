@@ -12,7 +12,7 @@ from dataclasses import replace
 from types import SimpleNamespace
 import unittest
 
-from news_pipeline import pipeline, prompt_catalog, prompt_contracts
+from news_pipeline import pipeline, prompt_catalog, prompt_contracts, prompt_templates
 from news_pipeline.article_summarization import (
     ArticleSummarizationRuntime,
     build_article_summary_prompt_messages,
@@ -550,6 +550,134 @@ Citation precedence: Cite this source only for facts it directly supports.
             "image_art_direction",
         ):
             self.assertEqual(resolved[task], playful[task])
+
+    # --- Full-template drift guards (ADR 0015) ---------------------------------
+
+    def test_prompt_template_tasks_match_catalog_tasks(self) -> None:
+        # Drift-guard: the full-template registry, its env map, and the
+        # contract placeholder registry must cover exactly the same five LLM
+        # stages as the Prompt Catalog; a task added to only one side would
+        # silently lose its template editor or validation.
+        self.assertEqual(
+            set(prompt_templates.PROMPT_TEMPLATE_ENV_VARS),
+            set(prompt_catalog.PROMPT_TASKS),
+        )
+        self.assertEqual(
+            set(prompt_templates.DEFAULT_PROMPT_TEMPLATES),
+            set(prompt_catalog.PROMPT_TASKS),
+        )
+        self.assertEqual(
+            set(prompt_templates.PROMPT_TEMPLATE_DYNAMIC_PLACEHOLDERS),
+            set(prompt_catalog.PROMPT_TASKS),
+        )
+        self.assertEqual(
+            set(prompt_templates.PROMPT_TEMPLATE_CONTRACT_PLACEHOLDERS),
+            set(prompt_catalog.PROMPT_TASKS),
+        )
+
+    def test_default_template_render_matches_stage_builder_bytes(self) -> None:
+        # The stage builders and the default template renderer must produce
+        # identical bytes for the same dynamic values, proving the template
+        # extraction kept the default path byte-identical (ADR 0011 golden
+        # snapshots above stay authoritative).
+        values = {
+            "now_label": "May 30, 2026",
+            "recent_window_hours": "24",
+            "article_payload": (
+                "Selected article:\n\nTitle: Flood plan expands\nSource: Fixture Wire\n"
+                "Published: Unknown publish time\nURL: N/A\nDescription: N/A\n"
+                "Article text:\nN/A\n\n"
+                "Return exactly this block, replacing only the summary text:\n\n"
+                "DATABASE_ENTRY:\n### Flood plan expands\nMetadata:\n"
+                "- Source: Fixture Wire\n- Published: Unknown publish time\n- URL: N/A\n\n"
+                "Summary:\n<4-7 sentence article summary in plain prose, no brackets>"
+            ),
+            "output_contract": prompt_contracts.ARTICLE_SUMMARY_OUTPUT_CONTRACT,
+            "editorial_instructions": prompt_catalog.DEFAULT_PROMPT_INSTRUCTIONS[
+                "article_summary"
+            ],
+        }
+        system_text, user_text = prompt_templates.render_prompt_template(
+            "article_summary",
+            prompt_templates.DEFAULT_PROMPT_TEMPLATES["article_summary"],
+            values,
+        )
+        messages = build_article_summary_prompt_messages(
+            {"title": "Flood plan expands", "source": "Fixture Wire"},
+            "May 30, 2026",
+            _article_summarization_runtime(),
+        )
+        self.assertEqual(system_text, str(messages[0].content))
+        self.assertEqual(user_text, str(messages[1].content))
+
+    def test_all_profiles_render_contracts_through_default_templates(self) -> None:
+        # Every built-in profile must render every stage with its full machine
+        # contract intact when the profile sentences are supplied through the
+        # $editorial_instructions placeholder of the default templates.
+        for profile in prompt_catalog.PROMPT_PROFILES.values():
+            drafting_values = {
+                "now_label": "May 30, 2026",
+                "story_title": "Storm damage",
+                "source_summary_lines": "S1: sample summary",
+                "citation_contract": prompt_contracts.STORY_DRAFTING_CITATION_CONTRACT,
+                "output_contract": prompt_contracts.STORY_DRAFTING_OUTPUT_CONTRACT,
+                "editorial_instructions": profile.prompts["story_drafting"],
+            }
+            system_text, user_text = prompt_templates.render_prompt_template(
+                "story_drafting",
+                prompt_templates.DEFAULT_PROMPT_TEMPLATES["story_drafting"],
+                drafting_values,
+            )
+            prompt_contracts.assert_prompt_contract(
+                "story_drafting", f"{system_text}\n\n{user_text}"
+            )
+            self.assertIn(profile.prompts["story_drafting"], system_text)
+
+            art_values = {
+                "synthesis_body": "Final output body.",
+                "image_contract": prompt_contracts.IMAGE_ART_JSON_CONTRACT,
+                "editorial_instructions": profile.prompts["image_art_direction"],
+            }
+            art_system, art_user = prompt_templates.render_prompt_template(
+                "image_art_direction",
+                prompt_templates.DEFAULT_PROMPT_TEMPLATES["image_art_direction"],
+                art_values,
+            )
+            prompt_contracts.assert_prompt_contract(
+                "image_art_direction", f"{art_system}\n\n{art_user}"
+            )
+            self.assertEqual(
+                art_system,
+                pipeline._build_image_art_system_prompt(
+                    profile.prompts["image_art_direction"]
+                ),
+            )
+
+            title_values = {
+                "report_title": "Sample report",
+                "synthesis_body": "Final output body.",
+                "title_contract": prompt_contracts.TITLE_GENERATION_JSON_CONTRACT,
+                "overlay_protocol": prompt_contracts.IMAGE_ART_OVERLAY_PROTOCOL,
+                "editorial_instructions": profile.prompts["title_generation"],
+            }
+            title_system, title_user = prompt_templates.render_prompt_template(
+                "title_generation",
+                prompt_templates.DEFAULT_PROMPT_TEMPLATES["title_generation"],
+                title_values,
+            )
+            prompt_contracts.assert_prompt_contract(
+                "title_generation", f"{title_system}\n\n{title_user}"
+            )
+            self.assertEqual(
+                title_system,
+                pipeline._build_title_generation_system_prompt(
+                    profile.prompts["title_generation"]
+                ),
+            )
+            # Image/title templates stay isolated: each profile sentence
+            # appears only in its own rendered system message.
+            self.assertNotIn(profile.prompts["title_generation"], art_system)
+            self.assertNotIn(profile.prompts["image_art_direction"], title_system)
 
 
 if __name__ == "__main__":
