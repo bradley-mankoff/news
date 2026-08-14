@@ -1986,6 +1986,59 @@ class UITests(unittest.TestCase):
         self.assertEqual(status, 400)
         self.assertIn("Missing model parameter.", json.loads(body)["error"])
 
+    def test_schema_label_maps_and_drift_contract(self) -> None:
+        """The schema serves the canonical model-catalog label maps and the
+        embedded JavaScript reads them from state.schema at render time
+        (issue #82): a label added on the Python side renders without a
+        second UI edit, and no duplicate hardcoded map literals remain."""
+        with patch.object(
+            ui_module, "_runtime_snapshot", return_value=({"runtime": "ok"}, None)
+        ), patch.object(
+            ui_module, "configured_removed_topic_env_vars", return_value=set()
+        ), patch.object(
+            ui_module, "list_presets", return_value={"path": "presets.yaml", "presets": []}
+        ), patch.object(
+            ui_module,
+            "list_model_tuning_presets",
+            return_value={"path": "model.yaml", "presets": []},
+        ), patch.object(
+            ui_module, "_source_summary", return_value={"total": 0}
+        ), patch.object(ui_module, "_recipient_summary", return_value={"total": 0}):
+            payload = ui_module.schema_payload()
+
+        # The canonical dictionaries are served verbatim as copied projections.
+        self.assertEqual(payload["model_task_labels"], model_catalog.MODEL_TASK_LABELS)
+        self.assertEqual(payload["runtime_fit_labels"], model_catalog.RUNTIME_FIT_LABELS)
+        self.assertEqual(payload["model_task_labels"]["translation"], "Translation")
+        self.assertEqual(payload["runtime_fit_labels"]["external_only"], "External only")
+
+        # A label added on the Python side appears in the schema response
+        # without any UI code change and survives JSON encoding.
+        with patch.dict(ui_module.MODEL_TASK_LABELS, {"future_task": "Future task"}), patch.dict(
+            ui_module.RUNTIME_FIT_LABELS, {"future_fit": "Future fit"}
+        ), patch.object(
+            ui_module,
+            "MODEL_RECOMMENDATION_TASKS",
+            (*ui_module.MODEL_RECOMMENDATION_TASKS, "future_task"),
+        ):
+            payload = ui_module.schema_payload()
+        self.assertEqual(payload["model_task_labels"]["future_task"], "Future task")
+        self.assertEqual(payload["runtime_fit_labels"]["future_fit"], "Future fit")
+        self.assertIn("future_task", payload["model_recommendation_tasks"])
+        json.dumps(payload)  # must stay JSON-serializable for _send_json
+
+        # Drift guard: the embedded JS holds no duplicate map literals and
+        # resolves both vocabularies from state.schema, keeping the existing
+        # raw-key/unknown fallbacks and the status-keyed behavior gate.
+        html = ui_module.HTML
+        self.assertNotIn("const MODEL_TASK_LABELS = {", html)
+        self.assertNotIn("const RUNTIME_FIT_LABELS = {", html)
+        self.assertIn("state.schema.model_task_labels", html)
+        self.assertIn("state.schema.runtime_fit_labels", html)
+        self.assertIn("labels[task] || task", html)
+        self.assertIn('fit.status || "unknown"', html)
+        self.assertIn('fit.status === "external_only"', html)
+
     def test_schema_payload_includes_custom_catalog_entries(self) -> None:
         """The existing schema payload is the integration surface for merged
         catalog data: custom aliases appear in catalog cards and selector
