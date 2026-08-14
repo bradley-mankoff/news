@@ -2440,7 +2440,6 @@ const assert = (condition, message) => {
 };
 // A selector failure (or any unexpected path) must fail the run instead of
 // being swallowed into a console message.
-const realConsoleError = console.error;
 console.error = (...args) => { throw new Error("console.error: " + args.join(" ")); };
 """
             + _FAKE_DOM_ELEMENT_JS
@@ -2459,7 +2458,10 @@ const statusEls = new Map();    // "<task>" -> status element
 const validateBtns = new Map(); // "<task>" -> Validate button
 const restoreBtns = new Map();  // "<task>" -> Restore default button
 function parseEditorMarkup(markup) {
-  textareas.clear(); statusEls.clear(); validateBtns.clear(); restoreBtns.clear();
+  textareas.clear();
+  statusEls.clear();
+  validateBtns.clear();
+  restoreBtns.clear();
   let match;
   const textareaRe = /<textarea data-template-(system|user)="([^"]*)"[^>]*>([\s\S]*?)<\/textarea>/g;
   while ((match = textareaRe.exec(markup)) !== null) {
@@ -2518,6 +2520,10 @@ const document = {
 };
 function $(id) { return document.getElementById(id); }
 function value(id) { const el = $(id); return el ? el.value : ""; }
+// The editor's textareas are addressed by CSS selector; keep the lookups
+// short instead of repeating the template literal at every call site.
+const templateSys = task => document.querySelector(`[data-template-system="${task}"]`);
+const templateUser = task => document.querySelector(`[data-template-user="${task}"]`);
 const flush = () => new Promise(resolve => setTimeout(resolve, 0));
 
 // ---- API and preset-save stubs (only the network edge is stubbed) --------
@@ -2598,8 +2604,8 @@ assert(
 
 // ---- Restore: edited pair returns to defaults and drops its override ------
 const restoreTask = TASKS[0];
-const sysEl = document.querySelector(`[data-template-system="${restoreTask.task}"]`);
-const userEl = document.querySelector(`[data-template-user="${restoreTask.task}"]`);
+const sysEl = templateSys(restoreTask.task);
+const userEl = templateUser(restoreTask.task);
 sysEl.value = "custom system text";
 userEl.value = "custom user text";
 sysEl.fire("input");
@@ -2613,8 +2619,8 @@ assert(envAfterRestore[restoreTask.env_var] === undefined, "restored default pai
 
 // ---- Restore all defaults ------------------------------------------------
 for (const t of TASKS) {
-  const sys = document.querySelector(`[data-template-system="${t.task}"]`);
-  const usr = document.querySelector(`[data-template-user="${t.task}"]`);
+  const sys = templateSys(t.task);
+  const usr = templateUser(t.task);
   sys.value = `edited system ${t.task}`;
   usr.value = `edited user ${t.task}`;
   sys.fire("input");
@@ -2624,7 +2630,7 @@ const envAll = currentPromptTemplateEnv();
 assert(Object.keys(envAll).length === 0, "restore-all left overrides behind");
 for (const t of TASKS) {
   assert(
-    document.querySelector(`[data-template-system="${t.task}"]`).value === t.system,
+    templateSys(t.task).value === t.system,
     `${t.task}: restore-all did not reset the system textarea`
   );
 }
@@ -2632,7 +2638,7 @@ for (const t of TASKS) {
 // ---- User-only edit: it marks the task dirty and serializes both values ----
 const userOnlyTask = TASKS[3];
 setPromptTemplateEnv({});
-const userOnly = document.querySelector(`[data-template-user="${userOnlyTask.task}"]`);
+const userOnly = templateUser(userOnlyTask.task);
 statusEls.get(userOnlyTask.task).innerHTML = '<span class="ok">Template is valid.</span>';
 userOnly.value = "user-only edit";
 userOnly.fire("input");
@@ -2651,8 +2657,8 @@ assert(
 const editTask = TASKS[1];
 const editedSystem = `Custom $editorial_instructions system for ${editTask.task}`;
 const editedUser = `Custom user text for ${editTask.task}`;
-const sysEdit = document.querySelector(`[data-template-system="${editTask.task}"]`);
-const usrEdit = document.querySelector(`[data-template-user="${editTask.task}"]`);
+const sysEdit = templateSys(editTask.task);
+const usrEdit = templateUser(editTask.task);
 sysEdit.value = editedSystem;
 usrEdit.value = editedUser;
 sysEdit.fire("input");
@@ -2676,19 +2682,13 @@ assert(
 
 // ---- Apply round-trip: the saved env restores the exact edited pair --------
 for (const t of TASKS) {
-  const sys = document.querySelector(`[data-template-system="${t.task}"]`);
+  const sys = templateSys(t.task);
   sys.value = "stale text";
   sys.fire("input");
 }
 setPromptTemplateEnv(savedPresetPayload.env);
-assert(
-  document.querySelector(`[data-template-system="${editTask.task}"]`).value === editedSystem,
-  "apply did not restore the edited system text"
-);
-assert(
-  document.querySelector(`[data-template-user="${editTask.task}"]`).value === editedUser,
-  "apply did not restore the edited user text"
-);
+assert(templateSys(editTask.task).value === editedSystem, "apply did not restore the edited system text");
+assert(templateUser(editTask.task).value === editedUser, "apply did not restore the edited user text");
 const envAfter = currentPromptTemplateEnv();
 assert(
   envAfter[editTask.env_var] === envBefore[editTask.env_var],
@@ -2712,16 +2712,16 @@ for (const malformedRaw of malformedValues) {
     "malformed override was not flagged"
   );
   assert(
-    document.querySelector(`[data-template-system="${malformedTask.task}"]`).value === malformedTask.system,
+    templateSys(malformedTask.task).value === malformedTask.system,
     "malformed override replaced the built-in defaults"
   );
   setPromptTemplateEnv({ [malformedTask.env_var]: malformedRaw });
   assert(
-    document.querySelector(`[data-template-system="${malformedTask.task}"]`).value === malformedTask.system,
+    templateSys(malformedTask.task).value === malformedTask.system,
     "applying malformed override changed the system default"
   );
   assert(
-    document.querySelector(`[data-template-user="${malformedTask.task}"]`).value === malformedTask.user,
+    templateUser(malformedTask.task).value === malformedTask.user,
     "applying malformed override changed the user default"
   );
   const envMalformed = currentPromptTemplateEnv();
