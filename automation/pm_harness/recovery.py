@@ -173,6 +173,13 @@ def fresh_issue_dispatch_guard(
                 f"resume or discard issue #{issue_number}"
             )
     runs = fetch_workflow_runs(env)
+    lookup_error = getattr(runs, "error", None)
+    if lookup_error:
+        log(
+            f"FRESH DISPATCH DEFERRED issue={issue_number}: "
+            f"run lookup unavailable ({lookup_error})"
+        )
+        return False, f"Archon run lookup unavailable: {lookup_error}"
     latest = latest_workflow_run(runs, issue_number=issue_number)
     if latest and str(latest.get("status") or "").lower() in ACTIVE_WORKFLOW_STATUSES:
         return False, (
