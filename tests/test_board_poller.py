@@ -249,7 +249,20 @@ class WorkflowRecoveryTest(unittest.TestCase):
         self.assertIn("dirty", reason)
         fetch.assert_not_called()
 
-
+    def test_fresh_dispatch_defers_when_run_lookup_is_unavailable(self):
+        unavailable = WorkflowRuns(error="archon_timeout")
+        with (
+            patch.object(recovery_adapter, "resolve_worktree_info", return_value=None),
+            patch.object(recovery_adapter, "fetch_workflow_runs", return_value=unavailable),
+            patch.object(recovery_adapter, "log") as log,
+        ):
+            allowed, reason = fresh_issue_dispatch_guard({}, 141)
+        self.assertFalse(allowed)
+        self.assertEqual(reason, "Archon run lookup unavailable: archon_timeout")
+        log.assert_called_once_with(
+            "FRESH DISPATCH DEFERRED issue=141: "
+            "run lookup unavailable (archon_timeout)"
+        )
 
 
 class MatchIssuePrTest(unittest.TestCase):
