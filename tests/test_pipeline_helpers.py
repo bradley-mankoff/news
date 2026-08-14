@@ -1083,6 +1083,50 @@ class PipelineHelperTests(unittest.TestCase):
             pipeline._HF_REVISION_CACHE.clear()
             pipeline._HF_REVISION_CACHE.update(original_cache)
 
+    def test_invoke_with_retries_redacts_model_credentials_at_persistence_boundary(self) -> None:
+        stats = {
+            "calls": {},
+            "token_usage": {},
+            "retries": 0,
+            "fallbacks": 0,
+            "failures": {},
+        }
+        error_message = (
+            "Bearer bearer-secret api_key=key-secret token=token-secret "
+            "configured-model-secret "
+            + ("provider response body " * 200)
+        )
+
+        with patch.object(pipeline, "MODEL_API_KEY", "configured-model-secret"), patch.object(
+            pipeline, "MODEL_CALL_STATS", stats
+        ), patch.object(pipeline.progress_tracker, "warning"):
+            response = pipeline.invoke_with_retries(
+                SimpleNamespace(
+                    max_tokens=12,
+                    invoke=MagicMock(side_effect=RuntimeError(error_message)),
+                ),
+                [HumanMessage(content="hello")],
+                task_name="title generation",
+                fallback_content='{"overlay_headline":"fallback"}',
+                attempts=1,
+            )
+
+        fallback_error = response.response_metadata["news_pipeline_fallback_error"]
+        serialized_failures = json.dumps(stats["failures"])
+        for secret in (
+            "bearer-secret",
+            "key-secret",
+            "token-secret",
+            "configured-model-secret",
+        ):
+            self.assertNotIn(secret, fallback_error)
+            self.assertNotIn(secret, serialized_failures)
+        self.assertIn("Bearer ***", fallback_error)
+        self.assertIn("api_key=***", fallback_error)
+        self.assertIn("token=***", fallback_error)
+        self.assertLessEqual(len(fallback_error), 503)
+        self.assertEqual(stats["failures"]["title generation"], fallback_error)
+
     def test_invoke_with_retries_preserves_managed_server_exit(self) -> None:
         with patch.object(
             pipeline,
