@@ -2,7 +2,7 @@
 
 Status: Accepted
 
-Date: 2026-08-02 (amended 2026-08-14: managed `llama.cpp`/GGUF added, issue #75)
+Date: 2026-08-02 (amended 2026-08-14: managed `llama.cpp`/GGUF added, issue #75; amended 2026-08-14: fixed default backend replaces selected-model inference, issue #169)
 
 ## Context
 
@@ -59,12 +59,21 @@ The supported runtime matrix is exactly:
 `NEWS_MODEL_BACKEND` values are validated against the closed set
 (`mlx-lm`, `mlx-vlm`, `external`, `llama.cpp`); invalid values fail fast
 with a `ValueError` listing the valid options. When unset, the backend is
-inferred from the model reference: catalog-declared backends win, raw
-`.gguf` references infer `llama.cpp`, and the legacy Gemma/Qwythos name
-heuristic remains for unlisted ids. Known catalog MLX/llama.cpp backend
-mismatches fail fast; an unknown bare HF repo explicitly selected with
-`NEWS_MODEL_BACKEND=llama.cpp` is supported so llama-server applies its
-documented default quantization.
+**not** inferred from the model reference: the fixed product default
+`DEFAULT_MODEL_BACKEND` (`mlx-vlm`, the backend of the default Gemma 4 12B
+model) applies (issue #169). A known catalog model whose declared backend
+differs from that default — for example `gemma-e2b-tiny` (`mlx-lm`) and the
+`qwythos-9b-*` GGUF aliases (`llama.cpp`) — must set `NEWS_MODEL_BACKEND`
+explicitly; config resolution fails fast with an actionable message naming
+the required value instead of silently launching the wrong managed server.
+Raw `.gguf` references likewise require an explicit
+`NEWS_MODEL_BACKEND=llama.cpp`. Explicit overrides keep the documented behavior: known catalog
+MLX/llama.cpp mismatches fail fast, `mlx-lm`/`mlx-vlm` cross-overrides keep
+their existing behavior, and an unknown bare HF repo explicitly selected
+with `NEWS_MODEL_BACKEND=llama.cpp` is supported so llama-server applies its
+documented default quantization. `infer_model_backend()` remains for
+per-task model assignments, catalog/runtime-fit metadata, and compatibility
+logic only.
 
 ## Consequences
 
