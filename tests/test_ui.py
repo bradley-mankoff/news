@@ -238,46 +238,101 @@ class UITests(unittest.TestCase):
             tuning_editor,
         )
         self.assertIn("image_art_direction_max_tokens", tuning_editor)
-        # Dedicated envs are suppressed from the raw override list (no duplicates).
-        surface = html.split("const SURFACED_ENVS")[1].split("const TASK_CONFIG")[0]
-        for env in (
-            "NEWS_ARTICLE_TEXT_TOKEN_LIMIT",
-            "NEWS_MODEL_ARTICLE_SUMMARY_TEMPERATURE",
-            "NEWS_MODEL_STORY_DRAFTING_REPETITION_PENALTY",
-        ):
-            self.assertIn(f'"{env}"', surface)
+        # Dedicated envs are suppressed from the raw override list via the
+        # registry-derived set (issue #115); the literal manifest is gone.
+        derived = html.split("const SURFACED_ENVS = new Set();", 1)[1].split("const TASK_CONFIG", 1)[0]
+        self.assertNotIn('"NEWS_', derived)
+        self.assertIn("function syncSurfacedEnvs()", derived)
+        self.assertIn("knob.ui_location", derived)
 
-    def test_surfaced_envs_are_registered_and_composed(self) -> None:
-        import re
-
+    def test_surfaced_envs_derived_from_registry_ui_location(self) -> None:
+        """SURFACED_ENVS is a derived Set populated from the registry's
+        ui_location metadata (issue #115): no literal environment-name
+        manifest survives in the browser source, and missing/unknown client
+        metadata must fail safe by leaving the knob in the raw list."""
         html = ui_module.HTML
-        surface = html.split("const SURFACED_ENVS")[1].split("const TASK_CONFIG")[0]
-        surfaced = re.findall(r'"NEWS_[A-Z_]+"', surface)
-        # No duplicates in the suppression manifest.
-        self.assertEqual(len(surfaced), len(set(surfaced)))
-        # No typos: every surfaced env must be a real registered knob.
-        registry = {knob["env"] for knob in build_knob_registry()}
-        self.assertEqual([e for e in surfaced if e.strip('"') not in registry], [])
-        # The 12 sampling envs are exactly prefix x suffix compositions, all surfaced.
+        derived = html.split("const SURFACED_ENVS = new Set();", 1)[1].split("const TASK_CONFIG", 1)[0]
+        # No literal env names inside the derived-set block.
+        self.assertNotIn('"NEWS_', derived)
+        self.assertNotIn('"', derived.split("function syncSurfacedEnvs")[0])
+        # The sync function reads schema knob ui_location metadata and only
+        # the two dedicated locations suppress the raw override.
+        self.assertIn("function syncSurfacedEnvs()", derived)
+        self.assertIn("((state.schema && state.schema.knobs) || [])", derived)
+        self.assertIn("const location = knob.ui_location;", derived)
+        self.assertIn('location === "run_setup" || location === "advanced_panels"', derived)
+        self.assertIn("SURFACED_ENVS.add(knob.env)", derived)
+        # The raw renderer keeps filtering through the same derived Set.
+        raw_filter = html.split("function renderAdvancedKnobs")[1].split("function collectModelTuningPresetBody")[0]
+        self.assertIn("if (SURFACED_ENVS.has(knob.env)) return;", raw_filter)
+
+    def test_surfaced_envs_parity_with_dedicated_renderers(self) -> None:
+        """Bidirectional registry/UI parity (issue #115): every surfaced
+        registry record maps to an actual dedicated UI reference, and every
+        dedicated UI reference maps back to one registered surfaced
+        environment. A stale metadata entry cannot hide an unrendered knob,
+        and a stale markup reference cannot point at a raw-only setting."""
+        html = ui_module.HTML
+        run_setup = html.split("function renderRunSetup")[1].split("function renderAdvancedPanels")[0]
+        advanced = html.split("function renderAdvancedPanels")[1].split("function renderAdvancedKnobs")[0]
+        task_config = html.split("const TASK_CONFIG")[1].split("const TASK_MAX_TOKENS_LABELS")[0]
+        # Direct Run Setup refs: data-env controls plus knobField() calls.
+        direct_run_setup = (
+            set(re.findall(r'data-env="(NEWS_[A-Z_]+)"', run_setup))
+            | set(re.findall(r'knobField\("(NEWS_[A-Z_]+)"', run_setup))
+        )
+        # Direct advanced panel refs: Budgets/Peripheral knobField() calls.
+        direct_panels = set(re.findall(r'knobField\("(NEWS_[A-Z_]+)"', advanced))
+        # TASK_CONFIG-driven refs: preset/base-URL/max-token envs and the
+        # sampling prefix composed with the SAMPLING_FIELDS suffixes.
+        task_direct = set(
+            re.findall(r'(?:presetEnv|baseUrlEnv|taskMaxTokensEnv): "(NEWS_[A-Z_]+)"', task_config)
+        )
+        prefixes = re.findall(r'taskSamplingPrefix: "(NEWS_MODEL_[A-Z_]+)"', task_config)
         suffixes = re.findall(
             r'\["([A-Z_]+)", "',
             html.split("const SAMPLING_FIELDS")[1].split("function samplingFields")[0],
         )
-        prefixes = re.findall(r'taskSamplingPrefix: "(NEWS_MODEL_[A-Z_]+)"', html)
-        composed = {f"{p}_{s}" for p in prefixes for s in suffixes}
-        self.assertEqual(len(composed), 30)
-        for env in composed:
-            self.assertIn(
-                f'"{env}"', surface, f"composed sampling env {env} not suppressed"
+        task_sampling = {f"{p}_{s}" for p in prefixes for s in suffixes}
+        self.assertEqual(len(task_sampling), 30)
+        # Sentence-level override map and the schema-driven template catalog.
+        override_map = {
+            env.strip('"')
+            for env in re.findall(
+                r'"NEWS_PROMPT_OVERRIDE_[A-Z_]+"',
+                html.split("const PROMPT_OVERRIDE_ENVS")[1].split("function selectedPromptProfile")[0],
             )
-        # NEWS_ARTICLE_TEXT_TOKEN_LIMIT (the 13th dedicated env) must also be surfaced.
-        self.assertIn('"NEWS_ARTICLE_TEXT_TOKEN_LIMIT"', surface)
-        # NEWS_MODEL has a dedicated "Default model" knob in Run Setup, so it
-        # must be suppressed from the Advanced raw list (no duplicate inputs).
-        self.assertIn('"NEWS_MODEL"', surface)
-        # The five per-task model envs moved OUT of Run Setup into Advanced,
-        # so they must NOT be suppressed: each appears exactly once, in the
-        # Advanced raw override list.
+        }
+        self.assertEqual(len(override_map), 5)
+        self.assertIn("function promptTemplateEnvMap()", html)
+        self.assertIn("map[t.task] = t.env_var;", html)
+        template_catalog = set(config_module.PROMPT_TEMPLATE_ENV_VARS.values())
+        dedicated_refs = (
+            direct_run_setup
+            | direct_panels
+            | task_direct
+            | task_sampling
+            | override_map
+            | template_catalog
+        )
+        registry = {knob["env"]: knob["ui_location"] for knob in build_knob_registry()}
+        surfaced = {env for env, loc in registry.items() if loc != "advanced_raw"}
+        # Every dedicated UI reference maps back to a registered surfaced env.
+        self.assertEqual(
+            sorted(dedicated_refs - surfaced),
+            [],
+            "dedicated markup references an env that is not registry-surfaced",
+        )
+        # Every surfaced registry env has an actual dedicated reference.
+        self.assertEqual(
+            sorted(surfaced - dedicated_refs),
+            [],
+            "registry-surfaced env has no dedicated UI reference",
+        )
+        self.assertEqual(len(surfaced), 74)
+        # The five per-task model selectors stay raw Advanced overrides even
+        # though TASK_CONFIG references them (modelEnv is not a dedicated
+        # control; no data-env input is generated for it).
         for env in (
             "NEWS_MODEL_ARTICLE_SUMMARY",
             "NEWS_MODEL_STORY_DRAFTING",
@@ -285,7 +340,8 @@ class UITests(unittest.TestCase):
             "NEWS_MODEL_TITLE_GENERATION",
             "NEWS_MODEL_IMAGE_ART_DIRECTION",
         ):
-            self.assertNotIn(f'"{env}"', surface, f"{env} must stay in the Advanced raw list")
+            self.assertEqual(registry[env], "advanced_raw", f"{env} must stay raw")
+            self.assertIn(f'modelEnv: "{env}"', task_config)
 
     def test_advanced_panels_rendered_at_boot(self) -> None:
         html = ui_module.HTML
@@ -297,6 +353,10 @@ class UITests(unittest.TestCase):
         self.assertLess(
             boot.index("renderAdvancedPanels();"), boot.index("renderAdvancedKnobs();")
         )
+        # The derived suppression set synchronizes after the async schema load
+        # and before any raw rendering (issue #115).
+        self.assertLess(boot.index("state.schema = await api(\"/api/schema\");"), boot.index("syncSurfacedEnvs();"))
+        self.assertLess(boot.index("syncSurfacedEnvs();"), boot.index("renderAdvancedKnobs();"))
 
     def test_model_tuning_panel_metadata_guard_executes_in_node_harness(self) -> None:
         """Execute the production modelTuningPanel() renderer in a Node harness.
@@ -487,9 +547,9 @@ assert(!advancedPanels.innerHTML.includes("undefined"), "undefined markup leaked
         self.assertIn("NEWS_PROMPT_OVERRIDE_STORY_DRAFTING", ui_module.HTML)
         self.assertIn("NEWS_PROMPT_OVERRIDE_TITLE_GENERATION", ui_module.HTML)
         self.assertIn("NEWS_PROMPT_OVERRIDE_IMAGE_ART_DIRECTION", ui_module.HTML)
-        # All five override env vars are suppressed from the Advanced tab like
-        # NEWS_PROMPT_PROFILE itself (dedicated editors are the single surface).
-        surfaced_block = ui_module.HTML.split("const SURFACED_ENVS = new Set([", 1)[1].split("]);", 1)[0]
+        # All five override env vars are registry-marked advanced_panels (the
+        # dedicated editors are the single surface; no raw duplicate).
+        registry = {knob["env"]: knob["ui_location"] for knob in build_knob_registry()}
         for env_var in (
             "NEWS_PROMPT_OVERRIDE_ARTICLE_SUMMARY",
             "NEWS_PROMPT_OVERRIDE_STORY_SCALE_SCREENING",
@@ -497,7 +557,7 @@ assert(!advancedPanels.innerHTML.includes("undefined"), "undefined markup leaked
             "NEWS_PROMPT_OVERRIDE_TITLE_GENERATION",
             "NEWS_PROMPT_OVERRIDE_IMAGE_ART_DIRECTION",
         ):
-            self.assertIn(env_var, surfaced_block)
+            self.assertEqual(registry[env_var], "advanced_panels", env_var)
         # Editable textareas carry data-env and are not readonly.
         self.assertIn(
             'textarea data-env="${escapeHtml(PROMPT_OVERRIDE_ENVS[task])}" rows="4"',
@@ -549,9 +609,9 @@ assert(!advancedPanels.innerHTML.includes("undefined"), "undefined markup leaked
         # The sentence-level profile editors remain in their own panel.
         self.assertEqual(advanced.count('id="promptProfileReadouts"'), 1)
         self.assertEqual(advanced.count('id="comparePromptProfileBtn"'), 1)
-        # All five template envs are suppressed from the raw Advanced list
-        # (the dedicated editors are the single surface; no duplicates).
-        surfaced_block = html.split("const SURFACED_ENVS = new Set([", 1)[1].split("]);", 1)[0]
+        # All five template envs are registry-marked advanced_panels (the
+        # dedicated editors are the single surface; no raw duplicates).
+        registry = {knob["env"]: knob["ui_location"] for knob in build_knob_registry()}
         for env_var in (
             "NEWS_PROMPT_TEMPLATE_ARTICLE_SUMMARY",
             "NEWS_PROMPT_TEMPLATE_STORY_SCALE_SCREENING",
@@ -559,7 +619,7 @@ assert(!advancedPanels.innerHTML.includes("undefined"), "undefined markup leaked
             "NEWS_PROMPT_TEMPLATE_TITLE_GENERATION",
             "NEWS_PROMPT_TEMPLATE_IMAGE_ART_DIRECTION",
         ):
-            self.assertIn(env_var, surfaced_block)
+            self.assertEqual(registry[env_var], "advanced_panels", env_var)
         # The editor DOM never carries data-env on the role textareas (two
         # inputs with the same env name would duplicate collectEnv() values).
         self.assertNotIn("data-env=\"${escapeHtml(envVar)}\"", html)
@@ -871,6 +931,85 @@ assert(
   containers.NEWS_TEST_FALLBACK.innerHTML.includes("https://example.test/model/fallback"),
   "renderKnobLinks did not use schema.current_env when the control was absent"
 );
+"""
+        )
+        node = shutil.which("node")
+        if node is None:
+            self.skipTest("Node.js is required for the embedded UI renderer harness")
+        timeout_seconds = 30
+        try:
+            result = subprocess.run(
+                [node, "--input-type=module", "-"],
+                input=js,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=timeout_seconds,
+            )
+        except subprocess.TimeoutExpired as exc:
+            self.fail(
+                f"Node harness timed out after {timeout_seconds}s: "
+                f"stdout={exc.stdout!r} stderr={exc.stderr!r}"
+            )
+        self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
+
+    def test_sync_surfaced_envs_executes_in_node_dom_harness(self) -> None:
+        """Execute the embedded syncSurfacedEnvs() derivation in a Node harness.
+
+        The production Set and sync function are extracted from ui_module.HTML
+        itself, so the observed behavior is the real code: only run_setup /
+        advanced_panels knobs are suppressed, raw and missing-metadata knobs
+        stay in the raw override list (fail-safe), and re-syncing clears stale
+        entries.
+        """
+        html = ui_module.HTML
+
+        def js_function_block(start: str, end: str) -> str:
+            return html[html.index(start) : html.index(end, html.index(start))]
+
+        js = (
+            r"""
+const assert = (condition, message) => {
+  if (!condition) throw new Error(message);
+};
+const state = { schema: null };
+"""
+            + js_function_block("const SURFACED_ENVS = new Set();", "const TASK_CONFIG")
+            + r"""
+
+// Fixture: one dedicated panel knob, one raw knob, one knob with no
+// ui_location metadata (must fail safe by staying visible in raw overrides).
+state.schema = {
+  knobs: [
+    { env: "NEWS_TEST_PANEL", ui_location: "advanced_panels" },
+    { env: "NEWS_TEST_SETUP", ui_location: "run_setup" },
+    { env: "NEWS_TEST_RAW", ui_location: "advanced_raw" },
+    { env: "NEWS_TEST_NO_LOCATION" }
+  ]
+};
+syncSurfacedEnvs();
+assert(SURFACED_ENVS.has("NEWS_TEST_PANEL"), "advanced_panels knob was not suppressed");
+assert(SURFACED_ENVS.has("NEWS_TEST_SETUP"), "run_setup knob was not suppressed");
+assert(!SURFACED_ENVS.has("NEWS_TEST_RAW"), "advanced_raw knob must stay in the raw list");
+assert(!SURFACED_ENVS.has("NEWS_TEST_NO_LOCATION"), "missing metadata must fail safe (not suppressed)");
+
+// Unknown location metadata also fails safe (never suppresses).
+state.schema.knobs[0].ui_location = "stale_panel";
+state.schema.knobs[3].ui_location = "legacy_location";
+syncSurfacedEnvs();
+assert(!SURFACED_ENVS.has("NEWS_TEST_PANEL"), "unknown location must not suppress");
+assert(SURFACED_ENVS.has("NEWS_TEST_SETUP"), "run_setup knob lost after re-sync");
+
+// Re-sync clears stale entries when a knob is reclassified to raw.
+state.schema.knobs[1].ui_location = "advanced_raw";
+syncSurfacedEnvs();
+assert(!SURFACED_ENVS.has("NEWS_TEST_SETUP"), "re-sync did not clear a reclassified knob");
+assert(SURFACED_ENVS.size === 0, "expected an empty derived set after reclassification");
+
+// Missing schema/knobs array yields an empty set without throwing.
+state.schema = null;
+syncSurfacedEnvs();
+assert(SURFACED_ENVS.size === 0, "missing schema must not throw and must suppress nothing");
 """
         )
         node = shutil.which("node")
@@ -2822,6 +2961,36 @@ assert(
         self.assertIn("application/json", headers["Content-Type"])
         self.assertEqual(payload["model_task_labels"], model_catalog.MODEL_TASK_LABELS)
         self.assertEqual(payload["runtime_fit_labels"], model_catalog.RUNTIME_FIT_LABELS)
+
+    def test_schema_payload_preserves_ui_location(self) -> None:
+        """The schema response carries ui_location on every knob (issue #115):
+        the browser derives SURFACED_ENVS from schema registry records instead
+        of a hardcoded list, so the metadata must survive the JSON-ready
+        payload exactly as the registry defines it."""
+        with patch.object(
+            ui_module, "_runtime_snapshot", return_value=({"runtime": "ok"}, None)
+        ), patch.object(
+            ui_module, "configured_removed_topic_env_vars", return_value=set()
+        ), patch.object(
+            ui_module, "list_presets", return_value={"path": "presets.yaml", "presets": []}
+        ), patch.object(
+            ui_module,
+            "list_model_tuning_presets",
+            return_value={"path": "model.yaml", "presets": []},
+        ), patch.object(
+            ui_module, "_source_summary", return_value={"total": 0}
+        ), patch.object(ui_module, "_recipient_summary", return_value={"total": 0}):
+            payload = ui_module.schema_payload()
+        payload_locations = {knob["env"]: knob["ui_location"] for knob in payload["knobs"]}
+        registry_locations = {
+            knob["env"]: knob["ui_location"] for knob in build_knob_registry()
+        }
+        self.assertEqual(payload_locations, registry_locations)
+        self.assertEqual(
+            set(payload_locations.values()),
+            {"run_setup", "advanced_panels", "advanced_raw"},
+        )
+        json.dumps(payload)  # must stay JSON-serializable for _send_json
 
     def test_schema_label_renderers_execute_in_node_dom_harness(self) -> None:
         """Execute the embedded catalog renderers against schema and search fixtures.

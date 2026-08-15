@@ -2253,85 +2253,22 @@ HTML = r"""<!doctype html>
     </div>
   </dialog>
   <script>
-    // Every env rendered as a dedicated knob (Run Setup or Advanced panels) must
-    // be listed here so renderAdvancedKnobs() omits it from the raw override
-    // list; otherwise the env appears twice and collectEnv() gets two inputs.
-    const SURFACED_ENVS = new Set([
-      "NEWS_MODEL",  // dedicated "Default model" knob in Run Setup; suppress the Advanced-tab duplicate
-      "NEWS_SOURCE_SCOPE",
-      "NEWS_DELIVERY_MODE",  // dedicated "Delivery mode" control in Run Setup; suppress the Advanced-tab duplicate
-      "NEWS_PROMPT_PROFILE",  // has a dedicated panel control; suppress the Advanced-tab duplicate
-      "NEWS_PROMPT_OVERRIDE_ARTICLE_SUMMARY",       // dedicated per-stage editors in the
-      "NEWS_PROMPT_OVERRIDE_STORY_SCALE_SCREENING", // Editorial approach panel; suppress
-      "NEWS_PROMPT_OVERRIDE_STORY_DRAFTING",        // the Advanced-tab duplicates
-      "NEWS_PROMPT_OVERRIDE_TITLE_GENERATION",
-      "NEWS_PROMPT_OVERRIDE_IMAGE_ART_DIRECTION",
-      "NEWS_PROMPT_TEMPLATE_ARTICLE_SUMMARY",       // dedicated full-template
-      "NEWS_PROMPT_TEMPLATE_STORY_SCALE_SCREENING", // editors in the Advanced
-      "NEWS_PROMPT_TEMPLATE_STORY_DRAFTING",        // Settings panel; suppress
-      "NEWS_PROMPT_TEMPLATE_TITLE_GENERATION",      // the Advanced-tab duplicates
-      "NEWS_PROMPT_TEMPLATE_IMAGE_ART_DIRECTION",
-      "NEWS_MODEL_ARTICLE_SUMMARY_TUNING_PRESET",
-      "NEWS_MODEL_STORY_DRAFTING_TUNING_PRESET",
-      "NEWS_MODEL_STORY_SCALE_SCREENING_TUNING_PRESET",
-      "NEWS_MODEL_TITLE_GENERATION_TUNING_PRESET",
-      "NEWS_MODEL_IMAGE_ART_DIRECTION_TUNING_PRESET",
-      "NEWS_MODEL_MAX_INPUT_TOKENS",
-      "NEWS_ARTICLE_SUMMARY_MAX_TOKENS",
-      "NEWS_STORY_DRAFTING_MAX_TOKENS",
-      "NEWS_STORY_SCALE_SCREENING_MAX_TOKENS",
-      "NEWS_TITLE_GENERATION_MAX_TOKENS",
-      "NEWS_IMAGE_ART_DIRECTION_MAX_TOKENS",
-      "NEWS_ARTICLE_TEXT_TOKEN_LIMIT",
-      "NEWS_MODEL_ARTICLE_SUMMARY_BASE_URL",
-      "NEWS_MODEL_STORY_DRAFTING_BASE_URL",
-      "NEWS_MODEL_STORY_SCALE_SCREENING_BASE_URL",
-      "NEWS_MODEL_TITLE_GENERATION_BASE_URL",
-      "NEWS_MODEL_IMAGE_ART_DIRECTION_BASE_URL",
-      "NEWS_MODEL_ARTICLE_SUMMARY_TEMPERATURE",
-      "NEWS_MODEL_ARTICLE_SUMMARY_TOP_P",
-      "NEWS_MODEL_ARTICLE_SUMMARY_TOP_K",
-      "NEWS_MODEL_ARTICLE_SUMMARY_MIN_P",
-      "NEWS_MODEL_ARTICLE_SUMMARY_PRESENCE_PENALTY",
-      "NEWS_MODEL_ARTICLE_SUMMARY_REPETITION_PENALTY",
-      "NEWS_MODEL_STORY_DRAFTING_TEMPERATURE",
-      "NEWS_MODEL_STORY_DRAFTING_TOP_P",
-      "NEWS_MODEL_STORY_DRAFTING_TOP_K",
-      "NEWS_MODEL_STORY_DRAFTING_MIN_P",
-      "NEWS_MODEL_STORY_DRAFTING_PRESENCE_PENALTY",
-      "NEWS_MODEL_STORY_DRAFTING_REPETITION_PENALTY",
-      "NEWS_MODEL_STORY_SCALE_SCREENING_TEMPERATURE",
-      "NEWS_MODEL_STORY_SCALE_SCREENING_TOP_P",
-      "NEWS_MODEL_STORY_SCALE_SCREENING_TOP_K",
-      "NEWS_MODEL_STORY_SCALE_SCREENING_MIN_P",
-      "NEWS_MODEL_STORY_SCALE_SCREENING_PRESENCE_PENALTY",
-      "NEWS_MODEL_STORY_SCALE_SCREENING_REPETITION_PENALTY",
-      "NEWS_MODEL_TITLE_GENERATION_TEMPERATURE",
-      "NEWS_MODEL_TITLE_GENERATION_TOP_P",
-      "NEWS_MODEL_TITLE_GENERATION_TOP_K",
-      "NEWS_MODEL_TITLE_GENERATION_MIN_P",
-      "NEWS_MODEL_TITLE_GENERATION_PRESENCE_PENALTY",
-      "NEWS_MODEL_TITLE_GENERATION_REPETITION_PENALTY",
-      "NEWS_MODEL_IMAGE_ART_DIRECTION_TEMPERATURE",
-      "NEWS_MODEL_IMAGE_ART_DIRECTION_TOP_P",
-      "NEWS_MODEL_IMAGE_ART_DIRECTION_TOP_K",
-      "NEWS_MODEL_IMAGE_ART_DIRECTION_MIN_P",
-      "NEWS_MODEL_IMAGE_ART_DIRECTION_PRESENCE_PENALTY",
-      "NEWS_MODEL_IMAGE_ART_DIRECTION_REPETITION_PENALTY",
-      "NEWS_SOURCE_COLLECTION_CONCURRENCY",
-      "NEWS_ARTICLE_SUMMARY_CONCURRENCY",
-      "NEWS_STORY_SYNTHESIS_CONCURRENCY",
-      "NEWS_MAX_STORIES",
-      "NEWS_MIN_ARTICLES_PER_STORY",
-      "NEWS_STORY_CLUSTER_SIMILARITY_THRESHOLD",
-      "NEWS_STORY_SELECTION_OVERLAP_THRESHOLD",
-      "NEWS_STORY_DEDUP_THRESHOLD",
-      "NEWS_STORY_BACKFILL_BATCH_MULTIPLIER",
-      "NEWS_BLOCK_REUSED_URLS",
-      "NEWS_IMAGE_ENABLED",
-      "NEWS_STORY_SCALE_SCREENING_ENABLED",
-      "NEWS_RELAX_STORY_DRAFTING_GUARDS"
-    ]);
+    // SURFACED_ENVS is derived from the Python runtime knob registry's
+    // ui_location metadata (issue #115): knobs whose location is run_setup or
+    // advanced_panels are rendered by dedicated controls, so renderAdvancedKnobs()
+    // omits them from the raw override list (otherwise the env appears twice and
+    // collectEnv() gets two inputs). Missing/unknown client metadata fails safe
+    // by leaving the knob in the raw list, so a setting cannot disappear.
+    const SURFACED_ENVS = new Set();
+    function syncSurfacedEnvs() {
+      SURFACED_ENVS.clear();
+      ((state.schema && state.schema.knobs) || []).forEach(knob => {
+        const location = knob.ui_location;
+        if (location === "run_setup" || location === "advanced_panels") {
+          SURFACED_ENVS.add(knob.env);
+        }
+      });
+    }
     const TASK_CONFIG = {
       article_summary: {
         label: "Article Summarization",
@@ -4784,6 +4721,7 @@ HTML = r"""<!doctype html>
     }
     async function init() {
       state.schema = await api("/api/schema");
+      syncSurfacedEnvs();
       let bootWarning = "";
       let activeRunStatus = "";
       try {
