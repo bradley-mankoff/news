@@ -1584,8 +1584,7 @@ class NewsUIHandler(BaseHTTPRequestHandler):
                     models = search_huggingface_models(
                         query, pipeline_tag=pipeline_tag, limit=limit
                     )
-                except Exception as exc:
-                    models = []
+                except (OSError, ValueError, ImportError) as exc:
                     self._send_json({"query": query, "models": [], "error": str(exc)})
                 else:
                     self._send_json({"query": query, "models": models, "error": None})
@@ -1600,7 +1599,7 @@ class NewsUIHandler(BaseHTTPRequestHandler):
                     return
                 try:
                     info = fetch_model_metadata(reference)
-                except Exception as exc:
+                except (OSError, ValueError, ImportError) as exc:
                     self._send_json({"model": reference, "info": None, "error": str(exc)})
                 else:
                     self._send_json({"model": reference, "info": info, "error": None})
@@ -4757,9 +4756,14 @@ HTML = r"""<!doctype html>
           if (preset) loadModelTuningEditor(meta.runtimeKey, preset);
           previewQuietly("run");
         };
-        $(meta.saveButtonId).onclick = () => saveModelTuningPreset(meta.runtimeKey).catch(err => setStatus(err.message, "bad"));
-        $(meta.renameButtonId).onclick = () => renameModelTuningPreset(meta.runtimeKey).catch(err => setStatus(err.message, "bad"));
-        $(meta.deleteButtonId).onclick = () => deleteModelTuningPreset(meta.runtimeKey).catch(err => setStatus(err.message, "bad"));
+        for (const [buttonId, install] of [
+          [meta.saveButtonId, saveModelTuningPreset],
+          [meta.renameButtonId, renameModelTuningPreset],
+          [meta.deleteButtonId, deleteModelTuningPreset],
+        ]) {
+          const button = $(buttonId);
+          if (button) button.onclick = () => install(meta.runtimeKey).catch(err => setStatus(err.message, "bad"));
+        }
       });
     }
     function applySelectedPresetFromState() {

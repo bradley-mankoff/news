@@ -8,6 +8,7 @@ the pipeline's single source of truth (mirrors
 
 from __future__ import annotations
 
+import builtins
 import os
 import tempfile
 import unittest
@@ -779,6 +780,36 @@ class ModelCatalogTests(unittest.TestCase):
         with patch("huggingface_hub.HfApi", return_value=fake_api):
             with self.assertRaises(OSError):
                 model_catalog.search_huggingface_models("qwythos")
+
+    def test_hf_api_missing_dependency_reports_actionable_guidance(self) -> None:
+        original_import = builtins.__import__
+        missing = ImportError("missing")
+        delegated: list[str] = []
+
+        def fake_import(
+            name: str,
+            globals: dict[str, object] | None = None,
+            locals: dict[str, object] | None = None,
+            fromlist: tuple[str, ...] | list[str] = (),
+            level: int = 0,
+        ) -> object:
+            if name == "huggingface_hub":
+                raise missing
+            delegated.append(name)
+            return original_import(name, globals, locals, fromlist, level)
+
+        with patch("builtins.__import__", side_effect=fake_import):
+            with self.assertRaisesRegex(
+                ImportError, "huggingface-hub is required for Hugging Face search"
+            ) as ctx:
+                model_catalog._hf_api()
+            imported = __import__("json")
+
+        self.assertIn("uv add huggingface-hub", str(ctx.exception))
+        self.assertIs(ctx.exception.__cause__, missing)
+        self.assertEqual(imported.__name__, "json")
+        self.assertIn("json", delegated)
+        self.assertIs(builtins.__import__, original_import)
 
     def test_fetch_metadata_not_found_is_value_error(self) -> None:
         request = httpx.Request("GET", "https://huggingface.co/api/models/missing/repo")
