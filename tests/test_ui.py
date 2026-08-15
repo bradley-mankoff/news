@@ -568,6 +568,7 @@ const containers = {
   NEWS_TEST_MODEL: new FakeElement("modelLinks")
 };
 const warnings = [];
+const missingControlEnvs = new Set();
 // Production uses two selector shapes: [data-env="..."] resolves the control
 // read by currentControlValue/inputForKnob, while [data-links-for="..."]
 // resolves the .knob-links container written by renderKnobLinks. Unknown
@@ -577,7 +578,10 @@ const document = {
   querySelector(selector) {
     if (selector.startsWith('[data-env="') && selector.endsWith('"]')) {
       const env = selector.slice('[data-env="'.length, -2);
-      if (!(env in controls)) throw new Error(`unexpected control selector: ${selector}`);
+      if (!(env in controls)) {
+        if (!missingControlEnvs.has(env)) throw new Error(`unexpected control selector: ${selector}`);
+        return null;
+      }
       return controls[env];
     }
     if (selector.startsWith('[data-links-for="') && selector.endsWith('"]')) {
@@ -633,10 +637,12 @@ container.innerHTML = '<a href="https://stale.test/old">stale</a>';
 renderKnobLinks("NEWS_TEST_MODEL");
 const anchors = (container.innerHTML.match(/<a /g) || []).length;
 assert(anchors === 2, `expected exactly two anchors, got ${anchors}`);
-assert(container.innerHTML.includes('href="https://example.test/model/known"'), "page link URL missing");
-assert(container.innerHTML.includes('href="https://example.test/model/known/hardware"'), "hardware link URL missing");
-assert(container.innerHTML.includes(">Hugging Face page</a>"), "page anchor label missing");
-assert(container.innerHTML.includes(">Hardware compatibility</a>"), "hardware anchor label missing");
+assert(container.innerHTML.includes(
+  '<a href="https://example.test/model/known" target="_blank" rel="noopener noreferrer">Hugging Face page</a>'
+), "page URL is not bound to the page anchor");
+assert(container.innerHTML.includes(
+  '<a href="https://example.test/model/known/hardware" target="_blank" rel="noopener noreferrer" title="Native Hardware Compatibility panel (GGUF/MLX) on the model page">Hardware compatibility</a>'
+), "hardware URL is not bound to the hardware anchor");
 assert((container.innerHTML.match(/target="_blank"/g) || []).length === 2, "both anchors must open in a new tab");
 assert((container.innerHTML.match(/rel="noopener noreferrer"/g) || []).length === 2, "both anchors must carry noopener noreferrer");
 assert(!container.innerHTML.includes("stale"), "stale container content was not replaced");
@@ -686,18 +692,49 @@ const warningCount = warnings.length;
 renderKnobLinks("NEWS_TEST_NO_CONTAINER");
 assert(warnings.length === warningCount + 1, "missing container did not emit the expected warning");
 assert(warnings[warningCount].includes('no [data-links-for="NEWS_TEST_NO_CONTAINER"] container'), "missing container warning text drifted");
+
+// A partial DOM can omit the control while schema.current_env still carries
+// the selected value; renderKnobLinks must use that defensive fallback.
+state.schema.current_env.NEWS_TEST_FALLBACK = "known-model";
+state.schema.knobs.push({
+  env: "NEWS_TEST_FALLBACK",
+  type: "select",
+  default: "other-model",
+  options: ["known-model"],
+  option_links: {
+    "known-model": {
+      page: "https://example.test/model/fallback",
+      hardware: "https://example.test/model/fallback/hardware"
+    }
+  }
+});
+missingControlEnvs.add("NEWS_TEST_FALLBACK");
+containers.NEWS_TEST_FALLBACK = new FakeElement("fallbackLinks");
+renderKnobLinks("NEWS_TEST_FALLBACK");
+assert(
+  containers.NEWS_TEST_FALLBACK.innerHTML.includes("https://example.test/model/fallback"),
+  "renderKnobLinks did not use schema.current_env when the control was absent"
+);
 """
         )
         node = shutil.which("node")
         if node is None:
             self.skipTest("Node.js is required for the embedded UI renderer harness")
-        result = subprocess.run(
-            [node, "--input-type=module", "-"],
-            input=js,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
+        timeout_seconds = 30
+        try:
+            result = subprocess.run(
+                [node, "--input-type=module", "-"],
+                input=js,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=timeout_seconds,
+            )
+        except subprocess.TimeoutExpired as exc:
+            self.fail(
+                f"Node harness timed out after {timeout_seconds}s: "
+                f"stdout={exc.stdout!r} stderr={exc.stderr!r}"
+            )
         self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
 
     def test_recommendation_renderer_reads_schema_picks(self) -> None:
