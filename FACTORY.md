@@ -17,55 +17,36 @@ When the folder starts to matter: say **projectify**. After that, you are in Mod
 
 Your job is **ideas and gates**. You do not implement. You do not manage a GitHub Project board.
 
-### The idea ritual
+### The idea ritual (`new-idea`)
 
-#### 1. Colloquial idea
+This is an **Archon workflow**, not a vibe. Mode A is for noodling. When the idea belongs in the factory:
 
-In `omp`, in the projectified repo, say it like you’d say it to a coworker. One paragraph. Name the user-visible change if you can. You do **not** need files, APIs, or ticket titles yet.
+1. In Mode A, `/handoff` → a `*handoff*.md`.
+2. Open a Mode B session in the projectified repo.
+3. Paste that file, or say **new-idea**. **Tag lights-on or lights-off here** — that is the stamp.
+4. Sit the three gates already in the workflow: lights, spec, ticket cut.
+5. It publishes tickets to **Piyaz** (or `.scratch/` if this repo has no Piyaz project). Then it **stops**. No code.
 
-Stamp **lights-on** in that first message if any of these is true:
+```
+archon workflow run new-idea --no-worktree @/path/to/handoff.md lights-off
+```
 
-- you will judge it by looking (UI, copy, naming, “does this feel right”)
-- there is no test that could fail for the thing you care about
-- you want to sit the session anyway
+Or tell omp `new-idea` and point at the handoff. Same chain.
 
-If it is “make X true and pytest can see it,” omit the stamp.
+What each gate is asking:
 
-#### 2. `/grill-me`
+- **Lights** — will you judge this by looking? If yes, on. If pytest can fail for the thing you care about, off.
+- **Grill** (inside the workflow) — who, what’s already true, what may stay broken, done-in-one-sitting. `/domain-modeling` / `/codebase-design` / `/wayfinder` join only if the talk needs them. You’re done when remaining questions are implementation.
+- **Spec** — stories + out of scope. Approving means later PRs that implement *this* you will accept.
+- **Tickets** — vertical slices (demo that ticket alone), each with blocked-by. Too coarse / too fine / wrong edges → send back.
 
-This is the interview. The agent should not start coding. It should make you choose.
+### Kick the factory
 
-Typical questions, in English: who is this for; what is already true; what must stay true; what you are willing to leave broken; what “done” looks like in one sitting; whether this is really one idea or three.
+Say **run the factory** (skill `run-factory`) in a Mode B session. That advances lights-off tickets (and only those). Parallel up to `factory.json` cap.
 
-**When the grill should change tools (you do not have to remember the names):**
+When something needs you (in-review, lights-on, “does this look right”): **that session should halt**. Cmux dings. The message should include the PR URL, the ticket ref, and a screenshot if it’s UI. SMS/iMessage is not wired yet — ding-on-halt is the current ping.
 
-| The conversation is about… | Skill that should join |
-|---|---|
-| What we *call* things, CONTEXT.md, an ADR | `/domain-modeling` |
-| Where a module’s interface sits, how to test it, “deep vs shallow” | `/codebase-design` |
-| “I don’t know the terrain” | `/wayfinder` |
-
-Those skills exist so the spec inherits Pocock’s words (`module`, `interface`, `seam`, `depth`) instead of a new private jargon. If the grill never needed them, skip them. Don’t run them as a checklist.
-
-You are done grilling when you are slightly annoyed and the remaining questions are implementation. Then stop.
-
-#### 3. `/to-spec`
-
-No second interview. It writes down what you already decided.
-
-You should see: problem in the user’s voice, solution in the user’s voice, a long list of user stories, implementation decisions **without file paths**, testing decisions (seams, not test filenames).
-
-**Your gate:** read the stories and the “out of scope.” If a story is gold-plating or a missing story is the actual product, send it back. Approving the spec is you saying “if the tickets implement *this*, I will accept the PRs.”
-
-#### 4. `/to-tickets`
-
-Cuts the spec into **vertical slices**. Vertical means each ticket walks through the layers that ticket needs (data, logic, UI, a test) far enough that you could demo *that* ticket alone. Horizontal means “all the schema this week, all the UI next week” — that is the cut we refuse.
-
-Each ticket names **blocked by**. A ticket with no blockers can start the moment you approve.
-
-**Your gate:** too coarse (a ticket you couldn’t review in one sitting) / too fine (tickets that cannot demo) / wrong edges (B listed as blocked by A when A does not actually gate B). Say merge, split, or rewire. Then stop. The tickets now exist.
-
-That is intake. Lights-off work can proceed without you.
+Do not keep a factory session spinning after it owes you a look.
 
 ### What happens without you
 
@@ -91,28 +72,14 @@ Then: merge (or ask QA to), mark the ticket **done**. Done means you (or QA) *sa
 - Type `orchestrate` expecting tickets. That is Mode A.
 - Mark **done** because the agent sounded sure.
 
-## Two trackers (same ritual)
+## Piyaz and git (not two products)
 
-`/to-spec` and `/to-tickets` publish to **whichever tracker the repo is pointed at**. You do not change how you talk.
+**Piyaz is the task graph.** Ideas, slices, blocked-by, lights, in-review, done.
+**Git / GitHub is the code.** Commits, draft PRs, review comments, merge.
 
-| | **Piyaz** | **`.scratch/`** |
-|---|---|---|
-| What you see | Team sidebar, Graph, Notes, PIN-12 | Markdown under `.scratch/<feature>/` |
-| Where it lives | Piyaz’s servers | **This git repo** |
-| Who can use the factory | You, after a Piyaz login | Anyone who cloned the repo |
-| Offline / airplane | No | Yes |
-| Review the ticket text in a PR | No (tickets are off-repo) | Yes (the slice files *are* the PR) |
-| “What’s ready?” UI | Graph / ready view | `Status:` + `Blocked by:` in files |
+Piyaz does **not** replace git. You are not duplicating the factory: a ticket says *what*, a PR says *the diff*. The implement workflow already opens a draft PR and can write `prUrl` back onto the Piyaz task. That is the join, not a second board.
 
-**Why keep `.scratch` if Piyaz is nicer**
-
-Not primarily “Piyaz might charge later.” That is a side benefit, not the design reason.
-
-1. **The factory has to work without a SaaS account.** omp-modes is meant to be something you can hand someone with stock OMP. Requiring Piyaz would make Mode B a Piyaz customer feature. `.scratch` is the zero-account backend.
-2. **Tickets in git are reviewable.** A slice’s wording is a product decision. On `.scratch` that decision is a file: greppable, `git log`, same PR as the code if you want. Piyaz is a better *cockpit*; it is a worse *archive* for an open repo.
-3. **News is already on `.scratch`** because Daily News is not a Piyaz project yet. Pinball is PIN. Do not reuse PIN. When you create **Daily News** in Bradley’s Team, we point news `factory.json` at it and new `/to-tickets` land in the sidebar. Old scratch files can stay as history or get imported once — that is a one-time move, not a reason to delete the adapter.
-
-Use Piyaz when you want the Graph and to sit in the driver’s seat in a browser. Use `.scratch` when the repo should be self-contained (OSS, offline, or “I have not made a Piyaz project yet”). Same grill → spec → tickets.
+`.scratch/` is the same tickets as files, for repos with no Piyaz project (news today) and for OSS clones with no Piyaz login. Prefer Piyaz when you want the sidebar. Create **Daily News** in Bradley’s Team (do not reuse PIN). Then we flip news `factory.json` to that project; `new-idea` publishes there.
 
 ## Lights
 
