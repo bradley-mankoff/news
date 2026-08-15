@@ -755,6 +755,178 @@ class ConfigHelperTests(unittest.TestCase):
             config_module.hf_model_page_url(f"https://huggingface.co/https://hf.co/{ref}")
         )
         self.assertIsNone(config_module.hf_model_page_url("HTTPS://HUGGINGFACE.CO/foo/bar"))
+    def test_registry_ui_locations_are_valid_unique_and_closed(self) -> None:
+        """Every registered knob carries exactly one ui_location from the
+        closed set, and registry environment names are unique (issue #115).
+        A duplicate env would create two controls with the same data-env and
+        collectEnv() last-write-wins would silently prefer the raw duplicate."""
+        registry = config_module.runtime_knob_registry()
+        envs = [knob["env"] for knob in registry]
+        self.assertEqual(len(envs), len(set(envs)), "registry env names must be unique")
+        for knob in registry:
+            location = knob.get("ui_location")
+            self.assertIsInstance(location, str, knob["env"])
+            self.assertIn(
+                location,
+                config_module.UI_LOCATIONS,
+                f"{knob['env']} has unknown ui_location {location!r}",
+            )
+        # The current contract: 4 Run Setup + 70 dedicated Advanced panel
+        # knobs, with every remaining registered knob raw-by-default.
+        locations = {knob["env"]: knob["ui_location"] for knob in registry}
+        self.assertEqual(
+            sum(loc == config_module.UI_LOCATION_RUN_SETUP for loc in locations.values()),
+            4,
+        )
+        self.assertEqual(
+            sum(loc == config_module.UI_LOCATION_ADVANCED_PANELS for loc in locations.values()),
+            70,
+        )
+        self.assertEqual(
+            sum(loc == config_module.UI_LOCATION_ADVANCED_RAW for loc in locations.values()),
+            len(registry) - 74,
+        )
+
+    def test_registry_ui_location_families_are_annotated_exactly(self) -> None:
+        """Pin the exact current dedicated families by name (not just count)
+        so an accidental reclassification is visible, and assert the raw-only
+        controls (task model selectors, legacy recipient scope, default
+        tuning, story-discovery/reasoning sampling) stay raw."""
+        registry = config_module.runtime_knob_registry()
+        locations = {knob["env"]: knob["ui_location"] for knob in registry}
+        self.assertEqual(
+            {env for env, loc in locations.items() if loc == config_module.UI_LOCATION_RUN_SETUP},
+            {"NEWS_MODEL", "NEWS_SOURCE_SCOPE", "NEWS_DELIVERY_MODE", "NEWS_PROMPT_PROFILE"},
+        )
+        advanced_panels = {
+            env for env, loc in locations.items() if loc == config_module.UI_LOCATION_ADVANCED_PANELS
+        }
+        # Prompt sentence overrides + full-template overrides (5 each).
+        self.assertEqual(
+            set(config_module.PROMPT_TASK_OVERRIDE_ENV_VARS.values()),
+            {env for env in advanced_panels if env.startswith("NEWS_PROMPT_OVERRIDE_")},
+        )
+        self.assertEqual(
+            set(config_module.PROMPT_TEMPLATE_ENV_VARS.values()),
+            {env for env in advanced_panels if env.startswith("NEWS_PROMPT_TEMPLATE_")},
+        )
+        # Generated per-task families: tuning presets, max tokens, base URLs
+        # and the 30 sampling fields for the five actual LLM tasks.
+        for task, _, _ in config_module.MODEL_TASK_KNOB_SPECS:
+            suffix = task.upper()
+            for env in (
+                f"NEWS_MODEL_{suffix}_TUNING_PRESET",
+                f"NEWS_{suffix}_MAX_TOKENS",
+                f"NEWS_MODEL_{suffix}_BASE_URL",
+            ):
+                self.assertEqual(
+                    locations[env],
+                    config_module.UI_LOCATION_ADVANCED_PANELS,
+                    f"{env} must be a dedicated Advanced panel knob",
+                )
+            # The task model selector itself stays raw (it is rendered only
+            # in the raw Advanced override list).
+            self.assertEqual(
+                locations[f"NEWS_MODEL_{suffix}"],
+                config_module.UI_LOCATION_ADVANCED_RAW,
+                f"NEWS_MODEL_{suffix} must stay a raw Advanced override",
+            )
+        llm_sampling_tasks = {spec[0] for spec in config_module.MODEL_TASK_KNOB_SPECS}
+        for task, prefix in config_module.MODEL_TASK_SAMPLING_ENV_PREFIXES.items():
+            for suffix in ("TEMPERATURE", "TOP_P", "TOP_K", "MIN_P", "PRESENCE_PENALTY", "REPETITION_PENALTY"):
+                env = f"{prefix}_{suffix}"
+                expected = (
+                    config_module.UI_LOCATION_ADVANCED_PANELS
+                    if task in llm_sampling_tasks
+                    else config_module.UI_LOCATION_ADVANCED_RAW
+                )
+                self.assertEqual(locations[env], expected, f"{env} misclassified")
+        for env in (
+            "NEWS_MODEL_REASONING_TEMPERATURE",
+            "NEWS_MODEL_STORY_DISCOVERY_TEMPERATURE",
+            "NEWS_MODEL_REASONING_TOP_P",
+            "NEWS_MODEL_STORY_DISCOVERY_TOP_P",
+        ):
+            self.assertEqual(
+                locations[env],
+                config_module.UI_LOCATION_ADVANCED_RAW,
+                f"{env} must stay a raw Advanced override",
+            )
+        # Remaining raw-only controls: legacy recipient scope, default/per-task
+        # assignment fields, backend/server knobs, budget caps not rendered in
+        # a dedicated panel, and the component-overlap threshold.
+        for env in (
+            "NEWS_RECIPIENT_SCOPE",
+            "NEWS_MODEL_BACKEND",
+            "NEWS_MODEL_TUNING_PRESET",
+            "NEWS_MODEL_BASE_URL",
+            "NEWS_TOTAL_ARTICLE_SUMMARY_CAP",
+            "NEWS_RECENT_WINDOW_HOURS",
+            "NEWS_MAX_ARTICLES_PER_SOURCE",
+            "NEWS_STORY_COMPONENT_OVERLAP_SUPPRESS_THRESHOLD",
+            "NEWS_MODEL_CONCURRENCY",
+            "NEWS_LLAMA_CPP_SERVER",
+            "NEWS_EMBEDDING_MODEL",
+            "NEWS_TOKEN_ENCODING",
+        ):
+            self.assertEqual(
+                locations[env],
+                config_module.UI_LOCATION_ADVANCED_RAW,
+                f"{env} must stay a raw Advanced override",
+            )
+        # Shared input cap, concurrency knobs, budget thresholds and optional
+        # controls are dedicated Advanced panel fields.
+        for env in (
+            "NEWS_MODEL_MAX_INPUT_TOKENS",
+            "NEWS_ARTICLE_TEXT_TOKEN_LIMIT",
+            "NEWS_MIN_ARTICLES_PER_STORY",
+            "NEWS_MAX_STORIES",
+            "NEWS_STORY_CLUSTER_SIMILARITY_THRESHOLD",
+            "NEWS_STORY_SELECTION_OVERLAP_THRESHOLD",
+            "NEWS_STORY_DEDUP_THRESHOLD",
+            "NEWS_STORY_BACKFILL_BATCH_MULTIPLIER",
+            "NEWS_SOURCE_COLLECTION_CONCURRENCY",
+            "NEWS_ARTICLE_SUMMARY_CONCURRENCY",
+            "NEWS_STORY_SYNTHESIS_CONCURRENCY",
+            "NEWS_BLOCK_REUSED_URLS",
+            "NEWS_IMAGE_ENABLED",
+            "NEWS_STORY_SCALE_SCREENING_ENABLED",
+            "NEWS_RELAX_STORY_DRAFTING_GUARDS",
+        ):
+            self.assertEqual(
+                locations[env],
+                config_module.UI_LOCATION_ADVANCED_PANELS,
+                f"{env} must be a dedicated Advanced panel knob",
+            )
+
+    def test_ui_location_validator_rejects_duplicate_envs(self) -> None:
+        """A synthetic registry with a duplicated env name must fail fast
+        instead of silently overwriting (dict/set last-write) or producing
+        two controls with the same data-env."""
+        registry = config_module.runtime_knob_registry()
+        duplicated = list(registry[:2])
+        duplicated.append(dict(registry[1]))  # same env as registry[1]
+        with self.assertRaises(ValueError) as ctx:
+            config_module._validate_ui_locations(duplicated)
+        self.assertIn(registry[1]["env"], str(ctx.exception))
+        self.assertIn("duplicate registry environment name", str(ctx.exception))
+
+    def test_ui_location_validator_rejects_unknown_or_missing_locations(self) -> None:
+        """An unknown/stale location or a surfaced record with no valid
+        location must be rejected with an environment-specific ValueError."""
+        registry = config_module.runtime_knob_registry()
+        stale = [dict(knob) for knob in registry[:2]]
+        stale[1]["ui_location"] = "legacy_panel"
+        with self.assertRaises(ValueError) as ctx:
+            config_module._validate_ui_locations(stale)
+        self.assertIn(stale[1]["env"], str(ctx.exception))
+        self.assertIn("invalid ui_location", str(ctx.exception))
+        missing = [dict(knob) for knob in registry[:2]]
+        del missing[1]["ui_location"]
+        with self.assertRaises(ValueError) as ctx:
+            config_module._validate_ui_locations(missing)
+        self.assertIn(missing[1]["env"], str(ctx.exception))
+        self.assertIn("invalid ui_location", str(ctx.exception))
 
     def test_docs_drift_guard_links_match_model_aliases(self) -> None:
         """Every built-in MODEL_ALIASES HF page URL must appear in README.md
