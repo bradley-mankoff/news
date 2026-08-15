@@ -29,7 +29,10 @@ try:
 except ValueError:
     UI_PORT = 8766
 UI_RUNTIME_WORKTREE = Path(
-    os.environ.get("NEWS_UI_RUNTIME_WORKTREE", str(ROOT.parent / "news-ui-runtime"))
+    os.environ.get(
+        "NEWS_UI_RUNTIME_WORKTREE",
+        str(Path.home() / ".local/share/news/ui-runtime"),
+    )
 ).expanduser()
 UI_RUNTIME_STATE_PATH = Path(
     os.environ.get(
