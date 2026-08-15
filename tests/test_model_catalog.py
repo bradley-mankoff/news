@@ -713,9 +713,9 @@ class ModelCatalogTests(unittest.TestCase):
                 self.assertTrue(fit["reason"])
 
     def test_payload_normalizes_none_id_object_config_and_string_timestamp(self) -> None:
-        """id=None, object-shaped config, and a string last_modified are
-        normalized without a network call; the empty ID keeps the payload out
-        of the catalog and the runtime-fit verdict external-only."""
+        """Normalize the missing ID and object config while preserving a
+        string last_modified; the empty ID keeps the payload out of the
+        catalog and the runtime-fit verdict external-only without a network call."""
         fake_info = _fake_model_info(
             id=None,
             config=SimpleNamespace(max_position_embeddings=8192),

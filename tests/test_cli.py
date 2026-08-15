@@ -393,15 +393,22 @@ class CliTests(unittest.TestCase):
         search.assert_not_called()
 
     def test_models_search_blank_query_is_rejected_without_search(self) -> None:
-        with patch("news_pipeline.cli.search_huggingface_models") as search:
-            code, stdout, stderr = self._invoke(
-                ["models", "search", "--query", ""]
-            )
+        cases = (
+            ["models", "search", "--query", ""],
+            ["models", "search", "--query", "   "],
+            ["models", "search", "--query", "\t"],
+            ["models", "search", "--query="],
+        )
+        for argv in cases:
+            with self.subTest(argv=argv), patch(
+                "news_pipeline.cli.search_huggingface_models"
+            ) as search:
+                code, stdout, stderr = self._invoke(argv)
 
-        self.assertEqual(code, 2)
-        self.assertEqual(stdout, "")
-        self.assertIn("models search requires --query", stderr)
-        search.assert_not_called()
+            self.assertEqual(code, 2)
+            self.assertEqual(stdout, "")
+            self.assertIn("models search requires --query", stderr)
+            search.assert_not_called()
 
     def test_models_search_limit_zero_clamps_to_one(self) -> None:
         fake_results = [
