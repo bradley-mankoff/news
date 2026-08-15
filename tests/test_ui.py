@@ -953,6 +953,366 @@ assert(
             )
         self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
 
+    def test_model_knob_link_refresh_is_schema_driven(self) -> None:
+        """Pin the schema/DOM-driven refresh and setter wiring (issue #79).
+
+        refreshModelKnobLinks() must discover link-bearing knobs without a
+        hard-coded list. Bulk markup boundaries use it, while the programmatic
+        select setter refreshes only its mounted target row; neither path
+        dispatches change. The synthetic future knob name lives only in tests;
+        production must have no special case for it.
+        """
+        html = ui_module.HTML
+        refresh = html.split("function refreshModelKnobLinks() {", 1)[1].split(
+            "function renderTabs", 1
+        )[0]
+        setter = html.split("function setControlValue(env, next) {", 1)[1].split(
+            "function knobByEnv", 1
+        )[0]
+        advanced = html.split("function renderAdvancedKnobs() {", 1)[1].split(
+            "function collectModelTuningPresetBody", 1
+        )[0]
+        run_setup = html.split("function renderRunSetup() {", 1)[1].split(
+            "const TASK_MAX_TOKENS_LABELS", 1
+        )[0]
+        for env in (
+            "NEWS_MODEL",
+            "NEWS_MODEL_ARTICLE_SUMMARY",
+            "NEWS_MODEL_STORY_DRAFTING",
+            "NEWS_MODEL_STORY_SCALE_SCREENING",
+            "NEWS_MODEL_TITLE_GENERATION",
+            "NEWS_MODEL_IMAGE_ART_DIRECTION",
+        ):
+            self.assertNotIn(
+                f'renderKnobLinks("{env}")', refresh, f"{env} is hard-coded in the bulk refresh"
+            )
+        self.assertIn("state.schema.knobs", refresh)
+        self.assertIn("knob.option_links", refresh)
+        self.assertIn("Object.keys(knob.option_links).length", refresh)
+        self.assertIn('document.querySelector(`[data-links-for="${knob.env}"]`)', refresh)
+        self.assertIn("renderKnobLinks(knob.env)", refresh)
+        # The programmatic select setter refreshes only mounted link rows and
+        # never dispatches a synthetic change event.
+        self.assertIn(
+            'if (el.tagName === "SELECT" && document.querySelector(`[data-links-for="${env}"]`)) {',
+            setter,
+        )
+        self.assertIn("renderKnobLinks(env);", setter)
+        # Advanced raw rerenders and run-setup markup rebuilds both bulk-refresh.
+        self.assertIn("refreshModelKnobLinks();", advanced)
+        self.assertNotIn('renderKnobLinks("NEWS_MODEL")', advanced)
+        self.assertLess(
+            advanced.index('$("knobContainer").innerHTML'),
+            advanced.index("refreshModelKnobLinks();"),
+            "Advanced raw controls must be rebuilt before links are refreshed",
+        )
+        self.assertIn("refreshModelKnobLinks();", run_setup)
+        self.assertLess(
+            run_setup.index('$("runSetupMount").innerHTML'),
+            run_setup.index("refreshModelKnobLinks();"),
+            "Run Setup markup must be rebuilt before links are refreshed",
+        )
+        # The synthetic future knob must never become a production special case.
+        self.assertNotIn("NEWS_MODEL_FUTURE_TASK", html)
+
+    def test_model_knob_link_refresh_and_setter_execute_in_node_dom_harness(self) -> None:
+        """Execute the schema-driven bulk refresh and programmatic select
+        setter in a DOM-shaped Node harness (issue #79).
+
+        Production functions (escapeHtml, currentControlValue, setControlValue,
+        knobByEnv, renderKnobLinks, refreshModelKnobLinks, resetAllOverrides,
+        setKnobEnv) are extracted from ui_module.HTML itself and driven against
+        a fixture that includes a synthetic future link-bearing knob. The
+        harness proves bulk discovery renders every mounted link row (including
+        the future knob) without a special case, the select setter mutates
+        without a synthetic change event, preset/reset paths refresh the
+        correct rows, unmounted link-bearing knobs are skipped silently, and
+        non-link controls are excluded from link-row rendering.
+        """
+        html = ui_module.HTML
+
+        def js_function_block(start: str, end: str) -> str:
+            begin = html.index(start)
+            return html[begin : html.index(end, begin)]
+
+        js = (
+            r"""
+const assert = (condition, message) => {
+  if (!condition) throw new Error(message);
+};
+"""
+            + _FAKE_DOM_ELEMENT_JS
+            + r"""
+// ---- Fake DOM -------------------------------------------------------------
+// Select-shaped controls: setControlValue/setKnobEnv read tagName and
+// options. Every value used here is a declared option, so an option
+// injection would be drift — fail loudly instead of silently emulating it.
+class FakeSelect extends FakeElement {
+  constructor(id, value = "") {
+    super(id, value);
+    this.tagName = "SELECT";
+    this.options = [];
+  }
+  insertAdjacentHTML(position, html) {
+    assert(position === "afterbegin", `harness: unexpected ${position} injection into ${this.id}`);
+    const match = html.match(/<option value="([^"]*)">/);
+    assert(match, `harness: malformed option injection into ${this.id}`);
+    this.options.unshift({ value: decodeEntities(match[1]) });
+  }
+}
+const controls = {
+  NEWS_MODEL: new FakeSelect("newsModel"),
+  NEWS_MODEL_ARTICLE_SUMMARY: new FakeSelect("articleModel"),
+  NEWS_MODEL_STORY_DRAFTING: new FakeSelect("storyModel"),
+  NEWS_MODEL_STORY_SCALE_SCREENING: new FakeSelect("scaleModel"),
+  NEWS_MODEL_TITLE_GENERATION: new FakeSelect("titleModel"),
+  NEWS_MODEL_IMAGE_ART_DIRECTION: new FakeSelect("imageArtModel"),
+  // Synthetic future link-bearing knob: must be refreshed without any
+  // production special case (issue #79).
+  NEWS_MODEL_FUTURE_TASK: new FakeSelect("futureModel"),
+  // Link-less select and non-link controls are mutated normally but remain
+  // excluded from link-row rendering and synthetic change dispatch.
+  NEWS_MODEL_BACKEND: new FakeSelect("backendSelect"),
+  NEWS_BLOCK_REUSED_URLS: new FakeElement("blockCheckbox")
+};
+controls.NEWS_BLOCK_REUSED_URLS.type = "checkbox";
+controls.NEWS_BLOCK_REUSED_URLS.checked = false;
+for (const [env, el] of Object.entries(controls)) el.dataset.env = env;
+// Every link-bearing knob has a mounted container except the unmounted one.
+const containers = {
+  NEWS_MODEL: new FakeElement("newsModelLinks"),
+  NEWS_MODEL_ARTICLE_SUMMARY: new FakeElement("articleLinks"),
+  NEWS_MODEL_STORY_DRAFTING: new FakeElement("storyLinks"),
+  NEWS_MODEL_STORY_SCALE_SCREENING: new FakeElement("scaleLinks"),
+  NEWS_MODEL_TITLE_GENERATION: new FakeElement("titleLinks"),
+  NEWS_MODEL_IMAGE_ART_DIRECTION: new FakeElement("imageArtLinks"),
+  NEWS_MODEL_FUTURE_TASK: new FakeElement("futureLinks")
+};
+const warnings = [];
+const missingControlEnvs = new Set();
+const document = {
+  querySelector(selector) {
+    if (selector.startsWith('[data-env="') && selector.endsWith('"]')) {
+      const env = selector.slice('[data-env="'.length, -2);
+      if (!(env in controls)) {
+        if (!missingControlEnvs.has(env)) throw new Error(`unexpected control selector: ${selector}`);
+        return null;
+      }
+      return controls[env];
+    }
+    if (selector.startsWith('[data-links-for="') && selector.endsWith('"]')) {
+      const env = selector.slice('[data-links-for="'.length, -2);
+      return containers[env] || null;
+    }
+    throw new Error(`unexpected selector: ${selector}`);
+  },
+  querySelectorAll(selector) {
+    if (selector !== "[data-env]") throw new Error(`unexpected selectorAll: ${selector}`);
+    return Object.values(controls);
+  }
+};
+const console = { warn: (...args) => warnings.push(args.join(" ")) };
+const state = { schema: null };
+const promptTemplateRaw = {};
+// Non-link helpers required by resetAllOverrides(); the link refresh under
+// test remains the production refreshModelKnobLinks().
+function renderPresetSummary() {}
+function renderModelTuningPanels() {}
+function renderPromptProfilePanel() {}
+function restorePromptTemplateTask() {}
+function previewWithStatus() {}
+function setPromptTemplateEnv() {}
+function previewQuietly() {}
+// Compatibility-hint tail of refreshModelKnobLinks(): track invocations so
+// the harness proves the hint boundary still runs after each bulk refresh.
+let hintRenderCount = 0;
+function catalogBackendForReference(reference) { return reference || "llama.cpp"; }
+function requiredBackendForSelectedModel() { return "llama.cpp"; }
+function renderModelBackendHint() { hintRenderCount++; }
+
+// ---- Fixture ---------------------------------------------------------------
+const linkRow = (option) => ({
+  page: `https://example.test/model/${option}`,
+  hardware: `https://example.test/model/${option}/hardware`
+});
+const linkKnobEnvs = [
+  "NEWS_MODEL", "NEWS_MODEL_ARTICLE_SUMMARY", "NEWS_MODEL_STORY_DRAFTING",
+  "NEWS_MODEL_STORY_SCALE_SCREENING", "NEWS_MODEL_TITLE_GENERATION",
+  "NEWS_MODEL_IMAGE_ART_DIRECTION", "NEWS_MODEL_FUTURE_TASK"
+];
+const linkKnobs = linkKnobEnvs.map(env => ({
+  env,
+  type: "select",
+  default: `${env}-default`,
+  options: [`${env}-default`, `${env}-alt`],
+  option_links: {
+    [`${env}-default`]: linkRow(`${env}-default`),
+    [`${env}-alt`]: linkRow(`${env}-alt`)
+  }
+}));
+// Unmounted link-bearing knob: container absent, refresh must skip it.
+linkKnobs.push({
+  env: "NEWS_MODEL_UNMOUNTED",
+  type: "select",
+  default: "unmounted-default",
+  options: ["unmounted-default"],
+  option_links: { "unmounted-default": linkRow("unmounted-default") }
+});
+// Link-less knobs: no option_links, no links container.
+linkKnobs.push({
+  env: "NEWS_MODEL_BACKEND",
+  type: "select",
+  default: "llama.cpp",
+  options: ["external", "llama.cpp", "mlx-lm", "mlx-vlm"]
+});
+linkKnobs.push({ env: "NEWS_BLOCK_REUSED_URLS", type: "bool", default: false });
+linkKnobs.push({ env: "NEWS_MODEL_LINKLESS", type: "select", default: "x", options: ["x"] });
+state.schema = { current_env: {}, knobs: linkKnobs };
+for (const env of linkKnobEnvs) {
+  controls[env].options.push({ value: `${env}-default` }, { value: `${env}-alt` });
+  controls[env].value = `${env}-alt`;
+}
+controls.NEWS_MODEL_BACKEND.options = ["external", "llama.cpp", "mlx-lm", "mlx-vlm"].map(value => ({ value }));
+controls.NEWS_MODEL_BACKEND.value = "external";
+controls.NEWS_MODEL_LINKLESS = new FakeSelect("linklessSelect");
+controls.NEWS_MODEL_LINKLESS.dataset.env = "NEWS_MODEL_LINKLESS";
+controls.NEWS_MODEL_LINKLESS.options = [{ value: "x" }];
+controls.NEWS_MODEL_LINKLESS.value = "x";
+
+// ---- Production blocks under test -----------------------------------------
+"""
+            + js_function_block("function escapeHtml(text) {", "function formatDefault")
+            + js_function_block('function formatDefault(value, fallback="none") {', "function currentControlValue")
+            + js_function_block("function currentControlValue(env) {", "function setControlValue")
+            + js_function_block("function setControlValue(env, next) {", "function knobByEnv")
+            + js_function_block("function knobByEnv(env) {", "function inputForKnob")
+            + js_function_block("function renderKnobLinks(env) {", "function refreshModelKnobLinks")
+            + js_function_block("function refreshModelKnobLinks() {", "function renderTabs")
+            + js_function_block("function resetAllOverrides() {", "function setKnobEnv(env) {")
+            + js_function_block("function setKnobEnv(env) {", "async function savePresetEditor")
+            + js_function_block("function applyRunPreset(preset) {", "function resetAllOverrides")
+            + r"""
+// ---- 1. Schema-driven bulk refresh ----------------------------------------
+refreshModelKnobLinks();
+for (const env of linkKnobEnvs) {
+  assert(
+    containers[env].innerHTML.includes(linkRow(`${env}-alt`).page),
+    `${env} did not render its link row on bulk refresh`
+  );
+  assert(
+    containers[env].innerHTML.includes(`rel="noopener noreferrer"`),
+    `${env} links lost the security contract`
+  );
+}
+assert(warnings.length === 0, `bulk refresh warned for unmounted/linkless knobs: ${warnings.join(", ")}`);
+
+// ---- 2. Programmatic select setter: mutate without a synthetic change ------
+const changeCalls = [];
+for (const env of ["NEWS_MODEL", "NEWS_MODEL_FUTURE_TASK"]) {
+  controls[env].addEventListener("change", () => changeCalls.push(env));
+}
+controls.NEWS_MODEL.value = "NEWS_MODEL-default";
+containers.NEWS_MODEL.innerHTML = '<a href="https://stale.test/old">stale</a>';
+setControlValue("NEWS_MODEL", "NEWS_MODEL-alt");
+assert(
+  containers.NEWS_MODEL.innerHTML.includes(linkRow("NEWS_MODEL-alt").page),
+  "setControlValue did not refresh the mounted NEWS_MODEL link row"
+);
+assert(!containers.NEWS_MODEL.innerHTML.includes("stale"), "stale NEWS_MODEL links survived setControlValue");
+controls.NEWS_MODEL_FUTURE_TASK.value = "NEWS_MODEL_FUTURE_TASK-default";
+containers.NEWS_MODEL_FUTURE_TASK.innerHTML = "stale";
+setControlValue("NEWS_MODEL_FUTURE_TASK", "NEWS_MODEL_FUTURE_TASK-alt");
+assert(
+  containers.NEWS_MODEL_FUTURE_TASK.innerHTML.includes(linkRow("NEWS_MODEL_FUTURE_TASK-alt").page),
+  "setControlValue did not refresh the synthetic future knob link row"
+);
+containers.NEWS_MODEL.innerHTML = '<a href="https://stale.test/external">stale</a>';
+setControlValue("NEWS_MODEL", "owner/external");
+assert(
+  controls.NEWS_MODEL.options.some(option => option.value === "owner/external"),
+  "setControlValue did not inject the external model option"
+);
+assert(controls.NEWS_MODEL.value === "owner/external", "external model value was not assigned");
+assert(
+  containers.NEWS_MODEL.innerHTML === '<span class="muted">No Hugging Face page for this external model</span>',
+  "external setter did not replace stale links"
+);
+assert(changeCalls.length === 0, `setControlValue dispatched a synthetic change: ${changeCalls.join(", ")}`);
+
+// ---- 3. Non-link and link-less controls remain outside link rendering -----
+setControlValue("NEWS_BLOCK_REUSED_URLS", "1");
+assert(controls.NEWS_BLOCK_REUSED_URLS.checked === true, "checkbox setter regressed");
+setControlValue("NEWS_MODEL_BACKEND", "mlx-vlm");
+assert(controls.NEWS_MODEL_BACKEND.value === "mlx-vlm", "backend select assignment regressed");
+setControlValue("NEWS_MODEL_LINKLESS", "x");
+assert(warnings.length === 0, `setter/refresh warned for link-less knobs: ${warnings.join(", ")}`);
+assert(changeCalls.length === 0, "non-link setter dispatched a synthetic change");
+
+// ---- 4. Preset application path: setKnobEnv + bulk refresh -----------------
+containers.NEWS_MODEL_IMAGE_ART_DIRECTION.innerHTML = "stale";
+setKnobEnv({
+  "NEWS_MODEL": "NEWS_MODEL-alt",
+  "NEWS_MODEL_IMAGE_ART_DIRECTION": "NEWS_MODEL_IMAGE_ART_DIRECTION-alt"
+});
+refreshModelKnobLinks();
+assert(
+  containers.NEWS_MODEL.innerHTML.includes(linkRow("NEWS_MODEL-alt").page),
+  "preset application did not refresh the NEWS_MODEL link row"
+);
+assert(
+  containers.NEWS_MODEL_IMAGE_ART_DIRECTION.innerHTML.includes(linkRow("NEWS_MODEL_IMAGE_ART_DIRECTION-alt").page),
+  "preset application did not refresh the task model link row"
+);
+assert(!containers.NEWS_MODEL_IMAGE_ART_DIRECTION.innerHTML.includes("stale"), "stale task links survived preset application");
+containers.NEWS_MODEL_FUTURE_TASK.innerHTML = "stale before extracted preset";
+applyRunPreset({
+  id: "future-external",
+  env: { "NEWS_MODEL_FUTURE_TASK": "owner/preset-external" }
+});
+assert(
+  containers.NEWS_MODEL_FUTURE_TASK.innerHTML === '<span class="muted">No Hugging Face page for this external model</span>',
+  "applyRunPreset did not refresh the external future-model row"
+);
+assert(warnings.length === 0, `preset path warned: ${warnings.join(", ")}`);
+
+// ---- 5. Reset path: resetAllOverrides clears controls and re-renders -------
+containers.NEWS_MODEL_FUTURE_TASK.innerHTML = "stale";
+resetAllOverrides();
+assert(controls.NEWS_MODEL.value === "", "reset did not clear the model control");
+assert(controls.NEWS_BLOCK_REUSED_URLS.checked === false, "reset did not clear the checkbox");
+assert(
+  containers.NEWS_MODEL.innerHTML.includes(linkRow("NEWS_MODEL-default").page),
+  "reset did not render default NEWS_MODEL links"
+);
+assert(
+  containers.NEWS_MODEL_FUTURE_TASK.innerHTML.includes(linkRow("NEWS_MODEL_FUTURE_TASK-default").page),
+  "reset did not render default links for the synthetic future knob"
+);
+assert(!containers.NEWS_MODEL_FUTURE_TASK.innerHTML.includes("stale"), "stale synthetic links survived reset");
+assert(warnings.length === 0, `reset path warned: ${warnings.join(", ")}`);
+assert(hintRenderCount >= 3, "refreshModelKnobLinks did not re-render the compatibility hint after bulk/preset/reset");
+"""
+        )
+        node = shutil.which("node")
+        if node is None:
+            self.skipTest("Node.js is required for the embedded UI renderer harness")
+        timeout_seconds = 30
+        try:
+            result = subprocess.run(
+                [node, "--input-type=module", "-"],
+                input=js,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=timeout_seconds,
+            )
+        except subprocess.TimeoutExpired as exc:
+            self.fail(
+                f"Node harness timed out after {timeout_seconds}s: "
+                f"stdout={exc.stdout!r} stderr={exc.stderr!r}"
+            )
+        self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
+
     def test_sync_surfaced_envs_executes_in_node_dom_harness(self) -> None:
         """Execute the embedded syncSurfacedEnvs() derivation in a Node harness.
 
@@ -1514,7 +1874,7 @@ assert(SURFACED_ENVS.size === 0, "missing schema must not throw and must suppres
             self.assertEqual(payload["sources"]["total"], 1)
             self.assertEqual(payload["recipients"]["total"], 1)
             # Model catalog keys are local-only (offline) additions.
-            self.assertEqual(len(payload["model_catalog"]), 4)
+            self.assertEqual(len(payload["model_catalog"]), 6)
             self.assertEqual(payload["model_catalog"][0]["alias"], "gemma-4-12b-it-4bit")
             self.assertIn("factual_extraction", payload["model_recommendation_tasks"])
             self.assertEqual(len(payload["model_recommendation_tasks"]), 7)
@@ -1531,7 +1891,7 @@ assert(SURFACED_ENVS.size === 0, "missing schema must not throw and must suppres
             self.assertEqual(payload["model_recommendations"]["translation"], [])
             self.assertEqual(
                 [pick["alias"] for pick in payload["model_recommendations"]["speed"]],
-                ["gemma-e2b-tiny", model_catalog.DEFAULT_CATALOG_MODEL_ALIAS],
+                ["gemma-e2b-tiny", "qwen3-8b-4bit", model_catalog.DEFAULT_CATALOG_MODEL_ALIAS],
             )
 
             helper_file = root / "nested" / "payload.yaml"
@@ -4096,10 +4456,10 @@ for (const absentId of ["article_tuning_save", "article_tuning_rename", "article
                 speed_picks = payload["model_recommendations"]["speed"]
                 self.assertEqual(
                     [pick["alias"] for pick in speed_picks],
-                    ["gemma-e2b-tiny", "smoke-model", model_catalog.DEFAULT_CATALOG_MODEL_ALIAS],
+                    ["gemma-e2b-tiny", "qwen3-8b-4bit", "smoke-model", model_catalog.DEFAULT_CATALOG_MODEL_ALIAS],
                 )
                 self.assertEqual(
-                    speed_picks[1]["reason"],
+                    speed_picks[2]["reason"],
                     "Overlay-specific speed recommendation.",
                 )
 
@@ -4110,6 +4470,8 @@ for (const absentId of ["article_tuning_save", "article_tuning_rename", "article
                 "gemma-e2b-tiny",
                 "qwythos-9b-4bit",
                 "qwythos-9b-8bit",
+                "qwen3-8b-4bit",
+                "qwen3-14b-4bit",
                 "smoke-model",
             ],
         )
@@ -4120,15 +4482,34 @@ for (const absentId of ["article_tuning_save", "article_tuning_rename", "article
                 "gemma-e2b-tiny": "mlx-lm",
                 "qwythos-9b-4bit": "llama.cpp",
                 "qwythos-9b-8bit": "llama.cpp",
+                "qwen3-8b-4bit": "mlx-lm",
+                "qwen3-14b-4bit": "mlx-lm",
                 "smoke-model": "mlx-lm",
             },
         )
+        qwen3_entries = {
+            entry["alias"]: entry
+            for entry in payload["model_catalog"]
+            if entry["alias"].startswith("qwen3")
+        }
+        for entry in qwen3_entries.values():
+            self.assertEqual(entry["context_length"], 40960)
+            self.assertEqual(
+                entry["hf_url"],
+                f"https://huggingface.co/{entry['reference']}",
+            )
         model_knob = next(knob for knob in payload["knobs"] if knob["env"] == "NEWS_MODEL")
         self.assertIn("smoke-model", model_knob["options"])
         self.assertEqual(
             model_knob["option_links"]["smoke-model"]["page"],
             "https://huggingface.co/mlx-community/smoke-model",
         )
+        for alias in ("qwen3-8b-4bit", "qwen3-14b-4bit"):
+            self.assertIn(alias, model_knob["options"])
+            self.assertEqual(
+                model_knob["option_links"][alias]["page"],
+                f"https://huggingface.co/{model_catalog.CATALOG_MODELS[alias].hf_repo}",
+            )
         task_knob = next(knob for knob in payload["knobs"] if knob["env"] == "NEWS_MODEL_STORY_DRAFTING")
         self.assertIn("smoke-model", task_knob["options"])
 
