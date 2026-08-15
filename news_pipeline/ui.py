@@ -4787,9 +4787,12 @@ HTML = r"""<!doctype html>
           if (preset) loadModelTuningEditor(meta.runtimeKey, preset);
           previewQuietly("run");
         };
-        $(meta.saveButtonId).onclick = () => saveModelTuningPreset(meta.runtimeKey).catch(err => setStatus(err.message, "bad"));
-        $(meta.renameButtonId).onclick = () => renameModelTuningPreset(meta.runtimeKey).catch(err => setStatus(err.message, "bad"));
-        $(meta.deleteButtonId).onclick = () => deleteModelTuningPreset(meta.runtimeKey).catch(err => setStatus(err.message, "bad"));
+        const saveButton = $(meta.saveButtonId);
+        if (saveButton) saveButton.onclick = () => saveModelTuningPreset(meta.runtimeKey).catch(err => setStatus(err.message, "bad"));
+        const renameButton = $(meta.renameButtonId);
+        if (renameButton) renameButton.onclick = () => renameModelTuningPreset(meta.runtimeKey).catch(err => setStatus(err.message, "bad"));
+        const deleteButton = $(meta.deleteButtonId);
+        if (deleteButton) deleteButton.onclick = () => deleteModelTuningPreset(meta.runtimeKey).catch(err => setStatus(err.message, "bad"));
       });
     }
     function applySelectedPresetFromState() {
