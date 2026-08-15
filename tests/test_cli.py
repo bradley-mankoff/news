@@ -300,14 +300,29 @@ class CliTests(unittest.TestCase):
         self.assertIn("qwythos-9b-4bit", stdout)
         self.assertIn("llama.cpp", stdout)
         self.assertIn("huggingface.co", stdout)
+        self.assertIn("qwen3-8b-4bit", stdout)
+        self.assertIn("qwen3-14b-4bit", stdout)
+        self.assertIn("mlx-lm", stdout)
 
         code, stdout, stderr = self._invoke(["models", "catalog", "--json"])
 
         self.assertEqual(code, 0)
         entries = json.loads(stdout)
-        self.assertEqual(len(entries), 4)
+        self.assertEqual(len(entries), 6)
         self.assertEqual(entries[0]["alias"], "gemma-4-12b-it-4bit")
         self.assertTrue(entries[0]["is_default"])
+        self.assertEqual(
+            [entry["alias"] for entry in entries[-2:]],
+            ["qwen3-8b-4bit", "qwen3-14b-4bit"],
+        )
+        qwen3 = {entry["alias"]: entry for entry in entries if entry["alias"].startswith("qwen3")}
+        for entry in qwen3.values():
+            self.assertEqual(entry["backend"], "mlx-lm")
+            self.assertIn(
+                entry["reference"],
+                ("mlx-community/Qwen3-8B-4bit", "mlx-community/Qwen3-14B-4bit"),
+            )
+            self.assertEqual(entry["context_length"], 40960)
         llama_entries = [entry for entry in entries if entry["backend"] == "llama.cpp"]
         self.assertEqual(
             [entry["alias"] for entry in llama_entries],
@@ -344,6 +359,8 @@ class CliTests(unittest.TestCase):
                     "gemma-e2b-tiny",
                     "qwythos-9b-4bit",
                     "qwythos-9b-8bit",
+                    "qwen3-8b-4bit",
+                    "qwen3-14b-4bit",
                     "smoke-model",
                 ],
             )
