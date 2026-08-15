@@ -98,6 +98,11 @@ class TerminalRecoveryPollTest(unittest.TestCase):
             patch.object(cycle_adapter, "sync_runnable_labels"),
             patch.object(cycle_adapter, "fetch_workflow_runs",
                          return_value=self._as_runs(runs)),
+            patch.object(
+                recovery_adapter,
+                "resolve_worktree_info_with_health",
+                return_value=(None, None),
+            ),
             patch.object(cycle_adapter, "fetch_workflow_run", return_value=None),
             patch.object(recovery_adapter, "inspect_worktree", return_value=dirty),
             patch.object(cycle_adapter, "save_state"),
@@ -297,6 +302,11 @@ class TerminalRecoveryPollTest(unittest.TestCase):
                 return_value=DispatchResult(True),
             ),
             patch.object(recovery_adapter, "fetch_workflow_runs", return_value=WorkflowRuns()),
+            patch.object(
+                recovery_adapter,
+                "resolve_worktree_info_with_health",
+                return_value=(None, None),
+            ),
             patch.object(cycle_adapter, "save_state"),
         ):
             cycle_adapter.poll(self._cfg(), {}, state)
@@ -351,6 +361,11 @@ class TerminalRecoveryPollTest(unittest.TestCase):
                 ],
             ),
             patch.object(recovery_adapter, "fetch_workflow_runs", return_value=WorkflowRuns()),
+            patch.object(
+                recovery_adapter,
+                "resolve_worktree_info_with_health",
+                return_value=(None, None),
+            ),
             patch.object(recovery_adapter, "inspect_worktree", return_value=False),
             patch.object(recovery_adapter, "comment_issue", return_value=True),
             patch.object(cycle_adapter, "save_state"),
