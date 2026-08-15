@@ -312,12 +312,13 @@ def _run_models(args: list[str]) -> int:
                 )
         return 0
     if subcommand == "search":
-        # Detect --json before parsing so validation failures use the same
-        # JSON error envelope as lookup failures (issue #93).
-        query, as_json = _models_search_error_context(rest)
         try:
-            query, pipeline_tag, limit, _ = _parse_models_search_args(rest)
+            query, pipeline_tag, limit, as_json = _parse_models_search_args(rest)
         except ValueError as exc:
+            # Parse failures use the same JSON error envelope as lookup
+            # failures (issue #93); the lenient scan reports the query and
+            # --json anywhere in the args, even past the failure point.
+            query, as_json = _models_search_error_context(rest)
             return _report_models_search_error(exc, as_json, query)
         try:
             results = search_huggingface_models(
