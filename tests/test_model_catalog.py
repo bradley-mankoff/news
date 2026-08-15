@@ -736,6 +736,14 @@ class ModelCatalogTests(unittest.TestCase):
                 model_catalog.RUNTIME_FIT_MANAGED_MLX_VLM,
             ),
             (
+                {"id": "someone/mixed-mlx-library-vlm", "tags": ["transformers", "safetensors", "image-text-to-text"], "library_name": "mlx", "pipeline_tag": "image-text-to-text"},
+                model_catalog.RUNTIME_FIT_MANAGED_MLX_VLM,
+            ),
+            (
+                {"id": "someone/mixed-mlx-tag-vlm", "tags": ["mlx", "transformers", "safetensors", "image-text-to-text"], "library_name": "transformers", "pipeline_tag": "image-text-to-text"},
+                model_catalog.RUNTIME_FIT_MANAGED_MLX_VLM,
+            ),
+            (
                 {"id": "someone/arbitrary-file.gguf", "tags": ["gguf", "mlx"], "library_name": "mlx", "pipeline_tag": "image-text-to-text"},
                 model_catalog.RUNTIME_FIT_EXTERNAL_ONLY,
             ),
@@ -785,7 +793,7 @@ class ModelCatalogTests(unittest.TestCase):
             ),
             (
                 {"id": "someone/transformers-vlm", "tags": ["safetensors"], "library_name": "transformers", "pipeline_tag": "image-text-to-text"},
-                model_catalog.RUNTIME_FIT_MANAGED_MLX_VLM,
+                model_catalog.RUNTIME_FIT_EXTERNAL_ONLY,
             ),
             (
                 {"id": "someone/transformers-other", "tags": ["safetensors"], "library_name": "transformers", "pipeline_tag": "audio-classification"},
@@ -840,6 +848,38 @@ class ModelCatalogTests(unittest.TestCase):
                 fit = model_catalog.runtime_fit_for_hf_model(info)
                 self.assertEqual(fit["status"], expected)
                 self.assertTrue(fit["reason"])
+
+    def test_transformers_vision_reason_explains_external_only(self) -> None:
+        """A Transformers+safetensors vision repo is external-only (issue #81):
+        mlx-vlm needs pre-converted MLX weights and an mmproj asset, so the
+        reason must say so instead of promising managed launchability."""
+        fit = model_catalog.runtime_fit_for_hf_model(
+            {
+                "id": "someone/transformers-vlm",
+                "tags": ["safetensors"],
+                "library_name": "transformers",
+                "pipeline_tag": "image-text-to-text",
+            }
+        )
+        self.assertEqual(fit["status"], model_catalog.RUNTIME_FIT_EXTERNAL_ONLY)
+        self.assertIn("pre-converted MLX weights", fit["reason"])
+        self.assertIn("mmproj", fit["reason"])
+        self.assertIn("external", fit["reason"])
+
+    def test_transformers_text_reason_carries_conversion_caveat(self) -> None:
+        """Transformers text repos keep the managed_mlx_lm verdict (issue #81),
+        but the reason must note the on-load conversion caveat rather than
+        implying a pre-converted MLX artifact."""
+        info = {
+            "id": "someone/transformers-text",
+            "tags": ["safetensors"],
+            "library_name": "transformers",
+            "pipeline_tag": "text-generation",
+        }
+        fit = model_catalog.runtime_fit_for_hf_model(info)
+        self.assertEqual(fit["status"], model_catalog.RUNTIME_FIT_MANAGED_MLX_LM)
+        self.assertIn("converts weights on load", fit["reason"])
+        self.assertIn("architecture-dependent", fit["reason"])
 
     def test_payload_normalizes_none_id_object_config_and_string_timestamp(self) -> None:
         """Normalize the missing ID and object config while preserving a
@@ -905,6 +945,34 @@ class ModelCatalogTests(unittest.TestCase):
         self.assertEqual(kwargs["pipeline_tag"], "text-generation")
         self.assertEqual(kwargs["limit"], 50)
         self.assertEqual(kwargs["expand"], model_catalog.HF_SEARCH_EXPAND)
+
+    def test_vision_runtime_fit_propagates_through_hf_payloads(self) -> None:
+        vision_info = _fake_model_info(
+            id="someone/transformers-vlm",
+            tags=["safetensors", "transformers"],
+            library_name="transformers",
+            pipeline_tag="image-text-to-text",
+        )
+
+        search_api = MagicMock()
+        search_api.list_models.return_value = iter([vision_info])
+        with patch("huggingface_hub.HfApi", return_value=search_api):
+            search_item = model_catalog.search_huggingface_models(
+                "vision", pipeline_tag="image-text-to-text"
+            )[0]
+
+        metadata_api = MagicMock()
+        metadata_api.model_info.return_value = vision_info
+        with patch("huggingface_hub.HfApi", return_value=metadata_api):
+            metadata_item = model_catalog.fetch_model_metadata("someone/transformers-vlm")
+
+        for item in (search_item, metadata_item):
+            with self.subTest(item=item):
+                self.assertEqual(
+                    item["runtime_fit"]["status"],
+                    model_catalog.RUNTIME_FIT_EXTERNAL_ONLY,
+                )
+                self.assertIn("mmproj", item["runtime_fit"]["reason"])
 
     def test_search_in_catalog_flag_and_empty_results(self) -> None:
         curated = "mlx-community/gemma-4-12B-it-4bit"
