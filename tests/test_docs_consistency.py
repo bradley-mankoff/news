@@ -131,6 +131,40 @@ class DocsConsistencyTests(unittest.TestCase):
             "Catalog ADR",
         )
 
+    def test_adr_collision_references_and_targets_are_repaired(self) -> None:
+        targets = {
+            "docs/adr/0016-project-license.md": "0016",
+            "docs/adr/0017-runtime-matrix.md": "0017",
+            "docs/adr/0018-prompt-catalog-owns-editorial-instructions.md": "0018",
+        }
+        for relative, number in targets.items():
+            path = _REPO / relative
+            self.assertTrue(path.is_file(), relative)
+            self.assertRegex(
+                path.read_text(encoding="utf-8").splitlines()[0],
+                rf"^# ADR {number}:",
+            )
+
+        for doc in (_README, _SETTINGS):
+            self.assertIn(_PROMPT_CATALOG_ADR_LINK, doc.read_text(encoding="utf-8"))
+        self.assertIn(
+            "docs/adr/0017-runtime-matrix.md",
+            _README.read_text(encoding="utf-8"),
+        )
+
+        for relative in (
+            "README.md",
+            "SETTINGS.md",
+            "docs/adr/0007-model-configuration-vocabulary.md",
+            "docs/adr/0011-prompt-contracts-pipeline-owned-and-validated.md",
+            "docs/adr/0014-model-catalog-yaml-overrides.md",
+            "docs/adr/0015-advanced-prompt-template-overrides.md",
+            "news_pipeline/model_catalog.py",
+        ):
+            text = (_REPO / relative).read_text(encoding="utf-8")
+            self.assertNotIn("docs/adr/0010-", text, relative)
+            self.assertNotIn("ADR 0010", text, relative)
+
     def test_adrs_are_uniquely_numbered_and_well_formed(self) -> None:
         adr_paths = sorted(_REPO.glob("docs/adr/[0-9][0-9][0-9][0-9]-*.md"))
         self.assertTrue(adr_paths, "docs/adr must contain at least one ADR")
@@ -141,9 +175,11 @@ class DocsConsistencyTests(unittest.TestCase):
             if (match := re.match(r"(\d{4})-", path.name))
         ]
         self.assertEqual(numbers, sorted(numbers), "ADR numbers must be sorted")
-        # New ADRs must extend, never re-use or renumber, existing decisions.
-        # The set-cardinality check catches duplicates anywhere in the sequence
-        # (0010 is intentionally unused after the collision repair).
+        # ADR records must have unique numbers in the current tree. This guard
+        # catches duplicates anywhere in the sequence; it cannot detect
+        # historical renumbering or require the next number to extend the
+        # existing range. ADR 0010 remains intentionally unused after the
+        # collision repair.
         self.assertEqual(
             len(numbers), len(set(numbers)), "ADR numbers must be unique"
         )
