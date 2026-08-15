@@ -3004,10 +3004,10 @@ const document = { getElementById(id) { return elements[id] || null; } };
 // Stubs used only when a handler is clicked; handler installation itself is
 // the behavior under test. Bare function references in wireEvents() are
 // evaluated at wiring time, so each must exist in harness scope.
-const clickedKeys = [];
-async function saveModelTuningPreset(runtimeKey) { clickedKeys.push(runtimeKey); }
-async function renameModelTuningPreset(runtimeKey) { clickedKeys.push(runtimeKey); }
-async function deleteModelTuningPreset(runtimeKey) { clickedKeys.push(runtimeKey); }
+const tuningCalls = [];
+async function saveModelTuningPreset(runtimeKey) { tuningCalls.push(["save", runtimeKey]); }
+async function renameModelTuningPreset(runtimeKey) { tuningCalls.push(["rename", runtimeKey]); }
+async function deleteModelTuningPreset(runtimeKey) { tuningCalls.push(["delete", runtimeKey]); }
 function setStatus(_message, _kind) {}
 function closeRunPresetDialog() {}
 function loadPresets() {}
@@ -3042,9 +3042,23 @@ for (const meta of Object.values(TASK_CONFIG)) {
   }
 }
 
-// The save closure still targets the task's own runtimeKey.
-await elements[TASK_CONFIG.story_drafting.saveButtonId].onclick();
-assert(clickedKeys.length === 1 && clickedKeys[0] === "story_drafting", "save handler captured the wrong runtimeKey");
+// Every tuning closure must preserve both its operation and task-specific runtimeKey.
+for (const meta of Object.values(TASK_CONFIG)) {
+  for (const [id, operation] of [
+    [meta.saveButtonId, "save"],
+    [meta.renameButtonId, "rename"],
+    [meta.deleteButtonId, "delete"],
+  ]) {
+    await elements[id].onclick();
+    const actual = tuningCalls.pop();
+    const expected = [operation, meta.runtimeKey];
+    assert(
+      JSON.stringify(actual) === JSON.stringify(expected),
+      `${id} invoked ${JSON.stringify(actual)} instead of ${operation}/${meta.runtimeKey}`
+    );
+  }
+}
+assert(tuningCalls.length === 0, "tuning callbacks left unexpected calls");
 
 // ---- Partial control trees -------------------------------------------------
 for (const absentId of ["article_tuning_save", "article_tuning_rename", "article_tuning_delete"]) {
