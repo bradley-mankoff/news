@@ -503,6 +503,29 @@ class ConfigHelperTests(unittest.TestCase):
             model_backend="mlx-lm",
         )  # no raise: same canonical endpoint, same model
 
+    def test_validate_managed_model_assignments_rejects_external_task_on_managed_default_endpoint(self) -> None:
+        # An external assignment cannot silently share an endpoint owned by
+        # the managed default server: it would route an external model name
+        # into the process serving the default model.
+        with self.assertRaisesRegex(
+            ValueError,
+            r"Task 'article_summary'.*external backend on the managed default endpoint",
+        ):
+            config_module._validate_managed_model_assignments(
+                {
+                    "article_summary": SimpleNamespace(
+                        backend="external",
+                        base_url="http://localhost:8080/v1/",
+                        reference="external-ref",
+                        name="external-name",
+                    )
+                },
+                model_reference="main-ref",
+                model_name="main-name",
+                model_base_url="http://127.0.0.1:8080/v1",
+                model_backend="mlx-lm",
+            )
+
     def test_validate_managed_model_assignments_external_default_exempts_its_endpoint(self) -> None:
         # When the default endpoint is external (caller-managed), assignments
         # riding that endpoint stay external and may use different models;

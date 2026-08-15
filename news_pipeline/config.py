@@ -946,9 +946,10 @@ def _validate_managed_model_assignments(
     Assignments are grouped by canonical endpoint, and any group holding
     different model names is rejected before source collection - whether the
     collision is default-vs-task or task-vs-task (issue #133). External
-    assignments - and assignments riding an external default endpoint -
-    stay out of the managed groups because external endpoints can serve
-    multiple models.
+    assignments sharing a managed default endpoint are rejected before
+    grouping, while assignments riding an external default endpoint stay out
+    of the managed groups because caller-managed endpoints can serve multiple
+    models.
     """
     groups: dict[tuple[Any, ...], list[tuple[str, str, str, str]]] = {}
     if is_managed_model_backend(model_backend) and model_base_url:
@@ -961,11 +962,22 @@ def _validate_managed_model_assignments(
         # helper callers and full dicts behave identically.
         if task == "default":
             continue
+        assignment_backend = getattr(assignment, "backend", None) or model_backend
+        if (
+            is_managed_model_backend(model_backend)
+            and not is_managed_model_backend(assignment_backend)
+            and assignment.base_url
+            and same_model_endpoint(assignment.base_url, model_base_url)
+        ):
+            raise ValueError(
+                f"Task {task!r} uses an external backend on the managed default "
+                "endpoint. Set a distinct per-task base URL for the external server."
+            )
         if not is_managed_server_assignment(
             assignment,
             default_backend=model_backend,
             default_base_url=model_base_url,
-            assignment_backend=getattr(assignment, "backend", None) or model_backend,
+            assignment_backend=assignment_backend,
         ) or not assignment.base_url:
             continue
         groups.setdefault(canonical_model_endpoint(assignment.base_url), []).append(
