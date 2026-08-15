@@ -73,9 +73,11 @@ Secret prevention is automatic through the Gitleaks pre-commit hook in
 `uv run pre-commit install`. It scans staged changes only and uses redacted
 output. CI checks the PR's new commit range with the same pinned Gitleaks v8.30.1
 container: the `Secret scan` job in `.github/workflows/ci.yml` runs on every
-pull request to `develop`/`main`, scans only the PR's non-merge commits,
-redacts findings, and fails the check on any finding. Reproduce the gate
-locally with the Docker command in `docs/security/secret-prevention.md`.
+pull request to `develop`/`main`, scans a merge-aware PR commit range using
+`--diff-merges=first-parent`, redacts findings, rejects inline
+`gitleaks:allow` comments with `--ignore-gitleaks-allow`, and fails the check
+on any finding. Reproduce the gate locally with the Docker command in
+`docs/security/secret-prevention.md`.
 Runbook: `docs/security/secret-prevention.md`.
 
 ### Shell script checks
