@@ -277,16 +277,22 @@ class CliTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertIn("gemma-4-12b-it-4bit", stdout)
         self.assertIn("gemma-e2b-tiny", stdout)
-        self.assertNotIn("qwythos", stdout)
+        self.assertIn("qwythos-9b-4bit", stdout)
+        self.assertIn("llama.cpp", stdout)
         self.assertIn("huggingface.co", stdout)
 
         code, stdout, stderr = self._invoke(["models", "catalog", "--json"])
 
         self.assertEqual(code, 0)
         entries = json.loads(stdout)
-        self.assertEqual(len(entries), 2)
+        self.assertEqual(len(entries), 4)
         self.assertEqual(entries[0]["alias"], "gemma-4-12b-it-4bit")
         self.assertTrue(entries[0]["is_default"])
+        llama_entries = [entry for entry in entries if entry["backend"] == "llama.cpp"]
+        self.assertEqual(
+            [entry["alias"] for entry in llama_entries],
+            ["qwythos-9b-4bit", "qwythos-9b-8bit"],
+        )
 
     def test_models_catalog_custom_yaml_entry_offline(self) -> None:
         """A valid YAML overlay is merged into the offline catalog command
@@ -313,7 +319,13 @@ class CliTests(unittest.TestCase):
             entries = json.loads(stdout)
             self.assertEqual(
                 [entry["alias"] for entry in entries],
-                ["gemma-4-12b-it-4bit", "gemma-e2b-tiny", "smoke-model"],
+                [
+                    "gemma-4-12b-it-4bit",
+                    "gemma-e2b-tiny",
+                    "qwythos-9b-4bit",
+                    "qwythos-9b-8bit",
+                    "smoke-model",
+                ],
             )
             self.assertTrue(entries[0]["is_default"])
             smoke = next(entry for entry in entries if entry["alias"] == "smoke-model")

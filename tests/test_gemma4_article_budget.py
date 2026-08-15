@@ -44,7 +44,7 @@ def _article_ids(count: int, *, prefix: str = "a") -> list[str]:
 
 
 class Gemma4ArticleBudgetTests(unittest.TestCase):
-    def test_gemma_4_detection_and_unsupported_qwythos_alias(self) -> None:
+    def test_gemma_4_detection_and_qwythos_alias(self) -> None:
         self.assertTrue(is_gemma_4_model_reference(CODEX_TEST_MODEL_ALIAS))
         self.assertTrue(is_gemma_4_model_reference(CODEX_TEST_MODEL_NAME))
         self.assertTrue(
@@ -52,10 +52,16 @@ class Gemma4ArticleBudgetTests(unittest.TestCase):
                 "mlx-community/gemma-4-26B-A4B-it-heretic-4bit"
             )
         )
-        # The Qwythos alias is unsupported, so resolution fails fast with an
-        # actionable error instead of a half-started server (issue #124).
-        with self.assertRaisesRegex(ValueError, "Unsupported model reference"):
-            is_gemma_4_model_reference(QWWYTHOS_9B_4BIT_MODEL_ALIAS)
+        # The Qwythos alias now resolves to a managed llama.cpp GGUF
+        # assignment (issue #75); it is not a Gemma 4 model, and resolution
+        # no longer fails fast.
+        self.assertFalse(is_gemma_4_model_reference(QWWYTHOS_9B_4BIT_MODEL_ALIAS))
+        resolved = load_runtime_config(
+            materialize_outputs=False,
+            environ={"NEWS_MODEL": QWWYTHOS_9B_4BIT_MODEL_ALIAS},
+        )
+        self.assertEqual(resolved.model_backend, "llama.cpp")
+        self.assertTrue(resolved.model_name.endswith(".gguf"))
         self.assertTrue(is_gemma_4_model_reference(DEFAULT_MODEL_ALIAS))
 
     def test_pipeline_budget_defaults_are_model_independent(self) -> None:

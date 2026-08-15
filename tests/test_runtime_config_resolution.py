@@ -28,6 +28,7 @@ from news_pipeline.config import (
     MODEL_TASK_STORY_SCALE_SCREENING,
     MODEL_TASK_TITLE_GENERATION,
     QWWYTHOS_9B_4BIT_MODEL_REFERENCE,
+    QWWYTHOS_9B_8BIT_MODEL_REFERENCE,
     ModelSamplingSettings,
     ModelServerSettings,
     PRESET_ENV_VAR,
@@ -123,34 +124,153 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
                 self.assertIn("python -m mlx_lm server", config.model_server_command)
                 self.assertNotIn("python -m mlx_vlm.server", config.model_server_command)
 
-    def test_qwythos_aliases_fail_fast_with_actionable_error(self) -> None:
-        # The error message must name the replacement so stale configs are
-        # self-serviceable (issue acceptance criterion).
-        with self.assertRaisesRegex(
-            ValueError,
-            r"Unsupported model reference: qwythos-9b-8bit.*gemma-4-12b-it-4bit",
+    def test_qwythos_aliases_resolve_to_managed_llama_cpp(self) -> None:
+        # The legacy aliases now resolve to their exact GGUF file references
+        # under the managed llama.cpp backend (issue #75).
+        for alias, reference in (
+            ("qwythos-9b-4bit", QWWYTHOS_9B_4BIT_MODEL_REFERENCE),
+            ("qwythos-9b-8bit", QWWYTHOS_9B_8BIT_MODEL_REFERENCE),
         ):
-            load_runtime_config(
-                environ={},
-                overrides={"NEWS_MODEL": "qwythos-9b-8bit"},
-                materialize_outputs=False,
-            )
+            with self.subTest(alias=alias):
+                config = load_runtime_config(
+                    environ={},
+                    overrides={"NEWS_MODEL": alias},
+                    materialize_outputs=False,
+                    run_started_at=datetime(2026, 6, 14, 12, 0, 0),
+                )
+                self.assertEqual(config.model_reference, alias)
+                self.assertEqual(config.model_name, reference)
+                self.assertEqual(config.model_backend, "llama.cpp")
+                self.assertIn("--hf-repo", config.model_server_command)
+                self.assertIn("--hf-file", config.model_server_command)
+                self.assertIn("--alias", config.model_server_command)
+                self.assertNotIn("mlx_lm", config.model_server_command)
+                self.assertNotIn("mlx_vlm", config.model_server_command)
+                self.assertEqual(
+                    config.model_assignments["default"].backend,
+                    "llama.cpp",
+                )
 
-    def test_raw_qwythos_gguf_references_fail_fast_too(self) -> None:
+    def test_raw_qwythos_gguf_references_infer_llama_cpp(self) -> None:
         # Raw owner/repo/file.gguf references and their URL forms (the values
-        # the old SETTINGS.md published as "Resolved model") fail fast like
-        # the aliases instead of half-starting an mlx-vlm server (issue #124).
-        for stale in (
+        # the old SETTINGS.md published as "Resolved model") now resolve to
+        # the managed llama.cpp backend instead of failing (issue #75).
+        for supported in (
             QWWYTHOS_9B_4BIT_MODEL_REFERENCE,
             f"https://huggingface.co/{QWWYTHOS_9B_4BIT_MODEL_REFERENCE}",
             f"https://hf.co/{QWWYTHOS_9B_4BIT_MODEL_REFERENCE}",
         ):
-            with self.assertRaisesRegex(ValueError, "Unsupported model reference"):
-                load_runtime_config(
+            with self.subTest(reference=supported):
+                config = load_runtime_config(
                     environ={},
-                    overrides={"NEWS_MODEL": stale},
+                    overrides={"NEWS_MODEL": supported},
                     materialize_outputs=False,
                 )
+                self.assertEqual(config.model_backend, "llama.cpp")
+                self.assertEqual(config.model_name, QWWYTHOS_9B_4BIT_MODEL_REFERENCE)
+                self.assertIn(
+                    "--hf-repo huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF",
+                    config.model_server_command,
+                )
+                self.assertIn(
+                    "--hf-file Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-Q4_K.gguf",
+                    config.model_server_command,
+                )
+
+    def test_local_gguf_path_infers_llama_cpp(self) -> None:
+        config = load_runtime_config(
+            environ={},
+            overrides={"NEWS_MODEL": "/models/my model.gguf"},
+            materialize_outputs=False,
+        )
+        self.assertEqual(config.model_backend, "llama.cpp")
+        self.assertIn(
+            "--model '/models/my model.gguf'",
+            config.model_server_command,
+        )
+
+    def test_llama_cpp_backend_unknown_bare_hf_repo_supported(self) -> None:
+        # An unknown bare HF repo explicitly selected for llama.cpp is passed
+        # as --hf-repo so llama-server applies its default quantization.
+        config = load_runtime_config(
+            environ={"NEWS_MODEL_BACKEND": "llama.cpp"},
+            overrides={"NEWS_MODEL": "some-owner/some-gguf-repo"},
+            materialize_outputs=False,
+        )
+        self.assertEqual(config.model_backend, "llama.cpp")
+        self.assertIn(
+            "--hf-repo some-owner/some-gguf-repo",
+            config.model_server_command,
+        )
+
+    def test_known_mlx_catalog_model_rejected_for_llama_cpp(self) -> None:
+        with self.assertRaisesRegex(
+            ValueError,
+            r"NEWS_MODEL_BACKEND=llama.cpp cannot serve.*mlx-vlm",
+        ):
+            load_runtime_config(
+                environ={"NEWS_MODEL_BACKEND": "llama.cpp"},
+                overrides={"NEWS_MODEL": "gemma-4-12b-it-4bit"},
+                materialize_outputs=False,
+            )
+
+    def test_known_llama_cpp_catalog_model_rejected_for_mlx(self) -> None:
+        for backend in ("mlx-lm", "mlx-vlm"):
+            with self.subTest(backend=backend):
+                with self.assertRaisesRegex(
+                    ValueError,
+                    rf"NEWS_MODEL_BACKEND={backend} cannot serve.*llama.cpp backend",
+                ):
+                    load_runtime_config(
+                        environ={"NEWS_MODEL_BACKEND": backend},
+                        overrides={"NEWS_MODEL": "qwythos-9b-4bit"},
+                        materialize_outputs=False,
+                    )
+
+    def test_known_catalog_backend_mismatch_rejects_url_aliases(self) -> None:
+        cases = (
+            (
+                "llama.cpp",
+                f"https://huggingface.co/{GEMMA_4_12B_IT_4BIT_MODEL_REPO}",
+                r"NEWS_MODEL_BACKEND=llama.cpp cannot serve.*mlx-vlm",
+            ),
+            (
+                "mlx-lm",
+                f"https://hf.co/{QWWYTHOS_9B_4BIT_MODEL_REFERENCE}",
+                r"NEWS_MODEL_BACKEND=mlx-lm cannot serve.*llama.cpp backend",
+            ),
+        )
+        for backend, reference, message in cases:
+            with self.subTest(backend=backend, reference=reference):
+                with self.assertRaisesRegex(ValueError, message):
+                    load_runtime_config(
+                        environ={"NEWS_MODEL_BACKEND": backend},
+                        overrides={"NEWS_MODEL": reference},
+                        materialize_outputs=False,
+                    )
+
+    def test_custom_llama_cpp_binary_appears_in_command(self) -> None:
+        config = load_runtime_config(
+            environ={"NEWS_LLAMA_CPP_SERVER": "/opt/llama/llama-server"},
+            overrides={"NEWS_MODEL": "qwythos-9b-4bit"},
+            materialize_outputs=False,
+        )
+        self.assertTrue(
+            config.model_server_command.startswith("/opt/llama/llama-server ")
+        )
+        self.assertEqual(
+            config.model_server_settings.llama_cpp_binary,
+            "/opt/llama/llama-server",
+        )
+
+    def test_blank_llama_cpp_binary_falls_back_to_default(self) -> None:
+        config = load_runtime_config(
+            environ={"NEWS_LLAMA_CPP_SERVER": "   "},
+            overrides={"NEWS_MODEL": "qwythos-9b-4bit"},
+            materialize_outputs=False,
+        )
+        self.assertTrue(config.model_server_command.startswith("llama-server "))
+        self.assertEqual(config.model_server_settings.llama_cpp_binary, "llama-server")
 
     def test_custom_managed_catalog_alias_reaches_runtime_config(self) -> None:
         custom = dict(model_catalog.BUILTIN_CATALOG_MODELS)
@@ -257,7 +377,7 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
         self.assertEqual(resolution.config.model_backend, "mlx-vlm")
 
     def test_news_model_backend_invalid_value_raises_value_error(self) -> None:
-        with self.assertRaisesRegex(ValueError, "NEWS_MODEL_BACKEND must be one of: mlx-lm, mlx-vlm, external"):
+        with self.assertRaisesRegex(ValueError, "NEWS_MODEL_BACKEND must be one of: mlx-lm, mlx-vlm, external, llama.cpp"):
             resolve_runtime_config(
                 RuntimeConfigRequest(
                     base_env={"NEWS_MODEL_BACKEND": "bogus"},
