@@ -526,8 +526,10 @@ models:
     description: A user-verified text-generation GGUF model.
 ```
 
-See [`docs/adr/0014-model-catalog-yaml-overrides.md`](docs/adr/0014-model-catalog-yaml-overrides.md)
-for the accepted architecture record.
+See [`docs/adr/0019-model-catalog-owns-curated-models-and-runtime-fit-verdicts.md`](docs/adr/0019-model-catalog-owns-curated-models-and-runtime-fit-verdicts.md)
+for the accepted baseline architecture record, and
+[`docs/adr/0014-model-catalog-yaml-overrides.md`](docs/adr/0014-model-catalog-yaml-overrides.md)
+for the YAML-overlay extension decision.
 
 ### Runtime Matrix
 

@@ -101,6 +101,10 @@ The default model remains the MLX Gemma 4 12B entry above.
 Each model page shows Hugging Face's native Hardware Compatibility panel
 (GGUF/MLX quantizations) — the UI model picker links directly to it.
 
+See [`docs/adr/0019-model-catalog-owns-curated-models-and-runtime-fit-verdicts.md`](docs/adr/0019-model-catalog-owns-curated-models-and-runtime-fit-verdicts.md)
+for the accepted Model Catalog ownership record (curated models,
+per-task recommendations, and runtime-fit verdicts).
+
 | Variable | Default | Description |
 |---|---|---|
 | `NEWS_MODEL_STORY_SCALE_SCREENING` | _(inherits `NEWS_MODEL`)_ | Model assignment for the global story scale screening LLM stage. |
@@ -191,6 +195,10 @@ id. Malformed or unsafe entries fail closed with a path-specific error.
 per-process snapshot, so restart `news` or the UI after editing. It is not a
 Run Setting and does not change the default model
 (`DEFAULT_MODEL_ALIAS` stays code-owned).
+
+Baseline catalog ownership (curated built-ins, recommendations, and
+runtime-fit verdicts) is recorded in
+[`docs/adr/0019-model-catalog-owns-curated-models-and-runtime-fit-verdicts.md`](docs/adr/0019-model-catalog-owns-curated-models-and-runtime-fit-verdicts.md).
 
 `config/prompt_overrides.yaml` is a partial editorial-instruction override
 map for the five prompt tasks (article summary, story scale screening, story
