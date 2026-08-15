@@ -19,7 +19,7 @@ for the accepted decision that separates Run Settings, Run Presets, Task Model
 Assignment, Model Tuning, Pipeline Budget, and Model Server Settings. Prompt
 Profiles are editorial tone bundles, not model configuration; their ownership
 is defined in
-[`docs/adr/0010-prompt-catalog-owns-editorial-instructions.md`](docs/adr/0010-prompt-catalog-owns-editorial-instructions.md).
+[`docs/adr/0018-prompt-catalog-owns-editorial-instructions.md`](docs/adr/0018-prompt-catalog-owns-editorial-instructions.md).
 
 ## Default Run Settings
 

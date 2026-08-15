@@ -280,7 +280,7 @@ stages (article summary, story scale screening, story drafting, title
 generation, image art direction). They swap editorial instruction sentences
 only; the pipeline's machine-required output contracts are unchanged. Prompt
 Profile ownership is governed by the Prompt Catalog ADR
-([`docs/adr/0010-prompt-catalog-owns-editorial-instructions.md`](docs/adr/0010-prompt-catalog-owns-editorial-instructions.md)),
+([`docs/adr/0018-prompt-catalog-owns-editorial-instructions.md`](docs/adr/0018-prompt-catalog-owns-editorial-instructions.md)),
 not by Model Tuning.
 
 ```bash
@@ -415,7 +415,7 @@ Curated models (2):
 
 Hugging Face search results carry runtime-fit verdicts (`managed_mlx_lm`,
 `managed_mlx_vlm`, or `external_only`) so unlaunchable repos are never picked
-for a managed backend (ADR 0010 runtime matrix); hardware fitting itself lives
+for a managed backend (ADR 0017 runtime matrix); hardware fitting itself lives
 on the Hugging Face model page. The UI's "Model catalog" panel shows curated
 cards, task recommendations, and search with the same verdicts.
 
@@ -433,7 +433,7 @@ file requires restarting `news` or the UI (no hot reload).
 - New aliases must provide `reference`, `name`, `backend`, `hf_repo`, and
   `description`. `backend` is limited to `mlx-lm`, `mlx-vlm`, and `external`;
   `reference` must equal `hf_repo` (an owner/repo id — file-qualified `.gguf`
-  references are rejected, ADR 0010). `context_length` is optional and
+  references are rejected, ADR 0017). `context_length` is optional and
   `task_notes` defaults to `{}`.
 - Aliases must match the safe pattern (lowercase letters, digits, `.`, `_`,
   `-`, starting with a letter or digit). Unknown top-level keys, entry
@@ -465,7 +465,7 @@ for the accepted architecture record.
 ### Runtime Matrix
 
 Initially supported runtimes (recorded in
-[`docs/adr/0010-runtime-matrix.md`](docs/adr/0010-runtime-matrix.md)):
+[`docs/adr/0017-runtime-matrix.md`](docs/adr/0017-runtime-matrix.md)):
 
 - `mlx-lm` — managed local MLX language-model server on Apple Silicon.
 - `mlx-vlm` — managed local MLX vision-language-model server on Apple Silicon.

@@ -13,7 +13,7 @@ be customized by a user; editing only one of those registries would create a
 catalog/runtime mismatch. The built-in entries are code-reviewed contracts,
 so the question was how to let a local operator add or reword catalog entries
 without forking application code or weakening the reviewed identity rules
-(ADR 0010 runtime matrix, issue #124 GGUF boundary).
+(ADR 0017 runtime matrix, issue #124 GGUF boundary).
 
 ## Decision
 
@@ -38,7 +38,7 @@ runtime-fit annotations.
   pattern (letters, digits, `.`, `_`, `-`, starting with a letter or digit).
 - Backends are limited to the closed set (`mlx-lm`, `mlx-vlm`, `external`);
   `reference == hf_repo` is required and file-qualified `.gguf` references
-  are rejected, preserving the ADR 0010 runtime matrix and the issue #92
+  are rejected, preserving the ADR 0017 runtime matrix and the issue #92
   drift guard.
 - Unknown top-level keys, entry fields, and recommendation keys are errors.
   Malformed or unsafe YAML fails closed with a path-specific `ValueError`
@@ -81,7 +81,7 @@ cycle boundary, and `config.py` consumes the merged registry through
   code-reviewed contracts and the empty/default behavior must stay stable.
 - Let only the UI or CLI read YAML — rejected: alias resolution, selectors,
   presets, and model-server startup would disagree with the catalog.
-- Allow arbitrary file-qualified/GGUF references — rejected by ADR 0010 and
+- Allow arbitrary file-qualified/GGUF references — rejected by ADR 0017 and
   the `reference == hf_repo` invariant.
 - Add a model-registration database/API — rejected: this is a local,
   offline-first configuration feature and existing config inputs are YAML.

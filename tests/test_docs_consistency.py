@@ -35,7 +35,7 @@ _SETTINGS = _REPO / "SETTINGS.md"
 
 _ADR_0007_LINK = "docs/adr/0007-model-configuration-vocabulary.md"
 _PROMPT_CATALOG_ADR_LINK = (
-    "docs/adr/0010-prompt-catalog-owns-editorial-instructions.md"
+    "docs/adr/0018-prompt-catalog-owns-editorial-instructions.md"
 )
 _ADR_0007_BOUNDARY_TERMS = (
     "Task Model Assignment",
@@ -142,8 +142,10 @@ class DocsConsistencyTests(unittest.TestCase):
         ]
         self.assertEqual(numbers, sorted(numbers), "ADR numbers must be sorted")
         # New ADRs must extend, never re-use or renumber, existing decisions.
+        # The set-cardinality check catches duplicates anywhere in the sequence
+        # (0010 is intentionally unused after the collision repair).
         self.assertEqual(
-            numbers[-1], max(numbers), "duplicate ADR number detected"
+            len(numbers), len(set(numbers)), "ADR numbers must be unique"
         )
 
         for path in adr_paths:

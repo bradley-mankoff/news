@@ -255,7 +255,7 @@ def _validate_catalog_repo_id(value: Any, alias: str, path: Path, field: str) ->
     if ".gguf" in repo_id.lower():
         raise ValueError(
             f"{path} model {alias!r} {field} {repo_id!r} is a file-qualified GGUF "
-            "reference; managed backends cannot launch GGUF files (ADR 0010). "
+            "reference; managed backends cannot launch GGUF files (ADR 0017). "
             "Use an owner/repo id with an MLX distribution instead."
         )
     if repo_id.count("/") != 1 or repo_id.startswith("/") or repo_id.endswith("/"):
@@ -549,7 +549,7 @@ HF_SEARCH_EXPAND = [
     "config",
 ]
 
-# Closed set of pipeline tags the CLI/UI may filter search by (ADR 0010).
+# Closed set of pipeline tags the CLI/UI may filter search by (ADR 0017).
 HF_SEARCH_PIPELINE_TAGS = ("text-generation", "text2text-generation", "image-text-to-text")
 
 
@@ -568,7 +568,7 @@ def runtime_fit_for_hf_model(info: Mapping[str, Any]) -> dict[str, str]:
     """Classify a Hugging Face model repo into a runtime-fit verdict.
 
     Returns ``{"status": ..., "reason": ...}`` where status is one of the
-    ``RUNTIME_FIT_*`` constants. Rules are conservative (ADR 0010): code-owned
+    ``RUNTIME_FIT_*`` constants. Rules are conservative (ADR 0017): code-owned
     curated repos and user-declared catalog entries are classified by their
     declared backend, while MLX libraries and transformers+safetensors
     text/vision repos are classified by metadata; everything else is
@@ -646,7 +646,7 @@ def runtime_fit_for_hf_model(info: Mapping[str, Any]) -> dict[str, str]:
             }
         return {
             "status": RUNTIME_FIT_EXTERNAL_ONLY,
-            "reason": "Transformers model outside the supported pipeline tags (ADR 0010).",
+            "reason": "Transformers model outside the supported pipeline tags (ADR 0017).",
         }
 
     return {
