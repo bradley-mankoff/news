@@ -263,9 +263,10 @@ def _models_search_error_context(args: list[str]) -> tuple[str, bool]:
             index += 1
         elif arg in {"--task", "--limit"}:
             index += 2
+        elif arg == "--json":
+            json_requested = True
+            index += 1
         else:
-            if arg == "--json":
-                json_requested = True
             index += 1
     return query, json_requested
 
