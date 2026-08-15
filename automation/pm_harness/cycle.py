@@ -929,8 +929,8 @@ def _fill_concurrency_gap(
     empty (no runnable items, dep-blocked, decision-only, needs-input,
     closed) so the gap is visible and fixable.
 
-    Mutates `item['status']` in place for promoted items so the dispatch
-    loop sees the Todo transition and dispatches in this same poll.
+    Mutates `item['status']` in place for promoted items so the next poll's
+    dispatch loop sees the Todo transition and dispatches the item.
 
     Returns the number of items promoted.
     """
@@ -1333,10 +1333,11 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
         fresh_dispatched=fresh_dispatched,
     )
     # Desired-state pass: fill free dispatch slots from runnable Backlog
-    # items so the factory stays near capacity without human nudges.
-    # Runs after the item loop so `ctx` exists and labels are fresh; the
+    # items so the factory stays near capacity without human nudges. Do not
+    # mutate existing board state while taking the initial snapshot; the
     # promoted items dispatch on the next poll's Todo transition.
-    _fill_concurrency_gap(ctx, items, number_lane, number_state)
+    if not ctx.first_run:
+        _fill_concurrency_gap(ctx, items, number_lane, number_state)
     _recheck_review_dispatch(ctx)
     _unblock_dependencies(ctx)
     runs_snapshot, runs_by_msg = _reconcile_completions(ctx)
