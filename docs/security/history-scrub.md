@@ -153,3 +153,35 @@ commits before rewriting — they are gone afterward).
 `automation/scrub_history.sh` automates steps 1-6 (clone, generate replacement files
 from redacted constants, filter-repo, audit verification) and by default only
 **prints** the push commands (`--dry-run`). A human passes `--execute` to push.
+
+## Automated Policy Gate
+
+`automation/scrub_policy.py` adds a read-only policy controller around the
+wrapper. Run the plan before changing anything:
+
+```bash
+python3 automation/scrub_policy.py plan
+python3 automation/scrub_policy.py check
+```
+
+Every open PR must have exactly one of the policy labels
+`rewrite-with-keep-set` or `close-on-scrub`. The former keeps the PR head in the
+rewritten push set; the latter closes the PR and deletes its head. The controller
+also requires no In Progress board items, a bounded human freeze window, a clean
+`/tmp/news-scrub-backup-*` mirror, and a current verified dry-run manifest from
+`scrub_history.sh --dry-run`.
+
+After reviewing the plan and arranging the freeze window, set it using the
+required mode argument, then re-check and execute:
+
+```bash
+python3 automation/scrub_policy.py check --freeze START END
+python3 automation/scrub_policy.py check
+python3 automation/scrub_policy.py execute
+```
+
+`execute` closes labeled PRs, deletes close-on-scrub heads, rewrites the mirror,
+and force-pushes `develop`, `main`, tags, and the labeled keep-set heads. It
+aborts before rewriting if a close or delete operation fails. Verify the audit
+and a fresh clone before clearing the freeze with
+`python3 automation/scrub_policy.py check --unfreeze`.

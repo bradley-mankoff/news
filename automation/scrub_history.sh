@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
 # Scrub personal data from git history with git-filter-repo (GATED).
 #
-# Usage: scrub_history.sh [--dry-run|--execute] [--mailmap PATH]
+# Usage: scrub_history.sh [--dry-run|--execute] [--mailmap PATH] [--keep-ref REF]
 #
 # Performs the history scrub described in docs/security/history-scrub.md on a
 # fresh mirror clone: generate replacement files (from redacted constants
 # below), run git filter-repo, then verify with automation/security_audit.py
 # (history-only). Push commands are PRINTED by default; a human passes
-# --execute to actually force-push develop + main + tags.
+# --execute to actually force-push develop, main, tags, and any explicitly
+# supplied --keep-ref values.
 #
 # DANGER: rewriting history invalidates every clone, worktree, open PR diff,
 # and the poller's automation/state.json. Run only when no issues are In
@@ -50,6 +51,7 @@ esac
 
 DRY_RUN=1
 MAILMAP=""
+KEEP_REFS=()
 
 while [ $# -gt 0 ]; do
   arg="$1"
@@ -66,15 +68,47 @@ while [ $# -gt 0 ]; do
       shift
       ;;
     --mailmap=*) MAILMAP="${arg#--mailmap=}" ;;
+    --keep-ref)
+      if [ $# -lt 2 ]; then
+        echo "error: --keep-ref requires a full refs/heads/* or refs/tags/* ref" >&2
+        exit 2
+      fi
+      KEEP_REFS+=("$2")
+      shift
+      ;;
+    --keep-ref=*) KEEP_REFS+=("${arg#--keep-ref=}") ;;
     -h|--help) sed -n '1,20p' "$0"; exit 0 ;;
     *)
       echo "error: unknown argument: $arg" >&2
-      echo "usage: scrub_history.sh [--dry-run|--execute] [--mailmap PATH]" >&2
+      echo "usage: scrub_history.sh [--dry-run|--execute] [--mailmap PATH] [--keep-ref REF]" >&2
       exit 2
       ;;
   esac
   shift
 done
+
+if [ "${#KEEP_REFS[@]}" -gt 0 ]; then
+  for ref in "${KEEP_REFS[@]}"; do
+    case "$ref" in
+      refs/heads/*|refs/tags/*) ;;
+      *)
+        echo "error: --keep-ref must be refs/heads/* or refs/tags/*: $ref" >&2
+        exit 2
+        ;;
+    esac
+    if ! git check-ref-format "$ref" >/dev/null 2>&1; then
+      echo "error: invalid --keep-ref: $ref" >&2
+      exit 2
+    fi
+  done
+fi
+
+DRY_RUN_MARKER="$SCRIPT_DIR/.scrub-dryrun-ok"
+if [ "$DRY_RUN" -eq 0 ]; then
+  # A prior dry-run is not evidence for an execute run that failed or was
+  # interrupted; invalidate it before starting the destructive path.
+  rm -f "$DRY_RUN_MARKER"
+fi
 
 if [ "$DRY_RUN" -eq 1 ]; then
   echo "==> DRY RUN: clone + rewrite + verify will run; push commands will only be printed."
@@ -86,6 +120,9 @@ command -v git-filter-repo >/dev/null 2>&1 || {
   echo "error: git-filter-repo not found. Install it first: brew install git-filter-repo" >&2
   exit 1
 }
+
+echo "==> Recording source refs for dry-run freshness checks"
+SOURCE_REFS_SHA256="$(git ls-remote "$REPO_URL" "refs/heads/*" "refs/tags/*" | shasum -a 256 | awk '{print $1}')"
 
 echo "==> Cloning mirror of $REPO_URL into $WORKDIR"
 rm -rf "$WORKDIR"
@@ -177,21 +214,35 @@ PUSH_CMDS=(
   "git -C $WORKDIR push --force origin main"
   "git -C $WORKDIR push --force --tags"
 )
+if [ "${#KEEP_REFS[@]}" -gt 0 ]; then
+  for ref in "${KEEP_REFS[@]}"; do
+    PUSH_CMDS+=("git -C $WORKDIR push --force origin $ref:$ref")
+  done
+fi
 
 if [ "$DRY_RUN" -eq 1 ]; then
+  cat > "$DRY_RUN_MARKER" <<EOF
+{
+  "verified_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+  "repo_url": "$REPO_URL",
+  "workdir": "$WORKDIR",
+  "source_refs_sha256": "$SOURCE_REFS_SHA256"
+}
+EOF
   echo "==> DRY RUN: push commands below were NOT executed."
   printf '    %s\n' "${PUSH_CMDS[@]}"
+  echo "    Verified dry-run manifest: $DRY_RUN_MARKER"
   echo "    Re-run with --execute to push. After pushing: update all local checkouts,"
   echo "    re-init automation/state.json, and contact GitHub Support to purge cached views."
 else
-  echo "==> Pushing rewritten history (develop, main, tags)"
+  echo "==> Pushing rewritten history (develop, main, tags, requested keep refs)"
   # No eval: the commands are fixed and known, so execute them directly with
   # a quoted WORKDIR (avoids shell injection via an env-controlled path).
   # Check each push individually: a partial force-push is the one failure
   # mode where the human must know exactly which refs moved. VERIFY_PASSED is
   # already 1 here, so the cleanup trap keeps the rewritten mirror for retry.
   PUSH_FAILED=0
-  for target in "origin develop" "origin main" "--tags"; do
+  for target in "origin develop" "origin main"; do
     # shellcheck disable=SC2086
     if ! git -C "$WORKDIR" push --force $target; then
       echo "error: push failed: git push --force $target" >&2
@@ -202,6 +253,26 @@ else
     fi
     echo "    ok: git push --force $target"
   done
+  if [ "$PUSH_FAILED" -eq 0 ] && ! git -C "$WORKDIR" push --force origin --tags; then
+    echo "error: push failed: git push --force origin --tags" >&2
+    echo "       Earlier pushes in this list may already have reached the remote." >&2
+    echo "       The rewritten mirror is kept at $WORKDIR for retry/inspection." >&2
+    PUSH_FAILED=1
+  elif [ "$PUSH_FAILED" -eq 0 ]; then
+    echo "    ok: git push --force origin --tags"
+  fi
+  if [ "$PUSH_FAILED" -eq 0 ] && [ "${#KEEP_REFS[@]}" -gt 0 ]; then
+    for ref in "${KEEP_REFS[@]}"; do
+      if ! git -C "$WORKDIR" push --force origin "$ref:$ref"; then
+        echo "error: push failed: git push --force origin $ref:$ref" >&2
+        echo "       Earlier pushes in this list may already have reached the remote." >&2
+        echo "       The rewritten mirror is kept at $WORKDIR for retry/inspection." >&2
+        PUSH_FAILED=1
+        break
+      fi
+      echo "    ok: git push --force origin $ref:$ref"
+    done
+  fi
   if [ "$PUSH_FAILED" -eq 1 ]; then
     echo "error: force-push incomplete; do NOT re-run the scrub from scratch without" >&2
     echo "       checking which refs moved (see the messages above)." >&2

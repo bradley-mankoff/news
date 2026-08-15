@@ -142,6 +142,10 @@ exit 0
         )
 
     def test_dry_run_produces_pushable_mirror_with_origin(self) -> None:
+        self.addCleanup(
+            (ROOT / "automation" / ".scrub-dryrun-ok").unlink,
+            missing_ok=True,
+        )
         # Regression: git filter-repo removes 'origin' by default, so the
         # script must re-add it before the push section (dry-run prints the
         # exact commands a human runs with --execute).
@@ -152,7 +156,10 @@ exit 0
             env = self._stub_env(tmpdir, fixture, workdir)
 
             r = subprocess.run(
-                ["bash", str(SCRIPT), "--dry-run"],
+                [
+                    "bash", str(SCRIPT), "--dry-run",
+                    "--keep-ref", "refs/heads/feature/kept",
+                ],
                 capture_output=True, text=True, env=env,
             )
 
@@ -160,6 +167,7 @@ exit 0
             self.assertIn("Verification passed", r.stdout)
             self.assertIn("Re-adding origin remote", r.stdout)
             self.assertIn("push --force origin develop", r.stdout)
+            self.assertIn("push --force origin refs/heads/feature/kept:refs/heads/feature/kept", r.stdout)
             # The push commands must be executable as printed: origin must
             # exist on the mirror after the scrub.
             origin = subprocess.run(

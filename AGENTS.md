@@ -15,7 +15,8 @@ direct fix sessions). It is not a project-management constitution.
 - Sources / recipients / presets → `config/*.yaml`
 - Model Catalog (built-ins, YAML overlay, runtime-fit) → `config/model_catalog.yaml` + `news_pipeline/model_catalog.py`
 - Security audit / history scrub → `docs/security/` +
-  `automation/security_audit.py` / `scrub_history.sh` (human-gated execute)
+  `automation/security_audit.py` / `scrub_policy.py` / `scrub_history.sh`
+  (human-gated execute)
 - Secret-prevention (Gitleaks local hook + PR CI gate) →
   `docs/security/secret-prevention.md` + `.pre-commit-config.yaml` +
   `.github/workflows/ci.yml` (pinned `v8.30.1`; staged-only local prevention

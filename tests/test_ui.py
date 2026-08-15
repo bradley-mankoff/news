@@ -2107,6 +2107,14 @@ assert(SURFACED_ENVS.size === 0, "missing schema must not throw and must suppres
                 )
                 self.assertEqual(_mask_secret("shh"), "********")
                 self.assertEqual(_mask_secret(""), "")
+                displayed_env = ui_module._display_env({
+                    "NEWS_PRIVATE_KEY": "-----BEGIN PRIVATE KEY-----secret",
+                    "NEWS_MODEL_API_KEY": "api-secret",
+                    "VISIBLE": "ok",
+                })
+                self.assertEqual(displayed_env["NEWS_PRIVATE_KEY"], "********")
+                self.assertEqual(displayed_env["NEWS_MODEL_API_KEY"], "********")
+                self.assertEqual(displayed_env["VISIBLE"], "ok")
                 self.assertEqual(_clean_env_for_config({"NEWS_TOPIC_IDS": "legacy", "X": "1"}), {"X": "1"})
                 self.assertEqual(
                     _json_ready(_Sample("item", root / "nested" / "path")),
@@ -3926,6 +3934,47 @@ assert(elements.modelSearchResults.querySelector('button[data-use-hf-model="owne
         )
         self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
 
+    def test_source_editor_renderer_executes_in_node_harness(self) -> None:
+        """Exercise every source-field renderer branch in the production UI."""
+        html = ui_module.HTML
+        source_input = html[html.index("function sourceInput"):html.index("function editSource")]
+        js = r"""
+const assert = (condition, message) => {
+  if (!condition) throw new Error(message);
+};
+""" + source_input + r"""
+const source = {
+  key: "alpha",
+  name: "Alpha",
+  tier: "core",
+  can_enrich_coverage: true,
+  strict_source_match: false,
+  source_match_mode: "feed_label",
+  notes: "safe note"
+};
+for (const field of [
+  "key", "name", "language", "tier", "region", "nations", "url",
+  "homepage", "provider_type", "intended_role", "weight",
+  "can_enrich_coverage", "strict_source_match", "source_match_mode",
+  "source_match_aliases", "notes"
+]) {
+  assert(typeof sourceInput(field, source) === "string", `missing renderer for ${field}`);
+}
+assert(sourceInput("tier", source).includes("selected"), "tier was not selected");
+assert(sourceInput("can_enrich_coverage", source).includes('value="true" selected'), "boolean was not selected");
+"""
+        node = shutil.which("node")
+        if node is None:
+            self.skipTest("Node.js is required for the embedded UI renderer harness")
+        result = subprocess.run(
+            [node, "--input-type=module", "-"],
+            input=js,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
+
     def test_model_catalog_renderers_execute_in_node_dom_harness(self) -> None:
         """Execute catalog cards, recommendations, and search fallbacks.
 
@@ -4121,7 +4170,7 @@ apiFailure = "<network failure>";
 await searchHuggingFaceModels();
 assert(elements.modelSearchResults.innerHTML.includes("&lt;network failure&gt;"), "request failure fallback missing");
 
-state.schema.current_env.NEWS_MODEL_BACKEND = "external";
+state.schema.current_env.NEWS_MODEL_BACKEND = " EXTERNAL ";
 apiFailure = null;
 apiResponse = { models: [{
   id: "owner/external",

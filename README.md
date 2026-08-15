@@ -615,6 +615,7 @@ Article Summarization, and Story Drafting models:
 
 ```bash
 NEWS_MODEL=gemma-e2b-tiny \
+NEWS_MODEL_BACKEND=mlx-lm \
 NEWS_MODEL_ARTICLE_SUMMARY=gemma-4-12b-it-4bit \
 NEWS_MODEL_ARTICLE_SUMMARY_BASE_URL=http://127.0.0.1:8090/v1 \
 NEWS_MODEL_STORY_DRAFTING=qwythos-9b-4bit \

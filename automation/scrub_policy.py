@@ -19,9 +19,8 @@ Exit code: 0 = all gates passed (or plan printed); 1 = a gate failed.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
-import os
-import re
 import subprocess
 import sys
 import time
@@ -29,7 +28,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 REPO = "bradley-mankoff/news"
-ROOT = Path("/Users/bradley_mankoff/personal_code/news")
+ROOT = Path(__file__).resolve().parent.parent
 FREEZE_FILE = ROOT / "automation" / ".scrub-freeze.json"
 KEEP_LABEL = "rewrite-with-keep-set"
 CLOSE_LABEL = "close-on-scrub"
@@ -88,8 +87,12 @@ def open_prs() -> list[dict]:
     except ValueError as exc:
         raise RuntimeError(f"unparseable gh output: {exc}") from exc
     for pr in prs:
+        raw_labels = pr.get("labels") or []
+        if isinstance(raw_labels, dict):
+            raw_labels = raw_labels.get("nodes", [])
         pr["_labels"] = {
-            node["name"] for node in (pr.get("labels") or {}).get("nodes", [])
+            item["name"] for item in raw_labels
+            if isinstance(item, dict) and item.get("name")
         }
     return prs
 
@@ -130,12 +133,28 @@ def backup_fresh_and_clean() -> tuple[bool, str]:
 
 
 def dry_run_artifact_ok() -> tuple[bool, str]:
-    """A passing dry-run artifact must exist. The scrub script keeps a
-    verified dry-run mirror; require the marker file."""
+    """Require a verified, current dry-run manifest and retained mirror."""
     marker = ROOT / "automation" / ".scrub-dryrun-ok"
     if not marker.exists():
         return False, "no .scrub-dryrun-ok marker (run scrub_history.sh --dry-run first)"
-    return True, f"dry-run marker present ({marker.stat().st_mtime:.0f})"
+    try:
+        manifest = json.loads(marker.read_text())
+    except (OSError, ValueError) as exc:
+        return False, f"invalid dry-run manifest: {exc}"
+
+    workdir = Path(str(manifest.get("workdir", "")))
+    if not workdir.is_dir():
+        return False, f"dry-run mirror is missing: {workdir}"
+    expected_digest = manifest.get("source_refs_sha256")
+    if not expected_digest:
+        return False, "dry-run manifest has no source ref digest"
+    current = run(["git", "ls-remote", "origin", "refs/heads/*", "refs/tags/*"])
+    if current.returncode != 0:
+        return False, f"cannot verify source refs: {current.stderr.strip()[:200]}"
+    actual_digest = hashlib.sha256(current.stdout.encode()).hexdigest()
+    if actual_digest != expected_digest:
+        return False, "dry-run source refs are stale; run scrub_history.sh --dry-run again"
+    return True, f"verified dry-run manifest present ({marker.stat().st_mtime:.0f})"
 
 
 def classify(prs: list[dict], heads: list[str]) -> tuple[list[str], list[str], list[dict]]:
@@ -158,7 +177,7 @@ def classify(prs: list[dict], heads: list[str]) -> tuple[list[str], list[str], l
             close_prs.append(pr)
         # unlabeled PR heads are neither kept nor closed -> gate fails
     for head in heads:
-        if head not in keep and head not in [f"refs/heads/{p['headRefName']}" for p in close_prs]:
+        if head not in keep:
             delete.append(head)
     # drop duplicates, keep deterministic order
     keep = sorted(set(keep))
@@ -275,17 +294,42 @@ def main() -> int:
         return 1
 
     keep, delete, close_prs = classify(prs, remote_refs())
+    failed_ops: list[str] = []
     print("\nEXECUTING:")
     print(" 1. close close-on-scrub PRs:", [p["number"] for p in close_prs])
     for p in close_prs:
         r = gh(["pr", "close", str(p["number"]), "-R", REPO])
-        print(f"    closed #{p['number']}: {'ok' if r.returncode == 0 else r.stderr.strip()[:80]}")
+        if r.returncode == 0:
+            print(f"    closed #{p['number']}: ok")
+        else:
+            detail = r.stderr.strip()[:80]
+            failed_ops.append(f"close PR #{p['number']}: {detail}")
+            print(f"    closed #{p['number']}: {detail}")
     print(f" 2. delete delete-set heads ({len(delete)})")
     for head in delete:
-        r = run(["git", "push", "origin", f":{head.removeprefix('refs/')}"])
-        print(f"    deleted {head}: {'ok' if r.returncode == 0 else r.stderr.strip()[:80]}")
+        r = run(["git", "push", "origin", f":{head}"])
+        if r.returncode == 0:
+            print(f"    deleted {head}: ok")
+        else:
+            detail = r.stderr.strip()[:80]
+            failed_ops.append(f"delete {head}: {detail}")
+            print(f"    deleted {head}: {detail}")
+    if failed_ops:
+        print("\nABORT before rewrite — remote operations failed:", file=sys.stderr)
+        for operation in failed_ops:
+            print(f"  - {operation}", file=sys.stderr)
+        return 1
+
+    extra_keep_refs = [
+        ref for ref in keep
+        if ref not in {"refs/heads/develop", "refs/heads/main"}
+        and not ref.startswith("refs/tags/")
+    ]
+    scrub_cmd = ["bash", "automation/scrub_history.sh", "--execute"]
+    for ref in extra_keep_refs:
+        scrub_cmd.extend(["--keep-ref", ref])
     print(" 3. rewrite + force-push keep-set via scrub_history.sh --execute")
-    r = run(["bash", "automation/scrub_history.sh", "--execute"], timeout=1800)
+    r = run(scrub_cmd, timeout=1800)
     print(f"    scrub exit={r.returncode}")
     print(" 4. verify: run `python3 automation/security_audit.py` (must exit 0)")
     print("    and `git clone` fresh; `git log --all` must show zero declared identities")

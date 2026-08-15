@@ -123,7 +123,10 @@ def _mask_secret(value: str | None) -> str:
 
 def _is_secret_env_key(key: str) -> bool:
     upper_key = key.upper()
-    return any(token in upper_key for token in ("PASSWORD", "SECRET", "API_KEY", "TOKEN"))
+    return any(
+        token in upper_key
+        for token in ("PASSWORD", "SECRET", "API_KEY", "TOKEN", "PRIVATE_KEY")
+    )
 
 
 def _display_env(env: dict[str, str]) -> dict[str, str]:
@@ -2522,11 +2525,11 @@ HTML = r"""<!doctype html>
     // config resolution (issue #169). The DOM value is never rewritten, so
     // submitted override semantics stay unchanged.
     function effectiveModelBackend() {
-      const current = String(currentControlValue("NEWS_MODEL_BACKEND") || "").trim();
+      const current = String(currentControlValue("NEWS_MODEL_BACKEND") || "").trim().toLowerCase();
       if (current) return current;
       const knob = knobByEnv("NEWS_MODEL_BACKEND");
       return knob && knob.default !== undefined && knob.default !== null && knob.default !== ""
-        ? String(knob.default)
+        ? String(knob.default).trim().toLowerCase()
         : "";
     }
     function inputForKnob(knob, { emptyLabel, optionLabels = {}, id = "" } = {}) {
@@ -4146,6 +4149,7 @@ HTML = r"""<!doctype html>
       document.querySelectorAll("#sourceTable tr[data-key]").forEach(row => row.onclick = () => editSource(row.dataset.key));
     }
     function sourceInput(field, src) {
+      const val = src[field] ?? "";
       if (["can_enrich_coverage","strict_source_match"].includes(field)) {
         return `<label>${field}<select id="source_${field}"><option value=""></option><option value="false" ${val === false ? "selected" : ""}>false</option><option value="true" ${val === true ? "selected" : ""}>true</option></select></label>`;
       }
