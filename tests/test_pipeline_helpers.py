@@ -1128,6 +1128,60 @@ class PipelineHelperTests(unittest.TestCase):
                     attempts=1,
                 )
 
+    def test_invoke_with_retries_detects_secondary_exit_after_call(self) -> None:
+        """A secondary process death during a request must not become fallback content."""
+        _, assignment = self._managed_fixture_assignments()
+        endpoint_key = pipeline.canonical_model_endpoint(assignment.base_url)
+        log_file = tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", delete=False)
+        log_file.write("secondary crash\n")
+        log_file.close()
+        self.addCleanup(lambda: Path(log_file.name).unlink(missing_ok=True))
+        state = pipeline.ManagedModelServerState(
+            assignment=assignment,
+            endpoint_key=endpoint_key,
+            log_path=log_file.name,
+            ready=True,
+        )
+        state.process = MagicMock()
+        state.process.poll.side_effect = [None, 137]
+        diagnostics = RunDiagnostics(
+            run_started_at="2026-06-01T10:00:00",
+            settings={},
+        )
+
+        llm = MagicMock(max_tokens=12)
+        llm.invoke.side_effect = httpx.ConnectError("secondary disconnected")
+        with patch.object(pipeline, "MODEL_ASSIGNMENTS", {
+            "default": self._managed_fixture_assignments()[0],
+            "article_summary": assignment,
+        }), patch.object(
+            pipeline, "MANAGED_MODEL_SERVER_ACTIVE", True
+        ), patch.object(
+            pipeline, "MANAGED_MODEL_SERVER_EXTERNAL", False
+        ), patch.object(
+            pipeline, "MANAGED_MODEL_SERVER_PROCESS", None
+        ), patch.object(
+            pipeline, "MANAGED_MODEL_SERVERS", {endpoint_key: state}
+        ), patch.object(
+            pipeline, "ACTIVE_RUN_DIAGNOSTICS", diagnostics
+        ), patch.object(
+            pipeline, "record_activity_snapshot"
+        ):
+            with self.assertRaises(pipeline.ManagedModelServerExited) as raised:
+                pipeline.invoke_with_retries(
+                    llm,
+                    [HumanMessage(content="hello")],
+                    task_name="analysis for Headline",
+                    fallback_content="fallback content",
+                    attempts=2,
+                )
+
+        self.assertIn(assignment.base_url, str(raised.exception))
+        self.assertIn(assignment.name, str(raised.exception))
+        self.assertIn(state.log_path, str(raised.exception))
+        llm.invoke.assert_called_once()
+        self.assertTrue(state.exit_recorded)
+
     def test_image_and_title_calls_record_independent_diagnostics(self) -> None:
         diagnostics = RunDiagnostics(
             run_started_at="2026-06-01T10:00:00",
@@ -1988,6 +2042,149 @@ class PipelineHelperTests(unittest.TestCase):
         stop = stack.enter_context(patch.object(pipeline, "_stop_managed_server_process"))
         return stack, popen, stop, wait_calls, probe_calls
 
+    def _production_secondary_stack(
+        self,
+        tmpdir: str,
+        secondary_assignment: SimpleNamespace,
+        *,
+        process: MagicMock | None = None,
+        popen_side_effect: Exception | None = None,
+        get_side_effect: list[object] | None = None,
+        post_side_effect: object | None = None,
+    ) -> tuple[contextlib.ExitStack, MagicMock, MagicMock]:
+        """Keep the production wait/probe helpers while mocking HTTP/subprocess boundaries."""
+        default_assignment, _ = self._managed_fixture_assignments()
+        if process is None:
+            process = MagicMock()
+            process.poll.return_value = None
+        stack = contextlib.ExitStack()
+        stack.enter_context(patch.object(pipeline, "MODEL_ASSIGNMENTS", {
+            "default": default_assignment,
+            secondary_assignment.task: secondary_assignment,
+        }))
+        stack.enter_context(patch.object(pipeline, "MODEL_BACKEND", "mlx-lm"))
+        stack.enter_context(patch.object(pipeline, "MODEL_BASE_URL", default_assignment.base_url))
+        stack.enter_context(patch.object(pipeline, "MODEL_SERVER_COMMAND", default_assignment.server_command))
+        stack.enter_context(patch.object(pipeline, "RUN_OUTPUT_DIR", tmpdir))
+        stack.enter_context(patch.object(pipeline, "ensure_codex_safe_model_reference"))
+        stack.enter_context(patch.object(pipeline, "record_activity_snapshot"))
+        stack.enter_context(patch.object(pipeline.progress_tracker, "start_meter"))
+        stack.enter_context(patch.object(pipeline.progress_tracker, "update_meter"))
+        stack.enter_context(patch.object(pipeline.progress_tracker, "finish_meter"))
+        stack.enter_context(patch.object(pipeline.progress_tracker, "detail"))
+        stack.enter_context(patch.object(pipeline.progress_tracker, "warning"))
+        stack.enter_context(patch.object(pipeline.time, "sleep", return_value=None))
+        if get_side_effect is not None:
+            stack.enter_context(patch.object(pipeline.requests, "get", side_effect=get_side_effect))
+        if post_side_effect is not None:
+            stack.enter_context(patch.object(pipeline.requests, "post", side_effect=post_side_effect))
+        popen = stack.enter_context(
+            patch.object(
+                pipeline.subprocess,
+                "Popen",
+                side_effect=popen_side_effect if popen_side_effect is not None else None,
+                return_value=process,
+            )
+        )
+        stop = stack.enter_context(patch.object(pipeline, "_stop_managed_server_process"))
+        return stack, popen, stop
+
+    def test_secondary_startup_failures_use_production_wait_and_probe_helpers(self) -> None:
+        """Secondary startup failures exercise HTTP preflight/probe and cleanup branches."""
+        _, secondary_assignment = self._managed_fixture_assignments()
+
+        def response(*, payload: dict[str, object], status: int = 200) -> MagicMock:
+            result = MagicMock()
+            result.status_code = status
+            result.json.return_value = payload
+            if status >= 400:
+                result.raise_for_status.side_effect = RuntimeError(f"HTTP {status}")
+            return result
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ready = response(payload={"data": [{"id": secondary_assignment.name}]})
+            probe_failure = response(payload={}, status=500)
+            stack, popen, stop = self._production_secondary_stack(
+                tmpdir,
+                secondary_assignment,
+                get_side_effect=[pipeline.requests.ConnectionError("refused"), ready],
+                post_side_effect=[probe_failure],
+            )
+            with stack:
+                with pipeline.managed_model_server():
+                    with self.assertRaisesRegex(RuntimeError, "failed a tiny generation probe"):
+                        pipeline._ensure_model_server_ready(secondary_assignment)
+                    state = pipeline.MANAGED_MODEL_SERVERS[
+                        pipeline.canonical_model_endpoint(secondary_assignment.base_url)
+                    ]
+                    self.assertIsNone(state.process)
+                    self.assertIsNone(state.log_file)
+                    self.assertFalse(state.ready)
+            self.assertEqual(popen.call_count, 1)
+            self.assertEqual(stop.call_count, 1)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            process = MagicMock()
+            process.poll.return_value = 17
+            stack, popen, stop = self._production_secondary_stack(
+                tmpdir,
+                secondary_assignment,
+                process=process,
+                get_side_effect=[pipeline.requests.ConnectionError("refused")],
+            )
+            with stack:
+                with pipeline.managed_model_server():
+                    with self.assertRaisesRegex(RuntimeError, "exit code 17"):
+                        pipeline._ensure_model_server_ready(secondary_assignment)
+            self.assertEqual(popen.call_count, 1)
+            self.assertEqual(stop.call_count, 1)
+
+    def test_secondary_startup_rejects_existing_endpoint_before_spawn(self) -> None:
+        _, secondary_assignment = self._managed_fixture_assignments()
+
+        response = MagicMock()
+        response.status_code = 200
+        response.raise_for_status.return_value = None
+        response.json.return_value = {"data": [{"id": "already-running"}]}
+        with tempfile.TemporaryDirectory() as tmpdir:
+            stack, popen, stop = self._production_secondary_stack(
+                tmpdir,
+                secondary_assignment,
+                get_side_effect=[response],
+            )
+            with stack:
+                with pipeline.managed_model_server():
+                    with self.assertRaisesRegex(RuntimeError, "already in use.*8090"):
+                        pipeline._ensure_model_server_ready(secondary_assignment)
+            self.assertEqual(popen.call_count, 0)
+            self.assertEqual(stop.call_count, 0)
+
+    def test_secondary_spawn_failure_closes_log_and_clears_state(self) -> None:
+        _, secondary_assignment = self._managed_fixture_assignments()
+        response = MagicMock()
+        response.status_code = 200
+        response.raise_for_status.return_value = None
+        response.json.return_value = {"data": []}
+        with tempfile.TemporaryDirectory() as tmpdir:
+            stack, popen, stop = self._production_secondary_stack(
+                tmpdir,
+                secondary_assignment,
+                get_side_effect=[pipeline.requests.ConnectionError("refused")],
+                popen_side_effect=OSError("spawn failed"),
+            )
+            with stack:
+                with pipeline.managed_model_server():
+                    with self.assertRaisesRegex(OSError, "spawn failed"):
+                        pipeline._ensure_model_server_ready(secondary_assignment)
+                    state = pipeline.MANAGED_MODEL_SERVERS[
+                        pipeline.canonical_model_endpoint(secondary_assignment.base_url)
+                    ]
+                    self.assertIsNone(state.process)
+                    self.assertIsNone(state.log_file)
+                    self.assertEqual(state.log_path, "")
+            self.assertEqual(popen.call_count, 1)
+            self.assertEqual(stop.call_count, 0)
+
     def test_two_managed_servers_start_probe_and_teardown_together(self) -> None:
         """Issue #133: divergent managed assignments on distinct endpoints
         each start their own process, each readiness/probe uses the
@@ -2165,6 +2362,29 @@ class PipelineHelperTests(unittest.TestCase):
             self.assertEqual(stop.call_count, 2)
             self.assertEqual(pipeline.MANAGED_MODEL_SERVERS, {})
 
+    def test_secondary_startup_rollback_preserves_readiness_error(self) -> None:
+        """Rollback failures must not replace the original startup failure."""
+        default_assignment, secondary_assignment = self._managed_fixture_assignments()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            stack, _, stop, _, _ = self._managed_fixture_stack(
+                tmpdir,
+                default_assignment,
+                secondary_assignment,
+                secondary_wait_error=RuntimeError("readiness root cause"),
+            )
+            stop.side_effect = RuntimeError("rollback cleanup failed")
+            with stack:
+                with pipeline.managed_model_server():
+                    with self.assertRaisesRegex(RuntimeError, "readiness root cause"):
+                        pipeline._ensure_model_server_ready(secondary_assignment)
+                    state = pipeline.MANAGED_MODEL_SERVERS[
+                        pipeline.canonical_model_endpoint(secondary_assignment.base_url)
+                    ]
+                    self.assertIsNone(state.process)
+                    self.assertIsNone(state.log_file)
+                    self.assertEqual(state.log_path, "")
+            self.assertEqual(stop.call_count, 1)
+
     def test_secondary_readiness_timeout_includes_endpoint_and_log(self) -> None:
         """A secondary server that never becomes ready raises a timeout that
         names its endpoint and per-server log, stops the process, and closes
@@ -2305,34 +2525,80 @@ class PipelineHelperTests(unittest.TestCase):
             finalize_failed.assert_not_called()
 
     def test_run_session_sigterm_stop_cleans_servers_and_restores_handler(self) -> None:
-        """The UI stops a run with SIGTERM (process.terminate). The temporary
-        main-thread handler converts it to an unwindable KeyboardInterrupt so
-        the server context cleans up, and the previous handler is restored in
-        all cases (issue #133)."""
+        """SIGTERM must unwind through the real multi-server cleanup context."""
         previous_handler = signal.getsignal(signal.SIGTERM)
-        cleanup_ran: list[bool] = []
-
-        @contextlib.contextmanager
-        def _sigterm_context():
-            try:
-                yield
-            finally:
-                cleanup_ran.append(True)
+        assignments = self._managed_fixture_assignments()
+        states: list[pipeline.ManagedModelServerState] = []
 
         with patch.object(pipeline, "run_logging", return_value=contextlib.nullcontext()), patch.object(
-            pipeline, "managed_model_server", return_value=_sigterm_context()
-        ), patch.object(pipeline, "_write_run_log"), patch.object(
+            pipeline, "_stop_managed_server_process"
+        ) as stop, patch.object(pipeline, "_write_run_log"), patch.object(
             pipeline, "_finalize_failed_run"
         ) as finalize_failed:
 
             def stop_mid_run() -> None:
+                for index, assignment in enumerate(assignments):
+                    state = pipeline.ManagedModelServerState(
+                        assignment=assignment,
+                        endpoint_key=pipeline.canonical_model_endpoint(assignment.base_url),
+                        log_path=f"model_server_{index}.log",
+                    )
+                    state.process = MagicMock()
+                    state.process.poll.return_value = 0
+                    state.log_file = tempfile.TemporaryFile(mode="w+")
+                    state.ready = True
+                    states.append(state)
+                    pipeline.MANAGED_MODEL_SERVERS[state.endpoint_key] = state
                 os.kill(os.getpid(), signal.SIGTERM)
 
             with self.assertRaises(KeyboardInterrupt):
                 pipeline.RunSession(pipeline.CONFIG).run(run_impl=stop_mid_run)
-        self.assertEqual(cleanup_ran, [True])
+
+        self.assertEqual(stop.call_count, 2)
+        self.assertEqual(
+            [call.args[0] for call in stop.call_args_list],
+            [states[1].process, states[0].process],
+        )
+        self.assertTrue(all(state.log_file.closed for state in states))
+        self.assertEqual(pipeline.MANAGED_MODEL_SERVERS, {})
+        self.assertFalse(pipeline.MANAGED_MODEL_SERVER_ACTIVE)
         self.assertEqual(signal.getsignal(signal.SIGTERM), previous_handler)
         finalize_failed.assert_not_called()
+
+    def test_managed_server_cleanup_continues_and_preserves_run_error(self) -> None:
+        """A stop failure is isolated, diagnosed, and cannot mask the run error."""
+        assignments = self._managed_fixture_assignments()
+        states: list[pipeline.ManagedModelServerState] = []
+        with patch.object(
+            pipeline,
+            "_stop_managed_server_process",
+            side_effect=[RuntimeError("stop failed"), None],
+        ) as stop, patch.object(pipeline, "record_activity_snapshot"), patch.object(
+            pipeline.progress_tracker, "warning"
+        ) as warning:
+            with self.assertRaisesRegex(RuntimeError, "original run failure"):
+                with pipeline.managed_model_server():
+                    for index, assignment in enumerate(assignments):
+                        state = pipeline.ManagedModelServerState(
+                            assignment=assignment,
+                            endpoint_key=pipeline.canonical_model_endpoint(assignment.base_url),
+                            log_path=f"/tmp/managed-{index}.log",
+                        )
+                        state.process = MagicMock()
+                        state.process.poll.return_value = None
+                        state.log_file = tempfile.TemporaryFile(mode="w+")
+                        states.append(state)
+                        pipeline.MANAGED_MODEL_SERVERS[state.endpoint_key] = state
+                    raise RuntimeError("original run failure")
+
+        self.assertEqual(stop.call_count, 2)
+        warning_text = "\n".join(str(call.args[0]) for call in warning.call_args_list)
+        self.assertIn(assignments[0].base_url, warning_text)
+        self.assertIn(assignments[1].base_url, warning_text)
+        self.assertIn(states[0].log_path, warning_text)
+        self.assertIn(states[1].log_path, warning_text)
+        self.assertTrue(all(state.log_file.closed for state in states))
+        self.assertEqual(pipeline.MANAGED_MODEL_SERVERS, {})
 
     def test_external_model_server_readiness_timeout(self) -> None:
         with patch.object(pipeline, "MODEL_BACKEND", "external"), patch.object(

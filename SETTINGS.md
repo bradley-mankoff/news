@@ -102,7 +102,7 @@ Each model page shows Hugging Face's native Hardware Compatibility panel
 | `NEWS_MODEL_STORY_SCALE_SCREENING_TUNING_PRESET` | _(none)_ | Model Tuning Preset for the story scale screening stage. |
 | `NEWS_MODEL_TITLE_GENERATION_TUNING_PRESET` | _(none)_ | Model Tuning Preset for the title generation stage. |
 | `NEWS_MODEL_IMAGE_ART_DIRECTION_TUNING_PRESET` | _(none)_ | Model Tuning Preset for the image art direction stage. |
-| `NEWS_MODEL_BASE_URL` | `http://127.0.0.1:8080/v1` | OpenAI-compatible local model endpoint. For managed backends the URL's port is the server port the run owns; per-task `NEWS_MODEL_<TASK>_BASE_URL` overrides create additional owned servers for those tasks, one per distinct canonical endpoint, each started on demand and stopped with the run. Same endpoint plus a different managed model is rejected at configuration time; external endpoints are never spawned. |
+| `NEWS_MODEL_BASE_URL` | `http://127.0.0.1:8080/v1` | OpenAI-compatible model endpoint. Ownership follows the resolved backend, not URL appearance: managed assignments own one process per distinct canonical endpoint, while assignments resolved with the `external` backend are caller-managed and never spawned. Per-task `NEWS_MODEL_<TASK>_BASE_URL` overrides create additional managed servers when their assignments use a managed backend; same endpoint plus a different managed model is rejected at configuration time. |
 | `NEWS_LLAMA_CPP_SERVER` | `llama-server` | Path or `PATH` name of the native `llama-server` executable used by the managed `llama.cpp` backend (advanced). The application never installs or downloads the binary; a missing binary fails at run launch with installation guidance. |
 | `NEWS_CODEX_TESTING` | `0` | `1` forces Codex-safe model references for model-related verification. |
 
@@ -115,9 +115,12 @@ NEWS_MODEL=qwythos-9b-4bit NEWS_LLAMA_CPP_SERVER=/opt/llama/llama-server uv run 
 
 The llama.cpp preview prints the exact `llama-server` command (`--hf-repo`,
 `--hf-file`, `--alias`, localhost binding, concurrency, and max-token flags)
-without starting a server or downloading a model. Per-task commands are the
-same preview with that task's base URL and model (`NEWS_MODEL_<TASK>` and
-`NEWS_MODEL_<TASK>_BASE_URL`). During a run, the default server writes
+without starting a server or downloading a model. The CLI previews only the
+resolved default assignment and has no task selector. To preview a task's
+managed command, set `NEWS_MODEL`, the relevant backend override, and
+`NEWS_MODEL_BASE_URL` to that task's resolved values before running the command;
+during a run, secondary assignments use their own resolved command. Ownership
+follows the assignment backend, not URL appearance. During a run, the default server writes
 `model_server.log` next to the report output and additional managed
 endpoints write deterministic per-server logs
 (`model_server_<endpoint>-<model>.log`) in the same directory; a distinct

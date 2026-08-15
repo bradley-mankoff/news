@@ -560,8 +560,10 @@ routed per task, and stopped with the run. Tasks sharing one canonical
 endpoint and model reuse the same process. Two tasks pointing at the
 same managed endpoint with different models are rejected at
 configuration time with guidance to set a per-task base URL or use an
-external server. External endpoints (default or per-task) are
-caller-managed and are never spawned by the application.
+external server. Ownership follows the resolved backend, not the URL's
+appearance: assignments resolved with the `external` backend (default or
+per-task) are caller-managed and are never spawned by the application, while a
+managed backend remains application-owned even when its URL looks remote.
 
 For example, one run can own three managed servers for the default,
 Article Summarization, and Story Drafting models:
@@ -636,8 +638,9 @@ same canonical endpoint with the same model is shared by every task
 that uses it. The default server writes `model_server.log` next to the
 report output, and additional managed endpoints write deterministic
 per-server log files (`model_server_<endpoint>-<model>.log`) in the
-same directory. External endpoints (default or per-task) are
-caller-managed and never spawned.
+same directory. Assignments resolved with the `external` backend (default or
+per-task) are caller-managed and never spawned; URL appearance alone does not
+select ownership.
 
 ### Image
 
