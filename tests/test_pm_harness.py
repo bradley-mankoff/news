@@ -166,6 +166,54 @@ class SyntheticProjectTest(unittest.TestCase):
         )
 
 
+class ConcurrencyFillPollTest(unittest.TestCase):
+    def test_backlog_fill_dispatches_in_same_poll_after_snapshot(self) -> None:
+        cfg = config()
+        state = {}
+        backlog_item = issue(8, "Backlog")
+        status_options = {
+            "Todo": "todo-option",
+            "In Progress": "in-progress-option",
+        }
+        with (
+            patch.object(
+                cycle,
+                "fetch_project",
+                side_effect=[
+                    ("project", "field", status_options, [backlog_item]),
+                    ("project", "field", status_options, [issue(8, "Backlog")]),
+                ],
+            ),
+            patch.object(cycle, "prepare_dispatch_budget"),
+            patch.object(cycle, "remaining_dispatch_budget", return_value=1),
+            patch.object(cycle, "reconcile_untracked_runs"),
+            patch.object(cycle, "sync_runnable_labels"),
+            patch.object(cycle, "fetch_workflow_runs", return_value=[]),
+            patch.object(
+                cycle,
+                "fresh_issue_dispatch_guard",
+                return_value=(True, ""),
+            ),
+            patch.object(
+                cycle,
+                "dispatch",
+                return_value=DispatchResult(True, pid=123),
+            ) as dispatch,
+            patch.object(cycle, "move_to_lane", return_value=True) as move,
+            patch.object(cycle, "save_state"),
+        ):
+            cycle.poll(cfg, {}, state)
+            dispatch.assert_not_called()
+            move.assert_not_called()
+
+            cycle.poll(cfg, {}, state)
+
+        dispatch.assert_called_once()
+        self.assertEqual(move.call_count, 2)
+        self.assertEqual(move.call_args_list[0].args[-1], "todo-option")
+        self.assertEqual(move.call_args_list[1].args[-1], "in-progress-option")
+
+
 class DispatchGuardRetryTest(unittest.TestCase):
     def test_todo_retries_after_transient_lookup_deferral(self) -> None:
         cfg = config()

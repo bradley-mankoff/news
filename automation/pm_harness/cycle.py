@@ -1076,6 +1076,31 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
     # with the same message (re-dispatches reuse the message) and pop the
     # marker before the new run registers.
     fresh_dispatched: set[str] = set()
+    ctx = PollContext(
+        cfg=cfg,
+        env=env,
+        state=state,
+        project_id=project_id,
+        field_id=field_id,
+        status_options=status_options,
+        items=items,
+        first_run=first_run,
+        done_lane_name=done_lane_name,
+        todo_lane_name=todo_lane_name,
+        blocked_lane_name=blocked_lane_name,
+        ready_lane_name=ready_lane_name,
+        in_progress_lane_name=in_progress_lane_name,
+        number_lane=number_lane,
+        number_state=number_state,
+        seen=seen,
+        fresh_dispatched=fresh_dispatched,
+    )
+    # Desired-state promotion must precede the transition loop so the
+    # established Todo path dispatches promoted work in this same poll. The
+    # first poll remains a read-only snapshot and must not mutate lanes.
+    if not first_run:
+        _fill_concurrency_gap(ctx, items, number_lane, number_state)
+
     for item in items:
         item_id = item["id"]
         seen.add(item_id)
@@ -1331,30 +1356,6 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
                 rec.pop("dep_cancelled_noted", None)
         state[item_id] = rec
 
-    ctx = PollContext(
-        cfg=cfg,
-        env=env,
-        state=state,
-        project_id=project_id,
-        field_id=field_id,
-        status_options=status_options,
-        items=items,
-        first_run=first_run,
-        done_lane_name=done_lane_name,
-        todo_lane_name=todo_lane_name,
-        blocked_lane_name=blocked_lane_name,
-        ready_lane_name=ready_lane_name,
-        in_progress_lane_name=in_progress_lane_name,
-        number_lane=number_lane,
-        number_state=number_state,
-        seen=seen,
-        fresh_dispatched=fresh_dispatched,
-    )
-    # Desired-state pass: fill free dispatch slots from runnable Backlog
-    # items so the factory stays near capacity without human nudges.
-    # Runs after the item loop so `ctx` exists and labels are fresh; the
-    # promoted items dispatch on the next poll's Todo transition.
-    _fill_concurrency_gap(ctx, items, number_lane, number_state)
     _recheck_review_dispatch(ctx)
     _unblock_dependencies(ctx)
     runs_snapshot, runs_by_msg = _reconcile_completions(ctx)
