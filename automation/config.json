@@ -7,7 +7,7 @@
   "poll_interval_seconds": 45,
   "poll_timeout_seconds": 300,
   "state_file": "automation/state.json",
-  "max_concurrent_workflows": 6,
+  "max_concurrent_workflows": 10,
   "runnable_label": "runnable",
   "decision_only": {
     "label": "decision-only",
