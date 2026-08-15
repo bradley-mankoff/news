@@ -514,6 +514,132 @@ assert(!advancedPanels.innerHTML.includes("undefined"), "undefined markup leaked
             )
         self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
 
+    def test_dedicated_renderers_emit_surfaced_controls(self) -> None:
+        """Execute every dedicated renderer and assert its controls are emitted.
+
+        This complements the registry parity guard by inspecting rendered HTML:
+        registry metadata may identify a control, but it cannot make a missing
+        model-tuning field or prompt-template editor appear in the DOM.
+        """
+        html = ui_module.HTML
+
+        def js_function_block(start: str, end: str) -> str:
+            return html[html.index(start) : html.index(end, html.index(start))]
+
+        js = (
+            r"""
+const assert = (condition, message) => {
+  if (!condition) throw new Error(message);
+};
+const elements = { promptTemplateEditors: { innerHTML: "" } };
+const $ = id => elements[id] || null;
+const document = {
+  querySelector: () => null,
+  querySelectorAll: () => []
+};
+"""
+            + js_function_block("    const TASK_CONFIG = {", "    const state = {")
+            + js_function_block("    const state = {", "    const icons = {")
+            + js_function_block(
+                "    const TASK_MAX_TOKENS_LABELS = {", "    const SAMPLING_FIELDS = ["
+            )
+            + js_function_block(
+                "    const SAMPLING_FIELDS = [", "    function samplingFields(prefix) {"
+            )
+            + js_function_block("function escapeHtml(text) {", "function formatDefault")
+            + js_function_block(
+                'function formatDefault(value, fallback="none") {',
+                "function currentControlValue",
+            )
+            + js_function_block(
+                "function currentControlValue(env) {", "function setControlValue"
+            )
+            + js_function_block("function knobByEnv(env) {", "function inputForKnob")
+            + js_function_block(
+                'function inputForKnob(knob, { emptyLabel, optionLabels = {}, id = "" } = {}) {',
+                "function knobField",
+            )
+            + js_function_block(
+                "function knobField(env, label, options={}) {", "function knobHint"
+            )
+            + js_function_block("function samplingFields(prefix) {", "function modelTuningPanel")
+            + js_function_block("function modelTuningPanel(task) {", "function renderAdvancedPanels")
+            + js_function_block(
+                "    let promptTemplateDirty = {};", "    function promptTemplateEnvMap() {"
+            )
+            + js_function_block(
+                "    function promptTemplateEnvMap() {", "    function promptTemplateRecord(task) {"
+            )
+            + js_function_block(
+                "    function renderPromptTemplateEditors() {", "    function currentPromptTemplateEnv() {"
+            )
+            + r"""
+const knobs = [];
+const knob = (env, type = "text") => ({ env, type, default: type === "number" ? 10 : "" });
+for (const task of Object.keys(TASK_CONFIG)) {
+  const meta = TASK_CONFIG[task];
+  knobs.push(knob(meta.baseUrlEnv));
+  knobs.push(knob(meta.taskMaxTokensEnv, "number"));
+  for (const [suffix] of SAMPLING_FIELDS) knobs.push(knob(`${meta.taskSamplingPrefix}_${suffix}`, "number"));
+}
+knobs.push(knob("NEWS_MODEL_MAX_INPUT_TOKENS", "number"));
+const templateTasks = [
+  ["article_summary", "NEWS_PROMPT_TEMPLATE_ARTICLE_SUMMARY", "Article Summarization"],
+  ["story_scale_screening", "NEWS_PROMPT_TEMPLATE_STORY_SCALE_SCREENING", "Story Scale Screening"],
+  ["story_drafting", "NEWS_PROMPT_TEMPLATE_STORY_DRAFTING", "Story Drafting"],
+  ["title_generation", "NEWS_PROMPT_TEMPLATE_TITLE_GENERATION", "Title Generation"],
+  ["image_art_direction", "NEWS_PROMPT_TEMPLATE_IMAGE_ART_DIRECTION", "Image Art Direction"]
+].map(([task, env_var, label]) => ({
+  task, env_var, label, system: `system ${task}`, user: `user ${task}`,
+  required_placeholders: [], optional_placeholders: [], placeholder_descriptions: {}
+}));
+state.schema = { knobs, current_env: {}, runtime: { model: {} }, prompt_templates: templateTasks };
+
+for (const task of Object.keys(TASK_CONFIG)) {
+  const meta = TASK_CONFIG[task];
+  const panel = modelTuningPanel(task);
+  assert(panel.includes(`data-env="${meta.presetEnv}"`), `${task} preset control missing`);
+  assert(panel.includes(`data-env="${meta.taskMaxTokensEnv}"`), `${task} max-token control missing`);
+  assert(panel.includes(`data-env="${meta.baseUrlEnv}"`), `${task} base URL control missing`);
+  for (const [suffix] of SAMPLING_FIELDS) {
+    const env = `${meta.taskSamplingPrefix}_${suffix}`;
+    assert(panel.includes(`data-env="${env}"`), `${task} sampling control missing: ${env}`);
+  }
+}
+assert(
+  modelTuningPanel("article_summary").includes('data-env="NEWS_MODEL_MAX_INPUT_TOKENS"'),
+  "shared model input cap control missing"
+);
+
+renderPromptTemplateEditors();
+for (const { task } of templateTasks) {
+  const markup = elements.promptTemplateEditors.innerHTML;
+  assert(markup.includes(`data-prompt-template-card="${task}"`), `${task} template card missing`);
+  assert(markup.includes(`data-template-system="${task}"`), `${task} system editor missing`);
+  assert(markup.includes(`data-template-user="${task}"`), `${task} user editor missing`);
+}
+"""
+        )
+        node = shutil.which("node")
+        if node is None:
+            self.skipTest("Node.js is required for the embedded UI renderer harness")
+        timeout_seconds = 30
+        try:
+            result = subprocess.run(
+                [node, "--input-type=module", "-"],
+                input=js,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=timeout_seconds,
+            )
+        except subprocess.TimeoutExpired as exc:
+            self.fail(
+                f"Node harness timed out after {timeout_seconds}s: "
+                f"stdout={exc.stdout!r} stderr={exc.stderr!r}"
+            )
+        self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
+
     def test_run_setup_single_default_model_card(self) -> None:
         html = ui_module.HTML
         run_setup = html.split("function renderRunSetup")[1].split("const SAMPLING_FIELDS")[0]
