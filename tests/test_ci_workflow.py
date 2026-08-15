@@ -42,8 +42,12 @@ CHECKOUT_ACTION = "actions/checkout@v4"
 SETUP_UV_ACTION = "astral-sh/setup-uv@v5"
 SETUP_UV_WITH = {"enable-cache": True}
 INSTALL_STEP_NAME = "Install dependencies"
+BROWSER_INSTALL_NAME = "Install Chromium for browser tests"
 RUN_STEP_NAME = "Run tests"
 SYNC_COMMAND = "uv sync --group dev"
+BROWSER_INSTALL_COMMAND = (
+    "uv run python -m playwright install --with-deps chromium"
+)
 PYTEST_COMMAND = "uv run python -m pytest -q"
 TARGET_BRANCHES = ("develop", "main")
 FALLBACK_COMMAND = ".venv/bin/python3 -m pytest tests/ -q"
@@ -104,12 +108,20 @@ class CiWorkflowTests(unittest.TestCase):
         install = next(
             step for step in steps if step.get("run") == SYNC_COMMAND
         )
+        browser_install = [
+            step
+            for step in steps
+            if step.get("run") == BROWSER_INSTALL_COMMAND
+        ]
         run_tests = next(
             step for step in steps if step.get("run") == PYTEST_COMMAND
         )
         self.assertEqual(install.get("name"), INSTALL_STEP_NAME)
+        self.assertEqual(len(browser_install), 1)
+        self.assertEqual(browser_install[0].get("name"), BROWSER_INSTALL_NAME)
         self.assertEqual(run_tests.get("name"), RUN_STEP_NAME)
-        self.assertLess(steps.index(install), steps.index(run_tests))
+        self.assertLess(steps.index(install), steps.index(browser_install[0]))
+        self.assertLess(steps.index(browser_install[0]), steps.index(run_tests))
         # The pytest run must be the job's final step: nothing may run
         # after it that could rewrite or mask the native exit status.
         self.assertIs(steps[-1], run_tests)
