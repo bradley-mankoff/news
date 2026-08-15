@@ -523,7 +523,12 @@ Supported runtimes (recorded in
 [`docs/adr/0017-runtime-matrix.md`](docs/adr/0017-runtime-matrix.md)):
 
 - `mlx-lm` — managed local MLX language-model server on Apple Silicon.
-- `mlx-vlm` — managed local MLX vision-language-model server on Apple Silicon.
+- `mlx-vlm` — managed local MLX vision-language-model server on Apple
+  Silicon. Managed only for repositories already carrying MLX-compatible
+  vision weights plus an `mmproj` asset; `mlx-vlm` does not convert source
+  Transformers weights at launch. Transformers+safetensors vision search
+  results are `external_only` and need an external OpenAI-compatible
+  endpoint (or conversion outside this application).
 - `llama.cpp` — managed local text-generation GGUF server across the
   platforms supported by the selected `llama-server` binary (issue #75).
 - `external` — any OpenAI-compatible endpoint.
