@@ -83,7 +83,7 @@ logic only.
 
 The Model Catalog's code-owned curated baseline and its runtime-fit verdict
 vocabulary are recorded in
-[`docs/adr/0019-model-catalog-owns-curated-models-and-runtime-fit-verdicts.md`](docs/adr/0019-model-catalog-owns-curated-models-and-runtime-fit-verdicts.md);
+[`docs/adr/0019-model-catalog-owns-curated-models-and-runtime-fit-verdicts.md`](0019-model-catalog-owns-curated-models-and-runtime-fit-verdicts.md);
 this record retains ownership of the supported runtime matrix and its
 semantics, and catalog verdicts consume the closed backend set without
 redefining it.

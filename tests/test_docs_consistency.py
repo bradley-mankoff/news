@@ -57,6 +57,10 @@ _MODEL_CATALOG_ADR_TERMS = (
     "RUNTIME_FIT_MANAGED_MLX_VLM",
     "RUNTIME_FIT_MANAGED_LLAMA_CPP",
     "RUNTIME_FIT_EXTERNAL_ONLY",
+    "managed_mlx_lm",
+    "managed_mlx_vlm",
+    "managed_llama_cpp",
+    "external_only",
     "runtime_fit_for_hf_model()",
     "news models catalog",
     "news models search",
@@ -356,6 +360,47 @@ class DocsConsistencyTests(unittest.TestCase):
             model_catalog,
             "README must not present runtime-fit verdicts as launch protection",
         )
+
+    def test_model_catalog_adr_sibling_links_resolve(self) -> None:
+        """Links inside docs/adr/ must use sibling-relative targets that
+        resolve from the source file's parent directory, never a
+        `docs/adr/...` prefix (which would resolve to
+        docs/adr/docs/adr/...)."""
+        introduced_links = {
+            _MODEL_CATALOG_ADR: (
+                "0014-model-catalog-yaml-overrides.md",
+                "0017-runtime-matrix.md",
+                "0007-model-configuration-vocabulary.md",
+            ),
+            _REPO / "docs/adr/0014-model-catalog-yaml-overrides.md": (
+                "0019-model-catalog-owns-curated-models-and-runtime-fit-"
+                "verdicts.md",
+            ),
+            _REPO / "docs/adr/0017-runtime-matrix.md": (
+                "0019-model-catalog-owns-curated-models-and-runtime-fit-"
+                "verdicts.md",
+            ),
+        }
+        for source, targets in introduced_links.items():
+            text = source.read_text(encoding="utf-8")
+            for target in targets:
+                self.assertIn(
+                    f"]({target})",
+                    text,
+                    f"{source.name} must link sibling target {target} "
+                    "sibling-relative style",
+                )
+                self.assertTrue(
+                    (source.parent / target).is_file(),
+                    f"{source.name}: sibling target {target} must resolve "
+                    "from the source file's parent directory",
+                )
+            self.assertNotIn(
+                "](docs/adr/",
+                text,
+                f"{source.name} must not use docs/adr/... link targets "
+                "(they resolve to docs/adr/docs/adr/...)",
+            )
 
     def test_adrs_are_uniquely_numbered_and_well_formed(self) -> None:
         adr_paths = sorted(_REPO.glob("docs/adr/[0-9][0-9][0-9][0-9]-*.md"))

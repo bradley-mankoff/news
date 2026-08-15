@@ -7,7 +7,7 @@ llama.cpp file-qualified reference form, issue #75)
 
 ## Context
 
-`news_pipeline/model_catalog.py` hard-codes two curated catalog entries, while
+`news_pipeline/model_catalog.py` hard-codes the curated catalog entries, while
 `news_pipeline/config.py` hard-codes the aliases consumed by runtime
 resolution and UI selectors. The catalog is visible in the CLI/UI but cannot
 be customized by a user; editing only one of those registries would create a
@@ -18,7 +18,7 @@ without forking application code or weakening the reviewed identity rules
 
 The baseline decision this overlay extends — who owns the curated catalog
 and its runtime-fit verdicts — is recorded in
-[`docs/adr/0019-model-catalog-owns-curated-models-and-runtime-fit-verdicts.md`](docs/adr/0019-model-catalog-owns-curated-models-and-runtime-fit-verdicts.md).
+[`docs/adr/0019-model-catalog-owns-curated-models-and-runtime-fit-verdicts.md`](0019-model-catalog-owns-curated-models-and-runtime-fit-verdicts.md).
 This record therefore extends, rather than defines, catalog ownership.
 
 ## Decision
