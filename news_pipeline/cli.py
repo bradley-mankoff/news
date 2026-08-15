@@ -274,9 +274,7 @@ def _report_models_search_error(exc: Exception, as_json: bool, query: str) -> in
     """Report a models-search failure: stderr message plus JSON error envelope."""
     print(str(exc), file=sys.stderr)
     if as_json:
-        print(
-            json.dumps({"query": query, "models": [], "error": str(exc)}, indent=2)
-        )
+        print(json.dumps({"query": query, "models": [], "error": str(exc)}, indent=2))
     return 2
 
 
@@ -310,19 +308,19 @@ def _run_models(args: list[str]) -> int:
     if subcommand == "search":
         # Detect --json before parsing so validation failures use the same
         # JSON error envelope as lookup failures (issue #93).
-        query, json_requested = _models_search_error_context(rest)
+        query, as_json = _models_search_error_context(rest)
         try:
-            query, pipeline_tag, limit, parsed_as_json = _parse_models_search_args(rest)
+            query, pipeline_tag, limit, _ = _parse_models_search_args(rest)
         except ValueError as exc:
-            return _report_models_search_error(exc, json_requested, query)
+            return _report_models_search_error(exc, as_json, query)
         try:
             results = search_huggingface_models(
                 query, pipeline_tag=pipeline_tag, limit=limit
             )
         except Exception as exc:
-            return _report_models_search_error(exc, parsed_as_json, query)
+            return _report_models_search_error(exc, as_json, query)
 
-        if parsed_as_json:
+        if as_json:
             print(json.dumps({"query": query, "models": results}, indent=2))
         else:
             for item in results:
