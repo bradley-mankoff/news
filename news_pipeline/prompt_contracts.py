@@ -9,12 +9,13 @@ markers, strict JSON for image art and scale screening) — live here as named
 constants, the single source of truth. Stage modules compose their prompts
 from these constants; ``validate_prompt_contract()`` proves a rendered prompt
 still contains every required marker, and ``validate_editorial_instructions()``
-fail-fasts at config resolution when a profile's editable sentences would
-weaken or collide with a contract.
+returns the violations that ``config.py`` fails fast on at config resolution
+when a profile's editable sentences would weaken or collide with a contract.
 
-This module is deliberately stdlib-only (``collections.abc``, ``typing``) so
-that ``config.py`` can import it without creating an import cycle (it must
-never import stage modules). Built-ins live in Python (not YAML) because they
+This module is deliberately stdlib-only (``collections.abc.Mapping`` plus
+built-in generic annotations; no ``typing`` import) so that ``config.py`` can
+import it without creating an import cycle (it must never import stage
+modules). Built-ins live in Python (not YAML) because they
 are code-reviewed contracts; editorial sentence overrides may be supplied by
 ``config/prompt_overrides.yaml`` and are validated here before pipeline
 execution.
@@ -66,8 +67,9 @@ STORY_DRAFTING_OUTPUT_CONTRACT = (
     "Contradictions: <short contradiction evidence paragraph with sentence-end source markers>"
 )
 
-# Single braces on purpose: injected as a .format() VALUE (inserted verbatim,
-# never re-parsed as a template), so they must NOT be doubled.
+# Single braces on purpose: injected as a string.Template substitution VALUE
+# (inserted verbatim, never re-parsed as a template), so they must NOT be
+# doubled.
 STORY_SCALE_SCREENING_JSON_CONTRACT = (
     "Return only valid JSON as an array of objects:\n"
     "[{\n"
@@ -173,13 +175,14 @@ def validate_editorial_instructions(
     """Return profile-safety violations for an editorial instruction map.
 
     Checks that every task slot is present and non-empty, that the
-    ``story_scale_screening`` slot is free of braces (the screening template
-    renders via ``.format()``), and that no slot contains blocklisted contract
-    language. ``allow_braces_for`` may name tasks whose renderer already
-    escapes literal braces before ``.format()`` (only ``story_scale_screening``
-    today); it is not a general relaxation. Returns violations instead of
-    raising so callers control how the profile error surfaces (config
-    resolution fail-fasts; tests assert).
+    ``story_scale_screening`` slot is free of braces by default (a deliberate
+    policy guard keeping that slot plain editorial text; substitution values
+    are inserted verbatim by the ``string.Template`` renderer), and that no
+    slot contains blocklisted contract language. ``allow_braces_for`` is an
+    explicit opt-in for a task whose renderer is known to accept literal
+    braces safely (only ``story_scale_screening`` today); it is not a general
+    relaxation. Returns violations instead of raising so callers control how
+    the profile error surfaces (config resolution fail-fasts; tests assert).
     """
     allowed_brace_tasks = set(allow_braces_for or ())
     violations: list[str] = []
