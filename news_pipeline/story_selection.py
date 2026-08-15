@@ -278,11 +278,13 @@ def _global_scale_screening_prompt_messages(
             ).strip()
         )
 
-    # The JSON contract and screening guidance are substituted as VALUES
-    # (inserted verbatim, never re-parsed as templates), so single braces in
-    # the contract and literal braces in user-entered guidance stay safe;
-    # string.Template replaces the old brace-escape .format() dance entirely
-    # (byte-identity drift-guard: tests/test_prompt_catalog.py).
+    # Each candidate block above is dedented and stripped before the blocks
+    # are joined, preserving the intended user-prompt layout. The JSON
+    # contract and editorial guidance are then supplied as string.Template
+    # substitution values: inserted verbatim and never re-parsed, so single
+    # braces in the contract and literal braces in user-entered guidance stay
+    # safe with no brace escaping on this path (byte-identity drift-guard:
+    # tests/test_prompt_catalog.py).
     template = prompt_template or DEFAULT_PROMPT_TEMPLATES["story_scale_screening"]
     system_text, user_text = render_prompt_template(
         "story_scale_screening",
