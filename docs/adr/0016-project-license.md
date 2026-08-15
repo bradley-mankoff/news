@@ -1,4 +1,4 @@
-# ADR 0010: Project license
+# ADR 0016: Project license
 
 Status: Accepted
 
