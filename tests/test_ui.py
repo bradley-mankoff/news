@@ -2331,7 +2331,7 @@ assert.equal(hint.classList.contains("hidden"), false);
         search.assert_called_once_with("qwythos", pipeline_tag="text-generation", limit=5)
 
         with patch.object(
-            ui_module, "search_huggingface_models", side_effect=RuntimeError("hf down")
+            ui_module, "search_huggingface_models", side_effect=OSError("hf down")
         ):
             status, _, body = self._invoke_get("/api/models/search?q=qwythos")
 
@@ -2339,6 +2339,28 @@ assert.equal(hint.classList.contains("hidden"), false);
         payload = json.loads(body)
         self.assertEqual(payload["models"], [])
         self.assertEqual(payload["error"], "hf down")
+
+        with patch.object(
+            ui_module,
+            "search_huggingface_models",
+            side_effect=ImportError("huggingface-hub missing"),
+        ):
+            status, _, body = self._invoke_get("/api/models/search?q=qwythos")
+
+        self.assertEqual(status, 200)
+        payload = json.loads(body)
+        self.assertEqual(payload["models"], [])
+        self.assertEqual(payload["error"], "huggingface-hub missing")
+
+        with patch.object(
+            ui_module,
+            "search_huggingface_models",
+            side_effect=RuntimeError("programming bug"),
+        ):
+            status, _, body = self._invoke_get("/api/models/search?q=qwythos")
+
+        self.assertEqual(status, 400)
+        self.assertEqual(json.loads(body), {"error": "programming bug"})
 
         status, _, body = self._invoke_get("/api/models/search")
         self.assertEqual(status, 400)
@@ -2411,6 +2433,16 @@ assert.equal(hint.classList.contains("hidden"), false);
         payload = json.loads(body)
         self.assertIsNone(payload["info"])
         self.assertIn("Model not found", payload["error"])
+
+        with patch.object(
+            ui_module,
+            "fetch_model_metadata",
+            side_effect=RuntimeError("programming bug"),
+        ):
+            status, _, body = self._invoke_get("/api/models/metadata?model=owner%2Frepo")
+
+        self.assertEqual(status, 400)
+        self.assertEqual(json.loads(body), {"error": "programming bug"})
 
         status, _, body = self._invoke_get("/api/models/metadata")
         self.assertEqual(status, 400)
