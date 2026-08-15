@@ -783,6 +783,8 @@ class ModelCatalogTests(unittest.TestCase):
 
     def test_hf_api_missing_dependency_reports_actionable_guidance(self) -> None:
         original_import = builtins.__import__
+        missing = ImportError("missing")
+        delegated: list[str] = []
 
         def fake_import(
             name: str,
@@ -792,7 +794,8 @@ class ModelCatalogTests(unittest.TestCase):
             level: int = 0,
         ) -> object:
             if name == "huggingface_hub":
-                raise ImportError("missing")
+                raise missing
+            delegated.append(name)
             return original_import(name, globals, locals, fromlist, level)
 
         with patch("builtins.__import__", side_effect=fake_import):
@@ -800,8 +803,13 @@ class ModelCatalogTests(unittest.TestCase):
                 ImportError, "huggingface-hub is required for Hugging Face search"
             ) as ctx:
                 model_catalog._hf_api()
+            imported = __import__("json")
+
         self.assertIn("uv add huggingface-hub", str(ctx.exception))
-        self.assertIsInstance(ctx.exception.__cause__, ImportError)
+        self.assertIs(ctx.exception.__cause__, missing)
+        self.assertEqual(imported.__name__, "json")
+        self.assertIn("json", delegated)
+        self.assertIs(builtins.__import__, original_import)
 
     def test_fetch_metadata_not_found_is_value_error(self) -> None:
         request = httpx.Request("GET", "https://huggingface.co/api/models/missing/repo")
