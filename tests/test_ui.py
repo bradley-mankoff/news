@@ -2330,27 +2330,22 @@ assert.equal(hint.classList.contains("hidden"), false);
         self.assertIsNone(payload["error"])
         search.assert_called_once_with("qwythos", pipeline_tag="text-generation", limit=5)
 
-        with patch.object(
-            ui_module, "search_huggingface_models", side_effect=OSError("hf down")
-        ):
-            status, _, body = self._invoke_get("/api/models/search?q=qwythos")
+        expected_exceptions = (
+            OSError("hf down"),
+            ValueError("invalid catalog response"),
+            ImportError("huggingface-hub missing"),
+        )
+        for exception in expected_exceptions:
+            with self.subTest(exception=type(exception).__name__), patch.object(
+                ui_module, "search_huggingface_models", side_effect=exception
+            ):
+                status, _, body = self._invoke_get("/api/models/search?q=qwythos")
 
-        self.assertEqual(status, 200)
-        payload = json.loads(body)
-        self.assertEqual(payload["models"], [])
-        self.assertEqual(payload["error"], "hf down")
-
-        with patch.object(
-            ui_module,
-            "search_huggingface_models",
-            side_effect=ImportError("huggingface-hub missing"),
-        ):
-            status, _, body = self._invoke_get("/api/models/search?q=qwythos")
-
-        self.assertEqual(status, 200)
-        payload = json.loads(body)
-        self.assertEqual(payload["models"], [])
-        self.assertEqual(payload["error"], "huggingface-hub missing")
+            self.assertEqual(status, 200)
+            self.assertEqual(
+                json.loads(body),
+                {"query": "qwythos", "models": [], "error": str(exception)},
+            )
 
         with patch.object(
             ui_module,
@@ -2384,15 +2379,24 @@ assert.equal(hint.classList.contains("hidden"), false);
         self.assertIsNone(payload["error"])
         fetch.assert_called_once_with("owner/repo")
 
-        with patch.object(
-            ui_module, "fetch_model_metadata", side_effect=ValueError("Model not found on Hugging Face: 'nope'")
-        ):
-            status, _, body = self._invoke_get("/api/models/metadata?model=nope")
+        expected_exceptions = (
+            OSError("network down"),
+            ValueError("Model not found on Hugging Face: 'nope'"),
+            ImportError("huggingface-hub missing"),
+        )
+        for exception in expected_exceptions:
+            with self.subTest(exception=type(exception).__name__), patch.object(
+                ui_module, "fetch_model_metadata", side_effect=exception
+            ):
+                status, _, body = self._invoke_get(
+                    "/api/models/metadata?model=owner%2Frepo"
+                )
 
-        self.assertEqual(status, 200)
-        payload = json.loads(body)
-        self.assertIsNone(payload["info"])
-        self.assertIn("Model not found", payload["error"])
+            self.assertEqual(status, 200)
+            self.assertEqual(
+                json.loads(body),
+                {"model": "owner/repo", "info": None, "error": str(exception)},
+            )
 
         with patch.object(
             ui_module,
