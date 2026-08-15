@@ -66,8 +66,9 @@ listener on the UI port.
 
 ### Security gate
 
-History scrub is human-gated: `automation/scrub_history.sh --dry-run`, review,
-then `--execute`. Runbook: `docs/security/history-scrub.md`.
+History scrub is human-gated: run `automation/scrub_history.sh --dry-run`, review
+its retained verified mirror, then run `--execute` to push that exact snapshot.
+Runbook: `docs/security/history-scrub.md`.
 Secret prevention is automatic through the Gitleaks pre-commit hook in
 `.pre-commit-config.yaml`, pinned to `v8.30.1`; install it with
 `uv run pre-commit install`. It scans staged changes only and uses redacted

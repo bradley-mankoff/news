@@ -102,7 +102,17 @@ git filter-repo \
 ### 6. Verify
 
 The mirror clone is bare (no working tree), so the scanner must run from a normal
-checkout of this repo — the script lives there, and `--repo` targets the mirror:
+checkout of this repo — the script lives there, and `--repo` targets the mirror.
+The wrapper also records the complete pre-rewrite ref manifest and the rewritten
+`develop`/`main`/tag manifest in a mode-0600 state file next to `WORKDIR`:
+
+```text
+/tmp/news-scrub.scrub-state
+```
+
+That state file is an approval boundary: execute mode refuses to reclone, refuses
+to rewrite a new graph, and fails closed if any advertised remote ref differs from
+the dry-run snapshot or if the retained target refs were modified.
 
 ```bash
 # from any non-bare checkout of this repo (e.g. the local clone you used to plan the scrub)
@@ -113,9 +123,24 @@ echo $?   # must be 0 (no findings)
 (Or use `automation/scrub_history.sh`, which automates steps 1–6 including this
 verification and resolves the scanner from its own directory.)
 
-### 7. Push
+### 7. Push the reviewed snapshot
 
-Force-push every branch and tag (the mirror clone has no remote, so add one):
+Use the wrapper's two phases. It restores `origin` after `git-filter-repo`, so the
+retained mirror has a usable push remote. After the owner approves the redacted
+dry-run and confirms that the complete ref manifest is unchanged, execute mode
+pushes the exact retained mirror; it does not delete the mirror or reclone:
+
+```bash
+REPO_URL=https://github.com/bradley-mankoff/news \
+WORKDIR=/tmp/news-scrub \
+automation/scrub_history.sh --execute --mailmap /tmp/news-scrub.mailmap
+```
+
+The wrapper's fixed push scope is `develop`, `main`, and tags. Other heads and
+GitHub pull refs remain outside that push scope unless the owner explicitly
+approves a separately reviewed scope expansion; do not describe a two-branch push
+as a repository-wide purge. If performing the push manually instead, restore the
+remote first and use the same approved ref list:
 
 ```bash
 cd /tmp/news-scrub
@@ -150,6 +175,8 @@ commits before rewriting — they are gone afterward).
 
 ## Automated Wrapper
 
-`automation/scrub_history.sh` automates steps 1-6 (clone, generate replacement files
-from redacted constants, filter-repo, audit verification) and by default only
-**prints** the push commands (`--dry-run`). A human passes `--execute` to push.
+`automation/scrub_history.sh` automates the fresh clone, replacement generation,
+filter-repo rewrite, audit verification, remote restoration, and ref-manifest
+recording. Dry-run is the safe default and only **prints** the fixed push commands.
+It retains the verified mirror for inspection; a human passes `--execute` only after
+approval to push that exact retained snapshot.
