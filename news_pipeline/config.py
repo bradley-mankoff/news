@@ -92,6 +92,14 @@ QWWYTHOS_9B_4BIT_MODEL_ALIAS = "qwythos-9b-4bit"
 QWWYTHOS_9B_4BIT_MODEL_REFERENCE = f"{QWWYTHOS_REPO}/{QWWYTHOS_Q4K_FILENAME}"
 QWWYTHOS_9B_8BIT_MODEL_ALIAS = "qwythos-9b-8bit"
 QWWYTHOS_9B_8BIT_MODEL_REFERENCE = f"{QWWYTHOS_REPO}/{QWWYTHOS_Q8_FILENAME}"
+# Runtime-verified Qwen3 MLX language models (issue #89): mlx-community
+# 4-bit distributions served by the managed mlx-lm backend on Apple
+# Silicon, verified per docs/model-runtime-verification.md. MLX entries
+# keep reference == hf_repo (no .gguf suffix).
+QWEN3_8B_4BIT_MODEL_ALIAS = "qwen3-8b-4bit"
+QWEN3_8B_4BIT_MODEL_REPO = "mlx-community/Qwen3-8B-4bit"
+QWEN3_14B_4BIT_MODEL_ALIAS = "qwen3-14b-4bit"
+QWEN3_14B_4BIT_MODEL_REPO = "mlx-community/Qwen3-14B-4bit"
 MODEL_BACKEND_MLX_LM = "mlx-lm"
 MODEL_BACKEND_MLX_VLM = "mlx-vlm"
 MODEL_BACKEND_EXTERNAL = "external"
@@ -178,6 +186,12 @@ MODEL_ALIASES = {
     QWWYTHOS_9B_8BIT_MODEL_ALIAS: QWWYTHOS_9B_8BIT_MODEL_REFERENCE,
     f"https://huggingface.co/{QWWYTHOS_9B_8BIT_MODEL_REFERENCE}": QWWYTHOS_9B_8BIT_MODEL_REFERENCE,
     f"https://hf.co/{QWWYTHOS_9B_8BIT_MODEL_REFERENCE}": QWWYTHOS_9B_8BIT_MODEL_REFERENCE,
+    QWEN3_8B_4BIT_MODEL_ALIAS: QWEN3_8B_4BIT_MODEL_REPO,
+    f"https://huggingface.co/{QWEN3_8B_4BIT_MODEL_REPO}": QWEN3_8B_4BIT_MODEL_REPO,
+    f"https://hf.co/{QWEN3_8B_4BIT_MODEL_REPO}": QWEN3_8B_4BIT_MODEL_REPO,
+    QWEN3_14B_4BIT_MODEL_ALIAS: QWEN3_14B_4BIT_MODEL_REPO,
+    f"https://huggingface.co/{QWEN3_14B_4BIT_MODEL_REPO}": QWEN3_14B_4BIT_MODEL_REPO,
+    f"https://hf.co/{QWEN3_14B_4BIT_MODEL_REPO}": QWEN3_14B_4BIT_MODEL_REPO,
 }
 # Custom aliases added through config/model_catalog.yaml (issue #90) extend
 # this mapping at use time via _catalog_model_aliases(); MODEL_ALIASES itself
@@ -1805,7 +1819,7 @@ def runtime_knob_registry() -> list[dict[str, Any]]:
         _runtime_knob("Run Settings", "Embedding model", "NEWS_EMBEDDING_MODEL", default="all-mpnet-base-v2", advanced=True),
         _runtime_knob("Run Settings", "Token encoding", "NEWS_TOKEN_ENCODING", default="o200k_base", advanced=True),
         _runtime_knob("Model Selection", "Default model", "NEWS_MODEL", "select", default=DEFAULT_MODEL_ALIAS, options=sorted(_catalog_model_aliases()), option_links=model_links, ui_location=UI_LOCATION_RUN_SETUP),
-        _runtime_knob("Model Selection", "Model backend", "NEWS_MODEL_BACKEND", "select", default=DEFAULT_MODEL_BACKEND, options=sorted(SUPPORTED_MODEL_BACKENDS), ui_location=UI_LOCATION_RUN_SETUP),
+        _runtime_knob("Model Selection", "Model backend", "NEWS_MODEL_BACKEND", "select", default=DEFAULT_MODEL_BACKEND, options=sorted(SUPPORTED_MODEL_BACKENDS)),
         _runtime_knob("Model Tuning", "Default tuning preset", "NEWS_MODEL_TUNING_PRESET", "select", options=tuning_presets),
         _runtime_knob("Model Tuning", "Model input cap", "NEWS_MODEL_MAX_INPUT_TOKENS", "number", minimum=1, step=1, ui_location=UI_LOCATION_ADVANCED_PANELS),
         _runtime_knob("Pipeline Budget", "Article text token limit", "NEWS_ARTICLE_TEXT_TOKEN_LIMIT", "number", minimum=1, step=1, ui_location=UI_LOCATION_ADVANCED_PANELS),
