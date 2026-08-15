@@ -631,7 +631,10 @@ class UITests(unittest.TestCase):
         self.assertIn("refreshModelKnobLinks();", presets)
         self.assertIn('void previewQuietly("run");', presets)
         self.assertIn("refreshModelKnobLinks();", reset)
-        self.assertIn('void previewQuietly("run");', reset)
+        self.assertIn(
+            'void preview("run").catch(err => setStatus(err.message, "bad"));',
+            reset,
+        )
         self.assertIn('state.selectedModelRequiredBackend = catalogBackendForReference(el.value);', delegated)
         self.assertIn("requiredBackendForSelectedModel()", delegated)
         self.assertIn("refreshHuggingFaceUseButtons();", delegated)
@@ -2946,6 +2949,195 @@ for (const malformedRaw of malformedValues) {
             check=False,
         )
         self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
+
+    def test_clear_reset_and_profile_preview_errors_use_status_path(self) -> None:
+        """Drive the production clear/reset/profile handlers in a Node DOM
+        harness and prove rejected previews surface through the existing
+        setStatus(..., "bad") header path (issue #116) while successful
+        previews still update #previewPane.
+
+        The production blocks for preview(), requestBody(), setStatus(),
+        resetAllOverrides(), and wireEvents() are extracted from the embedded
+        script rather than reimplemented, so a regression that drops the
+        status catch, returns a rejected promise, or stops updating the pane
+        on success fails here. Source assertions pin the named handlers to the
+        status pattern and keep the unrelated previewQuietly() auto-refresh
+        paths untouched.
+        """
+        html = ui_module.HTML
+
+        def js_function_block(start: str, end: str) -> str:
+            return html[html.index(start) : html.index(end, html.index(start))]
+
+        status_pattern = 'preview("run").catch(err => setStatus(err.message, "bad"))'
+        # Named clear/reset/profile handlers use the status path...
+        reset_block = js_function_block(
+            "function resetAllOverrides() {", "function setKnobEnv(env) {"
+        )
+        self.assertIn(f"void {status_pattern}", reset_block)
+        profile_block = js_function_block(
+            '$("promptProfileSelect").onchange = () => {',
+            '$("comparePromptProfileBtn").onclick',
+        )
+        self.assertEqual(profile_block.count(status_pattern), 2)
+        # ...while unrelated preset auto-refresh keeps previewQuietly().
+        preset_block = js_function_block(
+            "function applyRunPreset(preset) {", "function resetAllOverrides() {"
+        )
+        self.assertIn('void previewQuietly("run")', preset_block)
+        self.assertIn('async function previewQuietly(action="run") {', html)
+
+        js = (
+            r"""
+const assert = (condition, message) => {
+  if (!condition) throw new Error(message);
+};
+"""
+            + _FAKE_DOM_ELEMENT_JS
+            + r"""
+// ---- Fake DOM ------------------------------------------------------------
+// wireEvents() assigns handlers to every control, so the ID-only $ helper
+// must resolve each of them (a null lookup would throw inside wireEvents).
+const byId = {};
+// Production code writes textContent on #status and #previewPane, but the
+// shared FakeElement exposes a read-only textContent getter; subclass it so
+// setStatus() and preview() behave exactly as in the browser.
+class WritableTextElement extends FakeElement {
+  set textContent(value) { this._innerHTML = String(value); }
+  get textContent() { return decodeEntities(this._innerHTML.replace(/<[^>]*>/g, "")); }
+}
+function registerElement(id) { return byId[id] || (byId[id] = new FakeElement(id)); }
+function registerWritable(id) { return byId[id] || (byId[id] = new WritableTextElement(id)); }
+for (const id of [
+  "previewBtn", "runBtn", "utilityPreviewBtn", "utilityRunBtn", "stopBtn",
+  "openRunPresetDrawerBtn", "savePresetBtn", "closeRunPresetDialogBtn",
+  "newPresetBtn", "reloadPresetsBtn", "applyPresetBtn", "renamePresetBtn",
+  "savePresetEditorBtn", "deletePresetBtn", "knobSearch", "clearKnobsBtn",
+  "resetDefaultsBtn", "promptProfileSelect", "restorePromptProfileBtn",
+  "comparePromptProfileBtn", "sourceSearch", "reloadSourcesBtn",
+  "newSourceBtn", "saveSourceBtn", "deleteSourceBtn", "reloadRecipientsBtn",
+  "newRecipientBtn", "saveRecipientBtn", "deleteRecipientBtn",
+  "newModelTuningPresetBtn", "reloadModelTuningPresetsBtn",
+  "saveModelTuningPresetBtn", "deleteModelTuningPresetBtn", "actionSelect",
+  "sourceOptions"
+]) registerElement(id);
+registerWritable("status");
+registerWritable("previewPane");
+const profileEnvInput = new FakeElement("profileEnv");
+function $(id) { return byId[id] || null; }
+function value(id) { const el = $(id); return el ? el.value : ""; }
+const document = {
+  getElementById(id) { return byId[id] || null; },
+  querySelector(selector) {
+    // The restore-profile handler only clears the NEWS_PROMPT_PROFILE control.
+    if (selector === '[data-env="NEWS_PROMPT_PROFILE"]') return profileEnvInput;
+    return null;
+  },
+  querySelectorAll(_selector) {
+    // No env knobs or override editors in this harness.
+    return [];
+  }
+};
+const state = { schema: null, selectedRunPresetId: "" };
+const promptTemplateRaw = {};
+const flush = () => new Promise(resolve => setTimeout(resolve, 0));
+
+// ---- Non-preview reset/profile dependencies are stubbed -------------------
+function renderPresetSummary() {}
+function renderModelTuningPanels() {}
+function renderPromptProfilePanel() {}
+function refreshModelKnobLinks() {}
+function restorePromptTemplateTask() {}
+function collectEnv() { return {}; }
+function collectOptions() { return {}; }
+// wireEvents() reads these identifiers eagerly while assigning handlers;
+// their bodies are never invoked by this harness, so no-ops are sufficient.
+function closeRunPresetDialog() {}
+function renderAdvancedKnobs() {}
+function loadPresets() {}
+function loadSources() {}
+function renderSources() {}
+function loadRecipients() {}
+// wireEvents() enumerates TASK_CONFIG at wiring time; this harness never
+// invokes the model/tuning handlers, so the empty catalog is sufficient.
+const TASK_CONFIG = {};
+
+// ---- Production blocks under test -----------------------------------------
+"""
+            + js_function_block('function setStatus(text, cls="muted") {', "function showTab(id) {")
+            + js_function_block('function requestBody(action="run") {', "function envToText(env) {")
+            + js_function_block('async function preview(action="run") {', "function updateRunControls() {")
+            + js_function_block("function resetAllOverrides() {", "function setKnobEnv(env) {")
+            + js_function_block("function wireEvents() {", "function applySelectedPresetFromState() {")
+            + r"""
+// ---- API stub: only the network edge is stubbed ----------------------------
+let previewCount = 0;
+let rejectPreview = false;
+async function api(path, options = {}) {
+  assert(path === "/api/preview", `unexpected API path: ${path}`);
+  previewCount++;
+  if (rejectPreview) throw new Error("preview failed");
+  return { command_text: "fresh preview", runtime_error: null };
+}
+
+// ---- Failure path: rejected previews surface through the status bar --------
+wireEvents();
+assert($("clearKnobsBtn").onclick === resetAllOverrides, "Clear overrides no longer binds the shared reset handler");
+assert($("resetDefaultsBtn").onclick === resetAllOverrides, "Reset defaults no longer binds the shared reset handler");
+
+rejectPreview = true;
+$("clearKnobsBtn").onclick();
+await flush();
+assert($("status").textContent === "preview failed", "Clear overrides did not surface the preview error");
+assert($("status").className === "bad", "Clear overrides did not mark the status bad");
+
+$("resetDefaultsBtn").onclick();
+await flush();
+assert($("status").textContent === "preview failed", "Reset defaults did not surface the preview error");
+assert($("status").className === "bad", "Reset defaults did not mark the status bad");
+
+$("promptProfileSelect").onchange();
+await flush();
+assert($("status").textContent === "preview failed", "Profile change did not surface the preview error");
+assert($("status").className === "bad", "Profile change did not mark the status bad");
+
+profileEnvInput.value = "custom-profile";
+$("restorePromptProfileBtn").onclick();
+await flush();
+assert(profileEnvInput.value === "", "Profile restore did not clear the profile control");
+assert($("status").textContent === "preview failed", "Profile restore did not surface the preview error");
+assert($("status").className === "bad", "Profile restore did not mark the status bad");
+assert(previewCount === 4, `expected 4 failed preview requests, got ${previewCount}`);
+
+// ---- Success path: the pane still updates and no error is written ---------
+rejectPreview = false;
+$("previewPane").textContent = "stale preview";
+$("clearKnobsBtn").onclick();
+await flush();
+$("resetDefaultsBtn").onclick();
+await flush();
+$("promptProfileSelect").onchange();
+await flush();
+$("restorePromptProfileBtn").onclick();
+await flush();
+assert($("previewPane").textContent === "fresh preview", "successful preview did not update the pane");
+assert(previewCount === 8, `expected 8 preview requests total, got ${previewCount}`);
+assert($("status").textContent === "preview failed", "successful preview overwrote the last error status");
+assert($("status").className === "bad", "successful preview cleared the bad status");
+"""
+        )
+        node = shutil.which("node")
+        if node is None:
+            self.skipTest("Node.js is required for the embedded UI renderer harness")
+        result = subprocess.run(
+            [node, "--input-type=module", "-"],
+            input=js,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
+
     def test_schema_payload_includes_custom_catalog_entries(self) -> None:
         """The existing schema payload is the integration surface for merged
         catalog data: custom aliases appear in catalog cards and selector
