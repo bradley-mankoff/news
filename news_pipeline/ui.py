@@ -2253,22 +2253,12 @@ HTML = r"""<!doctype html>
     </div>
   </dialog>
   <script>
-    // SURFACED_ENVS is derived from the Python runtime knob registry's
-    // ui_location metadata (issue #115): knobs whose location is run_setup or
-    // advanced_panels are rendered by dedicated controls, so renderAdvancedKnobs()
-    // omits them from the raw override list (otherwise the env appears twice and
-    // collectEnv() gets two inputs). Missing/unknown client metadata fails safe
-    // by leaving the knob in the raw list, so a setting cannot disappear.
-    const SURFACED_ENVS = new Set();
-    function syncSurfacedEnvs() {
-      SURFACED_ENVS.clear();
-      ((state.schema && state.schema.knobs) || []).forEach(knob => {
-        const location = knob.ui_location;
-        if (location === "run_setup" || location === "advanced_panels") {
-          SURFACED_ENVS.add(knob.env);
-        }
-      });
-    }
+    // Dedicated envs (Run Setup, model-tuning cards, prompt editors, and the
+    // no-data-env full-template editors) are discovered dynamically by
+    // surfacedEnvSet() after the specialized panels render (issue #114); the
+    // old static SURFACED_ENVS suppression manifest is gone. The registry's
+    // ui_location metadata (issue #115) remains the config-side annotation of
+    // render ownership; the live DOM surface is what renderers actually mount.
     const TASK_CONFIG = {
       article_summary: {
         label: "Article Summarization",
@@ -2561,6 +2551,65 @@ HTML = r"""<!doctype html>
       const knob = knobByEnv(env);
       if (!knob) return "";
       return `<label class="field"><span>${escapeHtml(label)}</span>${inputForKnob(knob, options)}<code>${escapeHtml(env)}</code></label>`;
+    }
+    // Registry-driven Advanced panels (issue #114): the registry record is the
+    // single source of label/env/metadata, so a new knob appears automatically
+    // without a second hand-maintained UI env list.
+    function knobFieldFor(knob, options={}) {
+      if (!knob) return "";
+      return `<label class="field"><span>${escapeHtml(knob.label)}</span>${inputForKnob(knob, options)}<code>${escapeHtml(knob.env)}</code></label>`;
+    }
+    // Groups records by first-seen registry group order and preserves the
+    // per-group registry order; a new group needs no hardcoded group-order
+    // entry in the UI.
+    function knobGroups(knobs) {
+      const groups = [];
+      const index = new Map();
+      (knobs || []).forEach(knob => {
+        let entry = index.get(knob.group);
+        if (!entry) {
+          entry = { group: knob.group, knobs: [] };
+          index.set(knob.group, entry);
+          groups.push(entry);
+        }
+        entry.knobs.push(knob);
+      });
+      return groups;
+    }
+    // Every env already mounted as a dedicated control, plus the schema
+    // prompt-template envs whose editors intentionally carry no data-env. Must
+    // run after renderRunSetup() and after the specialized Advanced panels so
+    // dedicated envs are never rendered twice (one control per env invariant).
+    function surfacedEnvSet() {
+      const surfaced = new Set();
+      // Dedicated controls live in these mounts. The raw fallback is kept
+      // outside the discovery scope so re-rendering it for search cannot make
+      // its own controls disappear on the next render.
+      document
+        .querySelectorAll("#runSetupMount [data-env], #advancedPanels [data-env]")
+        .forEach(el => surfaced.add(el.dataset.env));
+      // Full-template editors intentionally have no data-env. Suppress their
+      // registry records only after an editor actually mounted.
+      const templateEditors = $("promptTemplateEditors");
+      if (templateEditors && templateEditors.querySelector("[data-template-system]")) {
+        Object.values(promptTemplateEnvMap()).forEach(env => surfaced.add(env));
+      }
+      return surfaced;
+    }
+    // Ordinary Advanced panels generated from residual registry records: one
+    // panel per non-empty registry group, in first-seen registry order, with
+    // registry labels and inputForKnob() metadata (type/options/default/range).
+    function renderRegistryGroupPanels(surfaced) {
+      const residual = (state.schema && state.schema.knobs || []).filter(knob => !surfaced.has(knob.env));
+      return knobGroups(residual).map(entry => `
+        <section class="panel">
+          <p class="eyebrow">${escapeHtml(entry.group)}</p>
+          <h2>${escapeHtml(entry.group)}</h2>
+          <div class="form-grid">
+            ${entry.knobs.map(knob => knobFieldFor(knob)).join("")}
+          </div>
+        </section>
+      `).join("");
     }
     function knobHint(name) {
       if (KNOB_HINTS[name]) return KNOB_HINTS[name];
@@ -3050,24 +3099,16 @@ HTML = r"""<!doctype html>
         }
       };
     }
-    // Knob labels for each task's per-task max-tokens env (modelTuningPanel).
-    const TASK_MAX_TOKENS_LABELS = {
-      article_summary: "Article summary max tokens",
-      story_drafting: "Story drafting max tokens",
-      story_scale_screening: "Scale screening max tokens",
-      title_generation: "Title generation max tokens",
-      image_art_direction: "Image art direction max tokens"
-    };
-    const SAMPLING_FIELDS = [
-      ["TEMPERATURE", "Temperature"],
-      ["TOP_P", "Top P"],
-      ["TOP_K", "Top K"],
-      ["MIN_P", "Min P"],
-      ["PRESENCE_PENALTY", "Presence penalty"],
-      ["REPETITION_PENALTY", "Repetition penalty"]
-    ];
+    // Sampling knobs for a task prefix are the numeric Model Tuning registry
+    // records under that prefix (issue #114); the registry owns suffixes,
+    // labels, bounds, and step, so no second sampling list is kept in JS.
+    function taskSamplingKnobs(prefix) {
+      return (state.schema && state.schema.knobs || []).filter(knob =>
+        knob.group === "Model Tuning" && knob.type === "number" && knob.env.startsWith(`${prefix}_`)
+      );
+    }
     function samplingFields(prefix) {
-      return SAMPLING_FIELDS.map(([suffix, label]) => knobField(`${prefix}_${suffix}`, label)).join("");
+      return taskSamplingKnobs(prefix).map(knob => knobFieldFor(knob)).join("");
     }
     function modelTuningPanel(task) {
       const meta = TASK_CONFIG[task];
@@ -3086,8 +3127,8 @@ HTML = r"""<!doctype html>
             <label class="field"><span>Display name</span><input id="${meta.nameInputId}"><code>name</code></label>
             <label class="field"><span>Description</span><textarea id="${meta.descriptionInputId}"></textarea><code>description</code></label>
             ${sharedCap}
-            ${knobField(meta.taskMaxTokensEnv, TASK_MAX_TOKENS_LABELS[task] || "Max tokens")}
-            ${knobField(meta.baseUrlEnv, "Base URL")}
+            ${knobFieldFor(knobByEnv(meta.taskMaxTokensEnv))}
+            ${knobFieldFor(knobByEnv(meta.baseUrlEnv))}
             ${samplingFields(meta.taskSamplingPrefix)}
           </div>
           <div class="toolbar">
@@ -3111,32 +3152,7 @@ HTML = r"""<!doctype html>
         ${modelTuningPanel("story_scale_screening")}
         ${modelTuningPanel("title_generation")}
         ${modelTuningPanel("image_art_direction")}
-        <section class="panel">
-          <p class="eyebrow">Budgets</p>
-          <h2>Run budgets and quotas</h2>
-          <div class="form-grid">
-            ${knobField("NEWS_SOURCE_COLLECTION_CONCURRENCY", "Source collection concurrency")}
-            ${knobField("NEWS_ARTICLE_SUMMARY_CONCURRENCY", "Article summary concurrency")}
-            ${knobField("NEWS_STORY_SYNTHESIS_CONCURRENCY", "Story synthesis concurrency")}
-            ${knobField("NEWS_ARTICLE_TEXT_TOKEN_LIMIT", "Article text token limit")}
-            ${knobField("NEWS_MAX_STORIES", "Max stories")}
-            ${knobField("NEWS_MIN_ARTICLES_PER_STORY", "Min articles per story")}
-            ${knobField("NEWS_STORY_CLUSTER_SIMILARITY_THRESHOLD", "Story cluster similarity")}
-            ${knobField("NEWS_STORY_SELECTION_OVERLAP_THRESHOLD", "Story selection overlap")}
-            ${knobField("NEWS_STORY_DEDUP_THRESHOLD", "Story dedup threshold")}
-            ${knobField("NEWS_STORY_BACKFILL_BATCH_MULTIPLIER", "Backfill batch multiplier")}
-          </div>
-        </section>
-        <section class="panel">
-          <p class="eyebrow">Peripheral</p>
-          <h2>Optional run settings</h2>
-          <div class="form-grid">
-            ${knobField("NEWS_IMAGE_ENABLED", "Image generation")}
-            ${knobField("NEWS_BLOCK_REUSED_URLS", "Block reused URLs")}
-            ${knobField("NEWS_STORY_SCALE_SCREENING_ENABLED", "Story scale screening")}
-            ${knobField("NEWS_RELAX_STORY_DRAFTING_GUARDS", "Relax story drafting guards")}
-          </div>
-        </section>
+        <div id="registryKnobPanels"></div>
         <section class="panel">
           <p class="eyebrow">Prompt templates</p>
           <h2>Full prompt templates</h2>
@@ -3163,6 +3179,14 @@ HTML = r"""<!doctype html>
       decorateEnvHints($("advancedPanels"));
       renderPromptProfilePanel();
       renderPromptTemplateEditors();
+      // Ordinary knob panels are generated from the registry (issue #114):
+      // every residual knob (not mounted by Run Setup or a specialized editor
+      // above) renders exactly once in its registry group, in first-seen
+      // registry order. Surface discovery runs after the specialized panels so
+      // dedicated envs are never duplicated; the search-filtered raw override
+      // list below stays as the fallback for anything still unmounted.
+      $("registryKnobPanels").innerHTML = renderRegistryGroupPanels(surfacedEnvSet());
+      decorateEnvHints($("advancedPanels"));
     }
     function renderModelTuningControls(task, { preserveEditor = false } = {}) {
       const meta = TASK_CONFIG[task];
@@ -3220,10 +3244,10 @@ HTML = r"""<!doctype html>
       if (sharedMax) tuning.model_max_input_tokens = sharedMax;
       const taskMax = valueByEnv(meta.taskMaxTokensEnv);
       if (taskMax) tuning[`${meta.runtimeKey}_max_tokens`] = taskMax;
-      const samplingFields = SAMPLING_FIELDS.map(([suffix]) => [suffix.toLowerCase(), `${meta.taskSamplingPrefix}_${suffix}`]);
-      samplingFields.forEach(([key, env]) => {
-        const raw = valueByEnv(env);
-        if (raw) tuning[key] = raw;
+      const samplingFields = taskSamplingKnobs(meta.taskSamplingPrefix);
+      samplingFields.forEach(knob => {
+        const raw = valueByEnv(knob.env);
+        if (raw) tuning[knob.env.slice(meta.taskSamplingPrefix.length + 1).toLowerCase()] = raw;
       });
       return {
         id: value(meta.idInputId).trim(),
@@ -3253,10 +3277,10 @@ HTML = r"""<!doctype html>
         if (tuning.model_max_input_tokens) setControlValue("NEWS_MODEL_MAX_INPUT_TOKENS", tuning.model_max_input_tokens);
         const taskMaxTokens = tuning[`${meta.runtimeKey}_max_tokens`];
         if (taskMaxTokens) setControlValue(meta.taskMaxTokensEnv, taskMaxTokens);
-        SAMPLING_FIELDS.forEach(([suffix]) => {
-          const field = suffix.toLowerCase();
+        taskSamplingKnobs(meta.taskSamplingPrefix).forEach(knob => {
+          const field = knob.env.slice(meta.taskSamplingPrefix.length + 1).toLowerCase();
           if (tuning[field] !== undefined && tuning[field] !== null && tuning[field] !== "") {
-            setControlValue(`${meta.taskSamplingPrefix}_${suffix}`, tuning[field]);
+            setControlValue(knob.env, tuning[field]);
           }
         });
       }
@@ -3428,14 +3452,11 @@ HTML = r"""<!doctype html>
     }
     function renderAdvancedKnobs() {
       const search = value("knobSearch").toLowerCase();
-      const groups = {};
-      (state.schema.knobs || []).forEach(knob => {
-        if (SURFACED_ENVS.has(knob.env)) return;
-        const hay = `${knob.label} ${knob.env} ${knob.group}`.toLowerCase();
-        if (search && !hay.includes(search)) return;
-        (groups[knob.group] ||= []).push(knob);
-      });
-      const orderedGroups = ["Run Settings", "Model Selection", "Model Tuning", "Pipeline Budget", "Model Server Settings"];
+      // Filter envs already mounted by dedicated/generated panels (dynamic
+      // surface discovery, issue #114) so each env stays one control; the
+      // remaining records fall back to this searchable grouped list.
+      const surfaced = surfacedEnvSet();
+      const residual = (state.schema.knobs || []).filter(knob => !surfaced.has(knob.env));
       const renderCards = list => list.map(knob => `
         <div class="knob">
           <label>${escapeHtml(knob.label)}</label>
@@ -3443,13 +3464,16 @@ HTML = r"""<!doctype html>
           <code>${escapeHtml(knob.env)}</code>
         </div>
       `).join("");
-      $("knobContainer").innerHTML = [...orderedGroups, ...Object.keys(groups).filter(group => !orderedGroups.includes(group)).sort()].map(group => {
-        const knobs = groups[group];
-        if (!knobs || !knobs.length) return "";
+      $("knobContainer").innerHTML = knobGroups(residual).map(entry => {
+        const matched = entry.knobs.filter(knob => {
+          const hay = `${knob.label} ${knob.env} ${knob.group}`.toLowerCase();
+          return !search || hay.includes(search);
+        });
+        if (!matched.length) return "";
         return `
           <div class="knob-group">
-            <h2>${escapeHtml(group)}</h2>
-            <div class="knobs">${renderCards(knobs)}</div>
+            <h2>${escapeHtml(entry.group)}</h2>
+            <div class="knobs">${renderCards(matched)}</div>
           </div>
         `;
       }).join("");
@@ -4734,7 +4758,6 @@ HTML = r"""<!doctype html>
     }
     async function init() {
       state.schema = await api("/api/schema");
-      syncSurfacedEnvs();
       let bootWarning = "";
       let activeRunStatus = "";
       try {

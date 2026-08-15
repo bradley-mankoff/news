@@ -212,17 +212,20 @@ class UITests(unittest.TestCase):
         self.assertIn('id="advancedPanels"', html)
         self.assertIn("function renderAdvancedPanels", html)
         self.assertIn("function modelTuningPanel", html)
-        run_setup = html.split("function renderRunSetup")[1].split("const SAMPLING_FIELDS")[0]
+        run_setup = html.split("function renderRunSetup")[1].split("function modelTuningPanel")[0]
         self.assertNotIn("Run budgets and quotas", run_setup)
         self.assertNotIn("Optional run settings", run_setup)
         self.assertNotIn("article_tuning_preset", run_setup)
         self.assertNotIn("promptProfileReadouts", run_setup)
         self.assertNotIn("promptProfileCompare", run_setup)
         self.assertNotIn("<summary>Model tuning</summary>", html)
+        # The hand-maintained budgets/peripheral panels are gone: ordinary
+        # Advanced knob panels are generated from the registry (issue #114).
+        self.assertNotIn("Run budgets and quotas", html)
+        self.assertNotIn("Optional run settings", html)
+        self.assertNotIn("const SURFACED_ENVS", html)
         # Moved panels exist exactly once, inside renderAdvancedPanels.
         advanced = html.split("function renderAdvancedPanels")[1].split("function renderAdvancedKnobs")[0]
-        self.assertEqual(advanced.count("Run budgets and quotas"), 1)
-        self.assertEqual(advanced.count("Optional run settings"), 1)
         self.assertEqual(advanced.count('id="promptProfileReadouts"'), 1)
         self.assertEqual(advanced.count('id="comparePromptProfileBtn"'), 1)
         self.assertEqual(advanced.count('modelTuningPanel("article_summary")'), 1)
@@ -230,6 +233,18 @@ class UITests(unittest.TestCase):
         self.assertEqual(advanced.count('modelTuningPanel("story_scale_screening")'), 1)
         self.assertEqual(advanced.count('modelTuningPanel("title_generation")'), 1)
         self.assertEqual(advanced.count('modelTuningPanel("image_art_direction")'), 1)
+        # Ordinary knobs are derived from state.schema.knobs: no hardcoded
+        # knobField env lists survive in the Advanced panels, and the generic
+        # renderer mounts residual records after the specialized editors.
+        for env in (
+            "NEWS_SOURCE_COLLECTION_CONCURRENCY",
+            "NEWS_ARTICLE_TEXT_TOKEN_LIMIT",
+            "NEWS_IMAGE_ENABLED",
+            "NEWS_STORY_SCALE_SCREENING_ENABLED",
+        ):
+            self.assertNotIn(f'knobField("{env}"', advanced)
+        self.assertIn('id="registryKnobPanels"', advanced)
+        self.assertIn("renderRegistryGroupPanels(surfacedEnvSet())", advanced)
         tuning_editor = html.split('<h2>Model Tuning Preset Editor</h2>', 1)[1].split(
             '<h2>', 1
         )[0]
@@ -238,110 +253,38 @@ class UITests(unittest.TestCase):
             tuning_editor,
         )
         self.assertIn("image_art_direction_max_tokens", tuning_editor)
-        # Dedicated envs are suppressed from the raw override list via the
-        # registry-derived set (issue #115); the literal manifest is gone.
-        derived = html.split("const SURFACED_ENVS = new Set();", 1)[1].split("const TASK_CONFIG", 1)[0]
-        self.assertNotIn('"NEWS_', derived)
-        self.assertIn("function syncSurfacedEnvs()", derived)
-        self.assertIn("knob.ui_location", derived)
 
-    def test_surfaced_envs_derived_from_registry_ui_location(self) -> None:
-        """SURFACED_ENVS is a derived Set populated from the registry's
-        ui_location metadata (issue #115): no literal environment-name
-        manifest survives in the browser source, and missing/unknown client
-        metadata must fail safe by leaving the knob in the raw list."""
+    def test_advanced_surfaces_are_dynamic_and_duplicate_free(self) -> None:
+        """The static SURFACED_ENVS suppression manifest is replaced by
+        mounted-control discovery (issue #114): surfacedEnvSet() collects live
+        [data-env] controls after the dedicated panels render and adds the
+        schema prompt-template envs whose editors intentionally carry no
+        data-env. The one-control-per-env guarantee is proven behaviorally by
+        the Node harness running the production registry/group renderer.
+        """
         html = ui_module.HTML
-        derived = html.split("const SURFACED_ENVS = new Set();", 1)[1].split("const TASK_CONFIG", 1)[0]
-        # No literal env names inside the derived-set block.
-        self.assertNotIn('"NEWS_', derived)
-        self.assertNotIn('"', derived.split("function syncSurfacedEnvs")[0])
-        # The sync function reads schema knob ui_location metadata and only
-        # the two dedicated locations suppress the raw override.
-        self.assertIn("function syncSurfacedEnvs()", derived)
-        self.assertIn("((state.schema && state.schema.knobs) || [])", derived)
-        self.assertIn("const location = knob.ui_location;", derived)
-        self.assertIn('location === "run_setup" || location === "advanced_panels"', derived)
-        self.assertIn("SURFACED_ENVS.add(knob.env)", derived)
-        # The raw renderer keeps filtering through the same derived Set.
-        raw_filter = html.split("function renderAdvancedKnobs")[1].split("function collectModelTuningPresetBody")[0]
-        self.assertIn("if (SURFACED_ENVS.has(knob.env)) return;", raw_filter)
-
-    def test_surfaced_envs_parity_with_dedicated_renderers(self) -> None:
-        """Bidirectional registry/UI parity (issue #115): every surfaced
-        registry record maps to an actual dedicated UI reference, and every
-        dedicated UI reference maps back to one registered surfaced
-        environment. A stale metadata entry cannot hide an unrendered knob,
-        and a stale markup reference cannot point at a raw-only setting."""
-        html = ui_module.HTML
-        run_setup = html.split("function renderRunSetup")[1].split("function renderAdvancedPanels")[0]
-        advanced = html.split("function renderAdvancedPanels")[1].split("function renderAdvancedKnobs")[0]
-        task_config = html.split("const TASK_CONFIG")[1].split("const TASK_MAX_TOKENS_LABELS")[0]
-        # Direct Run Setup refs: data-env controls plus knobField() calls.
-        direct_run_setup = (
-            set(re.findall(r'data-env="(NEWS_[A-Z_]+)"', run_setup))
-            | set(re.findall(r'knobField\("(NEWS_[A-Z_]+)"', run_setup))
+        # No hand-maintained suppression manifest or hardcoded group order.
+        self.assertNotIn("const SURFACED_ENVS", html)
+        self.assertNotIn("orderedGroups", html)
+        # The dynamic surface helper feeds the generated panels and the raw
+        # override fallback list.
+        self.assertIn("function surfacedEnvSet", html)
+        self.assertIn(
+            'querySelectorAll("#runSetupMount [data-env], #advancedPanels [data-env]")',
+            html,
         )
-        # Direct advanced panel refs: Budgets/Peripheral knobField() calls.
-        direct_panels = set(re.findall(r'knobField\("(NEWS_[A-Z_]+)"', advanced))
-        # TASK_CONFIG-driven refs: preset/base-URL/max-token envs and the
-        # sampling prefix composed with the SAMPLING_FIELDS suffixes.
-        task_direct = set(
-            re.findall(r'(?:presetEnv|baseUrlEnv|taskMaxTokensEnv): "(NEWS_[A-Z_]+)"', task_config)
-        )
-        prefixes = re.findall(r'taskSamplingPrefix: "(NEWS_MODEL_[A-Z_]+)"', task_config)
-        suffixes = re.findall(
-            r'\["([A-Z_]+)", "',
-            html.split("const SAMPLING_FIELDS")[1].split("function samplingFields")[0],
-        )
-        task_sampling = {f"{p}_{s}" for p in prefixes for s in suffixes}
-        self.assertEqual(len(task_sampling), 30)
-        # Sentence-level override map and the schema-driven template catalog.
-        override_map = {
-            env.strip('"')
-            for env in re.findall(
-                r'"NEWS_PROMPT_OVERRIDE_[A-Z_]+"',
-                html.split("const PROMPT_OVERRIDE_ENVS")[1].split("function selectedPromptProfile")[0],
-            )
-        }
-        self.assertEqual(len(override_map), 5)
-        self.assertIn("function promptTemplateEnvMap()", html)
-        self.assertIn("map[t.task] = t.env_var;", html)
-        template_catalog = set(config_module.PROMPT_TEMPLATE_ENV_VARS.values())
-        dedicated_refs = (
-            direct_run_setup
-            | direct_panels
-            | task_direct
-            | task_sampling
-            | override_map
-            | template_catalog
-        )
-        registry = {knob["env"]: knob["ui_location"] for knob in build_knob_registry()}
-        surfaced = {env for env, loc in registry.items() if loc != "advanced_raw"}
-        # Every dedicated UI reference maps back to a registered surfaced env.
-        self.assertEqual(
-            sorted(dedicated_refs - surfaced),
-            [],
-            "dedicated markup references an env that is not registry-surfaced",
-        )
-        # Every surfaced registry env has an actual dedicated reference.
-        self.assertEqual(
-            sorted(surfaced - dedicated_refs),
-            [],
-            "registry-surfaced env has no dedicated UI reference",
-        )
-        self.assertEqual(len(surfaced), 74)
-        # The five per-task model selectors stay raw Advanced overrides even
-        # though TASK_CONFIG references them (modelEnv is not a dedicated
-        # control; no data-env input is generated for it).
-        for env in (
-            "NEWS_MODEL_ARTICLE_SUMMARY",
-            "NEWS_MODEL_STORY_DRAFTING",
-            "NEWS_MODEL_STORY_SCALE_SCREENING",
-            "NEWS_MODEL_TITLE_GENERATION",
-            "NEWS_MODEL_IMAGE_ART_DIRECTION",
-        ):
-            self.assertEqual(registry[env], "advanced_raw", f"{env} must stay raw")
-            self.assertIn(f'modelEnv: "{env}"', task_config)
+        self.assertIn('templateEditors.querySelector("[data-template-system]")', html)
+        self.assertIn("renderRegistryGroupPanels(surfacedEnvSet())", html)
+        raw = html.split("function renderAdvancedKnobs")[1].split(
+            "function collectModelTuningPresetBody"
+        )[0]
+        self.assertIn("const surfaced = surfacedEnvSet();", raw)
+        self.assertIn("knobGroups(residual)", raw)
+        # The per-task tuning cards select their fields from registry records
+        # rather than a JS sampling suffix list.
+        self.assertIn("function taskSamplingKnobs", html)
+        self.assertIn("function samplingFields", html)
+        self.assertNotIn("const SAMPLING_FIELDS", html)
 
     def test_advanced_panels_rendered_at_boot(self) -> None:
         html = ui_module.HTML
@@ -353,10 +296,6 @@ class UITests(unittest.TestCase):
         self.assertLess(
             boot.index("renderAdvancedPanels();"), boot.index("renderAdvancedKnobs();")
         )
-        # The derived suppression set synchronizes after the async schema load
-        # and before any raw rendering (issue #115).
-        self.assertLess(boot.index("state.schema = await api(\"/api/schema\");"), boot.index("syncSurfacedEnvs();"))
-        self.assertLess(boot.index("syncSurfacedEnvs();"), boot.index("renderAdvancedKnobs();"))
 
     def test_model_tuning_panel_metadata_guard_executes_in_node_harness(self) -> None:
         """Execute the production modelTuningPanel() renderer in a Node harness.
@@ -383,20 +322,21 @@ const assert = (condition, message) => {
 // inputForKnob reads current values through document.querySelector; the
 // harness has no DOM controls, so every lookup falls back to
 // state.schema.current_env, mirroring a schema-driven initial render.
-const document = { querySelector() { return null; } };
+const document = { querySelector() { return null; }, querySelectorAll: () => [] };
 const advancedPanels = { innerHTML: "" };
-const $ = (id) => id === "advancedPanels" ? advancedPanels : null;
+const registryKnobPanels = { innerHTML: "" };
+const $ = (id) => id === "advancedPanels" ? advancedPanels : (id === "registryKnobPanels" ? registryKnobPanels : null);
 const decorateEnvHints = () => {};
 const renderPromptProfilePanel = () => {};
 const renderPromptTemplateEditors = () => {};
+// The schema prompt-template envs reach the surface set through this map;
+// the harness has no template editors, so it contributes nothing.
+const promptTemplateEnvMap = () => ({});
 """
             + js_function_block("    const TASK_CONFIG = {", "    const state = {")
             + js_function_block("    const state = {", "    const icons = {")
             + js_function_block(
-                "    const TASK_MAX_TOKENS_LABELS = {", "    const SAMPLING_FIELDS = ["
-            )
-            + js_function_block(
-                "    const SAMPLING_FIELDS = [", "    function samplingFields(prefix) {"
+                "function taskSamplingKnobs(prefix) {", "function samplingFields(prefix) {"
             )
             + js_function_block("function escapeHtml(text) {", "function formatDefault")
             + js_function_block(
@@ -452,11 +392,12 @@ state.schema = {
     NEWS_MODEL_ARTICLE_SUMMARY_TEMPERATURE: "0.7"
   },
   knobs: [
-    { env: "NEWS_MODEL_MAX_INPUT_TOKENS", type: "number", default: 100000 },
-    { env: "NEWS_ARTICLE_SUMMARY_MAX_TOKENS", type: "number", default: 4000 },
-    { env: "NEWS_MODEL_ARTICLE_SUMMARY_BASE_URL", type: "text", default: "http://localhost:11434/v1" },
-    { env: "NEWS_MODEL_ARTICLE_SUMMARY_TEMPERATURE", type: "select", default: 0.7, options: ["0.2", "0.7", "1.0"] },
-    { env: "NEWS_MODEL_ARTICLE_SUMMARY_TOP_P", type: "select", default: 0.9, options: ["0.8", "0.9", "1.0"] }
+    { env: "NEWS_MODEL_MAX_INPUT_TOKENS", group: "Model Tuning", label: "Model input cap", type: "number", default: 100000, min: 1, max: null, step: 1 },
+    { env: "NEWS_ARTICLE_SUMMARY_MAX_TOKENS", group: "Model Tuning", label: "Article summary max tokens", type: "number", default: 4000, min: 1, max: null, step: 1 },
+    { env: "NEWS_MODEL_ARTICLE_SUMMARY_BASE_URL", group: "Model Server Settings", label: "Article Summarization base URL", type: "text", default: "http://localhost:11434/v1" },
+    { env: "NEWS_MODEL_ARTICLE_SUMMARY_TEMPERATURE", group: "Model Tuning", label: "Article Summarization Temperature", type: "number", default: 0.7, min: 0, max: 2, step: 0.01 },
+    { env: "NEWS_MODEL_ARTICLE_SUMMARY_TOP_P", group: "Model Tuning", label: "Article Summarization Top P", type: "number", default: 0.9, min: 0, max: 1, step: 0.01 },
+    { env: "NEWS_MAX_STORIES", group: "Pipeline Budget", label: "Max stories", type: "number", default: 10, min: 1, max: null, step: 1 }
   ]
 };
 const populatedPanel = modelTuningPanel("article_summary");
@@ -466,7 +407,7 @@ assert(populatedPanel.includes('data-env="NEWS_ARTICLE_SUMMARY_MAX_TOKENS"'), "t
 assert(populatedPanel.includes('data-env="NEWS_MODEL_ARTICLE_SUMMARY_BASE_URL"'), "base URL knob missing after metadata arrival");
 assert(populatedPanel.includes('value="http://localhost:11434/v1"'), "base URL current value missing after metadata arrival");
 assert(populatedPanel.includes('data-env="NEWS_MODEL_ARTICLE_SUMMARY_TEMPERATURE"'), "sampling field missing after metadata arrival");
-assert(populatedPanel.includes('<option value="0.7" selected>0.7</option>'), "sampling field current value not selected after metadata arrival");
+assert(populatedPanel.includes('<input data-env="NEWS_MODEL_ARTICLE_SUMMARY_TEMPERATURE" type="number" value="0.7" placeholder="0.7" min="0" max="2" step="0.01">'), "sampling field current value missing after metadata arrival");
 
 // ---- 4. Known-task parity --------------------------------------------------
 // Every configured task must still produce panel markup with an empty schema
@@ -490,8 +431,9 @@ try {
 }
 assert(!renderError, `Advanced Settings render threw: ${renderError}`);
 assert(advancedPanels.innerHTML.includes("<h2>Story Writing</h2>"), "remaining model panel missing after a task is removed");
-assert(advancedPanels.innerHTML.includes("<h2>Run budgets and quotas</h2>"), "Budgets panel missing after a task is removed");
+assert(registryKnobPanels.innerHTML.includes("<h2>Pipeline Budget</h2>"), "registry budgets panel missing after a task is removed");
 assert(!advancedPanels.innerHTML.includes("undefined"), "undefined markup leaked into Advanced Settings");
+assert(!registryKnobPanels.innerHTML.includes("undefined"), "undefined markup leaked into registry-generated panels");
 """
         )
         node = shutil.which("node")
@@ -516,7 +458,7 @@ assert(!advancedPanels.innerHTML.includes("undefined"), "undefined markup leaked
 
     def test_run_setup_single_default_model_card(self) -> None:
         html = ui_module.HTML
-        run_setup = html.split("function renderRunSetup")[1].split("const SAMPLING_FIELDS")[0]
+        run_setup = html.split("function renderRunSetup")[1].split("function modelTuningPanel")[0]
         # Exactly one "Default model" knob; the four per-task model cards are gone.
         self.assertEqual(run_setup.count('knobField("NEWS_MODEL", "Default model"'), 1)
         for env in (
@@ -547,6 +489,11 @@ assert(!advancedPanels.innerHTML.includes("undefined"), "undefined markup leaked
         self.assertIn("NEWS_PROMPT_OVERRIDE_STORY_DRAFTING", ui_module.HTML)
         self.assertIn("NEWS_PROMPT_OVERRIDE_TITLE_GENERATION", ui_module.HTML)
         self.assertIn("NEWS_PROMPT_OVERRIDE_IMAGE_ART_DIRECTION", ui_module.HTML)
+        # The override envs are the single surface through the mounted
+        # editors; surfacedEnvSet() discovers them dynamically (issue #114), so
+        # no static suppression manifest is maintained anymore.
+        self.assertIn("function surfacedEnvSet", ui_module.HTML)
+        self.assertNotIn("const SURFACED_ENVS", ui_module.HTML)
         # All five override env vars are registry-marked advanced_panels (the
         # dedicated editors are the single surface; no raw duplicate).
         registry = {knob["env"]: knob["ui_location"] for knob in build_knob_registry()}
@@ -609,6 +556,11 @@ assert(!advancedPanels.innerHTML.includes("undefined"), "undefined markup leaked
         # The sentence-level profile editors remain in their own panel.
         self.assertEqual(advanced.count('id="promptProfileReadouts"'), 1)
         self.assertEqual(advanced.count('id="comparePromptProfileBtn"'), 1)
+        # Template envs reach the surface set through promptTemplateEnvMap()
+        # because the editors intentionally carry no data-env (issue #114); no
+        # static manifest entry is maintained for them.
+        self.assertIn("promptTemplateEnvMap", html)
+        self.assertNotIn("const SURFACED_ENVS", html)
         # All five template envs are registry-marked advanced_panels (the
         # dedicated editors are the single surface; no raw duplicates).
         registry = {knob["env"]: knob["ui_location"] for knob in build_knob_registry()}
@@ -953,14 +905,16 @@ assert(
             )
         self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
 
-    def test_sync_surfaced_envs_executes_in_node_dom_harness(self) -> None:
-        """Execute the embedded syncSurfacedEnvs() derivation in a Node harness.
+    def test_registry_group_panels_execute_in_node_dom_harness(self) -> None:
+        """Execute the production registry/group renderer in a Node harness.
 
-        The production Set and sync function are extracted from ui_module.HTML
-        itself, so the observed behavior is the real code: only run_setup /
-        advanced_panels knobs are suppressed, raw and missing-metadata knobs
-        stay in the raw override list (fail-safe), and re-syncing clears stale
-        entries.
+        The Advanced ordinary panels (issue #114) are generated from
+        state.schema.knobs: first-seen registry group order, per-group
+        registry order, registry labels, and inputForKnob() metadata (select
+        options/default, bool choices, number min/max/step/placeholder), with
+        HTML-sensitive values escaped and already-surfaced envs (mounted
+        data-env controls plus schema prompt-template envs) excluded so each
+        env renders exactly once.
         """
         html = ui_module.HTML
 
@@ -972,44 +926,109 @@ assert(
 const assert = (condition, message) => {
   if (!condition) throw new Error(message);
 };
+"""
+            + _FAKE_DOM_ELEMENT_JS
+            + r"""
+// ---- Fake DOM: one already-mounted dedicated control ------------------------
+const mountedControls = [new FakeElement("mountedControl", "already-set")];
+mountedControls[0].dataset.env = "NEWS_FIXTURE_MOUNTED";
+const promptTemplateEditors = {
+  querySelector: selector => selector === "[data-template-system]" ? {} : null
+};
+const document = {
+  querySelector: () => null,
+  querySelectorAll: (selector) => {
+    if (selector === "[data-env]" || selector === "#runSetupMount [data-env], #advancedPanels [data-env]") return mountedControls;
+    throw new Error(`unexpected selector: ${selector}`);
+  }
+};
+const $ = id => id === "promptTemplateEditors" ? promptTemplateEditors : null;
+// The full-template editors intentionally carry no data-env, so their envs
+// reach the surface set through the schema-backed map after their marker mounts.
+function promptTemplateEnvMap() {
+  return { fixture_task: "NEWS_FIXTURE_TEMPLATE" };
+}
 const state = { schema: null };
 """
-            + js_function_block("const SURFACED_ENVS = new Set();", "const TASK_CONFIG")
+            + js_function_block("function escapeHtml(text) {", "function formatDefault")
+            + js_function_block('function formatDefault(value, fallback="none") {', "function currentControlValue")
+            + js_function_block("function currentControlValue(env) {", "function setControlValue")
+            + js_function_block("function knobByEnv(env) {", "function inputForKnob")
+            + js_function_block('function inputForKnob(knob, { emptyLabel, optionLabels = {}, id = "" } = {}) {', "function knobField")
+            + js_function_block("function knobField(env, label, options={}) {", "function knobFieldFor")
+            + js_function_block("function knobFieldFor(knob, options={}) {", "function knobGroups")
+            + js_function_block("function knobGroups(knobs) {", "function surfacedEnvSet")
+            + js_function_block("function surfacedEnvSet() {", "function renderRegistryGroupPanels")
+            + js_function_block("function renderRegistryGroupPanels(surfaced) {", "function knobHint")
             + r"""
-
-// Fixture: one dedicated panel knob, one raw knob, one knob with no
-// ui_location metadata (must fail safe by staying visible in raw overrides).
 state.schema = {
+  current_env: {
+    NEWS_FIXTURE_BOOL: "1",
+    NEWS_FIXTURE_NUMBER: "42"
+  },
   knobs: [
-    { env: "NEWS_TEST_PANEL", ui_location: "advanced_panels" },
-    { env: "NEWS_TEST_SETUP", ui_location: "run_setup" },
-    { env: "NEWS_TEST_RAW", ui_location: "advanced_raw" },
-    { env: "NEWS_TEST_NO_LOCATION" }
+    { env: "NEWS_FIXTURE_MOUNTED", group: "First <Group> & Co", label: "Mounted knob", type: "text", default: null, options: [], min: null, max: null, step: null, option_links: {} },
+    { env: "NEWS_FIXTURE_SELECT", group: "First <Group> & Co", label: "Fixture <select> & choice", type: "select", default: "b", options: ["a", "b", "b"], min: null, max: null, step: null, option_links: {} },
+    { env: "NEWS_FIXTURE_TEMPLATE", group: "First <Group> & Co", label: "Template env", type: "text", default: null, options: [], min: null, max: null, step: null, option_links: {} },
+    { env: "NEWS_FIXTURE_BOOL", group: "First <Group> & Co", label: "Fixture bool", type: "bool", default: false, options: [], min: null, max: null, step: null, option_links: {} },
+    { env: "NEWS_FIXTURE_NUMBER", group: "First <Group> & Co", label: "Fixture number", type: "number", default: 3.5, options: [], min: 0, max: 10, step: 0.5, option_links: {} },
+    { env: "NEWS_FIXTURE_NEW", group: "Second Group", label: "Brand new knob", type: "text", default: "hello <world>", options: [], min: null, max: null, step: null, option_links: {} }
   ]
 };
-syncSurfacedEnvs();
-assert(SURFACED_ENVS.has("NEWS_TEST_PANEL"), "advanced_panels knob was not suppressed");
-assert(SURFACED_ENVS.has("NEWS_TEST_SETUP"), "run_setup knob was not suppressed");
-assert(!SURFACED_ENVS.has("NEWS_TEST_RAW"), "advanced_raw knob must stay in the raw list");
-assert(!SURFACED_ENVS.has("NEWS_TEST_NO_LOCATION"), "missing metadata must fail safe (not suppressed)");
+const output = renderRegistryGroupPanels(surfacedEnvSet());
 
-// Unknown location metadata also fails safe (never suppresses).
-state.schema.knobs[0].ui_location = "stale_panel";
-state.schema.knobs[3].ui_location = "legacy_location";
-syncSurfacedEnvs();
-assert(!SURFACED_ENVS.has("NEWS_TEST_PANEL"), "unknown location must not suppress");
-assert(SURFACED_ENVS.has("NEWS_TEST_SETUP"), "run_setup knob lost after re-sync");
+// First-seen registry group order with per-group registry order preserved.
+assert(output.indexOf("First &lt;Group&gt; &amp; Co") < output.indexOf("Second Group"), "group order is not first-seen registry order");
+assert(output.includes("<h2>First &lt;Group&gt; &amp; Co</h2>"), "group heading missing or not escaped");
+assert(!output.includes("<Group>"), "raw group markup leaked");
+const selectPos = output.indexOf("NEWS_FIXTURE_SELECT");
+const boolPos = output.indexOf("NEWS_FIXTURE_BOOL");
+const numberPos = output.indexOf("NEWS_FIXTURE_NUMBER");
+assert(selectPos >= 0 && boolPos >= 0 && numberPos >= 0, "residual fixture knobs missing");
+assert(selectPos < boolPos && boolPos < numberPos, "per-group registry order was not preserved");
 
-// Re-sync clears stale entries when a knob is reclassified to raw.
-state.schema.knobs[1].ui_location = "advanced_raw";
-syncSurfacedEnvs();
-assert(!SURFACED_ENVS.has("NEWS_TEST_SETUP"), "re-sync did not clear a reclassified knob");
-assert(SURFACED_ENVS.size === 0, "expected an empty derived set after reclassification");
+// Generated metadata: registry label/env with literal-entity escaping.
+assert(output.includes("Fixture &lt;select&gt; &amp; choice"), "select label was not escaped");
+assert(output.includes("<code>NEWS_FIXTURE_SELECT</code>"), "select env code is missing");
+assert(output.includes("<code>NEWS_FIXTURE_NEW</code>"), "new knob env code is missing");
+assert(!output.includes("<select> &"), "raw label markup leaked");
 
-// Missing schema/knobs array yields an empty set without throwing.
-state.schema = null;
-syncSurfacedEnvs();
-assert(SURFACED_ENVS.size === 0, "missing schema must not throw and must suppress nothing");
+// Select: deduplicated options, default empty option, registry default.
+assert(output.includes('<option value="">default: b</option>'), "select default empty option missing");
+assert((output.match(/<option value="a">/g) || []).length === 1, "select option a missing or duplicated");
+assert((output.match(/<option value="b">/g) || []).length === 1, "duplicate select option b was not de-duplicated");
+
+// Bool: default/on/off vocabulary with the current value selected.
+assert(output.includes('<option value="">default: off</option>'), "bool default option missing");
+assert(output.includes('<option value="1" selected>on</option>'), "bool on/selected option missing");
+assert(output.includes('<option value="0">off</option>'), "bool off option missing");
+
+// Number: exact registry min/max/step plus default placeholder and current value.
+assert(output.includes('data-env="NEWS_FIXTURE_NUMBER"'), "number data-env missing");
+assert(output.includes('type="number"'), "number input type missing");
+assert(output.includes('min="0"'), "number min missing");
+assert(output.includes('max="10"'), "number max missing");
+assert(output.includes('step="0.5"'), "number step missing");
+assert(output.includes('placeholder="3.5"'), "number default placeholder missing");
+assert(output.includes('value="42"'), "number current value missing");
+
+// Text: default placeholder is escaped.
+assert(output.includes('placeholder="hello &lt;world&gt;"'), "text default placeholder not escaped/rendered");
+
+// Surface filter: the mounted data-env control and the template env must not
+// be duplicated, while the new unsurfaced fixture knob renders exactly once.
+assert(!output.includes("NEWS_FIXTURE_MOUNTED"), "mounted data-env control was duplicated in generated panels");
+assert(!output.includes("NEWS_FIXTURE_TEMPLATE"), "template env was duplicated in generated panels");
+assert(output.includes("NEWS_FIXTURE_NEW"), "new unsurfaced fixture knob is missing from generated panels");
+assert((output.match(/data-env="NEWS_FIXTURE_NEW"/g) || []).length === 1, "new fixture knob rendered more than once");
+assert(output.includes("Brand new knob"), "new fixture knob registry label is missing");
+
+// Defensive select behavior: a current value outside the offered options is
+// inserted and selected, and the surface filter still holds on re-render.
+state.schema.current_env.NEWS_FIXTURE_SELECT = "custom-choice";
+const rerendered = renderRegistryGroupPanels(surfacedEnvSet());
+assert(rerendered.includes('<option value="custom-choice" selected>custom-choice</option>'), "current select value outside registry options was not inserted");
+assert(!rerendered.includes("NEWS_FIXTURE_MOUNTED"), "rerender duplicated the mounted control");
 """
         )
         node = shutil.which("node")
@@ -1030,6 +1049,341 @@ assert(SURFACED_ENVS.size === 0, "missing schema must not throw and must suppres
                 f"Node harness timed out after {timeout_seconds}s: "
                 f"stdout={exc.stdout!r} stderr={exc.stderr!r}"
             )
+        self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
+
+    def test_advanced_specialized_surfaces_are_unique_through_collection(self) -> None:
+        """Run the real Advanced Settings render lifecycle in a DOM harness.
+
+        The registry renderer test above intentionally isolates one function.
+        This harness mounts Run Setup, specialized Advanced panels, prompt
+        editors, and generated panels in production order, then collects the
+        resulting environment so duplicate controls cannot hide behind a
+        renderer-only assertion.
+        """
+        html = ui_module.HTML
+
+        def js_function_block(start: str, end: str) -> str:
+            return html[html.index(start) : html.index(end, html.index(start))]
+
+        js = (
+            r"""
+const assert = (condition, message) => {
+  if (!condition) throw new Error(message);
+};
+"""
+            + _FAKE_DOM_ELEMENT_JS
+            + r"""
+const elements = {};
+const controls = [];
+const templateControls = {};
+function attr(attrs, name) {
+  const match = attrs.match(new RegExp(`${name}="([^"]*)"`));
+  return match ? match[1] : "";
+}
+function makeElement(id = "") {
+  const el = new FakeElement(id);
+  el.classList = { add() {}, toggle() {} };
+  Object.defineProperty(el, "textContent", {
+    configurable: true,
+    get() { return this._textContent || ""; },
+    set(value) { this._textContent = String(value); }
+  });
+  Object.defineProperty(el, "innerHTML", {
+    configurable: true,
+    get() { return this._innerHTML; },
+    set(value) { this._innerHTML = String(value); registerMarkup(value, this._owner || "advanced"); }
+  });
+  return el;
+}
+function rememberElement(id) {
+  if (!id) return null;
+  if (!elements[id]) elements[id] = makeElement(id);
+  return elements[id];
+}
+function registerMarkup(markup, owner) {
+  const source = String(markup);
+  for (const match of source.matchAll(/\bid="([^"]+)"/g)) rememberElement(match[1]);
+  for (const match of source.matchAll(/<(input|select|textarea)\b([^>]*)>/g)) {
+    const tag = match[1];
+    const attrs = match[2];
+    const env = attr(attrs, "data-env");
+    const templateSystem = attr(attrs, "data-template-system");
+    const templateUser = attr(attrs, "data-template-user");
+    const id = attr(attrs, "id");
+    const el = rememberElement(id) || makeElement();
+    el.tagName = tag.toUpperCase();
+    el.type = attr(attrs, "type") || (tag === "textarea" ? "textarea" : tag);
+    if (attrs.includes(" checked")) el.checked = true;
+    const valueAttr = attr(attrs, "value");
+    if (valueAttr) el.value = valueAttr;
+    if (env) {
+      el.dataset.env = env;
+      el._owner = owner;
+      controls.push(el);
+    }
+    if (templateSystem) {
+      el.dataset.templateSystem = templateSystem;
+      templateControls[`system:${templateSystem}`] = el;
+    }
+    if (templateUser) {
+      el.dataset.templateUser = templateUser;
+      templateControls[`user:${templateUser}`] = el;
+    }
+  }
+}
+function mount(id, owner) {
+  const el = rememberElement(id);
+  el._owner = owner;
+  Object.defineProperty(el, "innerHTML", {
+    configurable: true,
+    get() { return this._innerHTML; },
+    set(value) { this._innerHTML = String(value); registerMarkup(value, owner); }
+  });
+  return el;
+}
+const runSetupMount = mount("runSetupMount", "run");
+const advancedPanels = mount("advancedPanels", "advanced");
+const registryKnobPanels = mount("registryKnobPanels", "advanced");
+const promptTemplateEditors = mount("promptTemplateEditors", "advanced");
+const knobContainer = mount("knobContainer", "fallback");
+promptTemplateEditors.querySelector = selector =>
+  selector === "[data-template-system]" && Object.keys(templateControls).some(key => key.startsWith("system:")) ? {} : null;
+const $ = id => elements[id] || null;
+const document = {
+  querySelector(selector) {
+    const envMatch = selector.match(/^\[data-env="([^"]+)"\]$/);
+    if (envMatch) return controls.find(el => el.dataset.env === envMatch[1]) || null;
+    const systemMatch = selector.match(/^\[data-template-system="([^"]+)"\]$/);
+    if (systemMatch) return templateControls[`system:${systemMatch[1]}`] || null;
+    const userMatch = selector.match(/^\[data-template-user="([^"]+)"\]$/);
+    if (userMatch) return templateControls[`user:${userMatch[1]}`] || null;
+    if (selector.startsWith("#")) return elements[selector.slice(1)] || null;
+    return null;
+  },
+  querySelectorAll(selector) {
+    if (selector === "[data-env]") return controls;
+    if (selector === "#runSetupMount [data-env], #advancedPanels [data-env]") {
+      return controls.filter(el => el._owner === "run" || el._owner === "advanced");
+    }
+    if (selector === "[data-env^='NEWS_PROMPT_OVERRIDE_']") {
+      return controls.filter(el => el.dataset.env.startsWith("NEWS_PROMPT_OVERRIDE_"));
+    }
+    // Event wiring is not the subject of this harness; rendered controls are.
+    return [];
+  }
+};
+const decorateEnvHints = () => {};
+const renderPresetSummary = () => {};
+const renderModelTuningPanels = () => {};
+const renderModelCatalogPanel = () => {};
+const restoreAllPromptTemplates = () => {};
+const validatePromptTemplateTask = () => Promise.resolve();
+const renderKnobLinks = () => {};
+const currentPromptTemplateEnv = () => ({ NEWS_PROMPT_TEMPLATE_ARTICLE_SUMMARY: "serialized-template" });
+"""
+            + js_function_block("    const TASK_CONFIG = {", "    const state = {")
+            + js_function_block("    const state = {", "    const icons = {")
+            + js_function_block("function escapeHtml(text) {", "function formatDefault")
+            + js_function_block('function formatDefault(value, fallback="none") {', "function currentControlValue")
+            + js_function_block("function currentControlValue(env) {", "function setControlValue")
+            + js_function_block("function knobByEnv(env) {", "function inputForKnob")
+            + js_function_block('function inputForKnob(knob, { emptyLabel, optionLabels = {}, id = "" } = {}) {', "function knobField")
+            + js_function_block("function knobField(env, label, options={}) {", "function knobFieldFor")
+            + js_function_block("function knobFieldFor(knob, options={}) {", "function knobGroups")
+            + js_function_block("function knobGroups(knobs) {", "function surfacedEnvSet")
+            + js_function_block("function surfacedEnvSet() {", "function renderRegistryGroupPanels")
+            + js_function_block("function renderRegistryGroupPanels(surfaced) {", "function knobHint")
+            + js_function_block("function renderRunSetup() {", "function taskSamplingKnobs")
+            + js_function_block("function taskSamplingKnobs(prefix) {", "function samplingFields")
+            + js_function_block("function samplingFields(prefix) {", "function modelTuningPanel")
+            + js_function_block("function modelTuningPanel(task) {", "function renderAdvancedPanels")
+            + js_function_block("function renderAdvancedPanels() {", "function renderModelTuningControls")
+            + js_function_block("function collectEnv() {", "function collectOptions")
+            + js_function_block("const PROMPT_TASK_LABELS = {", "function selectedPromptProfile")
+            + js_function_block("function selectedPromptProfile() {", "function livePromptOverrides")
+            + js_function_block("function livePromptOverrides() {", "function renderPromptProfilePanel")
+            + js_function_block("function renderPromptProfilePanel() {", "function promptTemplateEnvMap")
+            + js_function_block("function promptTemplateEnvMap() {", "function promptTemplateRecord")
+            + js_function_block("function promptTemplateRecord(task) {", "function renderPromptTemplateEditors")
+            + js_function_block("function renderPromptTemplateEditors() {", "function restorePromptTemplateTask")
+            + r"""
+function value(id) {
+  const el = $(id);
+  return el ? el.value : "";
+}
+// renderRunSetup's unrelated button wiring is intentionally stubbed, while its
+// production HTML and data-env controls are mounted by the harness.
+const samplingSuffixes = ["TEMPERATURE", "TOP_P", "TOP_K", "MIN_P", "PRESENCE_PENALTY", "REPETITION_PENALTY"];
+const knobs = [
+  { env: "NEWS_MODEL", group: "Model Tuning", label: "Default model", type: "select", default: "gemma", options: ["gemma"], min: null, max: null, step: null, option_links: {} },
+  { env: "NEWS_MAX_STORIES", group: "Pipeline Budget", label: "Max stories", type: "number", default: 10, min: 1, max: 100, step: 1, options: [], option_links: {} }
+];
+for (const meta of Object.values(TASK_CONFIG)) {
+  knobs.push({ env: meta.taskMaxTokensEnv, group: "Model Tuning", label: `${meta.label} max tokens`, type: "number", default: 100, min: 1, max: 1000, step: 1, options: [], option_links: {} });
+  knobs.push({ env: meta.baseUrlEnv, group: "Model Server Settings", label: `${meta.label} base URL`, type: "text", default: "http://localhost", min: null, max: null, step: null, options: [], option_links: {} });
+  for (const suffix of samplingSuffixes) {
+    knobs.push({ env: `${meta.taskSamplingPrefix}_${suffix}`, group: "Model Tuning", label: `${meta.label} ${suffix}`, type: "number", default: 0.5, min: 0, max: 2, step: 0.01, options: [], option_links: {} });
+  }
+}
+state.schema = {
+  actions: ["run"],
+  current_env: { NEWS_MAX_STORIES: "7" },
+  runtime: {},
+  prompt_profiles: [{ id: "balanced", description: "Balanced", prompts: {
+    article_summary: "article", story_scale_screening: "scale", story_drafting: "draft", title_generation: "title", image_art_direction: "image"
+  }}],
+  prompt_templates: [{
+    task: "article_summary", env_var: "NEWS_PROMPT_TEMPLATE_ARTICLE_SUMMARY", label: "Article Summary",
+    system: "default system", user: "default user", required_placeholders: [], optional_placeholders: [], placeholder_descriptions: {}
+  }],
+  knobs
+};
+renderRunSetup();
+renderAdvancedPanels();
+const envs = controls.map(control => control.dataset.env);
+for (const env of new Set(envs)) {
+  const count = envs.filter(item => item === env).length;
+  assert(count === 1, `duplicate data-env control for ${env}: ${count}`);
+}
+assert(envs.includes("NEWS_MAX_STORIES"), "registry residual control did not mount");
+assert(!envs.includes("NEWS_PROMPT_TEMPLATE_ARTICLE_SUMMARY"), "template editor env leaked into data-env controls");
+const submitted = collectEnv();
+assert(submitted.NEWS_MAX_STORIES === "7", "collectEnv omitted the generated registry control");
+assert(submitted.NEWS_PROMPT_TEMPLATE_ARTICLE_SUMMARY === "serialized-template", "collectEnv omitted the template editor value");
+"""
+        )
+        node = shutil.which("node")
+        if node is None:
+            self.skipTest("Node.js is required for the embedded UI renderer harness")
+        try:
+            result = subprocess.run(
+                [node, "--input-type=module", "-"],
+                input=js,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=30,
+            )
+        except subprocess.TimeoutExpired as exc:
+            self.fail(f"Node harness timed out: stdout={exc.stdout!r} stderr={exc.stderr!r}")
+        self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
+
+    def test_advanced_raw_fallback_search_and_missing_container_execute_in_node_harness(self) -> None:
+        """Exercise the searchable fallback after the Advanced mount fails."""
+        html = ui_module.HTML
+
+        def js_function_block(start: str, end: str) -> str:
+            return html[html.index(start) : html.index(end, html.index(start))]
+
+        js = (
+            r"""
+const assert = (condition, message) => {
+  if (!condition) throw new Error(message);
+};
+"""
+            + _FAKE_DOM_ELEMENT_JS
+            + r"""
+const mounted = new FakeElement("mounted", "mounted");
+mounted.dataset.env = "NEWS_MOUNTED";
+const fallbackControls = [];
+const elements = {
+  knobSearch: new FakeElement("knobSearch", ""),
+  knobContainer: new FakeElement("knobContainer", "")
+};
+Object.defineProperty(elements.knobContainer, "innerHTML", {
+  configurable: true,
+  get() { return this._innerHTML; },
+  set(value) {
+    this._innerHTML = String(value);
+    fallbackControls.length = 0;
+    for (const match of this._innerHTML.matchAll(/data-env="([^"]+)"/g)) {
+      const el = new FakeElement("fallback", "");
+      el.dataset.env = match[1];
+      fallbackControls.push(el);
+    }
+  }
+});
+const $ = id => id === "advancedPanels" ? null : elements[id] || null;
+const warnings = [];
+const console = { error: (...args) => warnings.push(args.join(" ")) };
+const document = {
+  querySelector(selector) {
+    const match = selector.match(/^\[data-env="([^"]+)"\]$/);
+    if (!match) return null;
+    return [mounted, ...fallbackControls].find(el => el.dataset.env === match[1]) || null;
+  },
+  querySelectorAll(selector) {
+    if (selector === "[data-env]") return [mounted, ...fallbackControls];
+    if (selector === "#runSetupMount [data-env], #advancedPanels [data-env]") return [mounted];
+    return [];
+  }
+};
+const decorateEnvHints = () => {};
+const renderKnobLinks = () => {};
+const knobSearch = elements.knobSearch;
+const knobContainer = elements.knobContainer;
+const promptTemplateEnvMap = () => ({ article_summary: "NEWS_PROMPT_TEMPLATE_ARTICLE_SUMMARY" });
+function value(id) {
+  const el = $(id);
+  return el ? el.value : "";
+}
+const state = { schema: {
+  current_env: { NEWS_B: "2", NEWS_MOUNTED: "1" },
+  knobs: [
+    { env: "NEWS_A", group: "First", label: "Alpha", type: "text", default: null, options: [], min: null, max: null, step: null, option_links: {} },
+    { env: "NEWS_B", group: "Second", label: "Beta", type: "number", default: 2, options: [], min: null, max: null, step: 1, option_links: {} },
+    { env: "NEWS_MOUNTED", group: "First", label: "Already mounted", type: "text", default: null, options: [], min: null, max: null, step: null, option_links: {} },
+    { env: "NEWS_PROMPT_TEMPLATE_ARTICLE_SUMMARY", group: "Templates", label: "Template fallback", type: "text", default: null, options: [], min: null, max: null, step: null, option_links: {} }
+  ]
+}};
+"""
+            + js_function_block("function escapeHtml(text) {", "function formatDefault")
+            + js_function_block('function formatDefault(value, fallback="none") {', "function currentControlValue")
+            + js_function_block("function currentControlValue(env) {", "function setControlValue")
+            + js_function_block("function knobByEnv(env) {", "function inputForKnob")
+            + js_function_block('function inputForKnob(knob, { emptyLabel, optionLabels = {}, id = "" } = {}) {', "function knobField")
+            + js_function_block("function knobGroups(knobs) {", "function surfacedEnvSet")
+            + js_function_block("function surfacedEnvSet() {", "function renderRegistryGroupPanels")
+            + js_function_block("function renderAdvancedPanels() {", "function renderModelTuningControls")
+            + js_function_block("function renderAdvancedKnobs() {", "function collectModelTuningPresetBody")
+            + r"""
+// The generated-panel mount is deliberately absent. The existing diagnostic
+// must be emitted, and boot must still leave the raw fallback usable.
+renderAdvancedPanels();
+assert(warnings.length === 1, "missing Advanced container diagnostic was not emitted");
+assert(warnings[0].includes("missing #advancedPanels container"), "diagnostic text drifted");
+
+knobSearch.value = "beta";
+renderAdvancedKnobs();
+assert(knobContainer.innerHTML.includes("NEWS_B"), "matching raw knob missing");
+assert(!knobContainer.innerHTML.includes("NEWS_A"), "non-matching raw knob leaked");
+assert(!knobContainer.innerHTML.includes("NEWS_MOUNTED"), "dedicated control leaked into fallback");
+
+// Re-rendering must not treat the previous fallback output as a dedicated
+// surface; this is the degraded-path search regression boundary.
+knobSearch.value = "";
+renderAdvancedKnobs();
+assert(knobContainer.innerHTML.includes("NEWS_A"), "cleared search did not restore Alpha");
+assert(knobContainer.innerHTML.includes("NEWS_B"), "cleared search did not restore Beta");
+assert(knobContainer.innerHTML.includes("NEWS_PROMPT_TEMPLATE_ARTICLE_SUMMARY"), "unmounted template fallback was suppressed");
+assert(!knobContainer.innerHTML.includes("NEWS_MOUNTED"), "dedicated control duplicated in fallback");
+assert(knobContainer.innerHTML.indexOf("<h2>First</h2>") < knobContainer.innerHTML.indexOf("<h2>Second</h2>"), "first-seen group order changed");
+"""
+        )
+        node = shutil.which("node")
+        if node is None:
+            self.skipTest("Node.js is required for the embedded UI renderer harness")
+        try:
+            result = subprocess.run(
+                [node, "--input-type=module", "-"],
+                input=js,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=30,
+            )
+        except subprocess.TimeoutExpired as exc:
+            self.fail(f"Node harness timed out: stdout={exc.stdout!r} stderr={exc.stderr!r}")
         self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
 
     def test_recommendation_renderer_reads_schema_picks(self) -> None:

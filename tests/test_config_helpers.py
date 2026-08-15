@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import tempfile
 import textwrap
@@ -907,6 +908,70 @@ class ConfigHelperTests(unittest.TestCase):
         with patch.object(config_module, "UNSUPPORTED_MODEL_REFERENCES", {"blocked-ref"}):
             self.assertIsNone(config_module.hf_model_page_url("blocked-ref"))
 
+    def test_knob_registry_group_order_and_ui_contract(self) -> None:
+        # The Advanced UI (issue #114) derives its ordinary panels from the
+        # registry: group values determine panel placement and first-seen
+        # registry order determines panel/control order. Pin the small stable
+        # group vocabulary and the full metadata shape consumed by the UI's
+        # inputForKnob()/knobFieldFor(), while allowing new knobs inside an
+        # existing group (no fixed total-count assertions).
+        registry = config_module.runtime_knob_registry()
+        groups = []
+        seen = set()
+        for knob in registry:
+            if knob["group"] not in seen:
+                seen.add(knob["group"])
+                groups.append(knob["group"])
+        self.assertEqual(
+            groups,
+            [
+                "Run Settings",
+                "Model Selection",
+                "Model Tuning",
+                "Pipeline Budget",
+                "Model Server Settings",
+            ],
+        )
+        required_fields = {
+            "id",
+            "group",
+            "label",
+            "env",
+            "type",
+            "default",
+            "options",
+            "min",
+            "max",
+            "step",
+            "advanced",
+            "secret",
+            "option_links",
+            # ui_location (issue #115) is carried on every knob as the
+            # render-ownership annotation alongside #114's control metadata.
+            "ui_location",
+        }
+        control_types = {"text", "select", "bool", "number", "password"}
+        for knob in registry:
+            self.assertEqual(set(knob), required_fields, knob["env"])
+            self.assertEqual(knob["id"], knob["env"].lower(), knob["env"])
+            self.assertTrue(knob["group"], knob["env"])
+            self.assertTrue(knob["label"], knob["env"])
+            self.assertTrue(knob["env"], knob["env"])
+            self.assertIn(knob["type"], control_types, knob["env"])
+            self.assertIsInstance(knob["default"], (str, int, float, bool, type(None)), knob["env"])
+            self.assertIsInstance(knob["options"], list, knob["env"])
+            for bound in ("min", "max", "step"):
+                self.assertTrue(
+                    knob[bound] is None or isinstance(knob[bound], (int, float)),
+                    f"{knob['env']} {bound}",
+                )
+            self.assertIsInstance(knob["advanced"], bool, knob["env"])
+            self.assertIsInstance(knob["secret"], bool, knob["env"])
+            self.assertIsInstance(knob["option_links"], dict, knob["env"])
+        # JSON-safe: schema_payload() serializes the registry verbatim into
+        # state.schema.knobs, so the projection must round-trip exactly.
+        self.assertEqual(json.loads(json.dumps(registry)), registry)
+
     def test_registry_ui_locations_are_valid_unique_and_closed(self) -> None:
         """Every registered knob carries exactly one ui_location from the
         closed set, and registry environment names are unique (issue #115).
@@ -923,12 +988,12 @@ class ConfigHelperTests(unittest.TestCase):
                 config_module.UI_LOCATIONS,
                 f"{knob['env']} has unknown ui_location {location!r}",
             )
-        # The current contract: 4 Run Setup + 70 dedicated Advanced panel
+        # The current contract: 5 Run Setup + 70 dedicated Advanced panel
         # knobs, with every remaining registered knob raw-by-default.
         locations = {knob["env"]: knob["ui_location"] for knob in registry}
         self.assertEqual(
             sum(loc == config_module.UI_LOCATION_RUN_SETUP for loc in locations.values()),
-            4,
+            5,
         )
         self.assertEqual(
             sum(loc == config_module.UI_LOCATION_ADVANCED_PANELS for loc in locations.values()),
@@ -936,7 +1001,7 @@ class ConfigHelperTests(unittest.TestCase):
         )
         self.assertEqual(
             sum(loc == config_module.UI_LOCATION_ADVANCED_RAW for loc in locations.values()),
-            len(registry) - 74,
+            len(registry) - 75,
         )
 
     def test_registry_ui_location_families_are_annotated_exactly(self) -> None:
@@ -948,7 +1013,13 @@ class ConfigHelperTests(unittest.TestCase):
         locations = {knob["env"]: knob["ui_location"] for knob in registry}
         self.assertEqual(
             {env for env, loc in locations.items() if loc == config_module.UI_LOCATION_RUN_SETUP},
-            {"NEWS_MODEL", "NEWS_SOURCE_SCOPE", "NEWS_DELIVERY_MODE", "NEWS_PROMPT_PROFILE"},
+            {
+                "NEWS_MODEL",
+                "NEWS_MODEL_BACKEND",
+                "NEWS_SOURCE_SCOPE",
+                "NEWS_DELIVERY_MODE",
+                "NEWS_PROMPT_PROFILE",
+            },
         )
         advanced_panels = {
             env for env, loc in locations.items() if loc == config_module.UI_LOCATION_ADVANCED_PANELS
@@ -1005,11 +1076,10 @@ class ConfigHelperTests(unittest.TestCase):
                 f"{env} must stay a raw Advanced override",
             )
         # Remaining raw-only controls: legacy recipient scope, default/per-task
-        # assignment fields, backend/server knobs, budget caps not rendered in
-        # a dedicated panel, and the component-overlap threshold.
+        # assignment fields, server knobs, budget caps not rendered in a
+        # dedicated panel, and the component-overlap threshold.
         for env in (
             "NEWS_RECIPIENT_SCOPE",
-            "NEWS_MODEL_BACKEND",
             "NEWS_MODEL_TUNING_PRESET",
             "NEWS_MODEL_BASE_URL",
             "NEWS_TOTAL_ARTICLE_SUMMARY_CAP",
