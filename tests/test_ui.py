@@ -2215,7 +2215,9 @@ class UITests(unittest.TestCase):
         )
         search.assert_not_called()
 
-        for raw in ("1", "50"):
+        # Values outside 1-50 (0, 999) stay successful too — they are clamped
+        # by search_huggingface_models; the handler does not range-validate.
+        for raw in ("1", "50", "0", "999"):
             with self.subTest(limit=raw), patch.object(
                 ui_module, "search_huggingface_models", return_value=fake_models
             ) as search:
@@ -2233,17 +2235,6 @@ class UITests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(json.loads(body)["models"], fake_models)
         search.assert_called_once_with("qwythos", pipeline_tag=None, limit=20)
-
-        # Numeric values outside 1-50 remain successful and are clamped by
-        # search_huggingface_models; the handler does not range-validate.
-        for raw in ("0", "999"):
-            with self.subTest(limit=raw), patch.object(
-                ui_module, "search_huggingface_models", return_value=fake_models
-            ) as search:
-                status, _, body = self._invoke_get(f"/api/models/search?q=qwythos&limit={raw}")
-            self.assertEqual(status, 200)
-            self.assertEqual(json.loads(body)["models"], fake_models)
-            search.assert_called_once_with("qwythos", pipeline_tag=None, limit=int(raw))
 
     def test_models_metadata_endpoint(self) -> None:
         fake_info = {
