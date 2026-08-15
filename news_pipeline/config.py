@@ -1736,6 +1736,20 @@ UI_LOCATIONS = frozenset(
 )
 
 
+# Closed set of browser UI locations for registered knobs (issue #115).
+# ui_location declares which surface owns the control: run_setup and
+# advanced_panels are rendered by dedicated controls (suppressed from the raw
+# Advanced override list), while advanced_raw knobs remain available in the
+# raw override list. The default keeps any existing or future unannotated
+# knob visible in the raw list (fail-safe: a setting cannot disappear).
+UI_LOCATION_RUN_SETUP = "run_setup"
+UI_LOCATION_ADVANCED_PANELS = "advanced_panels"
+UI_LOCATION_ADVANCED_RAW = "advanced_raw"
+UI_LOCATIONS = frozenset(
+    {UI_LOCATION_RUN_SETUP, UI_LOCATION_ADVANCED_PANELS, UI_LOCATION_ADVANCED_RAW}
+)
+
+
 def _runtime_knob(
     group: str,
     label: str,
