@@ -200,7 +200,8 @@ def validate_editorial_instructions(
             and ("{" in instruction or "}" in instruction)
         ):
             violations.append(
-                "story_scale_screening instructions contain a brace that would break .format() rendering"
+                "story_scale_screening instructions contain a brace; "
+                "braces are disallowed by the default editorial-policy guard"
             )
         for marker in EDITORIAL_BLOCKLIST.get(task, ()):
             if marker in instruction:
