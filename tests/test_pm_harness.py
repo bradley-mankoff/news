@@ -262,6 +262,57 @@ class ConcurrencyFillPollTest(unittest.TestCase):
         )
 
 
+class DispatchGuardRetryTest(unittest.TestCase):
+    def test_todo_retries_after_transient_lookup_deferral(self) -> None:
+        cfg = config()
+        board_item = issue(7, "Todo")
+        state = {
+            "_meta": {"snapshot_done": True},
+            "item-7": {
+                "issue_number": 7,
+                "status": "Todo",
+                "dispatch_guard_deferred": True,
+            },
+        }
+        with (
+            patch.object(
+                cycle,
+                "fetch_project",
+                return_value=(
+                    "project",
+                    "field",
+                    {"In Progress": "in-progress-option"},
+                    [board_item],
+                ),
+            ),
+            patch.object(cycle, "prepare_dispatch_budget"),
+            patch.object(cycle, "reconcile_untracked_runs"),
+            patch.object(cycle, "sync_runnable_labels"),
+            patch.object(
+                cycle,
+                "fresh_issue_dispatch_guard",
+                side_effect=[
+                    (False, "Archon run lookup unavailable: archon_timeout"),
+                    (True, ""),
+                ],
+            ) as guard,
+            patch.object(
+                cycle,
+                "dispatch",
+                return_value=DispatchResult(True, pid=123),
+            ) as dispatch,
+            patch.object(cycle, "move_to_lane", return_value=True),
+            patch.object(cycle, "save_state"),
+        ):
+            cycle.poll(cfg, {}, state)
+            self.assertTrue(state["item-7"]["dispatch_guard_deferred"])
+            cycle.poll(cfg, {}, state)
+
+        self.assertEqual(guard.call_count, 2)
+        dispatch.assert_called_once()
+        self.assertNotIn("dispatch_guard_deferred", state["item-7"])
+
+
 class DecisionOnlyTest(unittest.TestCase):
     def test_todo_decision_moves_to_input_without_implementation_dispatch(self) -> None:
         cfg = config()
