@@ -195,6 +195,24 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
             config.model_server_command,
         )
 
+    def test_raw_gguf_without_explicit_backend_fails_fast(self) -> None:
+        for reference in (
+            "/models/my model.gguf",
+            QWWYTHOS_9B_4BIT_MODEL_REFERENCE,
+            f"https://huggingface.co/{QWWYTHOS_9B_4BIT_MODEL_REFERENCE}",
+            f"https://hf.co/{QWWYTHOS_9B_4BIT_MODEL_REFERENCE}",
+        ):
+            with self.subTest(reference=reference):
+                with self.assertRaisesRegex(
+                    ValueError,
+                    r"requires NEWS_MODEL_BACKEND=llama\.cpp",
+                ):
+                    load_runtime_config(
+                        environ={},
+                        overrides={"NEWS_MODEL": reference},
+                        materialize_outputs=False,
+                    )
+
     def test_llama_cpp_backend_unknown_bare_hf_repo_supported(self) -> None:
         # An unknown bare HF repo explicitly selected for llama.cpp is passed
         # as --hf-repo so llama-server applies its default quantization.
@@ -381,6 +399,104 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
         )
 
         self.assertEqual(resolution.config.model_backend, "mlx-vlm")
+
+    def test_selected_model_does_not_change_concurrency_defaults(self) -> None:
+        # Different model choices with the same explicit backend resolve the
+        # same model-neutral stage/server concurrency defaults (issue #169).
+        gemma_config = load_runtime_config(
+            environ={},
+            overrides={"NEWS_MODEL": GEMMA_4_12B_IT_4BIT_MODEL_ALIAS},
+            materialize_outputs=False,
+        )
+        tiny_config = load_runtime_config(
+            environ={},
+            overrides={
+                "NEWS_MODEL": CODEX_TEST_MODEL_ALIAS,
+                "NEWS_MODEL_BACKEND": "mlx-lm",
+            },
+            materialize_outputs=False,
+        )
+        for field in (
+            "article_summary_concurrency",
+            "story_synthesis_concurrency",
+            "model_concurrency",
+        ):
+            self.assertEqual(
+                getattr(gemma_config, field),
+                getattr(tiny_config, field),
+                f"{field} must be model-independent",
+            )
+        self.assertEqual(gemma_config.article_summary_concurrency, 4)
+        self.assertEqual(gemma_config.story_synthesis_concurrency, 4)
+        self.assertEqual(gemma_config.model_concurrency, 4)
+        self.assertEqual(tiny_config.model_backend, "mlx-lm")
+        self.assertEqual(gemma_config.model_backend, "mlx-vlm")
+
+    def test_inherited_assignments_report_resolved_default_backend(self) -> None:
+        config = load_runtime_config(
+            environ={},
+            overrides={
+                "NEWS_MODEL": CODEX_TEST_MODEL_ALIAS,
+                "NEWS_MODEL_BACKEND": "mlx-lm",
+            },
+            materialize_outputs=False,
+        )
+        self.assertEqual(config.model_assignments["default"].backend, "mlx-lm")
+        for task in (
+            MODEL_TASK_ARTICLE_SUMMARY,
+            MODEL_TASK_STORY_DRAFTING,
+            MODEL_TASK_STORY_SCALE_SCREENING,
+            MODEL_TASK_TITLE_GENERATION,
+            MODEL_TASK_IMAGE_ART_DIRECTION,
+        ):
+            self.assertEqual(
+                config.model_assignments[task].backend,
+                "mlx-lm",
+                f"{task} must inherit the resolved default backend",
+            )
+
+    def test_explicit_same_identity_task_override_keeps_inferred_backend(self) -> None:
+        # An explicit full model reference can resolve to the same model as the
+        # default alias without being an inherited assignment. Its catalog
+        # backend must remain authoritative for the task (issue #169).
+        config = load_runtime_config(
+            environ={},
+            overrides={
+                "NEWS_MODEL": CODEX_TEST_MODEL_ALIAS,
+                "NEWS_MODEL_BACKEND": "mlx-vlm",
+                "NEWS_MODEL_ARTICLE_SUMMARY": CODEX_TEST_MODEL_NAME,
+                "NEWS_MODEL_ARTICLE_SUMMARY_BASE_URL": "http://127.0.0.1:8090/v1",
+            },
+            materialize_outputs=False,
+        )
+
+        self.assertEqual(config.model_backend, "mlx-vlm")
+        assignment = config.model_assignments[MODEL_TASK_ARTICLE_SUMMARY]
+        self.assertEqual(assignment.name, CODEX_TEST_MODEL_NAME)
+        self.assertEqual(assignment.backend, "mlx-lm")
+        self.assertIn("python -m mlx_lm server", assignment.server_command)
+
+    def test_external_backend_inherits_into_task_assignments(self) -> None:
+        config = load_runtime_config(
+            environ={},
+            overrides={
+                "NEWS_MODEL_BACKEND": "external",
+                "NEWS_MODEL_BASE_URL": "https://api.example.com/v1",
+            },
+            materialize_outputs=False,
+        )
+        self.assertEqual(config.model_backend, "external")
+        self.assertEqual(config.model_assignments["default"].backend, "external")
+        self.assertEqual(config.model_assignments["default"].server_command, "")
+        for task in (
+            MODEL_TASK_ARTICLE_SUMMARY,
+            MODEL_TASK_STORY_DRAFTING,
+            MODEL_TASK_STORY_SCALE_SCREENING,
+            MODEL_TASK_TITLE_GENERATION,
+            MODEL_TASK_IMAGE_ART_DIRECTION,
+        ):
+            self.assertEqual(config.model_assignments[task].backend, "external")
+            self.assertEqual(config.model_assignments[task].server_command, "")
 
     def test_news_model_backend_invalid_value_raises_value_error(self) -> None:
         with self.assertRaisesRegex(ValueError, "NEWS_MODEL_BACKEND must be one of: mlx-lm, mlx-vlm, external, llama.cpp"):
