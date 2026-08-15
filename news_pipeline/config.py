@@ -1520,6 +1520,15 @@ def configured_model_api_key() -> str:
     return _str_env("NEWS_MODEL_API_KEY", "not-needed") or "not-needed"
 
 
+def _catalog_declared_backend(model_reference: str) -> str | None:
+    """Return the catalog-declared backend for a reference or alias, if any."""
+    clean = (model_reference or "").strip()
+    return (
+        _model_catalog.catalog_model_backend(clean)
+        or _model_catalog.catalog_model_backend(resolve_model_name(clean))
+    )
+
+
 def _validate_llama_cpp_backend_compatibility(model_reference: str, backend: str) -> None:
     """Reject known catalog MLX/llama.cpp backend mismatches fail-fast.
 
@@ -1530,15 +1539,10 @@ def _validate_llama_cpp_backend_compatibility(model_reference: str, backend: str
     llama-server apply its documented default quantization. mlx-lm/mlx-vlm
     cross-overrides and external selections keep their existing behavior.
     """
-    clean = (model_reference or "").strip()
-    resolved = resolve_model_name(clean)
-    declared = (
-        _model_catalog.catalog_model_backend(clean)
-        or _model_catalog.catalog_model_backend(resolved)
-    )
+    mlx_backends = (MODEL_BACKEND_MLX_LM, MODEL_BACKEND_MLX_VLM)
+    declared = _catalog_declared_backend(model_reference)
     if declared is None or declared == backend:
         return
-    mlx_backends = (MODEL_BACKEND_MLX_LM, MODEL_BACKEND_MLX_VLM)
     if backend == MODEL_BACKEND_LLAMA_CPP and declared in mlx_backends:
         raise ValueError(
             f"NEWS_MODEL_BACKEND=llama.cpp cannot serve {model_reference!r}: the "
@@ -1564,9 +1568,10 @@ def _configured_model_backend(model_reference: str) -> str:
     with an explicit NEWS_MODEL_BACKEND and fails fast with an actionable
     message; raw GGUF references likewise require the llama.cpp backend
     explicitly. Inherited task assignments use the resolved default backend;
-    explicit task assignments retain catalog/inferred backend metadata. Known catalog
-    MLX/llama.cpp mismatches fail fast; unknown references may be selected
-    with any backend."""
+    explicit task assignments retain catalog/inferred backend metadata.
+    Known catalog MLX/llama.cpp mismatches fail fast; unknown references may
+    be selected with any backend.
+    """
     configured = _str_env("NEWS_MODEL_BACKEND", "").strip().lower()
     if configured and configured not in SUPPORTED_MODEL_BACKENDS:
         raise ValueError(
@@ -1574,12 +1579,7 @@ def _configured_model_backend(model_reference: str) -> str:
         )
     backend = configured or DEFAULT_MODEL_BACKEND
     if not configured:
-        clean = (model_reference or "").strip()
-        resolved = resolve_model_name(clean)
-        declared = (
-            _model_catalog.catalog_model_backend(clean)
-            or _model_catalog.catalog_model_backend(resolved)
-        )
+        declared = _catalog_declared_backend(model_reference)
         if declared is not None and declared != backend:
             raise ValueError(
                 f"NEWS_MODEL={model_reference!r} requires NEWS_MODEL_BACKEND={declared}: "
@@ -1587,7 +1587,7 @@ def _configured_model_backend(model_reference: str) -> str:
                 f"default backend is {DEFAULT_MODEL_BACKEND}. Set "
                 f"NEWS_MODEL_BACKEND={declared} explicitly to use this model."
             )
-        if clean.lower().endswith(".gguf") or resolved.lower().endswith(".gguf"):
+        if resolve_model_name(model_reference).lower().endswith(".gguf"):
             raise ValueError(
                 f"NEWS_MODEL={model_reference!r} requires NEWS_MODEL_BACKEND=llama.cpp: "
                 "GGUF references are served by the managed llama.cpp backend, and "
