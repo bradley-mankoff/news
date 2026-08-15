@@ -1576,9 +1576,20 @@ class NewsUIHandler(BaseHTTPRequestHandler):
                     return
                 pipeline_tag = (params.get("pipeline_tag") or [None])[0] or None
                 raw_limit = (params.get("limit") or [""])[0]
-                try:
-                    limit = int(raw_limit) if raw_limit else 20
-                except ValueError:
+                if raw_limit:
+                    try:
+                        limit = int(raw_limit)
+                    except ValueError:
+                        self._send_json(
+                            {
+                                "query": query,
+                                "models": [],
+                                "error": f"--limit must be an integer, got {raw_limit!r}.",
+                            },
+                            status=HTTPStatus.BAD_REQUEST,
+                        )
+                        return
+                else:
                     limit = 20
                 try:
                     models = search_huggingface_models(

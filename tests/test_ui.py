@@ -2196,6 +2196,55 @@ class UITests(unittest.TestCase):
         self.assertEqual(status, 400)
         self.assertIn("Missing query parameter q.", json.loads(body)["error"])
 
+    def test_models_search_endpoint_invalid_limit_returns_400(self) -> None:
+        fake_models = [
+            {
+                "id": "owner/one",
+                "hf_url": "https://huggingface.co/owner/one",
+                "runtime_fit": {"status": "managed_mlx_lm", "reason": "ok"},
+            }
+        ]
+        with patch.object(
+            ui_module, "search_huggingface_models", return_value=fake_models
+        ) as search:
+            status, _, body = self._invoke_get("/api/models/search?q=qwythos&limit=abc")
+        self.assertEqual(status, 400)
+        self.assertEqual(
+            json.loads(body),
+            {"query": "qwythos", "models": [], "error": "--limit must be an integer, got 'abc'."},
+        )
+        search.assert_not_called()
+
+        for raw in ("1", "50"):
+            with self.subTest(limit=raw), patch.object(
+                ui_module, "search_huggingface_models", return_value=fake_models
+            ) as search:
+                status, _, body = self._invoke_get(f"/api/models/search?q=qwythos&limit={raw}")
+            self.assertEqual(status, 200)
+            payload = json.loads(body)
+            self.assertEqual(payload["models"], fake_models)
+            self.assertIsNone(payload["error"])
+            search.assert_called_once_with("qwythos", pipeline_tag=None, limit=int(raw))
+
+        with patch.object(
+            ui_module, "search_huggingface_models", return_value=fake_models
+        ) as search:
+            status, _, body = self._invoke_get("/api/models/search?q=qwythos")
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body)["models"], fake_models)
+        search.assert_called_once_with("qwythos", pipeline_tag=None, limit=20)
+
+        # Numeric values outside 1-50 remain successful and are clamped by
+        # search_huggingface_models; the handler does not range-validate.
+        for raw in ("0", "999"):
+            with self.subTest(limit=raw), patch.object(
+                ui_module, "search_huggingface_models", return_value=fake_models
+            ) as search:
+                status, _, body = self._invoke_get(f"/api/models/search?q=qwythos&limit={raw}")
+            self.assertEqual(status, 200)
+            self.assertEqual(json.loads(body)["models"], fake_models)
+            search.assert_called_once_with("qwythos", pipeline_tag=None, limit=int(raw))
+
     def test_models_metadata_endpoint(self) -> None:
         fake_info = {
             "id": "owner/repo",
