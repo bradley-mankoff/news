@@ -839,6 +839,90 @@ assert(
         self.assertIn("refreshHuggingFaceUseButtons();", delegated)
         self.assertIn("refreshModelKnobLinks();", boot)
 
+    def test_model_catalog_panel_markup_contract(self) -> None:
+        """The Model catalog panel exposes the expected heading, controls,
+        pipeline options, and limit attributes (issue #96)."""
+        html = ui_module.HTML
+        block = html.split('<p class="eyebrow">Model catalog</p>', 1)[1].split(
+            "<summary>Utilities</summary>", 1
+        )[0]
+        for snippet in (
+            "Model catalog and Hugging Face search",
+            "Built-in models are verified for the managed backends",
+            'id="recommendationTask"',
+            'id="recommendationReadout"',
+            'id="catalogCards"',
+            "<summary>Search Hugging Face</summary>",
+            'id="modelSearchQuery"',
+            'id="modelSearchPipeline"',
+            'id="modelSearchLimit"',
+            'id="modelSearchBtn"',
+            'id="modelSearchResults"',
+            '<option value="text-generation">text-generation</option>',
+            '<option value="text2text-generation">text2text-generation</option>',
+            '<option value="image-text-to-text">image-text-to-text</option>',
+            'min="1"',
+            'max="50"',
+            'value="10"',
+        ):
+            self.assertIn(snippet, block)
+
+    def test_model_catalog_panel_renderer_wiring_contract(self) -> None:
+        """The model-catalog renderer blocks keep their schema-backed data
+        sources, empty/error fallbacks, escaped fields, and backend-aware
+        wiring (issue #96)."""
+        html = ui_module.HTML
+        panel = html.split("function renderModelCatalogPanel() {", 1)[1].split(
+            "function renderRecommendations", 1
+        )[0]
+        recommendations = html.split("function renderRecommendations", 1)[1].split(
+            "async function searchHuggingFaceModels", 1
+        )[0]
+        search = html.split("async function searchHuggingFaceModels", 1)[1].split(
+            "async function comparePromptProfiles", 1
+        )[0]
+
+        # Panel: schema-backed task options and catalog cards with escaped
+        # fields, plus the catalog-aware use-model binding.
+        for snippet in (
+            "(state.schema && state.schema.model_recommendation_tasks) || []",
+            "modelCatalogEntries().map(entry => `",
+            "escapeHtml(entry.name)",
+            "escapeHtml(entry.alias)",
+            "escapeHtml(entry.description)",
+            "escapeHtml(entry.backend)",
+            "escapeHtml(entry.hf_url)",
+            "renderRecommendations(select.value);",
+            "btn.onclick = () => useModelReference(btn.dataset.useModel, catalogBackendForReference(btn.dataset.useModel));",
+        ):
+            self.assertIn(snippet, panel)
+
+        # Recommendations: empty-task and empty-picks fallbacks stay honest,
+        # and the Use buttons resolve the backend from the catalog.
+        self.assertIn("Pick a task to see curated recommendations.", recommendations)
+        self.assertIn("No verified curated model for this task yet", recommendations)
+        self.assertIn(
+            "btn.onclick = () => useModelReference(btn.dataset.useModel, catalogBackendForReference(btn.dataset.useModel));",
+            recommendations,
+        )
+
+        # Search: empty query, API error, empty results, runtime-fit backend
+        # lookup, external-only disabled state, binding, and catch rendering.
+        for snippet in (
+            "Enter a query to search Hugging Face.",
+            "`/api/models/search?q=${encodeURIComponent(query)}&pipeline_tag=${encodeURIComponent(pipeline)}&limit=${limit}`",
+            "if (data.error) {",
+            "No models found.",
+            "Object.prototype.hasOwnProperty.call(RUNTIME_FIT_BACKENDS, fit.status)",
+            "RUNTIME_FIT_BACKENDS[fit.status]",
+            'data-use-hf-backend="${escapeHtml(hfBackend)}"',
+            "externalOnly && !backendExternal",
+            'useModelReference(btn.dataset.useHfModel, btn.dataset.useHfBackend || "");',
+            "catch (err) {",
+            "escapeHtml(err.message)",
+        ):
+            self.assertIn(snippet, search)
+
     def test_runtime_fit_backend_map_matches_catalog_vocabulary(self) -> None:
         html = ui_module.HTML
         block = html.split("const RUNTIME_FIT_BACKENDS = {", 1)[1].split("};", 1)[0]

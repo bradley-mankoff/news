@@ -385,6 +385,58 @@ class CliTests(unittest.TestCase):
         self.assertEqual(stdout, "")
         self.assertIn("Unexpected arguments for models catalog: oops", stderr)
 
+    def test_models_requires_subcommand(self) -> None:
+        with patch("news_pipeline.cli.search_huggingface_models") as search:
+            code, stdout, stderr = self._invoke(["models"])
+
+        self.assertEqual(code, 2)
+        self.assertEqual(stdout, "")
+        self.assertIn("models requires a subcommand", stderr)
+        search.assert_not_called()
+
+    def test_models_unknown_subcommand_reports_valid_options(self) -> None:
+        with patch("news_pipeline.cli.search_huggingface_models") as search:
+            code, stdout, stderr = self._invoke(["models", "unknown"])
+
+        self.assertEqual(code, 2)
+        self.assertEqual(stdout, "")
+        self.assertIn("Unknown models subcommand: 'unknown'", stderr)
+        self.assertIn("Valid: catalog, search", stderr)
+        search.assert_not_called()
+
+    def test_models_search_blank_query_is_rejected_without_search(self) -> None:
+        with patch("news_pipeline.cli.search_huggingface_models") as search:
+            code, stdout, stderr = self._invoke(
+                ["models", "search", "--query", ""]
+            )
+
+        self.assertEqual(code, 2)
+        self.assertEqual(stdout, "")
+        self.assertIn("models search requires --query", stderr)
+        search.assert_not_called()
+
+    def test_models_search_limit_zero_clamps_to_one(self) -> None:
+        fake_results = [
+            {
+                "id": "owner/one",
+                "runtime_fit": {
+                    "status": "managed_mlx_lm",
+                    "reason": "MLX language model",
+                },
+            }
+        ]
+        with patch(
+            "news_pipeline.cli.search_huggingface_models", return_value=fake_results
+        ) as search:
+            code, stdout, stderr = self._invoke(
+                ["models", "search", "--query", "qwythos", "--limit=0"]
+            )
+
+        self.assertEqual(code, 0)
+        self.assertEqual(stdout, "owner/one [managed_mlx_lm] MLX language model\n")
+        self.assertEqual(stderr, "")
+        search.assert_called_once_with("qwythos", pipeline_tag=None, limit=1)
+
     def test_models_search_requires_query(self) -> None:
         code, stdout, stderr = self._invoke(["models", "search"])
 
