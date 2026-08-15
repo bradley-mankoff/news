@@ -15,7 +15,7 @@ Today those contracts are un-named inline literals buried inside the four stage
 templates (`article_summarization.py`, `story_drafting.py`,
 `story_selection.py`, `pipeline.py`), with no single source of truth and no
 validation that a rendered prompt still contains every required marker. ADR
-0010 already moved the *editorial* sentences into the Prompt Catalog; this ADR
+0018 already moved the *editorial* sentences into the Prompt Catalog; this ADR
 closes the other half of the split.
 
 ## Decision
