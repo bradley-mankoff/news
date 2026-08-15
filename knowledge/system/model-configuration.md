@@ -21,6 +21,9 @@ sources:
   - id: model-catalog-code
     resource: ../../news_pipeline/model_catalog.py
     title: Model Catalog built-ins, YAML loader, and runtime-fit matching
+  - id: model-catalog-adr
+    resource: ../../docs/adr/0019-model-catalog-owns-curated-models-and-runtime-fit-verdicts.md
+    title: ADR 0019 — Model Catalog ownership and runtime-fit verdicts
   - id: runtime-config-adr
     resource: ../../docs/adr/0004-runtime-config-resolution-owns-env-overlays.md
     title: ADR 0004 — Runtime Config Resolution
@@ -118,3 +121,4 @@ spawns them.
   Model Server Settings
 - `docs/adr/0017-runtime-matrix.md` — fixed default backend plus explicit
   override policy and the closed backend set
+- `docs/adr/0019-model-catalog-owns-curated-models-and-runtime-fit-verdicts.md` — accepted baseline decision: the Model Catalog owns curated models, per-task recommendations, and runtime-fit verdicts

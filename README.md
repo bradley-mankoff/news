@@ -465,15 +465,12 @@ for the recorded evidence, host, package versions, and task-contract
 results.
 
 Hugging Face search results carry runtime-fit verdicts (`managed_mlx_lm`,
-`managed_mlx_vlm`, `managed_llama_cpp`, or `external_only`) so unlaunchable
-repos are never picked for a managed backend (ADR 0017 runtime matrix);
-hardware fitting itself lives on the Hugging Face model page. Only
-MLX-formatted, asset-complete VLM repositories are `managed_mlx_vlm`;
-Transformers+safetensors vision search results (`image-text-to-text`) are
-`external_only` because `mlx-vlm` needs pre-converted MLX weights plus an
-`mmproj` asset and does not convert them at launch. The UI's "Model
-catalog" panel shows curated cards, task recommendations, and search with the
-same verdicts.
+`managed_mlx_vlm`, `managed_llama_cpp`, or `external_only`) as advisory
+picker/configuration hints. They do not guarantee hardware fit, compatibility,
+or successful launch; hardware fitting itself lives on the Hugging Face model
+page (see ADR 0019 and the ADR 0017 runtime matrix). The UI's "Model catalog"
+panel shows curated cards, task recommendations, and search with the same
+verdicts.
 
 #### User-editable YAML overrides
 
@@ -525,8 +522,10 @@ models:
     description: A user-verified text-generation GGUF model.
 ```
 
-See [`docs/adr/0014-model-catalog-yaml-overrides.md`](docs/adr/0014-model-catalog-yaml-overrides.md)
-for the accepted architecture record.
+See [`docs/adr/0019-model-catalog-owns-curated-models-and-runtime-fit-verdicts.md`](docs/adr/0019-model-catalog-owns-curated-models-and-runtime-fit-verdicts.md)
+for the accepted baseline architecture record, and
+[`docs/adr/0014-model-catalog-yaml-overrides.md`](docs/adr/0014-model-catalog-yaml-overrides.md)
+for the YAML-overlay extension decision.
 
 ### Runtime Matrix
 
