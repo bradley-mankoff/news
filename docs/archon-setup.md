@@ -28,7 +28,7 @@ Archon workflow engine + stock Pi provider, no custom extensions.
   (`launchctl list | grep news-board-poller`; log `automation/board_poller.log`;
   state `automation/state.json`).
 - The board poller enforces the committed
-  `automation/config.json:max_concurrent_workflows` limit (`4` here), counts
+  `automation/config.json:max_concurrent_workflows` limit (`10` here), counts
   active/paused Archon runs **for this repo's codebase** before dispatching
   (foreign repos' runs in the shared archon home do not consume news slots),
   reserves slots within a poll, and holds dispatches if the status lookup fails.

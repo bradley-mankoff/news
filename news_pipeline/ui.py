@@ -2506,6 +2506,13 @@ HTML = r"""<!doctype html>
         el.insertAdjacentHTML("afterbegin", `<option value="${escapeHtml(valueText)}">${escapeHtml(valueText)}</option>`);
       }
       el.value = valueText;
+      // Programmatic select updates do not dispatch `change`; when this select
+      // has a mounted link row, refresh it immediately. Other controls still
+      // receive their value updates, while preset/reset callers perform the
+      // bulk refresh (issue #79).
+      if (el.tagName === "SELECT" && document.querySelector(`[data-links-for="${env}"]`)) {
+        renderKnobLinks(env);
+      }
     }
     function knobByEnv(env) {
       return (state.schema && state.schema.knobs || []).find(knob => knob.env === env) || null;
@@ -2702,16 +2709,20 @@ HTML = r"""<!doctype html>
         `<a href="${escapeHtml(entry.hardware)}" target="_blank" rel="noopener noreferrer" title="Native Hardware Compatibility panel (GGUF/MLX) on the model page">Hardware compatibility</a>`
       ].join(" · ");
     }
-    // Programmatic value changes (preset apply, clear/reset, startup restore)
-    // do not fire `change` events, so re-render links after those paths or the
-    // .knob-links container keeps the previous model's links.
+    // Programmatic value changes (preset apply, clear/reset, startup restore,
+    // model-tuning setters) do not fire `change` events, so re-render links
+    // after those paths or the .knob-links container keeps the previous
+    // model's links. Discovery is schema-driven (issue #79): every registry
+    // knob carrying non-empty option_links is a model link candidate. The
+    // mounted-container precheck skips unmounted knobs without invoking the
+    // renderer; direct renderKnobLinks() calls still warn on missing containers.
     function refreshModelKnobLinks() {
-      renderKnobLinks("NEWS_MODEL");
-      renderKnobLinks("NEWS_MODEL_ARTICLE_SUMMARY");
-      renderKnobLinks("NEWS_MODEL_STORY_DRAFTING");
-      renderKnobLinks("NEWS_MODEL_STORY_SCALE_SCREENING");
-      renderKnobLinks("NEWS_MODEL_TITLE_GENERATION");
-      renderKnobLinks("NEWS_MODEL_IMAGE_ART_DIRECTION");
+      ((state.schema && state.schema.knobs) || []).forEach(knob => {
+        if (!(knob.option_links && Object.keys(knob.option_links).length)) return;
+        if (document.querySelector(`[data-links-for="${knob.env}"]`)) {
+          renderKnobLinks(knob.env);
+        }
+      });
       // Preset apply, reset/clear, and startup restore re-render the hint so
       // a stale mismatch message cannot outlive a matching model/backend pair.
       const reference = currentControlValue("NEWS_MODEL");
@@ -3049,6 +3060,10 @@ HTML = r"""<!doctype html>
           searchHuggingFaceModels().catch(err => setStatus(err.message, "bad"));
         }
       };
+      // The markup rebuild above recreates the NEWS_MODEL .knob-links row;
+      // refresh links here so the run-setup card is authoritative whenever
+      // renderRunSetup() is invoked (issue #79).
+      refreshModelKnobLinks();
     }
     // Knob labels for each task's per-task max-tokens env (modelTuningPanel).
     const TASK_MAX_TOKENS_LABELS = {
@@ -3455,7 +3470,10 @@ HTML = r"""<!doctype html>
         `;
       }).join("");
       decorateEnvHints($("knobContainer"));
-      renderKnobLinks("NEWS_MODEL");
+      // The raw override rebuild recreates every mounted .knob-links row, so
+      // refresh all of them (not just NEWS_MODEL) or recreated task model
+      // containers keep the previous model's links (issue #79).
+      refreshModelKnobLinks();
     }
     function collectModelTuningPresetBody(task) {
       return modelTuningPayload(task);

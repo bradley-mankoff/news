@@ -29,7 +29,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 REPO = "bradley-mankoff/news"
-ROOT = Path("/Users/bradley_mankoff/personal_code/news")
+ROOT = Path(__file__).resolve().parents[1]
 FREEZE_FILE = ROOT / "automation" / ".scrub-freeze.json"
 KEEP_LABEL = "rewrite-with-keep-set"
 CLOSE_LABEL = "close-on-scrub"
@@ -102,7 +102,7 @@ def remote_refs() -> list[str]:
 
 
 def board_in_progress() -> list[int]:
-    r = gh(["project", "item-list", "1", "--owner", "bradley-mankoff",
+    r = gh(["project", "item-list", "1", "--owner", "@me",
             "--limit", "200", "--format", "json"])
     if r.returncode != 0:
         raise RuntimeError(f"gh project item-list failed: {r.stderr.strip()[:200]}")

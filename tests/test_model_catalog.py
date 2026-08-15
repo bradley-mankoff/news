@@ -74,7 +74,7 @@ class ModelCatalogTests(unittest.TestCase):
             )
 
     def test_catalog_entries_are_complete(self) -> None:
-        self.assertEqual(len(model_catalog.CATALOG_MODELS), 4)
+        self.assertEqual(len(model_catalog.CATALOG_MODELS), 6)
         for entry in model_catalog.CATALOG_MODELS.values():
             self.assertTrue(entry.alias)
             self.assertTrue(entry.reference)
@@ -106,6 +106,22 @@ class ModelCatalogTests(unittest.TestCase):
                     entry.hf_repo,
                     f"{entry.alias} reference must equal hf_repo (issue #92)",
                 )
+        # Runtime-verified Qwen3 MLX entries (issue #89): exact aliases,
+        # references, mlx-lm backend, positive 40960 context, and only
+        # evidence-backed task notes.
+        for alias, reference, tasks in (
+            ("qwen3-8b-4bit", "mlx-community/Qwen3-8B-4bit", {"speed", "structured_output"}),
+            ("qwen3-14b-4bit", "mlx-community/Qwen3-14B-4bit", {"factual_extraction", "synthesis", "citation_fidelity"}),
+        ):
+            entry = model_catalog.CATALOG_MODELS[alias]
+            self.assertEqual(entry.alias, alias)
+            self.assertEqual(entry.reference, reference)
+            self.assertEqual(entry.hf_repo, reference)
+            self.assertEqual(entry.backend, "mlx-lm")
+            self.assertEqual(entry.context_length, 40960)
+            self.assertTrue(entry.description)
+            self.assertNotIn(".gguf", entry.reference.lower())
+            self.assertEqual(set(entry.task_notes), tasks)
 
     def test_default_catalog_model_is_the_default_alias(self) -> None:
         self.assertEqual(model_catalog.DEFAULT_CATALOG_MODEL_ALIAS, config.DEFAULT_MODEL_ALIAS)
@@ -284,6 +300,8 @@ class ModelCatalogTests(unittest.TestCase):
                 "gemma-e2b-tiny",
                 "qwythos-9b-4bit",
                 "qwythos-9b-8bit",
+                "qwen3-8b-4bit",
+                "qwen3-14b-4bit",
                 "my-mlx-model",
                 "my-vlm-model",
             ],
@@ -534,6 +552,17 @@ class ModelCatalogTests(unittest.TestCase):
             "mlx-vlm",
         )
         self.assertEqual(model_catalog.catalog_model_backend("gemma-e2b-tiny"), "mlx-lm")
+        # Runtime-verified Qwen3 MLX entries (issue #89).
+        self.assertEqual(model_catalog.catalog_model_backend("qwen3-8b-4bit"), "mlx-lm")
+        self.assertEqual(
+            model_catalog.catalog_model_backend("mlx-community/Qwen3-8B-4bit"),
+            "mlx-lm",
+        )
+        self.assertEqual(model_catalog.catalog_model_backend("qwen3-14b-4bit"), "mlx-lm")
+        self.assertEqual(
+            model_catalog.catalog_model_backend("mlx-community/Qwen3-14B-4bit"),
+            "mlx-lm",
+        )
         # Exact matching only: bare org and prefix siblings are unknown.
         self.assertIsNone(model_catalog.catalog_model_backend("mlx-community"))
         self.assertIsNone(model_catalog.catalog_model_backend("mlx-community/gemma-4-12B-it-4bit-other"))
@@ -578,7 +607,7 @@ class ModelCatalogTests(unittest.TestCase):
             picks = model_catalog.recommend_models("speed")
             self.assertEqual(
                 [pick["alias"] for pick in picks],
-                ["gemma-e2b-tiny", "my-mlx-model", "gemma-4-12b-it-4bit"],
+                ["gemma-e2b-tiny", "qwen3-8b-4bit", "my-mlx-model", "gemma-4-12b-it-4bit"],
             )
             # The default marker stays code-owned: YAML additions are never default.
             defaults = [record for record in records if record["is_default"]]
@@ -676,22 +705,37 @@ class ModelCatalogTests(unittest.TestCase):
                 self.assertTrue(pick["reason"])
         # Translation is the documented honest gap: no verified curated pick.
         self.assertEqual(model_catalog.recommend_models("translation"), [])
-        # Speed's curated pick is the tiny test model, with the default model
-        # appended exactly once as the fallback when it is not already a pick.
+        # Speed: curated picks are the tiny test model then the verified fast
+        # Qwen3 8B entry, with the default model appended exactly once as the
+        # fallback when it is not already a pick.
         speed_picks = model_catalog.recommend_models("speed")
         self.assertEqual(
             [pick["alias"] for pick in speed_picks],
-            ["gemma-e2b-tiny", model_catalog.DEFAULT_CATALOG_MODEL_ALIAS],
+            ["gemma-e2b-tiny", "qwen3-8b-4bit", model_catalog.DEFAULT_CATALOG_MODEL_ALIAS],
         )
         self.assertEqual(speed_picks[-1]["alias"], model_catalog.DEFAULT_CATALOG_MODEL_ALIAS)
-        # The default model covers the quality tasks first and is never
-        # duplicated when it is already a curated pick.
+        # Quality tasks: the default model carries every quality task note
+        # and leads in catalog order, followed by the verified Qwen3 pick for
+        # its declared tasks; the default is never duplicated. context_length
+        # remains default-only.
+        expected_by_task = {
+            "factual_extraction": [model_catalog.DEFAULT_CATALOG_MODEL_ALIAS, "qwen3-14b-4bit"],
+            "structured_output": [model_catalog.DEFAULT_CATALOG_MODEL_ALIAS, "qwen3-8b-4bit"],
+            "synthesis": [model_catalog.DEFAULT_CATALOG_MODEL_ALIAS, "qwen3-14b-4bit"],
+            "citation_fidelity": [model_catalog.DEFAULT_CATALOG_MODEL_ALIAS, "qwen3-14b-4bit"],
+            "context_length": [model_catalog.DEFAULT_CATALOG_MODEL_ALIAS],
+        }
         for task in ("factual_extraction", "structured_output", "synthesis", "citation_fidelity", "context_length"):
             picks = model_catalog.recommend_models(task)
             self.assertEqual(
                 [pick["alias"] for pick in picks],
-                [model_catalog.DEFAULT_CATALOG_MODEL_ALIAS],
+                expected_by_task[task],
             )
+        # No task note outside the declared set: translation stays the honest
+        # empty gap, and every returned pick keeps a supported backend.
+        for task in model_catalog.MODEL_RECOMMENDATION_TASKS:
+            for pick in model_catalog.recommend_models(task):
+                self.assertIn(pick["backend"], config.SUPPORTED_MODEL_BACKENDS)
         # Every returned pick record is JSON-ready and carries the lean
         # recommendation contract fields (no catalog-card-only extras).
         for task in model_catalog.MODEL_RECOMMENDATION_TASKS:
@@ -709,7 +753,7 @@ class ModelCatalogTests(unittest.TestCase):
 
     def test_list_model_catalog_is_json_ready(self) -> None:
         records = model_catalog.list_model_catalog()
-        self.assertEqual(len(records), 4)
+        self.assertEqual(len(records), 6)
         for record in records:
             self.assertIsInstance(record, dict)
             self.assertTrue(record["hf_url"].startswith("https://huggingface.co/"))
@@ -726,6 +770,19 @@ class ModelCatalogTests(unittest.TestCase):
                 record["hf_url"],
                 "https://huggingface.co/huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF",
             )
+        qwen3 = {record["alias"]: record for record in records if record["alias"].startswith("qwen3")}
+        self.assertEqual(set(qwen3), {"qwen3-8b-4bit", "qwen3-14b-4bit"})
+        for record in qwen3.values():
+            self.assertEqual(record["backend"], "mlx-lm")
+            self.assertIn(
+                record["reference"],
+                ("mlx-community/Qwen3-8B-4bit", "mlx-community/Qwen3-14B-4bit"),
+            )
+            self.assertEqual(record["context_length"], 40960)
+            self.assertEqual(
+                record["hf_url"],
+                f"https://huggingface.co/{record['reference']}",
+            )
 
     def test_runtime_fit_matrix(self) -> None:
         curated_gemma = "mlx-community/gemma-4-12B-it-4bit"
@@ -733,6 +790,32 @@ class ModelCatalogTests(unittest.TestCase):
             # (info dict, expected status)
             (
                 {"id": curated_gemma, "tags": ["mlx"], "library_name": "mlx", "pipeline_tag": "image-text-to-text"},
+                model_catalog.RUNTIME_FIT_MANAGED_MLX_VLM,
+            ),
+            # Runtime-verified Qwen3 MLX entries (issue #89): exact catalog
+            # identity is authoritative, so blank/unknown metadata still
+            # yields the declared managed mlx-lm verdict.
+            (
+                {"id": "mlx-community/Qwen3-8B-4bit", "tags": [], "library_name": "unknown", "pipeline_tag": None},
+                model_catalog.RUNTIME_FIT_MANAGED_MLX_LM,
+            ),
+            (
+                {"id": "mlx-community/Qwen3-14B-4bit", "tags": [], "library_name": "unknown", "pipeline_tag": None},
+                model_catalog.RUNTIME_FIT_MANAGED_MLX_LM,
+            ),
+            # Prefix-collision sibling (issue #92): a repo whose name merely
+            # starts with a curated Qwen3 repo's name must not match the
+            # curated entry; the generic MLX heuristic verdict is correct.
+            (
+                {"id": "mlx-community/Qwen3-8B-4bit-other", "tags": ["mlx"], "library_name": "mlx", "pipeline_tag": "text-generation"},
+                model_catalog.RUNTIME_FIT_MANAGED_MLX_LM,
+            ),
+            (
+                {"id": "someone/mixed-mlx-library-vlm", "tags": ["transformers", "safetensors", "image-text-to-text"], "library_name": "mlx", "pipeline_tag": "image-text-to-text"},
+                model_catalog.RUNTIME_FIT_MANAGED_MLX_VLM,
+            ),
+            (
+                {"id": "someone/mixed-mlx-tag-vlm", "tags": ["mlx", "transformers", "safetensors", "image-text-to-text"], "library_name": "transformers", "pipeline_tag": "image-text-to-text"},
                 model_catalog.RUNTIME_FIT_MANAGED_MLX_VLM,
             ),
             (
@@ -785,7 +868,7 @@ class ModelCatalogTests(unittest.TestCase):
             ),
             (
                 {"id": "someone/transformers-vlm", "tags": ["safetensors"], "library_name": "transformers", "pipeline_tag": "image-text-to-text"},
-                model_catalog.RUNTIME_FIT_MANAGED_MLX_VLM,
+                model_catalog.RUNTIME_FIT_EXTERNAL_ONLY,
             ),
             (
                 {"id": "someone/transformers-other", "tags": ["safetensors"], "library_name": "transformers", "pipeline_tag": "audio-classification"},
@@ -840,6 +923,60 @@ class ModelCatalogTests(unittest.TestCase):
                 fit = model_catalog.runtime_fit_for_hf_model(info)
                 self.assertEqual(fit["status"], expected)
                 self.assertTrue(fit["reason"])
+
+    def test_curated_backends_map_to_runtime_fit_verdicts(self) -> None:
+        """Table-driven curated-backend contract: each built-in entry's
+        declared backend must map to its expected runtime-fit verdict even
+        when the supplied metadata is otherwise blank, because exact catalog
+        identity is authoritative (issue #92 / #89)."""
+        expected = {
+            "mlx-lm": model_catalog.RUNTIME_FIT_MANAGED_MLX_LM,
+            "mlx-vlm": model_catalog.RUNTIME_FIT_MANAGED_MLX_VLM,
+            "llama.cpp": model_catalog.RUNTIME_FIT_MANAGED_LLAMA_CPP,
+        }
+        for entry in model_catalog.CATALOG_MODELS.values():
+            with self.subTest(alias=entry.alias):
+                fit = model_catalog.runtime_fit_for_hf_model(
+                    {
+                        "id": entry.hf_repo,
+                        "tags": [],
+                        "library_name": "unknown",
+                        "pipeline_tag": None,
+                    }
+                )
+                self.assertEqual(fit["status"], expected[entry.backend])
+
+    def test_transformers_vision_reason_explains_external_only(self) -> None:
+        """A Transformers+safetensors vision repo is external-only (issue #81):
+        mlx-vlm needs pre-converted MLX weights and an mmproj asset, so the
+        reason must say so instead of promising managed launchability."""
+        fit = model_catalog.runtime_fit_for_hf_model(
+            {
+                "id": "someone/transformers-vlm",
+                "tags": ["safetensors"],
+                "library_name": "transformers",
+                "pipeline_tag": "image-text-to-text",
+            }
+        )
+        self.assertEqual(fit["status"], model_catalog.RUNTIME_FIT_EXTERNAL_ONLY)
+        self.assertIn("pre-converted MLX weights", fit["reason"])
+        self.assertIn("mmproj", fit["reason"])
+        self.assertIn("external", fit["reason"])
+
+    def test_transformers_text_reason_carries_conversion_caveat(self) -> None:
+        """Transformers text repos keep the managed_mlx_lm verdict (issue #81),
+        but the reason must note the on-load conversion caveat rather than
+        implying a pre-converted MLX artifact."""
+        info = {
+            "id": "someone/transformers-text",
+            "tags": ["safetensors"],
+            "library_name": "transformers",
+            "pipeline_tag": "text-generation",
+        }
+        fit = model_catalog.runtime_fit_for_hf_model(info)
+        self.assertEqual(fit["status"], model_catalog.RUNTIME_FIT_MANAGED_MLX_LM)
+        self.assertIn("converts weights on load", fit["reason"])
+        self.assertIn("architecture-dependent", fit["reason"])
 
     def test_payload_normalizes_none_id_object_config_and_string_timestamp(self) -> None:
         """Normalize the missing ID and object config while preserving a
@@ -905,6 +1042,34 @@ class ModelCatalogTests(unittest.TestCase):
         self.assertEqual(kwargs["pipeline_tag"], "text-generation")
         self.assertEqual(kwargs["limit"], 50)
         self.assertEqual(kwargs["expand"], model_catalog.HF_SEARCH_EXPAND)
+
+    def test_vision_runtime_fit_propagates_through_hf_payloads(self) -> None:
+        vision_info = _fake_model_info(
+            id="someone/transformers-vlm",
+            tags=["safetensors", "transformers"],
+            library_name="transformers",
+            pipeline_tag="image-text-to-text",
+        )
+
+        search_api = MagicMock()
+        search_api.list_models.return_value = iter([vision_info])
+        with patch("huggingface_hub.HfApi", return_value=search_api):
+            search_item = model_catalog.search_huggingface_models(
+                "vision", pipeline_tag="image-text-to-text"
+            )[0]
+
+        metadata_api = MagicMock()
+        metadata_api.model_info.return_value = vision_info
+        with patch("huggingface_hub.HfApi", return_value=metadata_api):
+            metadata_item = model_catalog.fetch_model_metadata("someone/transformers-vlm")
+
+        for item in (search_item, metadata_item):
+            with self.subTest(item=item):
+                self.assertEqual(
+                    item["runtime_fit"]["status"],
+                    model_catalog.RUNTIME_FIT_EXTERNAL_ONLY,
+                )
+                self.assertIn("mmproj", item["runtime_fit"]["reason"])
 
     def test_search_in_catalog_flag_and_empty_results(self) -> None:
         curated = "mlx-community/gemma-4-12B-it-4bit"
