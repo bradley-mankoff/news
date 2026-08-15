@@ -163,10 +163,19 @@ class DocsConsistencyTests(unittest.TestCase):
             "README.md must contain exactly one Runtime Matrix section",
         )
         self.assertNotIn("GGUF files run through", readme)
+        # Issue #75 ships a managed llama.cpp backend: text-generation GGUF is
+        # launchable (operator-installed llama-server), multimodal GGUF is not.
+        # The README must state the restriction instead of a blanket
+        # "not launchable" claim.
         self.assertIn(
-            "GGUF files are not launchable by any managed backend",
+            "Text-generation GGUF is supported",
             readme,
-            "README Runtime Matrix must state the GGUF restriction",
+            "README Runtime Matrix must state text-GGUF launchability",
+        )
+        self.assertIn(
+            "multimodal GGUF",
+            readme,
+            "README Runtime Matrix must state the multimodal GGUF restriction",
         )
 
     def test_context_vocabulary_sections_have_knowledge_concepts(self) -> None:

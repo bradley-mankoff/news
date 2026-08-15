@@ -559,18 +559,31 @@ class ConfigHelperTests(unittest.TestCase):
             config_module.resolve_model_name(config_module.GEMMA_4_12B_IT_4BIT_MODEL_ALIAS),
             config_module.GEMMA_4_12B_IT_4BIT_MODEL_REPO,
         )
-        with self.assertRaisesRegex(ValueError, "Unsupported model reference"):
-            config_module.resolve_model_name("qwythos-9b-8bit")
-        # Raw GGUF references and their URL forms fail fast too (all forms the
-        # old docs published as "Resolved model").
-        for unsupported in (
+        # The legacy Qwythos aliases now resolve to their exact GGUF file
+        # references under the managed llama.cpp backend (issue #75).
+        self.assertEqual(
+            config_module.resolve_model_name(config_module.QWWYTHOS_9B_4BIT_MODEL_ALIAS),
+            config_module.QWWYTHOS_9B_4BIT_MODEL_REFERENCE,
+        )
+        self.assertEqual(
+            config_module.resolve_model_name(config_module.QWWYTHOS_9B_8BIT_MODEL_ALIAS),
+            config_module.QWWYTHOS_9B_8BIT_MODEL_REFERENCE,
+        )
+        # Raw GGUF references resolve to themselves; their URL forms map to
+        # the bare reference like every other alias URL key.
+        for supported in (
             config_module.QWWYTHOS_9B_8BIT_MODEL_REFERENCE,
             config_module.QWWYTHOS_9B_4BIT_MODEL_REFERENCE,
+        ):
+            self.assertEqual(config_module.resolve_model_name(supported), supported)
+        for url_form in (
             f"https://huggingface.co/{config_module.QWWYTHOS_9B_4BIT_MODEL_REFERENCE}",
             f"https://hf.co/{config_module.QWWYTHOS_9B_4BIT_MODEL_REFERENCE}",
         ):
-            with self.assertRaisesRegex(ValueError, "Unsupported model reference"):
-                config_module.resolve_model_name(unsupported)
+            self.assertEqual(
+                config_module.resolve_model_name(url_form),
+                config_module.QWWYTHOS_9B_4BIT_MODEL_REFERENCE,
+            )
         with patch.object(config_module, "UNSUPPORTED_MODEL_REFERENCES", {"blocked"}):
             with self.assertRaisesRegex(ValueError, "Unsupported model reference"):
                 config_module.resolve_model_name("blocked")
@@ -588,6 +601,15 @@ class ConfigHelperTests(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 config_module.ensure_codex_safe_model_reference("bad-model")
         self.assertEqual(config_module.infer_model_backend("gemma-4-vision"), "mlx-vlm")
+        # Raw GGUF references infer the managed llama.cpp backend (issue #75).
+        self.assertEqual(
+            config_module.infer_model_backend(config_module.QWWYTHOS_9B_4BIT_MODEL_REFERENCE),
+            config_module.MODEL_BACKEND_LLAMA_CPP,
+        )
+        self.assertEqual(
+            config_module.infer_model_backend("/models/local.gguf"),
+            config_module.MODEL_BACKEND_LLAMA_CPP,
+        )
         self.assertEqual(config_module._default_article_summary_concurrency(config_module.CODEX_TEST_MODEL_ALIAS), 8)
         self.assertEqual(config_module._default_story_synthesis_concurrency(config_module.CODEX_TEST_MODEL_ALIAS), 2)
         self.assertEqual(config_module._default_story_synthesis_concurrency("gemma-4-vision"), 1)
@@ -621,7 +643,18 @@ class ConfigHelperTests(unittest.TestCase):
         backend_knobs = [knob for knob in registry if knob["env"] == "NEWS_MODEL_BACKEND"]
         self.assertEqual(len(backend_knobs), 1)
         self.assertEqual(backend_knobs[0]["group"], "Model Selection")
-        self.assertEqual(backend_knobs[0]["options"], ["external", "mlx-lm", "mlx-vlm"])
+        self.assertEqual(
+            backend_knobs[0]["options"],
+            ["external", "llama.cpp", "mlx-lm", "mlx-vlm"],
+        )
+        # NEWS_LLAMA_CPP_SERVER is an advanced Model Server Settings knob.
+        llama_binary_knobs = [
+            knob for knob in registry if knob["env"] == "NEWS_LLAMA_CPP_SERVER"
+        ]
+        self.assertEqual(len(llama_binary_knobs), 1)
+        self.assertEqual(llama_binary_knobs[0]["group"], "Model Server Settings")
+        self.assertEqual(llama_binary_knobs[0]["default"], "llama-server")
+        self.assertTrue(llama_binary_knobs[0]["advanced"])
         # Pin the Prompt Profile knob contract: select with catalog-backed
         # default and options (drift-guard for runtime_knob_registry).
         prompt_profile_knob = next(knob for knob in registry if knob["env"] == "NEWS_PROMPT_PROFILE")
@@ -688,9 +721,19 @@ class ConfigHelperTests(unittest.TestCase):
             config_module.hf_model_page_url(config_module.CODEX_TEST_MODEL_ALIAS),
             f"https://huggingface.co/{config_module.CODEX_TEST_MODEL_NAME}",
         )
-        # The unsupported Qwythos aliases and their GGUF references have no page.
-        self.assertIsNone(config_module.hf_model_page_url(config_module.QWWYTHOS_9B_4BIT_MODEL_ALIAS))
-        self.assertIsNone(config_module.hf_model_page_url(config_module.QWWYTHOS_9B_4BIT_MODEL_REFERENCE))
+        # The Qwythos aliases resolve to the shared GGUF repo page.
+        qwythos_page = (
+            "https://huggingface.co/"
+            "huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF"
+        )
+        self.assertEqual(
+            config_module.hf_model_page_url(config_module.QWWYTHOS_9B_4BIT_MODEL_ALIAS),
+            qwythos_page,
+        )
+        self.assertEqual(
+            config_module.hf_model_page_url(config_module.QWWYTHOS_9B_8BIT_MODEL_REFERENCE),
+            qwythos_page,
+        )
         self.assertIsNone(config_module.hf_model_page_url("gpt-4o-mini"))
         self.assertIsNone(config_module.hf_model_page_url("openai/gpt-4o"))
         self.assertIsNone(config_module.hf_model_page_url("foo.gguf"))
@@ -699,8 +742,8 @@ class ConfigHelperTests(unittest.TestCase):
         self.assertIsNone(config_module.hf_model_page_url(""))
         self.assertIsNone(config_module.hf_model_page_url("   "))
         # Unsupported references yield None rather than raising ValueError.
-        with patch.object(config_module, "UNSUPPORTED_MODEL_REFERENCES", {"qwythos-9b-8bit"}):
-            self.assertIsNone(config_module.hf_model_page_url("qwythos-9b-8bit"))
+        with patch.object(config_module, "UNSUPPORTED_MODEL_REFERENCES", {"blocked-ref"}):
+            self.assertIsNone(config_module.hf_model_page_url("blocked-ref"))
 
     def test_hf_model_page_url_edge_cases_never_emit_broken_links(self) -> None:
         """Malformed / defensive inputs to hf_model_page_url must all yield
@@ -790,7 +833,7 @@ class ConfigHelperTests(unittest.TestCase):
         )
         self.assertNotIn("my-mlx-model", config_module.MODEL_ALIASES)
 
-    def test_custom_catalog_reserved_collision_fails_closed(self) -> None:
+    def test_custom_catalog_builtin_collision_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             path = Path(tmpdir) / "reserved.yaml"
             path.write_text(
@@ -803,15 +846,17 @@ class ConfigHelperTests(unittest.TestCase):
                 "    description: Reserved alias collision.\n",
                 encoding="utf-8",
             )
-            custom = model_catalog.load_model_catalog(path)
-        with patch.object(model_catalog, "_CATALOG_SNAPSHOT", custom):
-            # The legacy unsupported guard still fires first for the alias
-            # itself, and the registry build rejects the collision so the
-            # alias can never become a selector option.
-            with self.assertRaisesRegex(ValueError, "Unsupported model reference"):
-                config_module.resolve_model_name("qwythos-9b-4bit")
-            with self.assertRaisesRegex(ValueError, "unsupported reference"):
-                config_module.runtime_knob_registry()
+            # qwythos-9b-4bit is a built-in again (issue #75): the YAML
+            # identity must match the built-in entry exactly, so the
+            # redefinition fails closed at catalog load.
+            with self.assertRaisesRegex(ValueError, "does not match the built-in entry") as ctx:
+                model_catalog.load_model_catalog(path)
+            self.assertIn("reference", str(ctx.exception))
+        # The built-in alias still resolves to its GGUF reference.
+        self.assertEqual(
+            config_module.resolve_model_name("qwythos-9b-4bit"),
+            config_module.QWWYTHOS_9B_4BIT_MODEL_REFERENCE,
+        )
 
     def test_mlx_vlm_floor_is_gemma_4_capable(self) -> None:
         """The managed mlx-vlm backend must be able to load the default
@@ -837,12 +882,13 @@ class ConfigHelperTests(unittest.TestCase):
         major, minor, patch = (int(x) for x in mlx_vlm["version"].split(".")[:3])
         self.assertGreaterEqual((major, minor, patch), (0, 6, 4), mlx_vlm["version"])
 
-    def test_default_model_knob_points_at_gemma_and_hides_qwythos(self) -> None:
+    def test_default_model_knob_points_at_gemma_and_includes_qwythos(self) -> None:
         registry = config_module.runtime_knob_registry()
         knob = next(k for k in registry if k["env"] == "NEWS_MODEL")
         self.assertEqual(knob["default"], "gemma-4-12b-it-4bit")
         self.assertIn("gemma-4-12b-it-4bit", knob["options"])
-        self.assertNotIn("qwythos-9b-8bit", knob["options"])
+        self.assertIn("qwythos-9b-8bit", knob["options"])
+        self.assertIn("qwythos-9b-4bit", knob["options"])
         # prod preset now launches gemma
         self.assertEqual(config_module.run_preset_env("prod")["NEWS_MODEL"], "gemma-4-12b-it-4bit")
 
@@ -1298,7 +1344,11 @@ class ConfigHelperTests(unittest.TestCase):
 
 
         self.assertEqual(config_module.MODEL_BACKEND_EXTERNAL, "external")
-        self.assertEqual(config_module.SUPPORTED_MODEL_BACKENDS, ("mlx-lm", "mlx-vlm", "external"))
+        self.assertEqual(config_module.MODEL_BACKEND_LLAMA_CPP, "llama.cpp")
+        self.assertEqual(
+            config_module.SUPPORTED_MODEL_BACKENDS,
+            ("mlx-lm", "mlx-vlm", "external", "llama.cpp"),
+        )
         self.assertEqual(
             config_module.build_model_server_command(
                 "m",
@@ -1307,16 +1357,37 @@ class ConfigHelperTests(unittest.TestCase):
             ),
             "",
         )
+        # The llama.cpp case delegates to the adapter: HF file-qualified
+        # references map to --hf-repo/--hf-file with --alias, localhost,
+        # port, concurrency, and max-token flags; a custom binary is honored.
+        self.assertEqual(
+            config_module.build_model_server_command(
+                "owner/repo/model.Q4_K.gguf",
+                config_module.ModelServerSettings(
+                    base_url="http://127.0.0.1:8081/v1",
+                    max_tokens=2048,
+                    llama_cpp_binary="/opt/llama/llama-server",
+                ),
+                backend="llama.cpp",
+                model_concurrency=3,
+            ),
+            "/opt/llama/llama-server --hf-repo owner/repo --hf-file model.Q4_K.gguf "
+            "--alias owner/repo/model.Q4_K.gguf --parallel 3 --host 127.0.0.1 "
+            "--port 8081 --n-predict 2048",
+        )
         self.assertEqual(config_module._coerce_source_text_list(123), [])
         self.assertEqual(
             config_module._default_story_synthesis_concurrency("some-other-model"),
             config_module.DEFAULT_STORY_SYNTHESIS_CONCURRENCY,
         )
         self.assertEqual(config_module.infer_model_backend("other-model"), "mlx-lm")
-        # Legacy raw Qwythos references fail fast like the aliases (issue #124);
-        # the retained "qwythos" routing branch only serves non-listed raw ids.
-        with self.assertRaisesRegex(ValueError, "Unsupported model reference"):
-            config_module.infer_model_backend(config_module.QWWYTHOS_9B_4BIT_MODEL_REFERENCE)
+        # Raw GGUF references infer the managed llama.cpp backend (issue
+        # #75); the retained "qwythos" heuristic branch only serves non-GGUF
+        # raw ids.
+        self.assertEqual(
+            config_module.infer_model_backend(config_module.QWWYTHOS_9B_4BIT_MODEL_REFERENCE),
+            config_module.MODEL_BACKEND_LLAMA_CPP,
+        )
         self.assertEqual(config_module.infer_model_backend("someone/qwythos-other-raw-id"), "mlx-vlm")
 
         with patch.dict(os.environ, {config_module.PRESET_ENV_VAR: "sample"}, clear=True):

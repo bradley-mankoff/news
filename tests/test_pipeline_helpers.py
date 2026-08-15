@@ -1919,6 +1919,222 @@ class PipelineHelperTests(unittest.TestCase):
             self.assertFalse(pipeline.MANAGED_MODEL_SERVER_EXTERNAL)
             self.assertFalse(pipeline.MANAGED_MODEL_SERVER_READY)
 
+    def test_llama_cpp_managed_server_uses_generic_lifecycle(self) -> None:
+        """A llama.cpp assignment runs through the exact managed lifecycle:
+        binary check before Popen, /models readiness, generation probe, and
+        no external flag (issue #75)."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            log_path = Path(tmpdir) / "model_server.log"
+            stack = contextlib.ExitStack()
+            stack.enter_context(patch.object(pipeline, "MODEL_BACKEND", "llama.cpp"))
+            stack.enter_context(
+                patch.object(
+                    pipeline, "MODEL_SERVER_COMMAND",
+                    "llama-server --model '/models/a; echo pwned.gguf' --alias 'a model'",
+                )
+            )
+            stack.enter_context(
+                patch.object(
+                    pipeline, "MODEL_SERVER_SETTINGS",
+                    SimpleNamespace(llama_cpp_binary="llama-server"),
+                )
+            )
+            stack.enter_context(patch.object(pipeline, "MANAGED_MODEL_SERVER_READY", False))
+            stack.enter_context(patch.object(pipeline, "MANAGED_MODEL_SERVER_EXTERNAL", False))
+            stack.enter_context(patch.object(pipeline, "MANAGED_MODEL_SERVER_PROCESS", None))
+            stack.enter_context(patch.object(pipeline, "MANAGED_MODEL_SERVER_LOG_FILE", None))
+            stack.enter_context(patch.object(pipeline, "ensure_codex_safe_model_reference"))
+            binary_check = stack.enter_context(
+                patch.object(
+                    pipeline,
+                    "ensure_llama_cpp_server_available",
+                    return_value="/opt/llama/llama-server",
+                )
+            )
+            stack.enter_context(
+                patch.object(
+                    pipeline, "preflight_model_server",
+                    return_value={"ok": False, "error": "connection refused"},
+                )
+            )
+            stack.enter_context(
+                patch.object(
+                    pipeline, "_managed_model_server_log_path", return_value=str(log_path),
+                )
+            )
+            popen = stack.enter_context(
+                patch.object(pipeline.subprocess, "Popen", return_value=MagicMock())
+            )
+            wait = stack.enter_context(
+                patch.object(
+                    pipeline, "_wait_for_managed_model_server",
+                    return_value={"ok": True, "served_models": ["owner/repo/model.gguf"]},
+                )
+            )
+            probe = stack.enter_context(
+                patch.object(pipeline, "probe_model_generation", return_value={"ok": True})
+            )
+            stack.enter_context(patch.object(pipeline.time, "sleep", return_value=None))
+            stack.enter_context(patch.object(pipeline, "_raise_if_managed_model_server_exited"))
+            stack.enter_context(patch.object(pipeline, "record_activity_snapshot"))
+            stack.enter_context(patch.object(pipeline.progress_tracker, "start_meter"))
+            stack.enter_context(patch.object(pipeline.progress_tracker, "update_meter"))
+            stack.enter_context(patch.object(pipeline.progress_tracker, "finish_meter"))
+            stack.enter_context(patch.object(pipeline.progress_tracker, "detail"))
+            with stack:
+                pipeline._ensure_main_model_server_ready()
+
+                binary_check.assert_called_once_with("llama-server")
+                popen.assert_called_once()
+                args, kwargs = popen.call_args
+                self.assertEqual(
+                    args[0],
+                    [
+                        "llama-server",
+                        "--model",
+                        "/models/a; echo pwned.gguf",
+                        "--alias",
+                        "a model",
+                    ],
+                )
+                self.assertEqual(kwargs["cwd"], str(pipeline.CONFIG.root_dir))
+                self.assertIs(kwargs["stderr"], pipeline.subprocess.STDOUT)
+                self.assertTrue(kwargs["start_new_session"])
+                self.assertTrue(kwargs["text"])
+                wait.assert_called_once_with(pipeline.MANAGED_MODEL_SERVER_PROCESS)
+                probe.assert_called_once_with()
+                self.assertFalse(pipeline.MANAGED_MODEL_SERVER_EXTERNAL)
+                self.assertTrue(pipeline.MANAGED_MODEL_SERVER_READY)
+                self.assertIsNotNone(pipeline.MANAGED_MODEL_SERVER_PROCESS)
+            self.assertTrue(log_path.exists())
+
+    def test_llama_cpp_missing_binary_fails_before_spawn(self) -> None:
+        """A missing llama-server binary fails with actionable guidance
+        before Popen and before any log file is created (issue #75)."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            log_path = Path(tmpdir) / "model_server.log"
+            stack = contextlib.ExitStack()
+            stack.enter_context(patch.object(pipeline, "MODEL_BACKEND", "llama.cpp"))
+            stack.enter_context(
+                patch.object(pipeline, "MODEL_SERVER_COMMAND", "llama-server --model x.gguf")
+            )
+            stack.enter_context(
+                patch.object(
+                    pipeline, "MODEL_SERVER_SETTINGS",
+                    SimpleNamespace(llama_cpp_binary="llama-server"),
+                )
+            )
+            stack.enter_context(patch.object(pipeline, "MANAGED_MODEL_SERVER_READY", False))
+            stack.enter_context(patch.object(pipeline, "MANAGED_MODEL_SERVER_EXTERNAL", False))
+            stack.enter_context(patch.object(pipeline, "MANAGED_MODEL_SERVER_PROCESS", None))
+            stack.enter_context(patch.object(pipeline, "MANAGED_MODEL_SERVER_LOG_FILE", None))
+            stack.enter_context(patch.object(pipeline, "ensure_codex_safe_model_reference"))
+            stack.enter_context(
+                patch.object(
+                    pipeline,
+                    "ensure_llama_cpp_server_available",
+                    side_effect=RuntimeError(
+                        "llama.cpp server binary 'llama-server' is not available. "
+                        "Install an official llama.cpp release "
+                        "(https://github.com/ggml-org/llama.cpp/releases) ... "
+                        "or set NEWS_LLAMA_CPP_SERVER to the installed executable path."
+                    ),
+                )
+            )
+            stack.enter_context(
+                patch.object(
+                    pipeline, "preflight_model_server",
+                    return_value={"ok": False, "error": "connection refused"},
+                )
+            )
+            stack.enter_context(
+                patch.object(
+                    pipeline, "_managed_model_server_log_path", return_value=str(log_path),
+                )
+            )
+            stack.enter_context(
+                patch.object(
+                    pipeline.subprocess,
+                    "Popen",
+                    side_effect=AssertionError("must not spawn without a binary check"),
+                )
+            )
+            with stack:
+                with self.assertRaisesRegex(RuntimeError, "NEWS_LLAMA_CPP_SERVER"):
+                    pipeline._ensure_main_model_server_ready()
+
+                self.assertIsNone(pipeline.MANAGED_MODEL_SERVER_PROCESS)
+                self.assertFalse(pipeline.MANAGED_MODEL_SERVER_READY)
+                self.assertFalse(pipeline.MANAGED_MODEL_SERVER_EXTERNAL)
+            self.assertFalse(log_path.exists())
+
+    def test_mlx_managed_server_skips_llama_binary_check(self) -> None:
+        """The native llama.cpp binary check must never run for MLX backends;
+        the generic managed lifecycle stays untouched (issue #75)."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            log_path = Path(tmpdir) / "model_server.log"
+            stack = contextlib.ExitStack()
+            stack.enter_context(patch.object(pipeline, "MODEL_BACKEND", "mlx-lm"))
+            stack.enter_context(
+                patch.object(
+                    pipeline, "MODEL_SERVER_COMMAND",
+                    "uv run python -m mlx_lm server --model m",
+                )
+            )
+            stack.enter_context(
+                patch.object(
+                    pipeline, "MODEL_SERVER_SETTINGS",
+                    SimpleNamespace(llama_cpp_binary="llama-server"),
+                )
+            )
+            stack.enter_context(patch.object(pipeline, "MANAGED_MODEL_SERVER_READY", False))
+            stack.enter_context(patch.object(pipeline, "MANAGED_MODEL_SERVER_EXTERNAL", False))
+            stack.enter_context(patch.object(pipeline, "MANAGED_MODEL_SERVER_PROCESS", None))
+            stack.enter_context(patch.object(pipeline, "MANAGED_MODEL_SERVER_LOG_FILE", None))
+            stack.enter_context(patch.object(pipeline, "ensure_codex_safe_model_reference"))
+            stack.enter_context(
+                patch.object(
+                    pipeline,
+                    "ensure_llama_cpp_server_available",
+                    side_effect=AssertionError("must not check llama binary for mlx"),
+                )
+            )
+            stack.enter_context(
+                patch.object(
+                    pipeline, "preflight_model_server",
+                    return_value={"ok": False, "error": "connection refused"},
+                )
+            )
+            stack.enter_context(
+                patch.object(
+                    pipeline, "_managed_model_server_log_path", return_value=str(log_path),
+                )
+            )
+            stack.enter_context(
+                patch.object(pipeline.subprocess, "Popen", return_value=MagicMock())
+            )
+            stack.enter_context(
+                patch.object(
+                    pipeline, "_wait_for_managed_model_server",
+                    return_value={"ok": True, "served_models": ["m"]},
+                )
+            )
+            stack.enter_context(
+                patch.object(pipeline, "probe_model_generation", return_value={"ok": True})
+            )
+            stack.enter_context(patch.object(pipeline.time, "sleep", return_value=None))
+            stack.enter_context(patch.object(pipeline, "_raise_if_managed_model_server_exited"))
+            stack.enter_context(patch.object(pipeline, "record_activity_snapshot"))
+            stack.enter_context(patch.object(pipeline.progress_tracker, "start_meter"))
+            stack.enter_context(patch.object(pipeline.progress_tracker, "update_meter"))
+            stack.enter_context(patch.object(pipeline.progress_tracker, "finish_meter"))
+            stack.enter_context(patch.object(pipeline.progress_tracker, "detail"))
+            with stack:
+                pipeline._ensure_main_model_server_ready()
+
+                self.assertFalse(pipeline.MANAGED_MODEL_SERVER_EXTERNAL)
+                self.assertTrue(pipeline.MANAGED_MODEL_SERVER_READY)
+
     def test_progress_tracker_and_run_logging_branches(self) -> None:
         stream = StringIO()
         tracker = pipeline.ProgressTracker(stream=stream, show_meter_detail=True)

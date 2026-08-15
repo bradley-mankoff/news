@@ -100,6 +100,7 @@ from .config import (
     RuntimeConfig,
     DEFAULT_TITLE_GENERATION_MAX_TOKENS,
     MODEL_BACKEND_EXTERNAL,
+    MODEL_BACKEND_LLAMA_CPP,
     MODEL_TASK_ARTICLE_SUMMARY,
     MODEL_TASK_IMAGE_ART_DIRECTION,
     MODEL_TASK_STORY_DISCOVERY,
@@ -121,6 +122,7 @@ from .config import (
     update_recipient_pause_setting,
 
 )
+from .llama_cpp_adapter import ensure_llama_cpp_server_available
 from .diagnostics import RunDiagnostics
 from . import run_log
 from .run_finalizer import RunFinalizer, RunFinalizerAdapters, RunFinalizerConfig
@@ -5250,6 +5252,13 @@ def _ensure_main_model_server_ready() -> None:
                 f"Expected {MODEL_REFERENCE} / {MODEL_NAME}; served {served_models}. "
                 "Stop the existing server or choose another NEWS_MODEL_BASE_URL."
             )
+
+        if MODEL_BACKEND == MODEL_BACKEND_LLAMA_CPP:
+            # The native llama-server binary is an operator-installed
+            # prerequisite (official llama.cpp releases). It is checked only
+            # at actual run launch - never during Runtime Config resolution or
+            # UI preview - and failures are actionable before any spawn.
+            ensure_llama_cpp_server_available(MODEL_SERVER_SETTINGS.llama_cpp_binary)
 
         log_path = _managed_model_server_log_path()
         command = shlex.split(MODEL_SERVER_COMMAND)
