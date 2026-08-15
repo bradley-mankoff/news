@@ -233,7 +233,7 @@ def _runtime_snapshot(
                 "backend": config.model_backend,
                 "base_url": config.model_base_url,
                 "concurrency": config.model_concurrency,
-                "concurrency_source": "derived_from_model_stage_concurrency",
+                "concurrency_source": "derived_from_stage_concurrency",
                 "article_summary_concurrency": config.article_summary_concurrency,
                 "story_synthesis_concurrency": config.story_synthesis_concurrency,
                 "server_command": config.model_server_command,
@@ -2573,6 +2573,18 @@ HTML = r"""<!doctype html>
     function knobByEnv(env) {
       return (state.schema && state.schema.knobs || []).find(knob => knob.env === env) || null;
     }
+    // Effective NEWS_MODEL_BACKEND: an explicit control value wins; an
+    // empty/unset control resolves to the registry's fixed default, matching
+    // config resolution (issue #169). The DOM value is never rewritten, so
+    // submitted override semantics stay unchanged.
+    function effectiveModelBackend() {
+      const current = String(currentControlValue("NEWS_MODEL_BACKEND") || "").trim();
+      if (current) return current;
+      const knob = knobByEnv("NEWS_MODEL_BACKEND");
+      return knob && knob.default !== undefined && knob.default !== null && knob.default !== ""
+        ? String(knob.default)
+        : "";
+    }
     function inputForKnob(knob, { emptyLabel, optionLabels = {}, id = "" } = {}) {
       const current = currentControlValue(knob.env);
       const idAttr = id ? ` id="${escapeHtml(id)}"` : "";
@@ -4557,15 +4569,16 @@ HTML = r"""<!doctype html>
       renderModelBackendHint(requiredBackendForSelectedModel());
     }
     // Live compatibility hint under the Default model control: compares the
-    // selected model's known backend with the explicit NEWS_MODEL_BACKEND
-    // override (unsaved Advanced Settings edits included via
+    // selected model's known backend with the effective NEWS_MODEL_BACKEND
+    // (explicit control value, or the fixed registry default when the
+    // control is empty; unsaved Advanced Settings edits included via
     // currentControlValue). Never mutates the backend control; an empty
-    // override means config.py infers the backend from the model.
+    // override means the fixed default applies, not model inference.
     function renderModelBackendHint(requiredBackend = "") {
       const hint = document.getElementById("modelBackendHint");
       if (!hint) return;
       const required = String(requiredBackend || "").trim();
-      const current = String(currentControlValue("NEWS_MODEL_BACKEND") || "").trim();
+      const current = effectiveModelBackend();
       if (!required || !current) {
         // Unknown model/status or unset override: no conflict to report.
         hint.textContent = "";
@@ -4628,7 +4641,7 @@ HTML = r"""<!doctype html>
       });
     }
     function refreshHuggingFaceUseButtons() {
-      const backendExternal = currentControlValue("NEWS_MODEL_BACKEND") === "external";
+      const backendExternal = effectiveModelBackend() === "external";
       document.querySelectorAll("[data-use-hf-model]").forEach(btn => {
         const disabled = btn.dataset.useHfBackend === "external" && !backendExternal;
         btn.disabled = disabled;
@@ -4659,7 +4672,7 @@ HTML = r"""<!doctype html>
           container.innerHTML = `<p class="muted">No models found.</p>`;
           return;
         }
-        const backendExternal = currentControlValue("NEWS_MODEL_BACKEND") === "external";
+        const backendExternal = effectiveModelBackend() === "external";
         container.innerHTML = models.map(item => {
           const fit = item.runtime_fit || {};
           const fitLabel = runtimeFitLabels()[fit.status] || fit.status || "unknown";

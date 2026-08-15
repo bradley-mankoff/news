@@ -4783,7 +4783,7 @@ def _new_run_diagnostics(source_count: int) -> RunDiagnostics:
             "model_base_url": MODEL_BASE_URL,
             "model_backend": MODEL_BACKEND,
             "model_concurrency": MODEL_CONCURRENCY,
-            "model_concurrency_source": "derived_from_model_stage_concurrency",
+            "model_concurrency_source": "derived_from_stage_concurrency",
             "model_server_command": MODEL_SERVER_COMMAND,
             "model_assignments": _json_ready(MODEL_ASSIGNMENTS),
             "model_tuning": _json_ready(MODEL_TUNING),
