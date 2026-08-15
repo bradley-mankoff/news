@@ -132,6 +132,13 @@ def reconcile_untracked_runs(
             continue
         if runs is None:
             runs = fetch_workflow_runs(env)
+            lookup_error = getattr(runs, "error", None)
+            if lookup_error:
+                log(
+                    f"RUN LOOKUP UNAVAILABLE: {lookup_error}; "
+                    "retaining untracked-run markers"
+                )
+                return
         number = content["number"]
         run = latest_workflow_run(runs, issue_number=number)
         if not run:

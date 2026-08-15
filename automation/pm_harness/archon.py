@@ -270,6 +270,19 @@ class WorktreeLookup:
     error: str | None = None
 
 
+class WorktreeRecords(dict[str, dict[str, str]]):
+    """Legacy dict-shaped isolation records with lookup health."""
+
+    def __init__(
+        self,
+        records: dict[str, dict[str, str]] | None = None,
+        *,
+        error: str | None = None,
+    ) -> None:
+        super().__init__(records or {})
+        self.error = error
+
+
 def fetch_archon_worktrees(env: dict) -> WorktreeLookup:
     try:
         result = subprocess.run(
@@ -335,6 +348,10 @@ def resolve_worktree_info_with_health(
         if lookup.error:
             return None, lookup.error
         records = lookup.records
+    elif isinstance(lookup, WorktreeRecords):
+        if lookup.error:
+            return None, lookup.error
+        records = lookup
     elif isinstance(lookup, dict):
         # Preserve compatibility with callers/tests that provide legacy records.
         records = lookup
@@ -344,9 +361,9 @@ def resolve_worktree_info_with_health(
 
 
 def resolve_worktree_info(env: dict, issue_number: int) -> dict[str, str] | None:
-    """Find an Archon worktree record for an issue."""
-    info, _error = resolve_worktree_info_with_health(env, issue_number)
-    return info
+    """Find an Archon worktree record for an issue, preserving lookup health."""
+    info, error = resolve_worktree_info_with_health(env, issue_number)
+    return {"error": error} if error else info
 
 
 def resolve_worktree_branch(env: dict, issue_number: int) -> str | None:
