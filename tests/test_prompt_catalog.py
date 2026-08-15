@@ -116,26 +116,40 @@ def _capture_independent_art_title_prompts() -> dict[str, dict[str, str]]:
     golden baseline. Never calls a real model.
     """
     captured: dict[str, dict[str, str]] = {}
+    calls: list[str] = []
 
     def fake_invoke(_llm, messages, **_kwargs):
-        task_name = str(_kwargs.get("task_name"))
+        task_name = str(_kwargs["task_name"])
+        if len(messages) != 2:
+            raise AssertionError(f"expected system/user pair, got {len(messages)} messages")
+        calls.append(task_name)
         captured[task_name] = {
             "system": str(messages[0].content),
             "user": str(messages[1].content),
         }
         if task_name == "image art prompt generation":
             return AIMessage(content='{"image_prompt":"A documentary scene"}')
-        return AIMessage(content='{"overlay_headline":"Today in brief"}')
+        if task_name == "title generation":
+            return AIMessage(content='{"overlay_headline":"Today in brief"}')
+        raise AssertionError(f"unexpected task: {task_name}")
 
     with patch.object(pipeline, "build_chat_model", return_value=object()), patch.object(
         pipeline, "invoke_with_retries", side_effect=fake_invoke
     ):
-        pipeline.generate_image_art_brief(
+        result = pipeline.generate_image_art_brief(
             "Final output body.",
             "Sample report",
             prompt_instructions=prompt_catalog.DEFAULT_PROMPT_INSTRUCTIONS,
             prompt_templates=prompt_templates.DEFAULT_PROMPT_TEMPLATES,
         )
+    if calls != ["image art prompt generation", "title generation"]:
+        raise AssertionError(f"unexpected task call order: {calls}")
+    if "error" in result:
+        raise AssertionError(f"golden prompt capture used a fallback: {result['error']}")
+    if not result["image_prompt"].startswith("A documentary scene"):
+        raise AssertionError("fake image response did not complete normal parsing")
+    if result["overlay_headline"] != "Today in brief":
+        raise AssertionError("fake title response did not complete normal parsing")
     return captured
 
 
