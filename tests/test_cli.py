@@ -26,6 +26,23 @@ class CliTests(unittest.TestCase):
             code = cli.main(argv)
         return code, stdout.getvalue(), stderr.getvalue()
 
+    def _assert_json_search_error(
+        self,
+        code: int,
+        stdout: str,
+        stderr: str,
+        *,
+        query: str,
+        fragment: str,
+    ) -> None:
+        """Assert a JSON error envelope from `models search` failures."""
+        self.assertEqual(code, 2)
+        payload = json.loads(stdout)
+        self.assertEqual(payload["query"], query)
+        self.assertEqual(payload["models"], [])
+        self.assertIn(fragment, payload["error"])
+        self.assertIn(fragment, stderr)
+
     def test_help_output_prints_usage(self) -> None:
         code, stdout, stderr = self._invoke(["--help"])
 
@@ -365,12 +382,7 @@ class CliTests(unittest.TestCase):
 
         code, stdout, stderr = self._invoke(["models", "search", "--json"])
 
-        self.assertEqual(code, 2)
-        payload = json.loads(stdout)
-        self.assertEqual(payload["query"], "")
-        self.assertEqual(payload["models"], [])
-        self.assertIn("--query", payload["error"])
-        self.assertIn("--query", stderr)
+        self._assert_json_search_error(code, stdout, stderr, query="", fragment="--query")
 
     def test_models_search_query_value_named_json_keeps_human_output(self) -> None:
         fake_results = [
@@ -400,12 +412,7 @@ class CliTests(unittest.TestCase):
                 ["models", "search", "--json", "--query"]
             )
 
-        self.assertEqual(code, 2)
-        payload = json.loads(stdout)
-        self.assertEqual(payload["query"], "")
-        self.assertEqual(payload["models"], [])
-        self.assertIn("--query", payload["error"])
-        self.assertIn("--query", stderr)
+        self._assert_json_search_error(code, stdout, stderr, query="", fragment="--query")
         search.assert_not_called()
 
     def test_models_search_parser_defects_are_not_normalized_as_lookup_errors(self) -> None:
@@ -464,12 +471,9 @@ class CliTests(unittest.TestCase):
                 ["models", "search", "--json", "--query", "qwythos", "--task", "bogus"]
             )
 
-            self.assertEqual(code, 2)
-            payload = json.loads(stdout)
-            self.assertEqual(payload["query"], "qwythos")
-            self.assertEqual(payload["models"], [])
-            self.assertIn("Unknown search task 'bogus'", payload["error"])
-            self.assertIn("Unknown search task 'bogus'", stderr)
+            self._assert_json_search_error(
+                code, stdout, stderr, query="qwythos", fragment="Unknown search task 'bogus'"
+            )
 
             code, stdout, stderr = self._invoke(
                 ["models", "search", "--query", "qwythos", "--limit", "lots"]
@@ -483,12 +487,9 @@ class CliTests(unittest.TestCase):
                 ["models", "search", "--query", "qwythos", "--limit", "lots", "--json"]
             )
 
-            self.assertEqual(code, 2)
-            payload = json.loads(stdout)
-            self.assertEqual(payload["query"], "qwythos")
-            self.assertEqual(payload["models"], [])
-            self.assertIn("--limit must be an integer", payload["error"])
-            self.assertIn("--limit must be an integer", stderr)
+            self._assert_json_search_error(
+                code, stdout, stderr, query="qwythos", fragment="--limit must be an integer"
+            )
 
             search.assert_not_called()
 
