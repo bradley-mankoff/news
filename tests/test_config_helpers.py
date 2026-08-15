@@ -405,6 +405,151 @@ class ConfigHelperTests(unittest.TestCase):
                 model_backend="mlx-lm",
             )
 
+    def test_canonical_model_endpoint_is_the_single_equivalence_key(self) -> None:
+        canonical = "http://127.0.0.1:8080/v1"
+        variants = (
+            canonical + "/",
+            "HTTP://127.0.0.1:8080/v1",
+            "http://localhost:8080/v1",
+            "http://localhost.:8080/v1/",
+            "http://[::1]:8080/v1",
+            "http://[0:0:0:0:0:0:0:1]:8080/v1/",
+        )
+        key = config_module.canonical_model_endpoint(canonical)
+        for variant in variants:
+            self.assertEqual(config_module.canonical_model_endpoint(variant), key)
+        self.assertNotEqual(config_module.canonical_model_endpoint("http://127.0.0.1:8080/v2"), key)
+        self.assertNotEqual(config_module.canonical_model_endpoint("http://127.0.0.1:8081/v1"), key)
+        self.assertNotEqual(config_module.canonical_model_endpoint(""), key)
+        # Default ports fold into the key (http -> 80, https -> 443).
+        self.assertEqual(
+            config_module.canonical_model_endpoint("http://127.0.0.1/v1"),
+            config_module.canonical_model_endpoint("http://127.0.0.1:80/v1/"),
+        )
+        self.assertEqual(
+            config_module.canonical_model_endpoint("https://127.0.0.1/v1"),
+            config_module.canonical_model_endpoint("https://127.0.0.1:443/v1"),
+        )
+
+    def test_validate_managed_model_assignments_rejects_task_task_collision(self) -> None:
+        # Two non-default managed assignments on the same canonical endpoint
+        # with different models must fail early and identify the second task
+        # (issue #133): one managed server cannot serve both models.
+        with self.assertRaisesRegex(ValueError, "Task 'story_drafting'"):
+            config_module._validate_managed_model_assignments(
+                {
+                    "article_summary": SimpleNamespace(
+                        backend="mlx-lm",
+                        base_url="http://127.0.0.1:8090/v1",
+                        reference="mlx-community/model-a",
+                        name="mlx-community/model-a",
+                    ),
+                    "story_drafting": SimpleNamespace(
+                        backend="mlx-lm",
+                        base_url="http://localhost:8090/v1/",
+                        reference="mlx-community/model-b",
+                        name="mlx-community/model-b",
+                    ),
+                },
+                model_reference="main",
+                model_name="main",
+                model_base_url="http://127.0.0.1:8080/v1",
+                model_backend="mlx-lm",
+            )
+        # The rejection keeps the actionable shared-URL guidance.
+        with self.assertRaisesRegex(ValueError, "Set a per-task base URL"):
+            config_module._validate_managed_model_assignments(
+                {
+                    "article_summary": SimpleNamespace(
+                        backend="mlx-lm",
+                        base_url="http://127.0.0.1:8090/v1",
+                        reference="mlx-community/model-a",
+                        name="mlx-community/model-a",
+                    ),
+                    "title_generation": SimpleNamespace(
+                        backend="mlx-lm",
+                        base_url="http://127.0.0.1:8090/v1",
+                        reference="mlx-community/model-b",
+                        name="mlx-community/model-b",
+                    ),
+                },
+                model_reference="main",
+                model_name="main",
+                model_base_url="http://127.0.0.1:8080/v1",
+                model_backend="mlx-lm",
+            )
+
+    def test_validate_managed_model_assignments_shares_same_endpoint_same_model(self) -> None:
+        # Multiple tasks intentionally sharing one managed endpoint and model
+        # stay legal: only one server is needed for the whole group.
+        config_module._validate_managed_model_assignments(
+            {
+                "article_summary": SimpleNamespace(
+                    backend="mlx-lm",
+                    base_url="http://127.0.0.1:8090/v1",
+                    reference="mlx-community/shared",
+                    name="mlx-community/shared",
+                ),
+                "story_drafting": SimpleNamespace(
+                    backend="mlx-lm",
+                    base_url="http://localhost:8090/v1/",
+                    reference="mlx-community/shared",
+                    name="mlx-community/shared",
+                ),
+            },
+            model_reference="main",
+            model_name="main",
+            model_base_url="http://127.0.0.1:8080/v1",
+            model_backend="mlx-lm",
+        )  # no raise: same canonical endpoint, same model
+
+    def test_validate_managed_model_assignments_external_default_exempts_its_endpoint(self) -> None:
+        # When the default endpoint is external (caller-managed), assignments
+        # riding that endpoint stay external and may use different models;
+        # assignments on other endpoints are still managed and validated.
+        config_module._validate_managed_model_assignments(
+            {
+                "article_summary": SimpleNamespace(
+                    backend="mlx-lm",
+                    base_url="https://api.example.com/v1",
+                    reference="gemma-4-12b",
+                    name="mlx-community/gemma-4-12B-it-4bit",
+                ),
+                "story_drafting": SimpleNamespace(
+                    backend="mlx-lm",
+                    base_url="https://api.example.com/v1",
+                    reference="gemma-e2b-tiny",
+                    name="deadbydawn101/gemma-4-E2B-Heretic-Uncensored-mlx-4bit",
+                ),
+            },
+            model_reference="gemma-e2b-tiny",
+            model_name="deadbydawn101/gemma-4-E2B-Heretic-Uncensored-mlx-4bit",
+            model_base_url="https://api.example.com/v1",
+            model_backend="external",
+        )  # no raise: an external default endpoint serves many models
+        # The same task pair on a distinct endpoint is a managed collision.
+        with self.assertRaisesRegex(ValueError, "Task 'story_drafting'"):
+            config_module._validate_managed_model_assignments(
+                {
+                    "article_summary": SimpleNamespace(
+                        backend="mlx-lm",
+                        base_url="http://127.0.0.1:8090/v1",
+                        reference="gemma-4-12b",
+                        name="mlx-community/gemma-4-12B-it-4bit",
+                    ),
+                    "story_drafting": SimpleNamespace(
+                        backend="mlx-lm",
+                        base_url="http://localhost:8090/v1",
+                        reference="gemma-e2b-tiny",
+                        name="deadbydawn101/gemma-4-E2B-Heretic-Uncensored-mlx-4bit",
+                    ),
+                },
+                model_reference="gemma-e2b-tiny",
+                model_name="deadbydawn101/gemma-4-E2B-Heretic-Uncensored-mlx-4bit",
+                model_base_url="https://api.example.com/v1",
+                model_backend="external",
+            )
+
     def test_same_model_endpoint_tolerates_spelling_variants(self) -> None:
         canonical = "http://127.0.0.1:8080/v1"
         self.assertTrue(config_module.same_model_endpoint(canonical, canonical + "/"))
@@ -880,6 +1025,94 @@ class ConfigHelperTests(unittest.TestCase):
         self.assertIn("qwythos-9b-4bit", knob["options"])
         # prod preset now launches gemma
         self.assertEqual(config_module.run_preset_env("prod")["NEWS_MODEL"], "gemma-4-12b-it-4bit")
+
+    def test_translation_knobs_and_env_precedence_resolve_deterministically(self) -> None:
+        # UI schema exposes the opt-in translation knobs with the curated
+        # defaults (issue #172).
+        registry = config_module.runtime_knob_registry()
+        enabled_knob = next(k for k in registry if k["env"] == "NEWS_TRANSLATION_ENABLED")
+        self.assertEqual(enabled_knob["type"], "bool")
+        self.assertIs(enabled_knob["default"], False)
+        target_knob = next(k for k in registry if k["env"] == "NEWS_TRANSLATION_TARGET_LANGUAGE")
+        self.assertEqual(target_knob["default"], "en")
+        translation_model_knob = next(k for k in registry if k["env"] == "NEWS_MODEL_TRANSLATION")
+        self.assertIn("translategemma-4b-it-4bit", translation_model_knob["options"])
+        translation_url_knob = next(k for k in registry if k["env"] == "NEWS_MODEL_TRANSLATION_BASE_URL")
+        self.assertEqual(translation_url_knob["default"], "http://127.0.0.1:8081/v1")
+        compat_knob = next(k for k in registry if k["env"] == "NEWS_TRANSLATION_MODEL")
+        self.assertIn("translategemma-4b-it-4bit", compat_knob["options"])
+
+        # NEWS_MODEL_TRANSLATION (current task convention) wins over the
+        # historical NEWS_TRANSLATION_MODEL compatibility name.
+        config = config_module.load_runtime_config(
+            environ={},
+            overrides={
+                "NEWS_MODEL_TRANSLATION": "gemma-e2b-tiny",
+                "NEWS_TRANSLATION_MODEL": "translategemma-4b-it-4bit",
+                "NEWS_MODEL_TRANSLATION_BASE_URL": "http://127.0.0.1:9001/v1",
+                "NEWS_TRANSLATION_BASE_URL": "http://127.0.0.1:9002/v1",
+                "NEWS_TRANSLATION_ENABLED": "1",
+                "NEWS_TRANSLATION_TARGET_LANGUAGE": "zh_Hans",
+                "NEWS_TRANSLATION_MAX_TOKENS": "900",
+            },
+            materialize_outputs=False,
+        )
+        translation = config.model_assignments[config_module.MODEL_TASK_TRANSLATION]
+        self.assertEqual(translation.reference, "gemma-e2b-tiny")
+        self.assertEqual(translation.base_url, "http://127.0.0.1:9001/v1")
+        self.assertTrue(config.translation_enabled)
+        self.assertEqual(config.translation_target_language, "zh-hans")
+        self.assertEqual(translation.tuning.translation_max_tokens, 900)
+
+        # Legacy-only names still resolve when the task-convention names are
+        # unset, and the distinct default endpoint avoids main-server
+        # collisions.
+        config = config_module.load_runtime_config(
+            environ={},
+            overrides={"NEWS_TRANSLATION_MODEL": "gemma-e2b-tiny"},
+            materialize_outputs=False,
+        )
+        translation = config.model_assignments[config_module.MODEL_TASK_TRANSLATION]
+        self.assertEqual(translation.reference, "gemma-e2b-tiny")
+        self.assertEqual(
+            translation.base_url,
+            config_module.DEFAULT_TRANSLATION_MODEL_BASE_URL,
+        )
+        self.assertNotEqual(
+            translation.base_url,
+            config.model_assignments["default"].base_url,
+        )
+
+    def test_translation_assignment_sharing_main_endpoint_with_different_model_fails(self) -> None:
+        # The dedicated translation assignment must never silently ride the
+        # main model server with a different model identity (issue #172):
+        # config validation rejects the collision before source collection.
+        with self.assertRaisesRegex(ValueError, "Task 'translation'"):
+            config_module.load_runtime_config(
+                environ={},
+                overrides={
+                    "NEWS_MODEL": "gemma-4-12b-it-4bit",
+                    "NEWS_MODEL_TRANSLATION": "gemma-e2b-tiny",
+                    "NEWS_MODEL_TRANSLATION_BASE_URL": "http://127.0.0.1:8080/v1",
+                },
+                materialize_outputs=False,
+            )
+
+    def test_translation_sampling_group_and_tuning_preset_env(self) -> None:
+        config = config_module.load_runtime_config(
+            environ={},
+            overrides={"NEWS_MODEL_TRANSLATION_TEMPERATURE": "0.2"},
+            materialize_outputs=False,
+        )
+        translation = config.model_assignments[config_module.MODEL_TASK_TRANSLATION]
+        self.assertEqual(
+            translation.tuning.task_sampling["translation"].temperature,
+            0.2,
+        )
+        self.assertEqual(
+            config_module._task_max_tokens_field(config_module.MODEL_TASK_TRANSLATION),
+            "translation_max_tokens",
+        )
 
     def test_yaml_scope_and_runtime_config_helpers_cover_edge_branches(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

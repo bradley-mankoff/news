@@ -109,8 +109,10 @@ MODEL_RECOMMENDATION_TASK_NOTES: dict[str, str] = {
         "long source text intact across all stages."
     ),
     "translation": (
-        "No verified curated model yet; the translation stage is not "
-        "implemented in this release - search below for a candidate."
+        "Use the curated TranslateGemma 4B Instruct MLX conversion "
+        "(mlx-community/translategemma-4b-it-4bit) for declared-language "
+        "article translation; its structured source/target language-code "
+        "prompt is the verified path for this stage."
     ),
 }
 
@@ -136,6 +138,25 @@ class CatalogModel:
 # hf_repo page id. Adding more requires runtime verification on Apple Silicon
 # or an operator-installed llama-server binary - out of scope for this issue.
 BUILTIN_CATALOG_MODELS: dict[str, CatalogModel] = {
+    "translategemma-4b-it-4bit": CatalogModel(
+        alias="translategemma-4b-it-4bit",
+        reference="mlx-community/translategemma-4b-it-4bit",
+        name="TranslateGemma 4B Instruct (4-bit)",
+        backend="mlx-lm",
+        hf_repo="mlx-community/translategemma-4b-it-4bit",
+        context_length=None,
+        description=(
+            "The verified translation pick: the 4B TranslateGemma instruct "
+            "model as the mlx-community 4-bit MLX distribution, served by the "
+            "managed mlx-lm backend. Uses the structured language-code chat "
+            "template; larger 12B/27B variants are not the curated default "
+            "assignment. Requires Gemma license acceptance and Hugging Face "
+            "authentication on the operator machine."
+        ),
+        task_notes={
+            "translation": MODEL_RECOMMENDATION_TASK_NOTES["translation"],
+        },
+    ),
     "gemma-4-12b-it-4bit": CatalogModel(
         alias="gemma-4-12b-it-4bit",
         reference="mlx-community/gemma-4-12B-it-4bit",
@@ -575,8 +596,7 @@ def recommend_models(task: str) -> list[dict[str, Any]]:
 
     Entries that carry a task note come first (catalog order), then the
     default model as a fallback when it is not already included. Returns an
-    empty list when no curated entry covers the task (translation - the honest
-    documented gap).
+    empty list when no curated entry covers the task.
     """
     if task not in MODEL_RECOMMENDATION_TASKS:
         raise ValueError(

@@ -265,6 +265,7 @@ class RunDiagnostics:
         story_selection = _last_event(self.events, "global_story_selection")
         scale_screening = _last_event(self.events, "global_story_scale_screening")
         coverage_deficit = _last_event(self.events, "story_coverage_deficit")
+        translation = _last_event(self.events, "translation")
         contradiction_analytics = story_drafting.get("contradiction_analytics") or {}
 
         model_calls: Counter[str] = Counter()
@@ -323,6 +324,9 @@ class RunDiagnostics:
             "article_budget_candidate_count": _safe_int(self.article_budget.get("candidate_count")),
             "article_budget_included_count": _safe_int(self.article_budget.get("included_count")),
             "article_budget_dropped_count": _safe_int(self.article_budget.get("dropped_count")),
+            "translated_count": _safe_int(translation.get("translated_count")),
+            "translation_unchanged_count": _safe_int(translation.get("unchanged_count")),
+            "translation_skipped_count": _safe_int(translation.get("skipped_unknown_language")),
             "article_summary_count": self.article_summary_count,
             "model_call_count": sum(_safe_int(value) for value in model_calls.values()),
             "model_calls": dict(model_calls),
@@ -351,6 +355,8 @@ class RunDiagnostics:
             f"- Duration: {stats['duration']}",
             f"- Preset: {self.settings.get('preset_id') or 'custom'}",
             f"- Source scope: {self.settings.get('source_scope') or 'unknown'}",
+            f"- Translation enabled: {self.settings.get('translation_enabled')}",
+            f"- Translation target: {self.settings.get('translation_target_language') or 'unknown'}",
             f"- Source languages: {self.settings.get('source_languages') or 'unknown'}",
             f"- Recipient scope: {self.settings.get('recipient_scope') or 'unknown'}",
             f"- URL reuse blocking: {self.settings.get('url_reuse_blocking_enabled')}",
@@ -363,6 +369,9 @@ class RunDiagnostics:
             f"- Feed items parsed: {stats['feed_item_count']}",
             f"- Candidate feed items selected: {stats['selected_item_count']}",
             f"- Fresh article targets after history/dedupe: {stats['fresh_article_count']}",
+            f"- Article targets translated: {stats['translated_count']}",
+            f"- Article targets unchanged after translation: {stats['translation_unchanged_count']}",
+            f"- Translation candidates skipped (unknown language): {stats['translation_skipped_count']}",
             f"- Story groups retained: {stats['story_count']}",
             f"- Article targets retained after story grouping: {stats['story_included_count']}",
             f"- Article targets dropped before summary: {stats['story_dropped_count']}",
@@ -502,6 +511,7 @@ class RunDiagnostics:
             f"| Story Scale Screening model | {_table_value(_model_assignment_value(settings, 'story_scale_screening'))} |",
             f"| Title Generation model | {_table_value(_model_assignment_value(settings, 'title_generation'))} |",
             f"| Image Art Direction model | {_table_value(_model_assignment_value(settings, 'image_art_direction'))} |",
+            f"| Translation model | {_table_value(_model_assignment_value(settings, 'translation'))} |",
             f"| Model backend(s) | {_table_value(_model_backend_value(settings))} |",
             f"| Model input cap | {_table_value(settings.get('model_max_input_tokens'))} |",
             f"| Article summary cap | {_table_value(settings.get('article_summary_max_tokens'))} |",
@@ -514,6 +524,8 @@ class RunDiagnostics:
             f"| Story similarity threshold | {_table_value(settings.get('story_cluster_similarity_threshold'))} |",
             f"| Story overlap threshold | {_table_value(settings.get('story_selection_overlap_threshold'))} |",
             f"| Source scope | {_table_value(settings.get('source_scope'))} |",
+            f"| Translation enabled | {_table_value(settings.get('translation_enabled'))} |",
+            f"| Translation target | {_table_value(settings.get('translation_target_language'))} |",
             f"| Source languages | {_table_value(settings.get('source_languages'))} |",
             f"| Recipient scope | {_table_value(settings.get('recipient_scope'))} |",
             f"| URL reuse blocking | {_table_value(settings.get('url_reuse_blocking_enabled'))} |",
@@ -542,6 +554,9 @@ class RunDiagnostics:
             f"| Feed items parsed | {_table_value(stats['feed_item_count'])} |",
             f"| Candidate items selected | {_table_value(stats['selected_item_count'])} |",
             f"| Fresh after history/dedupe | {_table_value(stats['fresh_article_count'])} |",
+            f"| Article targets translated | {_table_value(stats['translated_count'])} |",
+            f"| Article targets unchanged after translation | {_table_value(stats['translation_unchanged_count'])} |",
+            f"| Translation candidates skipped (unknown language) | {_table_value(stats['translation_skipped_count'])} |",
             f"| Article targets retained after story grouping | {_table_value(stats['story_included_count'])} |",
             f"| Article targets dropped before summary | {_table_value(stats['story_dropped_count'])} |",
             f"| Story drafts generated | {_table_value(stats['story_draft_count'])} |",
@@ -928,6 +943,7 @@ def _model_backend_value(settings: dict[str, Any]) -> str:
         "story_scale_screening",
         "title_generation",
         "image_art_direction",
+        "translation",
     ):
         record = assignments.get(task)
         if not isinstance(record, dict):
@@ -1113,6 +1129,8 @@ def _model_call_bucket(task_name: str) -> str:
         return "article_summary"
     if normalized.startswith("story synthesis for "):
         return "story_synthesis"
+    if normalized.startswith("translation for "):
+        return "translation"
     clean = normalized.replace(" ", "_")
     return clean or "unknown"
 

@@ -30,7 +30,9 @@ is defined in
 | `NEWS_PROMPT_OVERRIDE_<TASK>` | _(unset)_ | Per-stage editorial override layered on top of `NEWS_PROMPT_PROFILE` and `config/prompt_overrides.yaml` (override wins). Tasks: `ARTICLE_SUMMARY`, `STORY_SCALE_SCREENING`, `STORY_DRAFTING`, `TITLE_GENERATION`, `IMAGE_ART_DIRECTION`. Unset/empty = use profile text. Editable from the UI's Editorial approach panel. |
 | `NEWS_PROMPT_TEMPLATE_<TASK>` | _(unset)_ | Advanced full-template override (ADR 0015): a JSON object `{"system": ..., "user": ...}` of Python `string.Template` texts replacing the whole system/user prompt for that task. Tasks match `NEWS_PROMPT_OVERRIDE_<TASK>`. Unset/empty = built-in template. Non-empty values must parse and validate (required placeholders, contract markers) or config resolution fails. Editable from the Advanced Settings full-template editors. |
 | `NEWS_MODEL` | `gemma-4-12b-it-4bit` | Default friendly alias or full model repo/name. Task-specific model assignments inherit this value unless overridden. Stages with no LLM call of their own (story discovery) inherit this value. |
-| `NEWS_SOURCE_SCOPE` | `core` | `core` selects active English core sources. `peripheral` selects core plus peripheral sources. |
+| `NEWS_SOURCE_SCOPE` | `core` | `core` selects active English core sources. `peripheral` selects core plus peripheral sources. With `NEWS_TRANSLATION_ENABLED=1`, selected tiers additionally include sources with any declared non-empty `language` (missing-language sources stay excluded). |
+| `NEWS_TRANSLATION_ENABLED` | `0` | `1` enables the opt-in translation stage: declared non-English bodies are translated to the target language before global story clustering. Disabled runs keep English-only source selection and never load a translation model. |
+| `NEWS_TRANSLATION_TARGET_LANGUAGE` | `en` | Normalized target language code for the translation stage (`_` folds to `-`). |
 | `NEWS_DELIVERY_MODE` | `owner` | Optional email delivery policy: `disabled` (no delivery, `skipped: user_disabled`), `owner` (sends only to `NEWS_PRIMARY_RECIPIENT`), or `recipients` (explicit opt-in: active `config/recipients.yaml` entries, with the owner included only when listed). An explicitly configured `NEWS_EMAIL_RECIPIENTS` fallback is used only when the catalog is empty; an all-paused catalog records `skipped: user_disabled`. Legacy `NEWS_RECIPIENT_SCOPE` maps to this mode when the new variable is unset. |
 | `NEWS_RECIPIENT_SCOPE` | `primary` | Legacy migration value: `primary` maps to `NEWS_DELIVERY_MODE=owner`, `all` maps to `recipients`. Prefer `NEWS_DELIVERY_MODE`. |
 | `NEWS_PRIMARY_RECIPIENT` | `primary@example.com` | Owner recipient used by `owner` delivery mode. |
@@ -47,6 +49,7 @@ is defined in
 | `NEWS_STORY_SCALE_SCREENING_MAX_TOKENS` | `3000` | Model Tuning token limit for each global story scale screening call. |
 | `NEWS_TITLE_GENERATION_MAX_TOKENS` | `700` | Model Tuning token limit for the title generation call. |
 | `NEWS_IMAGE_ART_DIRECTION_MAX_TOKENS` | `700` | Model Tuning token limit for the image art direction call. |
+| `NEWS_TRANSLATION_MAX_TOKENS` | `1800` | Model Tuning token limit for each translation call. |
 
 ## Renamed settings (migration note)
 
@@ -70,7 +73,7 @@ The `bradley` terminology was replaced with `primary` (issue #23):
 | `NEWS_MODEL_PRESENCE_PENALTY`, `NEWS_MODEL_REPETITION_PENALTY` | Default repetition controls. |
 | `NEWS_MODEL_REASONING_TEMPERATURE`, `NEWS_MODEL_REASONING_TOP_P`, `NEWS_MODEL_REASONING_TOP_K`, `NEWS_MODEL_REASONING_MIN_P` | Sampling settings for reasoning-heavy tasks. |
 | `NEWS_MODEL_REASONING_PRESENCE_PENALTY`, `NEWS_MODEL_REASONING_REPETITION_PENALTY` | Reasoning-task repetition controls. |
-| `NEWS_MODEL_STORY_DISCOVERY_*`, `NEWS_MODEL_STORY_SCALE_SCREENING_*`, `NEWS_MODEL_ARTICLE_SUMMARY_*`, `NEWS_MODEL_STORY_DRAFTING_*`, `NEWS_MODEL_TITLE_GENERATION_*`, `NEWS_MODEL_IMAGE_ART_DIRECTION_*` | Per-task sampling overrides using the same suffixes as the default sampling group. `NEWS_MODEL_STORY_DISCOVERY_*` is retained for compatibility: story discovery has no LLM stage (embedding/TF-IDF clustering). Image Art Direction is an independent LLM stage with its own `NEWS_MODEL_IMAGE_ART_DIRECTION_*` group. |
+| `NEWS_MODEL_STORY_DISCOVERY_*`, `NEWS_MODEL_STORY_SCALE_SCREENING_*`, `NEWS_MODEL_ARTICLE_SUMMARY_*`, `NEWS_MODEL_STORY_DRAFTING_*`, `NEWS_MODEL_TITLE_GENERATION_*`, `NEWS_MODEL_IMAGE_ART_DIRECTION_*`, `NEWS_MODEL_TRANSLATION_*` | Per-task sampling overrides using the same suffixes as the default sampling group. `NEWS_MODEL_STORY_DISCOVERY_*` is retained for compatibility: story discovery has no LLM stage (embedding/TF-IDF clustering). Image Art Direction is an independent LLM stage with its own `NEWS_MODEL_IMAGE_ART_DIRECTION_*` group; Translation is an independent LLM stage with its own `NEWS_MODEL_TRANSLATION_*` group. |
 
 ## Models
 
@@ -78,6 +81,7 @@ Built-in model aliases:
 
 | Alias | Resolved model | Hugging Face page |
 |---|---|---|
+| `translategemma-4b-it-4bit` | `mlx-community/translategemma-4b-it-4bit` (curated translation model; gated Gemma weights — requires Hugging Face authentication and Gemma license acceptance) | [mlx-community/translategemma-4b-it-4bit](https://huggingface.co/mlx-community/translategemma-4b-it-4bit) |
 | `gemma-e2b-tiny` | `deadbydawn101/gemma-4-E2B-Heretic-Uncensored-mlx-4bit` (kept as the Codex-safe test model) | [deadbydawn101/gemma-4-E2B-Heretic-Uncensored-mlx-4bit](https://huggingface.co/deadbydawn101/gemma-4-E2B-Heretic-Uncensored-mlx-4bit) |
 | `gemma-4-12b-it-4bit` | `mlx-community/gemma-4-12B-it-4bit` (default) | [mlx-community/gemma-4-12B-it-4bit](https://huggingface.co/mlx-community/gemma-4-12B-it-4bit) |
 | `qwythos-9b-4bit` | `huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-Q4_K.gguf` (managed `llama.cpp`) | [huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF](https://huggingface.co/huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF) |
@@ -96,13 +100,16 @@ Each model page shows Hugging Face's native Hardware Compatibility panel
 | `NEWS_MODEL_STORY_SCALE_SCREENING` | _(inherits `NEWS_MODEL`)_ | Model assignment for the global story scale screening LLM stage. |
 | `NEWS_MODEL_TITLE_GENERATION` | _(inherits `NEWS_MODEL`)_ | Model assignment for the title generation LLM stage (overlay headline). |
 | `NEWS_MODEL_IMAGE_ART_DIRECTION` | _(inherits `NEWS_MODEL`)_ | Model assignment for the image art direction LLM stage (text-free FLUX prompt). |
-| `NEWS_MODEL_STORY_SCALE_SCREENING_BASE_URL` | `http://127.0.0.1:8080/v1` | Model server endpoint for story scale screening calls. |
-| `NEWS_MODEL_TITLE_GENERATION_BASE_URL` | `http://127.0.0.1:8080/v1` | Model server endpoint for title generation calls. |
-| `NEWS_MODEL_IMAGE_ART_DIRECTION_BASE_URL` | `http://127.0.0.1:8080/v1` | Model server endpoint for image art direction calls. |
+| `NEWS_MODEL_TRANSLATION` | `translategemma-4b-it-4bit` | Model assignment for the translation LLM stage. The legacy `NEWS_TRANSLATION_MODEL` compatibility name still resolves when this is unset. |
+| `NEWS_MODEL_STORY_SCALE_SCREENING_BASE_URL` | `http://127.0.0.1:8080/v1` | Model server endpoint for story scale screening calls. A distinct managed URL is started, readiness-checked, routed, and stopped by the run itself. |
+| `NEWS_MODEL_TITLE_GENERATION_BASE_URL` | `http://127.0.0.1:8080/v1` | Model server endpoint for title generation calls. A distinct managed URL is started, readiness-checked, routed, and stopped by the run itself. |
+| `NEWS_MODEL_IMAGE_ART_DIRECTION_BASE_URL` | `http://127.0.0.1:8080/v1` | Model server endpoint for image art direction calls. A distinct managed URL is started, readiness-checked, routed, and stopped by the run itself. |
+| `NEWS_MODEL_TRANSLATION_BASE_URL` | `http://127.0.0.1:8081/v1` | Model server endpoint for translation calls, on a dedicated port so the translation model can never collide with the main server. The legacy `NEWS_TRANSLATION_BASE_URL` compatibility name still resolves when this is unset. |
 | `NEWS_MODEL_STORY_SCALE_SCREENING_TUNING_PRESET` | _(none)_ | Model Tuning Preset for the story scale screening stage. |
 | `NEWS_MODEL_TITLE_GENERATION_TUNING_PRESET` | _(none)_ | Model Tuning Preset for the title generation stage. |
 | `NEWS_MODEL_IMAGE_ART_DIRECTION_TUNING_PRESET` | _(none)_ | Model Tuning Preset for the image art direction stage. |
-| `NEWS_MODEL_BASE_URL` | `http://127.0.0.1:8080/v1` | OpenAI-compatible local model endpoint. |
+| `NEWS_MODEL_TRANSLATION_TUNING_PRESET` | _(none)_ | Model Tuning Preset for the translation stage. |
+| `NEWS_MODEL_BASE_URL` | `http://127.0.0.1:8080/v1` | OpenAI-compatible local model endpoint. For managed backends the URL's port is the server port the run owns; per-task `NEWS_MODEL_<TASK>_BASE_URL` overrides create additional owned servers for those tasks, one per distinct canonical endpoint, each started on demand and stopped with the run. Same endpoint plus a different managed model is rejected at configuration time; external endpoints are never spawned. |
 | `NEWS_LLAMA_CPP_SERVER` | `llama-server` | Path or `PATH` name of the native `llama-server` executable used by the managed `llama.cpp` backend (advanced). The application never installs or downloads the binary; a missing binary fails at run launch with installation guidance. |
 | `NEWS_CODEX_TESTING` | `0` | `1` forces Codex-safe model references for model-related verification. |
 
@@ -115,7 +122,13 @@ NEWS_MODEL=qwythos-9b-4bit NEWS_LLAMA_CPP_SERVER=/opt/llama/llama-server uv run 
 
 The llama.cpp preview prints the exact `llama-server` command (`--hf-repo`,
 `--hf-file`, `--alias`, localhost binding, concurrency, and max-token flags)
-without starting a server or downloading a model.
+without starting a server or downloading a model. Per-task commands are the
+same preview with that task's base URL and model (`NEWS_MODEL_<TASK>` and
+`NEWS_MODEL_<TASK>_BASE_URL`). During a run, the default server writes
+`model_server.log` next to the report output and additional managed
+endpoints write deterministic per-server logs
+(`model_server_<endpoint>-<model>.log`) in the same directory; a distinct
+URL therefore means a distinct owned process and log.
 
 ## Infrastructure
 
@@ -146,6 +159,12 @@ update, duplicate, delete, select, and preview commands for these presets.
 - `active: false` to exclude a source.
 - `language: en` for normal source selection.
 - `tier: core` and `tier: peripheral` with `NEWS_SOURCE_SCOPE`.
+
+With `NEWS_TRANSLATION_ENABLED=1`, sources in the selected tiers with any
+declared non-empty `language` are included and their scraped bodies are
+translated before global story clustering; missing-language sources stay
+excluded and source records are never auto-retagged. The `language` field is
+human-edited and authoritative.
 
 `config/recipients.yaml` stores the Delivery Profile's additional-recipient
 catalog. The checked-in file is a public template with an illustrative

@@ -353,6 +353,7 @@ def _article_candidates_from_source_context(
                 "wire_source": article.get("wire_source", ""),
                 "source_display_name": article.get("source_display_name", ""),
                 "description": article.get("description", ""),
+                "text": article.get("text", ""),
                 "relevance_score": 0,
             }
         )

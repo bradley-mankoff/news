@@ -1361,8 +1361,9 @@ assert(
             self.assertEqual(payload["sources"]["total"], 1)
             self.assertEqual(payload["recipients"]["total"], 1)
             # Model catalog keys are local-only (offline) additions.
-            self.assertEqual(len(payload["model_catalog"]), 4)
-            self.assertEqual(payload["model_catalog"][0]["alias"], "gemma-4-12b-it-4bit")
+            self.assertEqual(len(payload["model_catalog"]), 5)
+            self.assertEqual(payload["model_catalog"][0]["alias"], "translategemma-4b-it-4bit")
+            self.assertEqual(payload["model_catalog"][1]["alias"], "gemma-4-12b-it-4bit")
             self.assertIn("factual_extraction", payload["model_recommendation_tasks"])
             self.assertEqual(len(payload["model_recommendation_tasks"]), 7)
             # Server-owned recommendations: every task maps exactly to the
@@ -1375,7 +1376,10 @@ assert(
                     for task in model_catalog.MODEL_RECOMMENDATION_TASKS
                 },
             )
-            self.assertEqual(payload["model_recommendations"]["translation"], [])
+            self.assertEqual(
+                [pick["alias"] for pick in payload["model_recommendations"]["translation"]],
+                ["translategemma-4b-it-4bit", "gemma-4-12b-it-4bit"],
+            )
             self.assertEqual(
                 [pick["alias"] for pick in payload["model_recommendations"]["speed"]],
                 ["gemma-e2b-tiny", model_catalog.DEFAULT_CATALOG_MODEL_ALIAS],
@@ -3876,7 +3880,10 @@ for (const absentId of ["article_tuning_save", "article_tuning_rename", "article
                         for task in model_catalog.MODEL_RECOMMENDATION_TASKS
                     },
                 )
-                self.assertEqual(payload["model_recommendations"]["translation"], [])
+                self.assertEqual(
+                    [pick["alias"] for pick in payload["model_recommendations"]["translation"]],
+                    ["translategemma-4b-it-4bit", "gemma-4-12b-it-4bit"],
+                )
                 speed_picks = payload["model_recommendations"]["speed"]
                 self.assertEqual(
                     [pick["alias"] for pick in speed_picks],
@@ -3890,6 +3897,7 @@ for (const absentId of ["article_tuning_save", "article_tuning_rename", "article
         self.assertEqual(
             [entry["alias"] for entry in payload["model_catalog"]],
             [
+                "translategemma-4b-it-4bit",
                 "gemma-4-12b-it-4bit",
                 "gemma-e2b-tiny",
                 "qwythos-9b-4bit",
@@ -3900,6 +3908,7 @@ for (const absentId of ["article_tuning_save", "article_tuning_rename", "article
         self.assertEqual(
             {entry["alias"]: entry["backend"] for entry in payload["model_catalog"]},
             {
+                "translategemma-4b-it-4bit": "mlx-lm",
                 "gemma-4-12b-it-4bit": "mlx-vlm",
                 "gemma-e2b-tiny": "mlx-lm",
                 "qwythos-9b-4bit": "llama.cpp",

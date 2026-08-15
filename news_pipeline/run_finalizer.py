@@ -49,6 +49,7 @@ class RunFinalizer:
     adapters: RunFinalizerAdapters = field(default_factory=RunFinalizerAdapters)
     report_body: str = ""
     candidate_articles: list[dict[str, Any]] | None = None
+    translated_articles: list[dict[str, Any]] | None = None
     summarized_articles: list[dict[str, Any]] | None = None
     selected_articles: list[dict[str, Any]] | None = None
     article_summary_records: list[dict[str, Any]] | None = None
@@ -57,6 +58,15 @@ class RunFinalizer:
 
     def record_candidate_articles(self, articles: list[dict[str, Any]]) -> None:
         self.candidate_articles = articles
+
+    def record_translated_articles(self, articles: list[dict[str, Any]]) -> None:
+        """Record the post-translation candidate pool as a distinct stage.
+
+        Kept separate from the raw ``candidate`` stage so pre-translation and
+        post-translation candidates stay inspectable; callers that never run
+        translation simply leave it unset (issue #172).
+        """
+        self.translated_articles = articles
 
     def record_summarized_articles(self, articles: list[dict[str, Any]]) -> None:
         self.summarized_articles = articles
@@ -109,6 +119,7 @@ class RunFinalizer:
                 run_id=self.config.run_id,
                 diagnostics=self.diagnostics,
                 candidate_articles=self.candidate_articles,
+                translated_articles=self.translated_articles,
                 summarized_articles=self.summarized_articles,
                 selected_articles=self.selected_articles,
                 article_summary_records=self.article_summary_records,

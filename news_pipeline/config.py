@@ -92,6 +92,21 @@ QWWYTHOS_9B_4BIT_MODEL_ALIAS = "qwythos-9b-4bit"
 QWWYTHOS_9B_4BIT_MODEL_REFERENCE = f"{QWWYTHOS_REPO}/{QWWYTHOS_Q4K_FILENAME}"
 QWWYTHOS_9B_8BIT_MODEL_ALIAS = "qwythos-9b-8bit"
 QWWYTHOS_9B_8BIT_MODEL_REFERENCE = f"{QWWYTHOS_REPO}/{QWWYTHOS_Q8_FILENAME}"
+TRANSLATEGEMMA_4B_IT_4BIT_MODEL_ALIAS = "translategemma-4b-it-4bit"
+TRANSLATEGEMMA_4B_IT_4BIT_MODEL_REPO = "mlx-community/translategemma-4b-it-4bit"
+DEFAULT_TRANSLATION_MODEL_ALIAS = TRANSLATEGEMMA_4B_IT_4BIT_MODEL_ALIAS
+# Dedicated translation endpoint: a distinct local port so the curated
+# TranslateGemma assignment can never collide with the main model server
+# (issue #172). NEWS_MODEL_TRANSLATION_BASE_URL / NEWS_TRANSLATION_BASE_URL
+# override this at config resolution.
+DEFAULT_TRANSLATION_MODEL_BASE_URL = "http://127.0.0.1:8081/v1"
+DEFAULT_TRANSLATION_MAX_TOKENS = 1800
+TRANSLATION_TARGET_LANGUAGE_DEFAULT = "en"
+TRANSLATION_ENABLED_ENV_VAR = "NEWS_TRANSLATION_ENABLED"
+TRANSLATION_TARGET_LANGUAGE_ENV_VAR = "NEWS_TRANSLATION_TARGET_LANGUAGE"
+TRANSLATION_MODEL_ENV_VAR = "NEWS_TRANSLATION_MODEL"
+TRANSLATION_MODEL_BASE_URL_ENV_VAR = "NEWS_TRANSLATION_BASE_URL"
+MODEL_TASK_TRANSLATION = "translation"
 MODEL_BACKEND_MLX_LM = "mlx-lm"
 MODEL_BACKEND_MLX_VLM = "mlx-vlm"
 MODEL_BACKEND_EXTERNAL = "external"
@@ -172,6 +187,9 @@ MODEL_ALIASES = {
     QWWYTHOS_9B_8BIT_MODEL_ALIAS: QWWYTHOS_9B_8BIT_MODEL_REFERENCE,
     f"https://huggingface.co/{QWWYTHOS_9B_8BIT_MODEL_REFERENCE}": QWWYTHOS_9B_8BIT_MODEL_REFERENCE,
     f"https://hf.co/{QWWYTHOS_9B_8BIT_MODEL_REFERENCE}": QWWYTHOS_9B_8BIT_MODEL_REFERENCE,
+    TRANSLATEGEMMA_4B_IT_4BIT_MODEL_ALIAS: TRANSLATEGEMMA_4B_IT_4BIT_MODEL_REPO,
+    f"https://huggingface.co/{TRANSLATEGEMMA_4B_IT_4BIT_MODEL_REPO}": TRANSLATEGEMMA_4B_IT_4BIT_MODEL_REPO,
+    f"https://hf.co/{TRANSLATEGEMMA_4B_IT_4BIT_MODEL_REPO}": TRANSLATEGEMMA_4B_IT_4BIT_MODEL_REPO,
 }
 # Custom aliases added through config/model_catalog.yaml (issue #90) extend
 # this mapping at use time via _catalog_model_aliases(); MODEL_ALIASES itself
@@ -238,6 +256,7 @@ class ModelTuningSettings:
     story_scale_screening_max_tokens: int | None = None
     title_generation_max_tokens: int | None = None
     image_art_direction_max_tokens: int | None = None
+    translation_max_tokens: int | None = None
     task_sampling: dict[str, ModelSamplingSettings] = field(default_factory=dict)
 
 
@@ -368,6 +387,8 @@ class RuntimeConfig:
     prompt_instruction_overrides: dict[str, str]
     prompt_template_overrides: dict[str, dict[str, str]]
     source_scope: str
+    translation_enabled: bool
+    translation_target_language: str
     recipient_scope: str
     url_reuse_blocking_enabled: bool
     relaxed_story_drafting_guards: bool
@@ -472,6 +493,7 @@ MODEL_TASK_SAMPLING_ENV_PREFIXES = {
     MODEL_TASK_STORY_DRAFTING: "NEWS_MODEL_STORY_DRAFTING",
     MODEL_TASK_TITLE_GENERATION: "NEWS_MODEL_TITLE_GENERATION",
     MODEL_TASK_IMAGE_ART_DIRECTION: "NEWS_MODEL_IMAGE_ART_DIRECTION",
+    MODEL_TASK_TRANSLATION: "NEWS_MODEL_TRANSLATION",
 }
 MODEL_TUNING_PRESET_ENV_VARS = {
     "default": "NEWS_MODEL_TUNING_PRESET",
@@ -480,6 +502,7 @@ MODEL_TUNING_PRESET_ENV_VARS = {
     MODEL_TASK_STORY_SCALE_SCREENING: "NEWS_MODEL_STORY_SCALE_SCREENING_TUNING_PRESET",
     MODEL_TASK_TITLE_GENERATION: "NEWS_MODEL_TITLE_GENERATION_TUNING_PRESET",
     MODEL_TASK_IMAGE_ART_DIRECTION: "NEWS_MODEL_IMAGE_ART_DIRECTION_TUNING_PRESET",
+    MODEL_TASK_TRANSLATION: "NEWS_MODEL_TRANSLATION_TUNING_PRESET",
 }
 MODEL_REASONING_SAMPLING_ENV_PREFIX = "NEWS_MODEL_REASONING"
 # Per-task model knobs share env shapes NEWS_MODEL_<TASK>[_TUNING_PRESET|_BASE_URL]
@@ -491,6 +514,7 @@ MODEL_TASK_KNOB_SPECS: tuple[tuple[str, str, str], ...] = (
     (MODEL_TASK_STORY_SCALE_SCREENING, "Story Scale Screening", "Story scale screening max tokens"),
     (MODEL_TASK_TITLE_GENERATION, "Title Generation", "Title generation max tokens"),
     (MODEL_TASK_IMAGE_ART_DIRECTION, "Image Art Direction", "Image art direction max tokens"),
+    (MODEL_TASK_TRANSLATION, "Translation", "Translation max tokens"),
 )
 
 
@@ -505,6 +529,7 @@ def _empty_model_sampling_map() -> dict[str, ModelSamplingSettings]:
         MODEL_TASK_STORY_DRAFTING: ModelSamplingSettings(),
         MODEL_TASK_TITLE_GENERATION: ModelSamplingSettings(),
         MODEL_TASK_IMAGE_ART_DIRECTION: ModelSamplingSettings(),
+        MODEL_TASK_TRANSLATION: ModelSamplingSettings(),
         "reasoning": ModelSamplingSettings(),
     }
 
@@ -600,12 +625,31 @@ def _configured_model_assignments(
 
     task_entries = {}
     for task, _, _ in MODEL_TASK_KNOB_SPECS:
-        env_suffix = task.upper()
-        reference = _str_env(f"NEWS_MODEL_{env_suffix}", default_reference) or default_reference
-        base_url = _str_env(
-            f"NEWS_MODEL_{env_suffix}_BASE_URL",
-            default_server_settings.base_url,
-        ) or default_server_settings.base_url
+        if task == MODEL_TASK_TRANSLATION:
+            # Translation is a dedicated assignment with its own curated
+            # default model and endpoint (issue #172): NEWS_MODEL_TRANSLATION
+            # (current task convention) wins over the historical
+            # NEWS_TRANSLATION_MODEL compatibility name, and the same
+            # precedence applies to the base-URL pair. The distinct default
+            # endpoint keeps an enabled translation model from colliding with
+            # the main model server.
+            reference = (
+                _str_env(f"NEWS_MODEL_{task.upper()}", None)
+                or _str_env(TRANSLATION_MODEL_ENV_VAR, None)
+                or DEFAULT_TRANSLATION_MODEL_ALIAS
+            )
+            base_url = (
+                _str_env(f"NEWS_MODEL_{task.upper()}_BASE_URL", None)
+                or _str_env(TRANSLATION_MODEL_BASE_URL_ENV_VAR, None)
+                or DEFAULT_TRANSLATION_MODEL_BASE_URL
+            )
+        else:
+            env_suffix = task.upper()
+            reference = _str_env(f"NEWS_MODEL_{env_suffix}", default_reference) or default_reference
+            base_url = _str_env(
+                f"NEWS_MODEL_{env_suffix}_BASE_URL",
+                default_server_settings.base_url,
+            ) or default_server_settings.base_url
         task_entries[task] = _task_assignment_entry(
             task,
             reference=reference,
@@ -726,6 +770,10 @@ def _merge_model_tuning_settings(
             base.image_art_direction_max_tokens,
             overlay.image_art_direction_max_tokens,
         ),
+        translation_max_tokens=_merge_optional_value(
+            base.translation_max_tokens,
+            overlay.translation_max_tokens,
+        ),
         task_sampling=task_sampling,
     )
 
@@ -739,6 +787,7 @@ def _base_model_tuning(model_reference: str) -> ModelTuningSettings:
         story_scale_screening_max_tokens=DEFAULT_STORY_SCALE_SCREENING_MAX_TOKENS,
         title_generation_max_tokens=DEFAULT_TITLE_GENERATION_MAX_TOKENS,
         image_art_direction_max_tokens=DEFAULT_IMAGE_ART_DIRECTION_MAX_TOKENS,
+        translation_max_tokens=DEFAULT_TRANSLATION_MAX_TOKENS,
         task_sampling=_empty_model_sampling_map(),
     )
     model_default_tuning = MODEL_SPECIFIC_TUNING_DEFAULTS.get(resolved_name)
@@ -754,6 +803,7 @@ _TASK_MAX_TOKENS_FIELDS: dict[str, str] = {
     MODEL_TASK_STORY_SCALE_SCREENING: "story_scale_screening_max_tokens",
     MODEL_TASK_TITLE_GENERATION: "title_generation_max_tokens",
     MODEL_TASK_IMAGE_ART_DIRECTION: "image_art_direction_max_tokens",
+    MODEL_TASK_TRANSLATION: "translation_max_tokens",
 }
 
 # Canonical model-tuning max-token fields, derived from the task map so the
@@ -830,6 +880,37 @@ _LOOPBACK_HOST_ALIASES = frozenset(
 _LOOPBACK_CANONICAL_HOST = "127.0.0.1"
 
 
+def canonical_model_endpoint(url: str) -> tuple[Any, ...]:
+    """Canonical key for one model endpoint URL.
+
+    Folds the spelling variants users actually produce into one key:
+    trailing slashes on the path, scheme/host case differences, default
+    ports, userinfo in the authority, a trailing-dot FQDN on the host,
+    and loopback host aliases (localhost vs 127.0.0.1 vs the IPv6
+    spellings of the loopback interface). A genuinely different path
+    still produces a different key, and an empty URL produces the
+    empty key (``("", "", None, "")``) which never equals a real one.
+
+    This is the single endpoint-equivalence helper shared by managed
+    assignment collision validation and the run-time server registry, so
+    the two can never disagree about aliases or spelling variants.
+    """
+    parsed = urlparse(url or "")
+    scheme = (parsed.scheme or "").lower()
+    # A trailing dot marks the FQDN as absolute; it does not change
+    # which host is named, so it is folded before the alias check.
+    host = (parsed.hostname or "").lower().rstrip(".")
+    if host in _LOOPBACK_HOST_ALIASES:
+        host = _LOOPBACK_CANONICAL_HOST
+    try:
+        port = parsed.port
+    except ValueError:  # malformed port; treat as distinct
+        port = None
+    if port is None:
+        port = 443 if scheme == "https" else 80 if scheme == "http" else None
+    return (scheme, host, port, parsed.path.rstrip("/"))
+
+
 def same_model_endpoint(left: str, right: str) -> bool:
     """True when two base URLs denote the same model endpoint.
 
@@ -840,24 +921,7 @@ def same_model_endpoint(left: str, right: str) -> bool:
     spellings of the loopback interface). A genuinely different path
     still compares unequal, and an empty URL never matches a real one.
     """
-
-    def _canonical(url: str) -> tuple[Any, ...]:
-        parsed = urlparse(url or "")
-        scheme = (parsed.scheme or "").lower()
-        # A trailing dot marks the FQDN as absolute; it does not change
-        # which host is named, so it is folded before the alias check.
-        host = (parsed.hostname or "").lower().rstrip(".")
-        if host in _LOOPBACK_HOST_ALIASES:
-            host = _LOOPBACK_CANONICAL_HOST
-        try:
-            port = parsed.port
-        except ValueError:  # malformed port; treat as distinct
-            port = None
-        if port is None:
-            port = 443 if scheme == "https" else 80 if scheme == "http" else None
-        return (scheme, host, port, parsed.path.rstrip("/"))
-
-    return bool(left) == bool(right) and _canonical(left) == _canonical(right)
+    return bool(left) == bool(right) and canonical_model_endpoint(left) == canonical_model_endpoint(right)
 
 
 def managed_model_conflict_message(
@@ -882,6 +946,31 @@ def managed_model_conflict_message(
     )
 
 
+def is_managed_server_assignment(
+    assignment: TaskModelAssignment,
+    *,
+    default_backend: str,
+    default_base_url: str,
+    assignment_backend: str | None = None,
+) -> bool:
+    """Whether one task assignment is served by an application-owned server.
+
+    An assignment is owned when it uses a managed backend (any non-external
+    backend) at an endpoint the run can own. When the default backend is
+    external, the default endpoint itself is caller-managed and can serve
+    multiple models, so assignments pointing at exactly that endpoint stay
+    external too; only assignments on other endpoints can be owned (issue
+    #133). ``assignment_backend`` overrides the assignment's own backend for
+    callers that resolved it separately (legacy test doubles).
+    """
+    resolved_backend = assignment_backend or getattr(assignment, "backend", None) or default_backend
+    if not is_managed_model_backend(resolved_backend):
+        return False
+    if is_managed_model_backend(default_backend):
+        return True
+    return not same_model_endpoint(assignment.base_url, default_base_url)
+
+
 def _validate_managed_model_assignments(
     model_assignments: dict[str, TaskModelAssignment],
     *,
@@ -890,33 +979,56 @@ def _validate_managed_model_assignments(
     model_base_url: str,
     model_backend: str,
 ) -> None:
-    """Reject task models that cannot share the managed server's base URL.
+    """Reject managed task models that cannot share a managed base URL.
 
-    A managed local server (any non-external default backend) serves exactly
-    one model at the default base URL. A task assignment that resolves to the
-    same base URL with a different model name cannot be served by that server;
-    it previously failed only mid-run in build_chat_model, after source
-    collection. External endpoints can serve multiple models, so the managed
-    path is the only one validated here.
+    A managed local server (any non-external backend) serves exactly one
+    model at its base URL. Every owned assignment participates: the default
+    assignment uses the passed-in model values (matching direct helper
+    callers' contracts), and each task uses its own resolved backend when
+    present, falling back to ``model_backend`` for legacy test doubles.
+    Assignments are grouped by canonical endpoint, and any group holding
+    different model names is rejected before source collection - whether the
+    collision is default-vs-task or task-vs-task (issue #133). External
+    assignments - and assignments riding an external default endpoint -
+    stay out of the managed groups because external endpoints can serve
+    multiple models.
     """
-    if not is_managed_model_backend(model_backend):
-        return
+    groups: dict[tuple[Any, ...], list[tuple[str, str, str, str]]] = {}
+    if is_managed_model_backend(model_backend) and model_base_url:
+        groups.setdefault(canonical_model_endpoint(model_base_url), []).append(
+            ("default", model_reference, model_name, model_base_url)
+        )
     for task, assignment in model_assignments.items():
-        # The default assignment defines the compared values (model_name,
-        # model_base_url), so it always matches; skip it.
+        # The default assignment is synthesized above from the explicit
+        # model_reference/model_name/model_base_url arguments so direct
+        # helper callers and full dicts behave identically.
         if task == "default":
             continue
-        if same_model_endpoint(assignment.base_url, model_base_url) and assignment.name != model_name:
-            raise ValueError(
-                managed_model_conflict_message(
-                    task=task,
-                    reference=assignment.reference,
-                    name=assignment.name,
-                    model_reference=model_reference,
-                    model_name=model_name,
-                    model_base_url=model_base_url,
+        if not is_managed_server_assignment(
+            assignment,
+            default_backend=model_backend,
+            default_base_url=model_base_url,
+            assignment_backend=getattr(assignment, "backend", None) or model_backend,
+        ) or not assignment.base_url:
+            continue
+        groups.setdefault(canonical_model_endpoint(assignment.base_url), []).append(
+            (task, assignment.reference, assignment.name, assignment.base_url)
+        )
+
+    for entries in groups.values():
+        anchor_task, anchor_reference, anchor_name, anchor_base_url = entries[0]
+        for task, reference, name, base_url in entries[1:]:
+            if name != anchor_name:
+                raise ValueError(
+                    managed_model_conflict_message(
+                        task=task,
+                        reference=reference,
+                        name=name,
+                        model_reference=anchor_reference,
+                        model_name=anchor_name,
+                        model_base_url=anchor_base_url,
+                    )
                 )
-            )
 
 
 def _apply_model_tuning_preset(
@@ -1054,6 +1166,10 @@ def _apply_model_tuning_env_overrides(tuning: ModelTuningSettings) -> ModelTunin
         image_art_direction_max_tokens=_merge_optional_value(
             tuning.image_art_direction_max_tokens,
             _positive_optional_int_env("NEWS_IMAGE_ART_DIRECTION_MAX_TOKENS"),
+        ),
+        translation_max_tokens=_merge_optional_value(
+            tuning.translation_max_tokens,
+            _positive_optional_int_env("NEWS_TRANSLATION_MAX_TOKENS"),
         ),
         task_sampling=task_sampling,
     )
@@ -1625,6 +1741,23 @@ def runtime_knob_registry() -> list[dict[str, Any]]:
         _runtime_knob("Run Settings", "Block reused URLs", "NEWS_BLOCK_REUSED_URLS", "bool", default=False),
         _runtime_knob("Run Settings", "Image generation", "NEWS_IMAGE_ENABLED", "bool", default=False),
         _runtime_knob("Run Settings", "Story scale screening", "NEWS_STORY_SCALE_SCREENING_ENABLED", "bool"),
+        _runtime_knob("Run Settings", "Translation", TRANSLATION_ENABLED_ENV_VAR, "bool", default=False),
+        _runtime_knob(
+            "Run Settings",
+            "Translation target language",
+            TRANSLATION_TARGET_LANGUAGE_ENV_VAR,
+            "text",
+            default=TRANSLATION_TARGET_LANGUAGE_DEFAULT,
+        ),
+        _runtime_knob(
+            "Run Settings",
+            "Translation model (compatibility)",
+            TRANSLATION_MODEL_ENV_VAR,
+            "select",
+            options=sorted(_catalog_model_aliases()),
+            option_links=model_links,
+            advanced=True,
+        ),
         _runtime_knob(
             "Run Settings",
             "Prompt profile",
@@ -1724,7 +1857,11 @@ def runtime_knob_registry() -> list[dict[str, Any]]:
                 "Model Server Settings",
                 f"{task_label} base URL",
                 f"NEWS_MODEL_{env_suffix}_BASE_URL",
-                default="http://127.0.0.1:8080/v1",
+                default=(
+                    DEFAULT_TRANSLATION_MODEL_BASE_URL
+                    if task == MODEL_TASK_TRANSLATION
+                    else "http://127.0.0.1:8080/v1"
+                ),
             )
         )
     sampling_suffixes = [
@@ -2072,14 +2209,40 @@ def is_placeholder_credential(value: Any) -> bool:
     return str(value or "").strip().lower() in PLACEHOLDER_CREDENTIAL_TOKENS
 
 
+def _configured_translation_enabled() -> bool:
+    return _bool_env(TRANSLATION_ENABLED_ENV_VAR, False)
+
+
+def _configured_translation_target_language() -> str:
+    return _normalize_translation_language(
+        _str_env(TRANSLATION_TARGET_LANGUAGE_ENV_VAR, TRANSLATION_TARGET_LANGUAGE_DEFAULT)
+        or TRANSLATION_TARGET_LANGUAGE_DEFAULT
+    )
+
+
+def _normalize_translation_language(value: Any) -> str | None:
+    """Normalize a declared language code for the translation stage.
+
+    Lowercases and folds underscore separators to hyphens (``zh_Hans`` ->
+    ``zh-Hans``) without guessing or mapping unknown codes to another
+    language. Empty/whitespace values stay None: a missing declared language
+    is a skipped status, never an inference.
+    """
+    normalized = str(value or "").strip().lower().replace("_", "-")
+    return normalized or None
+
+
 def _source_enabled_for_scope(
     raw_source: dict[str, Any],
     source_scope: str,
     *,
+    translation_enabled: bool = False,
     source_key: str | None = None,
 ) -> bool:
     language = str(raw_source.get("language") or "").strip().lower()
-    if language != "en":
+    if not translation_enabled and language != "en":
+        return False
+    if translation_enabled and not language:
         return False
     selected_tiers = SOURCE_SCOPE_TIERS[_normalize_source_scope(source_scope)]
     return (
@@ -2113,6 +2276,7 @@ def load_sources(
     *,
     source_scope: str | None = None,
     include_inactive: bool = False,
+    translation_enabled: bool | None = None,
 ) -> dict[str, dict[str, Any]]:
     sources_path = path or CONFIG_DIR / "sources.yaml"
     payload = _load_yaml_mapping(sources_path)
@@ -2126,6 +2290,11 @@ def load_sources(
         if source_scope is not None
         else _configured_source_scope()
     )
+    selected_translation_enabled = (
+        translation_enabled
+        if translation_enabled is not None
+        else _configured_translation_enabled()
+    )
     for raw_source in raw_sources:
         if not isinstance(raw_source, dict):
             continue
@@ -2137,6 +2306,7 @@ def load_sources(
         if not include_inactive and not _source_enabled_for_scope(
             raw_source,
             selected_source_scope,
+            translation_enabled=selected_translation_enabled,
             source_key=key,
         ):
             continue
@@ -2331,6 +2501,8 @@ def _build_runtime_config(
               file=sys.stderr)
     primary_recipient = _str_env("NEWS_PRIMARY_RECIPIENT", "primary@example.com")
     source_scope = _configured_source_scope()
+    translation_enabled = _configured_translation_enabled()
+    translation_target_language = _configured_translation_target_language()
     recipient_scope = _configured_recipient_scope()
     url_reuse_blocking_enabled = _bool_env("NEWS_BLOCK_REUSED_URLS", False)
     relaxed_story_drafting_guards = _bool_env("NEWS_RELAX_STORY_DRAFTING_GUARDS", False)
@@ -2529,6 +2701,8 @@ def _build_runtime_config(
         prompt_instruction_overrides=prompt_instruction_overrides,
         prompt_template_overrides=prompt_template_overrides,
         source_scope=source_scope,
+        translation_enabled=translation_enabled,
+        translation_target_language=translation_target_language,
         recipient_scope=recipient_scope,
         url_reuse_blocking_enabled=url_reuse_blocking_enabled,
         relaxed_story_drafting_guards=relaxed_story_drafting_guards,

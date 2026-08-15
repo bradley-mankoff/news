@@ -216,6 +216,58 @@ class DiagnosticsTests(unittest.TestCase):
             self.assertIn("## Warnings", review_text)
             self.assertIn("A useful report.", review_text)
 
+    def test_translation_event_renders_in_review_and_summary(self) -> None:
+        """Translation policy, model identity, and per-status counts are
+        operator-visible in the run review and summary (issue #172)."""
+        diagnostics = RunDiagnostics(
+            run_started_at="2026-06-01T10:00:00",
+            settings={
+                "source_scope": "peripheral",
+                "translation_enabled": True,
+                "translation_target_language": "en",
+                "source_languages": {"en": 4, "es": 2, "fr": 2},
+                "model_assignments": {
+                    "translation": {
+                        "reference": "translategemma-4b-it-4bit",
+                        "name": "mlx-community/translategemma-4b-it-4bit",
+                        "backend": "mlx-lm",
+                        "base_url": "http://127.0.0.1:8081/v1",
+                    }
+                },
+            },
+        )
+        diagnostics.event(
+            "translation",
+            enabled=True,
+            candidate_count=4,
+            translated_count=2,
+            unchanged_count=1,
+            skipped_unknown_language=1,
+            not_needed_count=0,
+            target_language="en",
+            model="translategemma-4b-it-4bit",
+            model_name="mlx-community/translategemma-4b-it-4bit",
+            source_language_counts={"es": 2, "fr": 2},
+        )
+
+        stats = diagnostics.summary_stats()
+        self.assertEqual(stats["translated_count"], 2)
+        self.assertEqual(stats["translation_unchanged_count"], 1)
+        self.assertEqual(stats["translation_skipped_count"], 1)
+
+        review = diagnostics.to_run_review_markdown()
+        self.assertIn(
+            "| Translation model | translategemma-4b-it-4bit (mlx-community/translategemma-4b-it-4bit) [mlx-lm] @ http://127.0.0.1:8081/v1 |",
+            review,
+        )
+        self.assertIn("| Translation enabled | True |", review)
+        self.assertIn("| Article targets translated | 2 |", review)
+        self.assertIn("| Translation candidates skipped (unknown language) | 1 |", review)
+
+        summary = diagnostics.to_summary_markdown()
+        self.assertIn("- Translation enabled: True", summary)
+        self.assertIn("- Article targets translated: 2", summary)
+
     def test_empty_diagnostics_cover_fallbacks(self) -> None:
         diagnostics = RunDiagnostics(
             run_started_at="2026-06-01T10:00:00",

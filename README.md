@@ -261,6 +261,17 @@ Key Run Settings:
   previously recorded URLs block future reuse.
 - `NEWS_IMAGE_ENABLED=0|1`: report image generation, default off unless a
   preset enables it.
+- `NEWS_TRANSLATION_ENABLED=0|1`: opt-in translation of declared non-English
+  sources (default off). When enabled, selected-tier sources with a declared
+  `language` other than the target reach collection and their scraped bodies
+  are translated before global story clustering; missing-language sources
+  stay excluded. Source records are never auto-retagged and article text is
+  never language-sniffed — declared languages are authoritative.
+- `NEWS_TRANSLATION_TARGET_LANGUAGE=en`: normalized target language code for
+  the translation stage (`_` folds to `-`).
+- `NEWS_TRANSLATION_MODEL`: compatibility name for the translation model
+  assignment; `NEWS_MODEL_TRANSLATION` (the current task convention) wins
+  when both are set.
 - `NEWS_MODEL`: default model selection only. Task models are assigned
   separately with `NEWS_MODEL_ARTICLE_SUMMARY`, `NEWS_MODEL_STORY_DRAFTING`,
   `NEWS_MODEL_STORY_SCALE_SCREENING`, `NEWS_MODEL_TITLE_GENERATION`, and
@@ -269,6 +280,13 @@ Key Run Settings:
   clustering) so it inherits the default model. Image-enabled runs make two
   independent calls — Image Art Direction (text-free FLUX prompt) and Title
   Generation (overlay headline) — each routed to its own assignment.
+  Translation is the sixth actual LLM assignment: it defaults to the
+  curated `translategemma-4b-it-4bit` model on its own local endpoint
+  (`http://127.0.0.1:8081/v1`) via `NEWS_MODEL_TRANSLATION` /
+  `NEWS_MODEL_TRANSLATION_BASE_URL`; the legacy `NEWS_TRANSLATION_MODEL` /
+  `NEWS_TRANSLATION_BASE_URL` names still resolve when the task-convention
+  names are unset. The translation model loads lazily: a run only starts its
+  server when a translation-enabled run actually has non-English candidates.
 - `NEWS_MODEL_BACKEND`: optional backend override for the default model
   (`mlx-lm`, `mlx-vlm`, `external`, or `llama.cpp`; inferred from the model
   reference otherwise — see [Runtime Matrix](#runtime-matrix)).
@@ -409,8 +427,11 @@ uv run news models catalog
 uv run news models search --query gemma --task text-generation --limit 5
 ```
 
-Curated models (4):
+Curated models (5):
 
+- `translategemma-4b-it-4bit` — mlx-lm, TranslateGemma 4B Instruct 4-bit
+  conversion for the opt-in translation stage
+  ([Hugging Face](https://huggingface.co/mlx-community/translategemma-4b-it-4bit))
 - `gemma-4-12b-it-4bit` — mlx-vlm, 256K-token context, default model
   ([Hugging Face](https://huggingface.co/mlx-community/gemma-4-12B-it-4bit))
 - `gemma-e2b-tiny` — mlx-lm, Codex-safe test model
@@ -426,6 +447,31 @@ repos are never picked for a managed backend (ADR 0017 runtime matrix);
 hardware fitting itself lives on the Hugging Face model page. The UI's "Model
 catalog" panel shows curated cards, task recommendations, and search with the
 same verdicts.
+
+### Translation (opt-in)
+
+Translation is an optional pipeline stage that runs immediately after source
+collection and before global story clustering, so translated article bodies
+can join English story groups. It is disabled by default:
+
+- `NEWS_TRANSLATION_ENABLED=0` (default): source selection keeps the current
+  English-only behavior (`language == "en"` in the selected tiers).
+- `NEWS_TRANSLATION_ENABLED=1`: selected-tier sources with any declared
+  non-empty `language` reach collection. English sources pass through
+  unchanged; declared non-English bodies are translated to
+  `NEWS_TRANSLATION_TARGET_LANGUAGE` (default `en`) with TranslateGemma's
+  structured `source_lang_code`/`target_lang_code` prompt contract. Sources
+  without a declared language stay excluded, and unknown codes are skipped
+  and surfaced — never guessed from article text.
+
+The translation model is the curated `mlx-community/translategemma-4b-it-4bit`
+4B MLX conversion (gated Gemma weights; requires Hugging Face authentication
+and Gemma license acceptance on the operator machine). It runs as its own
+managed server on a dedicated local endpoint, started lazily on the first
+actual translation call and stopped with the run. A failed or empty model
+response never removes an article: the original body flows to
+clustering/summarization and the run records the status, reason, model, and
+bounded original-text preview in diagnostics and run history.
 
 #### User-editable YAML overrides
 
@@ -552,9 +598,28 @@ NEWS_MODEL=gemma-4-12b-it-4bit uv run news model-server-command
 
 If Article Summarization, Story Drafting, Story Scale Screening, Title
 Generation, or Image Art Direction uses a different model, give that
-task a matching base URL or run it on an externally managed server. The current
-runtime supports one managed local server per shared model/base URL; it does not
-automatically coordinate multiple local servers for one run.
+task a matching base URL or run it on an externally managed server. A
+run owns one managed local server per distinct task base URL: each
+distinct managed endpoint is started and readiness-checked (`/models`
+plus a tiny generation probe) on demand when its task is first used,
+routed per task, and stopped with the run. Tasks sharing one canonical
+endpoint and model reuse the same process. Two tasks pointing at the
+same managed endpoint with different models are rejected at
+configuration time with guidance to set a per-task base URL or use an
+external server. External endpoints (default or per-task) are
+caller-managed and are never spawned by the application.
+
+For example, one run can own three managed servers for the default,
+Article Summarization, and Story Drafting models:
+
+```bash
+NEWS_MODEL=gemma-e2b-tiny \
+NEWS_MODEL_ARTICLE_SUMMARY=gemma-4-12b-it-4bit \
+NEWS_MODEL_ARTICLE_SUMMARY_BASE_URL=http://127.0.0.1:8090/v1 \
+NEWS_MODEL_STORY_DRAFTING=qwythos-9b-4bit \
+NEWS_MODEL_STORY_DRAFTING_BASE_URL=http://127.0.0.1:8091/v1 \
+uv run news run
+```
 
 ### Model Tuning
 
@@ -610,8 +675,15 @@ server configuration:
   executable used by the managed `llama.cpp` backend (default
   `llama-server`; advanced setting).
 
-The base URL also determines the printed server port. If you point a task model
-at a different base URL, the task needs its own matching server endpoint.
+The base URL determines the printed server port and, for managed
+backends, the process the run owns. A distinct per-task base URL creates
+a distinct managed server for that task's model during the run; the
+same canonical endpoint with the same model is shared by every task
+that uses it. The default server writes `model_server.log` next to the
+report output, and additional managed endpoints write deterministic
+per-server log files (`model_server_<endpoint>-<model>.log`) in the
+same directory. External endpoints (default or per-task) are
+caller-managed and never spawned.
 
 ### Image
 

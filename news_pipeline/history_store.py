@@ -235,6 +235,22 @@ def _ensure_schema(con: Any) -> None:
         )
         """
     )
+    _ensure_columns(
+        con,
+        "run_articles",
+        {
+            # Translation provenance (issue #172): nullable so legacy DuckDB
+            # files decode with empty/null values and existing stage rows are
+            # untouched. Bounded previews only; never full article bodies.
+            "translation_status": "VARCHAR",
+            "translation_reason": "VARCHAR",
+            "translation_source_language": "VARCHAR",
+            "translation_target_language": "VARCHAR",
+            "translation_model": "VARCHAR",
+            "translation_original_text_preview": "VARCHAR",
+            "translation_text_preview": "VARCHAR",
+        },
+    )
     con.execute(
         """
         CREATE TABLE IF NOT EXISTS url_history (
@@ -409,6 +425,7 @@ def write_run_history(
     run_id: str,
     diagnostics: RunDiagnostics,
     candidate_articles: list[dict[str, Any]] | None = None,
+    translated_articles: list[dict[str, Any]] | None = None,
     summarized_articles: list[dict[str, Any]] | None = None,
     selected_articles: list[dict[str, Any]] | None = None,
     article_summary_records: list[dict[str, Any]] | None = None,
@@ -428,6 +445,7 @@ def write_run_history(
         _insert_run(con, run_id, diagnostics, imported_at=imported_at)
         _insert_sources(con, run_id, diagnostics.source_runs)
         _insert_run_articles(con, run_id, "candidate", candidate_articles or [])
+        _insert_run_articles(con, run_id, "translated", translated_articles or [])
         _insert_run_articles(con, run_id, "summarized", summarized_articles or [])
         _insert_run_articles(con, run_id, "selected", selected_articles or [])
         _insert_article_summaries(con, run_id, "summarized", article_summary_records or [])
@@ -893,6 +911,21 @@ def _insert_run_articles(con: Any, run_id: str, stage: str, articles: list[dict[
             "scrape_status": str(article.get("scrape_status") or ""),
             "resolution_status": str(article.get("resolution_status") or ""),
             "imported_from_path": imported_from_path,
+            "translation_status": str(article.get("translation_status") or "") or None,
+            "translation_reason": str(article.get("translation_reason") or "") or None,
+            "translation_source_language": (
+                str(article.get("translation_source_language") or "") or None
+            ),
+            "translation_target_language": (
+                str(article.get("translation_target_language") or "") or None
+            ),
+            "translation_model": str(article.get("translation_model") or "") or None,
+            "translation_original_text_preview": (
+                str(article.get("translation_original_text_preview") or "") or None
+            ),
+            "translation_text_preview": (
+                str(article.get("translation_text_preview") or "") or None
+            ),
         }
         _insert_dict(con, "run_articles", row)
 

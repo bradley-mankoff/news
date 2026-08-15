@@ -250,6 +250,13 @@ class ArticleCollectionTests(unittest.TestCase):
             )
 
             self.assertEqual([article["title"] for article in result.article_candidates], ["Alpha", "Beta"])
+            # The scraped body is preserved on candidates so the translation
+            # stage and story clustering see real article text (issue #172).
+            self.assertEqual(result.article_candidates[0]["text"], "Alpha body")
+            self.assertEqual(result.article_candidates[1]["text"], "Beta body")
+            # Source run digests stay bounded and body-free.
+            self.assertNotIn("text", diagnostics.source_runs[0]["fresh_articles"][0])
+            self.assertNotIn("translation_status", result.article_candidates[0])
             self.assertEqual(result.stats.fresh_article_count, 2)
             self.assertEqual(result.stats.candidate_url_count, 2)
             self.assertEqual(result.stats.rejected_counts["seen_in_history"], 1)

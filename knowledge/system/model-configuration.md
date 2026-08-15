@@ -31,8 +31,10 @@ sources:
 **Run Settings** are all user-controllable values for one run. A **Run Preset**
 is a saved overlay. **Task Model Assignment** selects a model for a model-using task. Every actual
 LLM stage has its own assignment: Article Summarization, Story Drafting, Story
-Scale Screening, Title Generation, and Image Art Direction (an independent LLM
-call producing the text-free FLUX prompt, issue #122). Story Discovery has no
+Scale Screening, Title Generation, Image Art Direction (an independent LLM
+call producing the text-free FLUX prompt, issue #122), and Translation (the
+opt-in declared-language article translation stage, issue #172). Story
+Discovery has no
 LLM stage (embedding/TF-IDF clustering) so it inherits the default model — the
 only inheritance case. **Model Tuning** is explicit inference
 configuration, **Model Defaults** fill unset values, **Pipeline Budget** covers
@@ -69,6 +71,17 @@ bare HF repos to `--hf-repo`, and local `.gguf` paths to `--model`. The
 application never downloads or installs the binary; a missing binary fails
 at run launch with actionable guidance. Text-generation GGUF is managed;
 multimodal GGUF (mmproj) is not.
+
+A Run Session may own multiple managed server processes: one per distinct
+canonical endpoint among the default and per-task managed assignments.
+Each endpoint is started and readiness-checked (`/models` plus a tiny
+generation probe) lazily on first task use, tasks sharing a canonical
+endpoint and model reuse one process, and every owned process and log is
+stopped together when the run exits (success, failure, `KeyboardInterrupt`,
+or a UI Stop SIGTERM). Same canonical endpoint with different managed
+models is rejected during Runtime Config Resolution, before source
+collection. External endpoints remain non-owned: the application never
+spawns them.
 
 ## Sources
 

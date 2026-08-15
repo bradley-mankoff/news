@@ -27,8 +27,11 @@ from news_pipeline.config import (
     MODEL_TASK_STORY_DRAFTING,
     MODEL_TASK_STORY_SCALE_SCREENING,
     MODEL_TASK_TITLE_GENERATION,
+    MODEL_TASK_TRANSLATION,
     QWWYTHOS_9B_4BIT_MODEL_REFERENCE,
     QWWYTHOS_9B_8BIT_MODEL_REFERENCE,
+    DEFAULT_TRANSLATION_MODEL_ALIAS,
+    DEFAULT_TRANSLATION_MODEL_BASE_URL,
     ModelSamplingSettings,
     ModelServerSettings,
     PRESET_ENV_VAR,
@@ -102,11 +105,24 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
             "image_art_direction",
         ):
             self.assertEqual(config.model_assignments[task].reference, "gemma-4-12b-it-4bit")
-        # No translation assignment; only default + the five stages.
+        # The translation assignment is a real sixth LLM task: it defaults to
+        # the curated TranslateGemma alias on its own endpoint, never the
+        # default model (issue #172).
+        translation = config.model_assignments[MODEL_TASK_TRANSLATION]
+        self.assertEqual(translation.reference, "translategemma-4b-it-4bit")
+        self.assertEqual(translation.name, "mlx-community/translategemma-4b-it-4bit")
+        self.assertEqual(translation.backend, "mlx-lm")
+        self.assertEqual(translation.base_url, "http://127.0.0.1:8081/v1")
+        self.assertEqual(translation.tuning.translation_max_tokens, 1800)
+        # Translation is opt-in and off by default; the target stays en.
+        self.assertFalse(config.translation_enabled)
+        self.assertEqual(config.translation_target_language, "en")
+        # Only default + the six LLM stages.
         self.assertEqual(
             set(config.model_assignments),
             {"default", "article_summary", "story_drafting",
-             "story_scale_screening", "title_generation", "image_art_direction"},
+             "story_scale_screening", "title_generation", "image_art_direction",
+             "translation"},
         )
 
     def test_codex_tiny_model_uses_mlx_lm_backend_and_server(self) -> None:
@@ -951,7 +967,7 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
             CODEX_TEST_MODEL_ALIAS,
         )
 
-    def test_task_model_assignments_cover_all_five_llm_stages(self) -> None:
+    def test_task_model_assignments_cover_all_six_llm_stages(self) -> None:
         config = load_runtime_config(
             environ={},
             overrides={
@@ -973,6 +989,7 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
                 MODEL_TASK_STORY_SCALE_SCREENING,
                 MODEL_TASK_TITLE_GENERATION,
                 MODEL_TASK_IMAGE_ART_DIRECTION,
+                MODEL_TASK_TRANSLATION,
             },
         )
         self.assertEqual(
@@ -1031,6 +1048,15 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
             config_module._task_max_tokens_field(MODEL_TASK_TITLE_GENERATION),
             "title_generation_max_tokens",
         )
+        self.assertEqual(
+            config_module._task_max_tokens_field(MODEL_TASK_TRANSLATION),
+            "translation_max_tokens",
+        )
+        # The translation assignment keeps the curated TranslateGemma default
+        # and its own endpoint even when other task models are overridden.
+        translation = config.model_assignments[MODEL_TASK_TRANSLATION]
+        self.assertEqual(translation.reference, DEFAULT_TRANSLATION_MODEL_ALIAS)
+        self.assertEqual(translation.base_url, DEFAULT_TRANSLATION_MODEL_BASE_URL)
 
     def test_managed_default_rejects_different_task_model_on_shared_base_url(self) -> None:
         # Regression for #113: the default managed server serves one model;
@@ -1133,6 +1159,112 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
         self.assertEqual(
             config.model_assignments[MODEL_TASK_ARTICLE_SUMMARY].base_url,
             config.model_base_url,
+        )
+
+    def test_divergent_managed_assignments_on_distinct_urls_resolve_with_commands(self) -> None:
+        # Issue #133: divergent task models on distinct managed base URLs
+        # resolve into per-task assignments, each carrying its own port and
+        # backend-specific generated command. One run can own several managed
+        # servers as long as each canonical endpoint serves one model.
+        config = load_runtime_config(
+            environ={},
+            overrides={
+                "NEWS_MODEL": CODEX_TEST_MODEL_ALIAS,
+                "NEWS_MODEL_ARTICLE_SUMMARY": GEMMA_4_12B_IT_4BIT_MODEL_ALIAS,
+                "NEWS_MODEL_ARTICLE_SUMMARY_BASE_URL": "http://127.0.0.1:8090/v1",
+                "NEWS_MODEL_STORY_DRAFTING": QWWYTHOS_9B_4BIT_MODEL_REFERENCE,
+                "NEWS_MODEL_STORY_DRAFTING_BASE_URL": "http://127.0.0.1:8091/v1",
+            },
+            materialize_outputs=False,
+        )
+        self.assertEqual(
+            config.model_assignments["default"].reference,
+            CODEX_TEST_MODEL_ALIAS,
+        )
+        default_command = config.model_assignments["default"].server_command
+        article_command = config.model_assignments[MODEL_TASK_ARTICLE_SUMMARY].server_command
+        story_command = config.model_assignments[MODEL_TASK_STORY_DRAFTING].server_command
+        self.assertIn("--port 8080", default_command)
+        self.assertIn("--port 8090", article_command)
+        self.assertIn(GEMMA_4_12B_IT_4BIT_MODEL_REPO, article_command)
+        self.assertIn("--port 8091", story_command)
+        self.assertIn("llama-server", story_command)
+        self.assertEqual(
+            config.model_assignments[MODEL_TASK_STORY_DRAFTING].backend,
+            "llama.cpp",
+        )
+
+    def test_managed_task_task_collision_on_shared_endpoint_rejected(self) -> None:
+        # Two non-default managed assignments on one canonical endpoint with
+        # different models fail at resolution (issue #133), even though the
+        # default assignment itself is untouched.
+        with self.assertRaisesRegex(
+            ValueError,
+            r"Managed model server cannot serve multiple different models "
+            r"from the same base URL.*Task 'story_drafting'.*Set a per-task base URL",
+        ):
+            load_runtime_config(
+                environ={},
+                overrides={
+                    "NEWS_MODEL": CODEX_TEST_MODEL_ALIAS,
+                    "NEWS_MODEL_ARTICLE_SUMMARY": GEMMA_4_12B_IT_4BIT_MODEL_ALIAS,
+                    "NEWS_MODEL_ARTICLE_SUMMARY_BASE_URL": "http://127.0.0.1:8090/v1",
+                    "NEWS_MODEL_STORY_DRAFTING": QWWYTHOS_9B_4BIT_MODEL_REFERENCE,
+                    "NEWS_MODEL_STORY_DRAFTING_BASE_URL": "http://localhost:8090/v1/",
+                },
+                materialize_outputs=False,
+            )
+
+    def test_external_default_with_managed_task_on_distinct_url_resolves(self) -> None:
+        # A mixed run: external default endpoint plus one managed task on a
+        # distinct URL. The managed task stays eligible for owned startup
+        # (non-empty generated command) while the external default has none.
+        config = load_runtime_config(
+            environ={},
+            overrides={
+                "NEWS_MODEL_BACKEND": "external",
+                "NEWS_MODEL_BASE_URL": "https://api.example.com/v1",
+                "NEWS_MODEL": CODEX_TEST_MODEL_ALIAS,
+                "NEWS_MODEL_ARTICLE_SUMMARY": GEMMA_4_12B_IT_4BIT_MODEL_ALIAS,
+                "NEWS_MODEL_ARTICLE_SUMMARY_BASE_URL": "http://127.0.0.1:8090/v1",
+            },
+            materialize_outputs=False,
+        )
+        self.assertEqual(config.model_backend, "external")
+        self.assertEqual(config.model_server_command, "")
+        self.assertEqual(
+            config.model_assignments[MODEL_TASK_ARTICLE_SUMMARY].base_url,
+            "http://127.0.0.1:8090/v1",
+        )
+        self.assertTrue(
+            config.model_assignments[MODEL_TASK_ARTICLE_SUMMARY].server_command
+        )
+        self.assertEqual(
+            config.model_assignments[MODEL_TASK_ARTICLE_SUMMARY].backend,
+            "mlx-vlm",
+        )
+        # The managed task on the distinct URL is eligible for owned startup;
+        # tasks riding the external default endpoint are not owned even when
+        # their inferred backend would build a command string.
+        self.assertTrue(
+            config_module.is_managed_server_assignment(
+                config.model_assignments[MODEL_TASK_ARTICLE_SUMMARY],
+                default_backend=config.model_backend,
+                default_base_url=config.model_base_url,
+            )
+        )
+        self.assertFalse(
+            config_module.is_managed_server_assignment(
+                config.model_assignments[MODEL_TASK_TITLE_GENERATION],
+                default_backend=config.model_backend,
+                default_base_url=config.model_base_url,
+            )
+        )
+        # The other tasks inherit the external default endpoint and remain
+        # caller-managed.
+        self.assertEqual(
+            config.model_assignments[MODEL_TASK_TITLE_GENERATION].base_url,
+            "https://api.example.com/v1",
         )
 
     def test_default_recipient_and_sender_are_clean_example_addresses(self) -> None:

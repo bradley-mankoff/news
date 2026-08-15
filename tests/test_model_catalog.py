@@ -74,7 +74,7 @@ class ModelCatalogTests(unittest.TestCase):
             )
 
     def test_catalog_entries_are_complete(self) -> None:
-        self.assertEqual(len(model_catalog.CATALOG_MODELS), 4)
+        self.assertEqual(len(model_catalog.CATALOG_MODELS), 5)
         for entry in model_catalog.CATALOG_MODELS.values():
             self.assertTrue(entry.alias)
             self.assertTrue(entry.reference)
@@ -280,6 +280,7 @@ class ModelCatalogTests(unittest.TestCase):
         self.assertEqual(
             list(merged),
             [
+                "translategemma-4b-it-4bit",
                 "gemma-4-12b-it-4bit",
                 "gemma-e2b-tiny",
                 "qwythos-9b-4bit",
@@ -674,8 +675,19 @@ class ModelCatalogTests(unittest.TestCase):
                 self.assertIn("hf_repo", pick)
                 self.assertIn("reason", pick)
                 self.assertTrue(pick["reason"])
-        # Translation is the documented honest gap: no verified curated pick.
-        self.assertEqual(model_catalog.recommend_models("translation"), [])
+        # Translation is the curated TranslateGemma 4B MLX pick (the default
+        # model is appended as the generic fallback, never first).
+        translation_picks = model_catalog.recommend_models("translation")
+        self.assertEqual(
+            [pick["alias"] for pick in translation_picks],
+            ["translategemma-4b-it-4bit", model_catalog.DEFAULT_CATALOG_MODEL_ALIAS],
+        )
+        self.assertEqual(
+            translation_picks[0]["hf_repo"],
+            "mlx-community/translategemma-4b-it-4bit",
+        )
+        self.assertEqual(translation_picks[0]["backend"], "mlx-lm")
+        self.assertIn("TranslateGemma", translation_picks[0]["reason"])
         # Speed's curated pick is the tiny test model, with the default model
         # appended exactly once as the fallback when it is not already a pick.
         speed_picks = model_catalog.recommend_models("speed")
@@ -709,7 +721,7 @@ class ModelCatalogTests(unittest.TestCase):
 
     def test_list_model_catalog_is_json_ready(self) -> None:
         records = model_catalog.list_model_catalog()
-        self.assertEqual(len(records), 4)
+        self.assertEqual(len(records), 5)
         for record in records:
             self.assertIsInstance(record, dict)
             self.assertTrue(record["hf_url"].startswith("https://huggingface.co/"))

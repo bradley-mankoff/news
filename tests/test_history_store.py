@@ -224,6 +224,108 @@ class HistoryStoreTests(unittest.TestCase):
                     "daily",
                 )
 
+    def test_translation_columns_migrate_lazily_and_legacy_rows_decode_null(self) -> None:
+        """Legacy DuckDB files gain nullable translation columns on the next
+        schema pass and old rows decode with null/empty values (issue #172)."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "history.duckdb"
+            ensure_schema(db_path)
+            with connect(db_path) as con:
+                columns = {
+                    row[1]
+                    for row in con.execute("PRAGMA table_info('run_articles')").fetchall()
+                }
+            self.assertIn("translation_status", columns)
+            self.assertIn("translation_reason", columns)
+            self.assertIn("translation_source_language", columns)
+            self.assertIn("translation_target_language", columns)
+            self.assertIn("translation_model", columns)
+            self.assertIn("translation_original_text_preview", columns)
+            self.assertIn("translation_text_preview", columns)
+
+            # Simulate a legacy database created before translation existed:
+            # drop the columns and write a legacy-shaped row.
+            with connect(db_path) as con:
+                for column in (
+                    "translation_status",
+                    "translation_reason",
+                    "translation_source_language",
+                    "translation_target_language",
+                    "translation_model",
+                    "translation_original_text_preview",
+                    "translation_text_preview",
+                ):
+                    con.execute(f"ALTER TABLE run_articles DROP COLUMN {column}")
+
+            diagnostics = self._diagnostics("2026-06-01T10:00:00", preset_id="daily")
+            legacy_article = {
+                "url": "https://example.com/legacy",
+                "title": "Legacy",
+                "source": "Example",
+            }
+            write_run_history(
+                db_path,
+                run_id="2026-06-01_10-00-00",
+                diagnostics=diagnostics,
+                candidate_articles=[legacy_article],
+                export_csv=False,
+            )
+            with connect(db_path) as con:
+                row = con.execute(
+                    "SELECT translation_status, translation_source_language, "
+                    "translation_original_text_preview FROM run_articles"
+                ).fetchone()
+                self.assertEqual(row, (None, None, None))
+
+    def test_translated_stage_rows_persist_bounded_previews(self) -> None:
+        """The translated stage stores bounded previews and provenance, never
+        full article bodies (issue #172)."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "history.duckdb"
+            diagnostics = self._diagnostics("2026-06-01T10:00:00", preset_id="daily")
+            write_run_history(
+                db_path,
+                run_id="2026-06-01_10-00-00",
+                diagnostics=diagnostics,
+                candidate_articles=[
+                    {"url": "https://example.com/a", "title": "A", "source": "El Pais"}
+                ],
+                translated_articles=[
+                    {
+                        "url": "https://example.com/a",
+                        "title": "A",
+                        "source": "El Pais",
+                        "translation_status": "translated",
+                        "translation_reason": "translated",
+                        "translation_source_language": "es",
+                        "translation_target_language": "en",
+                        "translation_model": "translategemma-4b-it-4bit",
+                        "translation_original_text_preview": "Hola mundo",
+                        "translation_text_preview": "Hello world",
+                    }
+                ],
+                export_csv=False,
+            )
+            with connect(db_path) as con:
+                rows = con.execute(
+                    "SELECT stage, translation_status, translation_model, "
+                    "translation_original_text_preview, translation_text_preview "
+                    "FROM run_articles ORDER BY stage"
+                ).fetchall()
+                self.assertEqual(
+                    rows,
+                    [
+                        ("candidate", None, None, None, None),
+                        (
+                            "translated",
+                            "translated",
+                            "translategemma-4b-it-4bit",
+                            "Hola mundo",
+                            "Hello world",
+                        ),
+                    ],
+                )
+
     def test_run_review_markdown_includes_kpis_and_report_preview(self) -> None:
         diagnostics = self._diagnostics("2026-06-01T10:00:00", preset_id="scratch")
         markdown = diagnostics.to_run_review_markdown(

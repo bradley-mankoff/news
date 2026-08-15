@@ -46,6 +46,62 @@ class RunFinalizerTests(unittest.TestCase):
                 self.assertEqual(con.execute("SELECT COUNT(*) FROM run_articles").fetchone()[0], 3)
                 self.assertEqual(con.execute("SELECT COUNT(*) FROM article_summaries").fetchone()[0], 2)
 
+    def test_finish_records_translated_stage_in_history(self) -> None:
+        """Post-translation candidates persist as their own durable stage
+        alongside the raw candidate stage (issue #172); runs that never
+        record translation stay compatible."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            finalizer, paths, _progress = self._finalizer(tmpdir)
+            finalizer.record_candidate_articles([self._article("https://example.com/a", "A")])
+            finalizer.record_translated_articles(
+                [
+                    {
+                        "url": "https://example.com/a",
+                        "title": "A",
+                        "source": "El Pais",
+                        "translation_status": "translated",
+                        "translation_reason": "translated",
+                        "translation_source_language": "es",
+                        "translation_target_language": "en",
+                        "translation_model": "translategemma-4b-it-4bit",
+                        "translation_original_text_preview": "Hola",
+                        "translation_text_preview": "Hello",
+                    }
+                ]
+            )
+            finalizer.diagnostics.event("completed")
+            finalizer.finish()
+            with connect(paths["history_db"]) as con:
+                rows = con.execute(
+                    "SELECT stage, translation_status, translation_source_language, "
+                    "translation_original_text_preview FROM run_articles ORDER BY stage"
+                ).fetchall()
+                self.assertEqual(
+                    rows,
+                    [
+                        ("candidate", None, None, None),
+                        ("translated", "translated", "es", "Hola"),
+                    ],
+                )
+
+    def test_finish_failed_records_translated_stage_compatibly(self) -> None:
+        """A failed run that recorded translation still writes history with
+        both stages; a failed run without translation stays legacy-shaped."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            finalizer, paths, _progress = self._finalizer(tmpdir)
+            finalizer.record_candidate_articles([self._article("https://example.com/a", "A")])
+            finalizer.record_translated_articles([self._article("https://example.com/a", "A")])
+            finalizer.finish_failed(RuntimeError("boom"), "traceback")
+            with connect(paths["history_db"]) as con:
+                stages = {
+                    row[0]
+                    for row in con.execute(
+                        "SELECT stage FROM run_articles"
+                    ).fetchall()
+                }
+            self.assertEqual(stages, {"candidate", "translated"})
+            self.assertEqual(finalizer.diagnostics.events[-1]["label"], "failed")
+
     def test_finish_writes_okf_bundle_from_recorded_story_records(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             finalizer, paths, _progress = self._finalizer(tmpdir)

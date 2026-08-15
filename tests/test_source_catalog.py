@@ -148,6 +148,53 @@ class SourceCatalogTests(unittest.TestCase):
                 list(load_sources(path, source_scope="peripheral")),
                 ["EnglishCore", "EnglishPeripheral"],
             )
+            # Translation-enabled loading includes declared non-English
+            # sources in the selected tiers; English passes through and
+            # missing-language sources stay excluded (issue #172).
+            self.assertEqual(
+                list(load_sources(path, source_scope="peripheral", translation_enabled=True)),
+                ["EnglishCore", "EnglishPeripheral", "Spanish"],
+            )
+            # Core scope with translation still excludes peripheral tiers.
+            self.assertEqual(
+                list(load_sources(path, source_scope="core", translation_enabled=True)),
+                ["EnglishCore"],
+            )
+
+    def test_translation_enabled_loading_excludes_missing_language_sources(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "sources.yaml"
+            path.write_text(
+                yaml.safe_dump(
+                    {
+                        "sources": [
+                            {
+                                "key": "EnglishCore",
+                                "url": "https://example.com/core.xml",
+                                "language": "en",
+                                "tier": "core",
+                            },
+                            {
+                                "key": "NoLanguage",
+                                "url": "https://example.com/no-lang.xml",
+                                "tier": "core",
+                            },
+                        ],
+                    },
+                    sort_keys=False,
+                ),
+                encoding="utf-8",
+            )
+
+            self.assertEqual(
+                list(load_sources(path, source_scope="core", translation_enabled=True)),
+                ["EnglishCore"],
+            )
+            # Disabled loading keeps the exact same English-only result.
+            self.assertEqual(
+                list(load_sources(path, source_scope="core")),
+                ["EnglishCore"],
+            )
 
     def test_load_records_and_source_rows(self) -> None:
         with TemporaryDirectory() as tmpdir:

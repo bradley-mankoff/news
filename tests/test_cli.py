@@ -285,9 +285,10 @@ class CliTests(unittest.TestCase):
 
         self.assertEqual(code, 0)
         entries = json.loads(stdout)
-        self.assertEqual(len(entries), 4)
-        self.assertEqual(entries[0]["alias"], "gemma-4-12b-it-4bit")
-        self.assertTrue(entries[0]["is_default"])
+        self.assertEqual(len(entries), 5)
+        self.assertEqual(entries[0]["alias"], "translategemma-4b-it-4bit")
+        self.assertEqual(entries[1]["alias"], "gemma-4-12b-it-4bit")
+        self.assertTrue(entries[1]["is_default"])
         llama_entries = [entry for entry in entries if entry["backend"] == "llama.cpp"]
         self.assertEqual(
             [entry["alias"] for entry in llama_entries],
@@ -320,6 +321,7 @@ class CliTests(unittest.TestCase):
             self.assertEqual(
                 [entry["alias"] for entry in entries],
                 [
+                    "translategemma-4b-it-4bit",
                     "gemma-4-12b-it-4bit",
                     "gemma-e2b-tiny",
                     "qwythos-9b-4bit",
@@ -327,7 +329,7 @@ class CliTests(unittest.TestCase):
                     "smoke-model",
                 ],
             )
-            self.assertTrue(entries[0]["is_default"])
+            self.assertTrue(entries[1]["is_default"])
             smoke = next(entry for entry in entries if entry["alias"] == "smoke-model")
             self.assertEqual(smoke["reference"], "mlx-community/smoke-model")
             self.assertEqual(smoke["backend"], "mlx-lm")
