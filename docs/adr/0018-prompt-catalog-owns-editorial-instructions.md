@@ -6,16 +6,19 @@ Date: 2026-08-02
 
 ## Context
 
-The five LLM prompt stages hardcoded editorial sentences inside stage modules,
-making tone changes a code change and blocking per-stage prompt customization.
+The five editorial LLM prompt stages hardcoded editorial sentences inside
+stage modules, making tone changes a code change and blocking per-stage prompt
+customization. Translation is a separate structured-prompt LLM assignment and
+is intentionally excluded from the editorial Prompt Catalog.
 
 ## Decision
 
 Introduce a code-owned Prompt Catalog (`news_pipeline/prompt_catalog.py`,
 stdlib-only) of built-in Prompt Profiles. Profiles provide per-task editorial
-instruction sentences for article summary, story scale screening, story
-drafting, title generation, and image art direction. Machine-required output
-contracts (`DATABASE_ENTRY:` blocks, citation markers, strict JSON, retry
+instruction sentences for the five editorial stages: article summary, story
+scale screening, story drafting, title generation, and image art direction.
+Machine-required output contracts (`DATABASE_ENTRY:` blocks, citation markers, strict
+JSON, retry
 messages, scale vocabulary) live in `news_pipeline/prompt_contracts.py` (ADR
 0011); stage modules compose prompts from those constants, and config
 resolution validates that profile instructions never weaken them. `balanced` is

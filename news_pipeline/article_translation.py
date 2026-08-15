@@ -18,6 +18,8 @@ from typing import Any
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 
+TranslationProgressCallback = Callable[..., None]
+
 # Bounded request body sent to the translation model; the full in-memory body
 # stays available for fallback and provenance previews.
 TRANSLATION_REQUEST_TEXT_LIMIT = 5000
@@ -67,8 +69,8 @@ class ArticleTranslationRuntime:
     # preserves the original body.
     validate_language_code: Callable[[str], bool] | None = None
     progress_start: Callable[[int], None] | None = None
-    progress_advance: Callable[[str], None] | None = None
-    progress_finish: Callable[[str], None] | None = None
+    progress_advance: TranslationProgressCallback | None = None
+    progress_finish: TranslationProgressCallback | None = None
     detail: Callable[[str], None] | None = None
 
 
@@ -171,6 +173,49 @@ def _with_translation_metadata(
     }
 
 
+def _translation_failure_result(
+    article: dict[str, Any],
+    runtime: ArticleTranslationRuntime,
+    *,
+    source_language: str,
+    target_language: str,
+    original_text: str,
+    title: str,
+    error: BaseException,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Return a visible, non-destructive result for an adapter failure."""
+    label = title or str(article.get("url") or "article")
+    if runtime.detail is not None:
+        runtime.detail(
+            f"Translation failed for {label[:80]} "
+            f"({type(error).__name__}: {error}); keeping original body."
+        )
+    return (
+        _with_translation_metadata(
+            article,
+            status=TRANSLATION_STATUS_UNCHANGED,
+            reason=TRANSLATION_REASON_TRANSLATION_FAILED,
+            source_language=source_language,
+            target_language=target_language,
+            model_reference=runtime.model_reference,
+            text=original_text,
+        ),
+        {
+            "status": TRANSLATION_STATUS_UNCHANGED,
+            "reason": TRANSLATION_REASON_TRANSLATION_FAILED,
+            "source_language": source_language,
+        },
+    )
+
+
+def _translation_chunks(text: str) -> list[str]:
+    """Split a body into bounded chunks without dropping its suffix."""
+    return [
+        text[start : start + TRANSLATION_REQUEST_TEXT_LIMIT]
+        for start in range(0, len(text), TRANSLATION_REQUEST_TEXT_LIMIT)
+    ] or [""]
+
+
 def _translate_single_article(
     article: dict[str, Any],
     runtime: ArticleTranslationRuntime,
@@ -184,25 +229,36 @@ def _translate_single_article(
     original_text = str(article.get("text") or "")
     title = str(article.get("title") or "")
 
-    if runtime.validate_language_code is not None and not runtime.validate_language_code(
-        source_language
-    ):
-        return (
-            _with_translation_metadata(
+    if runtime.validate_language_code is not None:
+        try:
+            language_is_supported = runtime.validate_language_code(source_language)
+        except (ValueError, TypeError, AttributeError, OSError, TimeoutError) as error:
+            return _translation_failure_result(
                 article,
-                status=TRANSLATION_STATUS_SKIPPED_UNKNOWN_LANGUAGE,
-                reason=TRANSLATION_REASON_UNSUPPORTED_LANGUAGE_CODE,
+                runtime,
                 source_language=source_language,
                 target_language=target_language,
-                model_reference=None,
-                text=original_text,
-            ),
-            {
-                "status": TRANSLATION_STATUS_SKIPPED_UNKNOWN_LANGUAGE,
-                "reason": TRANSLATION_REASON_UNSUPPORTED_LANGUAGE_CODE,
-                "source_language": source_language,
-            },
-        )
+                original_text=original_text,
+                title=title,
+                error=error,
+            )
+        if not language_is_supported:
+            return (
+                _with_translation_metadata(
+                    article,
+                    status=TRANSLATION_STATUS_SKIPPED_UNKNOWN_LANGUAGE,
+                    reason=TRANSLATION_REASON_UNSUPPORTED_LANGUAGE_CODE,
+                    source_language=source_language,
+                    target_language=target_language,
+                    model_reference=None,
+                    text=original_text,
+                ),
+                {
+                    "status": TRANSLATION_STATUS_SKIPPED_UNKNOWN_LANGUAGE,
+                    "reason": TRANSLATION_REASON_UNSUPPORTED_LANGUAGE_CODE,
+                    "source_language": source_language,
+                },
+            )
 
     if not original_text.strip():
         return (
@@ -222,32 +278,61 @@ def _translate_single_article(
             },
         )
 
-    llm = runtime.build_chat_model(max_tokens=runtime.max_tokens, task=TRANSLATION_TASK)
-    messages = build_translation_messages(original_text, source_language, target_language)
-    response = runtime.invoke_with_retries(
-        llm,
-        messages,
-        task_name=f"translation for {title}",
-        fallback_content=original_text,
-    )
-    used_fallback = bool(
-        (getattr(response, "response_metadata", None) or {}).get(
-            "news_pipeline_used_fallback"
+    try:
+        llm = runtime.build_chat_model(max_tokens=runtime.max_tokens, task=TRANSLATION_TASK)
+        chunks = _translation_chunks(original_text)
+        translated_parts: list[str] = []
+        used_fallback = False
+        empty_model_output = False
+        for chunk_index, chunk in enumerate(chunks, start=1):
+            task_name = f"translation for {title}"
+            if len(chunks) > 1:
+                task_name += f" (part {chunk_index}/{len(chunks)})"
+            response = runtime.invoke_with_retries(
+                llm,
+                build_translation_messages(chunk, source_language, target_language),
+                task_name=task_name,
+                fallback_content=chunk,
+            )
+            used_fallback = bool(
+                (getattr(response, "response_metadata", None) or {}).get(
+                    "news_pipeline_used_fallback"
+                )
+            )
+            if used_fallback:
+                break
+            translated_part = runtime.strip_model_artifacts(
+                str(response.content or "")
+            ).strip()
+            if not translated_part:
+                empty_model_output = True
+                break
+            translated_parts.append(translated_part)
+        translated_text = "".join(translated_parts).strip()
+    except (ValueError, TypeError, AttributeError, OSError, TimeoutError) as error:
+        return _translation_failure_result(
+            article,
+            runtime,
+            source_language=source_language,
+            target_language=target_language,
+            original_text=original_text,
+            title=title,
+            error=error,
         )
-    )
-    translated_text = runtime.strip_model_artifacts(str(response.content or "")).strip()
-    if used_fallback or not translated_text:
+
+    if used_fallback or empty_model_output or not translated_text:
         # A distinct failure reason even though the body status is unchanged:
         # the original body flows to clustering/summarization untouched.
+        reason = (
+            TRANSLATION_REASON_TRANSLATION_FAILED
+            if used_fallback
+            else TRANSLATION_REASON_EMPTY_MODEL_OUTPUT
+        )
         return (
             _with_translation_metadata(
                 article,
                 status=TRANSLATION_STATUS_UNCHANGED,
-                reason=(
-                    TRANSLATION_REASON_TRANSLATION_FAILED
-                    if used_fallback
-                    else TRANSLATION_REASON_EMPTY_MODEL_OUTPUT
-                ),
+                reason=reason,
                 source_language=source_language,
                 target_language=target_language,
                 model_reference=runtime.model_reference,
@@ -255,11 +340,7 @@ def _translate_single_article(
             ),
             {
                 "status": TRANSLATION_STATUS_UNCHANGED,
-                "reason": (
-                    TRANSLATION_REASON_TRANSLATION_FAILED
-                    if used_fallback
-                    else TRANSLATION_REASON_EMPTY_MODEL_OUTPUT
-                ),
+                "reason": reason,
                 "source_language": source_language,
             },
         )
@@ -345,7 +426,8 @@ def run_article_translation_pass(
     translated_articles: list[dict[str, Any]] = []
     status_counts: Counter[str] = Counter()
     source_language_counts: Counter[str] = Counter()
-    for index, (article, decision) in enumerate(zip(article_targets, decisions), start=1):
+    translation_index = 0
+    for article, decision in zip(article_targets, decisions):
         if not decision["needed"]:
             status = (
                 TRANSLATION_STATUS_SKIPPED_UNKNOWN_LANGUAGE
@@ -362,10 +444,13 @@ def run_article_translation_pass(
                 text=str(article.get("text") or ""),
             )
         else:
+            translation_index += 1
             if runtime.progress_advance is not None:
                 runtime.progress_advance(
-                    f"  [{index}/{len(translation_targets)}] Translating "
-                    f"{str(article.get('title') or article.get('url') or 'article')[:80]}"
+                    detail=(
+                        f"  [{translation_index}/{len(translation_targets)}] Translating "
+                        f"{str(article.get('title') or article.get('url') or 'article')[:80]}"
+                    )
                 )
             translated_article, _ = _translate_single_article(article, runtime, decision)
         translated_articles.append(translated_article)
@@ -382,5 +467,7 @@ def run_article_translation_pass(
     payload["not_needed_count"] = int(status_counts.get(TRANSLATION_STATUS_NOT_NEEDED, 0))
     payload["source_language_counts"] = dict(sorted(source_language_counts.items()))
     if runtime.progress_finish is not None:
-        runtime.progress_finish(f"{payload['translated_count']} translated article(s).")
+        runtime.progress_finish(
+            detail=f"{payload['translated_count']} translated article(s)."
+        )
     return translated_articles, payload

@@ -16,9 +16,12 @@ degraded model response or fallback — never as a rejected edit. ADR 0011
 already anticipated full-template validation through `validate_prompt_contract()`;
 this ADR records the accepted implementation of that surface.
 
-The five actual LLM stages are Article Summarization, Story Scale Screening,
-Story Drafting, Title Generation, and Image Art Direction. Story Discovery has
-no LLM stage (embedding/TF-IDF clustering) and is out of scope. Existing
+The five editorial LLM stages with full-template support are Article
+Summarization, Story Scale Screening, Story Drafting, Title Generation, and
+Image Art Direction. Translation is a sixth LLM assignment, but its structured
+language-code prompt is intentionally outside this editorial template surface.
+Story Discovery has no LLM stage (embedding/TF-IDF clustering) and is out of
+scope. Existing
 sentence-level Prompt Profiles, `config/prompt_overrides.yaml`, and
 `NEWS_PROMPT_OVERRIDE_<TASK>` values are backward-compatible and keep their
 current semantics.

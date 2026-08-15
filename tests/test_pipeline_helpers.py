@@ -4103,6 +4103,126 @@ class PipelineHelperTests(unittest.TestCase):
         self.assertEqual(translation_event["skipped_unknown_language"], 0)
         finalizer.record_translated_articles.assert_called_once_with([raw_candidate])
 
+    def test_run_session_translation_fallback_records_event_and_history(self) -> None:
+        """Exercise the real translation stage and runtime callbacks through a session."""
+        from news_pipeline.history_store import connect
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            config = replace(
+                pipeline.CONFIG,
+                translation_enabled=True,
+                output_dir=root / "out",
+                run_output_dir=root / "out" / ".staging",
+                run_staging_dir=root / "out" / ".staging",
+                latest_run_markdown_path=root / "out" / "latest_run.md",
+                latest_run_log_path=root / "out" / "latest_run.log",
+                latest_run_details_path=root / "out" / "latest_run_details.json",
+                history_db_path=root / "history.duckdb",
+            )
+            tracker = pipeline.ProgressTracker(stream=StringIO())
+            session = pipeline.RunSession(config, progress=tracker)
+            observed: dict[str, Any] = {}
+            article = {
+                "article_id": "es-1",
+                "source": "es-feed",
+                "title": "Hola",
+                "url": "https://example.com/es-1",
+                "text": "Hola mundo",
+            }
+
+            def run_impl() -> None:
+                pipeline.SOURCE_FEEDS = {"es-feed": {"language": "es"}}
+                diagnostics = RunDiagnostics(run_started_at="2026-06-01T10:00:00", settings={})
+                finalizer = pipeline._active_run_finalizer(diagnostics, config)
+                finalizer.record_candidate_articles([article])
+                translated, payload = pipeline.article_translation_stage.run_article_translation_pass(
+                    [article], pipeline._article_translation_runtime()
+                )
+                observed["article"] = translated[0]
+                observed["payload"] = payload
+                diagnostics.event("translation", **payload)
+                finalizer.record_translated_articles(translated)
+                diagnostics.event("completed")
+                finalizer.finish()
+
+            def fallback(_llm: object, _messages: object, **_kwargs: object) -> AIMessage:
+                return AIMessage(
+                    content="Hola mundo",
+                    response_metadata={"news_pipeline_used_fallback": True},
+                )
+
+            with patch.object(pipeline, "build_chat_model", return_value=object()), patch.object(
+                pipeline, "invoke_with_retries", side_effect=fallback
+            ):
+                session.run(run_impl)
+
+            self.assertEqual(observed["article"]["text"], "Hola mundo")
+            self.assertEqual(observed["article"]["translation_status"], "unchanged")
+            self.assertEqual(observed["article"]["translation_reason"], "translation_failed")
+            self.assertEqual(observed["payload"]["unchanged_count"], 1)
+            self.assertEqual(tracker.meter_done, tracker.meter_total)
+            with connect(config.history_db_path) as con:
+                self.assertEqual(
+                    con.execute(
+                        "SELECT stage, translation_status, translation_reason "
+                        "FROM run_articles ORDER BY stage"
+                    ).fetchall(),
+                    [("candidate", None, None), ("translated", "unchanged", "translation_failed")],
+                )
+                self.assertEqual(con.execute("SELECT status FROM runs").fetchone()[0], "completed")
+
+    def test_run_session_translation_server_exit_finalizes_and_tears_down(self) -> None:
+        """A fatal translation server exit remains fatal but still finalizes history."""
+        from news_pipeline.history_store import connect
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            config = replace(
+                pipeline.CONFIG,
+                translation_enabled=True,
+                output_dir=root / "out",
+                run_output_dir=root / "out" / ".staging",
+                run_staging_dir=root / "out" / ".staging",
+                latest_run_markdown_path=root / "out" / "latest_run.md",
+                latest_run_log_path=root / "out" / "latest_run.log",
+                latest_run_details_path=root / "out" / "latest_run_details.json",
+                history_db_path=root / "history.duckdb",
+            )
+            session = pipeline.RunSession(config, progress=pipeline.ProgressTracker(stream=StringIO()))
+            article = {
+                "article_id": "es-1",
+                "source": "es-feed",
+                "title": "Hola",
+                "url": "https://example.com/es-1",
+                "text": "Hola mundo",
+            }
+
+            def run_impl() -> None:
+                pipeline.SOURCE_FEEDS = {"es-feed": {"language": "es"}}
+                diagnostics = RunDiagnostics(run_started_at="2026-06-01T10:00:00", settings={})
+                finalizer = pipeline._active_run_finalizer(diagnostics, config)
+                finalizer.record_candidate_articles([article])
+                pipeline.article_translation_stage.run_article_translation_pass(
+                    [article], pipeline._article_translation_runtime()
+                )
+
+            with patch.object(pipeline, "build_chat_model", return_value=object()), patch.object(
+                pipeline,
+                "invoke_with_retries",
+                side_effect=pipeline.ManagedModelServerExited("translation server exited"),
+            ):
+                with self.assertRaisesRegex(pipeline.ManagedModelServerExited, "translation server exited"):
+                    session.run(run_impl)
+
+            self.assertFalse(pipeline.MANAGED_MODEL_SERVER_ACTIVE)
+            with connect(config.history_db_path) as con:
+                self.assertEqual(con.execute("SELECT status FROM runs").fetchone()[0], "failed")
+                self.assertEqual(
+                    con.execute("SELECT stage FROM run_articles").fetchall(),
+                    [("candidate",)],
+                )
+
     def test_complete_pipeline_run_persists_report_after_delivery_failure(self) -> None:
         diagnostics = RunDiagnostics(
             run_started_at="2026-06-01T10:00:00",

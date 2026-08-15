@@ -24,11 +24,15 @@ sources:
 
 The **Article Collection Funnel** fetches configured source contexts, rejects
 source mismatches, deduplicates URLs, records Source Run diagnostics, persists
-candidate URL history, and returns fresh article candidates to global story
-clustering.
+candidate URL history, and returns fresh article candidates. When translation
+is enabled, candidates pass through the optional declared-language Translation
+stage before global story clustering; otherwise the collection output flows
+unchanged to clustering.
 
 # Boundary
 
-Collection owns acquisition and freshness decisions. Article Summary Record
-owns normalized summary data after collection; DuckDB history remains the
-canonical durable runtime store.
+Collection owns acquisition and freshness decisions. Translation owns the
+post-collection body transformation without guessing or retagging source
+languages. Article Summary Record owns normalized summary data after collection
+(and any translation); DuckDB history remains the canonical durable runtime
+store.

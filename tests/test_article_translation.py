@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import unittest
+from dataclasses import replace
+from io import StringIO
 from types import SimpleNamespace
 from typing import Any
 
+from news_pipeline.pipeline import ProgressTracker
 from news_pipeline.article_translation import (
     TRANSLATION_REASON_EMPTY_BODY,
     TRANSLATION_REASON_EMPTY_MODEL_OUTPUT,
@@ -209,6 +212,23 @@ class TranslationPassTests(unittest.TestCase):
         self.assertEqual(calls[3][1]["task"], "translation")
         self.assertEqual(calls[4][1]["task_name"], "translation for Titulo")
 
+    def test_production_progress_tracker_callbacks_use_keyword_detail(self) -> None:
+        """The injected production callbacks must match ProgressTracker."""
+        tracker = ProgressTracker(stream=StringIO())
+        runtime, _calls = _runtime()
+        runtime = replace(
+            runtime,
+            progress_start=tracker.start_translation,
+            progress_advance=tracker.advance_meter,
+            progress_finish=tracker.finish_meter,
+        )
+
+        out, payload = run_article_translation_pass([_article()], runtime)
+
+        self.assertEqual(out[0]["translation_status"], TRANSLATION_STATUS_TRANSLATED)
+        self.assertEqual(payload["translated_count"], 1)
+        self.assertEqual(tracker.meter_done, tracker.meter_total)
+
     def test_unchanged_model_output_is_recorded_not_translated(self) -> None:
         runtime, _calls = _runtime(translated_text="Hola mundo")
         out, payload = run_article_translation_pass([_article()], runtime)
@@ -234,6 +254,43 @@ class TranslationPassTests(unittest.TestCase):
         self.assertEqual(out[0]["translation_reason"], TRANSLATION_REASON_EMPTY_MODEL_OUTPUT)
         self.assertEqual(out[0]["text"], "Hola mundo")
 
+    def test_adapter_construction_failure_preserves_body_and_records_failure(self) -> None:
+        runtime, calls = _runtime()
+
+        def fail_build(**_kwargs: object) -> object:
+            raise ValueError("invalid translation model configuration")
+
+        runtime = replace(runtime, build_chat_model=fail_build)
+        out, payload = run_article_translation_pass([_article()], runtime)
+
+        self.assertEqual(out[0]["text"], "Hola mundo")
+        self.assertEqual(out[0]["translation_status"], TRANSLATION_STATUS_UNCHANGED)
+        self.assertEqual(out[0]["translation_reason"], TRANSLATION_REASON_TRANSLATION_FAILED)
+        self.assertEqual(payload["unchanged_count"], 1)
+        self.assertTrue(any(call[0] == "detail" for call in calls))
+
+    def test_fatal_adapter_error_is_not_swallowed_as_article_fallback(self) -> None:
+        runtime, _calls = _runtime()
+
+        def fail_build(**_kwargs: object) -> object:
+            raise RuntimeError("managed server exited")
+
+        runtime = replace(runtime, build_chat_model=fail_build)
+        with self.assertRaisesRegex(RuntimeError, "managed server exited"):
+            run_article_translation_pass([_article()], runtime)
+
+    def test_response_normalization_failure_preserves_body_and_records_failure(self) -> None:
+        runtime, _calls = _runtime()
+
+        def fail_strip(_text: str) -> str:
+            raise ValueError("malformed model response")
+
+        runtime = replace(runtime, strip_model_artifacts=fail_strip)
+        out, _payload = run_article_translation_pass([_article()], runtime)
+
+        self.assertEqual(out[0]["text"], "Hola mundo")
+        self.assertEqual(out[0]["translation_reason"], TRANSLATION_REASON_TRANSLATION_FAILED)
+
     def test_empty_body_skips_model_call_and_stays_unchanged(self) -> None:
         runtime, calls = _runtime()
         out, payload = run_article_translation_pass([_article(text="   ")], runtime)
@@ -244,6 +301,20 @@ class TranslationPassTests(unittest.TestCase):
             [call for call in calls if call[0] in ("build_chat_model", "invoke_with_retries")]
         )
         self.assertEqual(payload["unchanged_count"], 1)
+
+    def test_unknown_declared_language_uses_production_fallback_path(self) -> None:
+        runtime, calls = _runtime(used_fallback=True)
+        feeds = dict(SOURCE_FEEDS)
+        feeds["el-pais"] = {"language": "xx"}
+        runtime = replace(runtime, source_feeds=feeds, validate_language_code=None)
+
+        out, payload = run_article_translation_pass([_article()], runtime)
+
+        self.assertEqual(out[0]["translation_status"], TRANSLATION_STATUS_UNCHANGED)
+        self.assertEqual(out[0]["translation_reason"], TRANSLATION_REASON_TRANSLATION_FAILED)
+        self.assertEqual(out[0]["text"], "Hola mundo")
+        self.assertEqual(payload["unchanged_count"], 1)
+        self.assertTrue(any(call[0] == "invoke_with_retries" for call in calls))
 
     def test_unsupported_language_code_skips_without_model_call(self) -> None:
         runtime, calls = _runtime(
@@ -303,6 +374,28 @@ class TranslationPassTests(unittest.TestCase):
         self.assertEqual(payload["translated_count"], 2)
         self.assertEqual(payload["not_needed_count"], 1)
         self.assertEqual(payload["source_language_counts"], {"en": 1, "es": 1, "fr": 1})
+
+    def test_long_body_is_translated_in_bounded_chunks_without_dropping_suffix(self) -> None:
+        runtime, _calls = _runtime()
+        requests: list[str] = []
+
+        def translate_chunk(_llm: object, messages: list[Any], **_kwargs: object) -> SimpleNamespace:
+            text = messages[0].content[0]["text"]
+            requests.append(text)
+            return SimpleNamespace(
+                content=f"translated:{text}",
+                response_metadata={},
+            )
+
+        runtime = replace(runtime, invoke_with_retries=translate_chunk)
+        original = "A" * 5000 + " SUFFIX SENTINEL"
+        out, _payload = run_article_translation_pass([_article(text=original)], runtime)
+
+        self.assertEqual(len(requests), 2)
+        self.assertTrue(all(len(request) <= 5000 for request in requests))
+        self.assertIn("SUFFIX SENTINEL", out[0]["text"])
+        self.assertLessEqual(len(out[0]["translation_original_text_preview"]), 300)
+        self.assertLessEqual(len(out[0]["translation_text_preview"]), 300)
 
     def test_model_artifacts_are_stripped_from_translated_output(self) -> None:
         def strip(text: str) -> str:

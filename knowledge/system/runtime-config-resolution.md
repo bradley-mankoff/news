@@ -30,4 +30,7 @@ preset. Removed settings are rejected instead of silently changing semantics.
 # Authority
 
 `news_pipeline/config.py` owns resolution rules. `config/run_presets.yaml` is
-editable input data; this concept does not copy or redefine its values.
+editable input data; this concept does not copy or redefine its values. The
+snapshot includes the opt-in translation enable/target settings and the
+separate Translation model assignment; the assignment is resolved even when
+the stage is disabled so diagnostics and previews remain reproducible.

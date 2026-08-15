@@ -271,7 +271,9 @@ Key Run Settings:
   `language` other than the target reach collection and their scraped bodies
   are translated before global story clustering; missing-language sources
   stay excluded. Source records are never auto-retagged and article text is
-  never language-sniffed — declared languages are authoritative.
+  never language-sniffed — declared languages are authoritative. If the model
+  rejects an unsupported declared code, the article remains unchanged and the
+  run surfaces `translation_failed` provenance.
 - `NEWS_TRANSLATION_TARGET_LANGUAGE=en`: normalized target language code for
   the translation stage (`_` folds to `-`).
 - `NEWS_TRANSLATION_MODEL`: compatibility name for the translation model
@@ -466,8 +468,11 @@ can join English story groups. It is disabled by default:
   unchanged; declared non-English bodies are translated to
   `NEWS_TRANSLATION_TARGET_LANGUAGE` (default `en`) with TranslateGemma's
   structured `source_lang_code`/`target_lang_code` prompt contract. Sources
-  without a declared language stay excluded, and unknown codes are skipped
-  and surfaced — never guessed from article text.
+  without a declared language stay excluded. Declared language codes are
+  never guessed from article text; if TranslateGemma rejects an unsupported
+  code, the article remains unchanged and the run surfaces
+  `translation_failed` provenance. Bodies longer than the bounded request are
+  translated in ordered chunks so their suffixes are not silently dropped.
 
 The translation model is the curated `mlx-community/translategemma-4b-it-4bit`
 4B MLX conversion (gated Gemma weights; requires Hugging Face authentication

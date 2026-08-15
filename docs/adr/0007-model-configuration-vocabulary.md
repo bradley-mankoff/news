@@ -32,9 +32,11 @@ profile is historical pressure, not current runtime behavior.
 - Task Model Assignment: the model selected for a model-using task, including
   its resolved name, backend, base URL, server command, and tuning. Every
   actual LLM stage has its own assignment: Article Summarization, Story
-  Drafting, Story Scale Screening, Title Generation, and Image Art Direction
-  (a separate LLM call producing the text-free FLUX prompt). Story Discovery
-  has no LLM stage (embedding/TF-IDF clustering) and inherits the default
+  Drafting, Story Scale Screening, Title Generation, Image Art Direction
+  (a separate LLM call producing the text-free FLUX prompt), and Translation
+  (the opt-in declared-language article stage). Translation has no Prompt
+  Profile or full-template slot. Story Discovery has no LLM stage
+  (embedding/TF-IDF clustering) and inherits the default
   model — the only inheritance case.
 - Model Defaults: model or backend defaults used when no explicit Model Tuning
   is configured.
@@ -59,9 +61,10 @@ Config Snapshot. It does not infer size-class model profiles from `NEWS_MODEL`.
 Setting ownership is exactly:
 
 1. **Model Selection / Task Model Assignment** — `NEWS_MODEL` is default model
-   selection only. The five LLM stages (Article Summarization, Story Drafting,
-   Story Scale Screening, Title Generation, and Image Art Direction) have
-   their own assignments via `NEWS_MODEL_<TASK>`. A default run may keep one
+   selection only. The six LLM stages (Article Summarization, Story Drafting,
+   Story Scale Screening, Title Generation, Image Art Direction, and
+   Translation) have their own assignments via `NEWS_MODEL_<TASK>`. A default
+   run may keep one
    model for all model-using tasks, but callers can select separate models
    without forking the rest of the run. Image Art Direction is an independent
    LLM call with its own assignment; Story Discovery is algorithmic and

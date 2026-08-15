@@ -22,7 +22,10 @@ sources:
 **Durable Run History** is the canonical runtime store for reproducible run
 outcomes. `output/history/news_history.duckdb` records diagnostics and
 structured article/story outcomes; configured CSV exports provide a reviewable
-flat projection.
+flat projection. Article rows retain separate raw `candidate` and post-stage
+`translated` records when translation runs. Translation status, reason,
+source/target language, model, and bounded original/translated previews are
+nullable provenance fields, so legacy rows remain readable after migration.
 
 # Authority boundary
 
