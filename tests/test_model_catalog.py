@@ -122,11 +122,11 @@ class ModelCatalogTests(unittest.TestCase):
             fit = model_catalog.runtime_fit_for_hf_model(
                 {"id": entry.hf_repo, "tags": [], "library_name": "", "pipeline_tag": None}
             )
-            expected_fit = (
-                model_catalog.RUNTIME_FIT_MANAGED_MLX_VLM
-                if entry.backend == "mlx-vlm"
-                else model_catalog.RUNTIME_FIT_MANAGED_MLX_LM
-            )
+            expected_fit = {
+                "mlx-vlm": model_catalog.RUNTIME_FIT_MANAGED_MLX_VLM,
+                "mlx-lm": model_catalog.RUNTIME_FIT_MANAGED_MLX_LM,
+                "llama.cpp": model_catalog.RUNTIME_FIT_MANAGED_LLAMA_CPP,
+            }[entry.backend]
             self.assertEqual(
                 fit["status"],
                 expected_fit,

@@ -2820,8 +2820,19 @@ assert(elements.modelSearchResults.textContent.includes("unknown_fit"), "unknown
 assert(elements.modelSearchResults.innerHTML.includes("Future &lt;fit&gt; &amp; choice"), "fit label was not escaped");
 assert(elements.modelSearchResults.querySelector('button[data-use-hf-model="owner/external"]').disabled, "external-only model was enabled");
 const ggufButton = elements.modelSearchResults.querySelector('button[data-use-hf-model="owner/gguf"]');
-assert(ggufButton && !ggufButton.disabled, "managed_llama_cpp model was not enabled");
-assert(ggufButton.dataset.useHfBackend === "llama.cpp", "managed_llama_cpp did not map to NEWS_MODEL_BACKEND=llama.cpp");
+// Drift guard (ship-review #146): with NEWS_MODEL_BACKEND=mlx-lm the managed
+// llama.cpp hit is disabled with actionable guidance instead of silently
+// switching backends.
+assert(ggufButton && ggufButton.disabled, "managed_llama_cpp was enabled without NEWS_MODEL_BACKEND=llama.cpp");
+assert(elements.modelSearchResults.innerHTML.includes(">Set NEWS_MODEL_BACKEND=llama.cpp to use<"), "mismatch label did not name the required backend");
+// With a matching backend override the managed llama.cpp hit becomes usable
+// and still maps to NEWS_MODEL_BACKEND=llama.cpp.
+state.schema.current_env.NEWS_MODEL_BACKEND = "llama.cpp";
+await searchHuggingFaceModels();
+const ggufUsable = elements.modelSearchResults.querySelector('button[data-use-hf-model="owner/gguf"]');
+assert(ggufUsable && !ggufUsable.disabled, "managed_llama_cpp model was not enabled with matching backend");
+assert(elements.modelSearchResults.innerHTML.includes(">Use</button>"), "enabled llama.cpp hit did not show the Use label");
+assert(ggufUsable.dataset.useHfBackend === "llama.cpp", "managed_llama_cpp did not map to NEWS_MODEL_BACKEND=llama.cpp");
 
 // Partial/empty schema state remains usable and keeps raw fallbacks.
 state.schema = { model_recommendation_tasks: ["raw_task"] };
