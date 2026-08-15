@@ -540,10 +540,12 @@ sends no credentials). An endpoint that rejects the request with HTTP 401/403
 fails fast instead of waiting out the readiness deadline.
 
 `news model-server-command` reports that no managed server command exists for
-the external backend. Per-task models can also use external endpoints by
-giving that task a distinct base URL (`NEWS_MODEL_ARTICLE_SUMMARY_BASE_URL`,
-`NEWS_MODEL_STORY_DRAFTING_BASE_URL`, `NEWS_MODEL_STORY_SCALE_SCREENING_BASE_URL`,
-`NEWS_MODEL_TITLE_GENERATION_BASE_URL`, `NEWS_MODEL_IMAGE_ART_DIRECTION_BASE_URL`).
+the external backend. Per-task assignments resolved with the external backend
+can use caller-managed endpoints by giving that task a distinct base URL
+(`NEWS_MODEL_ARTICLE_SUMMARY_BASE_URL`, `NEWS_MODEL_STORY_DRAFTING_BASE_URL`,
+`NEWS_MODEL_STORY_SCALE_SCREENING_BASE_URL`, `NEWS_MODEL_TITLE_GENERATION_BASE_URL`,
+`NEWS_MODEL_IMAGE_ART_DIRECTION_BASE_URL`); the URL itself does not select
+ownership.
 
 Normal report runs start the matching local MLX server, wait until it is ready,
 run the pipeline, and stop the managed server when the run exits. To keep a
