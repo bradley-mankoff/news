@@ -937,8 +937,6 @@ def _dispatch_guard_is_deferred(reason: str) -> bool:
         )
     )
 
-
-
 def _fill_concurrency_gap(
     ctx: PollContext,
     items: list[dict],

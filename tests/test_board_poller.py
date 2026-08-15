@@ -1402,6 +1402,102 @@ class FillConcurrencyGapTest(unittest.TestCase):
             },
         }
 
+    def test_poll_promotes_backlog_then_dispatches_on_next_poll(self):
+        cfg = {
+            "repo": "o/r",
+            "state_file": "state.json",
+            "default_lane": "Backlog",
+            "max_concurrent_workflows": 2,
+            "lanes": {
+                "Backlog": "backlog",
+                "Todo": "todo",
+                "In Progress": "in_progress",
+                "Ready for Review": "ready",
+                "In Review": "review",
+                "Done": "done",
+            },
+            "dispatch": {
+                "todo": {"default": "archon-fix-github-issue"},
+                "review": {
+                    "ship_to": "main",
+                    "done_lane": "Done",
+                    "merge_ship_on_approve": False,
+                },
+            },
+        }
+        state = {}
+        items = [self._item(1), self._item(2)]
+        with (
+            patch.object(
+                cycle_adapter,
+                "fetch_project",
+                return_value=(
+                    "project", "field",
+                    {"Todo": "todo-opt", "Done": "done-opt"},
+                    items,
+                ),
+            ),
+            patch.object(cycle_adapter, "prepare_dispatch_budget"),
+            patch.object(
+                cycle_adapter, "remaining_dispatch_budget", return_value=2
+            ),
+            patch.object(cycle_adapter, "sync_runnable_labels"),
+            patch.object(cycle_adapter, "move_to_lane", return_value=True) as move,
+            patch.object(cycle_adapter, "fresh_issue_dispatch_guard",
+                         return_value=(True, "")) as guard,
+            patch.object(
+                cycle_adapter,
+                "dispatch",
+                return_value=DispatchResult(True, pid=1),
+            ) as dispatch,
+            patch.object(cycle_adapter, "reconcile_untracked_runs"),
+            patch.object(cycle_adapter, "_recheck_review_dispatch"),
+            patch.object(cycle_adapter, "_unblock_dependencies"),
+            patch.object(
+                cycle_adapter,
+                "_reconcile_completions",
+                return_value=(None, None),
+            ),
+            patch.object(cycle_adapter, "_enforce_ready_proof"),
+            patch.object(
+                cycle_adapter,
+                "_complete_reviews",
+                return_value=(None, None, "In Review", "main"),
+            ),
+            patch.object(cycle_adapter, "_remediate_ship_conflicts"),
+            patch.object(cycle_adapter, "save_state"),
+        ):
+            cycle_adapter.poll(cfg, {}, state)
+
+            # The first poll establishes a read-only snapshot.
+            self.assertEqual(dispatch.call_count, 0)
+            self.assertEqual(move.call_count, 0)
+            self.assertEqual([item["status"] for item in items], ["Backlog", "Backlog"])
+
+            # The second poll promotes runnable backlog items after the
+            # transition loop, without dispatching them yet.
+            cycle_adapter.poll(cfg, {}, state)
+            self.assertEqual(dispatch.call_count, 0)
+            self.assertEqual(move.call_count, 2)
+            self.assertEqual([item["status"] for item in items], ["Todo", "Todo"])
+
+            # On the following poll the persisted Backlog -> Todo transitions
+            # reach the normal dispatch path.
+            cycle_adapter.poll(cfg, {}, state)
+
+        # Promotion does not require another board edit before dispatch.
+        self.assertEqual(guard.call_count, 2)
+        self.assertEqual(dispatch.call_count, 2)
+        self.assertEqual(move.call_count, 2)
+        move.assert_has_calls([
+            call(cfg, {}, "project", "item-1", "field", "todo-opt"),
+            call(cfg, {}, "project", "item-2", "field", "todo-opt"),
+        ])
+        self.assertTrue(state["_meta"]["snapshot_done"])
+        self.assertEqual(
+            [state[item["id"]]["status"] for item in items], ["Todo", "Todo"]
+        )
+
     def test_fills_free_slots_from_runnable_backlog(self):
         state = {}
         items = [self._item(1), self._item(2), self._item(3)]
