@@ -8,7 +8,7 @@ Date: 2026-08-14
 
 Advanced Settings labeled its prompt surface "Full prompt templates" but only
 rendered the selected Prompt Profile's editorial instruction sentences
-(ADR 0010) as readouts; the actual system/user messages stayed assembled
+(ADR 0018) as readouts; the actual system/user messages stayed assembled
 inside the stage modules and `pipeline.py`. An advanced user could not change
 prompt structure, ordering, or framing without editing Python, and a custom
 prompt that dropped a required input or parser marker would only surface as a
