@@ -50,10 +50,12 @@ Thumbs.db
 .agents/
 .archon/
 !.archon/
-.archon/config.yaml
+# .archon/config.yaml is committed: Mode B @panel/@judge aliases live there.
 .archon/mcp/
 !.archon/commands/
 !.archon/commands/*.md
+!.archon/workflows/
+!.archon/workflows/*.yaml
 .claude/
 
 # R

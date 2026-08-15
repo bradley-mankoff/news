@@ -1,0 +1,39 @@
+# Project-scoped Archon config
+# Inherits defaults from the archon-pi home config (~/.local/share/archon-pi/archon-home/config.yaml).
+# Reference: https://archon.diy/reference/configuration/
+
+assistant: pi
+
+# Workflow PRs and worktrees are based on the integration branch (develop);
+# main is production and only receives reviewed ship PRs (see README).
+worktree:
+  baseBranch: develop
+
+# Curated workflow set (project-scoped): bundled defaults are disabled so only
+# the pi-usable workflows installed in the archon home `workflows/` dir are
+# discovered. Claude-only workflows are archived under
+# ~/.local/share/archon-pi/archon-home/workflows-archived/ (not discovered).
+# Inventory + restore instructions: docs/archon-workflows.md
+defaults:
+  loadDefaultWorkflows: false
+
+# Pinned in the archon web UI for this project.
+recommendedWorkflows:
+  - archon-fix-github-issue
+  - archon-idea-to-pr
+  - archon-smart-pr-review
+
+# Mode B fusion panels (omp-modes). Luna only as panel-a, never as oneshot.
+aliases:
+  '@panel-a':
+    provider: pi
+    model: openai-codex/gpt-5.6-luna
+    effort: max
+  '@panel-b':
+    provider: pi
+    model: opencode-go/deepseek-v4-flash
+    effort: max
+  '@judge':
+    provider: pi
+    model: xai/grok-4.6
+    effort: high

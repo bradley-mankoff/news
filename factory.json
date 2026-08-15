@@ -1,0 +1,8 @@
+{
+  "tracker": "scratch",
+  "max_concurrent": 2,
+  "default_tactic": "fusion-02",
+  "allow_fusion": true,
+  "base_branch": "develop",
+  "gate": ".venv/bin/python3 -m pytest tests/ -q"
+}
