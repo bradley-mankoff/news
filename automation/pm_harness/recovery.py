@@ -132,6 +132,13 @@ def reconcile_untracked_runs(
             continue
         if runs is None:
             runs = fetch_workflow_runs(env)
+            lookup_error = getattr(runs, "error", None)
+            if lookup_error:
+                log(
+                    f"RUN LOOKUP UNAVAILABLE: {lookup_error}; "
+                    "retaining untracked-run markers"
+                )
+                return
         number = content["number"]
         run = latest_workflow_run(runs, issue_number=number)
         if not run:
@@ -165,6 +172,17 @@ def fresh_issue_dispatch_guard(
 ) -> tuple[bool, str]:
     """Refuse a fresh run while an existing issue worktree is unsafe."""
     worktree_info = resolve_worktree_info(env, issue_number)
+    lookup_error = (
+        worktree_info.get("error")
+        if isinstance(worktree_info, dict)
+        else None
+    )
+    if lookup_error:
+        log(
+            f"FRESH DISPATCH DEFERRED issue={issue_number}: "
+            f"worktree lookup unavailable ({lookup_error})"
+        )
+        return False, f"Archon worktree lookup unavailable: {lookup_error}"
     if worktree_info:
         worktree = inspect_worktree(worktree_info.get("path"))
         if worktree.get("dirty") is True:

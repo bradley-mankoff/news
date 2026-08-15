@@ -215,6 +215,19 @@ class WorkflowRecoveryTest(unittest.TestCase):
             )
 
 
+    def test_resolve_worktree_info_preserves_lookup_error(self):
+        with patch.object(
+            archon_adapter,
+            "fetch_archon_worktrees",
+            return_value=archon_adapter.WorktreeRecords(
+                error="archon_isolation_timeout"
+            ),
+        ):
+            self.assertEqual(
+                archon_adapter.resolve_worktree_info({}, 61),
+                {"error": "archon_isolation_timeout"},
+            )
+
     def test_recovery_comment_exposes_safe_actions(self):
         body = build_recovery_comment(
             141,
@@ -262,6 +275,58 @@ class WorkflowRecoveryTest(unittest.TestCase):
         log.assert_called_once_with(
             "FRESH DISPATCH DEFERRED issue=141: "
             "run lookup unavailable (archon_timeout)"
+        )
+
+    def test_fresh_dispatch_defers_when_worktree_lookup_is_unavailable(self):
+        with (
+            patch.object(
+                recovery_adapter,
+                "resolve_worktree_info",
+                return_value={"error": "archon_isolation_timeout"},
+            ),
+            patch.object(recovery_adapter, "fetch_workflow_runs") as fetch,
+            patch.object(recovery_adapter, "log") as log,
+        ):
+            allowed, reason = fresh_issue_dispatch_guard({}, 141)
+        self.assertFalse(allowed)
+        self.assertEqual(
+            reason,
+            "Archon worktree lookup unavailable: archon_isolation_timeout",
+        )
+        fetch.assert_not_called()
+        log.assert_called_once_with(
+            "FRESH DISPATCH DEFERRED issue=141: "
+            "worktree lookup unavailable (archon_isolation_timeout)"
+        )
+
+    def test_untracked_reconciliation_defers_on_unhealthy_snapshot(self):
+        item = {
+            "id": "item-141",
+            "status": "In Progress",
+            "content": {
+                "__typename": "Issue",
+                "number": 141,
+                "repository": {"nameWithOwner": "o/r"},
+            },
+        }
+        state = {}
+        with (
+            patch.object(
+                recovery_adapter,
+                "fetch_workflow_runs",
+                return_value=WorkflowRuns(
+                    [{"id": "stale"}], error="run_list_incomplete", partial=True
+                ),
+            ),
+            patch.object(recovery_adapter, "log") as log,
+        ):
+            recovery_adapter.reconcile_untracked_runs(
+                {"repo": "o/r"}, {}, state, [item], "In Progress"
+            )
+        self.assertNotIn("dispatch_msg", state["item-141"])
+        log.assert_called_once_with(
+            "RUN LOOKUP UNAVAILABLE: run_list_incomplete; "
+            "retaining untracked-run markers"
         )
 
 

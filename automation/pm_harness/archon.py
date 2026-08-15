@@ -261,7 +261,20 @@ def parse_isolation_list(output: str) -> dict[str, dict[str, str]]:
     return records
 
 
-def fetch_archon_worktrees(env: dict) -> dict[str, dict[str, str]]:
+class WorktreeRecords(dict[str, dict[str, str]]):
+    """Isolation records plus lookup health."""
+
+    def __init__(
+        self,
+        records: dict[str, dict[str, str]] | None = None,
+        *,
+        error: str | None = None,
+    ) -> None:
+        super().__init__(records or {})
+        self.error = error
+
+
+def fetch_archon_worktrees(env: dict) -> WorktreeRecords:
     try:
         result = subprocess.run(
             ["archon", "isolation", "list"],
@@ -271,9 +284,13 @@ def fetch_archon_worktrees(env: dict) -> dict[str, dict[str, str]]:
             env=env,
             cwd=str(ROOT),
         )
-    except (OSError, subprocess.TimeoutExpired):
-        return {}
-    return parse_isolation_list(result.stdout) if result.returncode == 0 else {}
+    except subprocess.TimeoutExpired:
+        return WorktreeRecords(error="archon_isolation_timeout")
+    except OSError:
+        return WorktreeRecords(error="archon_isolation_unavailable")
+    if result.returncode != 0:
+        return WorktreeRecords(error="archon_isolation_command_failed")
+    return WorktreeRecords(parse_isolation_list(result.stdout))
 
 
 def inspect_worktree(path: str | Path | None) -> dict:
@@ -302,8 +319,11 @@ def inspect_worktree(path: str | Path | None) -> dict:
 
 
 def resolve_worktree_info(env: dict, issue_number: int) -> dict[str, str] | None:
-    """Find an Archon worktree record for an issue."""
+    """Find an Archon worktree record for an issue, preserving lookup health."""
     records = fetch_archon_worktrees(env)
+    lookup_error = getattr(records, "error", None)
+    if lookup_error:
+        return {"error": lookup_error}
     pat = re.compile(rf"(?:task-issue-|issue-){issue_number}\b")
     for branch, record in records.items():
         if pat.search(branch):
