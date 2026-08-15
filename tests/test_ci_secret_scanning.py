@@ -26,6 +26,8 @@ integration fixture.
 
 from __future__ import annotations
 
+import os
+import subprocess
 import unittest
 from pathlib import Path
 
@@ -103,9 +105,12 @@ class CiSecretScanningTests(unittest.TestCase):
             LOG_OPTS,
             '--volume "$GITHUB_WORKSPACE:/repo:ro"',
             "/repo",
-            'test -n "$BASE_SHA" && test -n "$HEAD_SHA"',
         ):
             self.assertIn(fragment, run)
+        guard_lines = {line.strip() for line in run.splitlines()}
+        self.assertIn('test -n "$BASE_SHA"', guard_lines)
+        self.assertIn('test -n "$HEAD_SHA"', guard_lines)
+        self.assertNotIn('test -n "$BASE_SHA" && test -n "$HEAD_SHA"', run)
         # The gate must not scan full repository history (legacy findings
         # are the audit/scrub controls' responsibility, not this PR gate).
         self.assertNotIn("--all", run)
@@ -120,6 +125,41 @@ class CiSecretScanningTests(unittest.TestCase):
         self.assertEqual(env.get("HEAD_SHA"), HEAD_SHA_EXPR)
         self.assertNotIn("GITHUB_TOKEN", env)
         self.assertNotIn("GITLEAKS_LICENSE", env)
+
+    def test_sha_guard_fails_closed_before_scanner(self) -> None:
+        cfg = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
+        run = _scanner_steps(cfg)[0]["run"]
+        guard = run.split("docker run", maxsplit=1)[0]
+
+        for base_sha, head_sha in (("", "deadbeef"), ("deadbeef", "")):
+            with self.subTest(base_sha=base_sha, head_sha=head_sha):
+                result = subprocess.run(
+                    ["bash", "-e", "-c", f"{guard}\necho DOCKER_REACHED"],
+                    env={
+                        **os.environ,
+                        "BASE_SHA": base_sha,
+                        "HEAD_SHA": head_sha,
+                    },
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                self.assertNotEqual(result.returncode, 0)
+                self.assertNotIn("DOCKER_REACHED", result.stdout)
+
+        result = subprocess.run(
+            ["bash", "-e", "-c", f"{guard}\necho DOCKER_REACHED"],
+            env={
+                **os.environ,
+                "BASE_SHA": "base-sha",
+                "HEAD_SHA": "head-sha",
+            },
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("DOCKER_REACHED", result.stdout)
 
     def test_workflow_has_no_extra_scan_integrations(self) -> None:
         text = WORKFLOW.read_text(encoding="utf-8")
