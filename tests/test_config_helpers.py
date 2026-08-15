@@ -405,6 +405,174 @@ class ConfigHelperTests(unittest.TestCase):
                 model_backend="mlx-lm",
             )
 
+    def test_canonical_model_endpoint_is_the_single_equivalence_key(self) -> None:
+        canonical = "http://127.0.0.1:8080/v1"
+        variants = (
+            canonical + "/",
+            "HTTP://127.0.0.1:8080/v1",
+            "http://localhost:8080/v1",
+            "http://localhost.:8080/v1/",
+            "http://[::1]:8080/v1",
+            "http://[0:0:0:0:0:0:0:1]:8080/v1/",
+        )
+        key = config_module.canonical_model_endpoint(canonical)
+        for variant in variants:
+            self.assertEqual(config_module.canonical_model_endpoint(variant), key)
+        self.assertNotEqual(config_module.canonical_model_endpoint("http://127.0.0.1:8080/v2"), key)
+        self.assertNotEqual(config_module.canonical_model_endpoint("http://127.0.0.1:8081/v1"), key)
+        self.assertNotEqual(config_module.canonical_model_endpoint(""), key)
+        # Default ports fold into the key (http -> 80, https -> 443).
+        self.assertEqual(
+            config_module.canonical_model_endpoint("http://127.0.0.1/v1"),
+            config_module.canonical_model_endpoint("http://127.0.0.1:80/v1/"),
+        )
+        self.assertEqual(
+            config_module.canonical_model_endpoint("https://127.0.0.1/v1"),
+            config_module.canonical_model_endpoint("https://127.0.0.1:443/v1"),
+        )
+
+    def test_validate_managed_model_assignments_rejects_task_task_collision(self) -> None:
+        # Two non-default managed assignments on the same canonical endpoint
+        # with different models must fail early and identify the second task
+        # (issue #133): one managed server cannot serve both models.
+        with self.assertRaisesRegex(ValueError, "Task 'story_drafting'"):
+            config_module._validate_managed_model_assignments(
+                {
+                    "article_summary": SimpleNamespace(
+                        backend="mlx-lm",
+                        base_url="http://127.0.0.1:8090/v1",
+                        reference="mlx-community/model-a",
+                        name="mlx-community/model-a",
+                    ),
+                    "story_drafting": SimpleNamespace(
+                        backend="mlx-lm",
+                        base_url="http://localhost:8090/v1/",
+                        reference="mlx-community/model-b",
+                        name="mlx-community/model-b",
+                    ),
+                },
+                model_reference="main",
+                model_name="main",
+                model_base_url="http://127.0.0.1:8080/v1",
+                model_backend="mlx-lm",
+            )
+        # The rejection keeps the actionable shared-URL guidance.
+        with self.assertRaisesRegex(ValueError, "Set a per-task base URL"):
+            config_module._validate_managed_model_assignments(
+                {
+                    "article_summary": SimpleNamespace(
+                        backend="mlx-lm",
+                        base_url="http://127.0.0.1:8090/v1",
+                        reference="mlx-community/model-a",
+                        name="mlx-community/model-a",
+                    ),
+                    "title_generation": SimpleNamespace(
+                        backend="mlx-lm",
+                        base_url="http://127.0.0.1:8090/v1",
+                        reference="mlx-community/model-b",
+                        name="mlx-community/model-b",
+                    ),
+                },
+                model_reference="main",
+                model_name="main",
+                model_base_url="http://127.0.0.1:8080/v1",
+                model_backend="mlx-lm",
+            )
+
+    def test_validate_managed_model_assignments_shares_same_endpoint_same_model(self) -> None:
+        # Multiple tasks intentionally sharing one managed endpoint and model
+        # stay legal: only one server is needed for the whole group.
+        config_module._validate_managed_model_assignments(
+            {
+                "article_summary": SimpleNamespace(
+                    backend="mlx-lm",
+                    base_url="http://127.0.0.1:8090/v1",
+                    reference="mlx-community/shared",
+                    name="mlx-community/shared",
+                ),
+                "story_drafting": SimpleNamespace(
+                    backend="mlx-lm",
+                    base_url="http://localhost:8090/v1/",
+                    reference="mlx-community/shared",
+                    name="mlx-community/shared",
+                ),
+            },
+            model_reference="main",
+            model_name="main",
+            model_base_url="http://127.0.0.1:8080/v1",
+            model_backend="mlx-lm",
+        )  # no raise: same canonical endpoint, same model
+
+    def test_validate_managed_model_assignments_rejects_external_task_on_managed_default_endpoint(self) -> None:
+        # An external assignment cannot silently share an endpoint owned by
+        # the managed default server: it would route an external model name
+        # into the process serving the default model.
+        with self.assertRaisesRegex(
+            ValueError,
+            r"Task 'article_summary'.*external backend on the managed default endpoint",
+        ):
+            config_module._validate_managed_model_assignments(
+                {
+                    "article_summary": SimpleNamespace(
+                        backend="external",
+                        base_url="http://localhost:8080/v1/",
+                        reference="external-ref",
+                        name="external-name",
+                    )
+                },
+                model_reference="main-ref",
+                model_name="main-name",
+                model_base_url="http://127.0.0.1:8080/v1",
+                model_backend="mlx-lm",
+            )
+
+    def test_validate_managed_model_assignments_external_default_exempts_its_endpoint(self) -> None:
+        # When the default endpoint is external (caller-managed), assignments
+        # riding that endpoint stay external and may use different models;
+        # assignments on other endpoints are still managed and validated.
+        config_module._validate_managed_model_assignments(
+            {
+                "article_summary": SimpleNamespace(
+                    backend="mlx-lm",
+                    base_url="https://api.example.com/v1",
+                    reference="gemma-4-12b",
+                    name="mlx-community/gemma-4-12B-it-4bit",
+                ),
+                "story_drafting": SimpleNamespace(
+                    backend="mlx-lm",
+                    base_url="https://api.example.com/v1",
+                    reference="gemma-e2b-tiny",
+                    name="deadbydawn101/gemma-4-E2B-Heretic-Uncensored-mlx-4bit",
+                ),
+            },
+            model_reference="gemma-e2b-tiny",
+            model_name="deadbydawn101/gemma-4-E2B-Heretic-Uncensored-mlx-4bit",
+            model_base_url="https://api.example.com/v1",
+            model_backend="external",
+        )  # no raise: an external default endpoint serves many models
+        # The same task pair on a distinct endpoint is a managed collision.
+        with self.assertRaisesRegex(ValueError, "Task 'story_drafting'"):
+            config_module._validate_managed_model_assignments(
+                {
+                    "article_summary": SimpleNamespace(
+                        backend="mlx-lm",
+                        base_url="http://127.0.0.1:8090/v1",
+                        reference="gemma-4-12b",
+                        name="mlx-community/gemma-4-12B-it-4bit",
+                    ),
+                    "story_drafting": SimpleNamespace(
+                        backend="mlx-lm",
+                        base_url="http://localhost:8090/v1",
+                        reference="gemma-e2b-tiny",
+                        name="deadbydawn101/gemma-4-E2B-Heretic-Uncensored-mlx-4bit",
+                    ),
+                },
+                model_reference="gemma-e2b-tiny",
+                model_name="deadbydawn101/gemma-4-E2B-Heretic-Uncensored-mlx-4bit",
+                model_base_url="https://api.example.com/v1",
+                model_backend="external",
+            )
+
     def test_same_model_endpoint_tolerates_spelling_variants(self) -> None:
         canonical = "http://127.0.0.1:8080/v1"
         self.assertTrue(config_module.same_model_endpoint(canonical, canonical + "/"))
