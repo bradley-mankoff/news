@@ -808,6 +808,10 @@ class ModelCatalogTests(unittest.TestCase):
                 model_catalog.RUNTIME_FIT_MANAGED_MLX_LM,
             ),
             (
+                {"id": "someone/transformers-text2text", "tags": ["safetensors"], "library_name": "transformers", "pipeline_tag": "text2text-generation"},
+                model_catalog.RUNTIME_FIT_MANAGED_MLX_LM,
+            ),
+            (
                 {"id": "someone/transformers-vlm", "tags": ["safetensors"], "library_name": "transformers", "pipeline_tag": "image-text-to-text"},
                 model_catalog.RUNTIME_FIT_MANAGED_MLX_VLM,
             ),
@@ -864,6 +868,30 @@ class ModelCatalogTests(unittest.TestCase):
                 fit = model_catalog.runtime_fit_for_hf_model(info)
                 self.assertEqual(fit["status"], expected)
                 self.assertTrue(fit["reason"])
+
+    def test_payload_normalizes_none_id_object_config_and_string_timestamp(self) -> None:
+        """Normalize the missing ID and object config while preserving a
+        string last_modified; the empty ID keeps the payload out of the
+        catalog and the runtime-fit verdict external-only without a network call."""
+        fake_info = _fake_model_info(
+            id=None,
+            config=SimpleNamespace(max_position_embeddings=8192),
+            last_modified="2026-01-02T03:04:05Z",
+            tags=[],
+            library_name="unknown",
+            pipeline_tag=None,
+        )
+        payload = model_catalog._model_info_to_payload(fake_info)
+
+        self.assertEqual(payload["id"], "")
+        self.assertEqual(payload["hf_url"], "https://huggingface.co/")
+        self.assertEqual(payload["context_length"], 8192)
+        self.assertEqual(payload["last_modified"], "2026-01-02T03:04:05Z")
+        self.assertEqual(
+            payload["runtime_fit"]["status"], model_catalog.RUNTIME_FIT_EXTERNAL_ONLY
+        )
+        self.assertTrue(payload["runtime_fit"]["reason"])
+        self.assertFalse(payload["in_catalog"])
 
     def test_search_maps_and_annotates_results(self) -> None:
         fake_info = _fake_model_info()
