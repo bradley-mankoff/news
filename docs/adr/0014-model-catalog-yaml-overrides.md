@@ -2,7 +2,8 @@
 
 Status: Accepted
 
-Date: 2026-08-13
+Date: 2026-08-13 (amended 2026-08-14: backend-scoped identity rules with the
+llama.cpp file-qualified reference form, issue #75)
 
 ## Context
 
@@ -36,10 +37,16 @@ runtime-fit annotations.
   `description`; `context_length` is optional/null and `task_notes` defaults
   to `{}`. Aliases must be non-empty, trimmed, and match the safe lowercase
   pattern (letters, digits, `.`, `_`, `-`, starting with a letter or digit).
-- Backends are limited to the closed set (`mlx-lm`, `mlx-vlm`, `external`);
-  `reference == hf_repo` is required and file-qualified `.gguf` references
-  are rejected, preserving the ADR 0010 runtime matrix and the issue #92
-  drift guard.
+- Backends are limited to the closed set (`mlx-lm`, `mlx-vlm`, `external`,
+  `llama.cpp`); identity rules are backend-scoped (issue #75):
+  - `mlx-lm`, `mlx-vlm`, and `external` entries keep `reference == hf_repo`
+    and reject file-qualified `.gguf` references, preserving the issue #92
+    drift guard.
+  - `llama.cpp` entries use a file-qualified `owner/repo/file.gguf`
+    `reference` whose first two segments equal a bare `hf_repo` page id.
+    The file name must be a safe, traversal-free `.gguf` name (validated by
+    the stdlib-only adapter so catalog identity and launch parsing cannot
+    disagree); `hf_repo` remains the repo id used by Hugging Face search.
 - Unknown top-level keys, entry fields, and recommendation keys are errors.
   Malformed or unsafe YAML fails closed with a path-specific `ValueError`
   from every public catalog/config consumer; it never silently falls back to
@@ -66,14 +73,14 @@ cycle boundary, and `config.py` consumes the merged registry through
   entry in YAML; the entry then appears in `news models catalog`, UI
   schema/cards, selector options, recommendations, alias resolution, backend
   inference, and runtime-fit matching without Python changes.
-- Safer: identity fields, backends, and repo shapes stay validated, and
-  legacy unsupported Qwythos/GGUF references remain rejected; a custom
-  alias/reference colliding with `UNSUPPORTED_MODEL_REFERENCES` fails closed
+- Safer: identity fields, backends, and repo shapes stay validated; the
+  legacy Qwythos GGUF aliases are curated built-ins again (issue #75) and a
+  custom alias/reference colliding with a built-in identity fails closed
   before it can become a selector option.
 - Harder/off-limits: no UI editor, CRUD endpoint, or persistence API for the
   YAML file; no live Hugging Face verification or hardware-fit guarantee for
-  user entries; no new managed backend or GGUF support; no hot reload; the
-  catalog stays a per-process snapshot.
+  user entries; no multimodal GGUF or per-model chat-template editing; no
+  hot reload; the catalog stays a per-process snapshot.
 
 ## Alternatives considered
 
@@ -81,8 +88,10 @@ cycle boundary, and `config.py` consumes the merged registry through
   code-reviewed contracts and the empty/default behavior must stay stable.
 - Let only the UI or CLI read YAML — rejected: alias resolution, selectors,
   presets, and model-server startup would disagree with the catalog.
-- Allow arbitrary file-qualified/GGUF references — rejected by ADR 0010 and
-  the `reference == hf_repo` invariant.
+- Allow arbitrary file-qualified/GGUF references — rejected before issue
+  #75 by ADR 0010 and the `reference == hf_repo` invariant; now permitted
+  only for `llama.cpp` entries with the strict `owner/repo/file.gguf` form
+  under a bare `hf_repo`.
 - Add a model-registration database/API — rejected: this is a local,
   offline-first configuration feature and existing config inputs are YAML.
 - Hot reload the catalog — rejected: Runtime Config is a per-process

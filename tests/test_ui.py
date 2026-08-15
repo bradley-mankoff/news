@@ -116,7 +116,11 @@ class FakeElement {
     const buttonStart = this._innerHTML.lastIndexOf("<button", markerStart);
     const buttonEnd = this._innerHTML.indexOf(">", markerStart);
     const button = this._innerHTML.slice(buttonStart, buttonEnd + 1);
-    return { disabled: button.includes(" disabled") };
+    const backendMatch = button.match(/data-use-hf-backend="([^"]*)"/);
+    return {
+      disabled: button.includes(" disabled"),
+      dataset: { useHfBackend: backendMatch ? backendMatch[1] : "" }
+    };
   }
   querySelectorAll(_selector) { return []; }
   addEventListener(type, fn) {
@@ -832,12 +836,97 @@ assert(
         self.assertIn("refreshHuggingFaceUseButtons();", delegated)
         self.assertIn("refreshModelKnobLinks();", boot)
 
+    def test_model_catalog_panel_markup_contract(self) -> None:
+        """The Model catalog panel exposes the expected heading, controls,
+        pipeline options, and limit attributes (issue #96)."""
+        html = ui_module.HTML
+        block = html.split('<p class="eyebrow">Model catalog</p>', 1)[1].split(
+            "<summary>Utilities</summary>", 1
+        )[0]
+        for snippet in (
+            "Model catalog and Hugging Face search",
+            "Built-in models are verified for the managed backends",
+            'id="recommendationTask"',
+            'id="recommendationReadout"',
+            'id="catalogCards"',
+            "<summary>Search Hugging Face</summary>",
+            'id="modelSearchQuery"',
+            'id="modelSearchPipeline"',
+            'id="modelSearchLimit"',
+            'id="modelSearchBtn"',
+            'id="modelSearchResults"',
+            '<option value="text-generation">text-generation</option>',
+            '<option value="text2text-generation">text2text-generation</option>',
+            '<option value="image-text-to-text">image-text-to-text</option>',
+            'min="1"',
+            'max="50"',
+            'value="10"',
+        ):
+            self.assertIn(snippet, block)
+
+    def test_model_catalog_panel_renderer_wiring_contract(self) -> None:
+        """The model-catalog renderer blocks keep their schema-backed data
+        sources, empty/error fallbacks, escaped fields, and backend-aware
+        wiring (issue #96)."""
+        html = ui_module.HTML
+        panel = html.split("function renderModelCatalogPanel() {", 1)[1].split(
+            "function renderRecommendations", 1
+        )[0]
+        recommendations = html.split("function renderRecommendations", 1)[1].split(
+            "async function searchHuggingFaceModels", 1
+        )[0]
+        search = html.split("async function searchHuggingFaceModels", 1)[1].split(
+            "async function comparePromptProfiles", 1
+        )[0]
+
+        # Panel: schema-backed task options and catalog cards with escaped
+        # fields, plus the catalog-aware use-model binding.
+        for snippet in (
+            "(state.schema && state.schema.model_recommendation_tasks) || []",
+            "modelCatalogEntries().map(entry => `",
+            "escapeHtml(entry.name)",
+            "escapeHtml(entry.alias)",
+            "escapeHtml(entry.description)",
+            "escapeHtml(entry.backend)",
+            "escapeHtml(entry.hf_url)",
+            "renderRecommendations(select.value);",
+            "btn.onclick = () => useModelReference(btn.dataset.useModel, catalogBackendForReference(btn.dataset.useModel));",
+        ):
+            self.assertIn(snippet, panel)
+
+        # Recommendations: empty-task and empty-picks fallbacks stay honest,
+        # and the Use buttons resolve the backend from the catalog.
+        self.assertIn("Pick a task to see curated recommendations.", recommendations)
+        self.assertIn("No verified curated model for this task yet", recommendations)
+        self.assertIn(
+            "btn.onclick = () => useModelReference(btn.dataset.useModel, catalogBackendForReference(btn.dataset.useModel));",
+            recommendations,
+        )
+
+        # Search: empty query, API error, empty results, runtime-fit backend
+        # lookup, external-only disabled state, binding, and catch rendering.
+        for snippet in (
+            "Enter a query to search Hugging Face.",
+            "`/api/models/search?q=${encodeURIComponent(query)}&pipeline_tag=${encodeURIComponent(pipeline)}&limit=${limit}`",
+            "if (data.error) {",
+            "No models found.",
+            "Object.prototype.hasOwnProperty.call(RUNTIME_FIT_BACKENDS, fit.status)",
+            "RUNTIME_FIT_BACKENDS[fit.status]",
+            'data-use-hf-backend="${escapeHtml(hfBackend)}"',
+            "externalOnly && !backendExternal",
+            'useModelReference(btn.dataset.useHfModel, btn.dataset.useHfBackend || "");',
+            "catch (err) {",
+            "escapeHtml(err.message)",
+        ):
+            self.assertIn(snippet, search)
+
     def test_runtime_fit_backend_map_matches_catalog_vocabulary(self) -> None:
         html = ui_module.HTML
         block = html.split("const RUNTIME_FIT_BACKENDS = {", 1)[1].split("};", 1)[0]
         expected = {
             model_catalog.RUNTIME_FIT_MANAGED_MLX_LM: "mlx-lm",
             model_catalog.RUNTIME_FIT_MANAGED_MLX_VLM: "mlx-vlm",
+            model_catalog.RUNTIME_FIT_MANAGED_LLAMA_CPP: "llama.cpp",
             model_catalog.RUNTIME_FIT_EXTERNAL_ONLY: "external",
         }
         for status, backend in expected.items():
@@ -1116,7 +1205,7 @@ assert(
             self.assertEqual(payload["sources"]["total"], 1)
             self.assertEqual(payload["recipients"]["total"], 1)
             # Model catalog keys are local-only (offline) additions.
-            self.assertEqual(len(payload["model_catalog"]), 2)
+            self.assertEqual(len(payload["model_catalog"]), 4)
             self.assertEqual(payload["model_catalog"][0]["alias"], "gemma-4-12b-it-4bit")
             self.assertIn("factual_extraction", payload["model_recommendation_tasks"])
             self.assertEqual(len(payload["model_recommendation_tasks"]), 7)
@@ -2630,6 +2719,7 @@ const searchResults = [
   { id: "owner/unknown", hf_url: "https://example.test/unknown", runtime_fit: { status: "unknown_fit", reason: "unknown reason" } },
   { id: "owner/missing-status", hf_url: "https://example.test/missing-status", runtime_fit: { reason: "no status" } },
   { id: "owner/empty-status", hf_url: "https://example.test/empty-status", runtime_fit: { status: "", reason: "empty status" } },
+  { id: "owner/gguf", hf_url: "https://example.test/gguf", runtime_fit: { status: "managed_llama_cpp", reason: "managed llama reason" } },
   { id: "owner/external", hf_url: "https://example.test/external", runtime_fit: { status: "external_only", reason: "external reason" } }
 ];
 async function api(path) {
@@ -2661,6 +2751,9 @@ assert(elements.modelSearchResults.textContent.includes("Future <fit> & choice")
 assert(elements.modelSearchResults.textContent.includes("unknown_fit"), "unknown fit did not fall back to its status");
 assert(elements.modelSearchResults.innerHTML.includes("Future &lt;fit&gt; &amp; choice"), "fit label was not escaped");
 assert(elements.modelSearchResults.querySelector('button[data-use-hf-model="owner/external"]').disabled, "external-only model was enabled");
+const ggufButton = elements.modelSearchResults.querySelector('button[data-use-hf-model="owner/gguf"]');
+assert(ggufButton && !ggufButton.disabled, "managed_llama_cpp model was not enabled");
+assert(ggufButton.dataset.useHfBackend === "llama.cpp", "managed_llama_cpp did not map to NEWS_MODEL_BACKEND=llama.cpp");
 
 // Partial/empty schema state remains usable and keeps raw fallbacks.
 state.schema = { model_recommendation_tasks: ["raw_task"] };
@@ -2673,6 +2766,222 @@ assert(elements.modelSearchResults.textContent.includes("Fit: unknown — no sta
 assert(elements.modelSearchResults.textContent.includes("Fit: unknown — empty status"), "empty fit status did not fall back to unknown");
 assert(elements.modelSearchResults.querySelector('button[data-use-hf-model="owner/external"]').disabled, "empty schema enabled external-only model");
 """ )
+        node = shutil.which("node")
+        if node is None:
+            self.skipTest("Node.js is required for the embedded UI renderer harness")
+        result = subprocess.run(
+            [node, "--input-type=module", "-"],
+            input=js,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
+
+    def test_model_catalog_renderers_execute_in_node_dom_harness(self) -> None:
+        """Execute catalog cards, recommendations, and search fallbacks.
+
+        The source-contract checks pin the intended snippets, while this
+        harness exercises the extracted production functions with DOM-shaped
+        elements so template escaping, button bindings, backend-aware disable
+        state, and asynchronous fallbacks cannot regress silently.
+        """
+        html = ui_module.HTML
+
+        def js_function_block(start: str, end: str) -> str:
+            return html[html.index(start) : html.index(end, html.index(start))]
+
+        js = (
+            r"""
+const assert = (condition, message) => {
+  if (!condition) throw new Error(message);
+};
+"""
+            + _FAKE_DOM_ELEMENT_JS
+            + r'''
+class RichElement extends FakeElement {
+  set innerHTML(value) {
+    super.innerHTML = value;
+    this._buttons = [];
+    const pattern = /<button\b([^>]*)>([\s\S]*?)<\/button>/g;
+    for (const match of String(value).matchAll(pattern)) {
+      const attrs = match[1];
+      const button = {
+        dataset: {},
+        disabled: /\sdisabled(?:\s|$)/.test(attrs),
+        textContent: decodeEntities(match[2].replace(/<[^>]*>/g, "")),
+        onclick: null
+      };
+      for (const attr of attrs.matchAll(/\b(data-[\w-]+)="([^"]*)"/g)) {
+        const key = attr[1].slice(5).replace(/-([a-z])/g, (_match, letter) => letter.toUpperCase());
+        button.dataset[key] = decodeEntities(attr[2]);
+      }
+      this._buttons.push(button);
+    }
+  }
+  get innerHTML() { return super.innerHTML; }
+  querySelector(selector) {
+    const match = selector.match(/^button\[data-([a-z-]+)="([^"]*)"\]$/);
+    if (!match) return null;
+    const key = match[1].replace(/-([a-z])/g, (_match, letter) => letter.toUpperCase());
+    return (this._buttons || []).find(button => button.dataset[key] === decodeEntities(match[2])) || null;
+  }
+  querySelectorAll(selector) {
+    const match = selector.match(/^\[data-([a-z-]+)\]$/);
+    if (!match) return [];
+    const key = match[1].replace(/-([a-z])/g, (_match, letter) => letter.toUpperCase());
+    return (this._buttons || []).filter(button => Object.prototype.hasOwnProperty.call(button.dataset, key));
+  }
+}
+const elements = {
+  recommendationTask: new RichElement("recommendationTask", "speed"),
+  catalogCards: new RichElement("catalogCards"),
+  recommendationReadout: new RichElement("recommendationReadout"),
+  modelSearchResults: new RichElement("modelSearchResults"),
+  modelSearchQuery: new FakeElement("modelSearchQuery", "catalog"),
+  modelSearchPipeline: new FakeElement("modelSearchPipeline", "text-generation"),
+  modelSearchLimit: new FakeElement("modelSearchLimit", "10")
+};
+const modelSelect = {
+  value: "",
+  options: [{ value: "" }],
+  insertAdjacentHTML(_position, markup) {
+    const match = markup.match(/<option value="([^"]*)">/);
+    if (match) this.options.unshift({ value: decodeEntities(match[1]) });
+  },
+  dispatchEvent(_event) {}
+};
+const modelBackendHint = {
+  textContent: "",
+  classList: { add(_name) {}, remove(_name) {} }
+};
+function $(id) { return elements[id] || null; }
+function value(id) { return $(id) ? $(id).value : ""; }
+function currentControlValue(env) {
+  if (env === "NEWS_MODEL") return modelSelect.value;
+  return (state.schema && state.schema.current_env && state.schema.current_env[env]) || "";
+}
+const document = {
+  querySelector: selector => selector === '[data-env="NEWS_MODEL"]' ? modelSelect : null,
+  getElementById: id => id === "modelBackendHint" ? modelBackendHint : null,
+  querySelectorAll: () => []
+};
+class Event { constructor(type) { this.type = type; } }
+const state = { schema: null };
+let apiResponse = { models: [], error: null };
+let apiFailure = null;
+let apiCalls = 0;
+async function api(path) {
+  apiCalls += 1;
+  assert(path.includes("q=catalog"), `unexpected API path: ${path}`);
+  if (apiFailure) throw new Error(apiFailure);
+  return apiResponse;
+}
+'''
+            + js_function_block("function escapeHtml(text) {", "function formatDefault")
+            + js_function_block("function modelTaskLabels() {", "function useModelReference")
+            + js_function_block('function useModelReference(reference, requiredBackend = "") {', "function renderModelCatalogPanel")
+            + js_function_block("function renderModelCatalogPanel() {", "function renderRecommendations")
+            + js_function_block("function renderRecommendations(task) {", "async function searchHuggingFaceModels")
+            + js_function_block("async function searchHuggingFaceModels() {", "async function comparePromptProfiles")
+            + r'''
+state.schema = {
+  model_recommendation_tasks: ["speed"],
+  model_task_labels: { speed: "Speed" },
+  model_catalog: [{
+    alias: "safe-alias",
+    name: "<name>",
+    description: "<description>",
+    backend: "mlx-lm",
+    context_length: 8192,
+    hf_url: "https://example.test/?a=1&b=<2>"
+  }],
+  model_recommendations: {
+    speed: [{ alias: "recommended", name: "<recommended>", reason: "<reason>" }]
+  },
+  runtime_fit_labels: { managed_mlx_lm: "Managed <MLX>" },
+  current_env: { NEWS_MODEL_BACKEND: "mlx-lm" }
+};
+renderModelCatalogPanel();
+assert(elements.catalogCards.innerHTML.includes("&lt;name&gt;"), "catalog name was not escaped");
+assert(elements.catalogCards.innerHTML.includes("&lt;description&gt;"), "catalog description was not escaped");
+assert(elements.catalogCards.innerHTML.includes("?a=1&amp;b=&lt;2&gt;"), "catalog URL was not escaped");
+const catalogButton = elements.catalogCards.querySelector('button[data-use-model="safe-alias"]');
+assert(catalogButton && typeof catalogButton.onclick === "function", "catalog Use handler missing");
+catalogButton.onclick();
+assert(modelSelect.value === "safe-alias", "catalog button did not select its model");
+const recommendationButton = elements.recommendationReadout.querySelector('button[data-use-model="recommended"]');
+assert(recommendationButton && typeof recommendationButton.onclick === "function", "recommendation handler missing");
+recommendationButton.onclick();
+assert(modelSelect.value === "recommended", "recommendation button did not select its model");
+renderRecommendations("");
+assert(elements.recommendationReadout.textContent.includes("Pick a task"), "empty task fallback missing");
+renderRecommendations("unknown");
+assert(elements.recommendationReadout.textContent.includes("No verified curated model"), "empty recommendation fallback missing");
+
+apiResponse = {
+  models: [
+    {
+      id: "owner/<model>",
+      hf_url: "https://example.test/?a=1&b=<2>",
+      pipeline_tag: "text-generation",
+      library_name: "mlx",
+      downloads: 1,
+      likes: 2,
+      context_length: 4096,
+      runtime_fit: { status: "managed_mlx_lm", reason: "<fit>" }
+    },
+    {
+      id: "owner/external",
+      hf_url: "https://example.test/external",
+      pipeline_tag: "text-generation",
+      library_name: "unknown",
+      runtime_fit: { status: "external_only", reason: "external" }
+    }
+  ],
+  error: null
+};
+await searchHuggingFaceModels();
+assert(elements.modelSearchResults.innerHTML.includes("owner/&lt;model&gt;"), "search model ID was not escaped");
+assert(elements.modelSearchResults.innerHTML.includes("&amp;b=&lt;2&gt;"), "search URL was not escaped");
+assert(elements.modelSearchResults.innerHTML.includes("Managed &lt;MLX&gt;"), "search fit label was not escaped");
+const managedButton = elements.modelSearchResults.querySelector('button[data-use-hf-model="owner/<model>"]');
+const externalButton = elements.modelSearchResults.querySelector('button[data-use-hf-model="owner/external"]');
+assert(managedButton && !managedButton.disabled, "managed model was disabled");
+assert(externalButton && externalButton.disabled, "external-only model was enabled");
+managedButton.onclick();
+assert(modelSelect.value === "owner/<model>", "search Use handler did not select its model");
+
+const callsBeforeBlank = apiCalls;
+elements.modelSearchQuery.value = "  \t ";
+await searchHuggingFaceModels();
+assert(apiCalls === callsBeforeBlank, "blank search query called the API");
+assert(elements.modelSearchResults.textContent.includes("Enter a query"), "blank query fallback missing");
+elements.modelSearchQuery.value = "catalog";
+apiResponse = { models: [], error: "<API failure>" };
+await searchHuggingFaceModels();
+assert(elements.modelSearchResults.innerHTML.includes("&lt;API failure&gt;"), "API error was not escaped");
+apiResponse = { models: [], error: null };
+await searchHuggingFaceModels();
+assert(elements.modelSearchResults.textContent.includes("No models found."), "empty results fallback missing");
+apiFailure = "<network failure>";
+await searchHuggingFaceModels();
+assert(elements.modelSearchResults.innerHTML.includes("&lt;network failure&gt;"), "request failure fallback missing");
+
+state.schema.current_env.NEWS_MODEL_BACKEND = "external";
+apiFailure = null;
+apiResponse = { models: [{
+  id: "owner/external",
+  hf_url: "https://example.test/external",
+  runtime_fit: { status: "external_only", reason: "external" }
+}], error: null };
+await searchHuggingFaceModels();
+const enabledExternalButton = elements.modelSearchResults.querySelector('button[data-use-hf-model="owner/external"]');
+assert(enabledExternalButton && !enabledExternalButton.disabled, "external backend did not enable external-only model");
+enabledExternalButton.onclick();
+assert(modelSelect.value === "owner/external", "external search handler did not select its model");
+'''
+        )
         node = shutil.which("node")
         if node is None:
             self.skipTest("Node.js is required for the embedded UI renderer harness")
@@ -3424,13 +3733,21 @@ for (const absentId of ["article_tuning_save", "article_tuning_rename", "article
 
         self.assertEqual(
             [entry["alias"] for entry in payload["model_catalog"]],
-            ["gemma-4-12b-it-4bit", "gemma-e2b-tiny", "smoke-model"],
+            [
+                "gemma-4-12b-it-4bit",
+                "gemma-e2b-tiny",
+                "qwythos-9b-4bit",
+                "qwythos-9b-8bit",
+                "smoke-model",
+            ],
         )
         self.assertEqual(
             {entry["alias"]: entry["backend"] for entry in payload["model_catalog"]},
             {
                 "gemma-4-12b-it-4bit": "mlx-vlm",
                 "gemma-e2b-tiny": "mlx-lm",
+                "qwythos-9b-4bit": "llama.cpp",
+                "qwythos-9b-8bit": "llama.cpp",
                 "smoke-model": "mlx-lm",
             },
         )
