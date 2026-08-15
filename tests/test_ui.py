@@ -1069,6 +1069,14 @@ assert(!advancedPanels.innerHTML.includes("undefined"), "undefined markup leaked
         # Preset save validates the current template values first.
         self.assertIn("await validatePromptTemplateEnv(body.env);", html)
         self.assertIn("/api/prompt-templates/validate", html)
+        # Preset edit loads stored template values into the dedicated editors
+        # and the dedicated editors win over a stale raw env on save (issue
+        # #245). The executable harness below is the behavioral guard; these
+        # block-scoped checks are only source drift guards for the contract.
+        edit_block = html.split("function editRunPreset(id) {", 1)[1].split("function collectRunPresetEditor() {", 1)[0]
+        self.assertIn("setPromptTemplateEnv(preset.env || {});", edit_block)
+        save_block = html.split("async function savePresetEditor() {", 1)[1].split("async function renamePresetDisplayName", 1)[0]
+        self.assertIn("body.env = { ...body.env, ...currentPromptTemplateEnv() };", save_block)
         # The editor's data-template-* elements are looked up with CSS
         # selectors via document.querySelector; the ID-only $ helper must
         # never receive a selector string (issue #227). The executable Node
@@ -4452,10 +4460,13 @@ const templateUser = task => document.querySelector(`[data-template-user="${task
 const flush = () => new Promise(resolve => setTimeout(resolve, 0));
 
 // ---- API and preset-save stubs (only the network edge is stubbed) --------
+// A minimal in-memory preset store backs GET/POST/PATCH /api/presets so the
+// harness can prove both the save body and the persisted GET round trip.
 const requests = [];
 let savedPresetPayload = null;
 let presetsReloaded = 0;
 let rejectValidation = false;
+const presetStore = new Map();
 async function api(path, options = {}) {
   requests.push({ path, method: options.method || "GET", body: options.body || "" });
   if (path === "/api/prompt-templates/validate") {
@@ -4466,12 +4477,19 @@ async function api(path, options = {}) {
     return { valid: true, errors: {} };
   }
   if (path === "/api/presets") {
-    savedPresetPayload = JSON.parse(options.body);
+    if ((options.method || "GET") === "GET") return { presets: [...presetStore.values()] };
+    const body = JSON.parse(options.body);
+    presetStore.set(body.id, body);
+    savedPresetPayload = body;
     return { ok: true };
   }
   throw new Error(`unexpected API path: ${path}`);
 }
-async function loadPresets() { presetsReloaded++; }
+async function loadPresets() {
+  presetsReloaded++;
+  const data = await api("/api/presets");
+  state.presets = data.presets || [];
+}
 function renderPresetSummary() {}
 function renderRunPresetDrawer() {}
 const state = { schema: null, presets: [] };
@@ -4484,7 +4502,9 @@ const TASKS = """
 """
             + js_function_block("function escapeHtml(text) {", "function formatDefault")
             + js_function_block("// Advanced full-template editors (ADR 0015).", "function modelTaskLabels()")
+            + js_function_block("function editRunPreset(id) {", "function collectRunPresetEditor() {")
             + js_function_block("function collectRunPresetEditor() {", "function prepRunPresetEditorFromCurrent")
+            + js_function_block("function envToText(env) {", "function textToEnv(text) {")
             + js_function_block("function textToEnv(text) {", "function renderStats")
             + js_function_block("async function savePresetEditor() {", "async function renamePresetDisplayName")
             + js_function_block("function applyRunPreset(preset) {", "function resetAllOverrides")
@@ -4666,6 +4686,78 @@ for (const malformedRaw of malformedValues) {
     "malformed raw override was not preserved for round-trip"
   );
 }
+
+// ---- Stored preset conflict: stale raw env must not beat dirty editors ----
+// issue #245: opening a stored preset loads its template values into the
+// dedicated editors, and saving after editing them must persist the editor
+// value even though the raw preset_env textarea still holds the old JSON.
+state.schema = { current_env: {}, prompt_templates: TASKS };
+renderPromptTemplateEditors();
+const conflictTask = editTask;
+const conflictId = "stored-conflict-preset";
+const oldSystem = "QA-OLD-SENTINEL";
+const oldUser = "stale user text";
+const extraEnvKey = "NEWS_EXTRA_ORDINARY";
+presetStore.set(conflictId, {
+  id: conflictId,
+  name: "Stored Conflict",
+  description: "conflict fixture",
+  env: {
+    [conflictTask.env_var]: JSON.stringify({ system: oldSystem, user: oldUser }),
+    [extraEnvKey]: "keep-me"
+  }
+});
+await loadPresets();
+assert(
+  state.presets.some(p => p.id === conflictId),
+  "loadPresets did not populate state.presets from the in-memory store"
+);
+editRunPreset(conflictId);
+assert($("preset_id").value === conflictId, "editRunPreset did not fill the preset id");
+assert(
+  $("preset_env").value.includes("QA-OLD-SENTINEL"),
+  "editRunPreset did not load the stored raw env into preset_env"
+);
+assert(
+  templateSys(conflictTask.task).value === oldSystem,
+  "editRunPreset did not load the stored system value into the dedicated editor"
+);
+assert(
+  templateUser(conflictTask.task).value === oldUser,
+  "editRunPreset did not load the stored user value into the dedicated editor"
+);
+// Dirty the dedicated editor while the raw textarea keeps the old sentinel.
+const newSystem = "QA-NEW-SENTINEL";
+const newUser = "fresh user text";
+templateSys(conflictTask.task).value = newSystem;
+templateUser(conflictTask.task).value = newUser;
+templateSys(conflictTask.task).fire("input");
+const conflictEnvBefore = currentPromptTemplateEnv();
+assert(
+  conflictEnvBefore[conflictTask.env_var] === JSON.stringify({ system: newSystem, user: newUser }),
+  "dirty editor value was not serialized before save"
+);
+const validateCountBefore = requests.filter(r => r.path === "/api/prompt-templates/validate").length;
+await savePresetEditor();
+const persistedConflict = (await api("/api/presets")).presets.find(p => p.id === conflictId);
+assert(persistedConflict !== undefined, "conflict preset was not persisted");
+assert(
+  persistedConflict.env[conflictTask.env_var] === JSON.stringify({ system: newSystem, user: newUser }),
+  "stale raw env beat the dirty dedicated editor on save (merge precedence)"
+);
+assert(
+  persistedConflict.env[extraEnvKey] === "keep-me",
+  "unrelated raw env entry did not survive the save merge"
+);
+assert(persistedConflict.name === "Stored Conflict", "unrelated preset field changed on save");
+const conflictValidate = requests
+  .filter(r => r.path === "/api/prompt-templates/validate")
+  .slice(validateCountBefore);
+assert(
+  conflictValidate.length === 1 &&
+    JSON.parse(conflictValidate[0].body).templates[conflictTask.task].system === newSystem,
+  "validation did not receive the final edited value"
+);
 """
         )
         node = shutil.which("node")

@@ -3354,6 +3354,7 @@ HTML = r"""<!doctype html>
       $("preset_name").value = preset.name || preset.id || "";
       $("preset_description").value = preset.description || "";
       $("preset_env").value = envToText(preset.env || {});
+      setPromptTemplateEnv(preset.env || {});
     }
     function collectRunPresetEditor() {
       return {
@@ -3415,7 +3416,7 @@ HTML = r"""<!doctype html>
       // Merge the Advanced full-template editors into the saved env and run
       // the same authoritative validation the runtime uses, so an invalid
       // template can never be persisted.
-      body.env = { ...currentPromptTemplateEnv(), ...body.env };
+      body.env = { ...body.env, ...currentPromptTemplateEnv() };
       await validatePromptTemplateEnv(body.env);
       const exists = state.presets.some(preset => preset.id === body.id);
       await api("/api/presets", { method: exists ? "PATCH" : "POST", body: JSON.stringify(body) });
