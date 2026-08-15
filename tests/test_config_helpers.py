@@ -840,8 +840,19 @@ class ConfigHelperTests(unittest.TestCase):
             self.assertEqual(knob["type"], "text")
             self.assertTrue(knob["advanced"])
         # Drift-guard: every model knob option maps to an HF page + hardware
-        # link; the backend knob (not a model choice) carries none.
-        model_knob_envs = ("NEWS_MODEL", "NEWS_MODEL_ARTICLE_SUMMARY", "NEWS_MODEL_STORY_DRAFTING")
+        # link; the backend knob (not a model choice) carries none. The model
+        # knob family is NEWS_MODEL plus the generated per-task model knobs
+        # (issue #79), derived from MODEL_TASK_KNOB_SPECS rather than a second
+        # manifest, so adding a future task cannot drift the guard.
+        model_knob_envs = (
+            "NEWS_MODEL",
+            *(f"NEWS_MODEL_{task.upper()}" for task, _, _ in config_module.MODEL_TASK_KNOB_SPECS),
+        )
+        self.assertEqual(
+            {knob["env"] for knob in registry if knob["option_links"]},
+            set(model_knob_envs),
+            "option_links must be carried exactly by NEWS_MODEL and the generated task model knobs",
+        )
         for env in model_knob_envs:
             model_knob = next(knob for knob in registry if knob["env"] == env)
             self.assertEqual(
