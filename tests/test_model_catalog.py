@@ -780,6 +780,22 @@ class ModelCatalogTests(unittest.TestCase):
                 model_catalog.RUNTIME_FIT_EXTERNAL_ONLY,
             ),
             (
+                {"id": "someone/text2text-gguf", "tags": ["gguf"], "library_name": "transformers", "pipeline_tag": "text2text-generation"},
+                model_catalog.RUNTIME_FIT_MANAGED_LLAMA_CPP,
+            ),
+            (
+                {"id": "someone/audio-gguf", "tags": ["gguf"], "library_name": "transformers", "pipeline_tag": "audio-classification"},
+                model_catalog.RUNTIME_FIT_EXTERNAL_ONLY,
+            ),
+            (
+                {"id": "someone/embedding-gguf", "tags": ["gguf"], "library_name": "transformers", "pipeline_tag": "feature-extraction"},
+                model_catalog.RUNTIME_FIT_EXTERNAL_ONLY,
+            ),
+            (
+                {"id": "someone/unknown-task-gguf", "tags": ["gguf"], "library_name": "transformers", "pipeline_tag": None},
+                model_catalog.RUNTIME_FIT_EXTERNAL_ONLY,
+            ),
+            (
                 {"id": "someone/mlx-text", "tags": ["mlx"], "library_name": "mlx", "pipeline_tag": "text-generation"},
                 model_catalog.RUNTIME_FIT_MANAGED_MLX_LM,
             ),

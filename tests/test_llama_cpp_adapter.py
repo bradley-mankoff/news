@@ -136,6 +136,9 @@ class ParseModelReferenceTests(unittest.TestCase):
             "owner/../repo",
             "owner/repo/..%2Fevil.gguf",
             "owner/repo/..%2fevil.gguf",
+            "owner/repo/..%5Cevil.gguf",
+            "owner/repo/%2e%2e%2Fevil.gguf",
+            "https://huggingface.co/owner/repo/..%5cevil.gguf",
             "owner//repo",
             "owner/repo/",
         ):

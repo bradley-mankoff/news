@@ -1514,7 +1514,12 @@ def _validate_llama_cpp_backend_compatibility(model_reference: str, backend: str
     llama-server apply its documented default quantization. mlx-lm/mlx-vlm
     cross-overrides and external selections keep their existing behavior.
     """
-    declared = _model_catalog.catalog_model_backend(model_reference)
+    clean = (model_reference or "").strip()
+    resolved = resolve_model_name(clean)
+    declared = (
+        _model_catalog.catalog_model_backend(clean)
+        or _model_catalog.catalog_model_backend(resolved)
+    )
     if declared is None or declared == backend:
         return
     mlx_backends = (MODEL_BACKEND_MLX_LM, MODEL_BACKEND_MLX_VLM)
