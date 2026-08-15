@@ -68,6 +68,8 @@ git_cheat_sheet.txt
 # Automation runtime state
 automation/state.json
 automation/board_poller.log
+automation/.scrub-freeze.json
+automation/.scrub-dryrun-manifest.json
 automation/archon-runs.log
 automation/ui_runtime.json
 

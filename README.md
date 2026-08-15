@@ -61,13 +61,18 @@ Manual sync:
 python3 automation/news_ui_runtime.py sync
 ```
 
-This never rewrites a dirty developer checkout and never kills an unknown
-listener on the UI port.
+The clean runtime worktree defaults to `~/.local/share/news/ui-runtime`; set
+`NEWS_UI_RUNTIME_WORKTREE` to use another location. This never rewrites a dirty
+developer checkout and never kills an unknown listener on the UI port.
 
 ### Security gate
 
-History scrub is human-gated: `automation/scrub_history.sh --dry-run`, review,
-then `--execute`. Runbook: `docs/security/history-scrub.md`.
+History scrub is policy-gated and human-approved: inspect with
+`python3 automation/scrub_policy.py check` and `plan`, then run
+`python3 automation/scrub_policy.py execute` only after every gate passes.
+The lower-level `automation/scrub_history.sh` wrapper is used by the policy
+engine and must not be invoked with `--execute` to bypass those gates. Runbook:
+`docs/security/history-scrub.md`.
 Secret prevention is automatic through the Gitleaks pre-commit hook in
 `.pre-commit-config.yaml`, pinned to `v8.30.1`; install it with
 `uv run pre-commit install`. It scans staged changes only and uses redacted

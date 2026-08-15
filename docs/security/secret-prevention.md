@@ -216,9 +216,10 @@ is a deliberate detector change.
 - **History is not rewritten.** Existing historical personal-data findings
   (documented in `docs/security/audit-2026-08-02.md`) are a separate concern.
   The audit scanner (`automation/security_audit.py`) reports them and exits 1;
-  the history scrub (`docs/security/history-scrub.md`, gated runbook +
-  `automation/scrub_history.sh`) rewrites history with `git filter-repo` and
-  requires explicit human approval. The hook intentionally does not scan
+  the history scrub (`docs/security/history-scrub.md`, policy-gated runbook +
+  `automation/scrub_policy.py` orchestrating `automation/scrub_history.sh`)
+  rewrites history with `git filter-repo` and requires explicit human approval.
+  The hook intentionally does not scan
   history, so ordinary commits are not blocked by old findings.
 - **Native GitHub secret scanning is not configured here.** Enabling
   GitHub's own secret scanning / push protection and any alert triage is an
@@ -236,7 +237,8 @@ is a deliberate detector change.
 | Gitleaks pre-commit hook (this runbook) | Staged diff of future commits | Every `git commit` | Checked in, `.pre-commit-config.yaml` |
 | Gitleaks CI gate | Merge-aware PR commit range (`BASE_SHA..HEAD_SHA`) | Every pull request to `develop`/`main` | Checked in, `.github/workflows/ci.yml`, pinned `v8.30.1` |
 | `automation/security_audit.py` | Working tree + full history | Manual | Checked in, exits 0 when clean |
-| `automation/scrub_history.sh` | Entire history (rewrite) | Gated, human approval | Checked in, dry-run by default |
+| `automation/scrub_policy.py` | Freeze, labels, board, backup, and dry-run gates | Read-only checks/plans; human-approved execute | Checked in, authoritative orchestrator |
+| `automation/scrub_history.sh` | Entire history (rewrite) | Invoked by policy execute; dry-run by default | Checked in, lower-level rewrite wrapper |
 
 ## Troubleshooting
 

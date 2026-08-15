@@ -14,9 +14,10 @@
 # Progress and only with explicit human approval.
 #
 # Environment:
-#   REPO_URL   remote to clone (default: https://github.com/bradley-mankoff/news)
-#   WORKDIR    scratch dir for the mirror clone (default: /tmp/news-scrub)
-#   SCRUB_USER username in the audited personal paths (default: home)
+#   REPO_URL       remote to clone (default: https://github.com/bradley-mankoff/news)
+#   WORKDIR        scratch dir for the rewritten mirror (default: /tmp/news-scrub)
+#   BACKUP_WORKDIR scratch dir for the pre-rewrite backup (default: timestamped /tmp path)
+#   SCRUB_USER     username in the audited personal paths (default: home)
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -24,29 +25,41 @@ AUDIT_SCRIPT="$SCRIPT_DIR/security_audit.py"
 
 REPO_URL="${REPO_URL:-https://github.com/bradley-mankoff/news}"
 WORKDIR="${WORKDIR:-/tmp/news-scrub}"
+BACKUP_WORKDIR="${BACKUP_WORKDIR:-/tmp/news-scrub-backup-$(date -u +%Y%m%dT%H%M%SZ)}"
 SCRUB_USER="${SCRUB_USER:-home}"
+MANIFEST_PATH="$SCRIPT_DIR/.scrub-dryrun-manifest.json"
+BACKUP_MANIFEST_NAME=".scrub-backup-manifest.json"
 
-# The env-controlled destructive path below is `rm -rf "$WORKDIR"`; guard it
-# against typos like WORKDIR=/ or $HOME before anything can reach it.
-# Require an absolute path (kills relative typos like `..` or `.`) and reject
-# top-level/system directories (kills `/tmp` or `/Users` typos).
-case "$WORKDIR" in
-  ""|"/"|"$HOME"|"$HOME"/*)
-    echo "error: refusing unsafe WORKDIR: $WORKDIR (must be a scratch dir, e.g. /tmp/news-scrub)" >&2
-    exit 1
-    ;;
-  /*) ;;
-  *)
-    echo "error: refusing unsafe WORKDIR: $WORKDIR (must be an absolute path)" >&2
-    exit 1
-    ;;
-esac
-case "$WORKDIR" in
-  /tmp|/var|/Users|/home|/etc|/System|/private|/opt|/usr|/bin|/sbin)
-    echo "error: refusing unsafe WORKDIR: $WORKDIR (top-level system directory)" >&2
-    exit 1
-    ;;
-esac
+# Both env-controlled destructive paths are rm -rf targets. Require absolute
+# scratch paths and reject top-level/system directories before anything can
+# reach them. Also reject the same path for the backup and rewritten mirror.
+validate_scratch_path() {
+  local name="$1"
+  local value="$2"
+  case "$value" in
+    ""|"/"|"$HOME"|"$HOME"/*)
+      echo "error: refusing unsafe $name: $value (must be a scratch dir)" >&2
+      exit 1
+      ;;
+    /*) ;;
+    *)
+      echo "error: refusing unsafe $name: $value (must be an absolute path)" >&2
+      exit 1
+      ;;
+  esac
+  case "$value" in
+    /tmp|/var|/Users|/home|/etc|/System|/private|/opt|/usr|/bin|/sbin)
+      echo "error: refusing unsafe $name: $value (top-level system directory)" >&2
+      exit 1
+      ;;
+  esac
+}
+validate_scratch_path WORKDIR "$WORKDIR"
+validate_scratch_path BACKUP_WORKDIR "$BACKUP_WORKDIR"
+if [ "$WORKDIR" = "$BACKUP_WORKDIR" ]; then
+  echo "error: WORKDIR and BACKUP_WORKDIR must be different paths" >&2
+  exit 1
+fi
 
 DRY_RUN=1
 MAILMAP=""
@@ -87,35 +100,86 @@ command -v git-filter-repo >/dev/null 2>&1 || {
   exit 1
 }
 
-echo "==> Cloning mirror of $REPO_URL into $WORKDIR"
-rm -rf "$WORKDIR"
-git clone --mirror "$REPO_URL" "$WORKDIR"
-
-# --- generate replacement files from redacted constants ----------------------
-# The [@] / [.] / [USERNAME] placeholders keep this script free of raw
-# personal data; sed restores them before filter-repo reads the files.
+# The manifest records the exact pre-rewrite remote heads used by both the
+# backup and the dry-run. It is written atomically only after verification.
+REMOTE_REFS_TXT="$(mktemp)"
 REPLACEMENTS_TXT="$(mktemp)"
 MESSAGES_TXT="$(mktemp)"
 
 # VERIFY_PASSED gates the cleanup trap's mirror removal: once the rewritten
-# history has been verified clean, the mirror holds the ONLY copy of it and
-# must survive any later failure (e.g. a transient push error) so the human
-# can retry the push instead of redoing the entire clone+rewrite cycle.
+# history has been verified clean, the mirror holds the only rewritten copy
+# and must survive a later push failure for retry/inspection.
 VERIFY_PASSED=0
 
 cleanup() {
-  rm -f "$REPLACEMENTS_TXT" "$MESSAGES_TXT"
+  rm -f "$REMOTE_REFS_TXT" "$REPLACEMENTS_TXT" "$MESSAGES_TXT"
   # On failure BEFORE verification, remove the mirror too: it holds the raw
   # pre-scrub history (the very data the scrub is meant to contain). Keep it
   # on success (and after verification) so the human can inspect the
   # rewritten history before pushing.
   if [ "${1:-0}" -ne 0 ] && [ "$VERIFY_PASSED" -eq 0 ]; then
-    echo "note: removing $WORKDIR (scrub did not complete); the mirror holds raw" >&2
-    echo "      pre-scrub history and must not linger." >&2
-    rm -rf "$WORKDIR"
+    echo "note: removing raw scrub mirrors (scrub did not complete)" >&2
+    rm -rf "$WORKDIR" "$BACKUP_WORKDIR"
   fi
 }
 trap 'cleanup $?' EXIT
+
+if ! git ls-remote --heads "$REPO_URL" > "$REMOTE_REFS_TXT"; then
+  echo "error: could not snapshot remote heads from $REPO_URL" >&2
+  exit 1
+fi
+
+write_manifest() {
+  local manifest_path="$1"
+  local kind="$2"
+  local mirror_path="$3"
+  local audit_status="$4"
+  local fsck_status="$5"
+  python3 - "$manifest_path" "$kind" "$mirror_path" "$REPO_URL" "$REMOTE_REFS_TXT" "$audit_status" "$fsck_status" <<'PY'
+import json
+import os
+import sys
+from pathlib import Path
+from datetime import datetime, timezone
+
+manifest_path, kind, mirror_path, repo_url, refs_path, audit, fsck = sys.argv[1:]
+refs = {}
+for line in Path(refs_path).read_text(encoding="utf-8").splitlines():
+    if "\t" in line:
+        sha, ref = line.split("\t", 1)
+        refs[ref] = sha
+manifest = {
+    "manifest_version": 1,
+    "kind": kind,
+    "repo_url": repo_url,
+    "mirror_path": str(Path(mirror_path).resolve()),
+    "remote_refs": refs,
+    "declared_identities": ["bradley_mankoff"],
+    "audit_status": int(audit),
+    "fsck_status": int(fsck),
+    "completed_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+}
+tmp = Path(manifest_path).with_name(Path(manifest_path).name + ".tmp")
+tmp.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+os.replace(tmp, manifest_path)
+PY
+}
+
+# Keep an exact, ref-bound backup before rewriting. The backup contains the
+# pre-scrub history, so operators must protect or delete it according to the
+# security runbook after the support purge is complete.
+echo "==> Cloning ref-bound backup mirror into $BACKUP_WORKDIR"
+rm -rf "$BACKUP_WORKDIR"
+git clone --mirror "$REPO_URL" "$BACKUP_WORKDIR"
+if ! git -C "$BACKUP_WORKDIR" fsck --no-dangling; then
+  echo "error: backup mirror failed fsck" >&2
+  exit 1
+fi
+write_manifest "$BACKUP_WORKDIR/$BACKUP_MANIFEST_NAME" "backup" "$BACKUP_WORKDIR" 0 0
+
+echo "==> Cloning mirror of $REPO_URL into $WORKDIR"
+rm -rf "$WORKDIR"
+git clone --mirror "$REPO_URL" "$WORKDIR"
 
 cat > "$REPLACEMENTS_TXT" <<'EOF'
 bradley[@]mankoff[.]com==>bradley@example.com
@@ -164,6 +228,9 @@ elif [ "$AUDIT_STATUS" -ne 0 ]; then
 fi
 echo "==> Verification passed: rewritten history is clean."
 VERIFY_PASSED=1
+write_manifest "$MANIFEST_PATH" "dry-run" "$WORKDIR" "$AUDIT_STATUS" 0
+
+echo "==> Wrote ref-bound dry-run manifest to $MANIFEST_PATH"
 
 # --- push (dry-run default) --------------------------------------------------
 # git filter-repo removes the 'origin' remote as part of its default

@@ -139,6 +139,7 @@ exit 0
             PATH=f"{bin_dir}:{os.environ['PATH']}",
             REPO_URL=f"file://{fixture}",
             WORKDIR=str(workdir),
+            BACKUP_WORKDIR=str(tmpdir / "news-scrub-backup"),
         )
 
     def test_dry_run_produces_pushable_mirror_with_origin(self) -> None:

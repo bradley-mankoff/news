@@ -20,17 +20,18 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
-import re
 import subprocess
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 REPO = "bradley-mankoff/news"
-ROOT = Path("/Users/bradley_mankoff/personal_code/news")
+ROOT = Path(__file__).resolve().parent.parent
 FREEZE_FILE = ROOT / "automation" / ".scrub-freeze.json"
+DRY_RUN_MANIFEST = ROOT / "automation" / ".scrub-dryrun-manifest.json"
+BACKUP_MANIFEST_NAME = ".scrub-backup-manifest.json"
+ARTIFACT_MAX_AGE = timedelta(hours=24)
 KEEP_LABEL = "rewrite-with-keep-set"
 CLOSE_LABEL = "close-on-scrub"
 
@@ -41,6 +42,47 @@ DECLARED_IDENTITIES = ["bradley_mankoff"]
 
 def now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def validate_repo_root() -> None:
+    """Reject a copied/misconfigured script before it can mutate anything."""
+    result = subprocess.run(
+        ["git", "-C", str(ROOT), "rev-parse", "--show-toplevel"],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"repository root is not a Git checkout: {ROOT} "
+            f"({result.stderr.strip()[:200]})"
+        )
+    reported = Path(result.stdout.strip()).resolve()
+    if reported != ROOT.resolve():
+        raise RuntimeError(
+            f"repository root mismatch: expected {ROOT}, Git reported {reported}"
+        )
+
+
+def _manifest_timestamp_is_fresh(value: object) -> bool:
+    if not isinstance(value, str):
+        return False
+    try:
+        completed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    if completed.tzinfo is None:
+        return False
+    age = datetime.now(timezone.utc) - completed.astimezone(timezone.utc)
+    return timedelta(0) <= age <= ARTIFACT_MAX_AGE
+
+
+def _load_manifest(path: Path) -> dict | None:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return value if isinstance(value, dict) else None
 
 
 def run(cmd: list[str], timeout: float = 60) -> subprocess.CompletedProcess[str]:
@@ -94,11 +136,21 @@ def open_prs() -> list[dict]:
     return prs
 
 
-def remote_refs() -> list[str]:
+def remote_ref_snapshot() -> dict[str, str]:
     r = run(["git", "ls-remote", "--heads", "origin"])
     if r.returncode != 0:
         raise RuntimeError(f"git ls-remote failed: {r.stderr.strip()[:300]}")
-    return [line.split("\t")[1] for line in r.stdout.splitlines() if "\t" in line]
+    snapshot: dict[str, str] = {}
+    for line in r.stdout.splitlines():
+        if "\t" not in line:
+            continue
+        sha, ref = line.split("\t", 1)
+        snapshot[ref] = sha
+    return snapshot
+
+
+def remote_refs() -> list[str]:
+    return sorted(remote_ref_snapshot())
 
 
 def board_in_progress() -> list[int]:
@@ -116,26 +168,75 @@ def board_in_progress() -> list[int]:
     ]
 
 
+def _mirror_ref_snapshot(path: Path) -> dict[str, str] | None:
+    result = run(["git", "-C", str(path), "show-ref", "--heads"])
+    if result.returncode != 0:
+        return None
+    refs: dict[str, str] = {}
+    for line in result.stdout.splitlines():
+        parts = line.split(" ", 1)
+        if len(parts) == 2:
+            refs[parts[1]] = parts[0]
+    return refs
+
+
 def backup_fresh_and_clean() -> tuple[bool, str]:
-    """The backup mirror must exist and fsck-clean. Mirrors live under
-    /tmp/news-scrub-backup-* by convention; require at least one."""
-    candidates = sorted(Path("/tmp").glob("news-scrub-backup-*"))
-    if not candidates:
-        return False, "no backup mirror found under /tmp/news-scrub-backup-*"
-    latest = candidates[-1]
-    r = run(["git", "-C", str(latest), "fsck", "--no-dangling"])
-    if r.returncode != 0:
-        return False, f"backup {latest.name} fsck dirty: {r.stderr.strip()[:200]}"
-    return True, f"backup {latest.name} fsck clean"
+    """Require a recent, ref-bound, fsck-clean backup mirror."""
+    current_refs = remote_ref_snapshot()
+    candidates = [
+        path for path in Path("/tmp").glob("news-scrub-backup-*")
+        if path.is_dir()
+    ]
+    for candidate in sorted(candidates, key=lambda path: path.stat().st_mtime, reverse=True):
+        manifest = _load_manifest(candidate / BACKUP_MANIFEST_NAME)
+        if not manifest:
+            continue
+        if manifest.get("manifest_version") != 1:
+            continue
+        if manifest.get("kind") != "backup":
+            continue
+        if manifest.get("repo_url") != f"https://github.com/{REPO}":
+            continue
+        if manifest.get("mirror_path") != str(candidate.resolve()):
+            continue
+        if manifest.get("remote_refs") != current_refs:
+            continue
+        if manifest.get("fsck_status") != 0 or not _manifest_timestamp_is_fresh(
+            manifest.get("completed_at")
+        ):
+            continue
+        if _mirror_ref_snapshot(candidate) != current_refs:
+            continue
+        result = run(["git", "-C", str(candidate), "fsck", "--no-dangling"])
+        if result.returncode == 0:
+            return True, f"backup {candidate.name} is current and fsck clean"
+    return False, (
+        "no recent ref-matching backup manifest with a clean fsck found under "
+        "/tmp/news-scrub-backup-*"
+    )
 
 
 def dry_run_artifact_ok() -> tuple[bool, str]:
-    """A passing dry-run artifact must exist. The scrub script keeps a
-    verified dry-run mirror; require the marker file."""
-    marker = ROOT / "automation" / ".scrub-dryrun-ok"
-    if not marker.exists():
-        return False, "no .scrub-dryrun-ok marker (run scrub_history.sh --dry-run first)"
-    return True, f"dry-run marker present ({marker.stat().st_mtime:.0f})"
+    """Require the shell wrapper's fresh, ref-bound, audited manifest."""
+    manifest = _load_manifest(DRY_RUN_MANIFEST)
+    if not manifest:
+        return False, f"no valid dry-run manifest at {DRY_RUN_MANIFEST}"
+    if manifest.get("manifest_version") != 1 or manifest.get("kind") != "dry-run":
+        return False, "dry-run manifest has an unsupported kind or version"
+    if manifest.get("repo_url") != f"https://github.com/{REPO}":
+        return False, "dry-run manifest targets a different repository"
+    if manifest.get("audit_status") != 0:
+        return False, "dry-run manifest does not record a passing audit"
+    if set(manifest.get("declared_identities", [])) != set(DECLARED_IDENTITIES):
+        return False, "dry-run manifest identity set does not match policy"
+    if manifest.get("remote_refs") != remote_ref_snapshot():
+        return False, "dry-run manifest does not match current remote refs"
+    mirror = Path(str(manifest.get("mirror_path", ""))).expanduser()
+    if not mirror.is_dir():
+        return False, f"dry-run mirror is missing: {mirror}"
+    if not _manifest_timestamp_is_fresh(manifest.get("completed_at")):
+        return False, "dry-run manifest is missing or older than 24 hours"
+    return True, f"dry-run manifest verified ({manifest['completed_at']})"
 
 
 def classify(prs: list[dict], heads: list[str]) -> tuple[list[str], list[str], list[dict]]:
@@ -229,13 +330,19 @@ def plan_text(prs: list[dict]) -> str:
     return "\n".join(lines)
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("mode", choices=["check", "plan", "execute"])
     parser.add_argument("--freeze", nargs=2, metavar=("START", "END"),
                         help="set the freeze window (START END as ISO timestamps)")
     parser.add_argument("--unfreeze", action="store_true")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
+
+    try:
+        validate_repo_root()
+    except RuntimeError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 1
 
     if args.freeze:
         set_freeze(*args.freeze)
@@ -254,19 +361,32 @@ def main() -> int:
         return 1
 
     if args.mode == "check":
+        try:
+            results = gates(freeze, prs)
+        except RuntimeError as exc:
+            print(f"ERROR: gate evaluation failed: {exc}", file=sys.stderr)
+            return 1
         all_ok = True
-        for name, ok, detail in gates(freeze, prs):
+        for name, ok, detail in results:
             print(f"{'PASS' if ok else 'FAIL'}  {name}: {detail}")
             all_ok = all_ok and ok
         print(f"\nresult: {'READY' if all_ok else 'NOT READY'}")
         return 0 if all_ok else 1
 
     if args.mode == "plan":
-        print(plan_text(prs))
+        try:
+            print(plan_text(prs))
+        except RuntimeError as exc:
+            print(f"ERROR: plan failed: {exc}", file=sys.stderr)
+            return 1
         return 0
 
     # execute
-    results = gates(freeze, prs)
+    try:
+        results = gates(freeze, prs)
+    except RuntimeError as exc:
+        print(f"ERROR: gate evaluation failed: {exc}", file=sys.stderr)
+        return 1
     failed = [(n, d) for n, ok, d in results if not ok]
     for name, ok, detail in results:
         print(f"{'PASS' if ok else 'FAIL'}  {name}: {detail}")
@@ -274,19 +394,39 @@ def main() -> int:
         print("\nABORT — gates not met; nothing executed. Keep freeze up.")
         return 1
 
-    keep, delete, close_prs = classify(prs, remote_refs())
+    try:
+        keep, delete, close_prs = classify(prs, remote_refs())
+    except RuntimeError as exc:
+        print(f"ERROR: could not compute the mutation plan: {exc}", file=sys.stderr)
+        return 1
     print("\nEXECUTING:")
     print(" 1. close close-on-scrub PRs:", [p["number"] for p in close_prs])
     for p in close_prs:
-        r = gh(["pr", "close", str(p["number"]), "-R", REPO])
-        print(f"    closed #{p['number']}: {'ok' if r.returncode == 0 else r.stderr.strip()[:80]}")
+        result = gh(["pr", "close", str(p["number"]), "-R", REPO])
+        if result.returncode != 0:
+            print(
+                f"ERROR: could not close PR #{p['number']}: "
+                f"{result.stderr.strip()[:300]}",
+                file=sys.stderr,
+            )
+            print("ABORT — no branch deletion or history rewrite was attempted.", file=sys.stderr)
+            return 1
+        print(f"    closed #{p['number']}: ok")
     print(f" 2. delete delete-set heads ({len(delete)})")
     for head in delete:
-        r = run(["git", "push", "origin", f":{head.removeprefix('refs/')}"])
-        print(f"    deleted {head}: {'ok' if r.returncode == 0 else r.stderr.strip()[:80]}")
+        result = run(["git", "push", "origin", f":{head.removeprefix('refs/heads/')}"])
+        if result.returncode != 0:
+            print(
+                f"ERROR: could not delete {head}: "
+                f"{result.stderr.strip()[:300]}",
+                file=sys.stderr,
+            )
+            print("ABORT — history rewrite was not attempted; review completed remote mutations.", file=sys.stderr)
+            return 1
+        print(f"    deleted {head}: ok")
     print(" 3. rewrite + force-push keep-set via scrub_history.sh --execute")
-    r = run(["bash", "automation/scrub_history.sh", "--execute"], timeout=1800)
-    print(f"    scrub exit={r.returncode}")
+    result = run(["bash", "automation/scrub_history.sh", "--execute"], timeout=1800)
+    print(f"    scrub exit={result.returncode}")
     print(" 4. verify: run `python3 automation/security_audit.py` (must exit 0)")
     print("    and `git clone` fresh; `git log --all` must show zero declared identities")
     print("\nGITHUB SUPPORT REQUEST (staged, must be filed manually):")
@@ -294,7 +434,7 @@ def main() -> int:
           f"on {now()}). Please run GC and purge cached refs/diffs for refs: "
           f"{', '.join(keep[:5])}.")
     print("\nDo NOT unfreeze until verification passes and contributors are notified.")
-    return 0 if r.returncode == 0 else 1
+    return 0 if result.returncode == 0 else 1
 
 
 if __name__ == "__main__":

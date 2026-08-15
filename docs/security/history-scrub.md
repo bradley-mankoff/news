@@ -25,6 +25,50 @@ are In Progress on the board.
 - A clean mirror clone (see step 1) — never run `filter-repo` inside a live worktree.
 - `automation/security_audit.py` available on the machine running the scrub (it is
   committed to the repo, so any non-bare clone has it).
+- A protected local location with enough space for the ref-bound backup mirror;
+  the backup contains the pre-scrub history until the purge is complete.
+
+## Policy gate (authoritative entry point)
+
+`automation/scrub_policy.py` is the safety boundary for this operation. The
+lower-level shell wrapper must not be invoked with `--execute` directly.
+
+Inspect the live state without mutating GitHub or remote refs:
+
+```bash
+python3 automation/scrub_policy.py check
+python3 automation/scrub_policy.py plan
+```
+
+A human sets an explicit freeze window, then re-runs the checks:
+
+```bash
+python3 automation/scrub_policy.py check --freeze START END
+python3 automation/scrub_policy.py check
+```
+
+The `--freeze` form records the window and returns; the following `check`
+must still pass. `execute` is permitted only when all gates pass:
+
+- the freeze flag is active and the current time is inside the window;
+- no issue is `In Progress` on the project board;
+- every open PR has either `rewrite-with-keep-set` or `close-on-scrub`;
+- a recent, ref-matching, fsck-clean backup manifest exists under
+  `/tmp/news-scrub-backup-*`;
+- the shell wrapper's recent, audited dry-run manifest matches the current
+  remote heads and declared identity set.
+
+```bash
+python3 automation/scrub_policy.py execute
+```
+
+`execute` closes labeled PRs, deletes the computed delete-set heads, and then
+invokes `scrub_history.sh --execute`. It stops on any failed close or branch
+delete and never proceeds to the rewrite after a failed remote operation. The
+shell wrapper creates ref-bound manifests atomically; the backup is raw
+pre-scrub history and must be protected or deleted after the GitHub purge and
+verification are complete. Use `python3 automation/scrub_policy.py check --unfreeze`
+only after verification and contributor notification.
 
 ## Steps
 
@@ -148,8 +192,12 @@ commits before rewriting — they are gone afterward).
 - If any real recipient list was ever committed (it was not — `env.json` was never
   tracked), that data would also need rotation, not just rewriting.
 
-## Automated Wrapper
+## Lower-level Rewrite Wrapper
 
-`automation/scrub_history.sh` automates steps 1-6 (clone, generate replacement files
-from redacted constants, filter-repo, audit verification) and by default only
-**prints** the push commands (`--dry-run`). A human passes `--execute` to push.
+`automation/scrub_history.sh --dry-run` performs the mirror clone, creates a
+ref-bound pre-rewrite backup, generates replacement files, runs `git filter-repo`,
+and verifies the audit. It writes an audited
+`automation/.scrub-dryrun-manifest.json` plus a backup manifest under
+`/tmp/news-scrub-backup-*`; both are consumed by `scrub_policy.py`. It prints
+push commands by default. Only `scrub_policy.py execute` may invoke the wrapper
+with `--execute`, after all policy gates pass.
