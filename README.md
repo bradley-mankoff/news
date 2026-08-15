@@ -719,7 +719,7 @@ Focused commands:
 
 CI installs Chromium plus its Ubuntu system dependencies
 (`uv run python -m playwright install --with-deps chromium`) before running
-the full suite (`.venv/bin/python3 -m pytest tests/ -q`).
+the full suite (`uv run python -m pytest -q`).
 
 ## Fast Test Run
 

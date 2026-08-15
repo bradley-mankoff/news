@@ -3,11 +3,10 @@
 Drives the real embedded UI served by the fixture's ``NewsUIServer`` over an
 ephemeral localhost port: independent status badges and metadata warnings,
 historical run selection with literal ``<script>`` report text, failed-run
-visibility, and the terminal completion refresh/navigation lifecycle. All
-page fetches hit the live fixture server and no API route is mocked. The only
-substitution is ``ui_module.build_command`` in the terminal test, which
-replaces the real model pipeline with a tiny child process that atomically
-writes a completed latest review and exits.
+visibility, and terminal completion/failure refresh lifecycles. All page
+fetches hit the live fixture server and no API route is mocked. The only
+substitution is ``ui_module.build_command`` in terminal tests, which replaces
+the real model pipeline with tiny deterministic child processes.
 """
 
 from __future__ import annotations
@@ -22,6 +21,7 @@ from news_pipeline import ui as ui_module
 from tests.ui_review_fixtures import (
     COMPLETED_RUN_ID,
     FAILED_RUN_ID,
+    REFRESHED_REPORT_BODY,
     REFRESHED_RUN_ID,
     ReviewFixture,
 )
@@ -102,6 +102,54 @@ class ReportReviewBrowserTests(unittest.TestCase):
                 finally:
                     browser.close()
 
+    def test_terminal_failed_run_clears_controls_and_refreshes_review(self) -> None:
+        with ReviewFixture(latest_completed=False) as fixture:
+            with patch.object(
+                ui_module,
+                "build_command",
+                return_value=fixture.failed_child_command(),
+            ):
+                with sync_playwright() as playwright:
+                    browser = playwright.chromium.launch(headless=True)
+                    try:
+                        page = browser.new_page()
+                        page.goto(fixture.base_url, wait_until="load")
+                        page.locator("#runBtn").click()
+
+                        # A non-zero child still closes the SSE lifecycle and
+                        # restores the controls instead of leaving a spinner.
+                        expect(page.locator("#status")).to_contain_text("failed")
+                        expect(page.locator("#runBtn")).to_be_enabled()
+                        expect(page.locator("#stopBtn")).to_be_disabled()
+
+                        page.locator('nav button[data-tab="review"]').click()
+                        expect(page.locator("#reviewMount")).to_contain_text(
+                            REFRESHED_RUN_ID
+                        )
+                        expect(page.locator("#reviewMount")).to_contain_text(
+                            "run: failed"
+                        )
+                        expect(page.locator("#reviewMount")).to_contain_text(
+                            "report: not_generated"
+                        )
+                        expect(page.locator("#reviewMount")).to_contain_text(
+                            "No report was generated for this run."
+                        )
+                        failed_row = page.locator(
+                            f'#historyTable tr[data-run-id="{REFRESHED_RUN_ID}"]'
+                        )
+                        expect(failed_row).to_be_visible()
+                        failed_row.click()
+                        expect(page.locator("#runDetail")).to_contain_text(
+                            "run: failed"
+                        )
+                        expect(page.locator("#runDetail")).to_contain_text(
+                            "report: not_generated"
+                        )
+                        self.assertIsNone(ui_module.RUN_MANAGER.active())
+                    finally:
+                        browser.close()
+
     def test_terminal_completed_run_refreshes_review_and_navigates(self) -> None:
         with ReviewFixture(latest_completed=False) as fixture:
             with patch.object(
@@ -126,7 +174,8 @@ class ReportReviewBrowserTests(unittest.TestCase):
                         )
 
                         # Real POST /api/run + SSE terminal lifecycle; the
-                        # child atomically replaces the rolling latest state.
+                        # child atomically replaces each rolling artifact
+                        # before exiting.
                         page.locator("#runBtn").click()
 
                         # Terminal completion navigates to the Review tab with
@@ -144,6 +193,25 @@ class ReportReviewBrowserTests(unittest.TestCase):
                         expect(badge_row).to_contain_text("run: completed")
                         expect(badge_row).to_contain_text("report: available")
                         expect(badge_row).to_contain_text("delivery: failed")
+
+                        # The child also creates a durable history row and OKF
+                        # bundle, so the refreshed run can be selected from
+                        # history rather than only appearing in rolling files.
+                        refreshed_row = page.locator(
+                            f'#historyTable tr[data-run-id="{REFRESHED_RUN_ID}"]'
+                        )
+                        expect(refreshed_row).to_be_visible()
+                        refreshed_row.click()
+                        expect(page.locator("#openReportBtn")).to_be_enabled()
+                        expect(page.locator("#runDetail")).to_contain_text(
+                            "run: completed"
+                        )
+                        expect(page.locator("#runDetail")).to_contain_text(
+                            "report: available"
+                        )
+                        expect(page.locator("#selectedReportPane")).to_contain_text(
+                            REFRESHED_REPORT_BODY
+                        )
 
                         # The failed historical run remains visible and
                         # selectable after the review refresh.
