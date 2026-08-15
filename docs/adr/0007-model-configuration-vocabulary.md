@@ -88,11 +88,11 @@ selected model or task. The UI labels them separately and keeps advanced Model
 Tuning in collapsible sections.
 
 Supported backend policy (`mlx-lm`, `mlx-vlm`, `external`) is delegated to ADR
-0010 (Runtime Matrix) and is not restated here.
+0017 (Runtime Matrix) and is not restated here.
 
 Prompt Profiles are adjacent but out of boundary: they swap editorial
 instruction sentences only, and their ownership belongs to the Prompt Catalog
-ADR (`0010-prompt-catalog-owns-editorial-instructions.md`), not to Model
+ADR (`0018-prompt-catalog-owns-editorial-instructions.md`), not to Model
 Tuning.
 
 ## Consequences
