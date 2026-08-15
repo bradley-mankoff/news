@@ -700,10 +700,12 @@ def runtime_fit_for_hf_model(info: Mapping[str, Any]) -> dict[str, str]:
     Returns ``{"status": ..., "reason": ...}`` where status is one of the
     ``RUNTIME_FIT_*`` constants. Rules are conservative (ADR 0017): code-owned
     curated repos and user-declared catalog entries are classified by their
-    declared backend, while MLX libraries and transformers+safetensors
-    text/vision repos are classified by metadata; everything else is
-    ``external_only`` (never a hard block - only a verdict plus a picker
-    guard). User YAML metadata is advisory, not project verification.
+    declared backend, while MLX libraries and transformers+safetensors text
+    repos are classified by metadata; transformers+safetensors vision repos
+    are ``external_only`` because mlx-vlm needs pre-converted MLX weights and
+    an mmproj asset; everything else is ``external_only`` (never a hard block
+    - only a verdict plus a picker guard). User YAML metadata is advisory,
+    not project verification.
     """
     repo_id = str(info.get("id") or "")
     tags = {str(tag).lower() for tag in (info.get("tags") or [])}
@@ -791,13 +793,21 @@ def runtime_fit_for_hf_model(info: Mapping[str, Any]) -> dict[str, str]:
     if library_name == "transformers" and "safetensors" in tags:
         if pipeline_tag == "image-text-to-text":
             return {
-                "status": RUNTIME_FIT_MANAGED_MLX_VLM,
-                "reason": "Transformers vision-language model; launchable by the managed mlx-vlm server.",
+                "status": RUNTIME_FIT_EXTERNAL_ONLY,
+                "reason": (
+                    "Transformers vision model: mlx-vlm needs pre-converted MLX "
+                    "weights and mmproj; use an external OpenAI-compatible "
+                    "endpoint (NEWS_MODEL_BACKEND=external)."
+                ),
             }
         if pipeline_tag in ("text-generation", "text2text-generation"):
             return {
                 "status": RUNTIME_FIT_MANAGED_MLX_LM,
-                "reason": "Transformers text model; launchable by the managed mlx-lm server.",
+                "reason": (
+                    "Transformers text model; launchable by the managed mlx-lm "
+                    "server, which converts weights on load (requires "
+                    "torch/transformers, architecture-dependent)."
+                ),
             }
         return {
             "status": RUNTIME_FIT_EXTERNAL_ONLY,
