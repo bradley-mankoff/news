@@ -896,6 +896,16 @@ class ConfigHelperTests(unittest.TestCase):
             config_module.hf_model_page_url(config_module.QWWYTHOS_9B_8BIT_MODEL_REFERENCE),
             qwythos_page,
         )
+        # The runtime-verified Qwen3 aliases resolve to their exact MLX pages
+        # (issue #89), for alias, URL, and raw reference inputs.
+        for alias, repo in (
+            (config_module.QWEN3_8B_4BIT_MODEL_ALIAS, config_module.QWEN3_8B_4BIT_MODEL_REPO),
+            (config_module.QWEN3_14B_4BIT_MODEL_ALIAS, config_module.QWEN3_14B_4BIT_MODEL_REPO),
+        ):
+            page = f"https://huggingface.co/{repo}"
+            self.assertEqual(config_module.hf_model_page_url(alias), page)
+            self.assertEqual(config_module.hf_model_page_url(f"https://hf.co/{repo}"), page)
+            self.assertEqual(config_module.hf_model_page_url(f"https://huggingface.co/{repo}"), page)
         self.assertIsNone(config_module.hf_model_page_url("gpt-4o-mini"))
         self.assertIsNone(config_module.hf_model_page_url("openai/gpt-4o"))
         self.assertIsNone(config_module.hf_model_page_url("foo.gguf"))
@@ -1279,6 +1289,14 @@ class ConfigHelperTests(unittest.TestCase):
         self.assertIn("gemma-4-12b-it-4bit", knob["options"])
         self.assertIn("qwythos-9b-8bit", knob["options"])
         self.assertIn("qwythos-9b-4bit", knob["options"])
+        # Runtime-verified Qwen3 aliases appear in every model selector with
+        # their HF page links (issue #89).
+        for alias in ("qwen3-8b-4bit", "qwen3-14b-4bit"):
+            self.assertIn(alias, knob["options"])
+            self.assertEqual(
+                knob["option_links"][alias]["page"],
+                f"https://huggingface.co/{model_catalog.CATALOG_MODELS[alias].hf_repo}",
+            )
         # prod preset now launches gemma
         self.assertEqual(config_module.run_preset_env("prod")["NEWS_MODEL"], "gemma-4-12b-it-4bit")
 

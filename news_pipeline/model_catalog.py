@@ -133,8 +133,10 @@ class CatalogModel:
 # qwythos-9b-* GGUF pair (llama.cpp), aligned with config.py constants and
 # MODEL_ALIASES. MLX entries keep reference == hf_repo (issue #92); llama.cpp
 # entries use a file-qualified reference (owner/repo/file.gguf) with a bare
-# hf_repo page id. Adding more requires runtime verification on Apple Silicon
-# or an operator-installed llama-server binary - out of scope for this issue.
+# hf_repo page id. Adding a launchable built-in requires Apple-Silicon
+# runtime verification for MLX entries (recorded in
+# docs/model-runtime-verification.md, issue #89) or an operator-installed
+# llama-server binary for GGUF entries.
 BUILTIN_CATALOG_MODELS: dict[str, CatalogModel] = {
     "gemma-4-12b-it-4bit": CatalogModel(
         alias="gemma-4-12b-it-4bit",
@@ -205,6 +207,59 @@ BUILTIN_CATALOG_MODELS: dict[str, CatalogModel] = {
             "backend with an operator-installed llama-server binary (issue #75)."
         ),
         task_notes={},
+    ),
+    "qwen3-8b-4bit": CatalogModel(
+        alias="qwen3-8b-4bit",
+        reference="mlx-community/Qwen3-8B-4bit",
+        name="Qwen3 8B Instruct (4-bit)",
+        backend="mlx-lm",
+        hf_repo="mlx-community/Qwen3-8B-4bit",
+        context_length=40960,
+        description=(
+            "MLX 4-bit Qwen3 8B instruction model, served by the managed "
+            "mlx-lm backend on Apple Silicon (verification and host limits: "
+            "docs/model-runtime-verification.md)."
+        ),
+        task_notes={
+            "speed": (
+                "Verified fast Qwen3 MLX option on the recorded Apple-Silicon "
+                "host: sub-second short completions; prefer it over the 14B "
+                "entry for speed-oriented runs."
+            ),
+            "structured_output": (
+                "Verified JSON structured-output contract under the pipeline's "
+                "enable_thinking=False call shape; a faster structured-output "
+                "pick than the default Gemma 4 12B for short contracts."
+            ),
+        },
+    ),
+    "qwen3-14b-4bit": CatalogModel(
+        alias="qwen3-14b-4bit",
+        reference="mlx-community/Qwen3-14B-4bit",
+        name="Qwen3 14B Instruct (4-bit)",
+        backend="mlx-lm",
+        hf_repo="mlx-community/Qwen3-14B-4bit",
+        context_length=40960,
+        description=(
+            "MLX 4-bit Qwen3 14B instruction model, served by the managed "
+            "mlx-lm backend on Apple Silicon; the larger Qwen3 MLX option, "
+            "host-sensitive (verification and host limits: "
+            "docs/model-runtime-verification.md)."
+        ),
+        task_notes={
+            "factual_extraction": (
+                "Verified extraction smoke (JSON) on the recorded host; the "
+                "higher-capacity Qwen3 MLX extraction pick."
+            ),
+            "synthesis": (
+                "Verified synthesis smoke (two-fact summary) on the recorded "
+                "host; a higher-capacity Qwen3 MLX drafting pick."
+            ),
+            "citation_fidelity": (
+                "Verified citation-marker preservation ([[S1]]/[[S2]] style) "
+                "on the recorded host."
+            ),
+        },
     ),
 }
 

@@ -1514,7 +1514,7 @@ assert(SURFACED_ENVS.size === 0, "missing schema must not throw and must suppres
             self.assertEqual(payload["sources"]["total"], 1)
             self.assertEqual(payload["recipients"]["total"], 1)
             # Model catalog keys are local-only (offline) additions.
-            self.assertEqual(len(payload["model_catalog"]), 4)
+            self.assertEqual(len(payload["model_catalog"]), 6)
             self.assertEqual(payload["model_catalog"][0]["alias"], "gemma-4-12b-it-4bit")
             self.assertIn("factual_extraction", payload["model_recommendation_tasks"])
             self.assertEqual(len(payload["model_recommendation_tasks"]), 7)
@@ -1531,7 +1531,7 @@ assert(SURFACED_ENVS.size === 0, "missing schema must not throw and must suppres
             self.assertEqual(payload["model_recommendations"]["translation"], [])
             self.assertEqual(
                 [pick["alias"] for pick in payload["model_recommendations"]["speed"]],
-                ["gemma-e2b-tiny", model_catalog.DEFAULT_CATALOG_MODEL_ALIAS],
+                ["gemma-e2b-tiny", "qwen3-8b-4bit", model_catalog.DEFAULT_CATALOG_MODEL_ALIAS],
             )
 
             helper_file = root / "nested" / "payload.yaml"
@@ -4096,10 +4096,10 @@ for (const absentId of ["article_tuning_save", "article_tuning_rename", "article
                 speed_picks = payload["model_recommendations"]["speed"]
                 self.assertEqual(
                     [pick["alias"] for pick in speed_picks],
-                    ["gemma-e2b-tiny", "smoke-model", model_catalog.DEFAULT_CATALOG_MODEL_ALIAS],
+                    ["gemma-e2b-tiny", "qwen3-8b-4bit", "smoke-model", model_catalog.DEFAULT_CATALOG_MODEL_ALIAS],
                 )
                 self.assertEqual(
-                    speed_picks[1]["reason"],
+                    speed_picks[2]["reason"],
                     "Overlay-specific speed recommendation.",
                 )
 
@@ -4110,6 +4110,8 @@ for (const absentId of ["article_tuning_save", "article_tuning_rename", "article
                 "gemma-e2b-tiny",
                 "qwythos-9b-4bit",
                 "qwythos-9b-8bit",
+                "qwen3-8b-4bit",
+                "qwen3-14b-4bit",
                 "smoke-model",
             ],
         )
@@ -4120,15 +4122,34 @@ for (const absentId of ["article_tuning_save", "article_tuning_rename", "article
                 "gemma-e2b-tiny": "mlx-lm",
                 "qwythos-9b-4bit": "llama.cpp",
                 "qwythos-9b-8bit": "llama.cpp",
+                "qwen3-8b-4bit": "mlx-lm",
+                "qwen3-14b-4bit": "mlx-lm",
                 "smoke-model": "mlx-lm",
             },
         )
+        qwen3_entries = {
+            entry["alias"]: entry
+            for entry in payload["model_catalog"]
+            if entry["alias"].startswith("qwen3")
+        }
+        for entry in qwen3_entries.values():
+            self.assertEqual(entry["context_length"], 40960)
+            self.assertEqual(
+                entry["hf_url"],
+                f"https://huggingface.co/{entry['reference']}",
+            )
         model_knob = next(knob for knob in payload["knobs"] if knob["env"] == "NEWS_MODEL")
         self.assertIn("smoke-model", model_knob["options"])
         self.assertEqual(
             model_knob["option_links"]["smoke-model"]["page"],
             "https://huggingface.co/mlx-community/smoke-model",
         )
+        for alias in ("qwen3-8b-4bit", "qwen3-14b-4bit"):
+            self.assertIn(alias, model_knob["options"])
+            self.assertEqual(
+                model_knob["option_links"][alias]["page"],
+                f"https://huggingface.co/{model_catalog.CATALOG_MODELS[alias].hf_repo}",
+            )
         task_knob = next(knob for knob in payload["knobs"] if knob["env"] == "NEWS_MODEL_STORY_DRAFTING")
         self.assertIn("smoke-model", task_knob["options"])
 
