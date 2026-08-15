@@ -4752,13 +4752,13 @@ HTML = r"""<!doctype html>
           if (preset) loadModelTuningEditor(meta.runtimeKey, preset);
           previewQuietly("run");
         };
-        for (const [buttonId, install] of [
+        for (const [buttonId, action] of [
           [meta.saveButtonId, saveModelTuningPreset],
           [meta.renameButtonId, renameModelTuningPreset],
           [meta.deleteButtonId, deleteModelTuningPreset],
         ]) {
           const button = $(buttonId);
-          if (button) button.onclick = () => install(meta.runtimeKey).catch(err => setStatus(err.message, "bad"));
+          if (button) button.onclick = () => action(meta.runtimeKey).catch(err => setStatus(err.message, "bad"));
         }
       });
     }

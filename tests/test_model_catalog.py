@@ -786,17 +786,11 @@ class ModelCatalogTests(unittest.TestCase):
         missing = ImportError("missing")
         delegated: list[str] = []
 
-        def fake_import(
-            name: str,
-            globals: dict[str, object] | None = None,
-            locals: dict[str, object] | None = None,
-            fromlist: tuple[str, ...] | list[str] = (),
-            level: int = 0,
-        ) -> object:
+        def fake_import(name: str, *args: object, **kwargs: object) -> object:
             if name == "huggingface_hub":
                 raise missing
             delegated.append(name)
-            return original_import(name, globals, locals, fromlist, level)
+            return original_import(name, *args, **kwargs)
 
         with patch("builtins.__import__", side_effect=fake_import):
             with self.assertRaisesRegex(

@@ -2893,11 +2893,11 @@ for (const meta of Object.values(TASK_CONFIG)) {
 assert(tuningCalls.length === 0, "tuning callbacks left unexpected calls");
 
 // ---- Partial control trees -------------------------------------------------
-for (const absentId of ["article_tuning_save", "article_tuning_rename", "article_tuning_delete"]) {
+const article = TASK_CONFIG.article_summary;
+for (const absentId of buttonIds(article)) {
   makeElements(absentId);
   wireEvents(); // must complete without throwing
   assert(elements[absentId] === undefined, `${absentId} should stay absent in the partial fixture`);
-  const article = TASK_CONFIG.article_summary;
   for (const id of selectIds(article)) {
     assert(typeof elements[id].onchange === "function", `${id} lost its handler when ${absentId} was absent`);
   }
