@@ -243,6 +243,43 @@ def _parse_models_search_limit(raw: str) -> int:
         raise ValueError(f"--limit must be an integer, got {raw!r}.") from None
 
 
+def _models_search_error_context(args: list[str]) -> tuple[str, bool]:
+    """Return (query, json_requested) for the JSON error envelope (issue #93).
+
+    Mirrors _parse_models_search_args' value consumption so flag-like
+    values (e.g. `--query --json`) do not count as --json.
+    """
+    query = ""
+    json_requested = False
+    index = 0
+    while index < len(args):
+        arg = args[index]
+        if arg == "--query":
+            if index + 1 < len(args):
+                query = args[index + 1]
+            index += 2
+        elif arg.startswith("--query="):
+            query = arg.split("=", 1)[1]
+            index += 1
+        elif arg in {"--task", "--limit"}:
+            index += 2
+        else:
+            if arg == "--json":
+                json_requested = True
+            index += 1
+    return query, json_requested
+
+
+def _report_models_search_error(exc: Exception, as_json: bool, query: str) -> int:
+    """Report a models-search failure: stderr message plus JSON error envelope."""
+    print(str(exc), file=sys.stderr)
+    if as_json:
+        print(
+            json.dumps({"query": query, "models": [], "error": str(exc)}, indent=2)
+        )
+    return 2
+
+
 def _run_models(args: list[str]) -> int:
     """Run the `news models` command (catalog / search subcommands).
 
@@ -272,50 +309,18 @@ def _run_models(args: list[str]) -> int:
         return 0
     if subcommand == "search":
         # Detect --json before parsing so validation failures use the same
-        # JSON error envelope as lookup failures (issue #93). Skip values
-        # consumed by the parser so flag-like values do not request JSON.
-        json_requested = False
-        query = ""
-        index = 0
-        while index < len(rest):
-            arg = rest[index]
-            if arg == "--query":
-                if index + 1 < len(rest):
-                    query = rest[index + 1]
-                index += 2
-                continue
-            if arg.startswith("--query="):
-                query = arg.split("=", 1)[1]
-                index += 1
-                continue
-            if arg in {"--task", "--limit"}:
-                index += 2
-                continue
-            if arg == "--json":
-                json_requested = True
-            index += 1
-
-        def report_search_error(exc: Exception, as_json: bool) -> int:
-            print(str(exc), file=sys.stderr)
-            if as_json:
-                print(
-                    json.dumps(
-                        {"query": query, "models": [], "error": str(exc)}, indent=2
-                    )
-                )
-            return 2
-
+        # JSON error envelope as lookup failures (issue #93).
+        query, json_requested = _models_search_error_context(rest)
         try:
             query, pipeline_tag, limit, parsed_as_json = _parse_models_search_args(rest)
         except ValueError as exc:
-            return report_search_error(exc, json_requested)
-
+            return _report_models_search_error(exc, json_requested, query)
         try:
             results = search_huggingface_models(
                 query, pipeline_tag=pipeline_tag, limit=limit
             )
         except Exception as exc:
-            return report_search_error(exc, parsed_as_json)
+            return _report_models_search_error(exc, parsed_as_json, query)
 
         if parsed_as_json:
             print(json.dumps({"query": query, "models": results}, indent=2))
