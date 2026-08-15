@@ -1017,7 +1017,10 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
         dep_blocked_marker = None
         dep_cancelled_noted = None
 
-        if not first_run and prev != status_val:
+        dispatch_guard_retry = (
+            lane == "todo" and bool(rec.get("dispatch_guard_deferred"))
+        )
+        if not first_run and (prev != status_val or dispatch_guard_retry):
             if lane == "todo" and content["__typename"] == "Issue":
                 # Dependency gate: an issue whose Depends-on refs are not all
                 # in the Done lane does not dispatch; it moves to the Blocked
@@ -1079,13 +1082,28 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
                         guard_ok, guard_reason = fresh_issue_dispatch_guard(
                             env, content["number"])
                         if guard_ok:
+                            # Clear before dispatch so a failed board move cannot
+                            # cause the same successful guard to dispatch again.
+                            rec.pop("dispatch_guard_deferred", None)
                             dispatch_result = dispatch(
                                 cfg, env, wf, branch, msg, item_id, content["number"])
                             ok = bool(dispatch_result)
                             if not ok and dispatch_result.reason == "capacity":
+                                rec["dispatch_guard_deferred"] = True
                                 note_capacity_deferred(
                                     cfg, env, content["number"], rec)
+                        elif guard_reason.startswith((
+                            "Archon run lookup unavailable:",
+                            "Archon worktree lookup unavailable:",
+                        )):
+                            rec["dispatch_guard_deferred"] = True
+                            rec.pop("recovery", None)
+                            log(
+                                f"DISPATCH DEFERRED issue={content['number']}: "
+                                f"{guard_reason}"
+                            )
                         else:
+                            rec.pop("dispatch_guard_deferred", None)
                             log(f"DISPATCH REFUSED issue={content['number']}: {guard_reason}")
                             rec["recovery"] = {
                                 "action": "resume_required",

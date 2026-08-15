@@ -8,7 +8,7 @@ from .archon import (
     fetch_workflow_runs,
     inspect_worktree,
     latest_workflow_run,
-    resolve_worktree_info,
+    resolve_worktree_info_with_health,
 )
 from .dispatch import dispatch
 from .github import comment_issue, note_capacity_deferred
@@ -164,15 +164,38 @@ def fresh_issue_dispatch_guard(
     issue_number: int,
 ) -> tuple[bool, str]:
     """Refuse a fresh run while an existing issue worktree is unsafe."""
-    worktree_info = resolve_worktree_info(env, issue_number)
+    worktree_info, worktree_lookup_error = resolve_worktree_info_with_health(
+        env, issue_number)
+    if worktree_lookup_error:
+        log(
+            f"FRESH DISPATCH DEFERRED issue={issue_number}: "
+            f"worktree lookup unavailable ({worktree_lookup_error})"
+        )
+        return (
+            False,
+            f"Archon worktree lookup unavailable: {worktree_lookup_error}",
+        )
     if worktree_info:
         worktree = inspect_worktree(worktree_info.get("path"))
-        if worktree.get("dirty") is True:
-            return False, (
-                f"existing worktree is dirty: {worktree.get('path')}; "
-                f"resume or discard issue #{issue_number}"
-            )
+        if worktree.get("dirty") is not False:
+            if worktree.get("dirty") is True:
+                reason = (
+                    f"existing worktree is dirty: {worktree.get('path')}; "
+                    f"resume or discard issue #{issue_number}"
+                )
+            else:
+                detail = worktree.get("error") or "worktree cleanliness is unknown"
+                reason = f"existing worktree cannot be verified: {detail}"
+            log(f"FRESH DISPATCH DEFERRED issue={issue_number}: {reason}")
+            return False, reason
     runs = fetch_workflow_runs(env)
+    lookup_error = getattr(runs, "error", None)
+    if lookup_error:
+        log(
+            f"FRESH DISPATCH DEFERRED issue={issue_number}: "
+            f"run lookup unavailable ({lookup_error})"
+        )
+        return False, f"Archon run lookup unavailable: {lookup_error}"
     latest = latest_workflow_run(runs, issue_number=issue_number)
     if latest and str(latest.get("status") or "").lower() in ACTIVE_WORKFLOW_STATUSES:
         return False, (

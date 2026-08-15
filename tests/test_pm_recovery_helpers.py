@@ -193,6 +193,36 @@ class InspectWorktreeTest(unittest.TestCase):
             self.assertTrue(dirty["dirty"])
 
 
+class FetchArchonWorktreesTest(unittest.TestCase):
+    def test_lookup_failures_are_distinct_from_empty_results(self) -> None:
+        with patch(
+            "automation.pm_harness.archon.subprocess.run",
+            side_effect=subprocess.TimeoutExpired("archon", 60),
+        ):
+            timed_out = archon.fetch_archon_worktrees({})
+        self.assertEqual(timed_out.records, {})
+        self.assertEqual(timed_out.error, "archon_isolation_timeout")
+
+        with patch(
+            "automation.pm_harness.archon.subprocess.run",
+            return_value=subprocess.CompletedProcess(
+                ["archon"], 1, "", "permission denied"
+            ),
+        ):
+            failed = archon.fetch_archon_worktrees({})
+        self.assertEqual(failed.records, {})
+        self.assertEqual(failed.error, "archon_isolation_command_failed")
+
+    def test_successful_empty_lookup_has_no_error(self) -> None:
+        with patch(
+            "automation.pm_harness.archon.subprocess.run",
+            return_value=subprocess.CompletedProcess(["archon"], 0, "", ""),
+        ):
+            lookup = archon.fetch_archon_worktrees({})
+        self.assertEqual(lookup.records, {})
+        self.assertIsNone(lookup.error)
+
+
 class FetchWorkflowRunsTest(unittest.TestCase):
     def _fake_run(self, payload: str = "", returncode: int = 0):
         def fake(cmd, **kwargs):
@@ -265,6 +295,48 @@ class FetchWorkflowRunsTest(unittest.TestCase):
             records = archon.fetch_workflow_runs({})
         self.assertIsNone(records.error)
         self.assertEqual([r["id"] for r in records], ["r1", "r2"])
+
+    def test_limit_500_parses_complete_snapshot_over_200_rows(self) -> None:
+        rows = [
+            {
+                "id": f"r{i}",
+                "status": "completed" if i % 2 else "failed",
+                "user_message": f"Build feature from issue #{i}",
+                "started_at": "2026-08-07T10:00:00Z",
+            }
+            for i in range(1, 202)
+        ]
+        payload = json.dumps({"total": len(rows), "runs": rows})
+        seen_cmd: list[str] = []
+
+        def fake(cmd, **kwargs):
+            seen_cmd.extend(cmd)
+            stdout = kwargs.get("stdout")
+            if hasattr(stdout, "write"):
+                stdout.write(payload)
+                stdout.flush()
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+
+        with patch(
+            "automation.pm_harness.archon.subprocess.run",
+            side_effect=fake,
+        ):
+            records = archon.fetch_workflow_runs({})
+        self.assertEqual(
+            seen_cmd,
+            ["archon", "workflow", "runs", "--json", "--limit", "500"],
+        )
+        self.assertIsNone(records.error)
+        self.assertEqual(len(records), 201)
+        self.assertEqual(records[0]["id"], "r1")
+        self.assertEqual(records[200]["id"], "r201")
+        # The complete snapshot is searchable by the existing status helpers.
+        newest = archon.latest_workflow_run(records, issue_number=201)
+        self.assertEqual(newest["id"], "r201")
+        by_message = archon.runs_by_message_from(records)
+        self.assertIsNone(by_message.error)
+        self.assertEqual(
+            by_message["Build feature from issue #201"], "completed")
 
     def test_normalizes_unusable_match_fields(self) -> None:
         payload = json.dumps({
