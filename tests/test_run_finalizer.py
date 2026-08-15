@@ -10,7 +10,12 @@ from unittest.mock import patch
 from news_pipeline import ui as ui_module
 from news_pipeline.diagnostics import RunDiagnostics
 from news_pipeline.history_store import connect
-from news_pipeline.run_finalizer import RunFinalizer, RunFinalizerAdapters, RunFinalizerConfig
+from news_pipeline.run_finalizer import (
+    FinalizationError,
+    RunFinalizer,
+    RunFinalizerAdapters,
+    RunFinalizerConfig,
+)
 
 
 class _Progress:
@@ -104,7 +109,8 @@ class RunFinalizerTests(unittest.TestCase):
             finalizer.record_report_body("Daily News Summary\n\nA useful report.")
             finalizer.diagnostics.event("completed")
 
-            finalizer.finish()
+            with self.assertRaisesRegex(FinalizationError, "OKF Run Bundle write failed"):
+                finalizer.finish()
 
             self.assertTrue(paths["latest_details"].is_file())
             self.assertIn(
@@ -116,6 +122,8 @@ class RunFinalizerTests(unittest.TestCase):
                     con.execute("SELECT status FROM runs").fetchone()[0],
                     "completed",
                 )
+            details = json.loads(paths["latest_details"].read_text(encoding="utf-8"))
+            self.assertEqual(details["events"][-1]["label"], "artifact_finalization_failed")
             self.assertIn("OKF Run Bundle write failed: okf down", progress.warnings)
 
 
@@ -154,7 +162,8 @@ class RunFinalizerTests(unittest.TestCase):
             finalizer.diagnostics.event("completed")
 
             with patch("pathlib.Path.write_text", side_effect=RuntimeError("disk down")):
-                finalizer.finish()
+                with self.assertRaisesRegex(FinalizationError, "Beehiiv paste file write failed"):
+                    finalizer.finish()
 
             self.assertTrue(paths["latest_details"].exists())
             self.assertIn("Beehiiv paste file write failed: disk down", progress.warnings)
@@ -215,7 +224,7 @@ class RunFinalizerTests(unittest.TestCase):
             self.assertEqual(payload["run_status"], "failed")
             self.assertEqual(payload["report_status"], "not_generated")
 
-    def test_finish_continues_after_independent_writer_failures(self) -> None:
+    def test_finish_reports_independent_writer_failures_after_attempting_all_writes(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             finalizer, paths, progress = self._finalizer(tmpdir)
 
@@ -229,11 +238,14 @@ class RunFinalizerTests(unittest.TestCase):
             )
             finalizer.diagnostics.event("completed")
 
-            finalizer.finish()
+            with self.assertRaisesRegex(FinalizationError, "Run history write failed"):
+                finalizer.finish()
 
             self.assertTrue(paths["latest_details"].exists())
             self.assertTrue(paths["latest_markdown"].exists())
             self.assertIn("Run history write failed: history down", progress.warnings)
+            details = json.loads(paths["latest_details"].read_text(encoding="utf-8"))
+            self.assertEqual(details["events"][-1]["label"], "artifact_finalization_failed")
 
     def test_finish_keeps_completed_report_with_skipped_delivery(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

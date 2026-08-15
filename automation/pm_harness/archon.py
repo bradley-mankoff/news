@@ -12,6 +12,7 @@ from datetime import datetime
 from pathlib import Path
 
 from .model import (
+    WorkflowRunLookup,
     WorkflowRuns,
     WorkflowRunStatusMap,
     issue_number_from_message,
@@ -143,10 +144,10 @@ def fetch_workflow_runs(env: dict) -> WorkflowRuns:
     return _parse_workflow_runs(output)
 
 
-def fetch_workflow_run(env: dict, run_id: str | None) -> dict | None:
-    """Read one known run without depending on the fragile runs-list payload."""
+def fetch_workflow_run(env: dict, run_id: str | None) -> WorkflowRunLookup:
+    """Read one known run while distinguishing errors from not-found."""
     if not run_id:
-        return None
+        return WorkflowRunLookup(not_found=True)
     try:
         result = subprocess.run(
             ["archon", "workflow", "get", str(run_id), "--json"],
@@ -156,15 +157,35 @@ def fetch_workflow_run(env: dict, run_id: str | None) -> dict | None:
             env=env,
             cwd=str(ROOT),
         )
-    except (OSError, subprocess.TimeoutExpired):
-        return None
+    except subprocess.TimeoutExpired:
+        return WorkflowRunLookup(error="archon_run_timeout")
+    except OSError:
+        return WorkflowRunLookup(error="archon_run_unavailable")
     if result.returncode != 0:
-        return None
+        return WorkflowRunLookup(error="archon_run_command_failed")
     try:
         run = json.loads(result.stdout)
     except (TypeError, ValueError):
-        return None
-    return run if isinstance(run, dict) and run.get("id") else None
+        return WorkflowRunLookup(error="archon_run_json")
+    if not isinstance(run, dict) or not run.get("id"):
+        return WorkflowRunLookup(error="archon_run_shape")
+    return WorkflowRunLookup(run=run)
+
+
+def unpack_workflow_lookup(
+    lookup: WorkflowRunLookup | dict | None,
+) -> tuple[dict | None, str | None, bool]:
+    """Normalize exact-lookup results and preserve legacy test doubles.
+
+    Older callers/tests supplied a raw dict or ``None``. A raw ``None`` is
+    treated as confirmed absence only for that compatibility surface; real
+    ``fetch_workflow_run`` failures always return an explicit error.
+    """
+    if isinstance(lookup, WorkflowRunLookup):
+        return lookup.run, lookup.error, lookup.not_found
+    if isinstance(lookup, dict):
+        return lookup, None, False
+    return None, None, True
 
 
 def latest_workflow_run(

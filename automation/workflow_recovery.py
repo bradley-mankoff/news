@@ -28,6 +28,7 @@ fetch_workflow_run = archon.fetch_workflow_run
 gh = runtime.gh
 inspect_worktree = archon.inspect_worktree
 latest_workflow_run = archon.latest_workflow_run
+unpack_workflow_lookup = archon.unpack_workflow_lookup
 load_config = runtime.load_config
 issue_number_from_message = model.issue_number_from_message
 resolve_worktree_info = archon.resolve_worktree_info
@@ -93,8 +94,9 @@ def _status_payload(cfg: dict, env: dict, issue_number: int) -> dict:
     _state_path, state = _load_state(cfg)
     record = _record_for_issue(state, issue_number) or {}
     runs = fetch_workflow_runs(env)
-    run = fetch_workflow_run(env, record.get("run_id"))
-    if run is None:
+    lookup = fetch_workflow_run(env, record.get("run_id"))
+    run, run_lookup_error, not_found = unpack_workflow_lookup(lookup)
+    if run is None and not_found and not getattr(runs, "error", None):
         run = latest_workflow_run(runs, issue_number=issue_number)
     worktree_info = resolve_worktree_info(env, issue_number)
     stored = record.get("recovery") if isinstance(record.get("recovery"), dict) else {}
@@ -124,6 +126,7 @@ def _status_payload(cfg: dict, env: dict, issue_number: int) -> dict:
         recovery = "absent"
     return {
         "issue_number": issue_number,
+        "run_lookup_error": run_lookup_error,
         "recovery": recovery,
         "run": run_details,
         "worktree": worktree,

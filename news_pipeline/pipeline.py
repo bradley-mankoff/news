@@ -112,6 +112,7 @@ from .config import (
     configured_model_api_key,
     ensure_codex_safe_model_reference,
     is_managed_server_assignment,
+    managed_server_bind_key,
     is_placeholder_address,
     is_placeholder_credential,
     managed_model_conflict_message,
@@ -5236,9 +5237,18 @@ def _stop_managed_server_process(process: subprocess.Popen, *, server_label: str
     try:
         os.killpg(process.pid, signal.SIGTERM)
     except ProcessLookupError:
-        return
+        # The group may have exited between poll() and killpg(); process.wait
+        # below still reaps the child and refreshes Popen's return code.
+        pass
     except Exception:
-        process.terminate()
+        pass
+    # Direct termination is a bounded fallback for platforms where the
+    # process group disappears or does not deliver the signal to the child.
+    if process.poll() is None:
+        try:
+            process.terminate()
+        except (ProcessLookupError, OSError):
+            pass
 
     try:
         process.wait(timeout=20)
@@ -5246,9 +5256,9 @@ def _stop_managed_server_process(process: subprocess.Popen, *, server_label: str
         progress_tracker.detail(f"Managed {server_label} did not stop gracefully; killing it.")
         try:
             os.killpg(process.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            return
-        except Exception:
+        except (ProcessLookupError, OSError):
+            pass
+        if process.poll() is None:
             process.kill()
         process.wait(timeout=10)
 
@@ -5314,6 +5324,15 @@ def managed_model_server():
             try:
                 if state.process is not None:
                     _stop_managed_server_process(state.process, server_label=server_label)
+                    if state.process.poll() is None:
+                        # Preserve the cleanup guarantee even if the process
+                        # group disappeared or a custom stop implementation
+                        # returned before Popen observed termination.
+                        try:
+                            state.process.kill()
+                        except (ProcessLookupError, OSError):
+                            pass
+                        state.process.wait(timeout=10)
                     if state.process.poll() is None:
                         raise RuntimeError("process is still running after stop")
             except Exception as error:
@@ -5470,7 +5489,19 @@ def _ensure_model_server_ready(assignment: TaskModelAssignment) -> None:
                 )
             )
     endpoint_key = canonical_model_endpoint(assignment.base_url)
+    bind_key = managed_server_bind_key(assignment.base_url)
     with MANAGED_MODEL_SERVERS_LOCK:
+        for existing_key, existing_state in MANAGED_MODEL_SERVERS.items():
+            if existing_key == endpoint_key:
+                continue
+            if managed_server_bind_key(existing_state.assignment.base_url) == bind_key:
+                raise RuntimeError(
+                    "Managed model servers require distinct local ports; "
+                    f"{assignment.task!r} at {assignment.base_url!r} and "
+                    f"{existing_state.assignment.task!r} at "
+                    f"{existing_state.assignment.base_url!r} both bind "
+                    f"{bind_key[0]}:{bind_key[1]}. Set distinct per-task base URLs."
+                )
         state = MANAGED_MODEL_SERVERS.get(endpoint_key)
         if state is not None and state.assignment.name != assignment.name:
             raise RuntimeError(

@@ -12,6 +12,7 @@ from .archon import (
     fetch_workflow_runs,
     latest_workflow_run,
     runs_by_message_from,
+    unpack_workflow_lookup,
 )
 from .dispatch import (
     dispatch,
@@ -212,7 +213,10 @@ def _reconcile_completions(
             if awaiting_integration:
                 run_status = "completed"
             else:
-                direct_run = fetch_workflow_run(env, rec.get("run_id"))
+                direct_lookup = fetch_workflow_run(env, rec.get("run_id"))
+                direct_run, direct_lookup_error, direct_not_found = unpack_workflow_lookup(
+                    direct_lookup
+                )
                 if runs_snapshot is None:
                     fetched = fetch_workflow_runs(env)
                     runs_snapshot = (
@@ -222,9 +226,15 @@ def _reconcile_completions(
                     )
                     runs_by_msg = runs_by_message_from(runs_snapshot)
                 lookup_error = getattr(runs_snapshot, "error", None)
+                if direct_lookup_error:
+                    log(
+                        f"RUN LOOKUP UNAVAILABLE: {direct_lookup_error}; "
+                        "retaining run markers"
+                    )
+                    state[item_id] = rec
+                    continue
                 if lookup_error:
-                    # A direct lookup for the persisted run is targeted evidence;
-                    # an incomplete list is not evidence that no newer run exists.
+                    # An incomplete list is not evidence that no newer run exists.
                     runs_by_msg = None
                     if not direct_run:
                         log(
@@ -234,10 +244,10 @@ def _reconcile_completions(
                         state[item_id] = rec
                         continue
                 newest_run = None
-                if msg:
+                if direct_not_found and msg:
                     newest_run = latest_workflow_run(
                         runs_snapshot, message=msg)
-                if newest_run is None and issue_number:
+                if direct_not_found and newest_run is None and issue_number:
                     newest_run = latest_workflow_run(
                         runs_snapshot, issue_number=issue_number)
                 run = direct_run or newest_run
@@ -659,8 +669,18 @@ def _complete_reviews(ctx: PollContext, runs_snapshot: WorkflowRuns | None, runs
                 continue
 
             rmsg = rec.get("review_msg")
-            review_run = fetch_workflow_run(env, rec.get("review_run_id"))
+            review_lookup = fetch_workflow_run(env, rec.get("review_run_id"))
+            review_run, review_lookup_error, review_not_found = unpack_workflow_lookup(
+                review_lookup
+            )
             verdict_holds_review = verdict in {"request-changes", "block"}
+            if review_lookup_error:
+                log(
+                    f"REVIEW RUN LOOKUP UNAVAILABLE: {review_lookup_error}; "
+                    "retaining review run markers"
+                )
+                state[item_id] = rec
+                continue
             if rmsg and not verdict_holds_review:
                 if runs_snapshot is None:
                     fetched = fetch_workflow_runs(env)
@@ -678,7 +698,7 @@ def _complete_reviews(ctx: PollContext, runs_snapshot: WorkflowRuns | None, runs
                     )
                     state[item_id] = rec
                     continue
-                if not lookup_error:
+                if not lookup_error and review_not_found:
                     newest_review = latest_workflow_run(
                         runs_snapshot, message=rmsg)
                     review_run = review_run or newest_review

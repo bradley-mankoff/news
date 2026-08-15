@@ -431,6 +431,47 @@ class ConfigHelperTests(unittest.TestCase):
             config_module.canonical_model_endpoint("https://127.0.0.1:443/v1"),
         )
 
+    def test_canonical_model_endpoint_keeps_malformed_ports_distinct(self) -> None:
+        for malformed, valid in (
+            ("http://model.example:not-a-port/v1", "http://model.example/v1"),
+            ("http://model.example:99999/v1", "http://model.example/v1"),
+            ("https://model.example:not-a-port/v1", "https://model.example/v1"),
+        ):
+            with self.subTest(malformed=malformed):
+                self.assertNotEqual(
+                    config_module.canonical_model_endpoint(malformed),
+                    config_module.canonical_model_endpoint(valid),
+                )
+        self.assertEqual(
+            config_module.canonical_model_endpoint("http://user:pass@model.example/v1"),
+            config_module.canonical_model_endpoint("http://model.example/v1"),
+        )
+        with self.assertRaisesRegex(ValueError, "invalid port"):
+            config_module.managed_server_bind_key("http://model.example:not-a-port/v1")
+
+    def test_validate_managed_model_assignments_rejects_same_bind_port_on_distinct_paths(self) -> None:
+        with self.assertRaisesRegex(ValueError, "both bind 127.0.0.1:8090"):
+            config_module._validate_managed_model_assignments(
+                {
+                    "article_summary": SimpleNamespace(
+                        backend="mlx-lm",
+                        base_url="http://127.0.0.1:8090/v1-a",
+                        reference="shared",
+                        name="shared",
+                    ),
+                    "story_drafting": SimpleNamespace(
+                        backend="mlx-lm",
+                        base_url="http://127.0.0.1:8090/v1-b",
+                        reference="shared",
+                        name="shared",
+                    ),
+                },
+                model_reference="main",
+                model_name="main",
+                model_base_url="http://127.0.0.1:8080/v1",
+                model_backend="mlx-lm",
+            )
+
     def test_validate_managed_model_assignments_rejects_task_task_collision(self) -> None:
         # Two non-default managed assignments on the same canonical endpoint
         # with different models must fail early and identify the second task

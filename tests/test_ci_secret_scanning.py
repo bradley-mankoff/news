@@ -27,7 +27,10 @@ integration fixture.
 from __future__ import annotations
 
 import os
+import secrets
+import shutil
 import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -160,6 +163,64 @@ class CiSecretScanningTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0)
         self.assertIn("DOCKER_REACHED", result.stdout)
+
+    @unittest.skipUnless(
+        os.environ.get("CI") == "true" and shutil.which("docker"),
+        "Docker Gitleaks integration runs in CI only",
+    )
+    def test_pinned_scanner_detects_a_secret_in_the_requested_range(self) -> None:
+        """Exercise the exact container contract against a temporary repository."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = Path(tmpdir)
+            subprocess.run(["git", "init", "-q", str(repo)], check=True)
+            git_env = {
+                **os.environ,
+                "GIT_AUTHOR_NAME": "CI test",
+                "GIT_AUTHOR_EMAIL": "ci@example.invalid",
+                "GIT_COMMITTER_NAME": "CI test",
+                "GIT_COMMITTER_EMAIL": "ci@example.invalid",
+            }
+
+            def commit(name: str, content: str) -> str:
+                (repo / name).write_text(content, encoding="utf-8")
+                subprocess.run(["git", "-C", str(repo), "add", name], check=True)
+                subprocess.run(
+                    ["git", "-C", str(repo), "commit", "-qm", name],
+                    check=True,
+                    env=git_env,
+                )
+                return subprocess.check_output(
+                    ["git", "-C", str(repo), "rev-parse", "HEAD"],
+                    text=True,
+                ).strip()
+
+            base_sha = commit("clean.txt", "clean\n")
+            generated_token = "github_pat_" + secrets.token_hex(24)
+            head_sha = commit("candidate.txt", generated_token + "\n")
+            result = subprocess.run(
+                [
+                    "docker",
+                    "run",
+                    "--rm",
+                    "--volume",
+                    f"{repo}:/repo:ro",
+                    IMAGE,
+                    "git",
+                    "--redact",
+                    "--no-banner",
+                    "--no-color",
+                    "--verbose",
+                    "--exit-code",
+                    "1",
+                    f"--log-opts=--no-merges {base_sha}..{head_sha}",
+                    "/repo",
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertNotIn(generated_token, result.stdout + result.stderr)
 
     def test_workflow_has_no_extra_scan_integrations(self) -> None:
         text = WORKFLOW.read_text(encoding="utf-8")
