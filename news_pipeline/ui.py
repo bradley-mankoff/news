@@ -3431,7 +3431,7 @@ HTML = r"""<!doctype html>
       renderModelTuningPanels();
       renderPromptProfilePanel();
       refreshModelKnobLinks();
-      void preview("run").catch(err => setStatus(err.message, "bad"));
+      void previewWithStatus("run");
     }
     function setKnobEnv(env) {
       document.querySelectorAll("[data-env]").forEach(el => {
@@ -3676,6 +3676,10 @@ HTML = r"""<!doctype html>
       const data = await api("/api/preview", { method: "POST", body: JSON.stringify(requestBody(action)) });
       $("previewPane").textContent = data.command_text + (data.runtime_error ? `\n\nPreview error: ${data.runtime_error}` : "");
       return data;
+    }
+    function previewWithStatus(action="run") {
+      // User-initiated path: surface failures through the status bar.
+      return preview(action).catch(err => setStatus(err.message, "bad"));
     }
     function updateRunControls() {
       const active = Boolean(state.activeRun);
@@ -4716,9 +4720,9 @@ HTML = r"""<!doctype html>
         : `<p class="muted">No differences from balanced.</p>`;
     }
     function wireEvents() {
-      $("previewBtn").onclick = () => preview("run").catch(err => setStatus(err.message, "bad"));
+      $("previewBtn").onclick = () => previewWithStatus("run");
       $("runBtn").onclick = () => runAction("run").catch(err => setStatus(err.message, "bad"));
-      $("utilityPreviewBtn").onclick = () => preview(value("actionSelect") || "run").catch(err => setStatus(err.message, "bad"));
+      $("utilityPreviewBtn").onclick = () => previewWithStatus(value("actionSelect") || "run");
       $("utilityRunBtn").onclick = () => runAction(value("actionSelect") || "run").catch(err => setStatus(err.message, "bad"));
       $("stopBtn").onclick = () => {
         const runId = state.activeRun;
@@ -4747,14 +4751,14 @@ HTML = r"""<!doctype html>
       $("resetDefaultsBtn").onclick = resetAllOverrides;
       $("promptProfileSelect").onchange = () => {
         renderPromptProfilePanel();
-        void preview("run").catch(err => setStatus(err.message, "bad"));
+        void previewWithStatus("run");
       };
       $("restorePromptProfileBtn").onclick = () => {
         const el = document.querySelector('[data-env="NEWS_PROMPT_PROFILE"]');
         if (el) el.value = "";
         document.querySelectorAll("[data-env^='NEWS_PROMPT_OVERRIDE_']").forEach(editor => { editor.value = ""; });
         renderPromptProfilePanel();
-        void preview("run").catch(err => setStatus(err.message, "bad"));
+        void previewWithStatus("run");
       };
       $("comparePromptProfileBtn").onclick = () => comparePromptProfiles().catch(err => setStatus(err.message, "bad"));
       $("sourceSearch").oninput = renderSources;

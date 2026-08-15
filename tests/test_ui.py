@@ -631,10 +631,7 @@ class UITests(unittest.TestCase):
         self.assertIn("refreshModelKnobLinks();", presets)
         self.assertIn('void previewQuietly("run");', presets)
         self.assertIn("refreshModelKnobLinks();", reset)
-        self.assertIn(
-            'void preview("run").catch(err => setStatus(err.message, "bad"));',
-            reset,
-        )
+        self.assertIn('void previewWithStatus("run");', reset)
         self.assertIn('state.selectedModelRequiredBackend = catalogBackendForReference(el.value);', delegated)
         self.assertIn("requiredBackendForSelectedModel()", delegated)
         self.assertIn("refreshHuggingFaceUseButtons();", delegated)
@@ -2961,20 +2958,22 @@ for (const malformedRaw of malformedValues) {
         script rather than reimplemented, so a regression that drops the
         status catch, returns a rejected promise, or stops updating the pane
         on success fails here. Source assertions pin the named handlers to the
-        status pattern and keep the unrelated previewQuietly() auto-refresh
-        paths untouched.
+        previewWithStatus() helper and keep the unrelated previewQuietly()
+        auto-refresh paths untouched.
         """
         html = ui_module.HTML
 
         def js_function_block(start: str, end: str) -> str:
-            return html[html.index(start) : html.index(end, html.index(start))]
+            begin = html.index(start)
+            return html[begin : html.index(end, begin)]
 
-        status_pattern = 'preview("run").catch(err => setStatus(err.message, "bad"))'
-        # Named clear/reset/profile handlers use the status path...
+        status_pattern = 'previewWithStatus("run")'
+        # Named clear/reset/profile handlers route previews through the status
+        # helper...
         reset_block = js_function_block(
             "function resetAllOverrides() {", "function setKnobEnv(env) {"
         )
-        self.assertIn(f"void {status_pattern}", reset_block)
+        self.assertIn(f"void {status_pattern};", reset_block)
         profile_block = js_function_block(
             '$("promptProfileSelect").onchange = () => {',
             '$("comparePromptProfileBtn").onclick',
@@ -2986,6 +2985,14 @@ for (const malformedRaw of malformedValues) {
         )
         self.assertIn('void previewQuietly("run")', preset_block)
         self.assertIn('async function previewQuietly(action="run") {', html)
+        # ...and the helper itself surfaces failures through setStatus().
+        preview_block = js_function_block(
+            'async function preview(action="run") {', "function updateRunControls() {"
+        )
+        self.assertIn(
+            'return preview(action).catch(err => setStatus(err.message, "bad"));',
+            preview_block,
+        )
 
         js = (
             r"""
@@ -3085,28 +3092,26 @@ wireEvents();
 assert($("clearKnobsBtn").onclick === resetAllOverrides, "Clear overrides no longer binds the shared reset handler");
 assert($("resetDefaultsBtn").onclick === resetAllOverrides, "Reset defaults no longer binds the shared reset handler");
 
+function assertFailedPreview(label) {
+  assert($("status").textContent === "preview failed", `${label} did not surface the preview error`);
+  assert($("status").className === "bad", `${label} did not mark the status bad`);
+}
+
 rejectPreview = true;
 $("clearKnobsBtn").onclick();
 await flush();
-assert($("status").textContent === "preview failed", "Clear overrides did not surface the preview error");
-assert($("status").className === "bad", "Clear overrides did not mark the status bad");
-
+assertFailedPreview("Clear overrides");
 $("resetDefaultsBtn").onclick();
 await flush();
-assert($("status").textContent === "preview failed", "Reset defaults did not surface the preview error");
-assert($("status").className === "bad", "Reset defaults did not mark the status bad");
-
+assertFailedPreview("Reset defaults");
 $("promptProfileSelect").onchange();
 await flush();
-assert($("status").textContent === "preview failed", "Profile change did not surface the preview error");
-assert($("status").className === "bad", "Profile change did not mark the status bad");
-
+assertFailedPreview("Profile change");
 profileEnvInput.value = "custom-profile";
 $("restorePromptProfileBtn").onclick();
 await flush();
 assert(profileEnvInput.value === "", "Profile restore did not clear the profile control");
-assert($("status").textContent === "preview failed", "Profile restore did not surface the preview error");
-assert($("status").className === "bad", "Profile restore did not mark the status bad");
+assertFailedPreview("Profile restore");
 assert(previewCount === 4, `expected 4 failed preview requests, got ${previewCount}`);
 
 // ---- Success path: the pane still updates and no error is written ---------
