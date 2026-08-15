@@ -830,6 +830,37 @@ _LOOPBACK_HOST_ALIASES = frozenset(
 _LOOPBACK_CANONICAL_HOST = "127.0.0.1"
 
 
+def canonical_model_endpoint(url: str) -> tuple[Any, ...]:
+    """Canonical key for one model endpoint URL.
+
+    Folds the spelling variants users actually produce into one key:
+    trailing slashes on the path, scheme/host case differences, default
+    ports, userinfo in the authority, a trailing-dot FQDN on the host,
+    and loopback host aliases (localhost vs 127.0.0.1 vs the IPv6
+    spellings of the loopback interface). A genuinely different path
+    still produces a different key, and an empty URL produces the
+    empty key (``("", "", None, "")``) which never equals a real one.
+
+    This is the single endpoint-equivalence helper shared by managed
+    assignment collision validation and the run-time server registry, so
+    the two can never disagree about aliases or spelling variants.
+    """
+    parsed = urlparse(url or "")
+    scheme = (parsed.scheme or "").lower()
+    # A trailing dot marks the FQDN as absolute; it does not change
+    # which host is named, so it is folded before the alias check.
+    host = (parsed.hostname or "").lower().rstrip(".")
+    if host in _LOOPBACK_HOST_ALIASES:
+        host = _LOOPBACK_CANONICAL_HOST
+    try:
+        port = parsed.port
+    except ValueError:  # malformed port; treat as distinct
+        port = None
+    if port is None:
+        port = 443 if scheme == "https" else 80 if scheme == "http" else None
+    return (scheme, host, port, parsed.path.rstrip("/"))
+
+
 def same_model_endpoint(left: str, right: str) -> bool:
     """True when two base URLs denote the same model endpoint.
 
@@ -840,24 +871,7 @@ def same_model_endpoint(left: str, right: str) -> bool:
     spellings of the loopback interface). A genuinely different path
     still compares unequal, and an empty URL never matches a real one.
     """
-
-    def _canonical(url: str) -> tuple[Any, ...]:
-        parsed = urlparse(url or "")
-        scheme = (parsed.scheme or "").lower()
-        # A trailing dot marks the FQDN as absolute; it does not change
-        # which host is named, so it is folded before the alias check.
-        host = (parsed.hostname or "").lower().rstrip(".")
-        if host in _LOOPBACK_HOST_ALIASES:
-            host = _LOOPBACK_CANONICAL_HOST
-        try:
-            port = parsed.port
-        except ValueError:  # malformed port; treat as distinct
-            port = None
-        if port is None:
-            port = 443 if scheme == "https" else 80 if scheme == "http" else None
-        return (scheme, host, port, parsed.path.rstrip("/"))
-
-    return bool(left) == bool(right) and _canonical(left) == _canonical(right)
+    return bool(left) == bool(right) and canonical_model_endpoint(left) == canonical_model_endpoint(right)
 
 
 def managed_model_conflict_message(
@@ -882,6 +896,31 @@ def managed_model_conflict_message(
     )
 
 
+def is_managed_server_assignment(
+    assignment: TaskModelAssignment,
+    *,
+    default_backend: str,
+    default_base_url: str,
+    assignment_backend: str | None = None,
+) -> bool:
+    """Whether one task assignment is served by an application-owned server.
+
+    An assignment is owned when it uses a managed backend (any non-external
+    backend) at an endpoint the run can own. When the default backend is
+    external, the default endpoint itself is caller-managed and can serve
+    multiple models, so assignments pointing at exactly that endpoint stay
+    external too; only assignments on other endpoints can be owned (issue
+    #133). ``assignment_backend`` overrides the assignment's own backend for
+    callers that resolved it separately (legacy test doubles).
+    """
+    resolved_backend = assignment_backend or getattr(assignment, "backend", None) or default_backend
+    if not is_managed_model_backend(resolved_backend):
+        return False
+    if is_managed_model_backend(default_backend):
+        return True
+    return not same_model_endpoint(assignment.base_url, default_base_url)
+
+
 def _validate_managed_model_assignments(
     model_assignments: dict[str, TaskModelAssignment],
     *,
@@ -890,33 +929,56 @@ def _validate_managed_model_assignments(
     model_base_url: str,
     model_backend: str,
 ) -> None:
-    """Reject task models that cannot share the managed server's base URL.
+    """Reject managed task models that cannot share a managed base URL.
 
-    A managed local server (any non-external default backend) serves exactly
-    one model at the default base URL. A task assignment that resolves to the
-    same base URL with a different model name cannot be served by that server;
-    it previously failed only mid-run in build_chat_model, after source
-    collection. External endpoints can serve multiple models, so the managed
-    path is the only one validated here.
+    A managed local server (any non-external backend) serves exactly one
+    model at its base URL. Every owned assignment participates: the default
+    assignment uses the passed-in model values (matching direct helper
+    callers' contracts), and each task uses its own resolved backend when
+    present, falling back to ``model_backend`` for legacy test doubles.
+    Assignments are grouped by canonical endpoint, and any group holding
+    different model names is rejected before source collection - whether the
+    collision is default-vs-task or task-vs-task (issue #133). External
+    assignments - and assignments riding an external default endpoint -
+    stay out of the managed groups because external endpoints can serve
+    multiple models.
     """
-    if not is_managed_model_backend(model_backend):
-        return
+    groups: dict[tuple[Any, ...], list[tuple[str, str, str, str]]] = {}
+    if is_managed_model_backend(model_backend) and model_base_url:
+        groups.setdefault(canonical_model_endpoint(model_base_url), []).append(
+            ("default", model_reference, model_name, model_base_url)
+        )
     for task, assignment in model_assignments.items():
-        # The default assignment defines the compared values (model_name,
-        # model_base_url), so it always matches; skip it.
+        # The default assignment is synthesized above from the explicit
+        # model_reference/model_name/model_base_url arguments so direct
+        # helper callers and full dicts behave identically.
         if task == "default":
             continue
-        if same_model_endpoint(assignment.base_url, model_base_url) and assignment.name != model_name:
-            raise ValueError(
-                managed_model_conflict_message(
-                    task=task,
-                    reference=assignment.reference,
-                    name=assignment.name,
-                    model_reference=model_reference,
-                    model_name=model_name,
-                    model_base_url=model_base_url,
+        if not is_managed_server_assignment(
+            assignment,
+            default_backend=model_backend,
+            default_base_url=model_base_url,
+            assignment_backend=getattr(assignment, "backend", None) or model_backend,
+        ) or not assignment.base_url:
+            continue
+        groups.setdefault(canonical_model_endpoint(assignment.base_url), []).append(
+            (task, assignment.reference, assignment.name, assignment.base_url)
+        )
+
+    for entries in groups.values():
+        anchor_task, anchor_reference, anchor_name, anchor_base_url = entries[0]
+        for task, reference, name, base_url in entries[1:]:
+            if name != anchor_name:
+                raise ValueError(
+                    managed_model_conflict_message(
+                        task=task,
+                        reference=reference,
+                        name=name,
+                        model_reference=anchor_reference,
+                        model_name=anchor_name,
+                        model_base_url=anchor_base_url,
+                    )
                 )
-            )
 
 
 def _apply_model_tuning_preset(

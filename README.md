@@ -552,9 +552,28 @@ NEWS_MODEL=gemma-4-12b-it-4bit uv run news model-server-command
 
 If Article Summarization, Story Drafting, Story Scale Screening, Title
 Generation, or Image Art Direction uses a different model, give that
-task a matching base URL or run it on an externally managed server. The current
-runtime supports one managed local server per shared model/base URL; it does not
-automatically coordinate multiple local servers for one run.
+task a matching base URL or run it on an externally managed server. A
+run owns one managed local server per distinct task base URL: each
+distinct managed endpoint is started and readiness-checked (`/models`
+plus a tiny generation probe) on demand when its task is first used,
+routed per task, and stopped with the run. Tasks sharing one canonical
+endpoint and model reuse the same process. Two tasks pointing at the
+same managed endpoint with different models are rejected at
+configuration time with guidance to set a per-task base URL or use an
+external server. External endpoints (default or per-task) are
+caller-managed and are never spawned by the application.
+
+For example, one run can own three managed servers for the default,
+Article Summarization, and Story Drafting models:
+
+```bash
+NEWS_MODEL=gemma-e2b-tiny \
+NEWS_MODEL_ARTICLE_SUMMARY=gemma-4-12b-it-4bit \
+NEWS_MODEL_ARTICLE_SUMMARY_BASE_URL=http://127.0.0.1:8090/v1 \
+NEWS_MODEL_STORY_DRAFTING=qwythos-9b-4bit \
+NEWS_MODEL_STORY_DRAFTING_BASE_URL=http://127.0.0.1:8091/v1 \
+uv run news run
+```
 
 ### Model Tuning
 
@@ -610,8 +629,15 @@ server configuration:
   executable used by the managed `llama.cpp` backend (default
   `llama-server`; advanced setting).
 
-The base URL also determines the printed server port. If you point a task model
-at a different base URL, the task needs its own matching server endpoint.
+The base URL determines the printed server port and, for managed
+backends, the process the run owns. A distinct per-task base URL creates
+a distinct managed server for that task's model during the run; the
+same canonical endpoint with the same model is shared by every task
+that uses it. The default server writes `model_server.log` next to the
+report output, and additional managed endpoints write deterministic
+per-server log files (`model_server_<endpoint>-<model>.log`) in the
+same directory. External endpoints (default or per-task) are
+caller-managed and never spawned.
 
 ### Image
 
