@@ -1584,8 +1584,7 @@ class NewsUIHandler(BaseHTTPRequestHandler):
                     models = search_huggingface_models(
                         query, pipeline_tag=pipeline_tag, limit=limit
                     )
-                except Exception as exc:
-                    models = []
+                except (OSError, ValueError, ImportError) as exc:
                     self._send_json({"query": query, "models": [], "error": str(exc)})
                 else:
                     self._send_json({"query": query, "models": models, "error": None})
@@ -1600,7 +1599,7 @@ class NewsUIHandler(BaseHTTPRequestHandler):
                     return
                 try:
                     info = fetch_model_metadata(reference)
-                except Exception as exc:
+                except (OSError, ValueError, ImportError) as exc:
                     self._send_json({"model": reference, "info": None, "error": str(exc)})
                 else:
                     self._send_json({"model": reference, "info": info, "error": None})
