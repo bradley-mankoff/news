@@ -86,11 +86,17 @@ Built-in model aliases:
 | `gemma-4-12b-it-4bit` | `mlx-community/gemma-4-12B-it-4bit` (default) | [mlx-community/gemma-4-12B-it-4bit](https://huggingface.co/mlx-community/gemma-4-12B-it-4bit) |
 | `qwythos-9b-4bit` | `huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-Q4_K.gguf` (managed `llama.cpp`) | [huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF](https://huggingface.co/huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF) |
 | `qwythos-9b-8bit` | `huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-Q8_0.gguf` (managed `llama.cpp`) | [huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF](https://huggingface.co/huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF) |
+| `qwen3-8b-4bit` | `mlx-community/Qwen3-8B-4bit` (runtime-verified, managed `mlx-lm`; 40,960-token context) | [mlx-community/Qwen3-8B-4bit](https://huggingface.co/mlx-community/Qwen3-8B-4bit) |
+| `qwen3-14b-4bit` | `mlx-community/Qwen3-14B-4bit` (runtime-verified, managed `mlx-lm`; 40,960-token context) | [mlx-community/Qwen3-14B-4bit](https://huggingface.co/mlx-community/Qwen3-14B-4bit) |
 
 The legacy `qwythos-9b-*` aliases are supported again through the managed
 `llama.cpp` backend (issue #75): each resolves to its exact GGUF file
 reference and is served by an operator-installed `llama-server` binary. The
-default model remains the MLX Gemma 4 12B entry above.
+`qwen3-8b-4bit` / `qwen3-14b-4bit` entries are runtime-verified MLX
+language models served by the managed `mlx-lm` backend; selecting either as
+the default requires `NEWS_MODEL_BACKEND=mlx-lm`, and the evidence record
+lives in [`docs/model-runtime-verification.md`](docs/model-runtime-verification.md).
+The default model remains the MLX Gemma 4 12B entry above.
 
 Each model page shows Hugging Face's native Hardware Compatibility panel
 (GGUF/MLX quantizations) — the UI model picker links directly to it.
@@ -115,6 +121,8 @@ Print the fully resolved local server command without running the pipeline:
 ```bash
 NEWS_MODEL=gemma-4-12b-it-4bit uv run news model-server-command
 NEWS_MODEL=qwythos-9b-4bit NEWS_MODEL_BACKEND=llama.cpp NEWS_LLAMA_CPP_SERVER=/opt/llama/llama-server uv run news model-server-command
+NEWS_MODEL=qwen3-8b-4bit NEWS_MODEL_BACKEND=mlx-lm uv run news model-server-command
+NEWS_MODEL=qwen3-14b-4bit NEWS_MODEL_BACKEND=mlx-lm uv run news model-server-command
 ```
 
 The llama.cpp preview prints the exact `llama-server` command (`--hf-repo`,

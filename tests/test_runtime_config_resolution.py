@@ -148,6 +148,45 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
                 materialize_outputs=False,
             )
 
+    def test_qwen3_mlx_lm_aliases_resolve_with_explicit_backend(self) -> None:
+        # Runtime-verified Qwen3 MLX entries (issue #89): an explicit
+        # NEWS_MODEL_BACKEND=mlx-lm resolves each alias to the exact Qwen3
+        # repo and emits the MLX-LM server command, never a VLM command.
+        for alias, repo in (
+            ("qwen3-8b-4bit", config_module.QWEN3_8B_4BIT_MODEL_REPO),
+            ("qwen3-14b-4bit", config_module.QWEN3_14B_4BIT_MODEL_REPO),
+        ):
+            with self.subTest(alias=alias):
+                config = load_runtime_config(
+                    environ={},
+                    overrides={"NEWS_MODEL": alias, "NEWS_MODEL_BACKEND": "mlx-lm"},
+                    materialize_outputs=False,
+                    run_started_at=datetime(2026, 8, 15, 12, 0, 0),
+                )
+                self.assertEqual(config.model_reference, alias)
+                self.assertEqual(config.model_name, repo)
+                self.assertEqual(config.model_backend, "mlx-lm")
+                self.assertIn(f"python -m mlx_lm server --model {repo}", config.model_server_command)
+                self.assertNotIn("python -m mlx_vlm.server", config.model_server_command)
+                self.assertEqual(config.model_assignments["default"].backend, "mlx-lm")
+
+    def test_qwen3_without_explicit_backend_fails_fast(self) -> None:
+        # The fixed default backend is mlx-vlm; the Qwen3 catalog entries
+        # declare mlx-lm, so leaving NEWS_MODEL_BACKEND unset must fail fast
+        # instead of silently launching the fixed mlx-vlm server (issues
+        # #169 / #89).
+        for alias in ("qwen3-8b-4bit", "qwen3-14b-4bit"):
+            with self.subTest(alias=alias):
+                with self.assertRaisesRegex(
+                    ValueError,
+                    rf"NEWS_MODEL='{alias}' requires NEWS_MODEL_BACKEND=mlx-lm",
+                ):
+                    load_runtime_config(
+                        environ={},
+                        overrides={"NEWS_MODEL": alias},
+                        materialize_outputs=False,
+                    )
+
     def test_qwythos_aliases_resolve_to_explicit_managed_llama_cpp(self) -> None:
         # The legacy aliases now resolve to their exact GGUF file references
         # under the managed llama.cpp backend (issue #75); the catalog
