@@ -1,9 +1,6 @@
 # Saved run presets for the daily news pipeline.
 #
 # Run Presets are env-style defaults. Shell/UI overrides still win.
-# Presets bind an explicit NEWS_MODEL_BACKEND to their selected model: the
-# standalone model control remains independent (issue #169), but a preset may
-# intentionally pair model and backend so its workflow stays launchable.
 presets:
   default:
     name: Default
@@ -14,7 +11,6 @@ presets:
       NEWS_BLOCK_REUSED_URLS: '0'
       NEWS_IMAGE_ENABLED: '0'
       NEWS_MODEL: gemma-4-12b-it-4bit
-      NEWS_MODEL_BACKEND: mlx-vlm
   dev:
     name: Dev
     description: Small core-source review run with the Codex-safe tiny model.
@@ -24,7 +20,6 @@ presets:
       NEWS_BLOCK_REUSED_URLS: '0'
       NEWS_IMAGE_ENABLED: '0'
       NEWS_MODEL: gemma-e2b-tiny
-      NEWS_MODEL_BACKEND: mlx-lm
       NEWS_MIN_ARTICLES_PER_STORY: '2'
       NEWS_RELAX_STORY_DRAFTING_GUARDS: '1'
   local-prod:
@@ -37,7 +32,6 @@ presets:
       NEWS_BLOCK_REUSED_URLS: '0'
       NEWS_IMAGE_ENABLED: '1'
       NEWS_MODEL: gemma-4-12b-it-4bit
-      NEWS_MODEL_BACKEND: mlx-vlm
       NEWS_MIN_ARTICLES_PER_STORY: '4'
   loose-local-prod:
     name: Loose local production review
@@ -49,7 +43,6 @@ presets:
       NEWS_BLOCK_REUSED_URLS: '0'
       NEWS_IMAGE_ENABLED: '1'
       NEWS_MODEL: gemma-4-12b-it-4bit
-      NEWS_MODEL_BACKEND: mlx-vlm
       NEWS_MIN_ARTICLES_PER_STORY: '4'
       NEWS_STORY_CLUSTER_SIMILARITY_THRESHOLD: '0.27'
   prod:
@@ -62,5 +55,4 @@ presets:
       NEWS_BLOCK_REUSED_URLS: '1'
       NEWS_IMAGE_ENABLED: '1'
       NEWS_MODEL: gemma-4-12b-it-4bit
-      NEWS_MODEL_BACKEND: mlx-vlm
       NEWS_MIN_ARTICLES_PER_STORY: '4'

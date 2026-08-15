@@ -73,9 +73,11 @@ Secret prevention is automatic through the Gitleaks pre-commit hook in
 `uv run pre-commit install`. It scans staged changes only and uses redacted
 output. CI checks the PR's new commit range with the same pinned Gitleaks v8.30.1
 container: the `Secret scan` job in `.github/workflows/ci.yml` runs on every
-pull request to `develop`/`main`, scans only the PR's non-merge commits,
-redacts findings, and fails the check on any finding. Reproduce the gate
-locally with the Docker command in `docs/security/secret-prevention.md`.
+pull request to `develop`/`main`, scans a merge-aware PR commit range using
+`--diff-merges=first-parent`, redacts findings, rejects inline
+`gitleaks:allow` comments with `--ignore-gitleaks-allow`, and fails the check
+on any finding. Reproduce the gate locally with the Docker command in
+`docs/security/secret-prevention.md`.
 Runbook: `docs/security/secret-prevention.md`.
 
 ### Shell script checks
@@ -251,13 +253,16 @@ The accepted vocabulary separating Run Presets, Task Model Assignment, Model
 Tuning, Pipeline Budget, and Model Server Settings is defined in
 [`docs/adr/0007-model-configuration-vocabulary.md`](docs/adr/0007-model-configuration-vocabulary.md).
 
+The accepted vocabulary separating Run Presets, Task Model Assignment, Model
+Tuning, Pipeline Budget, and Model Server Settings is defined in
+[`docs/adr/0007-model-configuration-vocabulary.md`](docs/adr/0007-model-configuration-vocabulary.md).
+
 When running from a shell, put `NEWS_` assignments on the same command line or
 export them first:
 
 ```bash
-NEWS_MODEL=gemma-e2b-tiny NEWS_MODEL_BACKEND=mlx-lm NEWS_IMAGE_ENABLED=0 uv run news run
+NEWS_MODEL=gemma-e2b-tiny NEWS_IMAGE_ENABLED=0 uv run news run
 export NEWS_MODEL=gemma-e2b-tiny
-export NEWS_MODEL_BACKEND=mlx-lm
 uv run news run
 ```
 
@@ -298,12 +303,8 @@ Key Run Settings:
   independent calls — Image Art Direction (text-free FLUX prompt) and Title
   Generation (overlay headline) — each routed to its own assignment.
 - `NEWS_MODEL_BACKEND`: optional backend override for the default model
-  (`mlx-lm`, `mlx-vlm`, `external`, or `llama.cpp`). When unset, the fixed
-  product default `mlx-vlm` applies — model identity never selects a
-  backend. A known model whose declared backend differs (for example
-  `gemma-e2b-tiny` needs `mlx-lm`, and the Qwythos GGUF aliases need
-  `llama.cpp`) must set this explicitly or config resolution fails with an
-  actionable message — see [Runtime Matrix](#runtime-matrix).
+  (`mlx-lm`, `mlx-vlm`, `external`, or `llama.cpp`; inferred from the model
+  reference otherwise — see [Runtime Matrix](#runtime-matrix)).
 
 ### Prompt Profiles
 
@@ -393,7 +394,7 @@ override because its renderer escapes them safely.
 ### Model Selection
 
 ```bash
-NEWS_MODEL=gemma-e2b-tiny NEWS_MODEL_BACKEND=mlx-lm uv run news run
+NEWS_MODEL=gemma-e2b-tiny uv run news run
 NEWS_MODEL=gemma-4-12b-it-4bit uv run news run --preset NAME
 ```
 
@@ -478,9 +479,8 @@ file requires restarting `news` or the UI (no hot reload).
   `description`. Backends are limited to `mlx-lm`, `mlx-vlm`, `external`,
   and `llama.cpp`, with backend-scoped identity rules: MLX/external entries
   require `reference == hf_repo` (an owner/repo id — file-qualified `.gguf`
-  references are rejected for those backends, preserving the ADR 0017 runtime
-  matrix and issue #92 drift guard), while `llama.cpp` entries use a
-  file-qualified `owner/repo/file.gguf` reference whose first two segments
+  references are rejected for those backends), while `llama.cpp` entries use
+  a file-qualified `owner/repo/file.gguf` reference whose first two segments
   equal a bare `hf_repo` page id. `context_length` is optional and
   `task_notes` defaults to `{}`.
 - Aliases must match the safe pattern (lowercase letters, digits, `.`, `_`,
@@ -518,16 +518,11 @@ for the accepted architecture record.
 
 ### Runtime Matrix
 
-Initially supported runtimes (recorded in
+Supported runtimes (recorded in
 [`docs/adr/0017-runtime-matrix.md`](docs/adr/0017-runtime-matrix.md)):
 
 - `mlx-lm` — managed local MLX language-model server on Apple Silicon.
-- `mlx-vlm` — managed local MLX vision-language-model server on Apple
-  Silicon. Managed only for repositories already carrying MLX-compatible
-  vision weights plus an `mmproj` asset; `mlx-vlm` does not convert source
-  Transformers weights at launch. Transformers+safetensors vision search
-  results are `external_only` and need an external OpenAI-compatible
-  endpoint (or conversion outside this application).
+- `mlx-vlm` — managed local MLX vision-language-model server on Apple Silicon.
 - `llama.cpp` — managed local text-generation GGUF server across the
   platforms supported by the selected `llama-server` binary (issue #75).
 - `external` — any OpenAI-compatible endpoint.
@@ -545,8 +540,8 @@ local `.gguf` paths (`--model`). Text-generation GGUF is supported;
 multimodal GGUF (separate `mmproj` file) is not.
 
 ```bash
-NEWS_MODEL=qwythos-9b-4bit NEWS_MODEL_BACKEND=llama.cpp uv run news run
-NEWS_MODEL=/models/local-model.gguf NEWS_MODEL_BACKEND=llama.cpp uv run news run
+NEWS_MODEL=qwythos-9b-4bit uv run news run
+NEWS_MODEL=/models/local-model.gguf uv run news run
 NEWS_MODEL=some-owner/some-gguf-repo NEWS_MODEL_BACKEND=llama.cpp uv run news run
 ```
 
@@ -554,22 +549,17 @@ Print the exact managed command without starting a server or downloading a
 model (the command is a preview only):
 
 ```bash
-NEWS_MODEL=qwythos-9b-4bit NEWS_MODEL_BACKEND=llama.cpp NEWS_LLAMA_CPP_SERVER=/opt/llama/llama-server uv run news model-server-command
+NEWS_MODEL=qwythos-9b-4bit NEWS_LLAMA_CPP_SERVER=/opt/llama/llama-server uv run news model-server-command
 ```
 
 ```text
 /opt/llama/llama-server --hf-repo huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF --hf-file Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-Q4_K.gguf --alias huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-Q4_K.gguf --parallel 4 --host 127.0.0.1 --port 8080 --n-predict <max-tokens-if-configured>
 ```
 
-`NEWS_MODEL` selects model identity only; it never picks a backend. An
-unset `NEWS_MODEL_BACKEND` resolves to the fixed product default `mlx-vlm`
-(the backend of the default Gemma 4 12B model). Known catalog models whose
-declared backend differs — `gemma-e2b-tiny` (`mlx-lm`) and the
-`qwythos-9b-*` GGUF aliases (`llama.cpp`) — must set `NEWS_MODEL_BACKEND`
-explicitly; config resolution fails fast with an actionable message naming
-the required value instead of silently launching the wrong server. Any
-other explicit value fails fast; known catalog MLX/llama.cpp mismatches
-fail fast too. To run the default model against an external
+The default model's backend is inferred from the model reference unless
+`NEWS_MODEL_BACKEND` is set to `mlx-lm`, `mlx-vlm`, `external`, or
+`llama.cpp` (any other value fails fast; known catalog MLX/llama.cpp
+mismatches fail fast too). To run the default model against an external
 OpenAI-compatible endpoint — no managed server is started; the pipeline waits
 for and probes the endpoint:
 
@@ -658,12 +648,7 @@ sampling env vars like `NEWS_MODEL_ARTICLE_SUMMARY_TEMPERATURE` or
 
 Pipeline Budget settings are separate from model selection and tuning. They
 cover article text caps, article summary caps, recency windows, article/story
-limits, and story thresholds. Stage concurrency defaults are fixed pipeline
-values — `NEWS_ARTICLE_SUMMARY_CONCURRENCY` and
-`NEWS_STORY_SYNTHESIS_CONCURRENCY` default to `4` for every model choice, and
-`NEWS_MODEL_CONCURRENCY` (Model Server Settings) defaults to `4`, rising only
-when an explicitly configured stage worker count needs a larger server pool.
-Model identity never changes these defaults.
+limits, and story thresholds.
 
 ### Model Server Settings
 
@@ -701,7 +686,7 @@ select ownership.
 
 ```bash
 NEWS_IMAGE_ENABLED=0 uv run news run --preset NAME
-NEWS_MODEL=gemma-e2b-tiny NEWS_MODEL_BACKEND=mlx-lm NEWS_IMAGE_ENABLED=0 uv run news run
+NEWS_MODEL=gemma-e2b-tiny NEWS_IMAGE_ENABLED=0 uv run news run
 NEWS_IMAGE_ENABLED=1 uv run news run --preset NAME
 ```
 
@@ -826,7 +811,7 @@ For even faster runs, override the model explicitly and tighten the
 recency window:
 
 ```bash
-NEWS_MODEL=gemma-e2b-tiny NEWS_MODEL_BACKEND=mlx-lm NEWS_RECENT_WINDOW_HOURS=6 uv run news run
+NEWS_MODEL=gemma-e2b-tiny NEWS_RECENT_WINDOW_HOURS=6 uv run news run
 ```
 
 To preview the resolved config before launching a run, use the UI or
