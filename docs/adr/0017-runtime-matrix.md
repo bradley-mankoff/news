@@ -39,6 +39,12 @@ The supported runtime matrix is exactly:
    releases may break the managed-server contract, and the 0.6.10 cascade
    (`mlx>=0.32.0`, `transformers>=5.14.0`) does not resolve against the
    current lock. Revisit the bound when a newer release is triaged.
+   Management applies only to repositories already carrying MLX-compatible
+   vision weights plus an `mmproj` asset; `mlx-vlm` does not convert source
+   Transformers weights at launch. A Hugging Face search result whose
+   metadata says `transformers` + `safetensors` + `image-text-to-text` is
+   therefore `external_only` — the repository is an ordinary Transformers
+   vision model, not a pre-converted MLX VLM.
 3. **`llama.cpp`** — managed local text-generation GGUF server for
    text-generation GGUF models (issue #75). The application launches an
    operator-installed official native `llama-server` binary (selected with
@@ -99,6 +105,12 @@ logic only.
   links (issue #32) already shipped in the model picker.
 - Text-generation GGUF search results report `managed_llama_cpp`; multimodal
   GGUF results remain `external_only` (mmproj files are not managed).
+  Transformers+safetensors vision search results (`image-text-to-text`) are
+  also `external_only`: `mlx-vlm` requires pre-converted MLX weights plus an
+  `mmproj` asset and does not convert ordinary Transformers repositories at
+  launch. Use the external OpenAI-compatible backend for these, or convert
+  them outside this application. MLX-library vision repositories and curated
+  MLX VLM entries keep the `managed_mlx_vlm` verdict.
 - `news model-server-command` reports that no managed server command exists
   for the external backend and prints the resolved llama.cpp command for
   managed GGUF selections without starting a server or downloading a model.

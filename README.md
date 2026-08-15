@@ -455,7 +455,11 @@ Curated models (4):
 Hugging Face search results carry runtime-fit verdicts (`managed_mlx_lm`,
 `managed_mlx_vlm`, `managed_llama_cpp`, or `external_only`) so unlaunchable
 repos are never picked for a managed backend (ADR 0017 runtime matrix);
-hardware fitting itself lives on the Hugging Face model page. The UI's "Model
+hardware fitting itself lives on the Hugging Face model page. Only
+MLX-formatted, asset-complete VLM repositories are `managed_mlx_vlm`;
+Transformers+safetensors vision search results (`image-text-to-text`) are
+`external_only` because `mlx-vlm` needs pre-converted MLX weights plus an
+`mmproj` asset and does not convert them at launch. The UI's "Model
 catalog" panel shows curated cards, task recommendations, and search with the
 same verdicts.
 
@@ -518,7 +522,12 @@ Initially supported runtimes (recorded in
 [`docs/adr/0017-runtime-matrix.md`](docs/adr/0017-runtime-matrix.md)):
 
 - `mlx-lm` — managed local MLX language-model server on Apple Silicon.
-- `mlx-vlm` — managed local MLX vision-language-model server on Apple Silicon.
+- `mlx-vlm` — managed local MLX vision-language-model server on Apple
+  Silicon. Managed only for repositories already carrying MLX-compatible
+  vision weights plus an `mmproj` asset; `mlx-vlm` does not convert source
+  Transformers weights at launch. Transformers+safetensors vision search
+  results are `external_only` and need an external OpenAI-compatible
+  endpoint (or conversion outside this application).
 - `llama.cpp` — managed local text-generation GGUF server across the
   platforms supported by the selected `llama-server` binary (issue #75).
 - `external` — any OpenAI-compatible endpoint.
