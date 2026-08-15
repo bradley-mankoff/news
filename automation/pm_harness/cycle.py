@@ -12,7 +12,12 @@ from .archon import (
     latest_workflow_run,
     runs_by_message_from,
 )
-from .dispatch import dispatch, prepare_dispatch_budget, resume_issue
+from .dispatch import (
+    dispatch,
+    prepare_dispatch_budget,
+    remaining_dispatch_budget,
+    resume_issue,
+)
 from .github import (
     branch_empty_vs_main,
     comment_issue,
@@ -908,6 +913,123 @@ def ensure_ship_review(cfg: dict, env: dict, item_id: str, issue_number: int,
     return "ok", msg, ship["number"]
 
 
+def _fill_concurrency_gap(
+    ctx: PollContext,
+    items: list[dict],
+    number_lane: dict[int, str],
+    number_state: dict[int, str],
+) -> int:
+    """Desire full throughput: promote runnable Backlog items to Todo when
+    the dispatch budget has free slots, and log the diagnosis when it cannot.
+
+    The poller's dispatch loop only starts work on the Backlog->Todo lane
+    transition (the PM was the sole promoter, so idle capacity went unused
+    until a human nudged). This pass makes the system self-desiring: it
+    fills free slots from runnable Backlog items and records why slots stay
+    empty (no runnable items, dep-blocked, decision-only, needs-input,
+    closed) so the gap is visible and fixable.
+
+    Mutates `item['status']` in place for promoted items so the dispatch
+    loop sees the Todo transition and dispatches in this same poll.
+
+    Returns the number of items promoted.
+    """
+    cfg, env, state = ctx.cfg, ctx.env, ctx.state
+    project_id, field_id = ctx.project_id, ctx.field_id
+    status_options = ctx.status_options
+    todo_lane = ctx.todo_lane_name
+    done_lane = ctx.done_lane_name
+    if not todo_lane or not done_lane:
+        return 0
+    limit = cfg.get("max_concurrent_workflows", 10)
+    # Budget was computed at poll start as (limit - active) and decremented
+    # per dispatch; whatever remains is free capacity this poll.
+    budget = remaining_dispatch_budget()
+    if budget is None or budget <= 0:
+        return 0
+    free = min(int(budget), int(limit))
+
+    backlog = [
+        item for item in items
+        if (item.get("content") or {}).get("__typename") == "Issue"
+        and (item.get("content") or {}).get("repository", {}).get(
+            "nameWithOwner") == cfg["repo"]
+        and item.get("status") == cfg.get("default_lane", "Backlog")
+    ]
+    promoted = 0
+    for item in sorted(
+        backlog,
+        key=lambda it: (it.get("content") or {}).get("number") or 0,
+    ):
+        if promoted >= free:
+            break
+        content = item["content"]
+        number = content["number"]
+        labels = [
+            node["name"] for node in (content.get("labels") or {}).get("nodes", [])
+        ]
+        if is_decision_only(cfg, labels):
+            continue
+        if "needs-input" in labels:
+            continue
+        if content.get("state") != "OPEN":
+            continue
+        deps = parse_dep_refs(content.get("body") or "")
+        if deps:
+            unsatisfied, _ = dep_gate(
+                deps, number_lane, number_state, done_lane)
+            if unsatisfied:
+                continue
+        item_id = item["id"]
+        option_id = status_options.get(todo_lane)
+        if not option_id or not move_to_lane(
+                cfg, env, project_id, item_id, field_id, option_id):
+            continue
+        item["status"] = todo_lane  # dispatch loop sees the transition
+        rec = state.setdefault(item_id, {})
+        rec["issue_number"] = number
+        log(f"CONCURRENCY FILL issue={number} -> {todo_lane} "
+            f"(free={free - promoted}/{limit})")
+        promoted += 1
+
+    if promoted < free and backlog:
+        # Diagnose why the pipeline cannot fill: surface the blockers so
+        # the factory can be fed (file issues, unblock deps, split scope).
+        decision = needs_input = dep_blocked = closed = 0
+        blocked_by: dict[int, list[int]] = {}
+        for item in backlog:
+            content = item["content"]
+            number = content["number"]
+            labels = [
+                node["name"]
+                for node in (content.get("labels") or {}).get("nodes", [])
+            ]
+            if is_decision_only(cfg, labels):
+                decision += 1
+            elif "needs-input" in labels:
+                needs_input += 1
+            elif content.get("state") != "OPEN":
+                closed += 1
+            else:
+                deps = parse_dep_refs(content.get("body") or "")
+                if deps:
+                    unsatisfied, _ = dep_gate(
+                        deps, number_lane, number_state, done_lane)
+                    if unsatisfied:
+                        dep_blocked += 1
+                        blocked_by[number] = unsatisfied
+        detail = (
+            f"CONCURRENCY GAP: free={free}, {len(backlog)} backlog items "
+            f"not promoted — decision_only={decision}, needs_input={needs_input}, "
+            f"closed={closed}, dep_blocked={dep_blocked}"
+        )
+        if blocked_by:
+            first = sorted(blocked_by.items())[0]
+            detail += f" (e.g. #{first[0]} depends on {fmt_deps(first[1])})"
+        log(detail)
+    return promoted
+
+
 def poll(cfg: dict, env: dict, state: dict) -> None:
     project_id, field_id, status_options, items = fetch_project(cfg, env)
     hydrate_state_for_items(state, items)
@@ -1210,6 +1332,11 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
         seen=seen,
         fresh_dispatched=fresh_dispatched,
     )
+    # Desired-state pass: fill free dispatch slots from runnable Backlog
+    # items so the factory stays near capacity without human nudges.
+    # Runs after the item loop so `ctx` exists and labels are fresh; the
+    # promoted items dispatch on the next poll's Todo transition.
+    _fill_concurrency_gap(ctx, items, number_lane, number_state)
     _recheck_review_dispatch(ctx)
     _unblock_dependencies(ctx)
     runs_snapshot, runs_by_msg = _reconcile_completions(ctx)
