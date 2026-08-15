@@ -116,7 +116,11 @@ class FakeElement {
     const buttonStart = this._innerHTML.lastIndexOf("<button", markerStart);
     const buttonEnd = this._innerHTML.indexOf(">", markerStart);
     const button = this._innerHTML.slice(buttonStart, buttonEnd + 1);
-    return { disabled: button.includes(" disabled") };
+    const backendMatch = button.match(/data-use-hf-backend="([^"]*)"/);
+    return {
+      disabled: button.includes(" disabled"),
+      dataset: { useHfBackend: backendMatch ? backendMatch[1] : "" }
+    };
   }
   querySelectorAll(_selector) { return []; }
   addEventListener(type, fn) {
@@ -640,6 +644,7 @@ class UITests(unittest.TestCase):
         expected = {
             model_catalog.RUNTIME_FIT_MANAGED_MLX_LM: "mlx-lm",
             model_catalog.RUNTIME_FIT_MANAGED_MLX_VLM: "mlx-vlm",
+            model_catalog.RUNTIME_FIT_MANAGED_LLAMA_CPP: "llama.cpp",
             model_catalog.RUNTIME_FIT_EXTERNAL_ONLY: "external",
         }
         for status, backend in expected.items():
@@ -918,7 +923,7 @@ class UITests(unittest.TestCase):
             self.assertEqual(payload["sources"]["total"], 1)
             self.assertEqual(payload["recipients"]["total"], 1)
             # Model catalog keys are local-only (offline) additions.
-            self.assertEqual(len(payload["model_catalog"]), 2)
+            self.assertEqual(len(payload["model_catalog"]), 4)
             self.assertEqual(payload["model_catalog"][0]["alias"], "gemma-4-12b-it-4bit")
             self.assertIn("factual_extraction", payload["model_recommendation_tasks"])
             self.assertEqual(len(payload["model_recommendation_tasks"]), 7)
@@ -2432,6 +2437,7 @@ const searchResults = [
   { id: "owner/unknown", hf_url: "https://example.test/unknown", runtime_fit: { status: "unknown_fit", reason: "unknown reason" } },
   { id: "owner/missing-status", hf_url: "https://example.test/missing-status", runtime_fit: { reason: "no status" } },
   { id: "owner/empty-status", hf_url: "https://example.test/empty-status", runtime_fit: { status: "", reason: "empty status" } },
+  { id: "owner/gguf", hf_url: "https://example.test/gguf", runtime_fit: { status: "managed_llama_cpp", reason: "managed llama reason" } },
   { id: "owner/external", hf_url: "https://example.test/external", runtime_fit: { status: "external_only", reason: "external reason" } }
 ];
 async function api(path) {
@@ -2463,6 +2469,9 @@ assert(elements.modelSearchResults.textContent.includes("Future <fit> & choice")
 assert(elements.modelSearchResults.textContent.includes("unknown_fit"), "unknown fit did not fall back to its status");
 assert(elements.modelSearchResults.innerHTML.includes("Future &lt;fit&gt; &amp; choice"), "fit label was not escaped");
 assert(elements.modelSearchResults.querySelector('button[data-use-hf-model="owner/external"]').disabled, "external-only model was enabled");
+const ggufButton = elements.modelSearchResults.querySelector('button[data-use-hf-model="owner/gguf"]');
+assert(ggufButton && !ggufButton.disabled, "managed_llama_cpp model was not enabled");
+assert(ggufButton.dataset.useHfBackend === "llama.cpp", "managed_llama_cpp did not map to NEWS_MODEL_BACKEND=llama.cpp");
 
 // Partial/empty schema state remains usable and keeps raw fallbacks.
 state.schema = { model_recommendation_tasks: ["raw_task"] };
@@ -3226,13 +3235,21 @@ for (const absentId of ["article_tuning_save", "article_tuning_rename", "article
 
         self.assertEqual(
             [entry["alias"] for entry in payload["model_catalog"]],
-            ["gemma-4-12b-it-4bit", "gemma-e2b-tiny", "smoke-model"],
+            [
+                "gemma-4-12b-it-4bit",
+                "gemma-e2b-tiny",
+                "qwythos-9b-4bit",
+                "qwythos-9b-8bit",
+                "smoke-model",
+            ],
         )
         self.assertEqual(
             {entry["alias"]: entry["backend"] for entry in payload["model_catalog"]},
             {
                 "gemma-4-12b-it-4bit": "mlx-vlm",
                 "gemma-e2b-tiny": "mlx-lm",
+                "qwythos-9b-4bit": "llama.cpp",
+                "qwythos-9b-8bit": "llama.cpp",
                 "smoke-model": "mlx-lm",
             },
         )

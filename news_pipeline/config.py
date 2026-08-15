@@ -27,6 +27,10 @@ from urllib.parse import urlparse
 import yaml
 
 from . import model_catalog as _model_catalog
+from .llama_cpp_adapter import (
+    DEFAULT_LLAMA_CPP_SERVER,
+    build_llama_cpp_server_command,
+)
 from .prompt_catalog import (
     DEFAULT_PROMPT_PROFILE_ID,
     PROMPT_PROFILE_ENV_VAR,
@@ -91,10 +95,16 @@ QWWYTHOS_9B_8BIT_MODEL_REFERENCE = f"{QWWYTHOS_REPO}/{QWWYTHOS_Q8_FILENAME}"
 MODEL_BACKEND_MLX_LM = "mlx-lm"
 MODEL_BACKEND_MLX_VLM = "mlx-vlm"
 MODEL_BACKEND_EXTERNAL = "external"
-SUPPORTED_MODEL_BACKENDS = (MODEL_BACKEND_MLX_LM, MODEL_BACKEND_MLX_VLM, MODEL_BACKEND_EXTERNAL)
-# Legacy identifier retained for API compatibility; Qwythos is no longer the
-# default. Always use MODEL_BACKEND_MLX_VLM directly.
-QWWYTHOS_MODEL_BACKEND = MODEL_BACKEND_MLX_VLM
+MODEL_BACKEND_LLAMA_CPP = "llama.cpp"
+SUPPORTED_MODEL_BACKENDS = (
+    MODEL_BACKEND_MLX_LM,
+    MODEL_BACKEND_MLX_VLM,
+    MODEL_BACKEND_EXTERNAL,
+    MODEL_BACKEND_LLAMA_CPP,
+)
+# Legacy identifier retained for API compatibility; the Qwythos GGUF models
+# are now served by the managed llama.cpp backend (issue #75).
+QWWYTHOS_MODEL_BACKEND = MODEL_BACKEND_LLAMA_CPP
 # Standard Gemma 4 12B instruction model, MLX 4-bit distribution. The default
 # must be a repo id (never owner/repo/file.gguf): mlx-vlm rejects file-qualified
 # references with HFValidationError (issue #124).
@@ -156,28 +166,25 @@ MODEL_ALIASES = {
     CODEX_TEST_MODEL_ALIAS: CODEX_TEST_MODEL_NAME,
     f"https://huggingface.co/{CODEX_TEST_MODEL_NAME}": CODEX_TEST_MODEL_NAME,
     f"https://hf.co/{CODEX_TEST_MODEL_NAME}": CODEX_TEST_MODEL_NAME,
+    QWWYTHOS_9B_4BIT_MODEL_ALIAS: QWWYTHOS_9B_4BIT_MODEL_REFERENCE,
+    f"https://huggingface.co/{QWWYTHOS_9B_4BIT_MODEL_REFERENCE}": QWWYTHOS_9B_4BIT_MODEL_REFERENCE,
+    f"https://hf.co/{QWWYTHOS_9B_4BIT_MODEL_REFERENCE}": QWWYTHOS_9B_4BIT_MODEL_REFERENCE,
+    QWWYTHOS_9B_8BIT_MODEL_ALIAS: QWWYTHOS_9B_8BIT_MODEL_REFERENCE,
+    f"https://huggingface.co/{QWWYTHOS_9B_8BIT_MODEL_REFERENCE}": QWWYTHOS_9B_8BIT_MODEL_REFERENCE,
+    f"https://hf.co/{QWWYTHOS_9B_8BIT_MODEL_REFERENCE}": QWWYTHOS_9B_8BIT_MODEL_REFERENCE,
 }
 # Custom aliases added through config/model_catalog.yaml (issue #90) extend
 # this mapping at use time via _catalog_model_aliases(); MODEL_ALIASES itself
 # stays the built-in-only baseline so the README/SETTINGS drift guard covers
 # exactly the documented built-ins.
-# Qwythos GGUF references are NOT launchable by the managed mlx-vlm backend
-# (file-qualified GGUF refs raise HFValidationError) and are not validated for
-# any backend; stale configs fail fast with an actionable error instead of a
-# half-started server. The set covers every form the old docs published
-# (friendly aliases, raw owner/repo/file.gguf references, and their
-# https://huggingface.co/... / https://hf.co/... URL forms) so legacy configs
-# fail before launch. Opt-in work tracked separately.
-UNSUPPORTED_MODEL_REFERENCES: set[str] = {
-    QWWYTHOS_9B_8BIT_MODEL_ALIAS,
-    QWWYTHOS_9B_4BIT_MODEL_ALIAS,
-    QWWYTHOS_9B_8BIT_MODEL_REFERENCE,
-    QWWYTHOS_9B_4BIT_MODEL_REFERENCE,
-    f"https://huggingface.co/{QWWYTHOS_9B_8BIT_MODEL_REFERENCE}",
-    f"https://hf.co/{QWWYTHOS_9B_8BIT_MODEL_REFERENCE}",
-    f"https://huggingface.co/{QWWYTHOS_9B_4BIT_MODEL_REFERENCE}",
-    f"https://hf.co/{QWWYTHOS_9B_4BIT_MODEL_REFERENCE}",
-}
+# Qwythos GGUF references are now launchable by the managed llama.cpp
+# backend (issue #75): the legacy aliases, raw owner/repo/file.gguf
+# references, and their URL forms all resolve to the managed llama.cpp
+# assignment. This compatibility set stays empty so any genuinely rejected
+# future reference fails fast in resolve_model_name before launch; never add
+# an alias here (the registry build and hf_model_page_url depend on the
+# aliases/unsupported sets staying disjoint).
+UNSUPPORTED_MODEL_REFERENCES: set[str] = set()
 CODEX_RUNTIME_ENV_VARS = ("CODEX_SANDBOX", "CODEX_CI", "CODEX_THREAD_ID")
 REMOVED_TOPIC_ENV_VARS = (
     "NEWS_TOPIC_IDS",
@@ -255,6 +262,7 @@ class ModelServerSettings:
     prompt_cache_size: int | None = None
     prompt_cache_bytes: str | None = None
     max_tokens: int | None = None
+    llama_cpp_binary: str = DEFAULT_LLAMA_CPP_SERVER
 
 
 @dataclass(frozen=True)
@@ -509,6 +517,10 @@ def _configured_model_server_settings(base_url: str | None = None) -> ModelServe
         prompt_cache_bytes=_str_env("NEWS_MODEL_SERVER_PROMPT_CACHE_BYTES", DEFAULT_MODEL_SERVER_PROMPT_CACHE_BYTES)
         or DEFAULT_MODEL_SERVER_PROMPT_CACHE_BYTES,
         max_tokens=_int_env("NEWS_MODEL_SERVER_MAX_TOKENS", DEFAULT_MODEL_SERVER_MAX_TOKENS),
+        llama_cpp_binary=(
+            _str_env("NEWS_LLAMA_CPP_SERVER", DEFAULT_LLAMA_CPP_SERVER)
+            or DEFAULT_LLAMA_CPP_SERVER
+        ),
     )
 
 
@@ -1329,11 +1341,12 @@ def _catalog_model_aliases() -> dict[str, str]:
 def resolve_model_name(model_reference: str) -> str:
     """Resolve a friendly model alias to its configured model reference.
 
-    The returned reference may use a managed MLX backend or an external
-    OpenAI-compatible endpoint; callers use backend inference separately.
-    Raises ValueError for references in UNSUPPORTED_MODEL_REFERENCES (the
-    legacy qwythos-9b-* aliases, raw GGUF references, and their URL forms) so
-    stale configs fail before launch.
+    The returned reference may use a managed MLX/llama.cpp backend or an
+    external OpenAI-compatible endpoint; callers use backend inference
+    separately. Raises ValueError for references in
+    UNSUPPORTED_MODEL_REFERENCES (kept empty today - issue #75 re-enabled
+    the legacy Qwythos GGUF references under the managed llama.cpp backend)
+    so genuinely rejected stale configs fail before launch.
     """
     clean_reference = (model_reference or "").strip()
     if not clean_reference:
@@ -1457,11 +1470,11 @@ def infer_model_backend(model_reference: str) -> str:
 
     Catalog-declared backends win for exact alias/reference matches (issue
     #90) so a catalog card and the launched server never disagree; YAML
-    entries use the backend they declare. Raw unlisted references keep the
+    entries use the backend they declare. Raw ``.gguf`` references infer the
+    managed llama.cpp backend (issue #75). Unlisted references keep the
     legacy heuristic fallback: the retained "qwythos" branch only matches
-    raw references that are not in UNSUPPORTED_MODEL_REFERENCES (aliases,
-    GGUF refs, and URL forms all fail fast in resolve_model_name); it exists
-    for legacy/external configs (issue #124 Deviation 3).
+    raw non-GGUF references and exists for legacy/external configs (issue
+    #124 Deviation 3).
     """
     clean = (model_reference or "").strip()
     if not clean:
@@ -1469,6 +1482,8 @@ def infer_model_backend(model_reference: str) -> str:
     catalog_backend = _model_catalog.catalog_model_backend(clean)
     if catalog_backend is not None:
         return catalog_backend
+    if clean.lower().endswith(".gguf"):
+        return MODEL_BACKEND_LLAMA_CPP
     if is_codex_test_model_reference(model_reference):
         # Guard second: the tiny model's repo id also contains "gemma-4" and
         # would otherwise be misclassified as mlx-vlm (its catalog entry
@@ -1489,10 +1504,41 @@ def configured_model_api_key() -> str:
     return _str_env("NEWS_MODEL_API_KEY", "not-needed") or "not-needed"
 
 
+def _validate_llama_cpp_backend_compatibility(model_reference: str, backend: str) -> None:
+    """Reject known catalog MLX/llama.cpp backend mismatches fail-fast.
+
+    A known MLX catalog entry can never be served by llama.cpp, and a known
+    llama.cpp (GGUF) catalog entry can never be served by an MLX backend.
+    Unknown references are deliberately allowed under any backend: a bare
+    HF repo explicitly selected with ``NEWS_MODEL_BACKEND=llama.cpp`` lets
+    llama-server apply its documented default quantization. mlx-lm/mlx-vlm
+    cross-overrides and external selections keep their existing behavior.
+    """
+    declared = _model_catalog.catalog_model_backend(model_reference)
+    if declared is None or declared == backend:
+        return
+    mlx_backends = (MODEL_BACKEND_MLX_LM, MODEL_BACKEND_MLX_VLM)
+    if backend == MODEL_BACKEND_LLAMA_CPP and declared in mlx_backends:
+        raise ValueError(
+            f"NEWS_MODEL_BACKEND=llama.cpp cannot serve {model_reference!r}: the "
+            f"model catalog declares backend {declared!r} for an MLX distribution. "
+            "llama.cpp launches GGUF files; choose a GGUF model or remove the "
+            "backend override."
+        )
+    if backend in mlx_backends and declared == MODEL_BACKEND_LLAMA_CPP:
+        raise ValueError(
+            f"NEWS_MODEL_BACKEND={backend} cannot serve {model_reference!r}: the "
+            "model catalog declares the llama.cpp backend for a GGUF file. "
+            "Set NEWS_MODEL_BACKEND=llama.cpp or choose an MLX model."
+        )
+
+
 def _configured_model_backend(model_reference: str) -> str:
     """Resolve the default model's backend: NEWS_MODEL_BACKEND override
     (validated against SUPPORTED_MODEL_BACKENDS) or inferred from the
-    reference. Per-task models always use inference."""
+    reference. Per-task models always use inference. Known catalog
+    MLX/llama.cpp mismatches fail fast; unknown references may be selected
+    with any backend."""
     configured = _str_env("NEWS_MODEL_BACKEND", "").strip().lower()
     if configured and configured not in SUPPORTED_MODEL_BACKENDS:
         raise ValueError(
@@ -1505,6 +1551,7 @@ def _configured_model_backend(model_reference: str) -> str:
             "OpenAI-compatible endpoint (without it, the pipeline would poll the "
             "default managed-server loopback URL and time out)."
         )
+    _validate_llama_cpp_backend_compatibility(model_reference, backend)
     return backend
 
 
@@ -1628,6 +1675,13 @@ def runtime_knob_registry() -> list[dict[str, Any]]:
         _runtime_knob("Model Server Settings", "Server prompt cache size", "NEWS_MODEL_SERVER_PROMPT_CACHE_SIZE", "number", minimum=0, step=1),
         _runtime_knob("Model Server Settings", "Server prompt cache bytes", "NEWS_MODEL_SERVER_PROMPT_CACHE_BYTES"),
         _runtime_knob("Model Server Settings", "Server max tokens", "NEWS_MODEL_SERVER_MAX_TOKENS", "number", minimum=1, step=1),
+        _runtime_knob(
+            "Model Server Settings",
+            "llama.cpp server binary",
+            "NEWS_LLAMA_CPP_SERVER",
+            default=DEFAULT_LLAMA_CPP_SERVER,
+            advanced=True,
+        ),
     ]
     for task, task_label, max_tokens_label in MODEL_TASK_KNOB_SPECS:
         env_suffix = task.upper()
@@ -1707,13 +1761,29 @@ def build_model_server_command(
     """Return the managed server command for the backend.
 
     External backends have no managed server: returns "" (callers treat the
-    empty string as "connect to the endpoint directly").
+    empty string as "connect to the endpoint directly"). The llama.cpp case
+    is delegated to the stdlib-only adapter, which owns GGUF reference
+    parsing and shell-safe argument construction; MLX/external output stays
+    byte-compatible with the previous implementation.
     """
     if backend == MODEL_BACKEND_EXTERNAL:
         return ""
     concurrency = max(1, int(model_concurrency))
     parsed_base_url = urlparse(settings.base_url or "")
     port = parsed_base_url.port or 8080
+    if backend == MODEL_BACKEND_LLAMA_CPP:
+        # The stdlib-only adapter owns GGUF reference parsing and shell-safe
+        # argument construction; MLX-only prefill/cache flags are never
+        # passed to llama-server. The command string is still executed with
+        # shlex.split and shell=False by the managed lifecycle.
+        return build_llama_cpp_server_command(
+            model_name,
+            alias=model_name,
+            port=port,
+            parallel=concurrency,
+            max_tokens=settings.max_tokens,
+            binary=settings.llama_cpp_binary,
+        )
     extra_flags: list[str] = []
     if settings.prefill_step_size is not None:
         extra_flags.extend(["--prefill-step-size", str(settings.prefill_step_size)])

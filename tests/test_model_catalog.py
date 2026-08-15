@@ -74,7 +74,7 @@ class ModelCatalogTests(unittest.TestCase):
             )
 
     def test_catalog_entries_are_complete(self) -> None:
-        self.assertEqual(len(model_catalog.CATALOG_MODELS), 2)
+        self.assertEqual(len(model_catalog.CATALOG_MODELS), 4)
         for entry in model_catalog.CATALOG_MODELS.values():
             self.assertTrue(entry.alias)
             self.assertTrue(entry.reference)
@@ -87,14 +87,25 @@ class ModelCatalogTests(unittest.TestCase):
                 set(entry.task_notes).issubset(set(model_catalog.MODEL_RECOMMENDATION_TASKS)),
                 f"{entry.alias} task_notes use unknown tasks",
             )
-            # Exact equality: runtime_fit_for_hf_model matches on hf_repo
-            # only (issue #92); a file-qualified or suffixed reference
-            # would silently break that invariant.
-            self.assertEqual(
-                entry.reference,
-                entry.hf_repo,
-                f"{entry.alias} reference must equal hf_repo (issue #92)",
-            )
+            if entry.backend == "llama.cpp":
+                # File-qualified launch identity under a bare hf_repo page id
+                # (issue #75); the file name is the final path segment.
+                self.assertEqual(
+                    entry.reference.rsplit("/", 1)[0],
+                    entry.hf_repo,
+                    f"{entry.alias} reference must live under hf_repo",
+                )
+                self.assertTrue(entry.reference.lower().endswith(".gguf"))
+                self.assertNotIn(".gguf", entry.hf_repo.lower())
+            else:
+                # Exact equality: runtime_fit_for_hf_model matches on hf_repo
+                # only (issue #92); a file-qualified or suffixed reference
+                # would silently break that invariant.
+                self.assertEqual(
+                    entry.reference,
+                    entry.hf_repo,
+                    f"{entry.alias} reference must equal hf_repo (issue #92)",
+                )
 
     def test_default_catalog_model_is_the_default_alias(self) -> None:
         self.assertEqual(model_catalog.DEFAULT_CATALOG_MODEL_ALIAS, config.DEFAULT_MODEL_ALIAS)
@@ -111,10 +122,16 @@ class ModelCatalogTests(unittest.TestCase):
         self.assertEqual(default.hf_repo, "mlx-community/gemma-4-12B-it-4bit")
         self.assertEqual(default.backend, "mlx-vlm")
         self.assertNotIn(".gguf", default.reference)
-        self.assertNotIn("qwythos", model_catalog.CATALOG_MODELS)
+        self.assertIn("qwythos-9b-4bit", model_catalog.CATALOG_MODELS)
+        self.assertIn("qwythos-9b-8bit", model_catalog.CATALOG_MODELS)
+        self.assertEqual(
+            model_catalog.CATALOG_MODELS["qwythos-9b-4bit"].backend,
+            "llama.cpp",
+        )
         for entry in model_catalog.CATALOG_MODELS.values():
-            self.assertEqual(entry.reference, entry.hf_repo)
-            # i.e. reference == hf_repo exactly (no file suffix)
+            if entry.backend != "llama.cpp":
+                self.assertEqual(entry.reference, entry.hf_repo)
+                # i.e. reference == hf_repo exactly (no file suffix)
 
     # -- YAML overlay loading and merge (issue #90) -------------------------
 
@@ -262,7 +279,14 @@ class ModelCatalogTests(unittest.TestCase):
         # Built-ins first (code order), then YAML additions in YAML order.
         self.assertEqual(
             list(merged),
-            ["gemma-4-12b-it-4bit", "gemma-e2b-tiny", "my-mlx-model", "my-vlm-model"],
+            [
+                "gemma-4-12b-it-4bit",
+                "gemma-e2b-tiny",
+                "qwythos-9b-4bit",
+                "qwythos-9b-8bit",
+                "my-mlx-model",
+                "my-vlm-model",
+            ],
         )
         self.assertEqual(merged["my-mlx-model"].reference, "mlx-community/example-model")
         self.assertEqual(merged["my-mlx-model"].backend, "mlx-lm")
@@ -291,14 +315,14 @@ class ModelCatalogTests(unittest.TestCase):
                 "  my-model:\n"
                 "    reference: owner/repo\n"
                 "    name: My Model\n"
-                "    backend: llama.cpp\n"
+                "    backend: tensorrt\n"
                 "    hf_repo: owner/repo\n"
                 "    description: Unsupported backend.\n",
                 encoding="utf-8",
             )
             with self.assertRaisesRegex(ValueError, "backend.*not supported") as ctx:
                 model_catalog.load_model_catalog(path)
-            self.assertIn("mlx-lm", str(ctx.exception))
+            self.assertIn("llama.cpp", str(ctx.exception))
 
     def test_load_model_catalog_reference_identity_rules(self) -> None:
         cases = {
@@ -342,6 +366,78 @@ class ModelCatalogTests(unittest.TestCase):
                 )
                 with self.assertRaisesRegex(ValueError, expected):
                     model_catalog.load_model_catalog(path)
+
+    def test_load_model_catalog_llama_cpp_identity_rules(self) -> None:
+        """llama.cpp entries use a file-qualified .gguf reference under a bare
+        hf_repo page id; every other shape fails closed (issue #75)."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+
+            valid = root / "valid_llama.yaml"
+            valid.write_text(
+                "models:\n"
+                "  my-gguf-model:\n"
+                "    reference: owner/example-repo/example.Q4_K.gguf\n"
+                "    name: Example GGUF\n"
+                "    backend: llama.cpp\n"
+                "    hf_repo: owner/example-repo\n"
+                "    description: A user-verified GGUF model.\n",
+                encoding="utf-8",
+            )
+            merged = model_catalog.load_model_catalog(valid)
+            self.assertEqual(
+                merged["my-gguf-model"].reference,
+                "owner/example-repo/example.Q4_K.gguf",
+            )
+            self.assertEqual(merged["my-gguf-model"].backend, "llama.cpp")
+            self.assertEqual(merged["my-gguf-model"].hf_repo, "owner/example-repo")
+
+            cases = {
+                "bare_repo": (
+                    "    reference: owner/example-repo\n"
+                    "    hf_repo: owner/example-repo\n",
+                    "file-qualified",
+                ),
+                "repo_mismatch": (
+                    "    reference: owner/other-repo/example.Q4_K.gguf\n"
+                    "    hf_repo: owner/example-repo\n",
+                    "under hf_repo",
+                ),
+                "non_gguf_file": (
+                    "    reference: owner/example-repo/example.safetensors\n"
+                    "    hf_repo: owner/example-repo\n",
+                    r"\.gguf file",
+                ),
+                "traversal": (
+                    "    reference: owner/example-repo/../evil.gguf\n"
+                    "    hf_repo: owner/example-repo\n",
+                    "file-qualified",
+                ),
+                "gguf_hf_repo": (
+                    "    reference: owner/example-repo/example.Q4_K.gguf\n"
+                    "    hf_repo: owner/example-repo.gguf\n",
+                    "GGUF",
+                ),
+                "url_form": (
+                    "    reference: https://huggingface.co/owner/repo/file.gguf\n"
+                    "    hf_repo: owner/repo\n",
+                    "file-qualified",
+                ),
+            }
+            for label, (lines, expected) in cases.items():
+                with self.subTest(label=label):
+                    path = root / f"llama_{label}.yaml"
+                    path.write_text(
+                        "models:\n"
+                        "  my-gguf-model:\n"
+                        f"{lines}"
+                        "    name: Example GGUF\n"
+                        "    backend: llama.cpp\n"
+                        "    description: Identity rule case.\n",
+                        encoding="utf-8",
+                    )
+                    with self.assertRaisesRegex(ValueError, expected):
+                        model_catalog.load_model_catalog(path)
 
     def test_load_model_catalog_invalid_context_length(self) -> None:
         for raw in ("0", "-1", "true", "'8192'", "1.5"):
@@ -613,7 +709,7 @@ class ModelCatalogTests(unittest.TestCase):
 
     def test_list_model_catalog_is_json_ready(self) -> None:
         records = model_catalog.list_model_catalog()
-        self.assertEqual(len(records), 2)
+        self.assertEqual(len(records), 4)
         for record in records:
             self.assertIsInstance(record, dict)
             self.assertTrue(record["hf_url"].startswith("https://huggingface.co/"))
@@ -621,6 +717,15 @@ class ModelCatalogTests(unittest.TestCase):
             self.assertIn("is_default", record)
         defaults = [record for record in records if record["is_default"]]
         self.assertEqual([record["alias"] for record in defaults], ["gemma-4-12b-it-4bit"])
+        qwythos = {record["alias"]: record for record in records if record["alias"].startswith("qwythos")}
+        self.assertEqual(set(qwythos), {"qwythos-9b-4bit", "qwythos-9b-8bit"})
+        for record in qwythos.values():
+            self.assertEqual(record["backend"], "llama.cpp")
+            self.assertTrue(record["reference"].endswith(".gguf"))
+            self.assertEqual(
+                record["hf_url"],
+                "https://huggingface.co/huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF",
+            )
 
     def test_runtime_fit_matrix(self) -> None:
         curated_gemma = "mlx-community/gemma-4-12B-it-4bit"
@@ -640,6 +745,10 @@ class ModelCatalogTests(unittest.TestCase):
             ),
             (
                 {"id": "someone/arbitrary-gguf", "tags": ["gguf", "text-generation"], "library_name": "transformers", "pipeline_tag": "text-generation"},
+                model_catalog.RUNTIME_FIT_MANAGED_LLAMA_CPP,
+            ),
+            (
+                {"id": "someone/multimodal-gguf", "tags": ["gguf", "image-text-to-text"], "library_name": "transformers", "pipeline_tag": "image-text-to-text"},
                 model_catalog.RUNTIME_FIT_EXTERNAL_ONLY,
             ),
             (
@@ -696,6 +805,10 @@ class ModelCatalogTests(unittest.TestCase):
             (
                 {"id": "deadbydawn101/gemma-4-E2B-Heretic-Uncensored-mlx-4bit-other", "tags": ["mlx"], "library_name": "mlx", "pipeline_tag": "text-generation"},
                 model_catalog.RUNTIME_FIT_MANAGED_MLX_LM,
+            ),
+            (
+                {"id": "huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF", "tags": ["gguf"], "library_name": "transformers", "pipeline_tag": "text-generation"},
+                model_catalog.RUNTIME_FIT_MANAGED_LLAMA_CPP,
             ),
             (
                 {"id": "someone/unknown", "tags": [], "library_name": "unknown", "pipeline_tag": None},

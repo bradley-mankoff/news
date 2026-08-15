@@ -258,8 +258,8 @@ Key Run Settings:
   independent calls — Image Art Direction (text-free FLUX prompt) and Title
   Generation (overlay headline) — each routed to its own assignment.
 - `NEWS_MODEL_BACKEND`: optional backend override for the default model
-  (`mlx-lm`, `mlx-vlm`, or `external`; inferred from the model reference
-  otherwise — see [Runtime Matrix](#runtime-matrix)).
+  (`mlx-lm`, `mlx-vlm`, `external`, or `llama.cpp`; inferred from the model
+  reference otherwise — see [Runtime Matrix](#runtime-matrix)).
 
 ### Prompt Profiles
 
@@ -373,10 +373,13 @@ Built-in aliases:
 
 - `gemma-e2b-tiny`: [`deadbydawn101/gemma-4-E2B-Heretic-Uncensored-mlx-4bit`](https://huggingface.co/deadbydawn101/gemma-4-E2B-Heretic-Uncensored-mlx-4bit) (Codex-safe test model)
 - `gemma-4-12b-it-4bit`: [`mlx-community/gemma-4-12B-it-4bit`](https://huggingface.co/mlx-community/gemma-4-12B-it-4bit) (default; the standard Gemma 4 12B instruction model, 256K-token context)
+- `qwythos-9b-4bit`: [`huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF`](https://huggingface.co/huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF) (legacy 9B Q4_K GGUF, managed `llama.cpp`)
+- `qwythos-9b-8bit`: [`huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF`](https://huggingface.co/huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF) (legacy 9B Q8_0 GGUF, managed `llama.cpp`)
 
-The legacy `qwythos-9b-*` aliases are **unsupported**: mlx-vlm cannot launch
-file-qualified GGUF references, so stale configs fail fast with an actionable
-error instead of a half-started server.
+The legacy `qwythos-9b-*` aliases are supported again through the managed
+`llama.cpp` backend (issue #75): each resolves to its exact GGUF file
+reference and is served by an operator-installed `llama-server` binary. The
+default model remains the MLX Gemma 4 12B entry above.
 
 Each model page shows Hugging Face's native Hardware Compatibility panel
 (GGUF/MLX quantizations) — the UI model picker links directly to it.
@@ -394,18 +397,23 @@ uv run news models catalog
 uv run news models search --query gemma --task text-generation --limit 5
 ```
 
-Curated models (2):
+Curated models (4):
 
 - `gemma-4-12b-it-4bit` — mlx-vlm, 256K-token context, default model
   ([Hugging Face](https://huggingface.co/mlx-community/gemma-4-12B-it-4bit))
 - `gemma-e2b-tiny` — mlx-lm, Codex-safe test model
   ([Hugging Face](https://huggingface.co/deadbydawn101/gemma-4-E2B-Heretic-Uncensored-mlx-4bit))
+- `qwythos-9b-4bit` — llama.cpp, legacy Q4_K GGUF (requires an installed `llama-server`)
+  ([Hugging Face](https://huggingface.co/huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF))
+- `qwythos-9b-8bit` — llama.cpp, legacy Q8_0 GGUF (requires an installed `llama-server`)
+  ([Hugging Face](https://huggingface.co/huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF))
 
 Hugging Face search results carry runtime-fit verdicts (`managed_mlx_lm`,
-`managed_mlx_vlm`, or `external_only`) so unlaunchable repos are never picked
-for a managed backend (ADR 0010 runtime matrix); hardware fitting itself lives
-on the Hugging Face model page. The UI's "Model catalog" panel shows curated
-cards, task recommendations, and search with the same verdicts.
+`managed_mlx_vlm`, `managed_llama_cpp`, or `external_only`) so unlaunchable
+repos are never picked for a managed backend (ADR 0010 runtime matrix);
+hardware fitting itself lives on the Hugging Face model page. The UI's
+"Model catalog" panel shows curated cards, task recommendations, and search
+with the same verdicts.
 
 #### User-editable YAML overrides
 
@@ -419,9 +427,12 @@ file requires restarting `news` or the UI (no hot reload).
   identity (`reference`/`backend`/`hf_repo`) must be absent or match the
   built-in entry exactly.
 - New aliases must provide `reference`, `name`, `backend`, `hf_repo`, and
-  `description`. `backend` is limited to `mlx-lm`, `mlx-vlm`, and `external`;
-  `reference` must equal `hf_repo` (an owner/repo id — file-qualified `.gguf`
-  references are rejected, ADR 0010). `context_length` is optional and
+  `description`. Backends are limited to `mlx-lm`, `mlx-vlm`, `external`,
+  and `llama.cpp`, with backend-scoped identity rules: MLX/external entries
+  require `reference == hf_repo` (an owner/repo id — file-qualified `.gguf`
+  references are rejected for those backends), while `llama.cpp` entries use
+  a file-qualified `owner/repo/file.gguf` reference whose first two segments
+  equal a bare `hf_repo` page id. `context_length` is optional and
   `task_notes` defaults to `{}`.
 - Aliases must match the safe pattern (lowercase letters, digits, `.`, `_`,
   `-`, starting with a letter or digit). Unknown top-level keys, entry
@@ -445,6 +456,12 @@ models:
     hf_repo: mlx-community/example-model
     context_length: 8192
     description: A user-verified MLX language model.
+  my-gguf-model:
+    reference: owner/example-repo/example.Q4_K.gguf
+    name: Example GGUF Model
+    backend: llama.cpp
+    hf_repo: owner/example-repo
+    description: A user-verified text-generation GGUF model.
 ```
 
 See [`docs/adr/0014-model-catalog-yaml-overrides.md`](docs/adr/0014-model-catalog-yaml-overrides.md)
@@ -452,21 +469,48 @@ for the accepted architecture record.
 
 ### Runtime Matrix
 
-Initially supported runtimes (recorded in
+Supported runtimes (recorded in
 [`docs/adr/0010-runtime-matrix.md`](docs/adr/0010-runtime-matrix.md)):
 
 - `mlx-lm` — managed local MLX language-model server on Apple Silicon.
 - `mlx-vlm` — managed local MLX vision-language-model server on Apple Silicon.
+- `llama.cpp` — managed local text-generation GGUF server across the
+  platforms supported by the selected `llama-server` binary (issue #75).
 - `external` — any OpenAI-compatible endpoint.
 
-Managed cross-platform GGUF via `llama.cpp` is **not** initially supported;
-GGUF files are not launchable by any managed backend (file-qualified GGUF
-references raise `HFValidationError` in `mlx-vlm`), so curated defaults are
-MLX repo ids and GGUF repos are `external_only` for the model picker.
+The `llama.cpp` backend manages the server process (start, health check,
+logging, exit detection, teardown) but does **not** install or download the
+native binary: install an official llama.cpp release for your platform
+(<https://github.com/ggml-org/llama.cpp/releases>) so `llama-server` is on
+`PATH`, or point `NEWS_LLAMA_CPP_SERVER` at the installed executable. The
+binary is checked only at actual run launch; a missing binary fails before
+spawn with installation guidance. Supported model identities are HF
+`owner/repo/file.gguf` references (mapped to `--hf-repo`/`--hf-file`), bare
+HF repos (`--hf-repo`, llama.cpp applies its default quantization), and
+local `.gguf` paths (`--model`). Text-generation GGUF is supported;
+multimodal GGUF (separate `mmproj` file) is not.
+
+```bash
+NEWS_MODEL=qwythos-9b-4bit uv run news run
+NEWS_MODEL=/models/local-model.gguf uv run news run
+NEWS_MODEL=some-owner/some-gguf-repo NEWS_MODEL_BACKEND=llama.cpp uv run news run
+```
+
+Print the exact managed command without starting a server or downloading a
+model (the command is a preview only):
+
+```bash
+NEWS_MODEL=qwythos-9b-4bit NEWS_LLAMA_CPP_SERVER=/opt/llama/llama-server uv run news model-server-command
+```
+
+```text
+/opt/llama/llama-server --hf-repo huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF --hf-file Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-Q4_K.gguf --alias huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-Q4_K.gguf --parallel 4 --host 127.0.0.1 --port 8080 --n-predict <max-tokens-if-configured>
+```
 
 The default model's backend is inferred from the model reference unless
-`NEWS_MODEL_BACKEND` is set to `mlx-lm`, `mlx-vlm`, or `external` (any other
-value fails fast). To run the default model against an external
+`NEWS_MODEL_BACKEND` is set to `mlx-lm`, `mlx-vlm`, `external`, or
+`llama.cpp` (any other value fails fast; known catalog MLX/llama.cpp
+mismatches fail fast too). To run the default model against an external
 OpenAI-compatible endpoint — no managed server is started; the pipeline waits
 for and probes the endpoint:
 
@@ -536,8 +580,8 @@ limits, and story thresholds.
 
 ### Model Server Settings
 
-Model Server Settings control the local MLX/OpenAI-compatible server
-configuration:
+Model Server Settings control the local MLX/llama.cpp/OpenAI-compatible
+server configuration:
 
 - `NEWS_MODEL_BASE_URL`
 - `NEWS_MODEL_ARTICLE_SUMMARY_BASE_URL`
@@ -549,6 +593,9 @@ configuration:
 - `NEWS_MODEL_SERVER_PROMPT_CACHE_SIZE`
 - `NEWS_MODEL_SERVER_PROMPT_CACHE_BYTES`
 - `NEWS_MODEL_SERVER_MAX_TOKENS`
+- `NEWS_LLAMA_CPP_SERVER` — path or `PATH` name of the native `llama-server`
+  executable used by the managed `llama.cpp` backend (default
+  `llama-server`; advanced setting).
 
 The base URL also determines the printed server port. If you point a task model
 at a different base URL, the task needs its own matching server endpoint.
