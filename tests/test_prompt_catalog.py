@@ -10,7 +10,10 @@ from __future__ import annotations
 
 from dataclasses import replace
 from types import SimpleNamespace
+from unittest.mock import patch
 import unittest
+
+from langchain_core.messages import AIMessage
 
 from news_pipeline import pipeline, prompt_catalog, prompt_contracts, prompt_templates
 from news_pipeline.article_summarization import (
@@ -102,6 +105,54 @@ def _story_block() -> dict:
     }
 
 
+def _capture_independent_art_title_prompts() -> dict[str, dict[str, str]]:
+    """Run the production Image Art Direction and Title Generation calls with a
+    fake model and capture the exact system/user message bytes sent to it.
+
+    ``generate_image_art_brief`` makes two independent calls; the fake
+    invocation returns deterministic valid JSON for each task so both calls
+    finish on the normal parsing path instead of a fallback. Balanced defaults
+    are passed explicitly so local ``NEWS_PROMPT_*`` overrides cannot move the
+    golden baseline. Never calls a real model.
+    """
+    captured: dict[str, dict[str, str]] = {}
+    calls: list[str] = []
+
+    def fake_invoke(_llm, messages, **_kwargs):
+        task_name = str(_kwargs["task_name"])
+        if len(messages) != 2:
+            raise AssertionError(f"expected system/user pair, got {len(messages)} messages")
+        calls.append(task_name)
+        captured[task_name] = {
+            "system": str(messages[0].content),
+            "user": str(messages[1].content),
+        }
+        if task_name == "image art prompt generation":
+            return AIMessage(content='{"image_prompt":"A documentary scene"}')
+        if task_name == "title generation":
+            return AIMessage(content='{"overlay_headline":"Today in brief"}')
+        raise AssertionError(f"unexpected task: {task_name}")
+
+    with patch.object(pipeline, "build_chat_model", return_value=object()), patch.object(
+        pipeline, "invoke_with_retries", side_effect=fake_invoke
+    ):
+        result = pipeline.generate_image_art_brief(
+            "Final output body.",
+            "Sample report",
+            prompt_instructions=prompt_catalog.DEFAULT_PROMPT_INSTRUCTIONS,
+            prompt_templates=prompt_templates.DEFAULT_PROMPT_TEMPLATES,
+        )
+    if calls != ["image art prompt generation", "title generation"]:
+        raise AssertionError(f"unexpected task call order: {calls}")
+    if "error" in result:
+        raise AssertionError(f"golden prompt capture used a fallback: {result['error']}")
+    if not result["image_prompt"].startswith("A documentary scene"):
+        raise AssertionError("fake image response did not complete normal parsing")
+    if result["overlay_headline"] != "Today in brief":
+        raise AssertionError("fake title response did not complete normal parsing")
+    return captured
+
+
 class PromptCatalogTests(unittest.TestCase):
     def test_builtin_profiles_cover_all_tasks(self) -> None:
         self.assertEqual(len(prompt_catalog.PROMPT_PROFILES), 5)
@@ -144,6 +195,61 @@ class PromptCatalogTests(unittest.TestCase):
         prompt_text = "\n\n".join(str(message.content) for message in messages)
         self.assertIn(balanced, prompt_text)
         self.assertIn("Return only valid JSON", prompt_text)
+
+    def test_balanced_scale_screening_prompts_are_byte_identical(self) -> None:
+        # Golden byte-identity snapshot (ADR 0011): lock the exact bytes the
+        # LLM receives, including the empty-draft trailing space after
+        # "Story draft:" and the JSON contract layout, so whitespace drift
+        # fails here instead of changing model behavior.
+        messages = _global_scale_screening_prompt_messages([_story_block()])
+        self.assertEqual(
+            str(messages[0].content),
+            """You are a strict but conservative scale-screening editor for a global daily
+news newsletter.
+
+Your job is to label each drafted story by substantive news scale. The labels
+are used to avoid obvious small local stories, not to separate good stories
+from great stories.
+
+Scale labels:
+- obviously_large_scale: the story has clear broad stakes, such as effects across
+  multiple countries, cross-border conflict, major civil war or mass displacement,
+  oil, gas, food, semiconductors, shipping lanes, critical minerals, supply chains,
+  sanctions, currency or financial markets, global public health, major migration,
+  multinational regulation, national politics, national economic effects, major
+  national legal effects, or major geopolitical/security implications.
+- obviously_small_scale: the story is plainly a routine single-country domestic
+  matter, local crime, local accident, city/province dispute, provincial or municipal
+  politics, or ordinary single-company item without broader market, supply-chain,
+  diplomatic, humanitarian, legal, national political, or security effects.
+- not_obvious: the scale is borderline or the supplied evidence does not justify an
+  obvious large/small conclusion.
+
+Be conservative: mark obviously_small_scale only when the supplied story draft and
+article summaries make the limited scale plain. Do not invent broader stakes, but do
+not mark national elections, interstate conflicts, civil wars, landmark court cases,
+nationally important US state races, major public-health events, or stories with clear
+global market/supply-chain/security implications as obviously small.
+
+Return only valid JSON as an array of objects:
+[{
+  "story_key":"...",
+  "scale":"obviously_large_scale|not_obvious|obviously_small_scale",
+  "scale_reason":"short scale reason"
+}]""",
+        )
+        self.assertEqual(
+            str(messages[1].content),
+            "Screen these candidate stories for global-news scale.\n\n"
+            "Story key: story-1\n"
+            "Story title: Storm damage\n"
+            # The rendered draft is empty, so the line keeps its trailing space
+            # ("Story draft: "); split across literals so the source line
+            # itself carries no trailing whitespace (git diff --check).
+            "Story draft:" " \n"
+            "Article summaries:\n"
+            "- Officials reported storm damage.",
+        )
 
     def test_balanced_article_summary_prompt_is_byte_identical(self) -> None:
         # Golden byte-identity snapshot: the rendered prompts must stay
@@ -259,6 +365,58 @@ Citation precedence: Cite this source only for facts it directly supports.
         Headline: <custom story headline>
         Main story: <story paragraph with sentence-end source markers>
         Contradictions: <short contradiction evidence paragraph with sentence-end source markers>""",
+        )
+
+    def test_balanced_image_art_direction_prompts_are_byte_identical(self) -> None:
+        # Golden byte-identity snapshot (ADR 0011): capture the exact
+        # system/user messages the production Image Art Direction call sends
+        # (image-only JSON contract, no title guidance) and lock their bytes.
+        captured = _capture_independent_art_title_prompts()
+        self.assertEqual(
+            set(captured),
+            {"image art prompt generation", "title generation"},
+        )
+        self.assertEqual(
+            captured["image art prompt generation"]["system"],
+            "You are preparing art direction for a text-to-image news illustration. "
+            "Return ONLY valid JSON with the key image_prompt. The image_prompt is "
+            "for FLUX and must request a realistic documentary photograph with "
+            "absolutely no text or typography in the image.",
+        )
+        self.assertEqual(
+            captured["image art prompt generation"]["user"],
+            "Use the final news output below to create the text-free image prompt.\n"
+            "\n"
+            "Final output:\n"
+            "Final output body.",
+        )
+
+    def test_balanced_title_generation_prompts_are_byte_identical(self) -> None:
+        # Golden byte-identity snapshot (ADR 0011): capture the exact
+        # system/user messages the production Title Generation call sends
+        # (title-only JSON contract, overlay protocol, dynamic report inputs)
+        # and lock their bytes.
+        captured = _capture_independent_art_title_prompts()
+        self.assertEqual(
+            set(captured),
+            {"image art prompt generation", "title generation"},
+        )
+        self.assertEqual(
+            captured["title generation"]["system"],
+            "You are writing the overlay headline for a news report. "
+            "Return ONLY valid JSON with the key overlay_headline. "
+            "Keep overlay_headline punchy, factual, and <= 11 words. "
+            "The overlay_headline is readable text that will be rendered later by "
+            "code, not by the image model.",
+        )
+        self.assertEqual(
+            captured["title generation"]["user"],
+            "Use the final news output below to create the overlay headline.\n"
+            "\n"
+            "Report title: Sample report\n"
+            "\n"
+            "Final output:\n"
+            "Final output body.",
         )
 
     def test_get_unknown_profile_error_lists_available(self) -> None:
