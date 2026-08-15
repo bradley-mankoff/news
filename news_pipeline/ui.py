@@ -244,7 +244,7 @@ def _runtime_snapshot(
                 "backend": config.model_backend,
                 "base_url": config.model_base_url,
                 "concurrency": config.model_concurrency,
-                "concurrency_source": "derived_from_model_stage_concurrency",
+                "concurrency_source": "derived_from_stage_concurrency",
                 "article_summary_concurrency": config.article_summary_concurrency,
                 "story_synthesis_concurrency": config.story_synthesis_concurrency,
                 "server_command": config.model_server_command,

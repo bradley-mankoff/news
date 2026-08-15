@@ -60,7 +60,10 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
     def test_preset_base_env_and_overrides_have_documented_precedence(self) -> None:
         resolution = resolve_runtime_config(
             RuntimeConfigRequest(
-                base_env={"NEWS_MODEL": GEMMA_4_12B_IT_4BIT_MODEL_ALIAS},
+                base_env={
+                    "NEWS_MODEL": GEMMA_4_12B_IT_4BIT_MODEL_ALIAS,
+                    "NEWS_MODEL_BACKEND": "mlx-vlm",
+                },
                 preset_id="dev",
                 overrides={"NEWS_SOURCE_SCOPE": "peripheral"},
                 materialize_outputs=False,
@@ -109,18 +112,15 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
              "story_scale_screening", "title_generation", "image_art_direction"},
         )
 
-    def test_codex_tiny_model_uses_mlx_lm_backend_and_server(self) -> None:
-        references = (
-            CODEX_TEST_MODEL_ALIAS,
-            CODEX_TEST_MODEL_NAME,
-            f"https://huggingface.co/{CODEX_TEST_MODEL_NAME}",
-            f"https://hf.co/{CODEX_TEST_MODEL_NAME}",
-        )
-        for reference in references:
+    def test_codex_tiny_model_uses_explicit_mlx_lm_backend_and_server(self) -> None:
+        # The tiny model's catalog backend is mlx-lm, which differs from the
+        # fixed default; it must be paired with an explicit backend (issue
+        # #169).
+        for reference in (CODEX_TEST_MODEL_ALIAS, CODEX_TEST_MODEL_NAME):
             with self.subTest(reference=reference):
                 config = load_runtime_config(
                     environ={},
-                    overrides={"NEWS_MODEL": reference},
+                    overrides={"NEWS_MODEL": reference, "NEWS_MODEL_BACKEND": "mlx-lm"},
                     materialize_outputs=False,
                     run_started_at=datetime(2026, 6, 14, 12, 0, 0),
                 )
@@ -128,8 +128,6 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
                 self.assertEqual(config.model_backend, "mlx-lm")
                 self.assertEqual(config.model_name, CODEX_TEST_MODEL_NAME)
                 self.assertIn("python -m mlx_lm server", config.model_server_command)
-                self.assertNotIn("python -m mlx_vlm.server", config.model_server_command)
-
                 self.assertNotIn("python -m mlx_vlm.server", config.model_server_command)
 
     def test_known_mismatch_without_explicit_backend_fails_fast(self) -> None:
@@ -335,7 +333,7 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
     def test_custom_llama_cpp_binary_appears_in_command(self) -> None:
         config = load_runtime_config(
             environ={"NEWS_LLAMA_CPP_SERVER": "/opt/llama/llama-server"},
-            overrides={"NEWS_MODEL": "qwythos-9b-4bit"},
+            overrides={"NEWS_MODEL": "qwythos-9b-4bit", "NEWS_MODEL_BACKEND": "llama.cpp"},
             materialize_outputs=False,
         )
         self.assertTrue(
@@ -349,7 +347,7 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
     def test_blank_llama_cpp_binary_falls_back_to_default(self) -> None:
         config = load_runtime_config(
             environ={"NEWS_LLAMA_CPP_SERVER": "   "},
-            overrides={"NEWS_MODEL": "qwythos-9b-4bit"},
+            overrides={"NEWS_MODEL": "qwythos-9b-4bit", "NEWS_MODEL_BACKEND": "llama.cpp"},
             materialize_outputs=False,
         )
         self.assertTrue(config.model_server_command.startswith("llama-server "))
@@ -370,7 +368,7 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
         with patch.object(model_catalog, "_CATALOG_SNAPSHOT", custom):
             config = load_runtime_config(
                 environ={},
-                overrides={"NEWS_MODEL": "custom-managed"},
+                overrides={"NEWS_MODEL": "custom-managed", "NEWS_MODEL_BACKEND": "mlx-lm"},
                 materialize_outputs=False,
                 run_started_at=datetime(2026, 6, 14, 12, 0, 0),
             )
@@ -396,7 +394,7 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
         with patch.object(model_catalog, "_CATALOG_SNAPSHOT", custom):
             config = load_runtime_config(
                 environ={"NEWS_MODEL_BASE_URL": "https://api.example.com/v1"},
-                overrides={"NEWS_MODEL": "custom-external"},
+                overrides={"NEWS_MODEL": "custom-external", "NEWS_MODEL_BACKEND": "external"},
                 materialize_outputs=False,
                 run_started_at=datetime(2026, 6, 14, 12, 0, 0),
             )
@@ -426,7 +424,7 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
             ):
                 load_runtime_config(
                     environ={},
-                    overrides={"NEWS_MODEL": "custom-external"},
+                    overrides={"NEWS_MODEL": "custom-external", "NEWS_MODEL_BACKEND": "external"},
                     materialize_outputs=False,
                 )
 
@@ -614,7 +612,10 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
     def test_context_env_drives_runtime_config_derivations(self) -> None:
         config = load_runtime_config(
             environ={"NEWS_TOTAL_ARTICLE_SUMMARY_CAP": "55"},
-            overrides={"NEWS_MODEL": "gemma-e2b-tiny"},
+            overrides={
+                "NEWS_MODEL": "gemma-e2b-tiny",
+                "NEWS_MODEL_BACKEND": "mlx-lm",
+            },
             materialize_outputs=False,
             run_started_at=datetime(2026, 6, 14, 12, 0, 0),
         )
@@ -1296,6 +1297,7 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
             environ={},
             overrides={
                 "NEWS_MODEL": CODEX_TEST_MODEL_ALIAS,
+                "NEWS_MODEL_BACKEND": "mlx-lm",
                 "NEWS_STORY_SCALE_SCREENING_ENABLED": "0",
                 "NEWS_MAX_STORIES": "7",
                 "NEWS_STORY_SELECTION_OVERLAP_THRESHOLD": "0.4",
@@ -1318,6 +1320,7 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
             environ={},
             overrides={
                 "NEWS_MODEL": CODEX_TEST_MODEL_ALIAS,
+                "NEWS_MODEL_BACKEND": "mlx-lm",
                 "NEWS_MODEL_ARTICLE_SUMMARY": GEMMA_4_12B_IT_4BIT_MODEL_ALIAS,
                 "NEWS_MODEL_ARTICLE_SUMMARY_BASE_URL": "http://127.0.0.1:8090/v1",
                 "NEWS_MODEL_STORY_DRAFTING": GEMMA_4_12B_IT_4BIT_MODEL_ALIAS,
@@ -1402,6 +1405,7 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
             environ={},
             overrides={
                 "NEWS_MODEL": CODEX_TEST_MODEL_ALIAS,
+                "NEWS_MODEL_BACKEND": "mlx-lm",
                 "NEWS_MODEL_STORY_SCALE_SCREENING": GEMMA_4_12B_IT_4BIT_MODEL_ALIAS,
                 "NEWS_MODEL_STORY_SCALE_SCREENING_BASE_URL": "http://127.0.0.1:8090/v1",
                 "NEWS_MODEL_TITLE_GENERATION": GEMMA_4_12B_IT_4BIT_MODEL_ALIAS,
@@ -1491,6 +1495,7 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
                 environ={},
                 overrides={
                     "NEWS_MODEL": CODEX_TEST_MODEL_ALIAS,
+                    "NEWS_MODEL_BACKEND": "mlx-lm",
                     "NEWS_MODEL_ARTICLE_SUMMARY": GEMMA_4_12B_IT_4BIT_MODEL_ALIAS,
                 },
                 materialize_outputs=False,
@@ -1505,6 +1510,7 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
                 environ={},
                 overrides={
                     "NEWS_MODEL": CODEX_TEST_MODEL_ALIAS,
+                    "NEWS_MODEL_BACKEND": "mlx-lm",
                     "NEWS_MODEL_ARTICLE_SUMMARY": GEMMA_4_12B_IT_4BIT_MODEL_ALIAS,
                     "NEWS_MODEL_ARTICLE_SUMMARY_BASE_URL": "http://127.0.0.1:8080/v1/",
                 },
@@ -1520,6 +1526,7 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
                 environ={},
                 overrides={
                     "NEWS_MODEL": CODEX_TEST_MODEL_ALIAS,
+                    "NEWS_MODEL_BACKEND": "mlx-lm",
                     "NEWS_MODEL_ARTICLE_SUMMARY": GEMMA_4_12B_IT_4BIT_MODEL_ALIAS,
                     "NEWS_MODEL_ARTICLE_SUMMARY_BASE_URL": "http://localhost:8080/v1",
                 },
@@ -1533,6 +1540,7 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
                 overrides={
                     "NEWS_MODEL_BASE_URL": "http://localhost:8080/v1",
                     "NEWS_MODEL": CODEX_TEST_MODEL_ALIAS,
+                    "NEWS_MODEL_BACKEND": "mlx-lm",
                     "NEWS_MODEL_ARTICLE_SUMMARY": GEMMA_4_12B_IT_4BIT_MODEL_ALIAS,
                     "NEWS_MODEL_ARTICLE_SUMMARY_BASE_URL": "http://127.0.0.1:8080/v1",
                 },
@@ -1568,6 +1576,7 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
             environ={},
             overrides={
                 "NEWS_MODEL": CODEX_TEST_MODEL_ALIAS,
+                "NEWS_MODEL_BACKEND": "mlx-lm",
                 "NEWS_MODEL_ARTICLE_SUMMARY": CODEX_TEST_MODEL_ALIAS,
             },
             materialize_outputs=False,
@@ -1891,7 +1900,11 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
         self.assertFalse(snapshot["smtp_password_set"])
 
     def test_ui_schema_surfaces_delivery_mode_knob(self) -> None:
-        with patch.dict(os.environ, {"NEWS_MODEL": CODEX_TEST_MODEL_ALIAS}, clear=True):
+        with patch.dict(
+            os.environ,
+            {"NEWS_MODEL": CODEX_TEST_MODEL_ALIAS, "NEWS_MODEL_BACKEND": "mlx-lm"},
+            clear=True,
+        ):
             schema = schema_payload()
         knobs = {knob["env"]: knob for knob in schema["knobs"]}
         self.assertIn("NEWS_DELIVERY_MODE", knobs)
@@ -1903,7 +1916,11 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
         )
 
 
-        with patch.dict(os.environ, {"NEWS_MODEL": CODEX_TEST_MODEL_ALIAS}, clear=True):
+        with patch.dict(
+            os.environ,
+            {"NEWS_MODEL": CODEX_TEST_MODEL_ALIAS, "NEWS_MODEL_BACKEND": "mlx-lm"},
+            clear=True,
+        ):
             schema = schema_payload()
 
         groups = {knob["group"] for knob in schema["knobs"]}
@@ -2022,6 +2039,7 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
                 os.environ,
                 {
                     "NEWS_MODEL": CODEX_TEST_MODEL_ALIAS,
+                    "NEWS_MODEL_BACKEND": "mlx-lm",
                     "NEWS_MODEL_STORY_DRAFTING": "mlx-community/example-model",
                     "NEWS_MODEL_STORY_DRAFTING_BASE_URL": "http://127.0.0.1:8090/v1",
                     "NEWS_MODEL_STORY_DRAFTING_TUNING_PRESET": "concise-story-drafting",
@@ -2044,6 +2062,7 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
                 os.environ,
                 {
                     "NEWS_MODEL": CODEX_TEST_MODEL_ALIAS,
+                    "NEWS_MODEL_BACKEND": "mlx-lm",
                     "NEWS_MODEL_STORY_DRAFTING": "mlx-community/example-model",
                     "NEWS_MODEL_STORY_DRAFTING_TUNING_PRESET": "wrong-task",
                 },
@@ -2059,6 +2078,7 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
                 os.environ,
                 {
                     "NEWS_MODEL": CODEX_TEST_MODEL_ALIAS,
+                    "NEWS_MODEL_BACKEND": "mlx-lm",
                     "NEWS_MODEL_TITLE_GENERATION": "mlx-community/example-model",
                     "NEWS_MODEL_TITLE_GENERATION_TUNING_PRESET": "wrong-task",
                 },
@@ -2074,6 +2094,7 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
                 os.environ,
                 {
                     "NEWS_MODEL": CODEX_TEST_MODEL_ALIAS,
+                    "NEWS_MODEL_BACKEND": "mlx-lm",
                     "NEWS_MODEL_TUNING_PRESET": "blank-default",
                 },
                 clear=True,
@@ -2133,6 +2154,7 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
                 os.environ,
                 {
                     "NEWS_MODEL": CODEX_TEST_MODEL_ALIAS,
+                    "NEWS_MODEL_BACKEND": "mlx-lm",
                     "NEWS_MODEL_STORY_SCALE_SCREENING": "mlx-community/example-model",
                     "NEWS_MODEL_STORY_SCALE_SCREENING_BASE_URL": "http://127.0.0.1:8090/v1",
                     "NEWS_MODEL_STORY_SCALE_SCREENING_TUNING_PRESET": "quick-scale-screen",
@@ -2309,7 +2331,11 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
         }
         config_one = load_runtime_config(
             materialize_outputs=False,
-            environ={**shared_env, "NEWS_MODEL": CODEX_TEST_MODEL_ALIAS},
+            environ={
+                **shared_env,
+                "NEWS_MODEL": CODEX_TEST_MODEL_ALIAS,
+                "NEWS_MODEL_BACKEND": "mlx-lm",
+            },
         )
         config_two = load_runtime_config(
             materialize_outputs=False,

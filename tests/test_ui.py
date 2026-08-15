@@ -2731,7 +2731,11 @@ assert.equal(hint.classList.contains("hidden"), false);
         # model/base-URL combination instead of showing a clean command.
         # build_command re-raises the config ValueError, which the /api/preview
         # route serializes via _send_error_json for the browser.
-        with patch.dict(os.environ, {"NEWS_MODEL": CODEX_TEST_MODEL_ALIAS}, clear=True):
+        with patch.dict(
+            os.environ,
+            {"NEWS_MODEL": CODEX_TEST_MODEL_ALIAS, "NEWS_MODEL_BACKEND": "mlx-lm"},
+            clear=True,
+        ):
             with self.assertRaisesRegex(
                 ValueError,
                 r"Managed model server cannot serve multiple different models "
@@ -2749,7 +2753,11 @@ assert.equal(hint.classList.contains("hidden"), false);
     def test_preview_rejects_different_task_model_on_localhost_base_url_alias(self) -> None:
         # Regression for #134: an alias spelling of the managed base URL must
         # still raise in the preview instead of showing a clean command.
-        with patch.dict(os.environ, {"NEWS_MODEL": CODEX_TEST_MODEL_ALIAS}, clear=True):
+        with patch.dict(
+            os.environ,
+            {"NEWS_MODEL": CODEX_TEST_MODEL_ALIAS, "NEWS_MODEL_BACKEND": "mlx-lm"},
+            clear=True,
+        ):
             with self.assertRaisesRegex(
                 ValueError,
                 r"Managed model server cannot serve multiple different models "
