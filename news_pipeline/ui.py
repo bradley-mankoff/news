@@ -1604,7 +1604,6 @@ class NewsUIHandler(BaseHTTPRequestHandler):
                         query, pipeline_tag=pipeline_tag, limit=limit
                     )
                 except (OSError, ValueError, ImportError) as exc:
-                    models = []
                     self._send_json({"query": query, "models": [], "error": str(exc)})
                 else:
                     self._send_json({"query": query, "models": models, "error": None})
