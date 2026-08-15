@@ -2987,6 +2987,8 @@ const STATIC_IDS = [
   "saveModelTuningPresetBtn", "deleteModelTuningPresetBtn",
   "actionSelect", "sourceOptions"
 ];
+const selectIds = meta => [meta.modelSelectId, meta.presetSelectId];
+const buttonIds = meta => [meta.saveButtonId, meta.renameButtonId, meta.deleteButtonId];
 let elements = {};
 function makeElements(omitTuningButtonId) {
   const map = {};
@@ -2994,9 +2996,9 @@ function makeElements(omitTuningButtonId) {
   for (const meta of Object.values(TASK_CONFIG)) {
     map[meta.modelSelectId] = new FakeElement(meta.modelSelectId);
     map[meta.presetSelectId] = new FakeElement(meta.presetSelectId);
-    if (meta.saveButtonId !== omitTuningButtonId) map[meta.saveButtonId] = new FakeElement(meta.saveButtonId);
-    if (meta.renameButtonId !== omitTuningButtonId) map[meta.renameButtonId] = new FakeElement(meta.renameButtonId);
-    if (meta.deleteButtonId !== omitTuningButtonId) map[meta.deleteButtonId] = new FakeElement(meta.deleteButtonId);
+    for (const id of buttonIds(meta)) {
+      if (id !== omitTuningButtonId) map[id] = new FakeElement(id);
+    }
   }
   elements = map;
 }
@@ -3027,9 +3029,6 @@ function loadRecipients() {}
                 "    function applySelectedPresetFromState",
             )
             + r"""
-const selectIds = meta => [meta.modelSelectId, meta.presetSelectId];
-const buttonIds = meta => [meta.saveButtonId, meta.renameButtonId, meta.deleteButtonId];
-
 // ---- Complete control tree ------------------------------------------------
 makeElements(null);
 wireEvents();
