@@ -372,6 +372,50 @@ class CliTests(unittest.TestCase):
         self.assertIn("--query", payload["error"])
         self.assertIn("--query", stderr)
 
+    def test_models_search_query_value_named_json_keeps_human_output(self) -> None:
+        fake_results = [
+            {
+                "id": "owner/one",
+                "runtime_fit": {
+                    "status": "managed_mlx_lm",
+                    "reason": "MLX language model",
+                },
+            }
+        ]
+        with patch(
+            "news_pipeline.cli.search_huggingface_models", return_value=fake_results
+        ) as search:
+            code, stdout, stderr = self._invoke(
+                ["models", "search", "--query", "--json"]
+            )
+
+        self.assertEqual(code, 0)
+        self.assertEqual(stdout, "owner/one [managed_mlx_lm] MLX language model\n")
+        self.assertEqual(stderr, "")
+        search.assert_called_once_with("--json", pipeline_tag=None, limit=20)
+
+    def test_models_search_json_before_missing_query_is_reported_as_json(self) -> None:
+        with patch("news_pipeline.cli.search_huggingface_models") as search:
+            code, stdout, stderr = self._invoke(
+                ["models", "search", "--json", "--query"]
+            )
+
+        self.assertEqual(code, 2)
+        payload = json.loads(stdout)
+        self.assertEqual(payload["query"], "")
+        self.assertEqual(payload["models"], [])
+        self.assertIn("--query", payload["error"])
+        self.assertIn("--query", stderr)
+        search.assert_not_called()
+
+    def test_models_search_parser_defects_are_not_normalized_as_lookup_errors(self) -> None:
+        with patch(
+            "news_pipeline.cli._parse_models_search_args",
+            side_effect=TypeError("parser defect"),
+        ):
+            with self.assertRaises(TypeError):
+                self._invoke(["models", "search", "--query", "qwythos", "--json"])
+
     def test_models_search_success(self) -> None:
         fake_results = [
             {
@@ -406,44 +450,47 @@ class CliTests(unittest.TestCase):
         search.assert_called_once_with("qwythos", pipeline_tag=None, limit=50)
 
     def test_models_search_rejects_bad_task_and_limit(self) -> None:
-        code, stdout, stderr = self._invoke(
-            ["models", "search", "--query", "qwythos", "--task", "bogus"]
-        )
+        with patch("news_pipeline.cli.search_huggingface_models") as search:
+            code, stdout, stderr = self._invoke(
+                ["models", "search", "--query", "qwythos", "--task", "bogus"]
+            )
 
-        self.assertEqual(code, 2)
-        self.assertEqual(stdout, "")
-        self.assertIn("Unknown search task 'bogus'", stderr)
-        self.assertIn("text-generation", stderr)
+            self.assertEqual(code, 2)
+            self.assertEqual(stdout, "")
+            self.assertIn("Unknown search task 'bogus'", stderr)
+            self.assertIn("text-generation", stderr)
 
-        code, stdout, stderr = self._invoke(
-            ["models", "search", "--query", "qwythos", "--task", "bogus", "--json"]
-        )
+            code, stdout, stderr = self._invoke(
+                ["models", "search", "--json", "--query", "qwythos", "--task", "bogus"]
+            )
 
-        self.assertEqual(code, 2)
-        payload = json.loads(stdout)
-        self.assertEqual(payload["query"], "qwythos")
-        self.assertEqual(payload["models"], [])
-        self.assertIn("Unknown search task 'bogus'", payload["error"])
-        self.assertIn("Unknown search task 'bogus'", stderr)
+            self.assertEqual(code, 2)
+            payload = json.loads(stdout)
+            self.assertEqual(payload["query"], "qwythos")
+            self.assertEqual(payload["models"], [])
+            self.assertIn("Unknown search task 'bogus'", payload["error"])
+            self.assertIn("Unknown search task 'bogus'", stderr)
 
-        code, stdout, stderr = self._invoke(
-            ["models", "search", "--query", "qwythos", "--limit", "lots"]
-        )
+            code, stdout, stderr = self._invoke(
+                ["models", "search", "--query", "qwythos", "--limit", "lots"]
+            )
 
-        self.assertEqual(code, 2)
-        self.assertEqual(stdout, "")
-        self.assertIn("--limit must be an integer", stderr)
+            self.assertEqual(code, 2)
+            self.assertEqual(stdout, "")
+            self.assertIn("--limit must be an integer", stderr)
 
-        code, stdout, stderr = self._invoke(
-            ["models", "search", "--query", "qwythos", "--limit", "lots", "--json"]
-        )
+            code, stdout, stderr = self._invoke(
+                ["models", "search", "--query", "qwythos", "--limit", "lots", "--json"]
+            )
 
-        self.assertEqual(code, 2)
-        payload = json.loads(stdout)
-        self.assertEqual(payload["query"], "qwythos")
-        self.assertEqual(payload["models"], [])
-        self.assertIn("--limit must be an integer", payload["error"])
-        self.assertIn("--limit must be an integer", stderr)
+            self.assertEqual(code, 2)
+            payload = json.loads(stdout)
+            self.assertEqual(payload["query"], "qwythos")
+            self.assertEqual(payload["models"], [])
+            self.assertIn("--limit must be an integer", payload["error"])
+            self.assertIn("--limit must be an integer", stderr)
+
+            search.assert_not_called()
 
     def test_models_search_error_exit_code(self) -> None:
         with patch(
