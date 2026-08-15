@@ -34,6 +34,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Mapping
 
+from .llama_cpp_adapter import parse_llama_cpp_model_reference
+
 logger = logging.getLogger(__name__)
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
@@ -41,7 +43,7 @@ MODEL_CATALOG_PATH = ROOT_DIR / "config" / "model_catalog.yaml"
 MODEL_CATALOG_YAML_ENV_VAR = "NEWS_MODEL_CATALOG_YAML"
 # Closed set of backends a YAML entry may declare (drift-guard:
 # test_model_catalog.py pins this to config.SUPPORTED_MODEL_BACKENDS).
-CATALOG_MODEL_BACKENDS = ("mlx-lm", "mlx-vlm", "external")
+CATALOG_MODEL_BACKENDS = ("mlx-lm", "mlx-vlm", "external", "llama.cpp")
 # Aliases must be safe for environment/CLI use: lowercase letters, digits,
 # ".", "_", and "-", beginning with a letter or digit.
 _CATALOG_ALIAS_RE = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
@@ -127,11 +129,12 @@ class CatalogModel:
     task_notes: dict[str, str]
 
 
-# Exactly 2 curated entries (gemma-4-12b-it-4bit / gemma-e2b-tiny), aligned
-# with config.py GEMMA_4_12B_IT_4BIT_* and CODEX_TEST_* constants and
-# MODEL_ALIASES. The Qwythos GGUF pair is NOT curated: mlx-vlm cannot launch
-# file-qualified GGUF refs (issue #124). Adding more requires runtime
-# verification on Apple Silicon - out of scope for this issue.
+# Curated entries: gemma-4-12b-it-4bit / gemma-e2b-tiny (MLX) and the
+# qwythos-9b-* GGUF pair (llama.cpp), aligned with config.py constants and
+# MODEL_ALIASES. MLX entries keep reference == hf_repo (issue #92); llama.cpp
+# entries use a file-qualified reference (owner/repo/file.gguf) with a bare
+# hf_repo page id. Adding more requires runtime verification on Apple Silicon
+# or an operator-installed llama-server binary - out of scope for this issue.
 BUILTIN_CATALOG_MODELS: dict[str, CatalogModel] = {
     "gemma-4-12b-it-4bit": CatalogModel(
         alias="gemma-4-12b-it-4bit",
@@ -170,6 +173,38 @@ BUILTIN_CATALOG_MODELS: dict[str, CatalogModel] = {
         task_notes={
             "speed": MODEL_RECOMMENDATION_TASK_NOTES["speed"],
         },
+    ),
+    "qwythos-9b-4bit": CatalogModel(
+        alias="qwythos-9b-4bit",
+        reference=(
+            "huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF/"
+            "Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-Q4_K.gguf"
+        ),
+        name="Qwythos 9B (Q4_K GGUF)",
+        backend="llama.cpp",
+        hf_repo="huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF",
+        context_length=None,
+        description=(
+            "Legacy 9B GGUF model (Q4_K), served by the managed llama.cpp "
+            "backend with an operator-installed llama-server binary (issue #75)."
+        ),
+        task_notes={},
+    ),
+    "qwythos-9b-8bit": CatalogModel(
+        alias="qwythos-9b-8bit",
+        reference=(
+            "huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF/"
+            "Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-Q8_0.gguf"
+        ),
+        name="Qwythos 9B (Q8_0 GGUF)",
+        backend="llama.cpp",
+        hf_repo="huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF",
+        context_length=None,
+        description=(
+            "Legacy 9B GGUF model (Q8_0), served by the managed llama.cpp "
+            "backend with an operator-installed llama-server binary (issue #75)."
+        ),
+        task_notes={},
     ),
 }
 
@@ -255,8 +290,8 @@ def _validate_catalog_repo_id(value: Any, alias: str, path: Path, field: str) ->
     if ".gguf" in repo_id.lower():
         raise ValueError(
             f"{path} model {alias!r} {field} {repo_id!r} is a file-qualified GGUF "
-            "reference; managed backends cannot launch GGUF files (ADR 0010). "
-            "Use an owner/repo id with an MLX distribution instead."
+            "reference; only the llama.cpp backend may name a .gguf file, and it "
+            "belongs in the reference field (owner/repo/file.gguf), never here."
         )
     if repo_id.count("/") != 1 or repo_id.startswith("/") or repo_id.endswith("/"):
         raise ValueError(
@@ -303,6 +338,33 @@ def _validate_catalog_task_notes(value: Any, alias: str, path: Path) -> dict[str
             )
         notes[task] = note.strip()
     return notes
+
+
+def _validate_catalog_gguf_reference(value: Any, alias: str, path: Path, field: str) -> str:
+    """Validate a llama.cpp file-qualified reference (owner/repo/file.gguf).
+
+    Delegates segment grammar (traversal, separators, control characters) to
+    the stdlib-only adapter so catalog identity and launch parsing can never
+    disagree; the reference must be the exact file-qualified form."""
+    if not isinstance(value, str):
+        raise ValueError(
+            f"{path} model {alias!r} {field} must be a string."
+        )
+    reference = value.strip()
+    if not reference or reference != value:
+        raise ValueError(
+            f"{path} model {alias!r} {field} must be a non-empty, trimmed string."
+        )
+    try:
+        source = parse_llama_cpp_model_reference(reference)
+    except ValueError as error:
+        raise ValueError(f"{path} model {alias!r} {field}: {error}") from error
+    if source.kind != "hf_file":
+        raise ValueError(
+            f"{path} model {alias!r} {field} must be a file-qualified "
+            "owner/repo/file.gguf reference for the llama.cpp backend."
+        )
+    return reference
 
 
 def _validate_catalog_entry(
@@ -365,19 +427,31 @@ def _validate_catalog_entry(
         raise ValueError(
             f"{path} new model alias {alias!r} must provide: {', '.join(missing)}."
         )
-    reference = _validate_catalog_repo_id(raw_entry["reference"], alias, path, "reference")
-    hf_repo = _validate_catalog_repo_id(raw_entry["hf_repo"], alias, path, "hf_repo")
-    if reference != hf_repo:
-        raise ValueError(
-            f"{path} model {alias!r} reference must equal hf_repo (issue #92 "
-            f"drift guard); got reference={reference!r}, hf_repo={hf_repo!r}."
-        )
     backend = str(raw_entry["backend"]).strip().lower()
     if backend not in CATALOG_MODEL_BACKENDS:
         raise ValueError(
             f"{path} model {alias!r} backend {backend!r} is not supported. "
             f"Valid backends: {', '.join(CATALOG_MODEL_BACKENDS)}."
         )
+    if backend == "llama.cpp":
+        hf_repo = _validate_catalog_repo_id(raw_entry["hf_repo"], alias, path, "hf_repo")
+        reference = _validate_catalog_gguf_reference(
+            raw_entry["reference"], alias, path, "reference"
+        )
+        if reference.rsplit("/", 1)[0] != hf_repo:
+            raise ValueError(
+                f"{path} model {alias!r} reference must be a file-qualified "
+                f".gguf reference under hf_repo; got reference={reference!r}, "
+                f"hf_repo={hf_repo!r}."
+            )
+    else:
+        reference = _validate_catalog_repo_id(raw_entry["reference"], alias, path, "reference")
+        hf_repo = _validate_catalog_repo_id(raw_entry["hf_repo"], alias, path, "hf_repo")
+        if reference != hf_repo:
+            raise ValueError(
+                f"{path} model {alias!r} reference must equal hf_repo (issue #92 "
+                f"drift guard); got reference={reference!r}, hf_repo={hf_repo!r}."
+            )
     name = str(raw_entry["name"]).strip()
     description = str(raw_entry["description"]).strip()
     if not name:
@@ -528,11 +602,13 @@ def recommend_models(task: str) -> list[dict[str, Any]]:
 
 RUNTIME_FIT_MANAGED_MLX_LM = "managed_mlx_lm"
 RUNTIME_FIT_MANAGED_MLX_VLM = "managed_mlx_vlm"
+RUNTIME_FIT_MANAGED_LLAMA_CPP = "managed_llama_cpp"
 RUNTIME_FIT_EXTERNAL_ONLY = "external_only"
 
 RUNTIME_FIT_LABELS: dict[str, str] = {
     RUNTIME_FIT_MANAGED_MLX_LM: "Managed mlx-lm",
     RUNTIME_FIT_MANAGED_MLX_VLM: "Managed mlx-vlm",
+    RUNTIME_FIT_MANAGED_LLAMA_CPP: "Managed llama.cpp",
     RUNTIME_FIT_EXTERNAL_ONLY: "External only",
 }
 
@@ -606,6 +682,12 @@ def runtime_fit_for_hf_model(info: Mapping[str, Any]) -> dict[str, str]:
                 else:
                     reason = f"Catalog entry declares managed {model.backend}; runtime fit is advisory."
                 return {"status": status, "reason": reason}
+            if model.backend == "llama.cpp":
+                if is_builtin:
+                    reason = "Curated GGUF model, launchable by the managed llama.cpp server."
+                else:
+                    reason = "Catalog entry declares managed llama.cpp; runtime fit is advisory."
+                return {"status": RUNTIME_FIT_MANAGED_LLAMA_CPP, "reason": reason}
             # Catalog loading allowlists backends; fail closed if a test or
             # future caller constructs an invalid CatalogModel directly.
             return {
@@ -614,11 +696,21 @@ def runtime_fit_for_hf_model(info: Mapping[str, Any]) -> dict[str, str]:
             }
 
     if "gguf" in tags:
+        if "image-text-to-text" in tags or pipeline_tag == "image-text-to-text":
+            return {
+                "status": RUNTIME_FIT_EXTERNAL_ONLY,
+                "reason": (
+                    "Multimodal GGUF models need a separate mmproj file and are "
+                    "not managed by this release; use an external OpenAI-compatible "
+                    "endpoint (NEWS_MODEL_BACKEND=external)."
+                ),
+            }
         return {
-            "status": RUNTIME_FIT_EXTERNAL_ONLY,
+            "status": RUNTIME_FIT_MANAGED_LLAMA_CPP,
             "reason": (
-                "Managed MLX servers cannot launch GGUF files; use an external "
-                "OpenAI-compatible endpoint (NEWS_MODEL_BACKEND=external)."
+                "Text-generation GGUF model; launchable by the managed llama.cpp "
+                "server when a llama-server binary is installed "
+                "(NEWS_LLAMA_CPP_SERVER)."
             ),
         }
 

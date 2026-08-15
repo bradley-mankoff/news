@@ -2,7 +2,7 @@
 
 Status: Accepted
 
-Date: 2026-08-02
+Date: 2026-08-02 (amended 2026-08-14: managed `llama.cpp`/GGUF added, issue #75)
 
 ## Context
 
@@ -10,28 +10,25 @@ The pipeline must decide which model runtimes are initially supported so that
 config surfaces, documentation, and the UI match reality (HANDOFF: "Initial
 runtime scope should be honest").
 
-Today the managed runtime is Apple-Silicon-only MLX/MLX-VLM:
+The managed runtime started as Apple-Silicon-only MLX/MLX-VLM:
 
 - Backend inference (`news_pipeline/config.py` `infer_model_backend`) knows
-  `mlx-lm` and `mlx-vlm` only.
+  the closed `SUPPORTED_MODEL_BACKENDS` set.
 - Managed server commands (`news_pipeline/config.py` `build_model_server_command`)
-  spawn `mlx_lm`/`mlx_vlm` servers; the pyproject dependency markers are
-  `darwin`/`arm64`.
+  spawn `mlx_lm`/`mlx_vlm` servers or delegate to the llama.cpp adapter; the
+  pyproject dependency markers for the MLX packages are `darwin`/`arm64`.
 - External OpenAI-compatible endpoints already work for the LLM calls
   (`langchain-openai` `ChatOpenAI`, `news_pipeline/pipeline.py`), but only for
   *per-task* models with a distinct base URL. The default model cannot be
-  external: the pipeline preflights `NEWS_MODEL_BASE_URL`, sees a live server,
-  and raises "Model server endpoint is already in use" instead of using it.
-- `MANAGED_MODEL_SERVER_EXTERNAL` (`news_pipeline/pipeline.py`) is a pre-wired
-  flag that is never set — the external-mode hook exists but is unused.
-- GGUF is not loadable by any managed backend: `mlx-vlm` rejects
-  file-qualified GGUF references (`owner/repo/file.gguf`) with
-  `HFValidationError` (issue #124), and there is no `llama.cpp` adapter and
-  no managed cross-platform GGUF path.
+  external without `NEWS_MODEL_BACKEND=external` plus `NEWS_MODEL_BASE_URL`.
+- GGUF was not loadable by any managed backend until issue #75 added the
+  managed llama.cpp adapter: `mlx-vlm` rejects file-qualified GGUF references
+  (`owner/repo/file.gguf`) with `HFValidationError` (issue #124), and there
+  was no managed cross-platform GGUF path.
 
 ## Decision
 
-The initially supported runtime matrix is exactly:
+The supported runtime matrix is exactly:
 
 1. **`mlx-lm`** — managed local MLX language-model server on Apple Silicon
    (`darwin` + `arm64`, matching the pyproject markers).
@@ -42,21 +39,32 @@ The initially supported runtime matrix is exactly:
    releases may break the managed-server contract, and the 0.6.10 cascade
    (`mlx>=0.32.0`, `transformers>=5.14.0`) does not resolve against the
    current lock. Revisit the bound when a newer release is triaged.
-3. **`external`** — any OpenAI-compatible endpoint, declared for the default
+3. **`llama.cpp`** — managed local text-generation GGUF server for
+   text-generation GGUF models (issue #75). The application launches an
+   operator-installed official native `llama-server` binary (selected with
+   `NEWS_LLAMA_CPP_SERVER`, default `llama-server`) through the same managed
+   process/readiness/log/teardown lifecycle as MLX; the stdlib-only adapter
+   (`news_pipeline/llama_cpp_adapter.py`) translates HF
+   `owner/repo/file.gguf` references to `--hf-repo`/`--hf-file`, bare HF
+   repos to `--hf-repo` (default quantization), and local `.gguf` paths to
+   `--model`, always with `--alias`, `--host 127.0.0.1`, `--port`,
+   `--parallel`, and optional `--n-predict`. The application never
+   downloads, installs, or replaces the native binary; a missing binary
+   fails at run launch with actionable guidance. Multimodal GGUF (separate
+   `mmproj` file) and image-input routing are explicitly not managed.
+4. **`external`** — any OpenAI-compatible endpoint, declared for the default
    model with `NEWS_MODEL_BACKEND=external` plus `NEWS_MODEL_BASE_URL`, or for
    a task model via that task's `_BASE_URL` env var (distinct base URL).
 
 `NEWS_MODEL_BACKEND` values are validated against the closed set
-(`mlx-lm`, `mlx-vlm`, `external`); invalid values fail fast with a `ValueError`
-listing the valid options. When unset, the backend is inferred from the model
-reference as before.
-
-**Not initially supported:** managed cross-platform GGUF via `llama.cpp`.
-GGUF files are not launchable by any managed backend (`mlx-vlm` rejects
-file-qualified references with `HFValidationError`); curated defaults are MLX
-repo ids, and GGUF repos are `external_only` for the model picker. A real
-`llama.cpp` adapter is a deliberate later addition and requires its own issue;
-nothing in this ADR should be read as promising it.
+(`mlx-lm`, `mlx-vlm`, `external`, `llama.cpp`); invalid values fail fast
+with a `ValueError` listing the valid options. When unset, the backend is
+inferred from the model reference: catalog-declared backends win, raw
+`.gguf` references infer `llama.cpp`, and the legacy Gemma/Qwythos name
+heuristic remains for unlisted ids. Known catalog MLX/llama.cpp backend
+mismatches fail fast; an unknown bare HF repo explicitly selected with
+`NEWS_MODEL_BACKEND=llama.cpp` is supported so llama-server applies its
+documented default quantization.
 
 ## Consequences
 
@@ -66,7 +74,13 @@ nothing in this ADR should be read as promising it.
   Authenticated endpoints are supported via `NEWS_MODEL_API_KEY`, sent as a
   `Bearer` token on `/models` and `/chat/completions` requests; HTTP 401/403
   responses fail fast instead of waiting out the readiness deadline.
-- Managed server startup happens only for `mlx-lm`/`mlx-vlm`.
+- Managed server startup happens only for `mlx-lm`/`mlx-vlm`/`llama.cpp`;
+  the llama.cpp executable is checked immediately before `Popen` and only
+  for the llama backend, so Runtime Config resolution and UI previews never
+  require the native binary.
+- The legacy `qwythos-9b-4bit`/`qwythos-9b-8bit` aliases are supported
+  again as curated llama.cpp catalog entries (file-qualified references with
+  a bare `hf_repo` page id); the Gemma MLX default is unchanged.
 - Per-task external models continue to work via a distinct per-task base URL;
   per-task backend env vars are out of scope until a user need exists.
 - Model pickers and validation surfaces must constrain backends to the closed
@@ -74,8 +88,10 @@ nothing in this ADR should be read as promising it.
   (`news_pipeline/model_catalog.py` + `config/model_catalog.yaml`, ADR 0014)
   builds on that single source of truth, as do the hardware compatibility
   links (issue #32) already shipped in the model picker.
+- Text-generation GGUF search results report `managed_llama_cpp`; multimodal
+  GGUF results remain `external_only` (mmproj files are not managed).
 - `news model-server-command` reports that no managed server command exists
-  for the external backend.
-- The runtime matrix is documented in the README so operators know what is and
-  is not supported in the first release.
-
+  for the external backend and prints the resolved llama.cpp command for
+  managed GGUF selections without starting a server or downloading a model.
+- The runtime matrix is documented in the README so operators know what is
+  and is not supported in the first release.

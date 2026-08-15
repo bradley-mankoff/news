@@ -48,13 +48,27 @@ an optional user-editable YAML overlay (`config/model_catalog.yaml`, issue
 descriptive/recommendation metadata for existing aliases (name, description,
 context_length, task_notes) and add new complete entries (reference, name,
 backend, hf_repo, description) with backends limited to `mlx-lm`, `mlx-vlm`,
-and `external`. `reference` must equal `hf_repo` (owner/repo id; never a
-file-qualified `.gguf` path). The merged catalog is a per-process snapshot
-loaded when the CLI/UI starts (restart after editing) and is the single
-source for CLI/UI listing, model selector options, alias resolution, backend
-inference, and Hugging Face runtime-fit verdicts. YAML additions are
-user-verified, not Apple-Silicon verified by this project, and never
-silently become the default model.
+`external`, and `llama.cpp` (issue #75). Identity rules are backend-scoped:
+MLX/external entries require `reference == hf_repo` (owner/repo id; never a
+file-qualified `.gguf` path), while `llama.cpp` entries use a file-qualified
+`owner/repo/file.gguf` reference under a bare `hf_repo` page id. The merged
+catalog is a per-process snapshot loaded when the CLI/UI starts (restart
+after editing) and is the single source for CLI/UI listing, model selector
+options, alias resolution, backend inference, and Hugging Face runtime-fit
+verdicts (`managed_mlx_lm`, `managed_mlx_vlm`, `managed_llama_cpp`,
+`external_only`). YAML additions are user-verified, not
+Apple-Silicon/llama-server verified by this project, and never silently
+become the default model.
+
+The managed `llama.cpp` backend (`NEWS_MODEL_BACKEND=llama.cpp`) launches an
+operator-installed official native `llama-server` binary (default
+`llama-server`, overridable with `NEWS_LLAMA_CPP_SERVER`) through the same
+managed process/readiness/log/teardown lifecycle as MLX; the stdlib-only
+adapter translates HF file-qualified references to `--hf-repo`/`--hf-file`,
+bare HF repos to `--hf-repo`, and local `.gguf` paths to `--model`. The
+application never downloads or installs the binary; a missing binary fails
+at run launch with actionable guidance. Text-generation GGUF is managed;
+multimodal GGUF (mmproj) is not.
 
 ## Sources
 

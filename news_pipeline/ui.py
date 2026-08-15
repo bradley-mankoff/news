@@ -4539,6 +4539,7 @@ HTML = r"""<!doctype html>
     const RUNTIME_FIT_BACKENDS = {
       managed_mlx_lm: "mlx-lm",
       managed_mlx_vlm: "mlx-vlm",
+      managed_llama_cpp: "llama.cpp",
       external_only: "external"
     };
     function modelCatalogEntries() {

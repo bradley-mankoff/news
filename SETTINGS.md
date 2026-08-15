@@ -80,10 +80,13 @@ Built-in model aliases:
 |---|---|---|
 | `gemma-e2b-tiny` | `deadbydawn101/gemma-4-E2B-Heretic-Uncensored-mlx-4bit` (kept as the Codex-safe test model) | [deadbydawn101/gemma-4-E2B-Heretic-Uncensored-mlx-4bit](https://huggingface.co/deadbydawn101/gemma-4-E2B-Heretic-Uncensored-mlx-4bit) |
 | `gemma-4-12b-it-4bit` | `mlx-community/gemma-4-12B-it-4bit` (default) | [mlx-community/gemma-4-12B-it-4bit](https://huggingface.co/mlx-community/gemma-4-12B-it-4bit) |
+| `qwythos-9b-4bit` | `huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-Q4_K.gguf` (managed `llama.cpp`) | [huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF](https://huggingface.co/huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF) |
+| `qwythos-9b-8bit` | `huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-Q8_0.gguf` (managed `llama.cpp`) | [huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF](https://huggingface.co/huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF) |
 
-The legacy `qwythos-9b-*` aliases are **unsupported**: mlx-vlm cannot launch
-file-qualified GGUF references, so stale configs fail fast with an actionable
-error instead of a half-started server.
+The legacy `qwythos-9b-*` aliases are supported again through the managed
+`llama.cpp` backend (issue #75): each resolves to its exact GGUF file
+reference and is served by an operator-installed `llama-server` binary. The
+default model remains the MLX Gemma 4 12B entry above.
 
 Each model page shows Hugging Face's native Hardware Compatibility panel
 (GGUF/MLX quantizations) — the UI model picker links directly to it.
@@ -100,13 +103,19 @@ Each model page shows Hugging Face's native Hardware Compatibility panel
 | `NEWS_MODEL_TITLE_GENERATION_TUNING_PRESET` | _(none)_ | Model Tuning Preset for the title generation stage. |
 | `NEWS_MODEL_IMAGE_ART_DIRECTION_TUNING_PRESET` | _(none)_ | Model Tuning Preset for the image art direction stage. |
 | `NEWS_MODEL_BASE_URL` | `http://127.0.0.1:8080/v1` | OpenAI-compatible local model endpoint. |
+| `NEWS_LLAMA_CPP_SERVER` | `llama-server` | Path or `PATH` name of the native `llama-server` executable used by the managed `llama.cpp` backend (advanced). The application never installs or downloads the binary; a missing binary fails at run launch with installation guidance. |
 | `NEWS_CODEX_TESTING` | `0` | `1` forces Codex-safe model references for model-related verification. |
 
 Print the fully resolved local server command without running the pipeline:
 
 ```bash
 NEWS_MODEL=gemma-4-12b-it-4bit uv run news model-server-command
+NEWS_MODEL=qwythos-9b-4bit NEWS_LLAMA_CPP_SERVER=/opt/llama/llama-server uv run news model-server-command
 ```
+
+The llama.cpp preview prints the exact `llama-server` command (`--hf-repo`,
+`--hf-file`, `--alias`, localhost binding, concurrency, and max-token flags)
+without starting a server or downloading a model.
 
 ## Infrastructure
 
@@ -152,12 +161,15 @@ catalog whose entries are all paused.
 (issue #90): metadata overrides for existing built-in entries (only `name`,
 `description`, `context_length`, `task_notes`) plus complete new entries
 (`reference`, `name`, `backend`, `hf_repo`, `description`). Backends are
-limited to `mlx-lm`, `mlx-vlm`, and `external`; `reference` must equal
-`hf_repo` and never point at a file-qualified `.gguf` path. Malformed or
-unsafe entries fail closed with a path-specific error. `NEWS_MODEL_CATALOG_YAML`
-selects an alternate path; the catalog is a per-process snapshot, so restart
-`news` or the UI after editing. It is not a Run Setting and does not change
-the default model (`DEFAULT_MODEL_ALIAS` stays code-owned).
+limited to `mlx-lm`, `mlx-vlm`, `external`, and `llama.cpp`. Identity rules
+are backend-scoped: MLX/external entries require `reference == hf_repo` and
+never point at a file-qualified `.gguf` path, while `llama.cpp` entries use a
+file-qualified `owner/repo/file.gguf` reference under a bare `hf_repo` page
+id. Malformed or unsafe entries fail closed with a path-specific error.
+`NEWS_MODEL_CATALOG_YAML` selects an alternate path; the catalog is a
+per-process snapshot, so restart `news` or the UI after editing. It is not a
+Run Setting and does not change the default model
+(`DEFAULT_MODEL_ALIAS` stays code-owned).
 
 `config/prompt_overrides.yaml` is a partial editorial-instruction override
 map for the five prompt tasks (article summary, story scale screening, story

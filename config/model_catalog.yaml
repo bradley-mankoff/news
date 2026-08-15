@@ -18,9 +18,15 @@
 #
 # New aliases must provide reference, name, backend, hf_repo, and
 # description; context_length is optional and task_notes defaults to {}.
-# backends are limited to mlx-lm, mlx-vlm, and external; reference must
-# equal hf_repo (an owner/repo id, never a file-qualified .gguf path).
-# Example complete new entry:
+# Backends are limited to mlx-lm, mlx-vlm, external, and llama.cpp. Identity
+# rules are backend-scoped (ADR 0014 / issue #75):
+#   - mlx-lm, mlx-vlm, and external entries require reference == hf_repo
+#     (an owner/repo id, never a file-qualified .gguf path).
+#   - llama.cpp entries require a file-qualified reference
+#     (owner/repo/file.gguf) whose first two segments equal hf_repo (the
+#     bare repo page id); the file name must be a safe, traversal-free
+#     .gguf name.
+# Example complete new entries:
 #
 # models:
 #   my-mlx-model:
@@ -32,4 +38,10 @@
 #     description: A user-verified MLX language model.
 #     task_notes:
 #       speed: Fast local model.
+#   my-gguf-model:
+#     reference: owner/example-repo/example.Q4_K.gguf
+#     name: Example GGUF Model
+#     backend: llama.cpp
+#     hf_repo: owner/example-repo
+#     description: A user-verified text-generation GGUF model.
 models: {}
