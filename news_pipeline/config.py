@@ -805,7 +805,12 @@ def _validate_model_tuning_preset_scope(
 
 
 def is_managed_model_backend(backend: str) -> bool:
-    """A managed backend serves exactly one model at the default base URL."""
+    """Whether backend identity makes an assignment application-owned.
+
+    Ownership is selected by the resolved backend, not by whether a base URL
+    looks local or remote. Any non-external backend is application-managed;
+    the ``external`` backend is caller-managed.
+    """
     return backend != MODEL_BACKEND_EXTERNAL
 
 
@@ -905,11 +910,13 @@ def is_managed_server_assignment(
 ) -> bool:
     """Whether one task assignment is served by an application-owned server.
 
-    An assignment is owned when it uses a managed backend (any non-external
-    backend) at an endpoint the run can own. When the default backend is
-    external, the default endpoint itself is caller-managed and can serve
-    multiple models, so assignments pointing at exactly that endpoint stay
-    external too; only assignments on other endpoints can be owned (issue
+    An assignment is owned when its resolved backend is managed (any
+    non-external backend). A URL's appearance alone does not select ownership:
+    a managed assignment at a remote-looking URL is still application-owned,
+    while an ``external`` assignment is caller-managed. When the default
+    backend is external, the default endpoint itself is caller-managed and can
+    serve multiple models, so assignments pointing at exactly that endpoint
+    stay external too; only assignments on other endpoints can be owned (issue
     #133). ``assignment_backend`` overrides the assignment's own backend for
     callers that resolved it separately (legacy test doubles).
     """
