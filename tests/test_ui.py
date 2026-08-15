@@ -324,6 +324,11 @@ const assert = (condition, message) => {
 // harness has no DOM controls, so every lookup falls back to
 // state.schema.current_env, mirroring a schema-driven initial render.
 const document = { querySelector() { return null; } };
+const advancedPanels = { innerHTML: "" };
+const $ = (id) => id === "advancedPanels" ? advancedPanels : null;
+const decorateEnvHints = () => {};
+const renderPromptProfilePanel = () => {};
+const renderPromptTemplateEditors = () => {};
 """
             + js_function_block("    const TASK_CONFIG = {", "    const state = {")
             + js_function_block("    const state = {", "    const icons = {")
@@ -354,6 +359,9 @@ const document = { querySelector() { return null; } };
             )
             + js_function_block(
                 "function modelTuningPanel(task) {", "function renderAdvancedPanels"
+            )
+            + js_function_block(
+                "function renderAdvancedPanels() {", "function renderAdvancedKnobs"
             )
             + r"""
 // ---- 1. Missing task metadata ---------------------------------------------
@@ -408,18 +416,42 @@ for (const task of Object.keys(TASK_CONFIG)) {
   assert(typeof panel === "string" && panel.length > 0, `${task} must render non-empty panel markup`);
   assert(panel.includes(`<h2>${TASK_CONFIG[task].label}</h2>`), `${task} panel label missing`);
 }
+
+// ---- 5. Advanced Settings integration with missing metadata ---------------
+// Simulate configuration drift at the parent-render boundary. The missing
+// panel must interpolate as an empty string while later Advanced Settings
+// sections remain present.
+delete TASK_CONFIG.article_summary;
+let renderError = null;
+try {
+  renderAdvancedPanels();
+} catch (error) {
+  renderError = error;
+}
+assert(!renderError, `Advanced Settings render threw: ${renderError}`);
+assert(advancedPanels.innerHTML.includes("<h2>Story Writing</h2>"), "remaining model panel missing after a task is removed");
+assert(advancedPanels.innerHTML.includes("<h2>Run budgets and quotas</h2>"), "Budgets panel missing after a task is removed");
+assert(!advancedPanels.innerHTML.includes("undefined"), "undefined markup leaked into Advanced Settings");
 """
         )
         node = shutil.which("node")
         if node is None:
             self.skipTest("Node.js is required for the embedded UI renderer harness")
-        result = subprocess.run(
-            [node, "--input-type=module", "-"],
-            input=js,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
+        timeout_seconds = 30
+        try:
+            result = subprocess.run(
+                [node, "--input-type=module", "-"],
+                input=js,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=timeout_seconds,
+            )
+        except subprocess.TimeoutExpired as exc:
+            self.fail(
+                f"Node harness timed out after {timeout_seconds}s: "
+                f"stdout={exc.stdout!r} stderr={exc.stderr!r}"
+            )
         self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
 
     def test_run_setup_single_default_model_card(self) -> None:
