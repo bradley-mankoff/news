@@ -366,6 +366,10 @@ class CliTests(unittest.TestCase):
         code, stdout, stderr = self._invoke(["models", "search", "--json"])
 
         self.assertEqual(code, 2)
+        payload = json.loads(stdout)
+        self.assertEqual(payload["query"], "")
+        self.assertEqual(payload["models"], [])
+        self.assertIn("--query", payload["error"])
         self.assertIn("--query", stderr)
 
     def test_models_search_success(self) -> None:
@@ -390,6 +394,7 @@ class CliTests(unittest.TestCase):
         payload = json.loads(stdout)
         self.assertEqual(payload["query"], "qwythos")
         self.assertEqual([item["id"] for item in payload["models"]], ["owner/one", "owner/two"])
+        self.assertNotIn("error", payload)
         search.assert_called_once_with("qwythos", pipeline_tag="text-generation", limit=7)
 
         with patch("news_pipeline.cli.search_huggingface_models", return_value=fake_results) as search:
@@ -411,11 +416,33 @@ class CliTests(unittest.TestCase):
         self.assertIn("text-generation", stderr)
 
         code, stdout, stderr = self._invoke(
+            ["models", "search", "--query", "qwythos", "--task", "bogus", "--json"]
+        )
+
+        self.assertEqual(code, 2)
+        payload = json.loads(stdout)
+        self.assertEqual(payload["query"], "qwythos")
+        self.assertEqual(payload["models"], [])
+        self.assertIn("Unknown search task 'bogus'", payload["error"])
+        self.assertIn("Unknown search task 'bogus'", stderr)
+
+        code, stdout, stderr = self._invoke(
             ["models", "search", "--query", "qwythos", "--limit", "lots"]
         )
 
         self.assertEqual(code, 2)
         self.assertEqual(stdout, "")
+        self.assertIn("--limit must be an integer", stderr)
+
+        code, stdout, stderr = self._invoke(
+            ["models", "search", "--query", "qwythos", "--limit", "lots", "--json"]
+        )
+
+        self.assertEqual(code, 2)
+        payload = json.loads(stdout)
+        self.assertEqual(payload["query"], "qwythos")
+        self.assertEqual(payload["models"], [])
+        self.assertIn("--limit must be an integer", payload["error"])
         self.assertIn("--limit must be an integer", stderr)
 
     def test_models_search_error_exit_code(self) -> None:
@@ -427,6 +454,18 @@ class CliTests(unittest.TestCase):
         self.assertEqual(code, 2)
         self.assertEqual(stdout, "")
         self.assertIn("boom", stderr)
+
+        with patch(
+            "news_pipeline.cli.search_huggingface_models", side_effect=ValueError("boom")
+        ):
+            code, stdout, stderr = self._invoke(
+                ["models", "search", "--query", "qwythos", "--json"]
+            )
+
+        self.assertEqual(code, 2)
+        payload = json.loads(stdout)
+        self.assertEqual(payload, {"query": "qwythos", "models": [], "error": "boom"})
+        self.assertEqual(stderr, "boom\n")
 
     def test_unknown_command_returns_error(self) -> None:
         code, stdout, stderr = self._invoke(["not-a-command"])

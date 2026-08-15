@@ -271,13 +271,28 @@ def _run_models(args: list[str]) -> int:
                 )
         return 0
     if subcommand == "search":
-        query, pipeline_tag, limit, as_json = _parse_models_search_args(rest)
+        # Detect --json before parsing so validation failures use the same
+        # JSON error envelope as lookup failures (issue #93).
+        as_json = "--json" in rest
+        query = ""
+        for index, arg in enumerate(rest):
+            if arg == "--query" and index + 1 < len(rest):
+                query = rest[index + 1]
+            elif arg.startswith("--query="):
+                query = arg.split("=", 1)[1]
         try:
+            query, pipeline_tag, limit, _ = _parse_models_search_args(rest)
             results = search_huggingface_models(
                 query, pipeline_tag=pipeline_tag, limit=limit
             )
         except Exception as exc:
             print(str(exc), file=sys.stderr)
+            if as_json:
+                print(
+                    json.dumps(
+                        {"query": query, "models": [], "error": str(exc)}, indent=2
+                    )
+                )
             return 2
         if as_json:
             print(json.dumps({"query": query, "models": results}, indent=2))
