@@ -3412,11 +3412,12 @@ def invoke_with_retries(
             estimated_input_tokens=estimated_input_tokens,
             max_output_tokens=max_output_tokens,
         )
+    assignment = _task_model_assignment(_logical_task_assignment_key(task_name))
     try:
         for attempt in range(1, attempts + 1):
             attempts_made = attempt
             try:
-                _raise_if_managed_model_server_exited()
+                _raise_if_managed_model_server_exited(assignment=assignment)
                 response = llm.invoke(messages)
                 if isinstance(response, AIMessage):
                     _record_response_token_usage(task_name, response)
@@ -3430,7 +3431,7 @@ def invoke_with_retries(
                 raise
             except Exception as error:
                 last_error = error
-                _raise_if_managed_model_server_exited()
+                _raise_if_managed_model_server_exited(assignment=assignment)
                 if not _is_transient_model_error(error) or attempt == attempts:
                     break
                 transient_retries += 1
@@ -5264,6 +5265,9 @@ def _stop_managed_server_process(process: subprocess.Popen, *, server_label: str
             process.kill()
         process.wait(timeout=10)
 
+    if process.poll() is None:
+        raise RuntimeError(f"Managed {server_label} process is still running after stop.")
+
 
 def _finalize_failed_run(error: Exception, traceback_text: str, config: RuntimeConfig) -> None:
     global ACTIVE_RUN_DIAGNOSTICS
@@ -5318,20 +5322,41 @@ def managed_model_server():
         # one failure is logged and the remaining servers still stop, and
         # cleanup noise never replaces an original run exception.
         for state in reversed(list(MANAGED_MODEL_SERVERS.values())):
+            server_label = f"model server at {state.assignment.base_url}"
+            log_path = state.log_path or _managed_model_server_log_path_for(state.assignment)
             try:
                 if state.process is not None:
-                    _stop_managed_server_process(
-                        state.process,
-                        server_label=f"model server at {state.assignment.base_url}",
-                    )
-                    record_activity_snapshot("after_model_server_stop", ACTIVE_RUN_DIAGNOSTICS)
+                    _stop_managed_server_process(state.process, server_label=server_label)
+                    if state.process.poll() is None:
+                        raise RuntimeError("process is still running after stop")
             except Exception as error:
-                progress_tracker.warning(f"Managed model server stop failed: {error}")
+                progress_tracker.warning(
+                    f"Managed {server_label} cleanup failed; log {log_path}: {error}"
+                )
+                if ACTIVE_RUN_DIAGNOSTICS is not None:
+                    try:
+                        ACTIVE_RUN_DIAGNOSTICS.event(
+                            "managed_model_server_cleanup_failed",
+                            base_url=state.assignment.base_url,
+                            model=state.assignment.name,
+                            log_path=log_path,
+                            error=str(error),
+                        )
+                    except Exception:
+                        pass
+            try:
+                record_activity_snapshot("after_model_server_stop", ACTIVE_RUN_DIAGNOSTICS)
+            except Exception as error:
+                progress_tracker.warning(
+                    f"Managed {server_label} cleanup diagnostics failed; log {log_path}: {error}"
+                )
             try:
                 if state.log_file is not None:
                     state.log_file.close()
             except Exception as error:
-                progress_tracker.warning(f"Managed model server log close failed: {error}")
+                progress_tracker.warning(
+                    f"Managed {server_label} log close failed at {log_path}: {error}"
+                )
         MANAGED_MODEL_SERVERS.clear()
         MANAGED_MODEL_SERVER_ACTIVE = False
         MANAGED_MODEL_SERVER_READY = False
@@ -5544,13 +5569,19 @@ def _start_managed_server_state(state: ManagedModelServerState) -> None:
             start_new_session=True,
             text=True,
         )
-    except Exception:
-        log_file.close()
-        state.log_file = None
-        state.log_path = ""
-        if serves_default:
-            MANAGED_MODEL_SERVER_LOG_FILE = None
-        raise
+    except Exception as original_error:
+        try:
+            log_file.close()
+        except Exception as cleanup_error:
+            progress_tracker.warning(
+                f"Managed model server log close failed at {log_path}: {cleanup_error}"
+            )
+        finally:
+            state.log_file = None
+            state.log_path = ""
+            if serves_default:
+                MANAGED_MODEL_SERVER_LOG_FILE = None
+        raise original_error
     state.process = process
     if serves_default:
         MANAGED_MODEL_SERVER_PROCESS = process
@@ -5582,20 +5613,37 @@ def _start_managed_server_state(state: ManagedModelServerState) -> None:
         if serves_default:
             MANAGED_MODEL_SERVER_READY = True
         progress_tracker.finish_meter(detail="Model server ready.")
-    except Exception:
-        _stop_managed_server_process(
-            process,
-            server_label=f"model server at {assignment.base_url}",
-        )
-        record_activity_snapshot("after_model_server_stop", ACTIVE_RUN_DIAGNOSTICS)
-        log_file.close()
-        state.process = None
-        state.log_file = None
-        state.log_path = ""
-        if serves_default:
-            MANAGED_MODEL_SERVER_PROCESS = None
-            MANAGED_MODEL_SERVER_LOG_FILE = None
-        raise
+    except Exception as original_error:
+        try:
+            _stop_managed_server_process(
+                process,
+                server_label=f"model server at {assignment.base_url}",
+            )
+        except Exception as cleanup_error:
+            progress_tracker.warning(
+                f"Managed model server rollback failed at {assignment.base_url}: {cleanup_error}"
+            )
+        try:
+            record_activity_snapshot("after_model_server_stop", ACTIVE_RUN_DIAGNOSTICS)
+        except Exception as cleanup_error:
+            progress_tracker.warning(
+                f"Managed model server rollback diagnostics failed at {assignment.base_url}: "
+                f"{cleanup_error}"
+            )
+        finally:
+            try:
+                log_file.close()
+            except Exception as cleanup_error:
+                progress_tracker.warning(
+                    f"Managed model server log close failed at {log_path}: {cleanup_error}"
+                )
+            state.process = None
+            state.log_file = None
+            state.log_path = ""
+            if serves_default:
+                MANAGED_MODEL_SERVER_PROCESS = None
+                MANAGED_MODEL_SERVER_LOG_FILE = None
+        raise original_error
 
 
 def _filesystem_safe_model_label(text: str) -> str:

@@ -71,7 +71,12 @@ then `--execute`. Runbook: `docs/security/history-scrub.md`.
 Secret prevention is automatic through the Gitleaks pre-commit hook in
 `.pre-commit-config.yaml`, pinned to `v8.30.1`; install it with
 `uv run pre-commit install`. It scans staged changes only and uses redacted
-output. Runbook: `docs/security/secret-prevention.md`.
+output. CI checks the PR's new commit range with the same pinned Gitleaks v8.30.1
+container: the `Secret scan` job in `.github/workflows/ci.yml` runs on every
+pull request to `develop`/`main`, scans only the PR's non-merge commits,
+redacts findings, and fails the check on any finding. Reproduce the gate
+locally with the Docker command in `docs/security/secret-prevention.md`.
+Runbook: `docs/security/secret-prevention.md`.
 
 ### Shell script checks
 
@@ -583,10 +588,12 @@ sends no credentials). An endpoint that rejects the request with HTTP 401/403
 fails fast instead of waiting out the readiness deadline.
 
 `news model-server-command` reports that no managed server command exists for
-the external backend. Per-task models can also use external endpoints by
-giving that task a distinct base URL (`NEWS_MODEL_ARTICLE_SUMMARY_BASE_URL`,
-`NEWS_MODEL_STORY_DRAFTING_BASE_URL`, `NEWS_MODEL_STORY_SCALE_SCREENING_BASE_URL`,
-`NEWS_MODEL_TITLE_GENERATION_BASE_URL`, `NEWS_MODEL_IMAGE_ART_DIRECTION_BASE_URL`).
+the external backend. Per-task assignments resolved with the external backend
+can use caller-managed endpoints by giving that task a distinct base URL
+(`NEWS_MODEL_ARTICLE_SUMMARY_BASE_URL`, `NEWS_MODEL_STORY_DRAFTING_BASE_URL`,
+`NEWS_MODEL_STORY_SCALE_SCREENING_BASE_URL`, `NEWS_MODEL_TITLE_GENERATION_BASE_URL`,
+`NEWS_MODEL_IMAGE_ART_DIRECTION_BASE_URL`); the URL itself does not select
+ownership.
 
 Normal report runs start the matching local MLX server, wait until it is ready,
 run the pipeline, and stop the managed server when the run exits. To keep a
@@ -606,8 +613,10 @@ routed per task, and stopped with the run. Tasks sharing one canonical
 endpoint and model reuse the same process. Two tasks pointing at the
 same managed endpoint with different models are rejected at
 configuration time with guidance to set a per-task base URL or use an
-external server. External endpoints (default or per-task) are
-caller-managed and are never spawned by the application.
+external server. Ownership follows the resolved backend, not the URL's
+appearance: assignments resolved with the `external` backend (default or
+per-task) are caller-managed and are never spawned by the application, while a
+managed backend remains application-owned even when its URL looks remote.
 
 For example, one run can own three managed servers for the default,
 Article Summarization, and Story Drafting models:
@@ -682,8 +691,9 @@ same canonical endpoint with the same model is shared by every task
 that uses it. The default server writes `model_server.log` next to the
 report output, and additional managed endpoints write deterministic
 per-server log files (`model_server_<endpoint>-<model>.log`) in the
-same directory. External endpoints (default or per-task) are
-caller-managed and never spawned.
+same directory. Assignments resolved with the `external` backend (default or
+per-task) are caller-managed and never spawned; URL appearance alone does not
+select ownership.
 
 ### Image
 

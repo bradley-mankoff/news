@@ -855,7 +855,12 @@ def _validate_model_tuning_preset_scope(
 
 
 def is_managed_model_backend(backend: str) -> bool:
-    """A managed backend serves exactly one model at the default base URL."""
+    """Whether backend identity makes an assignment application-owned.
+
+    Ownership is selected by the resolved backend, not by whether a base URL
+    looks local or remote. Any non-external backend is application-managed;
+    the ``external`` backend is caller-managed.
+    """
     return backend != MODEL_BACKEND_EXTERNAL
 
 
@@ -955,11 +960,13 @@ def is_managed_server_assignment(
 ) -> bool:
     """Whether one task assignment is served by an application-owned server.
 
-    An assignment is owned when it uses a managed backend (any non-external
-    backend) at an endpoint the run can own. When the default backend is
-    external, the default endpoint itself is caller-managed and can serve
-    multiple models, so assignments pointing at exactly that endpoint stay
-    external too; only assignments on other endpoints can be owned (issue
+    An assignment is owned when its resolved backend is managed (any
+    non-external backend). A URL's appearance alone does not select ownership:
+    a managed assignment at a remote-looking URL is still application-owned,
+    while an ``external`` assignment is caller-managed. When the default
+    backend is external, the default endpoint itself is caller-managed and can
+    serve multiple models, so assignments pointing at exactly that endpoint
+    stay external too; only assignments on other endpoints can be owned (issue
     #133). ``assignment_backend`` overrides the assignment's own backend for
     callers that resolved it separately (legacy test doubles).
     """
@@ -1696,6 +1703,20 @@ def _default_article_summary_concurrency(model_reference: str) -> int:
 
 
 
+# Closed set of browser UI locations for registered knobs (issue #115).
+# ui_location declares which surface owns the control: run_setup and
+# advanced_panels are rendered by dedicated controls (suppressed from the raw
+# Advanced override list), while advanced_raw knobs remain available in the
+# raw override list. The default keeps any existing or future unannotated
+# knob visible in the raw list (fail-safe: a setting cannot disappear).
+UI_LOCATION_RUN_SETUP = "run_setup"
+UI_LOCATION_ADVANCED_PANELS = "advanced_panels"
+UI_LOCATION_ADVANCED_RAW = "advanced_raw"
+UI_LOCATIONS = frozenset(
+    {UI_LOCATION_RUN_SETUP, UI_LOCATION_ADVANCED_PANELS, UI_LOCATION_ADVANCED_RAW}
+)
+
+
 def _runtime_knob(
     group: str,
     label: str,
@@ -1710,6 +1731,7 @@ def _runtime_knob(
     advanced: bool = False,
     secret: bool = False,
     option_links: dict[str, dict[str, str]] | None = None,
+    ui_location: str = UI_LOCATION_ADVANCED_RAW,
 ) -> dict[str, Any]:
     return {
         "id": env.lower(),
@@ -1728,19 +1750,53 @@ def _runtime_knob(
         # url} for model-choice knobs; the drift-guard test pins that its
         # keys cover `options` exactly, and non-model knobs pass {}.
         "option_links": option_links or {},
+        # ui_location is the browser's render-ownership contract: dedicated
+        # controls (run_setup/advanced_panels) are suppressed from the raw
+        # Advanced override list, advanced_raw knobs stay in that list. This
+        # is rendering metadata only; the pre-existing `advanced` flag is
+        # descriptive and is not a substitute for it.
+        "ui_location": ui_location,
     }
+
+
+def _validate_ui_locations(knobs: list[dict[str, Any]]) -> None:
+    """Fail fast on duplicate env names or missing/invalid ui_location values.
+
+    Every registered knob must declare exactly one UI location from the
+    closed set. A duplicate env would create two controls with the same
+    data-env (collectEnv last-write-wins), and an unknown/missing location
+    could let a dedicated knob silently disappear from or double up in the
+    raw Advanced override list.
+    """
+    seen: dict[str, int] = {}
+    for index, knob in enumerate(knobs):
+        env = knob.get("env")
+        if not isinstance(env, str) or not env:
+            raise ValueError(f"registry knob is missing a valid env name: {knob!r}")
+        if env in seen:
+            raise ValueError(
+                f"duplicate registry environment name: {env!r} "
+                f"(indexes {seen[env]} and {index})"
+            )
+        seen[env] = index
+        location = knob.get("ui_location")
+        if not isinstance(location, str) or location not in UI_LOCATIONS:
+            raise ValueError(
+                f"registry knob {env!r} has invalid ui_location {location!r}; "
+                "must be one of: " + ", ".join(sorted(UI_LOCATIONS))
+            )
 
 
 def runtime_knob_registry() -> list[dict[str, Any]]:
     tuning_presets = sorted(load_model_tuning_presets())
     model_links = _model_option_links()
     knobs = [
-        _runtime_knob("Run Settings", "Source scope", "NEWS_SOURCE_SCOPE", "select", default="core", options=list(SOURCE_SCOPES)),
+        _runtime_knob("Run Settings", "Source scope", "NEWS_SOURCE_SCOPE", "select", default="core", options=list(SOURCE_SCOPES), ui_location=UI_LOCATION_RUN_SETUP),
         _runtime_knob("Run Settings", "Recipient scope", "NEWS_RECIPIENT_SCOPE", "select", default="primary", options=list(RECIPIENT_SCOPES)),
-        _runtime_knob("Run Settings", "Delivery mode", DELIVERY_MODE_ENV_VAR, "select", default=DELIVERY_MODE_OWNER, options=list(DELIVERY_MODES)),
-        _runtime_knob("Run Settings", "Block reused URLs", "NEWS_BLOCK_REUSED_URLS", "bool", default=False),
-        _runtime_knob("Run Settings", "Image generation", "NEWS_IMAGE_ENABLED", "bool", default=False),
-        _runtime_knob("Run Settings", "Story scale screening", "NEWS_STORY_SCALE_SCREENING_ENABLED", "bool"),
+        _runtime_knob("Run Settings", "Delivery mode", DELIVERY_MODE_ENV_VAR, "select", default=DELIVERY_MODE_OWNER, options=list(DELIVERY_MODES), ui_location=UI_LOCATION_RUN_SETUP),
+        _runtime_knob("Run Settings", "Block reused URLs", "NEWS_BLOCK_REUSED_URLS", "bool", default=False, ui_location=UI_LOCATION_ADVANCED_PANELS),
+        _runtime_knob("Run Settings", "Image generation", "NEWS_IMAGE_ENABLED", "bool", default=False, ui_location=UI_LOCATION_ADVANCED_PANELS),
+        _runtime_knob("Run Settings", "Story scale screening", "NEWS_STORY_SCALE_SCREENING_ENABLED", "bool", ui_location=UI_LOCATION_ADVANCED_PANELS),
         _runtime_knob("Run Settings", "Translation", TRANSLATION_ENABLED_ENV_VAR, "bool", default=False),
         _runtime_knob(
             "Run Settings",
@@ -1765,6 +1821,7 @@ def runtime_knob_registry() -> list[dict[str, Any]]:
             "select",
             default=DEFAULT_PROMPT_PROFILE_ID,
             options=list(PROMPT_PROFILE_IDS),
+            ui_location=UI_LOCATION_RUN_SETUP,
         ),
         *[
             _runtime_knob(
@@ -1773,6 +1830,7 @@ def runtime_knob_registry() -> list[dict[str, Any]]:
                 env_var,
                 "text",
                 advanced=True,
+                ui_location=UI_LOCATION_ADVANCED_PANELS,
             )
             for task, env_var in PROMPT_TASK_OVERRIDE_ENV_VARS.items()
         ],
@@ -1783,29 +1841,30 @@ def runtime_knob_registry() -> list[dict[str, Any]]:
                 env_var,
                 "text",
                 advanced=True,
+                ui_location=UI_LOCATION_ADVANCED_PANELS,
             )
             for task, env_var in PROMPT_TEMPLATE_ENV_VARS.items()
         ],
-        _runtime_knob("Run Settings", "Relax story drafting guards", "NEWS_RELAX_STORY_DRAFTING_GUARDS", "bool", advanced=True),
+        _runtime_knob("Run Settings", "Relax story drafting guards", "NEWS_RELAX_STORY_DRAFTING_GUARDS", "bool", advanced=True, ui_location=UI_LOCATION_ADVANCED_PANELS),
         _runtime_knob("Run Settings", "Embedding model", "NEWS_EMBEDDING_MODEL", default="all-mpnet-base-v2", advanced=True),
         _runtime_knob("Run Settings", "Token encoding", "NEWS_TOKEN_ENCODING", default="o200k_base", advanced=True),
-        _runtime_knob("Model Selection", "Default model", "NEWS_MODEL", "select", default=DEFAULT_MODEL_ALIAS, options=sorted(_catalog_model_aliases()), option_links=model_links),
+        _runtime_knob("Model Selection", "Default model", "NEWS_MODEL", "select", default=DEFAULT_MODEL_ALIAS, options=sorted(_catalog_model_aliases()), option_links=model_links, ui_location=UI_LOCATION_RUN_SETUP),
         _runtime_knob("Model Selection", "Model backend", "NEWS_MODEL_BACKEND", "select", options=sorted(SUPPORTED_MODEL_BACKENDS)),
         _runtime_knob("Model Tuning", "Default tuning preset", "NEWS_MODEL_TUNING_PRESET", "select", options=tuning_presets),
-        _runtime_knob("Model Tuning", "Model input cap", "NEWS_MODEL_MAX_INPUT_TOKENS", "number", minimum=1, step=1),
-        _runtime_knob("Pipeline Budget", "Article text token limit", "NEWS_ARTICLE_TEXT_TOKEN_LIMIT", "number", minimum=1, step=1),
+        _runtime_knob("Model Tuning", "Model input cap", "NEWS_MODEL_MAX_INPUT_TOKENS", "number", minimum=1, step=1, ui_location=UI_LOCATION_ADVANCED_PANELS),
+        _runtime_knob("Pipeline Budget", "Article text token limit", "NEWS_ARTICLE_TEXT_TOKEN_LIMIT", "number", minimum=1, step=1, ui_location=UI_LOCATION_ADVANCED_PANELS),
         _runtime_knob("Pipeline Budget", "Total article summary cap", "NEWS_TOTAL_ARTICLE_SUMMARY_CAP", "number", minimum=0, step=1),
         _runtime_knob("Pipeline Budget", "Recent window hours", "NEWS_RECENT_WINDOW_HOURS", "number", minimum=1, step=1),
         _runtime_knob("Pipeline Budget", "Max articles per source", "NEWS_MAX_ARTICLES_PER_SOURCE", "number", minimum=1, step=1),
-        _runtime_knob("Pipeline Budget", "Min articles per story", "NEWS_MIN_ARTICLES_PER_STORY", "number", minimum=2, step=1),
-        _runtime_knob("Pipeline Budget", "Max stories", "NEWS_MAX_STORIES", "number", minimum=1, step=1),
-        _runtime_knob("Pipeline Budget", "Story cluster similarity", "NEWS_STORY_CLUSTER_SIMILARITY_THRESHOLD", "number", minimum=0, maximum=1, step=0.01),
-        _runtime_knob("Pipeline Budget", "Story selection overlap", "NEWS_STORY_SELECTION_OVERLAP_THRESHOLD", "number", minimum=0, maximum=1, step=0.01),
-        _runtime_knob("Pipeline Budget", "Story dedup threshold", "NEWS_STORY_DEDUP_THRESHOLD", "number", minimum=0, maximum=1, step=0.01),
-        _runtime_knob("Pipeline Budget", "Backfill batch multiplier", "NEWS_STORY_BACKFILL_BATCH_MULTIPLIER", "number", minimum=1, step=1),
-        _runtime_knob("Pipeline Budget", "Source collection concurrency", "NEWS_SOURCE_COLLECTION_CONCURRENCY", "number", default=DEFAULT_SOURCE_COLLECTION_CONCURRENCY, minimum=1, step=1),
-        _runtime_knob("Pipeline Budget", "Article summary concurrency", "NEWS_ARTICLE_SUMMARY_CONCURRENCY", "number", default=DEFAULT_ARTICLE_SUMMARY_CONCURRENCY, minimum=1, step=1),
-        _runtime_knob("Pipeline Budget", "Story synthesis concurrency", "NEWS_STORY_SYNTHESIS_CONCURRENCY", "number", default=DEFAULT_STORY_SYNTHESIS_CONCURRENCY, minimum=1, step=1),
+        _runtime_knob("Pipeline Budget", "Min articles per story", "NEWS_MIN_ARTICLES_PER_STORY", "number", minimum=2, step=1, ui_location=UI_LOCATION_ADVANCED_PANELS),
+        _runtime_knob("Pipeline Budget", "Max stories", "NEWS_MAX_STORIES", "number", minimum=1, step=1, ui_location=UI_LOCATION_ADVANCED_PANELS),
+        _runtime_knob("Pipeline Budget", "Story cluster similarity", "NEWS_STORY_CLUSTER_SIMILARITY_THRESHOLD", "number", minimum=0, maximum=1, step=0.01, ui_location=UI_LOCATION_ADVANCED_PANELS),
+        _runtime_knob("Pipeline Budget", "Story selection overlap", "NEWS_STORY_SELECTION_OVERLAP_THRESHOLD", "number", minimum=0, maximum=1, step=0.01, ui_location=UI_LOCATION_ADVANCED_PANELS),
+        _runtime_knob("Pipeline Budget", "Story dedup threshold", "NEWS_STORY_DEDUP_THRESHOLD", "number", minimum=0, maximum=1, step=0.01, ui_location=UI_LOCATION_ADVANCED_PANELS),
+        _runtime_knob("Pipeline Budget", "Backfill batch multiplier", "NEWS_STORY_BACKFILL_BATCH_MULTIPLIER", "number", minimum=1, step=1, ui_location=UI_LOCATION_ADVANCED_PANELS),
+        _runtime_knob("Pipeline Budget", "Source collection concurrency", "NEWS_SOURCE_COLLECTION_CONCURRENCY", "number", default=DEFAULT_SOURCE_COLLECTION_CONCURRENCY, minimum=1, step=1, ui_location=UI_LOCATION_ADVANCED_PANELS),
+        _runtime_knob("Pipeline Budget", "Article summary concurrency", "NEWS_ARTICLE_SUMMARY_CONCURRENCY", "number", default=DEFAULT_ARTICLE_SUMMARY_CONCURRENCY, minimum=1, step=1, ui_location=UI_LOCATION_ADVANCED_PANELS),
+        _runtime_knob("Pipeline Budget", "Story synthesis concurrency", "NEWS_STORY_SYNTHESIS_CONCURRENCY", "number", default=DEFAULT_STORY_SYNTHESIS_CONCURRENCY, minimum=1, step=1, ui_location=UI_LOCATION_ADVANCED_PANELS),
         _runtime_knob("Pipeline Budget", "Component overlap suppress", "NEWS_STORY_COMPONENT_OVERLAP_SUPPRESS_THRESHOLD", "number", minimum=0, maximum=1, step=0.01, advanced=True),
         _runtime_knob("Model Server Settings", "Model concurrency", "NEWS_MODEL_CONCURRENCY", "number", default=DEFAULT_PIPELINE_CONCURRENCY, minimum=1, step=1, advanced=True),
         _runtime_knob("Model Server Settings", "Model base URL", "NEWS_MODEL_BASE_URL", default="http://127.0.0.1:8080/v1"),
@@ -1823,6 +1882,12 @@ def runtime_knob_registry() -> list[dict[str, Any]]:
     ]
     for task, task_label, max_tokens_label in MODEL_TASK_KNOB_SPECS:
         env_suffix = task.upper()
+        # ui_location is the browser's render-ownership contract (issue
+        # #115): only tasks with dedicated TASK_CONFIG controls are
+        # advanced_panels. The translation task (issue #172) has no
+        # dedicated panel yet, so its knobs stay raw Advanced overrides.
+        dedicated = task != MODEL_TASK_TRANSLATION
+        ui_location = UI_LOCATION_ADVANCED_PANELS if dedicated else UI_LOCATION_ADVANCED_RAW
         knobs.append(
             _runtime_knob(
                 "Model Selection",
@@ -1840,6 +1905,7 @@ def runtime_knob_registry() -> list[dict[str, Any]]:
                 f"NEWS_MODEL_{env_suffix}_TUNING_PRESET",
                 "select",
                 options=tuning_presets,
+                ui_location=ui_location,
             )
         )
         knobs.append(
@@ -1850,6 +1916,7 @@ def runtime_knob_registry() -> list[dict[str, Any]]:
                 "number",
                 minimum=1,
                 step=1,
+                ui_location=ui_location,
             )
         )
         knobs.append(
@@ -1862,6 +1929,7 @@ def runtime_knob_registry() -> list[dict[str, Any]]:
                     if task == MODEL_TASK_TRANSLATION
                     else "http://127.0.0.1:8080/v1"
                 ),
+                ui_location=ui_location,
             )
         )
     sampling_suffixes = [
@@ -1876,8 +1944,15 @@ def runtime_knob_registry() -> list[dict[str, Any]]:
         **MODEL_TASK_SAMPLING_ENV_PREFIXES,
         "reasoning": "NEWS_MODEL_REASONING",
     }
+    # The five actual LLM task sampling families are rendered by the
+    # dedicated modelTuningPanel() controls; the default/story-discovery/
+    # reasoning families stay raw Advanced overrides (issue #115). The
+    # translation family (issue #172) also stays raw: the UI has no
+    # dedicated translation panel yet.
+    sampled_tasks = {spec[0] for spec in MODEL_TASK_KNOB_SPECS} - {MODEL_TASK_TRANSLATION}
     for task, prefix in sorted(sampling_prefixes.items()):
         task_label = task.replace("_", " ").title()
+        dedicated = task in sampled_tasks
         for suffix, suffix_label, value_type, minimum, maximum, step in sampling_suffixes:
             knobs.append(
                 _runtime_knob(
@@ -1889,8 +1964,12 @@ def runtime_knob_registry() -> list[dict[str, Any]]:
                     maximum=maximum,
                     step=step,
                     advanced=True,
+                    ui_location=(
+                        UI_LOCATION_ADVANCED_PANELS if dedicated else UI_LOCATION_ADVANCED_RAW
+                    ),
                 )
             )
+    _validate_ui_locations(knobs)
     return knobs
 
 def build_model_server_command(

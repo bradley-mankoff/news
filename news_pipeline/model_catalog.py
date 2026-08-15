@@ -366,11 +366,10 @@ def _validate_catalog_gguf_reference(value: Any, alias: str, path: Path, field: 
 
     Delegates segment grammar (traversal, separators, control characters) to
     the stdlib-only adapter so catalog identity and launch parsing can never
-    disagree; the reference must be the exact file-qualified form."""
+    disagree; the reference must be the exact file-qualified form.
+    """
     if not isinstance(value, str):
-        raise ValueError(
-            f"{path} model {alias!r} {field} must be a string."
-        )
+        raise ValueError(f"{path} model {alias!r} {field} must be a string.")
     reference = value.strip()
     if not reference or reference != value:
         raise ValueError(
@@ -459,22 +458,20 @@ def _validate_catalog_entry(
         reference = _validate_catalog_gguf_reference(
             raw_entry["reference"], alias, path, "reference"
         )
-        mismatched = reference.rsplit("/", 1)[0] != hf_repo
-        mismatch_error = (
-            f"{path} model {alias!r} reference must be a file-qualified "
-            f".gguf reference under hf_repo; got reference={reference!r}, "
-            f"hf_repo={hf_repo!r}."
-        )
+        if reference.rsplit("/", 1)[0] != hf_repo:
+            raise ValueError(
+                f"{path} model {alias!r} reference must be a file-qualified "
+                f".gguf reference under hf_repo; got reference={reference!r}, "
+                f"hf_repo={hf_repo!r}."
+            )
     else:
         reference = _validate_catalog_repo_id(raw_entry["reference"], alias, path, "reference")
         hf_repo = _validate_catalog_repo_id(raw_entry["hf_repo"], alias, path, "hf_repo")
-        mismatched = reference != hf_repo
-        mismatch_error = (
-            f"{path} model {alias!r} reference must equal hf_repo (issue #92 "
-            f"drift guard); got reference={reference!r}, hf_repo={hf_repo!r}."
-        )
-    if mismatched:
-        raise ValueError(mismatch_error)
+        if reference != hf_repo:
+            raise ValueError(
+                f"{path} model {alias!r} reference must equal hf_repo (issue #92 "
+                f"drift guard); got reference={reference!r}, hf_repo={hf_repo!r}."
+            )
     name = str(raw_entry["name"]).strip()
     description = str(raw_entry["description"]).strip()
     if not name:
