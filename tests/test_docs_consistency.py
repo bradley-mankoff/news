@@ -309,6 +309,54 @@ class DocsConsistencyTests(unittest.TestCase):
             _README.read_text(encoding="utf-8"),
         )
 
+    def test_runtime_fit_documentation_preserves_exact_matching_and_advisory_bounds(
+        self,
+    ) -> None:
+        adr = _MODEL_CATALOG_ADR.read_text(encoding="utf-8")
+        readme = _README.read_text(encoding="utf-8")
+
+        runtime_fit = re.sub(
+            r"\s+",
+            " ",
+            adr.split("### Runtime-fit verdicts", 1)[1].split(
+                "### Advisory boundary", 1
+            )[0],
+        ).lower()
+        for term in (
+            "repository `id` exactly equals the merged entry's `hf_repo`",
+            "alias/reference matching is used by catalog/config lookup, not by `runtime_fit_for_hf_model()`",
+            "bare org id or prefix sibling never matches",
+            "repository metadata heuristics",
+        ):
+            self.assertIn(
+                term,
+                runtime_fit,
+                f"ADR 0019 missing runtime-fit term {term!r}",
+            )
+
+        model_catalog = re.sub(
+            r"\s+",
+            " ",
+            readme.split("### Model Catalog", 1)[1].split(
+                "#### User-editable YAML overrides", 1
+            )[0],
+        ).lower()
+        for term in (
+            "as advisory picker/configuration hints",
+            "do not guarantee hardware fit, compatibility, or successful launch",
+            "hardware fitting itself lives on the hugging face model page",
+        ):
+            self.assertIn(
+                term,
+                model_catalog,
+                f"README missing runtime-fit term {term!r}",
+            )
+        self.assertNotIn(
+            "unlaunchable repos are never picked",
+            model_catalog,
+            "README must not present runtime-fit verdicts as launch protection",
+        )
+
     def test_adrs_are_uniquely_numbered_and_well_formed(self) -> None:
         adr_paths = sorted(_REPO.glob("docs/adr/[0-9][0-9][0-9][0-9]-*.md"))
         self.assertTrue(adr_paths, "docs/adr must contain at least one ADR")

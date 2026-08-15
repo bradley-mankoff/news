@@ -76,11 +76,12 @@ vocabulary:
 
 Classification precedence and boundaries:
 
-- Catalog entries win by exact match (issue #92): an exact alias or
-  `hf_repo` equality against the merged snapshot is the anchored match. A
-  bare org id or prefix sibling never matches. Built-in entries are
-  project-verified for their declared backend; user YAML entries that
-  declare a managed backend carry advisory verdicts.
+- Catalog entries win when a Hugging Face result's repository `id` exactly
+  equals the merged entry's `hf_repo` (issue #92). Alias/reference matching is
+  used by catalog/config lookup, not by `runtime_fit_for_hf_model()`. A bare
+  org id or prefix sibling never matches. Built-in entries are project-verified
+  for their declared backend; user YAML entries that declare a managed backend
+  carry advisory verdicts.
 - Generic Hugging Face results are classified from repository metadata
   heuristics: text-generation GGUF tags classify as `managed_llama_cpp`
   (multimodal GGUF stays `external_only` because mmproj files are not
