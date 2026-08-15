@@ -228,8 +228,9 @@ When running from a shell, put `NEWS_` assignments on the same command line or
 export them first:
 
 ```bash
-NEWS_MODEL=gemma-e2b-tiny NEWS_IMAGE_ENABLED=0 uv run news run
+NEWS_MODEL=gemma-e2b-tiny NEWS_MODEL_BACKEND=mlx-lm NEWS_IMAGE_ENABLED=0 uv run news run
 export NEWS_MODEL=gemma-e2b-tiny
+export NEWS_MODEL_BACKEND=mlx-lm
 uv run news run
 ```
 
@@ -365,7 +366,7 @@ override because its renderer escapes them safely.
 ### Model Selection
 
 ```bash
-NEWS_MODEL=gemma-e2b-tiny uv run news run
+NEWS_MODEL=gemma-e2b-tiny NEWS_MODEL_BACKEND=mlx-lm uv run news run
 NEWS_MODEL=gemma-4-12b-it-4bit uv run news run --preset NAME
 ```
 
@@ -733,7 +734,7 @@ For even faster runs, override the model explicitly and tighten the
 recency window:
 
 ```bash
-NEWS_MODEL=gemma-e2b-tiny NEWS_RECENT_WINDOW_HOURS=6 uv run news run
+NEWS_MODEL=gemma-e2b-tiny NEWS_MODEL_BACKEND=mlx-lm NEWS_RECENT_WINDOW_HOURS=6 uv run news run
 ```
 
 To preview the resolved config before launching a run, use the UI or

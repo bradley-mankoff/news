@@ -1288,6 +1288,10 @@ assert(
                 self.assertEqual(snapshot["preset_id"], "daily")
                 self.assertEqual(snapshot["prompt_profile_id"], "balanced")
                 self.assertEqual(snapshot["model"]["reference"], "gemma-2b")
+                self.assertEqual(
+                    snapshot["model"]["concurrency_source"],
+                    "derived_from_stage_concurrency",
+                )
                 self.assertEqual(snapshot["model"]["story_scale_screening"]["reference"], "gemma-2b")
                 self.assertEqual(snapshot["model"]["title_generation"]["reference"], "gemma-2b")
                 self.assertEqual(snapshot["model"]["image_art_direction"]["reference"], "gemma-2b")

@@ -11,7 +11,7 @@ Common Run Settings:
     NEWS_IMAGE_ENABLED=0|1
 
 Model selection:
-    NEWS_MODEL=gemma-e2b-tiny uv run news run --preset NAME
+    NEWS_MODEL=gemma-e2b-tiny NEWS_MODEL_BACKEND=mlx-lm uv run news run --preset NAME
     NEWS_MODEL=gemma-4-12b-it-4bit uv run news run --preset NAME
 
     NEWS_MODEL accepts either a friendly alias above or a full model repo/name.
@@ -5303,7 +5303,7 @@ def _run_pipeline() -> None:
     f"story overlap threshold {STORY_SELECTION_OVERLAP_THRESHOLD:.2f}, "
     f"article summary concurrency {ARTICLE_SUMMARY_CONCURRENCY}, "
     f"story synthesis concurrency {STORY_SYNTHESIS_CONCURRENCY}, "
-    f"derived model concurrency {MODEL_CONCURRENCY}."
+    f"model-server concurrency {MODEL_CONCURRENCY}."
     )
     progress_tracker.detail(
         f"Source scrape guardrails: article download timeout {ARTICLE_DOWNLOAD_TIMEOUT_SECONDS}s, "

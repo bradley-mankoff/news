@@ -564,8 +564,8 @@ def _task_assignment_entry(
     task: str,
     *,
     reference: str,
-    default_reference: str,
     default_backend: str,
+    inherited: bool,
     base_url: str,
     presets: dict[str, dict[str, Any]],
     model_concurrency: int,
@@ -575,10 +575,7 @@ def _task_assignment_entry(
     # resolved default backend so diagnostics and server commands never
     # disagree with the default assignment (issue #169). A task-specific
     # model override keeps its catalog/inferred backend metadata.
-    if resolve_model_name(reference) == resolve_model_name(default_reference):
-        backend = default_backend
-    else:
-        backend = infer_model_backend(reference)
+    backend = default_backend if inherited else infer_model_backend(reference)
     tuning = _configured_model_tuning(reference, task=task, presets=presets)
     return TaskModelAssignment(
         task=task,
@@ -616,7 +613,9 @@ def _configured_model_assignments(
     task_entries = {}
     for task, _, _ in MODEL_TASK_KNOB_SPECS:
         env_suffix = task.upper()
-        reference = _str_env(f"NEWS_MODEL_{env_suffix}", default_reference) or default_reference
+        raw_reference = _str_env(f"NEWS_MODEL_{env_suffix}", "")
+        inherited = not raw_reference
+        reference = raw_reference or default_reference
         base_url = _str_env(
             f"NEWS_MODEL_{env_suffix}_BASE_URL",
             default_server_settings.base_url,
@@ -624,8 +623,8 @@ def _configured_model_assignments(
         task_entries[task] = _task_assignment_entry(
             task,
             reference=reference,
-            default_reference=default_reference,
             default_backend=default_backend,
+            inherited=inherited,
             base_url=base_url,
             presets=presets,
             model_concurrency=model_concurrency,
@@ -1564,7 +1563,8 @@ def _configured_model_backend(model_reference: str) -> str:
     whose declared backend differs from the fixed default must be paired
     with an explicit NEWS_MODEL_BACKEND and fails fast with an actionable
     message; raw GGUF references likewise require the llama.cpp backend
-    explicitly. Per-task models always use inference. Known catalog
+    explicitly. Inherited task assignments use the resolved default backend;
+    explicit task assignments retain catalog/inferred backend metadata. Known catalog
     MLX/llama.cpp mismatches fail fast; unknown references may be selected
     with any backend."""
     configured = _str_env("NEWS_MODEL_BACKEND", "").strip().lower()

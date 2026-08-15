@@ -114,7 +114,7 @@ Print the fully resolved local server command without running the pipeline:
 
 ```bash
 NEWS_MODEL=gemma-4-12b-it-4bit uv run news model-server-command
-NEWS_MODEL=qwythos-9b-4bit NEWS_LLAMA_CPP_SERVER=/opt/llama/llama-server uv run news model-server-command
+NEWS_MODEL=qwythos-9b-4bit NEWS_MODEL_BACKEND=llama.cpp NEWS_LLAMA_CPP_SERVER=/opt/llama/llama-server uv run news model-server-command
 ```
 
 The llama.cpp preview prints the exact `llama-server` command (`--hf-repo`,

@@ -214,15 +214,22 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
         )
 
     def test_raw_gguf_without_explicit_backend_fails_fast(self) -> None:
-        with self.assertRaisesRegex(
-            ValueError,
-            r"NEWS_MODEL='.*my model.gguf' requires NEWS_MODEL_BACKEND=llama.cpp",
+        for reference in (
+            "/models/my model.gguf",
+            QWWYTHOS_9B_4BIT_MODEL_REFERENCE,
+            f"https://huggingface.co/{QWWYTHOS_9B_4BIT_MODEL_REFERENCE}",
+            f"https://hf.co/{QWWYTHOS_9B_4BIT_MODEL_REFERENCE}",
         ):
-            load_runtime_config(
-                environ={},
-                overrides={"NEWS_MODEL": "/models/my model.gguf"},
-                materialize_outputs=False,
-            )
+            with self.subTest(reference=reference):
+                with self.assertRaisesRegex(
+                    ValueError,
+                    r"requires NEWS_MODEL_BACKEND=llama\.cpp",
+                ):
+                    load_runtime_config(
+                        environ={},
+                        overrides={"NEWS_MODEL": reference},
+                        materialize_outputs=False,
+                    )
 
     def test_llama_cpp_backend_unknown_bare_hf_repo_supported(self) -> None:
         # An unknown bare HF repo explicitly selected for llama.cpp is passed
@@ -488,6 +495,27 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
                 "mlx-lm",
                 f"{task} must inherit the resolved default backend",
             )
+
+    def test_explicit_same_identity_task_override_keeps_inferred_backend(self) -> None:
+        # An explicit full model reference can resolve to the same model as the
+        # default alias without being an inherited assignment. Its catalog
+        # backend must remain authoritative for the task (issue #169).
+        config = load_runtime_config(
+            environ={},
+            overrides={
+                "NEWS_MODEL": CODEX_TEST_MODEL_ALIAS,
+                "NEWS_MODEL_BACKEND": "mlx-vlm",
+                "NEWS_MODEL_ARTICLE_SUMMARY": CODEX_TEST_MODEL_NAME,
+                "NEWS_MODEL_ARTICLE_SUMMARY_BASE_URL": "http://127.0.0.1:8090/v1",
+            },
+            materialize_outputs=False,
+        )
+
+        self.assertEqual(config.model_backend, "mlx-vlm")
+        assignment = config.model_assignments[MODEL_TASK_ARTICLE_SUMMARY]
+        self.assertEqual(assignment.name, CODEX_TEST_MODEL_NAME)
+        self.assertEqual(assignment.backend, "mlx-lm")
+        self.assertIn("python -m mlx_lm server", assignment.server_command)
 
     def test_external_backend_inherits_into_task_assignments(self) -> None:
         config = load_runtime_config(
