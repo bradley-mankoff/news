@@ -117,7 +117,7 @@ The llama.cpp preview prints the exact `llama-server` command (`--hf-repo`,
 `--hf-file`, `--alias`, localhost binding, concurrency, and max-token flags)
 without starting a server or downloading a model. The CLI previews only the
 resolved default assignment and has no task selector. To preview a task's
-managed command, set `NEWS_MODEL`, the relevant backend override, and
+managed command, set `NEWS_MODEL`, `NEWS_MODEL_BACKEND` when needed, and
 `NEWS_MODEL_BASE_URL` to that task's resolved values before running the command;
 during a run, secondary assignments use their own resolved command. Ownership
 follows the assignment backend, not URL appearance. During a run, the default server writes
