@@ -173,6 +173,40 @@ def _with_translation_metadata(
     }
 
 
+def _translation_status_result(
+    article: dict[str, Any],
+    *,
+    status: str,
+    reason: str,
+    source_language: str | None,
+    target_language: str,
+    text: str,
+    model_reference: str | None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Pair an annotated article with its JSON-ready status record.
+
+    Every terminal translation outcome shares this shape: ``text`` carries
+    the translated body when the model produced new content, otherwise the
+    original body (the stage is non-destructive).
+    """
+    return (
+        _with_translation_metadata(
+            article,
+            status=status,
+            reason=reason,
+            source_language=source_language,
+            target_language=target_language,
+            model_reference=model_reference,
+            text=text,
+        ),
+        {
+            "status": status,
+            "reason": reason,
+            "source_language": source_language,
+        },
+    )
+
+
 def _translation_failure_result(
     article: dict[str, Any],
     runtime: ArticleTranslationRuntime,
@@ -190,21 +224,14 @@ def _translation_failure_result(
             f"Translation failed for {label[:80]} "
             f"({type(error).__name__}: {error}); keeping original body."
         )
-    return (
-        _with_translation_metadata(
-            article,
-            status=TRANSLATION_STATUS_UNCHANGED,
-            reason=TRANSLATION_REASON_TRANSLATION_FAILED,
-            source_language=source_language,
-            target_language=target_language,
-            model_reference=runtime.model_reference,
-            text=original_text,
-        ),
-        {
-            "status": TRANSLATION_STATUS_UNCHANGED,
-            "reason": TRANSLATION_REASON_TRANSLATION_FAILED,
-            "source_language": source_language,
-        },
+    return _translation_status_result(
+        article,
+        status=TRANSLATION_STATUS_UNCHANGED,
+        reason=TRANSLATION_REASON_TRANSLATION_FAILED,
+        source_language=source_language,
+        target_language=target_language,
+        text=original_text,
+        model_reference=runtime.model_reference,
     )
 
 
@@ -243,39 +270,25 @@ def _translate_single_article(
                 error=error,
             )
         if not language_is_supported:
-            return (
-                _with_translation_metadata(
-                    article,
-                    status=TRANSLATION_STATUS_SKIPPED_UNKNOWN_LANGUAGE,
-                    reason=TRANSLATION_REASON_UNSUPPORTED_LANGUAGE_CODE,
-                    source_language=source_language,
-                    target_language=target_language,
-                    model_reference=None,
-                    text=original_text,
-                ),
-                {
-                    "status": TRANSLATION_STATUS_SKIPPED_UNKNOWN_LANGUAGE,
-                    "reason": TRANSLATION_REASON_UNSUPPORTED_LANGUAGE_CODE,
-                    "source_language": source_language,
-                },
+            return _translation_status_result(
+                article,
+                status=TRANSLATION_STATUS_SKIPPED_UNKNOWN_LANGUAGE,
+                reason=TRANSLATION_REASON_UNSUPPORTED_LANGUAGE_CODE,
+                source_language=source_language,
+                target_language=target_language,
+                text=original_text,
+                model_reference=None,
             )
 
     if not original_text.strip():
-        return (
-            _with_translation_metadata(
-                article,
-                status=TRANSLATION_STATUS_UNCHANGED,
-                reason=TRANSLATION_REASON_EMPTY_BODY,
-                source_language=source_language,
-                target_language=target_language,
-                model_reference=None,
-                text=original_text,
-            ),
-            {
-                "status": TRANSLATION_STATUS_UNCHANGED,
-                "reason": TRANSLATION_REASON_EMPTY_BODY,
-                "source_language": source_language,
-            },
+        return _translation_status_result(
+            article,
+            status=TRANSLATION_STATUS_UNCHANGED,
+            reason=TRANSLATION_REASON_EMPTY_BODY,
+            source_language=source_language,
+            target_language=target_language,
+            text=original_text,
+            model_reference=None,
         )
 
     try:
@@ -328,54 +341,33 @@ def _translate_single_article(
             if used_fallback
             else TRANSLATION_REASON_EMPTY_MODEL_OUTPUT
         )
-        return (
-            _with_translation_metadata(
-                article,
-                status=TRANSLATION_STATUS_UNCHANGED,
-                reason=reason,
-                source_language=source_language,
-                target_language=target_language,
-                model_reference=runtime.model_reference,
-                text=original_text,
-            ),
-            {
-                "status": TRANSLATION_STATUS_UNCHANGED,
-                "reason": reason,
-                "source_language": source_language,
-            },
-        )
-    if translated_text == original_text.strip():
-        return (
-            _with_translation_metadata(
-                article,
-                status=TRANSLATION_STATUS_UNCHANGED,
-                reason=TRANSLATION_REASON_MODEL_RETURNED_UNCHANGED,
-                source_language=source_language,
-                target_language=target_language,
-                model_reference=runtime.model_reference,
-                text=original_text,
-            ),
-            {
-                "status": TRANSLATION_STATUS_UNCHANGED,
-                "reason": TRANSLATION_REASON_MODEL_RETURNED_UNCHANGED,
-                "source_language": source_language,
-            },
-        )
-    return (
-        _with_translation_metadata(
+        return _translation_status_result(
             article,
-            status=TRANSLATION_STATUS_TRANSLATED,
-            reason=TRANSLATION_REASON_TRANSLATED,
+            status=TRANSLATION_STATUS_UNCHANGED,
+            reason=reason,
             source_language=source_language,
             target_language=target_language,
+            text=original_text,
             model_reference=runtime.model_reference,
-            text=translated_text,
-        ),
-        {
-            "status": TRANSLATION_STATUS_TRANSLATED,
-            "reason": TRANSLATION_REASON_TRANSLATED,
-            "source_language": source_language,
-        },
+        )
+    if translated_text == original_text.strip():
+        return _translation_status_result(
+            article,
+            status=TRANSLATION_STATUS_UNCHANGED,
+            reason=TRANSLATION_REASON_MODEL_RETURNED_UNCHANGED,
+            source_language=source_language,
+            target_language=target_language,
+            text=original_text,
+            model_reference=runtime.model_reference,
+        )
+    return _translation_status_result(
+        article,
+        status=TRANSLATION_STATUS_TRANSLATED,
+        reason=TRANSLATION_REASON_TRANSLATED,
+        source_language=source_language,
+        target_language=target_language,
+        text=translated_text,
+        model_reference=runtime.model_reference,
     )
 
 
@@ -434,14 +426,14 @@ def run_article_translation_pass(
                 if decision["reason"] == TRANSLATION_REASON_MISSING_SOURCE_LANGUAGE
                 else TRANSLATION_STATUS_NOT_NEEDED
             )
-            translated_article = _with_translation_metadata(
+            translated_article, _ = _translation_status_result(
                 article,
                 status=status,
                 reason=decision["reason"],
                 source_language=decision["source_language"],
                 target_language=target_language,
-                model_reference=None,
                 text=str(article.get("text") or ""),
+                model_reference=None,
             )
         else:
             translation_index += 1

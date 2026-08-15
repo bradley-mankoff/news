@@ -5206,14 +5206,19 @@ def _wait_for_managed_model_server(
     timeout_seconds: int = 300,
 ) -> dict[str, Any]:
     deadline = time.monotonic() + timeout_seconds
+    base_url = assignment.base_url if assignment is not None else MODEL_BASE_URL
+    log_path = (
+        _managed_model_server_log_path_for(assignment)
+        if assignment is not None
+        else _managed_model_server_log_path()
+    )
     last_preflight: dict[str, Any] = {}
     while time.monotonic() < deadline:
         exit_code = process.poll()
         if exit_code is not None:
             raise RuntimeError(
                 f"Managed model server exited before it was ready "
-                f"(exit code {exit_code}). See "
-                f"{_managed_model_server_log_path_for(assignment) if assignment is not None else _managed_model_server_log_path()}."
+                f"(exit code {exit_code}). See {log_path}."
             )
         last_preflight = (
             _preflight_model_server_for(assignment)
@@ -5225,12 +5230,6 @@ def _wait_for_managed_model_server(
         time.sleep(2)
 
     detail = last_preflight.get("error") or last_preflight.get("served_models") or "no response"
-    base_url = assignment.base_url if assignment is not None else MODEL_BASE_URL
-    log_path = (
-        _managed_model_server_log_path_for(assignment)
-        if assignment is not None
-        else _managed_model_server_log_path()
-    )
     raise TimeoutError(
         f"Managed model server did not become ready within {timeout_seconds} seconds "
         f"at {base_url}: {detail}. See {log_path}."

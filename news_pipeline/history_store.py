@@ -885,6 +885,12 @@ def _insert_sources(con: Any, run_id: str, source_runs: list[dict[str, Any]]) ->
         _insert_dict(con, "run_sources", row)
 
 
+def _nullable_text(article: dict[str, Any], key: str) -> str | None:
+    """String column value stored as NULL when absent or empty."""
+    value = str(article.get(key) or "")
+    return value or None
+
+
 def _insert_run_articles(con: Any, run_id: str, stage: str, articles: list[dict[str, Any]], *, imported_from_path: str = "") -> None:
     seen: set[tuple[str, str]] = set()
     row_index = 0
@@ -911,21 +917,13 @@ def _insert_run_articles(con: Any, run_id: str, stage: str, articles: list[dict[
             "scrape_status": str(article.get("scrape_status") or ""),
             "resolution_status": str(article.get("resolution_status") or ""),
             "imported_from_path": imported_from_path,
-            "translation_status": str(article.get("translation_status") or "") or None,
-            "translation_reason": str(article.get("translation_reason") or "") or None,
-            "translation_source_language": (
-                str(article.get("translation_source_language") or "") or None
-            ),
-            "translation_target_language": (
-                str(article.get("translation_target_language") or "") or None
-            ),
-            "translation_model": str(article.get("translation_model") or "") or None,
-            "translation_original_text_preview": (
-                str(article.get("translation_original_text_preview") or "") or None
-            ),
-            "translation_text_preview": (
-                str(article.get("translation_text_preview") or "") or None
-            ),
+            "translation_status": _nullable_text(article, "translation_status"),
+            "translation_reason": _nullable_text(article, "translation_reason"),
+            "translation_source_language": _nullable_text(article, "translation_source_language"),
+            "translation_target_language": _nullable_text(article, "translation_target_language"),
+            "translation_model": _nullable_text(article, "translation_model"),
+            "translation_original_text_preview": _nullable_text(article, "translation_original_text_preview"),
+            "translation_text_preview": _nullable_text(article, "translation_text_preview"),
         }
         _insert_dict(con, "run_articles", row)
 
