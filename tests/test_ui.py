@@ -3150,13 +3150,21 @@ assert(modelSelect.value === "owner/external", "external search handler did not 
         node = shutil.which("node")
         if node is None:
             self.skipTest("Node.js is required for the embedded UI renderer harness")
-        result = subprocess.run(
-            [node, "--input-type=module", "-"],
-            input=js,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
+        timeout_seconds = 30
+        try:
+            result = subprocess.run(
+                [node, "--input-type=module", "-"],
+                input=js,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=timeout_seconds,
+            )
+        except subprocess.TimeoutExpired as exc:
+            self.fail(
+                f"Node harness timed out after {timeout_seconds}s: "
+                f"stdout={exc.stdout!r} stderr={exc.stderr!r}"
+            )
         self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
 
     def test_prompt_template_editor_actions_execute_in_node_dom_harness(self) -> None:
