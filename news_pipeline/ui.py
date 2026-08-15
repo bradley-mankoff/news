@@ -1590,13 +1590,20 @@ class NewsUIHandler(BaseHTTPRequestHandler):
                 try:
                     limit = int(raw_limit) if raw_limit else 20
                 except ValueError:
-                    limit = 20
+                    self._send_json(
+                        {
+                            "query": query,
+                            "models": [],
+                            "error": f"--limit must be an integer, got {raw_limit!r}.",
+                        },
+                        status=HTTPStatus.BAD_REQUEST,
+                    )
+                    return
                 try:
                     models = search_huggingface_models(
                         query, pipeline_tag=pipeline_tag, limit=limit
                     )
-                except Exception as exc:
-                    models = []
+                except (OSError, ValueError, ImportError) as exc:
                     self._send_json({"query": query, "models": [], "error": str(exc)})
                 else:
                     self._send_json({"query": query, "models": models, "error": None})
@@ -1611,7 +1618,7 @@ class NewsUIHandler(BaseHTTPRequestHandler):
                     return
                 try:
                     info = fetch_model_metadata(reference)
-                except Exception as exc:
+                except (OSError, ValueError, ImportError) as exc:
                     self._send_json({"model": reference, "info": None, "error": str(exc)})
                 else:
                     self._send_json({"model": reference, "info": info, "error": None})

@@ -234,8 +234,11 @@ class WorkflowRecoveryTest(unittest.TestCase):
         with (
             patch.object(
                 recovery_adapter,
-                "resolve_worktree_info",
-                return_value={"branch": "archon/task-issue-141", "path": "/tmp/141"},
+                "resolve_worktree_info_with_health",
+                return_value=(
+                    {"branch": "archon/task-issue-141", "path": "/tmp/141"},
+                    None,
+                ),
             ),
             patch.object(
                 recovery_adapter,
@@ -252,7 +255,11 @@ class WorkflowRecoveryTest(unittest.TestCase):
     def test_fresh_dispatch_defers_when_run_lookup_is_unavailable(self):
         unavailable = WorkflowRuns(error="archon_timeout")
         with (
-            patch.object(recovery_adapter, "resolve_worktree_info", return_value=None),
+            patch.object(
+                recovery_adapter,
+                "resolve_worktree_info_with_health",
+                return_value=(None, None),
+            ),
             patch.object(recovery_adapter, "fetch_workflow_runs", return_value=unavailable),
             patch.object(recovery_adapter, "log") as log,
         ):
@@ -263,6 +270,99 @@ class WorkflowRecoveryTest(unittest.TestCase):
             "FRESH DISPATCH DEFERRED issue=141: "
             "run lookup unavailable (archon_timeout)"
         )
+
+    def test_fresh_dispatch_defers_when_worktree_lookup_is_unavailable(self):
+        with (
+            patch.object(
+                recovery_adapter,
+                "resolve_worktree_info_with_health",
+                return_value=(None, "archon_isolation_timeout"),
+            ),
+            patch.object(recovery_adapter, "fetch_workflow_runs") as fetch,
+            patch.object(recovery_adapter, "log") as log,
+        ):
+            allowed, reason = fresh_issue_dispatch_guard({}, 141)
+        self.assertFalse(allowed)
+        self.assertEqual(
+            reason,
+            "Archon worktree lookup unavailable: archon_isolation_timeout",
+        )
+        fetch.assert_not_called()
+        log.assert_called_once_with(
+            "FRESH DISPATCH DEFERRED issue=141: "
+            "worktree lookup unavailable (archon_isolation_timeout)"
+        )
+
+    def test_fresh_dispatch_defers_when_worktree_cleanliness_is_unknown(self):
+        with (
+            patch.object(
+                recovery_adapter,
+                "resolve_worktree_info_with_health",
+                return_value=(
+                    {"branch": "archon/task-issue-141", "path": "/tmp/141"},
+                    None,
+                ),
+            ),
+            patch.object(
+                recovery_adapter,
+                "inspect_worktree",
+                return_value={
+                    "path": "/tmp/141",
+                    "exists": True,
+                    "dirty": None,
+                    "error": "git unavailable",
+                },
+            ),
+            patch.object(recovery_adapter, "fetch_workflow_runs") as fetch,
+        ):
+            allowed, reason = fresh_issue_dispatch_guard({}, 141)
+        self.assertFalse(allowed)
+        self.assertEqual(
+            reason,
+            "existing worktree cannot be verified: git unavailable",
+        )
+        fetch.assert_not_called()
+
+    def test_fresh_dispatch_allows_healthy_empty_lookup(self):
+        with (
+            patch.object(
+                recovery_adapter,
+                "resolve_worktree_info_with_health",
+                return_value=(None, None),
+            ),
+            patch.object(
+                recovery_adapter,
+                "fetch_workflow_runs",
+                return_value=WorkflowRuns(),
+            ),
+        ):
+            self.assertEqual(
+                fresh_issue_dispatch_guard({}, 141),
+                (True, ""),
+            )
+
+    def test_fresh_dispatch_refuses_matching_active_run(self):
+        active = WorkflowRuns([{
+            "id": "run-141",
+            "user_message": "Build feature from issue #141",
+            "started_at": "2026-08-07T10:00:00Z",
+            "status": "running",
+        }])
+        with (
+            patch.object(
+                recovery_adapter,
+                "resolve_worktree_info_with_health",
+                return_value=(None, None),
+            ),
+            patch.object(
+                recovery_adapter,
+                "fetch_workflow_runs",
+                return_value=active,
+            ),
+        ):
+            allowed, reason = fresh_issue_dispatch_guard({}, 141)
+        self.assertFalse(allowed)
+        self.assertEqual(reason, "Archon run run-141 is still active")
 
 
 class MatchIssuePrTest(unittest.TestCase):
@@ -1331,6 +1431,7 @@ class FillConcurrencyGapTest(unittest.TestCase):
             if "CONCURRENCY GAP" in c.args[0]]
         self.assertEqual(len(gap), 1)
         self.assertIn("dep_blocked=1", gap[0])
+
 
     def test_failed_move_does_not_promote_or_seed_state(self):
         state = {}

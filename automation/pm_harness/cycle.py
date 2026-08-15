@@ -930,8 +930,8 @@ def _fill_concurrency_gap(
     empty (no runnable items, dep-blocked, decision-only, needs-input,
     closed) so the gap is visible and fixable.
 
-    Mutates `item['status']` in place so the next poll observes the
-    Backlog-to-Todo transition. This helper runs after the current poll's
+    Mutates `item['status']` in place so the next poll's dispatch loop sees
+    the Todo transition. This helper runs after the current poll's
     transition/dispatch loop, so promoted items dispatch on the next poll.
 
     Returns the number of items promoted.
@@ -1163,7 +1163,10 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
         dep_blocked_marker = None
         dep_cancelled_noted = None
 
-        if not first_run and prev != status_val:
+        dispatch_guard_retry = (
+            lane == "todo" and bool(rec.get("dispatch_guard_deferred"))
+        )
+        if not first_run and (prev != status_val or dispatch_guard_retry):
             if lane == "todo" and content["__typename"] == "Issue":
                 # Dependency gate: an issue whose Depends-on refs are not all
                 # in the Done lane does not dispatch; it moves to the Blocked
@@ -1225,13 +1228,28 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
                         guard_ok, guard_reason = fresh_issue_dispatch_guard(
                             env, content["number"])
                         if guard_ok:
+                            # Clear before dispatch so a failed board move cannot
+                            # cause the same successful guard to dispatch again.
+                            rec.pop("dispatch_guard_deferred", None)
                             dispatch_result = dispatch(
                                 cfg, env, wf, branch, msg, item_id, content["number"])
                             ok = bool(dispatch_result)
                             if not ok and dispatch_result.reason == "capacity":
+                                rec["dispatch_guard_deferred"] = True
                                 note_capacity_deferred(
                                     cfg, env, content["number"], rec)
+                        elif guard_reason.startswith((
+                            "Archon run lookup unavailable:",
+                            "Archon worktree lookup unavailable:",
+                        )):
+                            rec["dispatch_guard_deferred"] = True
+                            rec.pop("recovery", None)
+                            log(
+                                f"DISPATCH DEFERRED issue={content['number']}: "
+                                f"{guard_reason}"
+                            )
                         else:
+                            rec.pop("dispatch_guard_deferred", None)
                             log(f"DISPATCH REFUSED issue={content['number']}: {guard_reason}")
                             rec["recovery"] = {
                                 "action": "resume_required",
@@ -1357,9 +1375,10 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
         fresh_dispatched=fresh_dispatched,
     )
     # Desired-state pass: fill free dispatch slots from runnable Backlog
-    # items so the factory stays near capacity without human nudges. The
-    # initial poll remains a read-only snapshot; later polls promote items
-    # after the transition loop, so they dispatch on the next poll.
+    # items so the factory stays near capacity without human nudges. Do not
+    # mutate existing board state while taking the initial snapshot; later
+    # polls promote items after the transition loop, and they dispatch on the
+    # next poll's Todo transition.
     if not ctx.first_run:
         _fill_concurrency_gap(ctx, items, number_lane, number_state)
     _recheck_review_dispatch(ctx)
