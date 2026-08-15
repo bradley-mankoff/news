@@ -19,11 +19,11 @@ boundary) and is consumed by the CLI commands `news models catalog` and
 `news_pipeline/config.py` alias/backend lookup.
 
 The decision was extended but never baselined:
-[`docs/adr/0014-model-catalog-yaml-overrides.md`](docs/adr/0014-model-catalog-yaml-overrides.md)
+[`docs/adr/0014-model-catalog-yaml-overrides.md`](0014-model-catalog-yaml-overrides.md)
 records only the later YAML-overlay extension of the catalog,
-[`docs/adr/0017-runtime-matrix.md`](docs/adr/0017-runtime-matrix.md)
+[`docs/adr/0017-runtime-matrix.md`](0017-runtime-matrix.md)
 records the supported runtime matrix, and
-[`docs/adr/0007-model-configuration-vocabulary.md`](docs/adr/0007-model-configuration-vocabulary.md)
+[`docs/adr/0007-model-configuration-vocabulary.md`](0007-model-configuration-vocabulary.md)
 records the model-configuration vocabulary. No
 accepted ADR records *why* curated metadata and runtime-fit classification
 belong to the Model Catalog or how those decisions relate. Without a baseline
@@ -100,7 +100,7 @@ guarantee hardware fit, quality, safety, chat-template compatibility, or
 successful launch on every operator machine. The picker links to each Hugging
 Face model page's native hardware compatibility panel, and ADR 0017 owns the
 meaning and limits of supported backends
-([`docs/adr/0017-runtime-matrix.md`](docs/adr/0017-runtime-matrix.md)).
+([`docs/adr/0017-runtime-matrix.md`](0017-runtime-matrix.md)).
 YAML-added entries are
 user-verified, not Apple-Silicon/llama-server verified by this project, and
 never silently become the default model.
@@ -125,13 +125,13 @@ duplicate maps.
 
 ### Ownership boundaries
 
-- [`docs/adr/0017-runtime-matrix.md`](docs/adr/0017-runtime-matrix.md)
+- [`docs/adr/0017-runtime-matrix.md`](0017-runtime-matrix.md)
   owns the supported runtime matrix and backend semantics; this record does
   not restate them.
-- [`docs/adr/0014-model-catalog-yaml-overrides.md`](docs/adr/0014-model-catalog-yaml-overrides.md)
+- [`docs/adr/0014-model-catalog-yaml-overrides.md`](0014-model-catalog-yaml-overrides.md)
   owns the optional YAML overlay (validation, identity rules, and snapshot
   behavior); this record defines the baseline it extends.
-- [`docs/adr/0007-model-configuration-vocabulary.md`](docs/adr/0007-model-configuration-vocabulary.md)
+- [`docs/adr/0007-model-configuration-vocabulary.md`](0007-model-configuration-vocabulary.md)
   owns model selection/tuning/budget/server vocabulary; this record does
   not reassign that vocabulary.
 - This record accepts the current Model Catalog ownership; it does not
