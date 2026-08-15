@@ -222,13 +222,17 @@ def _reconcile_completions(
                     )
                     runs_by_msg = runs_by_message_from(runs_snapshot)
                 lookup_error = getattr(runs_snapshot, "error", None)
-                if lookup_error and not direct_run and not runs_snapshot:
-                    log(
-                        f"RUN LOOKUP UNAVAILABLE: {lookup_error}; "
-                        "retaining run markers"
-                    )
-                    state[item_id] = rec
-                    continue
+                if lookup_error:
+                    # A direct lookup for the persisted run is targeted evidence;
+                    # an incomplete list is not evidence that no newer run exists.
+                    runs_by_msg = None
+                    if not direct_run:
+                        log(
+                            f"RUN LOOKUP UNAVAILABLE: {lookup_error}; "
+                            "retaining run markers"
+                        )
+                        state[item_id] = rec
+                        continue
                 newest_run = None
                 if msg:
                     newest_run = latest_workflow_run(
@@ -656,7 +660,8 @@ def _complete_reviews(ctx: PollContext, runs_snapshot: WorkflowRuns | None, runs
 
             rmsg = rec.get("review_msg")
             review_run = fetch_workflow_run(env, rec.get("review_run_id"))
-            if rmsg:
+            verdict_holds_review = verdict in {"request-changes", "block"}
+            if rmsg and not verdict_holds_review:
                 if runs_snapshot is None:
                     fetched = fetch_workflow_runs(env)
                     runs_snapshot = (
@@ -665,9 +670,18 @@ def _complete_reviews(ctx: PollContext, runs_snapshot: WorkflowRuns | None, runs
                         else WorkflowRuns(list(fetched or []))
                     )
                     runs_by_msg = runs_by_message_from(runs_snapshot)
-                newest_review = latest_workflow_run(
-                    runs_snapshot, message=rmsg)
-                review_run = review_run or newest_review
+                lookup_error = getattr(runs_snapshot, "error", None)
+                if lookup_error and not review_run:
+                    log(
+                        f"RUN LOOKUP UNAVAILABLE: {lookup_error}; "
+                        "retaining review run markers"
+                    )
+                    state[item_id] = rec
+                    continue
+                if not lookup_error:
+                    newest_review = latest_workflow_run(
+                        runs_snapshot, message=rmsg)
+                    review_run = review_run or newest_review
             rstatus = str((review_run or {}).get("status") or "").lower()
             if review_run:
                 rec["review_run_id"] = str(review_run.get("id") or "")
@@ -912,6 +926,17 @@ def ensure_ship_review(cfg: dict, env: dict, item_id: str, issue_number: int,
         return None
     rec.pop("review_held", None)
     return "ok", msg, ship["number"]
+
+
+def _dispatch_guard_is_deferred(reason: str) -> bool:
+    """Identify guard failures caused by unavailable safety lookups."""
+    return reason.startswith(
+        (
+            "Archon run lookup unavailable:",
+            "Archon worktree lookup unavailable:",
+        )
+    )
+
 
 
 def _fill_concurrency_gap(
@@ -1238,10 +1263,7 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
                                 rec["dispatch_guard_deferred"] = True
                                 note_capacity_deferred(
                                     cfg, env, content["number"], rec)
-                        elif guard_reason.startswith((
-                            "Archon run lookup unavailable:",
-                            "Archon worktree lookup unavailable:",
-                        )):
+                        elif _dispatch_guard_is_deferred(guard_reason):
                             rec["dispatch_guard_deferred"] = True
                             rec.pop("recovery", None)
                             log(
@@ -1269,6 +1291,7 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
                                         f"discard {content['number']}`"):
                                     rec["dispatch_guard_notice"] = guard_reason
                     if ok:
+                        rec.pop("dispatch_guard_deferred", None)
                         dispatched_msg = msg
                         dispatched_wf = wf
                         dispatched_branch = branch
@@ -1322,6 +1345,7 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
             rec.pop("ready_test_comment", None)
             rec.pop("develop_pr", None)
             rec.pop("dispatch_guard_notice", None)
+            rec.pop("dispatch_guard_deferred", None)
             rec.pop("run_id", None)
             rec.pop("retrying", None)
             rec.pop("recovery_logged_run_id", None)
@@ -1378,7 +1402,8 @@ def poll(cfg: dict, env: dict, state: dict) -> None:
     # items so the factory stays near capacity without human nudges. Do not
     # mutate existing board state while taking the initial snapshot; later
     # polls promote items after the transition loop, and they dispatch on the
-    # next poll's Todo transition.
+    # next poll's Todo transition. The first poll establishes a snapshot and
+    # must not mutate pre-existing Backlog work.
     if not ctx.first_run:
         _fill_concurrency_gap(ctx, items, number_lane, number_state)
     _recheck_review_dispatch(ctx)
