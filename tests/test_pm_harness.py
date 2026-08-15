@@ -11,12 +11,13 @@ from pathlib import Path
 from unittest.mock import Mock, call, patch
 
 import automation.apply_workflow_edits as workflow_edits
+import automation.pm_harness.archon as archon
 import automation.pm_harness.cycle as cycle
 import automation.board_health as board_health
 import automation.pm_harness.engine as engine
 import automation.pm_harness.github as github
 import automation.pm_harness.recovery as recovery
-from automation.pm_harness.model import DispatchResult
+from automation.pm_harness.model import DispatchResult, WorkflowRunLookup, WorkflowRuns
 from automation.pm_harness.runtime import (
     hydrate_state_for_items,
     load_config,
@@ -78,6 +79,88 @@ def issue(number: int, status: str, *, labels: list[str] | None = None) -> dict:
             "labels": {"nodes": [{"name": name} for name in (labels or [])]},
         },
     }
+
+
+class ExactWorkflowLookupTest(unittest.TestCase):
+    def test_exact_lookup_preserves_transport_errors(self) -> None:
+        with patch.object(
+            archon.subprocess,
+            "run",
+            side_effect=subprocess.TimeoutExpired("archon", 60),
+        ):
+            result = archon.fetch_workflow_run({}, "run-1")
+        self.assertEqual(result, WorkflowRunLookup(error="archon_run_timeout"))
+
+        with patch.object(
+            archon.subprocess,
+            "run",
+            return_value=subprocess.CompletedProcess([], 1, "", "failed"),
+        ):
+            result = archon.fetch_workflow_run({}, "run-1")
+        self.assertEqual(result, WorkflowRunLookup(error="archon_run_command_failed"))
+
+    def test_exact_lookup_returns_found_run_only_for_valid_json(self) -> None:
+        run = {"id": "run-1", "status": "completed"}
+        with patch.object(
+            archon.subprocess,
+            "run",
+            return_value=subprocess.CompletedProcess([], 0, json.dumps(run), ""),
+        ):
+            result = archon.fetch_workflow_run({}, "run-1")
+        self.assertEqual(result.run, run)
+        self.assertIsNone(result.error)
+        self.assertFalse(result.not_found)
+
+    def test_completion_reconciliation_does_not_use_bulk_fallback_after_exact_error(self) -> None:
+        state = {
+            "item-7": {
+                "status": "In Progress",
+                "issue_number": 7,
+                "run_id": "run-1",
+                "dispatch_msg": "Implement issue #7",
+            }
+        }
+        ctx = cycle.PollContext(
+            cfg=config(),
+            env={},
+            state=state,
+            project_id="project",
+            field_id="field",
+            status_options={},
+            items=[],
+            first_run=False,
+            done_lane_name="Done",
+            todo_lane_name="Todo",
+            blocked_lane_name="Blocked",
+            ready_lane_name="Ready for Review",
+            in_progress_lane_name="In Progress",
+            number_lane={},
+            number_state={},
+            seen=set(),
+            fresh_dispatched=set(),
+        )
+        with (
+            patch.object(
+                cycle,
+                "fetch_workflow_run",
+                return_value=WorkflowRunLookup(error="archon_run_timeout"),
+            ),
+            patch.object(
+                cycle,
+                "fetch_workflow_runs",
+                return_value=WorkflowRuns([
+                    {"id": "old-run", "status": "completed", "user_message": "Implement issue #7"}
+                ]),
+            ),
+            patch.object(
+                cycle,
+                "latest_workflow_run",
+                side_effect=AssertionError("stale bulk fallback used"),
+            ),
+        ):
+            cycle._reconcile_completions(ctx)
+
+        self.assertEqual(state["item-7"]["run_id"], "run-1")
 
 
 class ConfigTest(unittest.TestCase):

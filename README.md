@@ -92,6 +92,28 @@ shellcheck automation/*.sh
 A non-zero result fails the CI check. Install ShellCheck first for local use
 (Homebrew on macOS: `brew install shellcheck`, or your OS package manager).
 
+### Tests and CI
+
+CI runs the repository's full pytest suite for pull requests targeting
+`develop` or `main` and for pushes to those branches. The `test` job in
+`.github/workflows/ci.yml` installs the declared uv development environment
+and then runs the suite with the same command you can run locally; a failing
+pytest process fails the CI check, because the workflow does not mask
+pytest's native exit status.
+
+Reproduce the CI suite locally from the repo root:
+
+```bash
+uv sync --group dev
+uv run python -m pytest -q
+```
+
+Reliable local fallback on this machine (avoids `uv run` spawn flakes):
+
+```bash
+.venv/bin/python3 -m pytest tests/ -q
+```
+
 
 ## UI
 

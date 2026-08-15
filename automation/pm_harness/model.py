@@ -68,6 +68,15 @@ class DispatchResult:
         return self.started
 
 
+@dataclass(frozen=True)
+class WorkflowRunLookup:
+    """Result of an exact run lookup, preserving transport health."""
+
+    run: dict | None = None
+    error: str | None = None
+    not_found: bool = False
+
+
 class WorkflowRuns(list[dict]):
     """Run rows plus lookup health; partial rows are usable only by identity."""
 

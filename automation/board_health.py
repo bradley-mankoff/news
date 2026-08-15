@@ -27,6 +27,7 @@ fmt_deps = policy.fmt_deps
 gh = runtime.gh
 inspect_worktree = archon.inspect_worktree
 latest_workflow_run = archon.latest_workflow_run
+unpack_workflow_lookup = archon.unpack_workflow_lookup
 load_config = runtime.load_config
 parse_dep_refs = policy.parse_dep_refs
 run_status_for = policy.run_status_for
@@ -128,8 +129,15 @@ def main() -> int:
 
         if lane == in_progress_lane:
             msg = rec.get("dispatch_msg")
-            run = fetch_workflow_run(env, rec.get("run_id"))
-            if run is None:
+            lookup = fetch_workflow_run(env, rec.get("run_id"))
+            run, lookup_error, not_found = unpack_workflow_lookup(lookup)
+            if lookup_error:
+                findings.append(
+                    f"#{number} exact workflow lookup unavailable ({lookup_error}); "
+                    "inspect recovery state"
+                )
+                continue
+            if run is None and not_found:
                 run = latest_workflow_run(
                     workflow_runs,
                     message=msg,

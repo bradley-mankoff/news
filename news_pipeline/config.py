@@ -859,11 +859,31 @@ def canonical_model_endpoint(url: str) -> tuple[Any, ...]:
         host = _LOOPBACK_CANONICAL_HOST
     try:
         port = parsed.port
-    except ValueError:  # malformed port; treat as distinct
-        port = None
+    except ValueError:
+        # Keep malformed authorities distinct from valid default-port URLs.
+        # Runtime command construction rejects these URLs with an actionable
+        # error; this key must never silently alias a valid endpoint.
+        port = ("invalid-port", parsed.netloc)
     if port is None:
         port = 443 if scheme == "https" else 80 if scheme == "http" else None
     return (scheme, host, port, parsed.path.rstrip("/"))
+
+
+def managed_server_bind_key(base_url: str) -> tuple[str, int]:
+    """Return the local socket identity used by a managed server command.
+
+    Managed commands always bind loopback and default to port 8080 when the
+    configured URL omits a port. URL paths and schemes are request-routing
+    details, not separate local sockets.
+    """
+    parsed = urlparse(base_url or "")
+    try:
+        port = parsed.port
+    except ValueError as error:
+        raise ValueError(
+            f"Managed model server base URL has an invalid port: {base_url!r}"
+        ) from error
+    return (_LOOPBACK_CANONICAL_HOST, port or 8080)
 
 
 def same_model_endpoint(left: str, right: str) -> bool:
@@ -946,16 +966,32 @@ def _validate_managed_model_assignments(
     Assignments are grouped by canonical endpoint, and any group holding
     different model names is rejected before source collection - whether the
     collision is default-vs-task or task-vs-task (issue #133). External
-    assignments sharing a managed default endpoint are rejected before
-    grouping, while assignments riding an external default endpoint stay out
-    of the managed groups because caller-managed endpoints can serve multiple
-    models.
+    assignments - and assignments riding an external default endpoint -
+    stay out of the managed groups because external endpoints can serve
+    multiple models. An external task assignment cannot silently share the
+    managed default endpoint.
     """
     groups: dict[tuple[Any, ...], list[tuple[str, str, str, str]]] = {}
+    bind_groups: dict[tuple[str, int], tuple[tuple[Any, ...], str, str]] = {}
+
+    def add_assignment(entry: tuple[str, str, str, str]) -> None:
+        task, reference, name, base_url = entry
+        endpoint_key = canonical_model_endpoint(base_url)
+        bind_key = managed_server_bind_key(base_url)
+        existing = bind_groups.get(bind_key)
+        if existing is not None and existing[0] != endpoint_key:
+            _, existing_task, existing_base_url = existing
+            raise ValueError(
+                "Managed model servers require distinct local ports; "
+                f"Task {task!r} at {base_url!r} and Task {existing_task!r} "
+                f"at {existing_base_url!r} both bind {bind_key[0]}:{bind_key[1]}. "
+                "Set distinct per-task base URLs."
+            )
+        bind_groups.setdefault(bind_key, (endpoint_key, task, base_url))
+        groups.setdefault(endpoint_key, []).append((task, reference, name, base_url))
+
     if is_managed_model_backend(model_backend) and model_base_url:
-        groups.setdefault(canonical_model_endpoint(model_base_url), []).append(
-            ("default", model_reference, model_name, model_base_url)
-        )
+        add_assignment(("default", model_reference, model_name, model_base_url))
     for task, assignment in model_assignments.items():
         # The default assignment is synthesized above from the explicit
         # model_reference/model_name/model_base_url arguments so direct
@@ -980,9 +1016,7 @@ def _validate_managed_model_assignments(
             assignment_backend=assignment_backend,
         ) or not assignment.base_url:
             continue
-        groups.setdefault(canonical_model_endpoint(assignment.base_url), []).append(
-            (task, assignment.reference, assignment.name, assignment.base_url)
-        )
+        add_assignment((task, assignment.reference, assignment.name, assignment.base_url))
 
     for entries in groups.values():
         anchor_task, anchor_reference, anchor_name, anchor_base_url = entries[0]
@@ -1919,8 +1953,7 @@ def build_model_server_command(
     if backend == MODEL_BACKEND_EXTERNAL:
         return ""
     concurrency = max(1, int(model_concurrency))
-    parsed_base_url = urlparse(settings.base_url or "")
-    port = parsed_base_url.port or 8080
+    _, port = managed_server_bind_key(settings.base_url)
     if backend == MODEL_BACKEND_LLAMA_CPP:
         # The stdlib-only adapter owns GGUF reference parsing and shell-safe
         # argument construction; MLX-only prefill/cache flags are never

@@ -154,16 +154,14 @@ class ArticleCollectionTests(unittest.TestCase):
 
             self.assertEqual(_normalize_url_for_dedupe("https://www.example.com/a?utm_source=x#frag"), "example.com/a")
             self.assertEqual(_load_seen_urls(replace(request, url_reuse_blocking_enabled=False), adapters), set())
-            self.assertEqual(
+            with self.assertRaisesRegex(RuntimeError, "history is unavailable"):
                 _load_seen_urls(
                     request,
                     ArticleCollectionAdapters(
                         fetch_source_context=lambda *_args: {},
                         blocking_urls=lambda _path: (_ for _ in ()).throw(RuntimeError("history down")),
                     ),
-                ),
-                set(),
-            )
+                )
 
             appended: list[tuple[str, list[str]]] = []
             _record_run_urls(
@@ -318,28 +316,28 @@ class ArticleCollectionTests(unittest.TestCase):
             def fail_history(*_args: Any, **_kwargs: Any) -> None:
                 raise RuntimeError("history down")
 
-            result = collect_article_candidates(
-                self._request(root, sources=["alpha"]),
-                self._diagnostics(root),
-                _Finalizer(),  # type: ignore[arg-type]
-                _Progress(),
-                ArticleCollectionAdapters(
-                    fetch_source_context=lambda source_index, source_name: {
-                        "source_index": source_index,
-                        "source": source_name,
-                        "started_at": "2026-06-01T10:00:00+00:00",
-                        "completed_at": "2026-06-01T10:00:00+00:00",
-                        "elapsed_seconds": 0.0,
-                        "error_reason": "",
-                        "direct_context": self._direct_context([self._article("https://example.com/a", "A")]),
-                    },
-                    upsert_url_history=fail_history,
-                    append_unique_urls=lambda path, urls: appended.append((path, urls)),
-                ),
-            )
+            with self.assertRaisesRegex(RuntimeError, "persist URL reuse history"):
+                collect_article_candidates(
+                    self._request(root, sources=["alpha"]),
+                    self._diagnostics(root),
+                    _Finalizer(),  # type: ignore[arg-type]
+                    _Progress(),
+                    ArticleCollectionAdapters(
+                        fetch_source_context=lambda source_index, source_name: {
+                            "source_index": source_index,
+                            "source": source_name,
+                            "started_at": "2026-06-01T10:00:00+00:00",
+                            "completed_at": "2026-06-01T10:00:00+00:00",
+                            "elapsed_seconds": 0.0,
+                            "error_reason": "",
+                            "direct_context": self._direct_context([self._article("https://example.com/a", "A")]),
+                        },
+                        upsert_url_history=fail_history,
+                        append_unique_urls=lambda path, urls: appended.append((path, urls)),
+                    ),
+                )
 
-            self.assertEqual(len(result.article_candidates), 1)
-            self.assertEqual(appended, [(str(root / "used_urls.txt"), ["https://example.com/a"])])
+            self.assertEqual(appended, [])
 
     def _request(self, root: Path, *, sources: list[str]) -> ArticleCollectionRequest:
         return ArticleCollectionRequest(

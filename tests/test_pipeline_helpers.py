@@ -9,6 +9,8 @@ import json
 import os
 import shlex
 import signal
+import socket
+import subprocess
 import sys
 import tempfile
 import types
@@ -2446,6 +2448,121 @@ class PipelineHelperTests(unittest.TestCase):
             self.assertFalse(pipeline.MANAGED_MODEL_SERVER_ACTIVE)
             self.assertIsNone(pipeline.MANAGED_MODEL_SERVER_PROCESS)
 
+    def test_runtime_rejects_distinct_paths_on_the_same_managed_bind_port(self) -> None:
+        default_assignment, secondary_assignment = self._managed_fixture_assignments()
+        other_assignment = SimpleNamespace(**vars(secondary_assignment))
+        other_assignment.task = "story_drafting"
+        other_assignment.base_url = "http://127.0.0.1:8090/v1-other"
+        with tempfile.TemporaryDirectory() as tmpdir:
+            stack, popen, _stop, _wait_calls, _probe_calls = self._managed_fixture_stack(
+                tmpdir, default_assignment, secondary_assignment
+            )
+            with stack:
+                with pipeline.managed_model_server():
+                    pipeline._ensure_model_server_ready(secondary_assignment)
+                    with self.assertRaisesRegex(RuntimeError, "distinct local ports"):
+                        pipeline._ensure_model_server_ready(other_assignment)
+            self.assertEqual(popen.call_count, 1)
+
+    def test_two_real_managed_servers_route_http_and_stop(self) -> None:
+        """Exercise real child processes, readiness, probes, and teardown."""
+        server_code = r'''
+import json
+import os
+import signal
+import sys
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+model = sys.argv[1]
+signal.signal(signal.SIGTERM, lambda *_args: os._exit(0))
+
+class Handler(BaseHTTPRequestHandler):
+    def log_message(self, *_args):
+        return
+
+    def _json(self, payload):
+        body = json.dumps(payload).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_GET(self):
+        if self.path.endswith("/models"):
+            self._json({"data": [{"id": model}]})
+        else:
+            self.send_error(404)
+
+    def do_POST(self):
+        if not self.path.endswith("/chat/completions"):
+            self.send_error(404)
+            return
+        length = int(self.headers.get("Content-Length", "0"))
+        json.loads(self.rfile.read(length) or b"{}")
+        self._json({"choices": [{"message": {"content": "served:" + model}}]})
+
+ThreadingHTTPServer(("127.0.0.1", int(sys.argv[2])), Handler).serve_forever()
+'''
+
+        def free_port() -> int:
+            with socket.socket() as sock:
+                sock.bind(("127.0.0.1", 0))
+                return int(sock.getsockname()[1])
+
+        def assignment(task: str, port: int, name: str) -> SimpleNamespace:
+            base_url = f"http://127.0.0.1:{port}/v1"
+            command = " ".join(
+                shlex.quote(value)
+                for value in (sys.executable, "-c", server_code, name, str(port))
+            )
+            return SimpleNamespace(
+                task=task,
+                backend="mlx-lm",
+                base_url=base_url,
+                reference=name,
+                name=name,
+                server_command=command,
+                tuning=SimpleNamespace(task_sampling={}),
+            )
+
+        default_assignment = assignment("default", free_port(), "real-default")
+        secondary_assignment = assignment("article_summary", free_port(), "real-secondary")
+        processes: list[subprocess.Popen] = []
+        with tempfile.TemporaryDirectory() as tmpdir, contextlib.ExitStack() as stack:
+            stack.enter_context(
+                patch.object(
+                    pipeline,
+                    "MODEL_ASSIGNMENTS",
+                    {"default": default_assignment, "article_summary": secondary_assignment},
+                )
+            )
+            stack.enter_context(patch.object(pipeline, "MODEL_BACKEND", "mlx-lm"))
+            stack.enter_context(patch.object(pipeline, "MODEL_NAME", default_assignment.name))
+            stack.enter_context(patch.object(pipeline, "MODEL_REFERENCE", default_assignment.reference))
+            stack.enter_context(patch.object(pipeline, "MODEL_BASE_URL", default_assignment.base_url))
+            stack.enter_context(
+                patch.object(pipeline, "MODEL_SERVER_COMMAND", default_assignment.server_command)
+            )
+            stack.enter_context(patch.object(pipeline, "RUN_OUTPUT_DIR", tmpdir))
+            stack.enter_context(patch.object(pipeline, "record_activity_snapshot"))
+            stack.enter_context(patch.object(pipeline, "ensure_codex_safe_model_reference"))
+            with pipeline.managed_model_server():
+                pipeline._ensure_model_server_ready(default_assignment)
+                pipeline._ensure_model_server_ready(secondary_assignment)
+                states = list(pipeline.MANAGED_MODEL_SERVERS.values())
+                processes = [state.process for state in states if state.process is not None]
+                self.assertEqual(len(processes), 2)
+                default_probe = pipeline.probe_model_generation()
+                secondary_probe = pipeline._probe_model_generation_for(secondary_assignment)
+                self.assertTrue(default_probe["ok"], default_probe)
+                self.assertTrue(secondary_probe["ok"], secondary_probe)
+                self.assertIn("real-default", default_probe["content_preview"])
+                self.assertIn("real-secondary", secondary_probe["content_preview"])
+
+        self.assertTrue(all(process.poll() is not None for process in processes))
+        self.assertEqual(pipeline.MANAGED_MODEL_SERVERS, {})
+
     def test_same_endpoint_same_model_reuses_one_process(self) -> None:
         """Tasks sharing one canonical endpoint and model start one server
         and run one readiness sequence (issue #133)."""
@@ -2720,7 +2837,6 @@ class PipelineHelperTests(unittest.TestCase):
         previous_handler = signal.getsignal(signal.SIGTERM)
         assignments = self._managed_fixture_assignments()
         states: list[pipeline.ManagedModelServerState] = []
-
         processes: list[MagicMock] = []
         with patch.object(pipeline, "run_logging", return_value=contextlib.nullcontext()), patch.object(
             pipeline, "_stop_managed_server_process"
