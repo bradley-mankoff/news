@@ -71,7 +71,12 @@ then `--execute`. Runbook: `docs/security/history-scrub.md`.
 Secret prevention is automatic through the Gitleaks pre-commit hook in
 `.pre-commit-config.yaml`, pinned to `v8.30.1`; install it with
 `uv run pre-commit install`. It scans staged changes only and uses redacted
-output. Runbook: `docs/security/secret-prevention.md`.
+output. CI checks the PR's new commit range with the same pinned Gitleaks v8.30.1
+container: the `Secret scan` job in `.github/workflows/ci.yml` runs on every
+pull request to `develop`/`main`, scans only the PR's non-merge commits,
+redacts findings, and fails the check on any finding. Reproduce the gate
+locally with the Docker command in `docs/security/secret-prevention.md`.
+Runbook: `docs/security/secret-prevention.md`.
 
 ### Shell script checks
 
