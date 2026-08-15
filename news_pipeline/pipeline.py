@@ -5301,6 +5301,29 @@ def managed_model_server():
         yield
         return
 
+    # A failed prior cleanup retains live process handles in the registry. Do
+    # not discard those handles when a later run starts; the application still
+    # owns the processes and must not launch another run over them.
+    live_states: list[ManagedModelServerState] = []
+    for state in MANAGED_MODEL_SERVERS.values():
+        if state.process is None:
+            continue
+        try:
+            if state.process.poll() is None:
+                live_states.append(state)
+        except Exception:
+            live_states.append(state)
+    if live_states:
+        details = ", ".join(
+            f"{state.assignment.base_url} (pid={getattr(state.process, 'pid', 'unknown')})"
+            for state in live_states
+        )
+        raise RuntimeError(
+            "Cannot start managed model servers while a prior run still owns "
+            f"running process(es): {details}."
+        )
+    MANAGED_MODEL_SERVERS.clear()
+
     MANAGED_MODEL_SERVER_ACTIVE = True
     MANAGED_MODEL_SERVER_READY = False
     MANAGED_MODEL_SERVER_EXTERNAL = False
@@ -5311,23 +5334,27 @@ def managed_model_server():
     # states from earlier direct helper calls are dropped on entry so this
     # context never stops processes it did not start.
     MANAGED_MODEL_SERVERS.clear()
+    body_error: BaseException | None = None
+    cleanup_failures: list[tuple[ManagedModelServerState, Exception]] = []
     try:
         yield
+    except BaseException as error:
+        body_error = error
+        raise
     finally:
-        # Stop every owned server in reverse start order (dict insertion
-        # order) and close every log. Cleanup is best-effort per server:
-        # one failure is logged and the remaining servers still stop, and
-        # cleanup noise never replaces an original run exception.
-        for state in reversed(list(MANAGED_MODEL_SERVERS.values())):
+        # Stop every owned server in reverse start order. Failed states stay
+        # in the registry with their process handle until termination is
+        # confirmed, so a later lifecycle entry cannot silently abandon them.
+        for endpoint_key, state in reversed(list(MANAGED_MODEL_SERVERS.items())):
             server_label = f"model server at {state.assignment.base_url}"
             log_path = state.log_path or _managed_model_server_log_path_for(state.assignment)
+            stop_error: Exception | None = None
             try:
                 if state.process is not None:
                     _stop_managed_server_process(state.process, server_label=server_label)
                     if state.process.poll() is None:
-                        # Preserve the cleanup guarantee even if the process
-                        # group disappeared or a custom stop implementation
-                        # returned before Popen observed termination.
+                        # Preserve the cleanup guarantee even if a custom stop
+                        # implementation returned before Popen observed termination.
                         try:
                             state.process.kill()
                         except (ProcessLookupError, OSError):
@@ -5336,20 +5363,44 @@ def managed_model_server():
                     if state.process.poll() is None:
                         raise RuntimeError("process is still running after stop")
             except Exception as error:
+                stop_error = error
                 progress_tracker.warning(
                     f"Managed {server_label} cleanup failed; log {log_path}: {error}"
                 )
-                if ACTIVE_RUN_DIAGNOSTICS is not None:
-                    try:
-                        ACTIVE_RUN_DIAGNOSTICS.event(
-                            "managed_model_server_cleanup_failed",
-                            base_url=state.assignment.base_url,
-                            model=state.assignment.name,
-                            log_path=log_path,
-                            error=str(error),
-                        )
-                    except Exception:
-                        pass
+                try:
+                    process_stopped = state.process is None or state.process.poll() is not None
+                except Exception:
+                    process_stopped = False
+                if not process_stopped:
+                    cleanup_failures.append((state, error))
+                    if ACTIVE_RUN_DIAGNOSTICS is not None:
+                        try:
+                            ACTIVE_RUN_DIAGNOSTICS.event(
+                                "managed_model_server_cleanup_failed",
+                                base_url=state.assignment.base_url,
+                                model=state.assignment.name,
+                                log_path=log_path,
+                                error=str(error),
+                            )
+                        except Exception as diagnostics_error:
+                            progress_tracker.warning(
+                                "Managed model-server cleanup diagnostic could not be recorded "
+                                f"for {log_path}: {diagnostics_error}"
+                            )
+            process_stopped = state.process is None
+            if state.process is not None:
+                try:
+                    process_stopped = state.process.poll() is not None
+                except Exception:
+                    process_stopped = False
+            if process_stopped:
+                state.process = None
+                state.ready = False
+                MANAGED_MODEL_SERVERS.pop(endpoint_key, None)
+            elif stop_error is not None:
+                # Keep the live process handle, but close the file descriptor;
+                # state.log_path remains available for diagnostics.
+                state.ready = False
             try:
                 record_activity_snapshot("after_model_server_stop", ACTIVE_RUN_DIAGNOSTICS)
             except Exception as error:
@@ -5359,17 +5410,30 @@ def managed_model_server():
             try:
                 if state.log_file is not None:
                     state.log_file.close()
+                state.log_file = None
             except Exception as error:
                 progress_tracker.warning(
                     f"Managed {server_label} log close failed at {log_path}: {error}"
                 )
-        MANAGED_MODEL_SERVERS.clear()
         MANAGED_MODEL_SERVER_ACTIVE = False
         MANAGED_MODEL_SERVER_READY = False
         MANAGED_MODEL_SERVER_EXTERNAL = False
-        MANAGED_MODEL_SERVER_PROCESS = None
         MANAGED_MODEL_SERVER_LOG_FILE = None
         MANAGED_MODEL_SERVER_EXIT_RECORDED = False
+        failed_default = next(
+            (
+                state
+                for state, _ in cleanup_failures
+                if _serves_default_endpoint(state.assignment)
+            ),
+            None,
+        )
+        MANAGED_MODEL_SERVER_PROCESS = failed_default.process if failed_default else None
+        if cleanup_failures and body_error is None:
+            raise RuntimeError(
+                "Managed model-server cleanup failed for "
+                f"{len(cleanup_failures)} server(s); process state was retained."
+            ) from cleanup_failures[0][1]
 
 
 def _ensure_external_model_server_ready() -> None:
@@ -5529,8 +5593,9 @@ def _start_managed_server_state(state: ManagedModelServerState) -> None:
     """Run the preflight/start/readiness/probe sequence for one server state.
 
     On any failure the just-started process is stopped and its log closed
-    before re-raising; the outer run context still cleans up every other
-    registered state. The default/main server keeps the compatibility
+    before re-raising when termination is confirmed; otherwise its process
+    and log state remain registered for outer teardown retry. The
+    default/main server keeps the compatibility
     wrappers and singular globals so existing callers and tests observe the
     same seam.
     """
@@ -5632,6 +5697,7 @@ def _start_managed_server_state(state: ManagedModelServerState) -> None:
             MANAGED_MODEL_SERVER_READY = True
         progress_tracker.finish_meter(detail="Model server ready.")
     except Exception as original_error:
+        rollback_succeeded = False
         try:
             _stop_managed_server_process(
                 process,
@@ -5642,13 +5708,17 @@ def _start_managed_server_state(state: ManagedModelServerState) -> None:
                 f"Managed model server rollback failed at {assignment.base_url}: {cleanup_error}"
             )
         try:
+            rollback_succeeded = process.poll() is not None
+        except Exception:
+            rollback_succeeded = False
+        try:
             record_activity_snapshot("after_model_server_stop", ACTIVE_RUN_DIAGNOSTICS)
         except Exception as cleanup_error:
             progress_tracker.warning(
                 f"Managed model server rollback diagnostics failed at {assignment.base_url}: "
                 f"{cleanup_error}"
             )
-        finally:
+        if rollback_succeeded:
             try:
                 log_file.close()
             except Exception as cleanup_error:
@@ -5661,6 +5731,16 @@ def _start_managed_server_state(state: ManagedModelServerState) -> None:
             if serves_default:
                 MANAGED_MODEL_SERVER_PROCESS = None
                 MANAGED_MODEL_SERVER_LOG_FILE = None
+        else:
+            # Keep the process and log registered so the outer lifecycle
+            # context can retry termination instead of abandoning a live
+            # application-owned child process.
+            state.process = process
+            state.log_file = log_file
+            state.log_path = log_path
+            if serves_default:
+                MANAGED_MODEL_SERVER_PROCESS = process
+                MANAGED_MODEL_SERVER_LOG_FILE = log_file
         raise original_error
 
 

@@ -47,6 +47,9 @@ runtime-fit annotations.
     The file name must be a safe, traversal-free `.gguf` name (validated by
     the stdlib-only adapter so catalog identity and launch parsing cannot
     disagree); `hf_repo` remains the repo id used by Hugging Face search.
+  `reference == hf_repo` is required and file-qualified `.gguf` references
+  are rejected, preserving the ADR 0017 runtime matrix and the issue #92
+  drift guard.
 - Unknown top-level keys, entry fields, and recommendation keys are errors.
   Malformed or unsafe YAML fails closed with a path-specific `ValueError`
   from every public catalog/config consumer; it never silently falls back to
