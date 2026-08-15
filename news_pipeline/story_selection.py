@@ -283,8 +283,7 @@ def _global_scale_screening_prompt_messages(
     # contract and editorial guidance are then supplied as string.Template
     # substitution values: inserted verbatim and never re-parsed, so single
     # braces in the contract and literal braces in user-entered guidance stay
-    # safe with no brace escaping on this path (byte-identity drift-guard:
-    # tests/test_prompt_catalog.py).
+    # safe with no brace escaping on this path.
     template = prompt_template or DEFAULT_PROMPT_TEMPLATES["story_scale_screening"]
     system_text, user_text = render_prompt_template(
         "story_scale_screening",
