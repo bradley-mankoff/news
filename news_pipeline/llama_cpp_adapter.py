@@ -237,10 +237,8 @@ def ensure_llama_cpp_server_available(
     if _is_explicit_path(raw):
         if os.path.isfile(raw) and os.access(raw, os.X_OK):
             return raw
-    else:
-        resolved = shutil.which(raw)
-        if resolved:
-            return resolved
+    elif resolved := shutil.which(raw):
+        return resolved
     raise RuntimeError(
         f"llama.cpp server binary {raw!r} is not available. Install an official "
         "llama.cpp release for your platform "

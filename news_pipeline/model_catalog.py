@@ -438,20 +438,22 @@ def _validate_catalog_entry(
         reference = _validate_catalog_gguf_reference(
             raw_entry["reference"], alias, path, "reference"
         )
-        if reference.rsplit("/", 1)[0] != hf_repo:
-            raise ValueError(
-                f"{path} model {alias!r} reference must be a file-qualified "
-                f".gguf reference under hf_repo; got reference={reference!r}, "
-                f"hf_repo={hf_repo!r}."
-            )
+        mismatched = reference.rsplit("/", 1)[0] != hf_repo
+        mismatch_error = (
+            f"{path} model {alias!r} reference must be a file-qualified "
+            f".gguf reference under hf_repo; got reference={reference!r}, "
+            f"hf_repo={hf_repo!r}."
+        )
     else:
         reference = _validate_catalog_repo_id(raw_entry["reference"], alias, path, "reference")
         hf_repo = _validate_catalog_repo_id(raw_entry["hf_repo"], alias, path, "hf_repo")
-        if reference != hf_repo:
-            raise ValueError(
-                f"{path} model {alias!r} reference must equal hf_repo (issue #92 "
-                f"drift guard); got reference={reference!r}, hf_repo={hf_repo!r}."
-            )
+        mismatched = reference != hf_repo
+        mismatch_error = (
+            f"{path} model {alias!r} reference must equal hf_repo (issue #92 "
+            f"drift guard); got reference={reference!r}, hf_repo={hf_repo!r}."
+        )
+    if mismatched:
+        raise ValueError(mismatch_error)
     name = str(raw_entry["name"]).strip()
     description = str(raw_entry["description"]).strip()
     if not name:
@@ -625,7 +627,7 @@ HF_SEARCH_EXPAND = [
     "config",
 ]
 
-# Closed set of pipeline tags the CLI/UI may filter search by (ADR 0010).
+# Closed set of pipeline tags the CLI/UI may filter search by (ADR 0017).
 HF_SEARCH_PIPELINE_TAGS = ("text-generation", "text2text-generation", "image-text-to-text")
 
 
@@ -644,7 +646,7 @@ def runtime_fit_for_hf_model(info: Mapping[str, Any]) -> dict[str, str]:
     """Classify a Hugging Face model repo into a runtime-fit verdict.
 
     Returns ``{"status": ..., "reason": ...}`` where status is one of the
-    ``RUNTIME_FIT_*`` constants. Rules are conservative (ADR 0010): code-owned
+    ``RUNTIME_FIT_*`` constants. Rules are conservative (ADR 0017): code-owned
     curated repos and user-declared catalog entries are classified by their
     declared backend, while MLX libraries and transformers+safetensors
     text/vision repos are classified by metadata; everything else is
@@ -747,7 +749,7 @@ def runtime_fit_for_hf_model(info: Mapping[str, Any]) -> dict[str, str]:
             }
         return {
             "status": RUNTIME_FIT_EXTERNAL_ONLY,
-            "reason": "Transformers model outside the supported pipeline tags (ADR 0010).",
+            "reason": "Transformers model outside the supported pipeline tags (ADR 0017).",
         }
 
     return {
