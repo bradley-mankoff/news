@@ -916,7 +916,7 @@ assert(
             "Object.prototype.hasOwnProperty.call(RUNTIME_FIT_BACKENDS, fit.status)",
             "RUNTIME_FIT_BACKENDS[fit.status]",
             'data-use-hf-backend="${escapeHtml(hfBackend)}"',
-            "externalOnly && !backendExternal",
+            "const useDisabled = backendRequirementMismatch(hfBackend);",
             'useModelReference(btn.dataset.useHfModel, btn.dataset.useHfBackend || "");',
             "catch (err) {",
             "escapeHtml(err.message)",
@@ -3042,6 +3042,7 @@ async function api(path) {
 }
 '''
             + js_function_block("function escapeHtml(text) {", "function formatDefault")
+            + js_function_block("function normalizedBackendValue(value) {", "function setControlValue")
             + js_function_block("function modelTaskLabels() {", "function useModelReference")
             + js_function_block('function useModelReference(reference, requiredBackend = "") {', "function renderModelCatalogPanel")
             + js_function_block("function renderModelCatalogPanel() {", "function renderRecommendations")
