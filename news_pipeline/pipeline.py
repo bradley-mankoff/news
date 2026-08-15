@@ -107,9 +107,11 @@ from .config import (
     MODEL_TASK_STORY_DRAFTING,
     MODEL_TASK_STORY_SCALE_SCREENING,
     MODEL_TASK_TITLE_GENERATION,
+    TaskModelAssignment,
+    canonical_model_endpoint,
     configured_model_api_key,
     ensure_codex_safe_model_reference,
-    is_managed_model_backend,
+    is_managed_server_assignment,
     is_placeholder_address,
     is_placeholder_credential,
     managed_model_conflict_message,
@@ -375,6 +377,31 @@ MANAGED_MODEL_SERVER_EXTERNAL = False
 MANAGED_MODEL_SERVER_PROCESS: subprocess.Popen | None = None
 MANAGED_MODEL_SERVER_LOG_FILE: TextIO | None = None
 MANAGED_MODEL_SERVER_EXIT_RECORDED = False
+# Endpoint-keyed registry of every managed server owned by the active run
+# (ADR 0002). The singular globals above remain the default/main-server
+# compatibility projection; this registry is the lifecycle authority.
+MANAGED_MODEL_SERVERS: dict[tuple[Any, ...], "ManagedModelServerState"] = {}
+MANAGED_MODEL_SERVERS_LOCK = Lock()
+
+
+@dataclasses.dataclass
+class ManagedModelServerState:
+    """Mutable lifecycle state for one managed server endpoint owned by a run.
+
+    The immutable ``TaskModelAssignment`` is the per-server identity/command
+    source; the canonical endpoint key groups tasks sharing one process.
+    One readiness lock per state makes concurrent first-use calls start a
+    server exactly once (article/story work uses concurrency).
+    """
+
+    assignment: TaskModelAssignment
+    endpoint_key: tuple[Any, ...]
+    process: subprocess.Popen | None = None
+    log_file: TextIO | None = None
+    log_path: str = ""
+    ready: bool = False
+    exit_recorded: bool = False
+    readiness_lock: Lock = dataclasses.field(default_factory=Lock)
 
 
 class ManagedModelServerExited(RuntimeError):
@@ -391,11 +418,36 @@ def _text_file_tail(path: str, *, max_chars: int = 3000) -> str:
         return f"Could not read {path}: {error}"
 
 
-def _managed_model_server_exit_message(exit_code: int, log_tail: str) -> str:
+def _serves_default_endpoint(assignment: TaskModelAssignment | None) -> bool:
+    """True when an assignment is served by the default/main server.
+
+    The default assignment and any assignment on the same canonical endpoint
+    as the default base URL share the compatibility main-server process,
+    projections, and default wrappers. Secondary endpoints never reach this
+    helper unless they are genuinely the default endpoint (the conflict check
+    rejects a different model there).
+    """
+    if assignment is None or getattr(assignment, "task", "default") == "default":
+        return True
+    return same_model_endpoint(assignment.base_url, MODEL_BASE_URL)
+
+
+def _managed_model_server_exit_message(
+    exit_code: int,
+    log_tail: str,
+    *,
+    log_path: str | None = None,
+    base_url: str | None = None,
+    model: str | None = None,
+) -> str:
     message = (
         f"Managed model server exited unexpectedly with code {exit_code}. "
-        f"See {_managed_model_server_log_path()}."
+        f"See {log_path or _managed_model_server_log_path()}."
     )
+    if base_url:
+        message += f" Endpoint: {base_url}."
+    if model:
+        message += f" Model: {model}."
     if "OutOfMemory" in log_tail or "Insufficient Memory" in log_tail:
         message += " The server log indicates Metal/GPU insufficient memory."
     if log_tail:
@@ -403,34 +455,73 @@ def _managed_model_server_exit_message(exit_code: int, log_tail: str) -> str:
     return message
 
 
-def _raise_if_managed_model_server_exited() -> None:
+def _raise_if_managed_model_server_exited(
+    assignment: TaskModelAssignment | None = None,
+) -> None:
+    """Raise when the managed server serving ``assignment`` exited.
+
+    The default/main server is checked through the compatibility singular
+    globals; secondary servers are looked up in the endpoint registry by the
+    assignment's canonical endpoint. The error includes the endpoint, model,
+    and per-server log path so a secondary failure is diagnosable (issue
+    #133).
+    """
     global MANAGED_MODEL_SERVER_EXIT_RECORDED
     global MANAGED_MODEL_SERVER_READY
-    if (
-        not MANAGED_MODEL_SERVER_ACTIVE
-        or MANAGED_MODEL_SERVER_EXTERNAL
-        or MANAGED_MODEL_SERVER_PROCESS is None
-    ):
+    if not MANAGED_MODEL_SERVER_ACTIVE:
         return
+    if _serves_default_endpoint(assignment):
+        if MANAGED_MODEL_SERVER_EXTERNAL or MANAGED_MODEL_SERVER_PROCESS is None:
+            return
+        process = MANAGED_MODEL_SERVER_PROCESS
+        state = None
+    else:
+        endpoint_key = canonical_model_endpoint(assignment.base_url)
+        with MANAGED_MODEL_SERVERS_LOCK:
+            state = MANAGED_MODEL_SERVERS.get(endpoint_key)
+        if state is None or state.process is None:
+            return
+        process = state.process
 
-    exit_code = MANAGED_MODEL_SERVER_PROCESS.poll()
+    exit_code = process.poll()
     if exit_code is None:
         return
 
-    MANAGED_MODEL_SERVER_READY = False
-    log_path = _managed_model_server_log_path()
+    base_url = assignment.base_url if assignment is not None else MODEL_BASE_URL
+    model = assignment.name if assignment is not None else MODEL_NAME
+    if state is None:
+        MANAGED_MODEL_SERVER_READY = False
+        log_path = _managed_model_server_log_path()
+        exit_recorded = MANAGED_MODEL_SERVER_EXIT_RECORDED
+    else:
+        state.ready = False
+        log_path = state.log_path or _managed_model_server_log_path_for(state.assignment)
+        exit_recorded = state.exit_recorded
     log_tail = _text_file_tail(log_path)
-    if not MANAGED_MODEL_SERVER_EXIT_RECORDED:
-        MANAGED_MODEL_SERVER_EXIT_RECORDED = True
+    if not exit_recorded:
+        if state is None:
+            MANAGED_MODEL_SERVER_EXIT_RECORDED = True
+        else:
+            state.exit_recorded = True
         if ACTIVE_RUN_DIAGNOSTICS is not None:
             ACTIVE_RUN_DIAGNOSTICS.event(
                 "managed_model_server_exited",
                 exit_code=exit_code,
+                base_url=base_url,
+                model=model,
                 log_path=log_path,
                 log_tail=log_tail,
             )
         record_activity_snapshot("after_model_server_unexpected_exit", ACTIVE_RUN_DIAGNOSTICS)
-    raise ManagedModelServerExited(_managed_model_server_exit_message(exit_code, log_tail))
+    raise ManagedModelServerExited(
+        _managed_model_server_exit_message(
+            exit_code,
+            log_tail,
+            log_path=log_path,
+            base_url=base_url,
+            model=model,
+        )
+    )
 
 
 def _read_url_file(path: str) -> set[str]:
@@ -1154,12 +1245,28 @@ class RunSession:
         self.managed_model_server_process: subprocess.Popen | None = None
         self.managed_model_server_log_file: TextIO | None = None
         self.managed_model_server_exit_recorded = False
+        # Endpoint-keyed managed-server registry: the lifecycle authority for
+        # every owned server in this run (issue #133, ADR 0002).
+        self.managed_model_servers: dict[tuple[Any, ...], ManagedModelServerState] = {}
 
     def run(self, run_impl: Callable[[], None] | None = None) -> None:
         implementation = run_impl or _run_pipeline
+        previous_stop_handler: Any = None
         with self._activate():
             with run_logging():
+                # The UI stops a run by terminating the pipeline process
+                # (SIGTERM). Install a temporary main-thread handler that
+                # unwinds through the lifecycle contexts so every managed
+                # server is stopped before the process exits; the previous
+                # handler is restored in all cases (issue #133).
                 try:
+                    if current_thread() is main_thread() and hasattr(signal, "SIGTERM"):
+                        previous_stop_handler = signal.getsignal(signal.SIGTERM)
+
+                        def _raise_run_stop(_signum, _frame):
+                            raise KeyboardInterrupt("Run stop requested (SIGTERM).")
+
+                        signal.signal(signal.SIGTERM, _raise_run_stop)
                     with managed_model_server():
                         implementation()
                 except Exception as error:
@@ -1173,6 +1280,9 @@ class RunSession:
                     raise
                 else:
                     progress_tracker.finish("done")
+                finally:
+                    if previous_stop_handler is not None:
+                        signal.signal(signal.SIGTERM, previous_stop_handler)
 
     @contextmanager
     def _activate(self):
@@ -1196,6 +1306,7 @@ class RunSession:
                 "MANAGED_MODEL_SERVER_PROCESS",
                 "MANAGED_MODEL_SERVER_LOG_FILE",
                 "MANAGED_MODEL_SERVER_EXIT_RECORDED",
+                "MANAGED_MODEL_SERVERS",
                 "progress_tracker",
             }
             previous = {name: globals().get(name) for name in names}
@@ -1227,6 +1338,7 @@ class RunSession:
                 "MANAGED_MODEL_SERVER_PROCESS": self.managed_model_server_process,
                 "MANAGED_MODEL_SERVER_LOG_FILE": self.managed_model_server_log_file,
                 "MANAGED_MODEL_SERVER_EXIT_RECORDED": self.managed_model_server_exit_recorded,
+                "MANAGED_MODEL_SERVERS": self.managed_model_servers,
             }
         )
 
@@ -1243,6 +1355,7 @@ class RunSession:
         self.managed_model_server_process = MANAGED_MODEL_SERVER_PROCESS
         self.managed_model_server_log_file = MANAGED_MODEL_SERVER_LOG_FILE
         self.managed_model_server_exit_recorded = MANAGED_MODEL_SERVER_EXIT_RECORDED
+        self.managed_model_servers = MANAGED_MODEL_SERVERS
 
 
 def _clean_progress_message(message: str) -> str:
@@ -2764,28 +2877,19 @@ def build_chat_model(max_tokens: int, *, task: str = "default") -> ChatOpenAI:
     ensure_codex_safe_model_reference(MODEL_REFERENCE)
     normalized_task = _normalized_model_task(task)
     assignment = _task_model_assignment(normalized_task)
-    if (
-        MANAGED_MODEL_SERVER_ACTIVE
-        # Config resolution already rejects this combination for managed
-        # backends; this guard is a backstop for callers that bypass config
-        # resolution. It stays gated on the runtime context flag because the
-        # check only applies while a managed server is actually running.
-        and is_managed_model_backend(MODEL_BACKEND)
+    if MANAGED_MODEL_SERVER_ACTIVE and is_managed_server_assignment(
+        assignment,
+        default_backend=MODEL_BACKEND,
+        default_base_url=MODEL_BASE_URL,
     ):
-        if same_model_endpoint(assignment.base_url, MODEL_BASE_URL):
-            if assignment.name != MODEL_NAME:
-                raise RuntimeError(
-                    managed_model_conflict_message(
-                        task=normalized_task,
-                        reference=assignment.reference,
-                        name=assignment.name,
-                        model_reference=MODEL_REFERENCE,
-                        model_name=MODEL_NAME,
-                        model_base_url=MODEL_BASE_URL,
-                    )
-                )
-            _ensure_main_model_server_ready()
-            _raise_if_managed_model_server_exited()
+        # The selected assignment routes its own server: managed assignments
+        # start (or reuse) their endpoint's process lazily on first use, and
+        # external assignments never spawn or inherit a managed readiness
+        # gate. Same-endpoint/different-model conflicts are rejected here as
+        # the runtime backstop for callers that bypass config resolution
+        # (issue #133, preserving #113/#134).
+        _ensure_model_server_ready(assignment)
+        _raise_if_managed_model_server_exited(assignment=assignment)
     sampling = assignment.tuning.task_sampling.get(
         normalized_task,
         assignment.tuning.task_sampling.get("default", ModelSamplingSettings()),
@@ -3252,11 +3356,12 @@ def invoke_with_retries(
             estimated_input_tokens=estimated_input_tokens,
             max_output_tokens=max_output_tokens,
         )
+    assignment = _task_model_assignment(_logical_task_assignment_key(task_name))
     try:
         for attempt in range(1, attempts + 1):
             attempts_made = attempt
             try:
-                _raise_if_managed_model_server_exited()
+                _raise_if_managed_model_server_exited(assignment=assignment)
                 response = llm.invoke(messages)
                 if isinstance(response, AIMessage):
                     _record_response_token_usage(task_name, response)
@@ -3270,7 +3375,7 @@ def invoke_with_retries(
                 raise
             except Exception as error:
                 last_error = error
-                _raise_if_managed_model_server_exited()
+                _raise_if_managed_model_server_exited(assignment=assignment)
                 if not _is_transient_model_error(error) or attempt == attempts:
                     break
                 transient_retries += 1
@@ -4995,9 +5100,9 @@ def _probe_chat_completion(
     return result
 
 
-def probe_model_generation(timeout_seconds: int = MODEL_LOAD_PROBE_TIMEOUT_SECONDS) -> dict[str, Any]:
-    payload = {
-        "model": MODEL_NAME,
+def _generation_probe_payload(model_name: str) -> dict[str, Any]:
+    return {
+        "model": model_name,
         "messages": [
             {"role": "system", "content": "Reply with exactly: ok"},
             {"role": "user", "content": "Health check."},
@@ -5007,16 +5112,39 @@ def probe_model_generation(timeout_seconds: int = MODEL_LOAD_PROBE_TIMEOUT_SECON
         "stream": False,
         "chat_template_kwargs": dict(VISIBLE_CONTENT_CHAT_TEMPLATE_KWARGS),
     }
+
+
+def probe_model_generation(timeout_seconds: int = MODEL_LOAD_PROBE_TIMEOUT_SECONDS) -> dict[str, Any]:
     return _probe_chat_completion(
         base_url=MODEL_BASE_URL,
-        payload=payload,
+        payload=_generation_probe_payload(MODEL_NAME),
         timeout_seconds=timeout_seconds,
+    )
+
+
+def _probe_model_generation_for(
+    assignment: TaskModelAssignment,
+    timeout_seconds: int = MODEL_LOAD_PROBE_TIMEOUT_SECONDS,
+) -> dict[str, Any]:
+    return _probe_chat_completion(
+        base_url=assignment.base_url,
+        payload=_generation_probe_payload(assignment.name),
+        timeout_seconds=timeout_seconds,
+    )
+
+
+def _preflight_model_server_for(assignment: TaskModelAssignment) -> dict[str, Any]:
+    return _preflight_openai_model_server(
+        base_url=assignment.base_url,
+        model_name=assignment.name,
+        model_reference=assignment.reference,
     )
 
 
 def _wait_for_managed_model_server(
     process: subprocess.Popen,
     *,
+    assignment: TaskModelAssignment | None = None,
     timeout_seconds: int = 300,
 ) -> dict[str, Any]:
     deadline = time.monotonic() + timeout_seconds
@@ -5026,17 +5154,28 @@ def _wait_for_managed_model_server(
         if exit_code is not None:
             raise RuntimeError(
                 f"Managed model server exited before it was ready "
-                f"(exit code {exit_code}). See {_managed_model_server_log_path()}."
+                f"(exit code {exit_code}). See "
+                f"{_managed_model_server_log_path_for(assignment) if assignment is not None else _managed_model_server_log_path()}."
             )
-        last_preflight = preflight_model_server()
+        last_preflight = (
+            _preflight_model_server_for(assignment)
+            if assignment is not None
+            else preflight_model_server()
+        )
         if last_preflight.get("ok") and last_preflight.get("model_match"):
             return last_preflight
         time.sleep(2)
 
     detail = last_preflight.get("error") or last_preflight.get("served_models") or "no response"
+    base_url = assignment.base_url if assignment is not None else MODEL_BASE_URL
+    log_path = (
+        _managed_model_server_log_path_for(assignment)
+        if assignment is not None
+        else _managed_model_server_log_path()
+    )
     raise TimeoutError(
         f"Managed model server did not become ready within {timeout_seconds} seconds "
-        f"at {MODEL_BASE_URL}: {detail}. See {_managed_model_server_log_path()}."
+        f"at {base_url}: {detail}. See {log_path}."
     )
 
 
@@ -5067,6 +5206,9 @@ def _stop_managed_server_process(process: subprocess.Popen, *, server_label: str
         except Exception:
             process.kill()
         process.wait(timeout=10)
+
+    if process.poll() is None:
+        raise RuntimeError(f"Managed {server_label} process is still running after stop.")
 
 
 def _finalize_failed_run(error: Exception, traceback_text: str, config: RuntimeConfig) -> None:
@@ -5110,14 +5252,54 @@ def managed_model_server():
     MANAGED_MODEL_SERVER_PROCESS = None
     MANAGED_MODEL_SERVER_LOG_FILE = None
     MANAGED_MODEL_SERVER_EXIT_RECORDED = False
+    # The registry is the lifecycle authority for the whole run; stale
+    # states from earlier direct helper calls are dropped on entry so this
+    # context never stops processes it did not start.
+    MANAGED_MODEL_SERVERS.clear()
     try:
         yield
     finally:
-        if MANAGED_MODEL_SERVER_PROCESS is not None:
-            _stop_managed_server_process(MANAGED_MODEL_SERVER_PROCESS, server_label="model server")
-            record_activity_snapshot("after_model_server_stop", ACTIVE_RUN_DIAGNOSTICS)
-        if MANAGED_MODEL_SERVER_LOG_FILE is not None:
-            MANAGED_MODEL_SERVER_LOG_FILE.close()
+        # Stop every owned server in reverse start order (dict insertion
+        # order) and close every log. Cleanup is best-effort per server:
+        # one failure is logged and the remaining servers still stop, and
+        # cleanup noise never replaces an original run exception.
+        for state in reversed(list(MANAGED_MODEL_SERVERS.values())):
+            server_label = f"model server at {state.assignment.base_url}"
+            log_path = state.log_path or _managed_model_server_log_path_for(state.assignment)
+            try:
+                if state.process is not None:
+                    _stop_managed_server_process(state.process, server_label=server_label)
+                    if state.process.poll() is None:
+                        raise RuntimeError("process is still running after stop")
+            except Exception as error:
+                progress_tracker.warning(
+                    f"Managed {server_label} cleanup failed; log {log_path}: {error}"
+                )
+                if ACTIVE_RUN_DIAGNOSTICS is not None:
+                    try:
+                        ACTIVE_RUN_DIAGNOSTICS.event(
+                            "managed_model_server_cleanup_failed",
+                            base_url=state.assignment.base_url,
+                            model=state.assignment.name,
+                            log_path=log_path,
+                            error=str(error),
+                        )
+                    except Exception:
+                        pass
+            try:
+                record_activity_snapshot("after_model_server_stop", ACTIVE_RUN_DIAGNOSTICS)
+            except Exception as error:
+                progress_tracker.warning(
+                    f"Managed {server_label} cleanup diagnostics failed; log {log_path}: {error}"
+                )
+            try:
+                if state.log_file is not None:
+                    state.log_file.close()
+            except Exception as error:
+                progress_tracker.warning(
+                    f"Managed {server_label} log close failed at {log_path}: {error}"
+                )
+        MANAGED_MODEL_SERVERS.clear()
         MANAGED_MODEL_SERVER_ACTIVE = False
         MANAGED_MODEL_SERVER_READY = False
         MANAGED_MODEL_SERVER_EXTERNAL = False
@@ -5174,9 +5356,14 @@ def _ensure_external_model_server_ready() -> None:
 
 
 def _ensure_main_model_server_ready() -> None:
+    """Compatibility seam: ensure the default assignment's server is ready.
+
+    Keeps the existing default-server behavior (external wait path and the
+    managed registry path) so single-server runs and direct-call tests
+    behave exactly as before; secondary endpoints are started lazily by
+    ``_ensure_model_server_ready`` on first actual task use (issue #133).
+    """
     global MANAGED_MODEL_SERVER_READY
-    global MANAGED_MODEL_SERVER_PROCESS
-    global MANAGED_MODEL_SERVER_LOG_FILE
     global MANAGED_MODEL_SERVER_EXTERNAL
     if MANAGED_MODEL_SERVER_READY:
         return
@@ -5195,80 +5382,253 @@ def _ensure_main_model_server_ready() -> None:
             MANAGED_MODEL_SERVER_READY = True
             progress_tracker.finish_meter(detail="External model server ready.")
             return
-        existing_preflight = preflight_model_server()
-        if ACTIVE_RUN_DIAGNOSTICS is not None:
-            ACTIVE_RUN_DIAGNOSTICS.event("model_server_preflight", **existing_preflight)
-        if existing_preflight.get("ok"):
-            served_models = existing_preflight.get("served_models") or ["n/a"]
+        # A fresh managed readiness pass owns the default endpoint: drop any
+        # registry state left behind by an earlier direct lifecycle call so
+        # this pass always performs the full preflight/start/probe sequence.
+        # The READY projection above is the live-server guard, so a ready
+        # default server already returned; this seam runs before any model
+        # worker exists, so no concurrent start can be dropped.
+        with MANAGED_MODEL_SERVERS_LOCK:
+            MANAGED_MODEL_SERVERS.pop(canonical_model_endpoint(MODEL_BASE_URL), None)
+        _ensure_model_server_ready(MODEL_ASSIGNMENTS["default"])
+
+
+def _ensure_model_server_ready(assignment: TaskModelAssignment) -> None:
+    """Start (or reuse) the managed server serving one task assignment.
+
+    External assignments - and assignments riding an external default
+    endpoint - are caller-managed and skipped. Managed assignments are
+    grouped by canonical endpoint: the first task using an endpoint starts
+    its server; later tasks sharing the endpoint reuse the ready state. A
+    same-endpoint assignment with a different model name is rejected with
+    the shared conflict wording (the runtime backstop for callers that
+    bypass config resolution, preserving #113/#134).
+    """
+    if not is_managed_server_assignment(
+        assignment,
+        default_backend=MODEL_BACKEND,
+        default_base_url=MODEL_BASE_URL,
+    ):
+        return
+    if assignment is not MODEL_ASSIGNMENTS["default"] and same_model_endpoint(assignment.base_url, MODEL_BASE_URL):
+        # The default assignment owns the default endpoint; config resolution
+        # already rejects a different model there and this is the backstop.
+        if assignment.name != MODEL_NAME:
             raise RuntimeError(
-                "Model server endpoint is already in use before this run could start "
-                "a managed server. "
-                f"Base URL: {MODEL_BASE_URL}. "
-                f"Expected {MODEL_REFERENCE} / {MODEL_NAME}; served {served_models}. "
-                "Stop the existing server or choose another NEWS_MODEL_BASE_URL."
-            )
-
-        if MODEL_BACKEND == MODEL_BACKEND_LLAMA_CPP:
-            # The native llama-server binary is an operator-installed
-            # prerequisite (official llama.cpp releases). It is checked only
-            # at actual run launch - never during Runtime Config resolution or
-            # UI preview - and failures are actionable before any spawn.
-            ensure_llama_cpp_server_available(MODEL_SERVER_SETTINGS.llama_cpp_binary)
-
-        log_path = _managed_model_server_log_path()
-        command = shlex.split(MODEL_SERVER_COMMAND)
-        record_activity_snapshot("before_model_server_start", ACTIVE_RUN_DIAGNOSTICS)
-        progress_tracker.update_meter(done=1, detail="Starting managed model server.")
-        progress_tracker.detail(f"Managed model server command: {MODEL_SERVER_COMMAND}")
-        progress_tracker.detail(f"Managed model server log: {log_path}")
-        os.makedirs(os.path.dirname(log_path), exist_ok=True)
-        log_file = open(log_path, "w", encoding="utf-8")
-        MANAGED_MODEL_SERVER_LOG_FILE = log_file
-        try:
-            process = subprocess.Popen(
-                command,
-                cwd=str(CONFIG.root_dir),
-                stdout=log_file,
-                stderr=subprocess.STDOUT,
-                start_new_session=True,
-                text=True,
-            )
-        except Exception:
-            log_file.close()
-            MANAGED_MODEL_SERVER_LOG_FILE = None
-            raise
-        MANAGED_MODEL_SERVER_PROCESS = process
-        try:
-            ready_preflight = _wait_for_managed_model_server(process)
-            record_activity_snapshot("after_model_server_ready", ACTIVE_RUN_DIAGNOSTICS)
-            progress_tracker.detail(
-                "Managed model server answered /models. "
-                f"Served models: {ready_preflight.get('served_models') or ['n/a']}"
-            )
-            progress_tracker.update_meter(done=2, detail="Checking model generation.")
-            generation_probe = probe_model_generation()
-            if not generation_probe.get("ok"):
-                raise RuntimeError(
-                    "Managed model server answered /models but failed a tiny generation probe. "
-                    f"{generation_probe.get('error') or generation_probe}. "
-                    f"See {_managed_model_server_log_path()}."
+                managed_model_conflict_message(
+                    task=getattr(assignment, "task", ""),
+                    reference=assignment.reference,
+                    name=assignment.name,
+                    model_reference=MODEL_REFERENCE,
+                    model_name=MODEL_NAME,
+                    model_base_url=MODEL_BASE_URL,
                 )
-            time.sleep(0.5)
-            _raise_if_managed_model_server_exited()
-            progress_tracker.detail("Managed model server passed a tiny generation probe.")
-            MANAGED_MODEL_SERVER_READY = True
-            progress_tracker.finish_meter(detail="Model server ready.")
-        except Exception:
-            _stop_managed_server_process(process, server_label="model server")
-            record_activity_snapshot("after_model_server_stop", ACTIVE_RUN_DIAGNOSTICS)
+            )
+    endpoint_key = canonical_model_endpoint(assignment.base_url)
+    with MANAGED_MODEL_SERVERS_LOCK:
+        state = MANAGED_MODEL_SERVERS.get(endpoint_key)
+        if state is not None and state.assignment.name != assignment.name:
+            raise RuntimeError(
+                managed_model_conflict_message(
+                    task=assignment.task,
+                    reference=assignment.reference,
+                    name=assignment.name,
+                    model_reference=state.assignment.reference,
+                    model_name=state.assignment.name,
+                    model_base_url=state.assignment.base_url,
+                )
+            )
+        if state is None:
+            state = ManagedModelServerState(assignment=assignment, endpoint_key=endpoint_key)
+            MANAGED_MODEL_SERVERS[endpoint_key] = state
+        if state.ready:
+            return
+    with state.readiness_lock:
+        if state.ready:
+            return
+        _start_managed_server_state(state)
+
+
+def _start_managed_server_state(state: ManagedModelServerState) -> None:
+    """Run the preflight/start/readiness/probe sequence for one server state.
+
+    On any failure the just-started process is stopped and its log closed
+    before re-raising; the outer run context still cleans up every other
+    registered state. The default/main server keeps the compatibility
+    wrappers and singular globals so existing callers and tests observe the
+    same seam.
+    """
+    global MANAGED_MODEL_SERVER_READY
+    global MANAGED_MODEL_SERVER_PROCESS
+    global MANAGED_MODEL_SERVER_LOG_FILE
+    assignment = state.assignment
+    serves_default = _serves_default_endpoint(assignment)
+    ensure_codex_safe_model_reference(assignment.reference)
+    progress_tracker.start_meter("model", total=3, unit="steps", detail="Checking model server.")
+    record_activity_snapshot("before_model_server_preflight")
+    existing_preflight = (
+        preflight_model_server() if serves_default else _preflight_model_server_for(assignment)
+    )
+    if ACTIVE_RUN_DIAGNOSTICS is not None:
+        ACTIVE_RUN_DIAGNOSTICS.event("model_server_preflight", **existing_preflight)
+    if existing_preflight.get("ok"):
+        served_models = existing_preflight.get("served_models") or ["n/a"]
+        raise RuntimeError(
+            "Model server endpoint is already in use before this run could start "
+            "a managed server. "
+            f"Base URL: {assignment.base_url}. "
+            f"Expected {assignment.reference} / {assignment.name}; served {served_models}. "
+            "Stop the existing server or choose another NEWS_MODEL_BASE_URL."
+        )
+
+    backend = MODEL_BACKEND if serves_default else assignment.backend
+    if backend == MODEL_BACKEND_LLAMA_CPP:
+        # The native llama-server binary is an operator-installed
+        # prerequisite (official llama.cpp releases). It is checked only
+        # at actual run launch - never during Runtime Config resolution or
+        # UI preview - and failures are actionable before any spawn.
+        ensure_llama_cpp_server_available(MODEL_SERVER_SETTINGS.llama_cpp_binary)
+
+    log_path = _managed_model_server_log_path_for(assignment)
+    command_source = MODEL_SERVER_COMMAND if serves_default else assignment.server_command
+    command = shlex.split(command_source)
+    record_activity_snapshot("before_model_server_start", ACTIVE_RUN_DIAGNOSTICS)
+    progress_tracker.update_meter(done=1, detail="Starting managed model server.")
+    progress_tracker.detail(f"Managed model server command: {command_source}")
+    progress_tracker.detail(f"Managed model server log: {log_path}")
+    os.makedirs(os.path.dirname(log_path), exist_ok=True)
+    log_file = open(log_path, "w", encoding="utf-8")
+    state.log_file = log_file
+    state.log_path = log_path
+    if serves_default:
+        MANAGED_MODEL_SERVER_LOG_FILE = log_file
+    try:
+        process = subprocess.Popen(
+            command,
+            cwd=str(CONFIG.root_dir),
+            stdout=log_file,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+            text=True,
+        )
+    except Exception as original_error:
+        try:
             log_file.close()
-            MANAGED_MODEL_SERVER_PROCESS = None
-            MANAGED_MODEL_SERVER_LOG_FILE = None
-            raise
+        except Exception as cleanup_error:
+            progress_tracker.warning(
+                f"Managed model server log close failed at {log_path}: {cleanup_error}"
+            )
+        finally:
+            state.log_file = None
+            state.log_path = ""
+            if serves_default:
+                MANAGED_MODEL_SERVER_LOG_FILE = None
+        raise original_error
+    state.process = process
+    if serves_default:
+        MANAGED_MODEL_SERVER_PROCESS = process
+    try:
+        if serves_default:
+            ready_preflight = _wait_for_managed_model_server(process)
+            generation_probe = probe_model_generation()
+            _raise_if_managed_model_server_exited()
+        else:
+            ready_preflight = _wait_for_managed_model_server(process, assignment=assignment)
+            generation_probe = _probe_model_generation_for(assignment)
+            _raise_if_managed_model_server_exited(assignment=assignment)
+        record_activity_snapshot("after_model_server_ready", ACTIVE_RUN_DIAGNOSTICS)
+        progress_tracker.detail(
+            "Managed model server answered /models. "
+            f"Served models: {ready_preflight.get('served_models') or ['n/a']}"
+        )
+        progress_tracker.update_meter(done=2, detail="Checking model generation.")
+        if not generation_probe.get("ok"):
+            raise RuntimeError(
+                "Managed model server answered /models but failed a tiny generation probe. "
+                f"{generation_probe.get('error') or generation_probe}. "
+                f"See {log_path}."
+            )
+        time.sleep(0.5)
+        _raise_if_managed_model_server_exited(assignment=assignment)
+        progress_tracker.detail("Managed model server passed a tiny generation probe.")
+        state.ready = True
+        if serves_default:
+            MANAGED_MODEL_SERVER_READY = True
+        progress_tracker.finish_meter(detail="Model server ready.")
+    except Exception as original_error:
+        try:
+            _stop_managed_server_process(
+                process,
+                server_label=f"model server at {assignment.base_url}",
+            )
+        except Exception as cleanup_error:
+            progress_tracker.warning(
+                f"Managed model server rollback failed at {assignment.base_url}: {cleanup_error}"
+            )
+        try:
+            record_activity_snapshot("after_model_server_stop", ACTIVE_RUN_DIAGNOSTICS)
+        except Exception as cleanup_error:
+            progress_tracker.warning(
+                f"Managed model server rollback diagnostics failed at {assignment.base_url}: "
+                f"{cleanup_error}"
+            )
+        finally:
+            try:
+                log_file.close()
+            except Exception as cleanup_error:
+                progress_tracker.warning(
+                    f"Managed model server log close failed at {log_path}: {cleanup_error}"
+                )
+            state.process = None
+            state.log_file = None
+            state.log_path = ""
+            if serves_default:
+                MANAGED_MODEL_SERVER_PROCESS = None
+                MANAGED_MODEL_SERVER_LOG_FILE = None
+        raise original_error
+
+
+def _filesystem_safe_model_label(text: str) -> str:
+    """Filesystem-safe label from a model/endpoint component.
+
+    Replaces path separators, whitespace, and shell-metacharacter-adjacent
+    characters with underscores; never accepts raw URLs or credentials.
+    """
+    safe = re.sub(r"[^A-Za-z0-9._-]+", "_", text.strip())
+    return safe.strip("._") or "model"
 
 
 def _managed_model_server_log_path() -> str:
     return os.path.join(RUN_OUTPUT_DIR, "model_server.log")
+
+
+def _managed_model_server_log_path_for(assignment: TaskModelAssignment) -> str:
+    """Deterministic per-server log path under the run output directory.
+
+    The default assignment keeps the compatibility ``model_server.log``;
+    secondary managed endpoints get a deterministic label built only from
+    parsed safe components (host/port/path + model name), never from raw
+    URLs or credentials, so labels cannot contain path separators or unsafe
+    characters (issue #133).
+    """
+    if getattr(assignment, "task", None) == "default":
+        return _managed_model_server_log_path()
+    try:
+        parsed = urlparse(assignment.base_url or "")
+        host = (parsed.hostname or "").lower()
+        try:
+            port = parsed.port
+        except ValueError:
+            port = None
+        port_label = f"-{port}" if port is not None else ""
+        path_label = _filesystem_safe_model_label(parsed.path.rstrip("/").replace("/", "-"))
+        if path_label:
+            path_label = f"-{path_label}"
+    except Exception:
+        host, port_label, path_label = "", "", ""
+    model_label = _filesystem_safe_model_label(assignment.name)
+    label = f"{_filesystem_safe_model_label(host)}{port_label}{path_label}-{model_label}"
+    return os.path.join(RUN_OUTPUT_DIR, f"model_server_{label}.log")
 
 
 def _run_pipeline() -> None:
