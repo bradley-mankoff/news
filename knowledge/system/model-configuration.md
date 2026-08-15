@@ -81,10 +81,40 @@ models is rejected during Runtime Config Resolution, before source
 collection. External endpoints remain non-owned: the application never
 spawns them.
 
+## Defaulting and assignment semantics (issue #169)
+
+`NEWS_MODEL` is model identity only; it never selects a backend or workload
+concurrency defaults. An unset `NEWS_MODEL_BACKEND` resolves to the fixed
+product default `DEFAULT_MODEL_BACKEND` (`mlx-vlm`, matching the default
+Gemma 4 12B alias), never to selected-model inference. A known catalog model
+whose declared backend differs — `gemma-e2b-tiny` (`mlx-lm`) and the
+`qwythos-9b-*` GGUF aliases (`llama.cpp`) — must set `NEWS_MODEL_BACKEND`
+explicitly; config resolution fails fast with an actionable message naming
+the required value (raw `.gguf` references require
+`NEWS_MODEL_BACKEND=llama.cpp` the same way). Explicit backend overrides
+keep the existing validation: closed backend set, external base-URL
+requirement, and known MLX/llama.cpp mismatch rejection. `infer_model_backend()`
+remains for per-task model assignments, catalog/runtime-fit metadata, and
+compatibility logic only.
+
+Article-summary and story-synthesis concurrency defaults are fixed pipeline
+values (`4`) for every model; `NEWS_MODEL_CONCURRENCY` defaults to `4` and
+rises only when an explicit stage worker count needs a larger server pool.
+Inherited task assignments (no per-task model override) carry the resolved
+default backend so diagnostics and server commands agree; a task-specific
+model keeps its catalog/inferred backend. Runtime and diagnostic payloads
+report the model-neutral provenance `derived_from_stage_concurrency` for the
+server concurrency default.
+
 ## Sources
 
 - `news_pipeline/model_catalog.py` — built-ins, YAML loader/validation,
   merge, runtime-fit matching
 - `config/model_catalog.yaml` — user-editable overlay
 - `news_pipeline/config.py` — alias resolution, backend inference, selector
-  options
+  options, fixed default backend and model-neutral concurrency defaults
+- `docs/adr/0007-model-configuration-vocabulary.md` — accepted ownership
+  boundaries between Model Selection, Model Tuning, Pipeline Budget, and
+  Model Server Settings
+- `docs/adr/0017-runtime-matrix.md` — fixed default backend plus explicit
+  override policy and the closed backend set

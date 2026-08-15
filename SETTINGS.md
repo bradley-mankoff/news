@@ -29,7 +29,8 @@ is defined in
 | `NEWS_PROMPT_PROFILE` | `balanced` | Editorial tone for the five LLM prompt stages. One of `balanced`, `consensus-and-contradiction`, `explain-like-im-five`, `facts-only`, `playful`. |
 | `NEWS_PROMPT_OVERRIDE_<TASK>` | _(unset)_ | Per-stage editorial override layered on top of `NEWS_PROMPT_PROFILE` and `config/prompt_overrides.yaml` (override wins). Tasks: `ARTICLE_SUMMARY`, `STORY_SCALE_SCREENING`, `STORY_DRAFTING`, `TITLE_GENERATION`, `IMAGE_ART_DIRECTION`. Unset/empty = use profile text. Editable from the UI's Editorial approach panel. |
 | `NEWS_PROMPT_TEMPLATE_<TASK>` | _(unset)_ | Advanced full-template override (ADR 0015): a JSON object `{"system": ..., "user": ...}` of Python `string.Template` texts replacing the whole system/user prompt for that task. Tasks match `NEWS_PROMPT_OVERRIDE_<TASK>`. Unset/empty = built-in template. Non-empty values must parse and validate (required placeholders, contract markers) or config resolution fails. Editable from the Advanced Settings full-template editors. |
-| `NEWS_MODEL` | `gemma-4-12b-it-4bit` | Default friendly alias or full model repo/name. Task-specific model assignments inherit this value unless overridden. Stages with no LLM call of their own (story discovery) inherit this value. |
+| `NEWS_MODEL` | `gemma-4-12b-it-4bit` | Default friendly alias or full model repo/name. Model identity only: it never selects a backend or workload concurrency defaults. Task-specific model assignments inherit this value unless overridden. Stages with no LLM call of their own (story discovery) inherit this value. |
+| `NEWS_MODEL_BACKEND` | `mlx-vlm` | Backend for the default model: `mlx-lm`, `mlx-vlm`, `external`, or `llama.cpp`. Unset/empty resolves to the fixed default `mlx-vlm`; a known catalog model whose declared backend differs (for example `gemma-e2b-tiny` → `mlx-lm`, Qwythos GGUF aliases → `llama.cpp`) must set this explicitly or config resolution fails with an actionable message. |
 | `NEWS_SOURCE_SCOPE` | `core` | `core` selects active English core sources. `peripheral` selects core plus peripheral sources. |
 | `NEWS_DELIVERY_MODE` | `owner` | Optional email delivery policy: `disabled` (no delivery, `skipped: user_disabled`), `owner` (sends only to `NEWS_PRIMARY_RECIPIENT`), or `recipients` (explicit opt-in: active `config/recipients.yaml` entries, with the owner included only when listed). An explicitly configured `NEWS_EMAIL_RECIPIENTS` fallback is used only when the catalog is empty; an all-paused catalog records `skipped: user_disabled`. Legacy `NEWS_RECIPIENT_SCOPE` maps to this mode when the new variable is unset. |
 | `NEWS_RECIPIENT_SCOPE` | `primary` | Legacy migration value: `primary` maps to `NEWS_DELIVERY_MODE=owner`, `all` maps to `recipients`. Prefer `NEWS_DELIVERY_MODE`. |
@@ -66,6 +67,9 @@ The `bradley` terminology was replaced with `primary` (issue #23):
 | `NEWS_MODEL_MAX_INPUT_TOKENS` | Model Tuning synthesis prompt ceiling; older article context is trimmed if exceeded. |
 | `NEWS_ARTICLE_TEXT_TOKEN_LIMIT` | Pipeline Budget truncation for scraped article text before summarization. |
 | `NEWS_RELAX_STORY_DRAFTING_GUARDS` | Allows short/degraded fallback story drafting output when explicitly enabled. |
+| `NEWS_ARTICLE_SUMMARY_CONCURRENCY` | Pipeline Budget worker count for article summaries. Fixed `4` default for every model choice; explicit values still win. |
+| `NEWS_STORY_SYNTHESIS_CONCURRENCY` | Pipeline Budget worker count for story synthesis. Fixed `4` default for every model choice; explicit values still win. |
+| `NEWS_MODEL_CONCURRENCY` | Model Server Settings parallelism for the model server. Defaults to `4`, rising only when an explicit `NEWS_ARTICLE_SUMMARY_CONCURRENCY`/`NEWS_STORY_SYNTHESIS_CONCURRENCY` needs a larger server pool; model identity never changes it. |
 | `NEWS_MODEL_TEMPERATURE`, `NEWS_MODEL_TOP_P`, `NEWS_MODEL_TOP_K`, `NEWS_MODEL_MIN_P` | Default sampling settings. |
 | `NEWS_MODEL_PRESENCE_PENALTY`, `NEWS_MODEL_REPETITION_PENALTY` | Default repetition controls. |
 | `NEWS_MODEL_REASONING_TEMPERATURE`, `NEWS_MODEL_REASONING_TOP_P`, `NEWS_MODEL_REASONING_TOP_K`, `NEWS_MODEL_REASONING_MIN_P` | Sampling settings for reasoning-heavy tasks. |
@@ -247,9 +251,10 @@ The old topic-scoped controls are rejected when present:
 `NEWS_TOPIC_EMBEDDING_THRESHOLD`, `NEWS_PER_SOURCE_TOPIC_ARTICLE_CAP`, and
 `NEWS_SUMMARY_SCOPE`.
 
-Model backend, cache, concurrency, and image-generation details are derived from
+Model backend (fixed default `mlx-vlm`), cache, concurrency (fixed stage
+and server defaults), and image-generation details are derived from
 explicit Run Settings or hard-coded defaults rather than hidden model-size
-bundles.
+bundles or model-identity inference.
 
 ## Daily Automation
 

@@ -102,6 +102,12 @@ SUPPORTED_MODEL_BACKENDS = (
     MODEL_BACKEND_EXTERNAL,
     MODEL_BACKEND_LLAMA_CPP,
 )
+# Fixed product default backend (issue #169): an unset NEWS_MODEL_BACKEND
+# resolves to this value, never to selected-model inference. It matches the
+# current launchable default (gemma-4-12b-it-4bit on mlx-vlm). A known
+# catalog model whose declared backend differs must set NEWS_MODEL_BACKEND
+# explicitly; model identity never silently selects a backend.
+DEFAULT_MODEL_BACKEND = MODEL_BACKEND_MLX_VLM
 # Legacy identifier retained for API compatibility; the Qwythos GGUF models
 # are now served by the managed llama.cpp backend (issue #75).
 QWWYTHOS_MODEL_BACKEND = MODEL_BACKEND_LLAMA_CPP
@@ -558,12 +564,21 @@ def _task_assignment_entry(
     task: str,
     *,
     reference: str,
+    default_reference: str,
+    default_backend: str,
     base_url: str,
     presets: dict[str, dict[str, Any]],
     model_concurrency: int,
 ) -> TaskModelAssignment:
     name = resolve_model_name(reference)
-    backend = infer_model_backend(reference)
+    # Inherited task assignments (no per-task model override) carry the
+    # resolved default backend so diagnostics and server commands never
+    # disagree with the default assignment (issue #169). A task-specific
+    # model override keeps its catalog/inferred backend metadata.
+    if resolve_model_name(reference) == resolve_model_name(default_reference):
+        backend = default_backend
+    else:
+        backend = infer_model_backend(reference)
     tuning = _configured_model_tuning(reference, task=task, presets=presets)
     return TaskModelAssignment(
         task=task,
@@ -609,6 +624,8 @@ def _configured_model_assignments(
         task_entries[task] = _task_assignment_entry(
             task,
             reference=reference,
+            default_reference=default_reference,
+            default_backend=default_backend,
             base_url=base_url,
             presets=presets,
             model_concurrency=model_concurrency,
@@ -1654,9 +1671,15 @@ def _validate_llama_cpp_backend_compatibility(model_reference: str, backend: str
 
 
 def _configured_model_backend(model_reference: str) -> str:
-    """Resolve the default model's backend: NEWS_MODEL_BACKEND override
-    (validated against SUPPORTED_MODEL_BACKENDS) or inferred from the
-    reference. Per-task models always use inference. Known catalog
+    """Resolve the default model's backend.
+
+    NEWS_MODEL_BACKEND override (validated against SUPPORTED_MODEL_BACKENDS)
+    wins; an empty/unset value resolves to the fixed DEFAULT_MODEL_BACKEND,
+    never to selected-model inference (issue #169). A known catalog model
+    whose declared backend differs from the fixed default must be paired
+    with an explicit NEWS_MODEL_BACKEND and fails fast with an actionable
+    message; raw GGUF references likewise require the llama.cpp backend
+    explicitly. Per-task models always use inference. Known catalog
     MLX/llama.cpp mismatches fail fast; unknown references may be selected
     with any backend."""
     configured = _str_env("NEWS_MODEL_BACKEND", "").strip().lower()
@@ -1664,7 +1687,28 @@ def _configured_model_backend(model_reference: str) -> str:
         raise ValueError(
             "NEWS_MODEL_BACKEND must be one of: " + ", ".join(SUPPORTED_MODEL_BACKENDS)
         )
-    backend = configured or infer_model_backend(model_reference)
+    backend = configured or DEFAULT_MODEL_BACKEND
+    if not configured:
+        clean = (model_reference or "").strip()
+        resolved = resolve_model_name(clean)
+        declared = (
+            _model_catalog.catalog_model_backend(clean)
+            or _model_catalog.catalog_model_backend(resolved)
+        )
+        if declared is not None and declared != backend:
+            raise ValueError(
+                f"NEWS_MODEL={model_reference!r} requires NEWS_MODEL_BACKEND={declared}: "
+                "the model catalog declares that backend for this model, and the "
+                f"default backend is {DEFAULT_MODEL_BACKEND}. Set "
+                f"NEWS_MODEL_BACKEND={declared} explicitly to use this model."
+            )
+        if clean.lower().endswith(".gguf") or resolved.lower().endswith(".gguf"):
+            raise ValueError(
+                f"NEWS_MODEL={model_reference!r} requires NEWS_MODEL_BACKEND=llama.cpp: "
+                "GGUF references are served by the managed llama.cpp backend, and "
+                f"the default backend is {DEFAULT_MODEL_BACKEND}. Set "
+                "NEWS_MODEL_BACKEND=llama.cpp explicitly to use this model."
+            )
     if backend == MODEL_BACKEND_EXTERNAL and not _str_env("NEWS_MODEL_BASE_URL", ""):
         raise ValueError(
             "NEWS_MODEL_BACKEND=external requires NEWS_MODEL_BASE_URL to point at an "
@@ -1675,23 +1719,6 @@ def _configured_model_backend(model_reference: str) -> str:
     return backend
 
 
-
-
-def _default_story_synthesis_concurrency(model_reference: str) -> int:
-    if is_codex_test_model_reference(model_reference):
-        return 2
-    resolved_name = resolve_model_name(model_reference).lower()
-    # Retained legacy branch (issue #124 Deviation 3): raw Qwythos references
-    # not covered by UNSUPPORTED_MODEL_REFERENCES still route to mlx-vlm.
-    if "qwythos" in resolved_name or is_gemma_4_model_reference(model_reference):
-        return 1
-    return DEFAULT_STORY_SYNTHESIS_CONCURRENCY
-
-
-def _default_article_summary_concurrency(model_reference: str) -> int:
-    if is_codex_test_model_reference(model_reference):
-        return 8
-    return DEFAULT_ARTICLE_SUMMARY_CONCURRENCY
 
 
 
@@ -1824,7 +1851,7 @@ def runtime_knob_registry() -> list[dict[str, Any]]:
         _runtime_knob("Run Settings", "Embedding model", "NEWS_EMBEDDING_MODEL", default="all-mpnet-base-v2", advanced=True),
         _runtime_knob("Run Settings", "Token encoding", "NEWS_TOKEN_ENCODING", default="o200k_base", advanced=True),
         _runtime_knob("Model Selection", "Default model", "NEWS_MODEL", "select", default=DEFAULT_MODEL_ALIAS, options=sorted(_catalog_model_aliases()), option_links=model_links, ui_location=UI_LOCATION_RUN_SETUP),
-        _runtime_knob("Model Selection", "Model backend", "NEWS_MODEL_BACKEND", "select", options=sorted(SUPPORTED_MODEL_BACKENDS)),
+        _runtime_knob("Model Selection", "Model backend", "NEWS_MODEL_BACKEND", "select", default=DEFAULT_MODEL_BACKEND, options=sorted(SUPPORTED_MODEL_BACKENDS)),
         _runtime_knob("Model Tuning", "Default tuning preset", "NEWS_MODEL_TUNING_PRESET", "select", options=tuning_presets),
         _runtime_knob("Model Tuning", "Model input cap", "NEWS_MODEL_MAX_INPUT_TOKENS", "number", minimum=1, step=1, ui_location=UI_LOCATION_ADVANCED_PANELS),
         _runtime_knob("Pipeline Budget", "Article text token limit", "NEWS_ARTICLE_TEXT_TOKEN_LIMIT", "number", minimum=1, step=1, ui_location=UI_LOCATION_ADVANCED_PANELS),
@@ -2636,29 +2663,25 @@ def _build_runtime_config(
     model_server_settings = _configured_model_server_settings(model_base_url)
     article_summary_concurrency = max(
         1,
-        _int_env(
-            "NEWS_ARTICLE_SUMMARY_CONCURRENCY",
-            _default_article_summary_concurrency(default_reference),
-        ),
+        _int_env("NEWS_ARTICLE_SUMMARY_CONCURRENCY", DEFAULT_ARTICLE_SUMMARY_CONCURRENCY),
     )
     story_synthesis_concurrency = max(
         1,
-        _int_env(
-            "NEWS_STORY_SYNTHESIS_CONCURRENCY",
-            _default_story_synthesis_concurrency(default_reference),
-        ),
+        _int_env("NEWS_STORY_SYNTHESIS_CONCURRENCY", DEFAULT_STORY_SYNTHESIS_CONCURRENCY),
     )
     source_collection_concurrency = max(
         1,
         _int_env("NEWS_SOURCE_COLLECTION_CONCURRENCY", DEFAULT_SOURCE_COLLECTION_CONCURRENCY),
     )
+    # Model-server concurrency is model-neutral (issue #169): it derives
+    # only from the fixed server default plus the resolved stage values, so
+    # the server is never below the active stage worker counts.
     model_concurrency = max(
         1,
         _int_env(
             "NEWS_MODEL_CONCURRENCY",
             max(
-                _default_article_summary_concurrency(default_reference),
-                _default_story_synthesis_concurrency(default_reference),
+                DEFAULT_PIPELINE_CONCURRENCY,
                 article_summary_concurrency,
                 story_synthesis_concurrency,
             ),
