@@ -131,6 +131,62 @@ class DocsConsistencyTests(unittest.TestCase):
             "Catalog ADR",
         )
 
+    def test_adr_0007_and_0017_guard_independent_model_backend_concurrency(self) -> None:
+        """Accepted ADRs, README, and SETTINGS must describe the issue #169
+        ownership boundary: model selection never infers a backend or
+        workload/server concurrency, the fixed default backend is `mlx-vlm`,
+        and stage/server concurrency defaults are fixed model-neutral values."""
+        adr_0007 = _ADR_0007.read_text(encoding="utf-8")
+        adr_0017 = (_REPO / "docs/adr/0017-runtime-matrix.md").read_text(
+            encoding="utf-8"
+        )
+        readme = _README.read_text(encoding="utf-8")
+        settings = _SETTINGS.read_text(encoding="utf-8")
+
+        # Independent ownership: model selection never picks a backend.
+        self.assertIn("never infers a backend", adr_0007)
+        self.assertIn("**not** inferred from the model reference", adr_0017)
+        self.assertIn("it never picks a backend", readme)
+        self.assertIn("never selects a backend", settings)
+
+        # Fixed default backend documented everywhere.
+        for doc, text in (
+            ("ADR 0007", adr_0007),
+            ("ADR 0017", adr_0017),
+            ("README.md", readme),
+            ("SETTINGS.md", settings),
+        ):
+            self.assertIn("mlx-vlm", text, f"{doc} must name the fixed default backend")
+        self.assertIn("DEFAULT_MODEL_BACKEND", adr_0017)
+        self.assertIn("NEWS_MODEL_BACKEND", settings)
+        self.assertIn("`mlx-vlm`", settings)
+
+        # The old selected-model inference policy must not survive.
+        self.assertNotIn(
+            "the backend is\ninferred from the model reference",
+            adr_0017,
+            "ADR 0017 must not retain selected-model backend inference",
+        )
+        self.assertNotIn(
+            "inferred from the model\nreference otherwise",
+            readme,
+            "README must not retain selected-model backend inference",
+        )
+
+        # Fixed model-neutral concurrency defaults.
+        self.assertIn("Stage concurrency defaults are fixed pipeline values", adr_0007)
+        self.assertIn("model-neutral", adr_0007)
+        self.assertIn("every model choice", readme)
+        self.assertIn("NEWS_MODEL_CONCURRENCY", settings)
+
+        # Inherited task assignments use the resolved default backend.
+        self.assertIn("Inherited task assignments", adr_0007)
+        normalized_0007 = re.sub(r"\s+", " ", adr_0007)
+        self.assertIn(
+            "carry the resolved default backend",
+            normalized_0007,
+        )
+
     def test_adr_collision_references_and_targets_are_repaired(self) -> None:
         targets = {
             "docs/adr/0016-project-license.md": "0016",
