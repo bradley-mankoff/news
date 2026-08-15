@@ -60,7 +60,10 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
     def test_preset_base_env_and_overrides_have_documented_precedence(self) -> None:
         resolution = resolve_runtime_config(
             RuntimeConfigRequest(
-                base_env={"NEWS_MODEL": GEMMA_4_12B_IT_4BIT_MODEL_ALIAS},
+                base_env={
+                    "NEWS_MODEL": GEMMA_4_12B_IT_4BIT_MODEL_ALIAS,
+                    "NEWS_MODEL_BACKEND": "mlx-vlm",
+                },
                 preset_id="dev",
                 overrides={"NEWS_SOURCE_SCOPE": "peripheral"},
                 materialize_outputs=False,
@@ -120,7 +123,7 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
             with self.subTest(reference=reference):
                 config = load_runtime_config(
                     environ={},
-                    overrides={"NEWS_MODEL": reference},
+                    overrides={"NEWS_MODEL": reference, "NEWS_MODEL_BACKEND": "mlx-lm"},
                     materialize_outputs=False,
                     run_started_at=datetime(2026, 6, 14, 12, 0, 0),
                 )
@@ -130,9 +133,26 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
                 self.assertIn("python -m mlx_lm server", config.model_server_command)
                 self.assertNotIn("python -m mlx_vlm.server", config.model_server_command)
 
-    def test_qwythos_aliases_resolve_to_managed_llama_cpp(self) -> None:
+    def test_known_mismatch_without_explicit_backend_fails_fast(self) -> None:
+        # A known catalog model whose backend differs from the fixed default
+        # must fail during config resolution with an actionable message
+        # instead of silently launching the default mlx-vlm server (issue
+        # #169).
+        with self.assertRaisesRegex(
+            ValueError,
+            r"NEWS_MODEL='gemma-e2b-tiny' requires NEWS_MODEL_BACKEND=mlx-lm",
+        ):
+            load_runtime_config(
+                environ={},
+                overrides={"NEWS_MODEL": CODEX_TEST_MODEL_ALIAS},
+                materialize_outputs=False,
+            )
+
+    def test_qwythos_aliases_resolve_to_explicit_managed_llama_cpp(self) -> None:
         # The legacy aliases now resolve to their exact GGUF file references
-        # under the managed llama.cpp backend (issue #75).
+        # under the managed llama.cpp backend (issue #75); the catalog
+        # declares llama.cpp, so the backend must be explicit under the
+        # fixed default rule (issue #169).
         for alias, reference in (
             ("qwythos-9b-4bit", QWWYTHOS_9B_4BIT_MODEL_REFERENCE),
             ("qwythos-9b-8bit", QWWYTHOS_9B_8BIT_MODEL_REFERENCE),
@@ -140,7 +160,7 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
             with self.subTest(alias=alias):
                 config = load_runtime_config(
                     environ={},
-                    overrides={"NEWS_MODEL": alias},
+                    overrides={"NEWS_MODEL": alias, "NEWS_MODEL_BACKEND": "llama.cpp"},
                     materialize_outputs=False,
                     run_started_at=datetime(2026, 6, 14, 12, 0, 0),
                 )
@@ -157,10 +177,11 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
                     "llama.cpp",
                 )
 
-    def test_raw_qwythos_gguf_references_infer_llama_cpp(self) -> None:
+    def test_raw_qwythos_gguf_references_require_explicit_llama_cpp(self) -> None:
         # Raw owner/repo/file.gguf references and their URL forms (the values
-        # the old SETTINGS.md published as "Resolved model") now resolve to
-        # the managed llama.cpp backend instead of failing (issue #75).
+        # the old SETTINGS.md published as "Resolved model") require the
+        # explicit llama.cpp backend under the fixed default rule (issue
+        # #169); the managed llama.cpp path itself is unchanged (issue #75).
         for supported in (
             QWWYTHOS_9B_4BIT_MODEL_REFERENCE,
             f"https://huggingface.co/{QWWYTHOS_9B_4BIT_MODEL_REFERENCE}",
@@ -169,7 +190,7 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
             with self.subTest(reference=supported):
                 config = load_runtime_config(
                     environ={},
-                    overrides={"NEWS_MODEL": supported},
+                    overrides={"NEWS_MODEL": supported, "NEWS_MODEL_BACKEND": "llama.cpp"},
                     materialize_outputs=False,
                 )
                 self.assertEqual(config.model_backend, "llama.cpp")
@@ -183,10 +204,10 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
                     config.model_server_command,
                 )
 
-    def test_local_gguf_path_infers_llama_cpp(self) -> None:
+    def test_local_gguf_path_requires_explicit_llama_cpp(self) -> None:
         config = load_runtime_config(
             environ={},
-            overrides={"NEWS_MODEL": "/models/my model.gguf"},
+            overrides={"NEWS_MODEL": "/models/my model.gguf", "NEWS_MODEL_BACKEND": "llama.cpp"},
             materialize_outputs=False,
         )
         self.assertEqual(config.model_backend, "llama.cpp")
@@ -194,6 +215,17 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
             "--model '/models/my model.gguf'",
             config.model_server_command,
         )
+
+    def test_raw_gguf_without_explicit_backend_fails_fast(self) -> None:
+        with self.assertRaisesRegex(
+            ValueError,
+            r"NEWS_MODEL='.*my model.gguf' requires NEWS_MODEL_BACKEND=llama.cpp",
+        ):
+            load_runtime_config(
+                environ={},
+                overrides={"NEWS_MODEL": "/models/my model.gguf"},
+                materialize_outputs=False,
+            )
 
     def test_llama_cpp_backend_unknown_bare_hf_repo_supported(self) -> None:
         # An unknown bare HF repo explicitly selected for llama.cpp is passed
@@ -258,7 +290,7 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
     def test_custom_llama_cpp_binary_appears_in_command(self) -> None:
         config = load_runtime_config(
             environ={"NEWS_LLAMA_CPP_SERVER": "/opt/llama/llama-server"},
-            overrides={"NEWS_MODEL": "qwythos-9b-4bit"},
+            overrides={"NEWS_MODEL": "qwythos-9b-4bit", "NEWS_MODEL_BACKEND": "llama.cpp"},
             materialize_outputs=False,
         )
         self.assertTrue(
@@ -272,7 +304,7 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
     def test_blank_llama_cpp_binary_falls_back_to_default(self) -> None:
         config = load_runtime_config(
             environ={"NEWS_LLAMA_CPP_SERVER": "   "},
-            overrides={"NEWS_MODEL": "qwythos-9b-4bit"},
+            overrides={"NEWS_MODEL": "qwythos-9b-4bit", "NEWS_MODEL_BACKEND": "llama.cpp"},
             materialize_outputs=False,
         )
         self.assertTrue(config.model_server_command.startswith("llama-server "))
@@ -293,7 +325,7 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
         with patch.object(model_catalog, "_CATALOG_SNAPSHOT", custom):
             config = load_runtime_config(
                 environ={},
-                overrides={"NEWS_MODEL": "custom-managed"},
+                overrides={"NEWS_MODEL": "custom-managed", "NEWS_MODEL_BACKEND": "mlx-lm"},
                 materialize_outputs=False,
                 run_started_at=datetime(2026, 6, 14, 12, 0, 0),
             )
@@ -319,7 +351,7 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
         with patch.object(model_catalog, "_CATALOG_SNAPSHOT", custom):
             config = load_runtime_config(
                 environ={"NEWS_MODEL_BASE_URL": "https://api.example.com/v1"},
-                overrides={"NEWS_MODEL": "custom-external"},
+                overrides={"NEWS_MODEL": "custom-external", "NEWS_MODEL_BACKEND": "external"},
                 materialize_outputs=False,
                 run_started_at=datetime(2026, 6, 14, 12, 0, 0),
             )
@@ -329,6 +361,29 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
         self.assertEqual(config.model_backend, "external")
         self.assertEqual(config.model_base_url, "https://api.example.com/v1")
         self.assertEqual(config.model_server_command, "")
+
+    def test_custom_external_catalog_alias_without_backend_fails_fast(self) -> None:
+        custom = dict(model_catalog.BUILTIN_CATALOG_MODELS)
+        custom["custom-external"] = model_catalog.CatalogModel(
+            alias="custom-external",
+            reference="external-org/openai-compatible",
+            name="External Compatible Model",
+            backend="external",
+            hf_repo="external-org/openai-compatible",
+            context_length=None,
+            description="A custom external model.",
+            task_notes={},
+        )
+        with patch.object(model_catalog, "_CATALOG_SNAPSHOT", custom):
+            with self.assertRaisesRegex(
+                ValueError,
+                r"NEWS_MODEL='custom-external' requires NEWS_MODEL_BACKEND=external",
+            ):
+                load_runtime_config(
+                    environ={},
+                    overrides={"NEWS_MODEL": "custom-external"},
+                    materialize_outputs=False,
+                )
 
     def test_inferred_external_catalog_alias_requires_base_url(self) -> None:
         custom = dict(model_catalog.BUILTIN_CATALOG_MODELS)
@@ -349,7 +404,7 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
             ):
                 load_runtime_config(
                     environ={},
-                    overrides={"NEWS_MODEL": "custom-external"},
+                    overrides={"NEWS_MODEL": "custom-external", "NEWS_MODEL_BACKEND": "external"},
                     materialize_outputs=False,
                 )
 
@@ -381,6 +436,83 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
         )
 
         self.assertEqual(resolution.config.model_backend, "mlx-vlm")
+
+    def test_selected_model_does_not_change_concurrency_defaults(self) -> None:
+        # Different model choices with the same explicit backend resolve the
+        # same model-neutral stage/server concurrency defaults (issue #169).
+        gemma_config = load_runtime_config(
+            environ={},
+            overrides={"NEWS_MODEL": GEMMA_4_12B_IT_4BIT_MODEL_ALIAS},
+            materialize_outputs=False,
+        )
+        tiny_config = load_runtime_config(
+            environ={},
+            overrides={
+                "NEWS_MODEL": CODEX_TEST_MODEL_ALIAS,
+                "NEWS_MODEL_BACKEND": "mlx-lm",
+            },
+            materialize_outputs=False,
+        )
+        for field in (
+            "article_summary_concurrency",
+            "story_synthesis_concurrency",
+            "model_concurrency",
+        ):
+            self.assertEqual(
+                getattr(gemma_config, field),
+                getattr(tiny_config, field),
+                f"{field} must be model-independent",
+            )
+        self.assertEqual(gemma_config.article_summary_concurrency, 4)
+        self.assertEqual(gemma_config.story_synthesis_concurrency, 4)
+        self.assertEqual(gemma_config.model_concurrency, 4)
+        self.assertEqual(tiny_config.model_backend, "mlx-lm")
+        self.assertEqual(gemma_config.model_backend, "mlx-vlm")
+
+    def test_inherited_assignments_report_resolved_default_backend(self) -> None:
+        config = load_runtime_config(
+            environ={},
+            overrides={
+                "NEWS_MODEL": CODEX_TEST_MODEL_ALIAS,
+                "NEWS_MODEL_BACKEND": "mlx-lm",
+            },
+            materialize_outputs=False,
+        )
+        self.assertEqual(config.model_assignments["default"].backend, "mlx-lm")
+        for task in (
+            MODEL_TASK_ARTICLE_SUMMARY,
+            MODEL_TASK_STORY_DRAFTING,
+            MODEL_TASK_STORY_SCALE_SCREENING,
+            MODEL_TASK_TITLE_GENERATION,
+            MODEL_TASK_IMAGE_ART_DIRECTION,
+        ):
+            self.assertEqual(
+                config.model_assignments[task].backend,
+                "mlx-lm",
+                f"{task} must inherit the resolved default backend",
+            )
+
+    def test_external_backend_inherits_into_task_assignments(self) -> None:
+        config = load_runtime_config(
+            environ={},
+            overrides={
+                "NEWS_MODEL_BACKEND": "external",
+                "NEWS_MODEL_BASE_URL": "https://api.example.com/v1",
+            },
+            materialize_outputs=False,
+        )
+        self.assertEqual(config.model_backend, "external")
+        self.assertEqual(config.model_assignments["default"].backend, "external")
+        self.assertEqual(config.model_assignments["default"].server_command, "")
+        for task in (
+            MODEL_TASK_ARTICLE_SUMMARY,
+            MODEL_TASK_STORY_DRAFTING,
+            MODEL_TASK_STORY_SCALE_SCREENING,
+            MODEL_TASK_TITLE_GENERATION,
+            MODEL_TASK_IMAGE_ART_DIRECTION,
+        ):
+            self.assertEqual(config.model_assignments[task].backend, "external")
+            self.assertEqual(config.model_assignments[task].server_command, "")
 
     def test_news_model_backend_invalid_value_raises_value_error(self) -> None:
         with self.assertRaisesRegex(ValueError, "NEWS_MODEL_BACKEND must be one of: mlx-lm, mlx-vlm, external, llama.cpp"):
@@ -439,7 +571,10 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
     def test_context_env_drives_runtime_config_derivations(self) -> None:
         config = load_runtime_config(
             environ={"NEWS_TOTAL_ARTICLE_SUMMARY_CAP": "55"},
-            overrides={"NEWS_MODEL": "gemma-e2b-tiny"},
+            overrides={
+                "NEWS_MODEL": "gemma-e2b-tiny",
+                "NEWS_MODEL_BACKEND": "mlx-lm",
+            },
             materialize_outputs=False,
             run_started_at=datetime(2026, 6, 14, 12, 0, 0),
         )
@@ -1121,6 +1256,7 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
             environ={},
             overrides={
                 "NEWS_MODEL": CODEX_TEST_MODEL_ALIAS,
+                "NEWS_MODEL_BACKEND": "mlx-lm",
                 "NEWS_STORY_SCALE_SCREENING_ENABLED": "0",
                 "NEWS_MAX_STORIES": "7",
                 "NEWS_STORY_SELECTION_OVERLAP_THRESHOLD": "0.4",
@@ -1143,6 +1279,7 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
             environ={},
             overrides={
                 "NEWS_MODEL": CODEX_TEST_MODEL_ALIAS,
+                "NEWS_MODEL_BACKEND": "mlx-lm",
                 "NEWS_MODEL_ARTICLE_SUMMARY": GEMMA_4_12B_IT_4BIT_MODEL_ALIAS,
                 "NEWS_MODEL_ARTICLE_SUMMARY_BASE_URL": "http://127.0.0.1:8090/v1",
                 "NEWS_MODEL_STORY_DRAFTING": GEMMA_4_12B_IT_4BIT_MODEL_ALIAS,
@@ -1227,6 +1364,7 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
             environ={},
             overrides={
                 "NEWS_MODEL": CODEX_TEST_MODEL_ALIAS,
+                "NEWS_MODEL_BACKEND": "mlx-lm",
                 "NEWS_MODEL_STORY_SCALE_SCREENING": GEMMA_4_12B_IT_4BIT_MODEL_ALIAS,
                 "NEWS_MODEL_STORY_SCALE_SCREENING_BASE_URL": "http://127.0.0.1:8090/v1",
                 "NEWS_MODEL_TITLE_GENERATION": GEMMA_4_12B_IT_4BIT_MODEL_ALIAS,
@@ -1316,6 +1454,7 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
                 environ={},
                 overrides={
                     "NEWS_MODEL": CODEX_TEST_MODEL_ALIAS,
+                    "NEWS_MODEL_BACKEND": "mlx-lm",
                     "NEWS_MODEL_ARTICLE_SUMMARY": GEMMA_4_12B_IT_4BIT_MODEL_ALIAS,
                 },
                 materialize_outputs=False,
@@ -1330,6 +1469,7 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
                 environ={},
                 overrides={
                     "NEWS_MODEL": CODEX_TEST_MODEL_ALIAS,
+                    "NEWS_MODEL_BACKEND": "mlx-lm",
                     "NEWS_MODEL_ARTICLE_SUMMARY": GEMMA_4_12B_IT_4BIT_MODEL_ALIAS,
                     "NEWS_MODEL_ARTICLE_SUMMARY_BASE_URL": "http://127.0.0.1:8080/v1/",
                 },
@@ -1345,6 +1485,7 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
                 environ={},
                 overrides={
                     "NEWS_MODEL": CODEX_TEST_MODEL_ALIAS,
+                    "NEWS_MODEL_BACKEND": "mlx-lm",
                     "NEWS_MODEL_ARTICLE_SUMMARY": GEMMA_4_12B_IT_4BIT_MODEL_ALIAS,
                     "NEWS_MODEL_ARTICLE_SUMMARY_BASE_URL": "http://localhost:8080/v1",
                 },
@@ -1358,6 +1499,7 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
                 overrides={
                     "NEWS_MODEL_BASE_URL": "http://localhost:8080/v1",
                     "NEWS_MODEL": CODEX_TEST_MODEL_ALIAS,
+                    "NEWS_MODEL_BACKEND": "mlx-lm",
                     "NEWS_MODEL_ARTICLE_SUMMARY": GEMMA_4_12B_IT_4BIT_MODEL_ALIAS,
                     "NEWS_MODEL_ARTICLE_SUMMARY_BASE_URL": "http://127.0.0.1:8080/v1",
                 },
@@ -1393,6 +1535,7 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
             environ={},
             overrides={
                 "NEWS_MODEL": CODEX_TEST_MODEL_ALIAS,
+                "NEWS_MODEL_BACKEND": "mlx-lm",
                 "NEWS_MODEL_ARTICLE_SUMMARY": CODEX_TEST_MODEL_ALIAS,
             },
             materialize_outputs=False,
@@ -1714,7 +1857,11 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
         self.assertFalse(snapshot["smtp_password_set"])
 
     def test_ui_schema_surfaces_delivery_mode_knob(self) -> None:
-        with patch.dict(os.environ, {"NEWS_MODEL": CODEX_TEST_MODEL_ALIAS}, clear=True):
+        with patch.dict(
+            os.environ,
+            {"NEWS_MODEL": CODEX_TEST_MODEL_ALIAS, "NEWS_MODEL_BACKEND": "mlx-lm"},
+            clear=True,
+        ):
             schema = schema_payload()
         knobs = {knob["env"]: knob for knob in schema["knobs"]}
         self.assertIn("NEWS_DELIVERY_MODE", knobs)
@@ -1726,7 +1873,11 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
         )
 
 
-        with patch.dict(os.environ, {"NEWS_MODEL": CODEX_TEST_MODEL_ALIAS}, clear=True):
+        with patch.dict(
+            os.environ,
+            {"NEWS_MODEL": CODEX_TEST_MODEL_ALIAS, "NEWS_MODEL_BACKEND": "mlx-lm"},
+            clear=True,
+        ):
             schema = schema_payload()
 
         groups = {knob["group"] for knob in schema["knobs"]}
@@ -1845,6 +1996,7 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
                 os.environ,
                 {
                     "NEWS_MODEL": CODEX_TEST_MODEL_ALIAS,
+                    "NEWS_MODEL_BACKEND": "mlx-lm",
                     "NEWS_MODEL_STORY_DRAFTING": "mlx-community/example-model",
                     "NEWS_MODEL_STORY_DRAFTING_BASE_URL": "http://127.0.0.1:8090/v1",
                     "NEWS_MODEL_STORY_DRAFTING_TUNING_PRESET": "concise-story-drafting",
@@ -1867,6 +2019,7 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
                 os.environ,
                 {
                     "NEWS_MODEL": CODEX_TEST_MODEL_ALIAS,
+                    "NEWS_MODEL_BACKEND": "mlx-lm",
                     "NEWS_MODEL_STORY_DRAFTING": "mlx-community/example-model",
                     "NEWS_MODEL_STORY_DRAFTING_TUNING_PRESET": "wrong-task",
                 },
@@ -1882,6 +2035,7 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
                 os.environ,
                 {
                     "NEWS_MODEL": CODEX_TEST_MODEL_ALIAS,
+                    "NEWS_MODEL_BACKEND": "mlx-lm",
                     "NEWS_MODEL_TITLE_GENERATION": "mlx-community/example-model",
                     "NEWS_MODEL_TITLE_GENERATION_TUNING_PRESET": "wrong-task",
                 },
@@ -1897,6 +2051,7 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
                 os.environ,
                 {
                     "NEWS_MODEL": CODEX_TEST_MODEL_ALIAS,
+                    "NEWS_MODEL_BACKEND": "mlx-lm",
                     "NEWS_MODEL_TUNING_PRESET": "blank-default",
                 },
                 clear=True,
@@ -1956,6 +2111,7 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
                 os.environ,
                 {
                     "NEWS_MODEL": CODEX_TEST_MODEL_ALIAS,
+                    "NEWS_MODEL_BACKEND": "mlx-lm",
                     "NEWS_MODEL_STORY_SCALE_SCREENING": "mlx-community/example-model",
                     "NEWS_MODEL_STORY_SCALE_SCREENING_BASE_URL": "http://127.0.0.1:8090/v1",
                     "NEWS_MODEL_STORY_SCALE_SCREENING_TUNING_PRESET": "quick-scale-screen",
@@ -2132,7 +2288,11 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
         }
         config_one = load_runtime_config(
             materialize_outputs=False,
-            environ={**shared_env, "NEWS_MODEL": CODEX_TEST_MODEL_ALIAS},
+            environ={
+                **shared_env,
+                "NEWS_MODEL": CODEX_TEST_MODEL_ALIAS,
+                "NEWS_MODEL_BACKEND": "mlx-lm",
+            },
         )
         config_two = load_runtime_config(
             materialize_outputs=False,

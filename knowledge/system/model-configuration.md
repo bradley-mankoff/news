@@ -87,4 +87,9 @@ spawns them.
   merge, runtime-fit matching
 - `config/model_catalog.yaml` — user-editable overlay
 - `news_pipeline/config.py` — alias resolution, backend inference, selector
-  options
+  options, fixed default backend and model-neutral concurrency defaults
+- `docs/adr/0007-model-configuration-vocabulary.md` — accepted ownership
+  boundaries between Model Selection, Model Tuning, Pipeline Budget, and
+  Model Server Settings
+- `docs/adr/0017-runtime-matrix.md` — fixed default backend plus explicit
+  override policy and the closed backend set
