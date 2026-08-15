@@ -16,6 +16,11 @@ so the question was how to let a local operator add or reword catalog entries
 without forking application code or weakening the reviewed identity rules
 (ADR 0017 runtime matrix, issue #124 GGUF boundary).
 
+The baseline decision this overlay extends — who owns the curated catalog
+and its runtime-fit verdicts — is recorded in
+[`docs/adr/0019-model-catalog-owns-curated-models-and-runtime-fit-verdicts.md`](docs/adr/0019-model-catalog-owns-curated-models-and-runtime-fit-verdicts.md).
+This record therefore extends, rather than defines, catalog ownership.
+
 ## Decision
 
 Add an optional, user-editable `config/model_catalog.yaml` overlay to the
