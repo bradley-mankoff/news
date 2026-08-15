@@ -419,6 +419,8 @@ Built-in aliases:
 - `gemma-4-12b-it-4bit`: [`mlx-community/gemma-4-12B-it-4bit`](https://huggingface.co/mlx-community/gemma-4-12B-it-4bit) (default; the standard Gemma 4 12B instruction model, 256K-token context)
 - `qwythos-9b-4bit`: [`huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF`](https://huggingface.co/huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF) (legacy 9B Q4_K GGUF, managed `llama.cpp`)
 - `qwythos-9b-8bit`: [`huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF`](https://huggingface.co/huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF) (legacy 9B Q8_0 GGUF, managed `llama.cpp`)
+- `qwen3-8b-4bit`: [`mlx-community/Qwen3-8B-4bit`](https://huggingface.co/mlx-community/Qwen3-8B-4bit) (runtime-verified Qwen3 8B 4-bit MLX, managed `mlx-lm`; 40,960-token context)
+- `qwen3-14b-4bit`: [`mlx-community/Qwen3-14B-4bit`](https://huggingface.co/mlx-community/Qwen3-14B-4bit) (runtime-verified Qwen3 14B 4-bit MLX, managed `mlx-lm`; 40,960-token context)
 
 The legacy `qwythos-9b-*` aliases are supported again through the managed
 `llama.cpp` backend (issue #75): each resolves to its exact GGUF file
@@ -441,7 +443,7 @@ uv run news models catalog
 uv run news models search --query gemma --task text-generation --limit 5
 ```
 
-Curated models (4):
+Curated models (6):
 
 - `gemma-4-12b-it-4bit` — mlx-vlm, 256K-token context, default model
   ([Hugging Face](https://huggingface.co/mlx-community/gemma-4-12B-it-4bit))
@@ -451,6 +453,16 @@ Curated models (4):
   ([Hugging Face](https://huggingface.co/huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF))
 - `qwythos-9b-8bit` — llama.cpp, legacy Q8_0 GGUF (requires an installed `llama-server`)
   ([Hugging Face](https://huggingface.co/huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF))
+- `qwen3-8b-4bit` — mlx-lm, runtime-verified smaller/speed-oriented Qwen3 4-bit MLX option (40,960-token context)
+  ([Hugging Face](https://huggingface.co/mlx-community/Qwen3-8B-4bit))
+- `qwen3-14b-4bit` — mlx-lm, runtime-verified larger/quality-oriented Qwen3 4-bit MLX option (40,960-token context, host-sensitive)
+  ([Hugging Face](https://huggingface.co/mlx-community/Qwen3-14B-4bit))
+
+The Qwen3 MLX entries were verified by launching the exact managed server on
+Apple Silicon and exercising readiness plus bounded completions; see
+[`docs/model-runtime-verification.md`](docs/model-runtime-verification.md)
+for the recorded evidence, host, package versions, and task-contract
+results.
 
 Hugging Face search results carry runtime-fit verdicts (`managed_mlx_lm`,
 `managed_mlx_vlm`, `managed_llama_cpp`, or `external_only`) so unlaunchable
@@ -555,6 +567,8 @@ model (the command is a preview only):
 
 ```bash
 NEWS_MODEL=qwythos-9b-4bit NEWS_MODEL_BACKEND=llama.cpp NEWS_LLAMA_CPP_SERVER=/opt/llama/llama-server uv run news model-server-command
+NEWS_MODEL=qwen3-8b-4bit NEWS_MODEL_BACKEND=mlx-lm uv run news model-server-command
+NEWS_MODEL=qwen3-14b-4bit NEWS_MODEL_BACKEND=mlx-lm uv run news model-server-command
 ```
 
 ```text
@@ -564,10 +578,12 @@ NEWS_MODEL=qwythos-9b-4bit NEWS_MODEL_BACKEND=llama.cpp NEWS_LLAMA_CPP_SERVER=/o
 `NEWS_MODEL` selects model identity only; it never picks a backend. An
 unset `NEWS_MODEL_BACKEND` resolves to the fixed product default `mlx-vlm`
 (the backend of the default Gemma 4 12B model). Known catalog models whose
-declared backend differs — `gemma-e2b-tiny` (`mlx-lm`) and the
-`qwythos-9b-*` GGUF aliases (`llama.cpp`) — must set `NEWS_MODEL_BACKEND`
-explicitly; config resolution fails fast with an actionable message naming
-the required value instead of silently launching the wrong server. Any
+declared backend differs — `gemma-e2b-tiny` (`mlx-lm`), the
+`qwythos-9b-*` GGUF aliases (`llama.cpp`), and the runtime-verified
+`qwen3-8b-4bit` / `qwen3-14b-4bit` MLX entries (`mlx-lm`) — must set
+`NEWS_MODEL_BACKEND` explicitly; config resolution fails fast with an
+actionable message naming the required value instead of silently launching
+the wrong server. Any
 other explicit value fails fast; known catalog MLX/llama.cpp mismatches
 fail fast too. To run the default model against an external
 OpenAI-compatible endpoint — no managed server is started; the pipeline waits
