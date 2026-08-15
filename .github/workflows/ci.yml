@@ -11,6 +11,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: ShellCheck automation scripts
+        run: shellcheck automation/*.sh
       - uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
