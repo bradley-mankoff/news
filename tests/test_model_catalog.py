@@ -888,7 +888,7 @@ class ModelCatalogTests(unittest.TestCase):
             ),
             (
                 {"id": "someone/transformers-vlm", "tags": ["safetensors"], "library_name": "transformers", "pipeline_tag": "image-text-to-text"},
-                model_catalog.RUNTIME_FIT_MANAGED_MLX_VLM,
+                model_catalog.RUNTIME_FIT_EXTERNAL_ONLY,
             ),
             (
                 {"id": "someone/transformers-other", "tags": ["safetensors"], "library_name": "transformers", "pipeline_tag": "audio-classification"},
@@ -965,6 +965,39 @@ class ModelCatalogTests(unittest.TestCase):
                     }
                 )
                 self.assertEqual(fit["status"], expected[entry.backend])
+
+    def test_transformers_vision_reason_explains_external_only(self) -> None:
+        """A Transformers+safetensors vision repo is external-only (issue #81):
+        mlx-vlm needs pre-converted MLX weights and an mmproj asset, so the
+        reason must say so instead of promising managed launchability."""
+        fit = model_catalog.runtime_fit_for_hf_model(
+            {
+                "id": "someone/transformers-vlm",
+                "tags": ["safetensors"],
+                "library_name": "transformers",
+                "pipeline_tag": "image-text-to-text",
+            }
+        )
+        self.assertEqual(fit["status"], model_catalog.RUNTIME_FIT_EXTERNAL_ONLY)
+        self.assertIn("pre-converted MLX weights", fit["reason"])
+        self.assertIn("mmproj", fit["reason"])
+        self.assertIn("external", fit["reason"])
+
+    def test_transformers_text_reason_carries_conversion_caveat(self) -> None:
+        """Transformers text repos keep the managed_mlx_lm verdict (issue #81),
+        but the reason must note the on-load conversion caveat rather than
+        implying a pre-converted MLX artifact."""
+        info = {
+            "id": "someone/transformers-text",
+            "tags": ["safetensors"],
+            "library_name": "transformers",
+            "pipeline_tag": "text-generation",
+        }
+        fit = model_catalog.runtime_fit_for_hf_model(info)
+        self.assertEqual(fit["status"], model_catalog.RUNTIME_FIT_MANAGED_MLX_LM)
+        self.assertIn("converts weights on load", fit["reason"])
+        self.assertIn("architecture-dependent", fit["reason"])
+
 
     def test_payload_normalizes_none_id_object_config_and_string_timestamp(self) -> None:
         """Normalize the missing ID and object config while preserving a
