@@ -3178,7 +3178,6 @@ assert($("status").className === "bad", "successful preview cleared the bad stat
             check=False,
         )
         self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
-
     def test_wire_events_tuning_button_lookups_execute_in_node_dom_harness(self) -> None:
         """Execute the production wireEvents() loop in a DOM-shaped Node harness.
 
@@ -3290,7 +3289,6 @@ for (const meta of Object.values(TASK_CONFIG)) {
   }
 }
 assert(tuningCalls.length === 0, "tuning callbacks left unexpected calls");
-
 // ---- Partial control trees -------------------------------------------------
 for (const absentId of ["article_tuning_save", "article_tuning_rename", "article_tuning_delete"]) {
   makeElements(absentId);
