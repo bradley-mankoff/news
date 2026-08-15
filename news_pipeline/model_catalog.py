@@ -345,11 +345,10 @@ def _validate_catalog_gguf_reference(value: Any, alias: str, path: Path, field: 
 
     Delegates segment grammar (traversal, separators, control characters) to
     the stdlib-only adapter so catalog identity and launch parsing can never
-    disagree; the reference must be the exact file-qualified form."""
+    disagree; the reference must be the exact file-qualified form.
+    """
     if not isinstance(value, str):
-        raise ValueError(
-            f"{path} model {alias!r} {field} must be a string."
-        )
+        raise ValueError(f"{path} model {alias!r} {field} must be a string.")
     reference = value.strip()
     if not reference or reference != value:
         raise ValueError(

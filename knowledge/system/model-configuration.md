@@ -95,6 +95,17 @@ model keeps its catalog/inferred backend. Runtime and diagnostic payloads
 report the model-neutral provenance `derived_from_stage_concurrency` for the
 server concurrency default.
 
+A Run Session may own multiple managed server processes: one per distinct
+canonical endpoint among the default and per-task managed assignments.
+Each endpoint is started and readiness-checked (`/models` plus a tiny
+generation probe) lazily on first task use, tasks sharing a canonical
+endpoint and model reuse one process, and every owned process and log is
+stopped together when the run exits (success, failure, `KeyboardInterrupt`,
+or a UI Stop SIGTERM). Same canonical endpoint with different managed
+models is rejected during Runtime Config Resolution, before source
+collection. External endpoints remain non-owned: the application never
+spawns them.
+
 ## Sources
 
 - `news_pipeline/model_catalog.py` — built-ins, YAML loader/validation,

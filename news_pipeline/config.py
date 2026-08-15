@@ -821,7 +821,12 @@ def _validate_model_tuning_preset_scope(
 
 
 def is_managed_model_backend(backend: str) -> bool:
-    """A managed backend serves exactly one model at the default base URL."""
+    """Whether backend identity makes an assignment application-owned.
+
+    Ownership is selected by the resolved backend, not by whether a base URL
+    looks local or remote. Any non-external backend is application-managed;
+    the ``external`` backend is caller-managed.
+    """
     return backend != MODEL_BACKEND_EXTERNAL
 
 
@@ -846,6 +851,37 @@ _LOOPBACK_HOST_ALIASES = frozenset(
 _LOOPBACK_CANONICAL_HOST = "127.0.0.1"
 
 
+def canonical_model_endpoint(url: str) -> tuple[Any, ...]:
+    """Canonical key for one model endpoint URL.
+
+    Folds the spelling variants users actually produce into one key:
+    trailing slashes on the path, scheme/host case differences, default
+    ports, userinfo in the authority, a trailing-dot FQDN on the host,
+    and loopback host aliases (localhost vs 127.0.0.1 vs the IPv6
+    spellings of the loopback interface). A genuinely different path
+    still produces a different key, and an empty URL produces the
+    empty key (``("", "", None, "")``) which never equals a real one.
+
+    This is the single endpoint-equivalence helper shared by managed
+    assignment collision validation and the run-time server registry, so
+    the two can never disagree about aliases or spelling variants.
+    """
+    parsed = urlparse(url or "")
+    scheme = (parsed.scheme or "").lower()
+    # A trailing dot marks the FQDN as absolute; it does not change
+    # which host is named, so it is folded before the alias check.
+    host = (parsed.hostname or "").lower().rstrip(".")
+    if host in _LOOPBACK_HOST_ALIASES:
+        host = _LOOPBACK_CANONICAL_HOST
+    try:
+        port = parsed.port
+    except ValueError:  # malformed port; treat as distinct
+        port = None
+    if port is None:
+        port = 443 if scheme == "https" else 80 if scheme == "http" else None
+    return (scheme, host, port, parsed.path.rstrip("/"))
+
+
 def same_model_endpoint(left: str, right: str) -> bool:
     """True when two base URLs denote the same model endpoint.
 
@@ -856,24 +892,7 @@ def same_model_endpoint(left: str, right: str) -> bool:
     spellings of the loopback interface). A genuinely different path
     still compares unequal, and an empty URL never matches a real one.
     """
-
-    def _canonical(url: str) -> tuple[Any, ...]:
-        parsed = urlparse(url or "")
-        scheme = (parsed.scheme or "").lower()
-        # A trailing dot marks the FQDN as absolute; it does not change
-        # which host is named, so it is folded before the alias check.
-        host = (parsed.hostname or "").lower().rstrip(".")
-        if host in _LOOPBACK_HOST_ALIASES:
-            host = _LOOPBACK_CANONICAL_HOST
-        try:
-            port = parsed.port
-        except ValueError:  # malformed port; treat as distinct
-            port = None
-        if port is None:
-            port = 443 if scheme == "https" else 80 if scheme == "http" else None
-        return (scheme, host, port, parsed.path.rstrip("/"))
-
-    return bool(left) == bool(right) and _canonical(left) == _canonical(right)
+    return bool(left) == bool(right) and canonical_model_endpoint(left) == canonical_model_endpoint(right)
 
 
 def managed_model_conflict_message(
@@ -898,6 +917,33 @@ def managed_model_conflict_message(
     )
 
 
+def is_managed_server_assignment(
+    assignment: TaskModelAssignment,
+    *,
+    default_backend: str,
+    default_base_url: str,
+    assignment_backend: str | None = None,
+) -> bool:
+    """Whether one task assignment is served by an application-owned server.
+
+    An assignment is owned when its resolved backend is managed (any
+    non-external backend). A URL's appearance alone does not select ownership:
+    a managed assignment at a remote-looking URL is still application-owned,
+    while an ``external`` assignment is caller-managed. When the default
+    backend is external, the default endpoint itself is caller-managed and can
+    serve multiple models, so assignments pointing at exactly that endpoint
+    stay external too; only assignments on other endpoints can be owned (issue
+    #133). ``assignment_backend`` overrides the assignment's own backend for
+    callers that resolved it separately (legacy test doubles).
+    """
+    resolved_backend = assignment_backend or getattr(assignment, "backend", None) or default_backend
+    if not is_managed_model_backend(resolved_backend):
+        return False
+    if is_managed_model_backend(default_backend):
+        return True
+    return not same_model_endpoint(assignment.base_url, default_base_url)
+
+
 def _validate_managed_model_assignments(
     model_assignments: dict[str, TaskModelAssignment],
     *,
@@ -906,33 +952,56 @@ def _validate_managed_model_assignments(
     model_base_url: str,
     model_backend: str,
 ) -> None:
-    """Reject task models that cannot share the managed server's base URL.
+    """Reject managed task models that cannot share a managed base URL.
 
-    A managed local server (any non-external default backend) serves exactly
-    one model at the default base URL. A task assignment that resolves to the
-    same base URL with a different model name cannot be served by that server;
-    it previously failed only mid-run in build_chat_model, after source
-    collection. External endpoints can serve multiple models, so the managed
-    path is the only one validated here.
+    A managed local server (any non-external backend) serves exactly one
+    model at its base URL. Every owned assignment participates: the default
+    assignment uses the passed-in model values (matching direct helper
+    callers' contracts), and each task uses its own resolved backend when
+    present, falling back to ``model_backend`` for legacy test doubles.
+    Assignments are grouped by canonical endpoint, and any group holding
+    different model names is rejected before source collection - whether the
+    collision is default-vs-task or task-vs-task (issue #133). External
+    assignments - and assignments riding an external default endpoint -
+    stay out of the managed groups because external endpoints can serve
+    multiple models.
     """
-    if not is_managed_model_backend(model_backend):
-        return
+    groups: dict[tuple[Any, ...], list[tuple[str, str, str, str]]] = {}
+    if is_managed_model_backend(model_backend) and model_base_url:
+        groups.setdefault(canonical_model_endpoint(model_base_url), []).append(
+            ("default", model_reference, model_name, model_base_url)
+        )
     for task, assignment in model_assignments.items():
-        # The default assignment defines the compared values (model_name,
-        # model_base_url), so it always matches; skip it.
+        # The default assignment is synthesized above from the explicit
+        # model_reference/model_name/model_base_url arguments so direct
+        # helper callers and full dicts behave identically.
         if task == "default":
             continue
-        if same_model_endpoint(assignment.base_url, model_base_url) and assignment.name != model_name:
-            raise ValueError(
-                managed_model_conflict_message(
-                    task=task,
-                    reference=assignment.reference,
-                    name=assignment.name,
-                    model_reference=model_reference,
-                    model_name=model_name,
-                    model_base_url=model_base_url,
+        if not is_managed_server_assignment(
+            assignment,
+            default_backend=model_backend,
+            default_base_url=model_base_url,
+            assignment_backend=getattr(assignment, "backend", None) or model_backend,
+        ) or not assignment.base_url:
+            continue
+        groups.setdefault(canonical_model_endpoint(assignment.base_url), []).append(
+            (task, assignment.reference, assignment.name, assignment.base_url)
+        )
+
+    for entries in groups.values():
+        anchor_task, anchor_reference, anchor_name, anchor_base_url = entries[0]
+        for task, reference, name, base_url in entries[1:]:
+            if name != anchor_name:
+                raise ValueError(
+                    managed_model_conflict_message(
+                        task=task,
+                        reference=reference,
+                        name=name,
+                        model_reference=anchor_reference,
+                        model_name=anchor_name,
+                        model_base_url=anchor_base_url,
+                    )
                 )
-            )
 
 
 def _apply_model_tuning_preset(
@@ -1607,6 +1676,20 @@ def _configured_model_backend(model_reference: str) -> str:
 
 
 
+# Closed set of browser UI locations for registered knobs (issue #115).
+# ui_location declares which surface owns the control: run_setup and
+# advanced_panels are rendered by dedicated controls (suppressed from the raw
+# Advanced override list), while advanced_raw knobs remain available in the
+# raw override list. The default keeps any existing or future unannotated
+# knob visible in the raw list (fail-safe: a setting cannot disappear).
+UI_LOCATION_RUN_SETUP = "run_setup"
+UI_LOCATION_ADVANCED_PANELS = "advanced_panels"
+UI_LOCATION_ADVANCED_RAW = "advanced_raw"
+UI_LOCATIONS = frozenset(
+    {UI_LOCATION_RUN_SETUP, UI_LOCATION_ADVANCED_PANELS, UI_LOCATION_ADVANCED_RAW}
+)
+
+
 def _runtime_knob(
     group: str,
     label: str,
@@ -1621,6 +1704,7 @@ def _runtime_knob(
     advanced: bool = False,
     secret: bool = False,
     option_links: dict[str, dict[str, str]] | None = None,
+    ui_location: str = UI_LOCATION_ADVANCED_RAW,
 ) -> dict[str, Any]:
     return {
         "id": env.lower(),
@@ -1639,19 +1723,53 @@ def _runtime_knob(
         # url} for model-choice knobs; the drift-guard test pins that its
         # keys cover `options` exactly, and non-model knobs pass {}.
         "option_links": option_links or {},
+        # ui_location is the browser's render-ownership contract: dedicated
+        # controls (run_setup/advanced_panels) are suppressed from the raw
+        # Advanced override list, advanced_raw knobs stay in that list. This
+        # is rendering metadata only; the pre-existing `advanced` flag is
+        # descriptive and is not a substitute for it.
+        "ui_location": ui_location,
     }
+
+
+def _validate_ui_locations(knobs: list[dict[str, Any]]) -> None:
+    """Fail fast on duplicate env names or missing/invalid ui_location values.
+
+    Every registered knob must declare exactly one UI location from the
+    closed set. A duplicate env would create two controls with the same
+    data-env (collectEnv last-write-wins), and an unknown/missing location
+    could let a dedicated knob silently disappear from or double up in the
+    raw Advanced override list.
+    """
+    seen: dict[str, int] = {}
+    for index, knob in enumerate(knobs):
+        env = knob.get("env")
+        if not isinstance(env, str) or not env:
+            raise ValueError(f"registry knob is missing a valid env name: {knob!r}")
+        if env in seen:
+            raise ValueError(
+                f"duplicate registry environment name: {env!r} "
+                f"(indexes {seen[env]} and {index})"
+            )
+        seen[env] = index
+        location = knob.get("ui_location")
+        if not isinstance(location, str) or location not in UI_LOCATIONS:
+            raise ValueError(
+                f"registry knob {env!r} has invalid ui_location {location!r}; "
+                "must be one of: " + ", ".join(sorted(UI_LOCATIONS))
+            )
 
 
 def runtime_knob_registry() -> list[dict[str, Any]]:
     tuning_presets = sorted(load_model_tuning_presets())
     model_links = _model_option_links()
     knobs = [
-        _runtime_knob("Run Settings", "Source scope", "NEWS_SOURCE_SCOPE", "select", default="core", options=list(SOURCE_SCOPES)),
+        _runtime_knob("Run Settings", "Source scope", "NEWS_SOURCE_SCOPE", "select", default="core", options=list(SOURCE_SCOPES), ui_location=UI_LOCATION_RUN_SETUP),
         _runtime_knob("Run Settings", "Recipient scope", "NEWS_RECIPIENT_SCOPE", "select", default="primary", options=list(RECIPIENT_SCOPES)),
-        _runtime_knob("Run Settings", "Delivery mode", DELIVERY_MODE_ENV_VAR, "select", default=DELIVERY_MODE_OWNER, options=list(DELIVERY_MODES)),
-        _runtime_knob("Run Settings", "Block reused URLs", "NEWS_BLOCK_REUSED_URLS", "bool", default=False),
-        _runtime_knob("Run Settings", "Image generation", "NEWS_IMAGE_ENABLED", "bool", default=False),
-        _runtime_knob("Run Settings", "Story scale screening", "NEWS_STORY_SCALE_SCREENING_ENABLED", "bool"),
+        _runtime_knob("Run Settings", "Delivery mode", DELIVERY_MODE_ENV_VAR, "select", default=DELIVERY_MODE_OWNER, options=list(DELIVERY_MODES), ui_location=UI_LOCATION_RUN_SETUP),
+        _runtime_knob("Run Settings", "Block reused URLs", "NEWS_BLOCK_REUSED_URLS", "bool", default=False, ui_location=UI_LOCATION_ADVANCED_PANELS),
+        _runtime_knob("Run Settings", "Image generation", "NEWS_IMAGE_ENABLED", "bool", default=False, ui_location=UI_LOCATION_ADVANCED_PANELS),
+        _runtime_knob("Run Settings", "Story scale screening", "NEWS_STORY_SCALE_SCREENING_ENABLED", "bool", ui_location=UI_LOCATION_ADVANCED_PANELS),
         _runtime_knob(
             "Run Settings",
             "Prompt profile",
@@ -1659,6 +1777,7 @@ def runtime_knob_registry() -> list[dict[str, Any]]:
             "select",
             default=DEFAULT_PROMPT_PROFILE_ID,
             options=list(PROMPT_PROFILE_IDS),
+            ui_location=UI_LOCATION_RUN_SETUP,
         ),
         *[
             _runtime_knob(
@@ -1667,6 +1786,7 @@ def runtime_knob_registry() -> list[dict[str, Any]]:
                 env_var,
                 "text",
                 advanced=True,
+                ui_location=UI_LOCATION_ADVANCED_PANELS,
             )
             for task, env_var in PROMPT_TASK_OVERRIDE_ENV_VARS.items()
         ],
@@ -1677,29 +1797,30 @@ def runtime_knob_registry() -> list[dict[str, Any]]:
                 env_var,
                 "text",
                 advanced=True,
+                ui_location=UI_LOCATION_ADVANCED_PANELS,
             )
             for task, env_var in PROMPT_TEMPLATE_ENV_VARS.items()
         ],
-        _runtime_knob("Run Settings", "Relax story drafting guards", "NEWS_RELAX_STORY_DRAFTING_GUARDS", "bool", advanced=True),
+        _runtime_knob("Run Settings", "Relax story drafting guards", "NEWS_RELAX_STORY_DRAFTING_GUARDS", "bool", advanced=True, ui_location=UI_LOCATION_ADVANCED_PANELS),
         _runtime_knob("Run Settings", "Embedding model", "NEWS_EMBEDDING_MODEL", default="all-mpnet-base-v2", advanced=True),
         _runtime_knob("Run Settings", "Token encoding", "NEWS_TOKEN_ENCODING", default="o200k_base", advanced=True),
-        _runtime_knob("Model Selection", "Default model", "NEWS_MODEL", "select", default=DEFAULT_MODEL_ALIAS, options=sorted(_catalog_model_aliases()), option_links=model_links),
-        _runtime_knob("Model Selection", "Model backend", "NEWS_MODEL_BACKEND", "select", default=DEFAULT_MODEL_BACKEND, options=sorted(SUPPORTED_MODEL_BACKENDS)),
+        _runtime_knob("Model Selection", "Default model", "NEWS_MODEL", "select", default=DEFAULT_MODEL_ALIAS, options=sorted(_catalog_model_aliases()), option_links=model_links, ui_location=UI_LOCATION_RUN_SETUP),
+        _runtime_knob("Model Selection", "Model backend", "NEWS_MODEL_BACKEND", "select", default=DEFAULT_MODEL_BACKEND, options=sorted(SUPPORTED_MODEL_BACKENDS), ui_location=UI_LOCATION_RUN_SETUP),
         _runtime_knob("Model Tuning", "Default tuning preset", "NEWS_MODEL_TUNING_PRESET", "select", options=tuning_presets),
-        _runtime_knob("Model Tuning", "Model input cap", "NEWS_MODEL_MAX_INPUT_TOKENS", "number", minimum=1, step=1),
-        _runtime_knob("Pipeline Budget", "Article text token limit", "NEWS_ARTICLE_TEXT_TOKEN_LIMIT", "number", minimum=1, step=1),
+        _runtime_knob("Model Tuning", "Model input cap", "NEWS_MODEL_MAX_INPUT_TOKENS", "number", minimum=1, step=1, ui_location=UI_LOCATION_ADVANCED_PANELS),
+        _runtime_knob("Pipeline Budget", "Article text token limit", "NEWS_ARTICLE_TEXT_TOKEN_LIMIT", "number", minimum=1, step=1, ui_location=UI_LOCATION_ADVANCED_PANELS),
         _runtime_knob("Pipeline Budget", "Total article summary cap", "NEWS_TOTAL_ARTICLE_SUMMARY_CAP", "number", minimum=0, step=1),
         _runtime_knob("Pipeline Budget", "Recent window hours", "NEWS_RECENT_WINDOW_HOURS", "number", minimum=1, step=1),
         _runtime_knob("Pipeline Budget", "Max articles per source", "NEWS_MAX_ARTICLES_PER_SOURCE", "number", minimum=1, step=1),
-        _runtime_knob("Pipeline Budget", "Min articles per story", "NEWS_MIN_ARTICLES_PER_STORY", "number", minimum=2, step=1),
-        _runtime_knob("Pipeline Budget", "Max stories", "NEWS_MAX_STORIES", "number", minimum=1, step=1),
-        _runtime_knob("Pipeline Budget", "Story cluster similarity", "NEWS_STORY_CLUSTER_SIMILARITY_THRESHOLD", "number", minimum=0, maximum=1, step=0.01),
-        _runtime_knob("Pipeline Budget", "Story selection overlap", "NEWS_STORY_SELECTION_OVERLAP_THRESHOLD", "number", minimum=0, maximum=1, step=0.01),
-        _runtime_knob("Pipeline Budget", "Story dedup threshold", "NEWS_STORY_DEDUP_THRESHOLD", "number", minimum=0, maximum=1, step=0.01),
-        _runtime_knob("Pipeline Budget", "Backfill batch multiplier", "NEWS_STORY_BACKFILL_BATCH_MULTIPLIER", "number", minimum=1, step=1),
-        _runtime_knob("Pipeline Budget", "Source collection concurrency", "NEWS_SOURCE_COLLECTION_CONCURRENCY", "number", default=DEFAULT_SOURCE_COLLECTION_CONCURRENCY, minimum=1, step=1),
-        _runtime_knob("Pipeline Budget", "Article summary concurrency", "NEWS_ARTICLE_SUMMARY_CONCURRENCY", "number", default=DEFAULT_ARTICLE_SUMMARY_CONCURRENCY, minimum=1, step=1),
-        _runtime_knob("Pipeline Budget", "Story synthesis concurrency", "NEWS_STORY_SYNTHESIS_CONCURRENCY", "number", default=DEFAULT_STORY_SYNTHESIS_CONCURRENCY, minimum=1, step=1),
+        _runtime_knob("Pipeline Budget", "Min articles per story", "NEWS_MIN_ARTICLES_PER_STORY", "number", minimum=2, step=1, ui_location=UI_LOCATION_ADVANCED_PANELS),
+        _runtime_knob("Pipeline Budget", "Max stories", "NEWS_MAX_STORIES", "number", minimum=1, step=1, ui_location=UI_LOCATION_ADVANCED_PANELS),
+        _runtime_knob("Pipeline Budget", "Story cluster similarity", "NEWS_STORY_CLUSTER_SIMILARITY_THRESHOLD", "number", minimum=0, maximum=1, step=0.01, ui_location=UI_LOCATION_ADVANCED_PANELS),
+        _runtime_knob("Pipeline Budget", "Story selection overlap", "NEWS_STORY_SELECTION_OVERLAP_THRESHOLD", "number", minimum=0, maximum=1, step=0.01, ui_location=UI_LOCATION_ADVANCED_PANELS),
+        _runtime_knob("Pipeline Budget", "Story dedup threshold", "NEWS_STORY_DEDUP_THRESHOLD", "number", minimum=0, maximum=1, step=0.01, ui_location=UI_LOCATION_ADVANCED_PANELS),
+        _runtime_knob("Pipeline Budget", "Backfill batch multiplier", "NEWS_STORY_BACKFILL_BATCH_MULTIPLIER", "number", minimum=1, step=1, ui_location=UI_LOCATION_ADVANCED_PANELS),
+        _runtime_knob("Pipeline Budget", "Source collection concurrency", "NEWS_SOURCE_COLLECTION_CONCURRENCY", "number", default=DEFAULT_SOURCE_COLLECTION_CONCURRENCY, minimum=1, step=1, ui_location=UI_LOCATION_ADVANCED_PANELS),
+        _runtime_knob("Pipeline Budget", "Article summary concurrency", "NEWS_ARTICLE_SUMMARY_CONCURRENCY", "number", default=DEFAULT_ARTICLE_SUMMARY_CONCURRENCY, minimum=1, step=1, ui_location=UI_LOCATION_ADVANCED_PANELS),
+        _runtime_knob("Pipeline Budget", "Story synthesis concurrency", "NEWS_STORY_SYNTHESIS_CONCURRENCY", "number", default=DEFAULT_STORY_SYNTHESIS_CONCURRENCY, minimum=1, step=1, ui_location=UI_LOCATION_ADVANCED_PANELS),
         _runtime_knob("Pipeline Budget", "Component overlap suppress", "NEWS_STORY_COMPONENT_OVERLAP_SUPPRESS_THRESHOLD", "number", minimum=0, maximum=1, step=0.01, advanced=True),
         _runtime_knob("Model Server Settings", "Model concurrency", "NEWS_MODEL_CONCURRENCY", "number", default=DEFAULT_PIPELINE_CONCURRENCY, minimum=1, step=1, advanced=True),
         _runtime_knob("Model Server Settings", "Model base URL", "NEWS_MODEL_BASE_URL", default="http://127.0.0.1:8080/v1"),
@@ -1734,6 +1855,7 @@ def runtime_knob_registry() -> list[dict[str, Any]]:
                 f"NEWS_MODEL_{env_suffix}_TUNING_PRESET",
                 "select",
                 options=tuning_presets,
+                ui_location=UI_LOCATION_ADVANCED_PANELS,
             )
         )
         knobs.append(
@@ -1744,6 +1866,7 @@ def runtime_knob_registry() -> list[dict[str, Any]]:
                 "number",
                 minimum=1,
                 step=1,
+                ui_location=UI_LOCATION_ADVANCED_PANELS,
             )
         )
         knobs.append(
@@ -1752,6 +1875,7 @@ def runtime_knob_registry() -> list[dict[str, Any]]:
                 f"{task_label} base URL",
                 f"NEWS_MODEL_{env_suffix}_BASE_URL",
                 default="http://127.0.0.1:8080/v1",
+                ui_location=UI_LOCATION_ADVANCED_PANELS,
             )
         )
     sampling_suffixes = [
@@ -1766,8 +1890,13 @@ def runtime_knob_registry() -> list[dict[str, Any]]:
         **MODEL_TASK_SAMPLING_ENV_PREFIXES,
         "reasoning": "NEWS_MODEL_REASONING",
     }
+    # The five actual LLM task sampling families are rendered by the
+    # dedicated modelTuningPanel() controls; the default/story-discovery/
+    # reasoning families stay raw Advanced overrides (issue #115).
+    sampled_tasks = {spec[0] for spec in MODEL_TASK_KNOB_SPECS}
     for task, prefix in sorted(sampling_prefixes.items()):
         task_label = task.replace("_", " ").title()
+        dedicated = task in sampled_tasks
         for suffix, suffix_label, value_type, minimum, maximum, step in sampling_suffixes:
             knobs.append(
                 _runtime_knob(
@@ -1779,8 +1908,12 @@ def runtime_knob_registry() -> list[dict[str, Any]]:
                     maximum=maximum,
                     step=step,
                     advanced=True,
+                    ui_location=(
+                        UI_LOCATION_ADVANCED_PANELS if dedicated else UI_LOCATION_ADVANCED_RAW
+                    ),
                 )
             )
+    _validate_ui_locations(knobs)
     return knobs
 
 def build_model_server_command(
