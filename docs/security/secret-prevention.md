@@ -1,4 +1,4 @@
-# Secret-Prevention Runbook (Gitleaks pre-commit hook)
+# Secret-Prevention Runbook (Gitleaks)
 
 Status: Active (checked-in, owner-selected prevention control)
 
@@ -7,10 +7,11 @@ Date: 2026-08-06
 ## When to Use
 
 Before going public, every future commit must be scanned for secrets. This
-runbook covers the checked-in Gitleaks pre-commit hook: what it does, how to
-install it, how to verify it, how to update it, and where its boundaries are.
-It is the **prevention** control; it does not rewrite existing history and
-does not replace the audit/scrub controls below.
+runbook covers the two checked-in Gitleaks prevention controls: the local
+pre-commit hook (what it does, how to install it, how to verify it, how to
+update it, and where its boundaries are) and the CI pull-request gate. They
+are the **prevention** controls; neither rewrites existing history and both
+are separate from the audit/scrub controls below.
 
 ## How It Works
 
@@ -94,6 +95,88 @@ uv run pre-commit validate-config
 uv run pre-commit run --all-files
 ```
 
+## CI Gate (pull-request secret scan)
+
+`.github/workflows/ci.yml` runs a separate `Secret scan` job on every pull
+request targeting `develop` or `main`. It is the remote merge-safety path: a
+contributor whose local hook is bypassed (`--no-verify`), skipped
+(`SKIP=gitleaks`), or never installed is still blocked from merging a new
+secret into the base branches.
+
+- The job checks out the PR head with full history (`fetch-depth: 0`) and
+  `persist-credentials: false`, so the `BASE_SHA..HEAD_SHA` range is
+  resolvable and no `GITHUB_TOKEN` is left in the checkout's git config.
+- The job grants only `contents: read`. No repository secret, write
+  permission, PR comment, or SARIF upload is used; the container receives no
+  `GITHUB_TOKEN` and no `GITLEAKS_LICENSE`. The sanitized scan checkout and
+  trusted policy directory are both mounted read-only (`/repo:ro` and
+  `/trusted:ro`).
+- Before scanning, the workflow copies the PR checkout to a temporary target,
+  removes its `.gitleaks.toml` and `.gitleaksignore`, and materializes those
+  policy files from `BASE_SHA`. When the base has no custom config, the
+  materialized config extends Gitleaks' built-in rules. The scanner also uses
+  `--ignore-gitleaks-allow`, so PR-owned policy and inline allow comments
+  cannot suppress a finding.
+- The scanner is the official `ghcr.io/gitleaks/gitleaks:v8.30.1` container,
+  the same detector release the local hook is pinned to. It runs
+  `git --redact --no-banner --no-color --verbose --exit-code 1` with
+  `--gitleaks-ignore-path /trusted/.gitleaksignore`,
+  `--ignore-gitleaks-allow`, and
+  `--log-opts="--diff-merges=first-parent ${BASE_SHA}..${HEAD_SHA}"`.
+- Scope is the PR's merge-aware commit range. CI does not scan all repository
+  history: known historical findings (documented in
+  `docs/security/audit-2026-08-02.md`) lie outside any new PR's range and
+  stay the responsibility of the audit/scrub controls, not this gate.
+- Findings and scanner/image failures both exit nonzero and fail the check;
+  the step does not mask the scanner's status (`continue-on-error` and
+  `|| true` are not used). `--redact` replaces detected values with
+  `REDACTED` in the job logs.
+
+### Reproduce the gate locally (Docker required)
+
+Set `BASE_BRANCH` to the PR's target branch and fetch that remote branch first
+if necessary.
+
+```bash
+# Set this to the PR target branch: develop or main.
+BASE_BRANCH=develop
+BASE_SHA="$(git merge-base "origin/${BASE_BRANCH}" HEAD)"
+HEAD_SHA="$(git rev-parse HEAD)"
+if [[ -z "${BASE_SHA:-}" || -z "${HEAD_SHA:-}" ]]; then
+  echo "Both BASE_SHA and HEAD_SHA are required" >&2
+  exit 1
+fi
+SCAN_ROOT="$(mktemp -d)"
+TRUSTED_ROOT="$(mktemp -d)"
+trap 'rm -rf "$SCAN_ROOT" "$TRUSTED_ROOT"' EXIT
+cp -a "$PWD/." "$SCAN_ROOT/"
+rm -f "$SCAN_ROOT/.gitleaks.toml" "$SCAN_ROOT/.gitleaksignore"
+if git cat-file -e "${BASE_SHA}:.gitleaks.toml" 2>/dev/null; then
+  git show "${BASE_SHA}:.gitleaks.toml" > "$TRUSTED_ROOT/gitleaks.toml"
+else
+  printf '[extend]\nuseDefault = true\n' > "$TRUSTED_ROOT/gitleaks.toml"
+fi
+if git cat-file -e "${BASE_SHA}:.gitleaksignore" 2>/dev/null; then
+  git show "${BASE_SHA}:.gitleaksignore" > "$TRUSTED_ROOT/.gitleaksignore"
+else
+  : > "$TRUSTED_ROOT/.gitleaksignore"
+fi
+docker run --rm \
+  --volume "$SCAN_ROOT:/repo:ro" \
+  --volume "$TRUSTED_ROOT:/trusted:ro" \
+  ghcr.io/gitleaks/gitleaks:v8.30.1 \
+  git --config /trusted/gitleaks.toml \
+  --gitleaks-ignore-path /trusted/.gitleaksignore \
+  --ignore-gitleaks-allow \
+  --redact --no-banner --no-color --verbose --exit-code 1 \
+  --log-opts="--diff-merges=first-parent ${BASE_SHA}..${HEAD_SHA}" \
+  /repo
+```
+
+A clean range exits 0; a finding exits 1 with the value redacted; an image
+or scanner error also exits nonzero. Only ever test against a synthetic
+fixture assembled from parts — never a real credential.
+
 ## Updating Gitleaks
 
 Detector improvements arrive in new Gitleaks releases. To update:
@@ -105,8 +188,12 @@ Detector improvements arrive in new Gitleaks releases. To update:
    `uv run pre-commit run gitleaks`. Use
    `uv run python automation/security_audit.py` for working-tree/history
    coverage.
-4. Update the pinned revision reference in `tests/test_secret_prevention.py`
-   and re-run the test suite.
+4. Update the pinned revision everywhere it appears in the same release:
+   `rev:` in `.pre-commit-config.yaml`, the image tag in the `Secret scan`
+   job in `.github/workflows/ci.yml`, the constants in
+   `tests/test_secret_prevention.py` and `tests/test_ci_secret_scanning.py`,
+   and the version references in this runbook and `README.md`. Re-run the
+   test suite.
 5. Commit the bump as its own change so the release notes stay visible.
 
 Do not bump revisions in the same commit as unrelated changes; a pin change
@@ -133,11 +220,11 @@ is a deliberate detector change.
   `automation/scrub_history.sh`) rewrites history with `git filter-repo` and
   requires explicit human approval. The hook intentionally does not scan
   history, so ordinary commits are not blocked by old findings.
-- **GitHub-side protection is not configured here.** Enabling push protection
-  for the repository and any secret-scanning alerts is an owner-level GitHub
-  setting to decide after the public flip; it is deliberately separate from
-  this checked-in hook. See GitHub's push-protection documentation when the
-  time comes.
+- **Native GitHub secret scanning is not configured here.** Enabling
+  GitHub's own secret scanning / push protection and any alert triage is an
+  owner-level GitHub setting to decide after the public flip; it is
+  deliberately separate from the checked-in hook and the CI gate above. See
+  GitHub's push-protection documentation when the time comes.
 - **No new scanner taxonomy.** Gitleaks is the prevention detector;
   `automation/security_audit.py` remains the audit control with its own
   categories and redaction.
@@ -147,7 +234,8 @@ is a deliberate detector change.
 | Control | What it scans | Runs when | Owner |
 |---------|---------------|-----------|-------|
 | Gitleaks pre-commit hook (this runbook) | Staged diff of future commits | Every `git commit` | Checked in, `.pre-commit-config.yaml` |
-| `automation/security_audit.py` | Working tree + full history | Manual / CI | Checked in, exits 0 when clean |
+| Gitleaks CI gate | Merge-aware PR commit range (`BASE_SHA..HEAD_SHA`) | Every pull request to `develop`/`main` | Checked in, `.github/workflows/ci.yml`, pinned `v8.30.1` |
+| `automation/security_audit.py` | Working tree + full history | Manual | Checked in, exits 0 when clean |
 | `automation/scrub_history.sh` | Entire history (rewrite) | Gated, human approval | Checked in, dry-run by default |
 
 ## Troubleshooting
