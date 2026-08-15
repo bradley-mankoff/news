@@ -79,10 +79,8 @@ def _validate_hf_segment(segment: str, label: str) -> str:
 def _parse_hf_reference(value: str) -> LlamaCppModelSource:
     segments = value.split("/")
     if len(segments) == 2:
-        owner, repo = (_validate_hf_segment(part, label) for part, label in (
-            (segments[0], "owner"),
-            (segments[1], "repo"),
-        ))
+        owner = _validate_hf_segment(segments[0], "owner")
+        repo = _validate_hf_segment(segments[1], "repo")
         return LlamaCppModelSource(kind="hf_repo", hf_repo=f"{owner}/{repo}")
     if len(segments) == 3:
         owner, repo, filename = (
@@ -151,13 +149,13 @@ def parse_llama_cpp_model_reference(reference: str) -> LlamaCppModelSource:
         raise ValueError(
             f"Model reference must not contain control characters: {value!r}."
         )
-    if "://" in value and _strip_hf_url_prefix(value) is None:
+    stripped = _strip_hf_url_prefix(value)
+    if "://" in value and stripped is None:
         raise ValueError(
             f"Unsupported model reference URL scheme: {value!r}. Use an "
             "https://huggingface.co/... or https://hf.co/... reference, an "
             "owner/repo (or owner/repo/file.gguf) id, or a local .gguf path."
         )
-    stripped = _strip_hf_url_prefix(value)
     if stripped is not None:
         if "?" in stripped or "#" in stripped:
             raise ValueError(
@@ -239,10 +237,8 @@ def ensure_llama_cpp_server_available(
     if _is_explicit_path(raw):
         if os.path.isfile(raw) and os.access(raw, os.X_OK):
             return raw
-    else:
-        resolved = shutil.which(raw)
-        if resolved:
-            return resolved
+    elif resolved := shutil.which(raw):
+        return resolved
     raise RuntimeError(
         f"llama.cpp server binary {raw!r} is not available. Install an official "
         "llama.cpp release for your platform "

@@ -35,5 +35,6 @@ include = ["news_pipeline*"]
 dev = [
     "pytest>=9.0.3",
     "pre-commit>=4.6.1",
+    "playwright==1.62.0",
 ]
 
