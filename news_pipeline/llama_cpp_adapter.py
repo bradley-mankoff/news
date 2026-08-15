@@ -20,6 +20,7 @@ import re
 import shlex
 import shutil
 from dataclasses import dataclass
+from urllib.parse import unquote
 
 DEFAULT_LLAMA_CPP_SERVER = "llama-server"
 HF_URL_PREFIXES = ("https://huggingface.co/", "https://hf.co/")
@@ -60,10 +61,17 @@ def _validate_hf_segment(segment: str, label: str) -> str:
             f"Invalid Hugging Face model reference: {label} segment {segment!r} "
             "must be non-empty and must not be '.' or '..'."
         )
-    if "/" in segment or "\\" in segment or "%2f" in segment.lower():
+    decoded = unquote(segment)
+    if (
+        "/" in segment
+        or "\\" in segment
+        or "/" in decoded
+        or "\\" in decoded
+        or decoded in (".", "..")
+    ):
         raise ValueError(
             f"Invalid Hugging Face model reference: {label} segment {segment!r} "
-            "must not contain path separators."
+            "must not contain path separators or traversal."
         )
     return segment
 

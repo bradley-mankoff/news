@@ -227,6 +227,28 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
                         materialize_outputs=False,
                     )
 
+    def test_known_catalog_backend_mismatch_rejects_url_aliases(self) -> None:
+        cases = (
+            (
+                "llama.cpp",
+                f"https://huggingface.co/{GEMMA_4_12B_IT_4BIT_MODEL_REPO}",
+                r"NEWS_MODEL_BACKEND=llama.cpp cannot serve.*mlx-vlm",
+            ),
+            (
+                "mlx-lm",
+                f"https://hf.co/{QWWYTHOS_9B_4BIT_MODEL_REFERENCE}",
+                r"NEWS_MODEL_BACKEND=mlx-lm cannot serve.*llama.cpp backend",
+            ),
+        )
+        for backend, reference, message in cases:
+            with self.subTest(backend=backend, reference=reference):
+                with self.assertRaisesRegex(ValueError, message):
+                    load_runtime_config(
+                        environ={"NEWS_MODEL_BACKEND": backend},
+                        overrides={"NEWS_MODEL": reference},
+                        materialize_outputs=False,
+                    )
+
     def test_custom_llama_cpp_binary_appears_in_command(self) -> None:
         config = load_runtime_config(
             environ={"NEWS_LLAMA_CPP_SERVER": "/opt/llama/llama-server"},

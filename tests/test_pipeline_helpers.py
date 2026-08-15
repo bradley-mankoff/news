@@ -1887,7 +1887,7 @@ class PipelineHelperTests(unittest.TestCase):
             stack.enter_context(
                 patch.object(
                     pipeline, "MODEL_SERVER_COMMAND",
-                    "llama-server --hf-repo a/b --hf-file m.gguf",
+                    "llama-server --model '/models/a; echo pwned.gguf' --alias 'a model'",
                 )
             )
             stack.enter_context(
@@ -1922,13 +1922,13 @@ class PipelineHelperTests(unittest.TestCase):
             popen = stack.enter_context(
                 patch.object(pipeline.subprocess, "Popen", return_value=MagicMock())
             )
-            stack.enter_context(
+            wait = stack.enter_context(
                 patch.object(
                     pipeline, "_wait_for_managed_model_server",
                     return_value={"ok": True, "served_models": ["owner/repo/model.gguf"]},
                 )
             )
-            stack.enter_context(
+            probe = stack.enter_context(
                 patch.object(pipeline, "probe_model_generation", return_value={"ok": True})
             )
             stack.enter_context(patch.object(pipeline.time, "sleep", return_value=None))
@@ -1943,6 +1943,23 @@ class PipelineHelperTests(unittest.TestCase):
 
                 binary_check.assert_called_once_with("llama-server")
                 popen.assert_called_once()
+                args, kwargs = popen.call_args
+                self.assertEqual(
+                    args[0],
+                    [
+                        "llama-server",
+                        "--model",
+                        "/models/a; echo pwned.gguf",
+                        "--alias",
+                        "a model",
+                    ],
+                )
+                self.assertEqual(kwargs["cwd"], str(pipeline.CONFIG.root_dir))
+                self.assertIs(kwargs["stderr"], pipeline.subprocess.STDOUT)
+                self.assertTrue(kwargs["start_new_session"])
+                self.assertTrue(kwargs["text"])
+                wait.assert_called_once_with(pipeline.MANAGED_MODEL_SERVER_PROCESS)
+                probe.assert_called_once_with()
                 self.assertFalse(pipeline.MANAGED_MODEL_SERVER_EXTERNAL)
                 self.assertTrue(pipeline.MANAGED_MODEL_SERVER_READY)
                 self.assertIsNotNone(pipeline.MANAGED_MODEL_SERVER_PROCESS)

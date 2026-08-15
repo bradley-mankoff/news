@@ -705,6 +705,15 @@ def runtime_fit_for_hf_model(info: Mapping[str, Any]) -> dict[str, str]:
                     "endpoint (NEWS_MODEL_BACKEND=external)."
                 ),
             }
+        if pipeline_tag not in {"text-generation", "text2text-generation"}:
+            return {
+                "status": RUNTIME_FIT_EXTERNAL_ONLY,
+                "reason": (
+                    "GGUF metadata does not identify a supported text-generation "
+                    "pipeline; use an external OpenAI-compatible endpoint "
+                    "(NEWS_MODEL_BACKEND=external)."
+                ),
+            }
         return {
             "status": RUNTIME_FIT_MANAGED_LLAMA_CPP,
             "reason": (
