@@ -38,7 +38,8 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          test -n "$BASE_SHA" && test -n "$HEAD_SHA"
+          test -n "$BASE_SHA"
+          test -n "$HEAD_SHA"
           docker run --rm \
             --volume "$GITHUB_WORKSPACE:/repo:ro" \
             ghcr.io/gitleaks/gitleaks:v8.30.1 \

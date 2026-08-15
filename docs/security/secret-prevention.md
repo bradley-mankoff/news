@@ -1,4 +1,4 @@
-# Secret-Prevention Runbook (Gitleaks pre-commit hook)
+# Secret-Prevention Runbook (Gitleaks)
 
 Status: Active (checked-in, owner-selected prevention control)
 
@@ -125,10 +125,16 @@ secret into the base branches.
 
 ### Reproduce the gate locally (Docker required)
 
+Set `BASE_BRANCH` to the PR's target branch and fetch that remote branch first
+if necessary.
+
 ```bash
-BASE_SHA="$(git merge-base origin/develop HEAD)"
+# Set this to the PR target branch: develop or main.
+BASE_BRANCH=develop
+BASE_SHA="$(git merge-base "origin/${BASE_BRANCH}" HEAD)"
 HEAD_SHA="$(git rev-parse HEAD)"
-test -n "$BASE_SHA" && test -n "$HEAD_SHA"
+test -n "$BASE_SHA"
+test -n "$HEAD_SHA"
 docker run --rm \
   --volume "$PWD:/repo:ro" \
   ghcr.io/gitleaks/gitleaks:v8.30.1 \
