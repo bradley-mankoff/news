@@ -3122,6 +3122,7 @@ HTML = r"""<!doctype html>
     }
     function modelTuningPanel(task) {
       const meta = TASK_CONFIG[task];
+      if (!meta) return "";
       const runtime = (state.schema && state.schema.runtime) || {};
       const taskRuntime = runtime.model && runtime.model[meta.runtimeKey] ? runtime.model[meta.runtimeKey] : {};
       const sharedCap = task === "article_summary" ? knobField("NEWS_MODEL_MAX_INPUT_TOKENS", "Shared model input cap") : "";
