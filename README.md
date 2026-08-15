@@ -699,6 +699,31 @@ uv run news history export
 
 Licensed under the [Apache License 2.0](LICENSE).
 
+## Report Review UI tests
+
+The Report Review integration and browser tests exercise the real
+`NewsUIServer` over an ephemeral localhost port with temporary DuckDB, OKF,
+and rolling-review artifacts. Fixtures never run the model pipeline and never
+touch developer output/history files.
+
+Install the dev group and the matching Chromium binary once:
+
+```bash
+uv sync --group dev
+uv run python -m playwright install chromium
+```
+
+Focused commands:
+
+```bash
+.venv/bin/python3 -m pytest tests/test_ui_review_integration.py -q
+.venv/bin/python3 -m pytest tests/test_ui_browser.py -q
+```
+
+CI installs Chromium plus its Ubuntu system dependencies
+(`uv run python -m playwright install --with-deps chromium`) before running
+the full suite (`uv run python -m pytest -q`).
+
 ## Fast Test Run
 
 For a quick local test that minimizes runtime and sends to a single
