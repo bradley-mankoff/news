@@ -1,6 +1,6 @@
 # Deterministic translation policy
 
-Status: ready-for-agent
+Status: claimed
 Lights: off
 Tags: fusion-02
 GitHub: #33
