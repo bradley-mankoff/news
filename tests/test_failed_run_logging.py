@@ -9,7 +9,7 @@ from datetime import datetime
 from io import StringIO
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import news_pipeline.pipeline as pipeline
 from news_pipeline.history_store import connect
@@ -40,6 +40,10 @@ class FailedRunLoggingTests(unittest.TestCase):
         pipeline.MANAGED_MODEL_SERVER_EXTERNAL = False
         pipeline.MANAGED_MODEL_SERVER_PROCESS = None
         pipeline.MANAGED_MODEL_SERVER_LOG_FILE = None
+        for state in list(pipeline.MANAGED_MODEL_SERVERS.values()):
+            if state.log_file is not None and not state.log_file.closed:
+                state.log_file.close()
+        pipeline.MANAGED_MODEL_SERVERS.clear()
 
     def test_run_logging_creates_missing_parents_and_tees_progress(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -122,6 +126,90 @@ class FailedRunLoggingTests(unittest.TestCase):
                 run_id, status = con.execute("SELECT run_id, status FROM runs").fetchone()
                 self.assertEqual(run_id, timestamp)
                 self.assertEqual(status, "failed")
+
+    def test_failed_run_with_running_servers_preserves_root_error_and_artifacts(self) -> None:
+        """A failed run that owns multiple managed servers must stop every
+        server and close every log during teardown without replacing the
+        root error or losing failure artifacts (issue #133)."""
+        timestamp = "2026-06-07_09-30-00"
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            output_dir = root / "daily_outputs"
+            run_output_dir = output_dir / ".staging" / timestamp
+            history_db_path = root / "history" / "news_history.duckdb"
+            latest_markdown = output_dir / "latest_run.md"
+            latest_log = output_dir / "latest_run.log"
+            latest_details = output_dir / "latest_run_details.json"
+            run_log = run_output_dir / f"run_log_{timestamp}.log"
+            run_started_at = datetime(2026, 6, 7, 9, 30, 0)
+
+            test_config = replace(
+                pipeline.CONFIG,
+                run_started_at=run_started_at,
+                run_date="2026-06-07",
+                timestamp=timestamp,
+                output_dir=output_dir,
+                run_output_dir=run_output_dir,
+                run_staging_dir=run_output_dir,
+                latest_run_markdown_path=latest_markdown,
+                latest_run_log_path=latest_log,
+                latest_run_details_path=latest_details,
+                history_db_path=history_db_path,
+                run_used_urls_path=run_output_dir / "tracked_urls.txt",
+            )
+
+            def fail_with_running_servers() -> None:
+                diagnostics = pipeline._new_run_diagnostics(1)
+                pipeline.ACTIVE_RUN_DIAGNOSTICS = diagnostics
+                pipeline.progress_tracker.detail("synthetic detail before failure")
+                default_assignment = pipeline.MODEL_ASSIGNMENTS["default"]
+                secondary_assignment = SimpleNamespace(
+                    task="article_summary",
+                    backend="mlx-lm",
+                    base_url="http://127.0.0.1:8090/v1",
+                    reference="secondary-ref",
+                    name="secondary-name",
+                    server_command="cmd",
+                    tuning=SimpleNamespace(task_sampling={}),
+                )
+                default_state = pipeline.ManagedModelServerState(
+                    assignment=default_assignment,
+                    endpoint_key=pipeline.canonical_model_endpoint(default_assignment.base_url),
+                )
+                secondary_state = pipeline.ManagedModelServerState(
+                    assignment=secondary_assignment,
+                    endpoint_key=pipeline.canonical_model_endpoint(secondary_assignment.base_url),
+                )
+                default_state.process = MagicMock()
+                secondary_state.process = MagicMock()
+                default_state.log_file = (run_output_dir / "model_server.log").open("w", encoding="utf-8")
+                secondary_state.log_file = (run_output_dir / "secondary.log").open("w", encoding="utf-8")
+                default_state.ready = True
+                secondary_state.ready = True
+                pipeline.MANAGED_MODEL_SERVERS[default_state.endpoint_key] = default_state
+                pipeline.MANAGED_MODEL_SERVERS[secondary_state.endpoint_key] = secondary_state
+                raise RuntimeError("synthetic failure")
+
+            with patch.object(pipeline, "_stop_managed_server_process") as stop, patch.object(
+                pipeline, "timestamp", "wrong-module-timestamp"
+            ):
+                with redirect_stdout(StringIO()):
+                    with self.assertRaisesRegex(RuntimeError, "synthetic failure"):
+                        pipeline.RunSession(test_config).run(fail_with_running_servers)
+
+            # Every owned server was stopped and the registry cleared.
+            self.assertEqual(stop.call_count, 2)
+            self.assertEqual(pipeline.MANAGED_MODEL_SERVERS, {})
+            self.assertFalse(pipeline.MANAGED_MODEL_SERVER_ACTIVE)
+
+            # The failure artifacts still record the original root error.
+            self.assertTrue(latest_markdown.exists())
+            self.assertIn("| Status | failed |", latest_markdown.read_text(encoding="utf-8"))
+            latest_log_text = latest_log.read_text(encoding="utf-8")
+            self.assertIn("RuntimeError: synthetic failure", latest_log_text)
+            details = json.loads(latest_details.read_text(encoding="utf-8"))
+            self.assertEqual(details["events"][-1]["label"], "failed")
+            self.assertIn("synthetic failure", details["events"][-1]["traceback"])
 
     def test_failed_run_logs_are_concise_and_preserve_traceback(self) -> None:
         timestamp = "2026-06-06_13-00-00"
