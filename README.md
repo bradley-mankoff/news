@@ -73,6 +73,18 @@ Secret prevention is automatic through the Gitleaks pre-commit hook in
 `uv run pre-commit install`. It scans staged changes only and uses redacted
 output. Runbook: `docs/security/secret-prevention.md`.
 
+### Shell script checks
+
+CI checks the maintained shell scripts in `automation/` with ShellCheck.
+Run the same command locally from the repo root:
+
+```bash
+shellcheck automation/*.sh
+```
+
+A non-zero result fails the CI check. Install ShellCheck first for local use
+(Homebrew on macOS: `brew install shellcheck`, or your OS package manager).
+
 
 ## UI
 
