@@ -1082,8 +1082,18 @@ assert(SURFACED_ENVS.size === 0, "missing schema must not throw and must suppres
         self.assertIn('hint.textContent = "";', hint)
         self.assertIn('hint.classList.add("hidden")', hint)
         self.assertIn('hint.classList.remove("hidden")', hint)
-        self.assertIn('currentControlValue("NEWS_MODEL_BACKEND")', hint)
+        self.assertIn("effectiveModelBackend()", hint)
         self.assertNotIn("hint.innerHTML", hint)
+        # The effective backend helper resolves an empty control to the
+        # registry default (issue #169): blank means the fixed default, never
+        # selected-model inference, and the DOM value is not rewritten.
+        helper = html.split("function effectiveModelBackend()", 1)[1].split(
+            "function inputForKnob", 1
+        )[0]
+        self.assertIn('currentControlValue("NEWS_MODEL_BACKEND")', helper)
+        self.assertIn('knobByEnv("NEWS_MODEL_BACKEND")', helper)
+        self.assertIn("knob.default", helper)
+        self.assertNotIn('setControlValue("NEWS_MODEL_BACKEND"', helper)
 
     def test_model_backend_hint_wiring_covers_each_path(self) -> None:
         html = ui_module.HTML
@@ -1231,7 +1241,7 @@ assert(SURFACED_ENVS.size === 0, "missing schema must not throw and must suppres
             html,
         )
         self.assertIn('data-use-hf-backend="${escapeHtml(hfBackend)}"', html)
-        self.assertIn('currentControlValue("NEWS_MODEL_BACKEND") === "external"', html)
+        self.assertIn('effectiveModelBackend() === "external"', html)
         # Use must never mutate the backend control.
         self.assertNotIn('setControlValue("NEWS_MODEL_BACKEND"', html)
 
@@ -1417,6 +1427,10 @@ assert(SURFACED_ENVS.size === 0, "missing schema must not throw and must suppres
                 self.assertEqual(snapshot["preset_id"], "daily")
                 self.assertEqual(snapshot["prompt_profile_id"], "balanced")
                 self.assertEqual(snapshot["model"]["reference"], "gemma-2b")
+                self.assertEqual(
+                    snapshot["model"]["concurrency_source"],
+                    "derived_from_stage_concurrency",
+                )
                 self.assertEqual(snapshot["model"]["story_scale_screening"]["reference"], "gemma-2b")
                 self.assertEqual(snapshot["model"]["title_generation"]["reference"], "gemma-2b")
                 self.assertEqual(snapshot["model"]["image_art_direction"]["reference"], "gemma-2b")
@@ -2140,7 +2154,11 @@ assert(SURFACED_ENVS.size === 0, "missing schema must not throw and must suppres
         # model/base-URL combination instead of showing a clean command.
         # build_command re-raises the config ValueError, which the /api/preview
         # route serializes via _send_error_json for the browser.
-        with patch.dict(os.environ, {"NEWS_MODEL": CODEX_TEST_MODEL_ALIAS}, clear=True):
+        with patch.dict(
+            os.environ,
+            {"NEWS_MODEL": CODEX_TEST_MODEL_ALIAS, "NEWS_MODEL_BACKEND": "mlx-lm"},
+            clear=True,
+        ):
             with self.assertRaisesRegex(
                 ValueError,
                 r"Managed model server cannot serve multiple different models "
@@ -2158,7 +2176,11 @@ assert(SURFACED_ENVS.size === 0, "missing schema must not throw and must suppres
     def test_preview_rejects_different_task_model_on_localhost_base_url_alias(self) -> None:
         # Regression for #134: an alias spelling of the managed base URL must
         # still raise in the preview instead of showing a clean command.
-        with patch.dict(os.environ, {"NEWS_MODEL": CODEX_TEST_MODEL_ALIAS}, clear=True):
+        with patch.dict(
+            os.environ,
+            {"NEWS_MODEL": CODEX_TEST_MODEL_ALIAS, "NEWS_MODEL_BACKEND": "mlx-lm"},
+            clear=True,
+        ):
             with self.assertRaisesRegex(
                 ValueError,
                 r"Managed model server cannot serve multiple different models "
@@ -3054,6 +3076,7 @@ async function api(path) {
 """
         + js_function_block("function escapeHtml(text) {", "function formatDefault")
         + js_function_block("function modelTaskLabels() {", "function useModelReference")
+        + js_function_block("function knobByEnv(env) {", "function inputForKnob")
         + js_function_block('function useModelReference(reference, requiredBackend = "") {', "function renderModelCatalogPanel")
         + js_function_block("function renderModelCatalogPanel() {", "function renderRecommendations")
         + js_function_block("function renderRecommendations(task) {", "async function searchHuggingFaceModels")
@@ -3178,7 +3201,11 @@ const modelSelect = {
 };
 const modelBackendHint = {
   textContent: "",
-  classList: { add(_name) {}, remove(_name) {} }
+  _hidden: true,
+  classList: {
+    add(name) { if (name === "hidden") modelBackendHint._hidden = true; },
+    remove(name) { if (name === "hidden") modelBackendHint._hidden = false; }
+  }
 };
 function $(id) { return elements[id] || null; }
 function value(id) { return $(id) ? $(id).value : ""; }
@@ -3205,6 +3232,7 @@ async function api(path) {
 '''
             + js_function_block("function escapeHtml(text) {", "function formatDefault")
             + js_function_block("function modelTaskLabels() {", "function useModelReference")
+            + js_function_block("function knobByEnv(env) {", "function inputForKnob")
             + js_function_block('function useModelReference(reference, requiredBackend = "") {', "function renderModelCatalogPanel")
             + js_function_block("function renderModelCatalogPanel() {", "function renderRecommendations")
             + js_function_block("function renderRecommendations(task) {", "async function searchHuggingFaceModels")
@@ -3305,6 +3333,25 @@ const enabledExternalButton = elements.modelSearchResults.querySelector('button[
 assert(enabledExternalButton && !enabledExternalButton.disabled, "external backend did not enable external-only model");
 enabledExternalButton.onclick();
 assert(modelSelect.value === "owner/external", "external search handler did not select its model");
+
+// Blank backend with a registry default gates by the fixed default (issue
+// #169): external-only results stay disabled and the hint compares against
+// the effective default until the backend control is explicit.
+delete state.schema.current_env.NEWS_MODEL_BACKEND;
+state.schema.knobs = [{ env: "NEWS_MODEL_BACKEND", default: "mlx-vlm", options: [], type: "select" }];
+renderModelBackendHint("mlx-lm");
+assert(modelBackendHint._hidden === false, "mismatch hint hidden with blank backend + fixed default");
+assert(modelBackendHint.textContent === "This model needs NEWS_MODEL_BACKEND=mlx-lm", "hint text missing for effective default mismatch");
+apiResponse = { models: [{ id: "owner/external2", hf_url: "https://example.test/external2", runtime_fit: { status: "external_only", reason: "external" } }], error: null };
+await searchHuggingFaceModels();
+const defaultGatedButton = elements.modelSearchResults.querySelector('button[data-use-hf-model="owner/external2"]');
+assert(defaultGatedButton && defaultGatedButton.disabled, "blank backend with fixed default enabled external-only model");
+state.schema.current_env.NEWS_MODEL_BACKEND = "external";
+renderModelBackendHint("external");
+assert(modelBackendHint._hidden === true, "mismatch hint shown for matching effective backend");
+await searchHuggingFaceModels();
+const defaultEnabledButton = elements.modelSearchResults.querySelector('button[data-use-hf-model="owner/external2"]');
+assert(defaultEnabledButton && !defaultEnabledButton.disabled, "explicit external did not enable external-only model");
 '''
         )
         node = shutil.which("node")

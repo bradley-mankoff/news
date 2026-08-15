@@ -229,6 +229,26 @@ class CliTests(unittest.TestCase):
         pass  # stderr check removed (test artifact after translation removal)
         serve_unsubscribe.assert_called_once_with()
 
+    def test_codex_model_server_command_pairs_tiny_model_with_mlx_lm(self) -> None:
+        with patch.dict(os.environ, {}, clear=True):
+            with patch("news_pipeline.cli._print_model_server_command", return_value=0) as print_command:
+                code, stdout, stderr = self._invoke(["codex-model-server-command"])
+            self.assertEqual(os.environ["NEWS_CODEX_TESTING"], "1")
+            self.assertEqual(os.environ["NEWS_MODEL_BACKEND"], "mlx-lm")
+        self.assertEqual(code, 0)
+        self.assertEqual(stdout, "")
+        self.assertEqual(stderr, "")
+        print_command.assert_called_once_with()
+
+        # An explicit backend remains authoritative for callers that use the
+        # command with a deliberate override.
+        with patch.dict(os.environ, {"NEWS_MODEL_BACKEND": "mlx-vlm"}, clear=True):
+            with patch("news_pipeline.cli._print_model_server_command", return_value=0) as print_command:
+                code, _, _ = self._invoke(["codex-model-server-command"])
+            self.assertEqual(os.environ["NEWS_MODEL_BACKEND"], "mlx-vlm")
+        self.assertEqual(code, 0)
+        print_command.assert_called_once_with()
+
     def test_model_server_command_external_backend_prints_notice(self) -> None:
         fake_config = SimpleNamespace(
             model_server_command="",

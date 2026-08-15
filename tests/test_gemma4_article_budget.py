@@ -58,7 +58,10 @@ class Gemma4ArticleBudgetTests(unittest.TestCase):
         self.assertFalse(is_gemma_4_model_reference(QWWYTHOS_9B_4BIT_MODEL_ALIAS))
         resolved = load_runtime_config(
             materialize_outputs=False,
-            environ={"NEWS_MODEL": QWWYTHOS_9B_4BIT_MODEL_ALIAS},
+            environ={
+                "NEWS_MODEL": QWWYTHOS_9B_4BIT_MODEL_ALIAS,
+                "NEWS_MODEL_BACKEND": "llama.cpp",
+            },
         )
         self.assertEqual(resolved.model_backend, "llama.cpp")
         self.assertTrue(resolved.model_name.endswith(".gguf"))
@@ -93,7 +96,7 @@ class Gemma4ArticleBudgetTests(unittest.TestCase):
             DEFAULT_ARTICLE_TEXT_TOKEN_LIMIT,
         )
 
-    def test_large_gemma_4_uses_article_parallelism_only(self) -> None:
+    def test_large_gemma_4_uses_fixed_stage_defaults(self) -> None:
         with patch.dict(
             os.environ,
             {
@@ -104,24 +107,29 @@ class Gemma4ArticleBudgetTests(unittest.TestCase):
             config = load_runtime_config(materialize_outputs=False)
 
         self.assertEqual(config.article_summary_concurrency, 4)
-        self.assertEqual(config.story_synthesis_concurrency, 1)
+        self.assertEqual(config.story_synthesis_concurrency, 4)
         self.assertEqual(config.model_concurrency, 4)
 
-    def test_tiny_gemma_uses_higher_article_parallelism_and_story_synthesis_two(self) -> None:
+    def test_tiny_gemma_uses_explicit_backend_and_fixed_stage_defaults(self) -> None:
         with patch.dict(
             os.environ,
             {
                 "NEWS_MODEL": CODEX_TEST_MODEL_ALIAS,
+                "NEWS_MODEL_BACKEND": "mlx-lm",
             },
             clear=True,
         ):
             config = load_runtime_config(materialize_outputs=False)
 
-        self.assertEqual(config.article_summary_concurrency, 8)
-        self.assertEqual(config.story_synthesis_concurrency, 2)
-        self.assertEqual(config.model_concurrency, 8)
+        self.assertEqual(config.model_backend, "mlx-lm")
+        # The old model-specific 8/2 defaults are gone (issue #169): the
+        # tiny model resolves the same fixed 4/4/4 concurrency as every
+        # other model.
+        self.assertEqual(config.article_summary_concurrency, 4)
+        self.assertEqual(config.story_synthesis_concurrency, 4)
+        self.assertEqual(config.model_concurrency, 4)
 
-    def test_gemma_12b_uses_article_parallelism_only(self) -> None:
+    def test_gemma_12b_uses_fixed_stage_defaults(self) -> None:
         with patch.dict(
             os.environ,
             {
@@ -132,8 +140,31 @@ class Gemma4ArticleBudgetTests(unittest.TestCase):
             config = load_runtime_config(materialize_outputs=False)
 
         self.assertEqual(config.article_summary_concurrency, 4)
-        self.assertEqual(config.story_synthesis_concurrency, 1)
+        self.assertEqual(config.story_synthesis_concurrency, 4)
         self.assertEqual(config.model_concurrency, 4)
+
+    def test_concurrency_defaults_are_identical_across_model_choices(self) -> None:
+        # Cross-model equality (issue #169): the same fixed stage/server
+        # defaults resolve for the default Gemma, the tiny model (with its
+        # required explicit backend), and the llama.cpp Qwythos alias.
+        configs = []
+        for model, backend in (
+            (DEFAULT_MODEL_ALIAS, None),
+            (CODEX_TEST_MODEL_ALIAS, "mlx-lm"),
+            (QWWYTHOS_9B_4BIT_MODEL_ALIAS, "llama.cpp"),
+        ):
+            env = {"NEWS_MODEL": model}
+            if backend:
+                env["NEWS_MODEL_BACKEND"] = backend
+            with patch.dict(os.environ, env, clear=True):
+                configs.append(load_runtime_config(materialize_outputs=False))
+        for field in (
+            "article_summary_concurrency",
+            "story_synthesis_concurrency",
+            "model_concurrency",
+        ):
+            values = {getattr(config, field) for config in configs}
+            self.assertEqual(values, {4}, f"{field} must be model-independent")
 
     def test_stage_concurrency_env_vars_are_honored(self) -> None:
         with patch.dict(
@@ -150,6 +181,25 @@ class Gemma4ArticleBudgetTests(unittest.TestCase):
         self.assertEqual(config.article_summary_concurrency, 3)
         self.assertEqual(config.story_synthesis_concurrency, 6)
         self.assertEqual(config.model_concurrency, 6)
+
+    def test_explicit_model_concurrency_cannot_underprovision_stage_workers(self) -> None:
+        for server_concurrency, expected in ((2, 7), (9, 9)):
+            with self.subTest(server_concurrency=server_concurrency):
+                with patch.dict(
+                    os.environ,
+                    {
+                        "NEWS_MODEL": GEMMA_4_12B_IT_4BIT_MODEL_ALIAS,
+                        "NEWS_ARTICLE_SUMMARY_CONCURRENCY": "5",
+                        "NEWS_STORY_SYNTHESIS_CONCURRENCY": "7",
+                        "NEWS_MODEL_CONCURRENCY": str(server_concurrency),
+                    },
+                    clear=True,
+                ):
+                    config = load_runtime_config(materialize_outputs=False)
+
+                self.assertEqual(config.article_summary_concurrency, 5)
+                self.assertEqual(config.story_synthesis_concurrency, 7)
+                self.assertEqual(config.model_concurrency, expected)
 
     def test_explicit_pipeline_budget_override_wins(self) -> None:
         with patch.dict(
@@ -173,7 +223,10 @@ class Gemma4ArticleBudgetTests(unittest.TestCase):
         with patch.dict(os.environ, {}, clear=True):
             config = load_runtime_config(
                 materialize_outputs=False,
-                environ={"NEWS_MODEL": CODEX_TEST_MODEL_ALIAS},
+                environ={
+                    "NEWS_MODEL": CODEX_TEST_MODEL_ALIAS,
+                    "NEWS_MODEL_BACKEND": "mlx-lm",
+                },
             )
 
         self.assertEqual(

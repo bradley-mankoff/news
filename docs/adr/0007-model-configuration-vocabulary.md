@@ -65,7 +65,14 @@ Setting ownership is exactly:
    model for all model-using tasks, but callers can select separate models
    without forking the rest of the run. Image Art Direction is an independent
    LLM call with its own assignment; Story Discovery is algorithmic and
-   inherits the default model.
+   inherits the default model. Model selection never infers a backend or a
+   workload/server concurrency profile: an unset `NEWS_MODEL_BACKEND`
+   resolves to the fixed default backend (`mlx-vlm`, ADR 0017), and a known
+   catalog model whose declared backend differs must set `NEWS_MODEL_BACKEND`
+   explicitly or config resolution fails with an actionable message.
+   Inherited task assignments (no per-task model override) carry the resolved
+   default backend so diagnostics and server commands never disagree; a
+   task-specific model keeps its catalog/inferred backend metadata.
 2. **Model Tuning** — sampling settings and model/task token caps, such as
    `NEWS_MODEL_MAX_INPUT_TOKENS`, `NEWS_<TASK>_MAX_TOKENS`, and
    `NEWS_MODEL_<TASK>_TEMPERATURE`. Precedence is backend/model defaults, then
@@ -77,10 +84,14 @@ Setting ownership is exactly:
    windows, article/story limits, story thresholds, and pipeline workload
    concurrency (`NEWS_SOURCE_COLLECTION_CONCURRENCY`,
    `NEWS_ARTICLE_SUMMARY_CONCURRENCY`, `NEWS_STORY_SYNTHESIS_CONCURRENCY`).
+   Stage concurrency defaults are fixed pipeline values (`4`) for every
+   model choice; model identity never changes them.
 4. **Model Server Settings** — base URLs (`NEWS_MODEL_BASE_URL`,
    `NEWS_MODEL_<TASK>_BASE_URL`), model-server concurrency
    (`NEWS_MODEL_CONCURRENCY`), prefill step size, prompt cache size/bytes, and
-   server max tokens.
+   server max tokens. The model-server concurrency default is model-neutral:
+   it derives from the fixed server default plus explicit stage worker
+   counts, never from model identity.
 
 Run Presets and Model Tuning Presets are different concepts. A Run Preset
 chooses a workflow; a Model Tuning Preset chooses inference settings for a
@@ -99,7 +110,10 @@ Tuning.
 
 - `NEWS_MODEL` is default model selection only; it is not a hidden bundle of
   model identity, tuning, budgets, and server settings, and no size-class
-  profile (such as `big_conservative`) is inferred at runtime.
+  profile (such as `big_conservative`) is inferred at runtime. It also never
+  selects a backend or workload/server concurrency defaults: those come from
+  the fixed product default (`mlx-vlm`, stage/server concurrency `4`) or
+  explicit settings.
 - Model-specific settings gain Locality in Model Tuning; run-wide limits gain
   Locality in Pipeline Budget; endpoint and server behavior gain Locality in
   Model Server Settings.
