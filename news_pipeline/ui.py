@@ -2520,11 +2520,10 @@ HTML = r"""<!doctype html>
         el.insertAdjacentHTML("afterbegin", `<option value="${escapeHtml(valueText)}">${escapeHtml(valueText)}</option>`);
       }
       el.value = valueText;
-      // Programmatic model changes (tuning-setter apply, preset apply/restore,
-      // reset) never dispatch `change`, so refresh the target's mounted link
-      // row here or the .knob-links container keeps the previous model's
-      // links (issue #79). Checkboxes, non-select fields, and knobs without a
-      // links container must remain untouched.
+      // Programmatic select updates do not dispatch `change`; when this select
+      // has a mounted link row, refresh it immediately. Other controls still
+      // receive their value updates, while preset/reset callers perform the
+      // bulk refresh (issue #79).
       if (el.tagName === "SELECT" && document.querySelector(`[data-links-for="${env}"]`)) {
         renderKnobLinks(env);
       }
@@ -2729,9 +2728,9 @@ HTML = r"""<!doctype html>
     // model-tuning setters) do not fire `change` events, so re-render links
     // after those paths or the .knob-links container keeps the previous
     // model's links. Discovery is schema-driven (issue #79): every registry
-    // knob carrying non-empty option_links is a model link candidate, and only
-    // mounted [data-links-for] containers are rendered (renderKnobLinks warns
-    // on missing containers, so unmounted knobs are skipped instead).
+    // knob carrying non-empty option_links is a model link candidate. The
+    // mounted-container precheck skips unmounted knobs without invoking the
+    // renderer; direct renderKnobLinks() calls still warn on missing containers.
     function refreshModelKnobLinks() {
       ((state.schema && state.schema.knobs) || []).forEach(knob => {
         if (!(knob.option_links && Object.keys(knob.option_links).length)) return;

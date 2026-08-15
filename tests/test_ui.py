@@ -1394,11 +1394,11 @@ assert(
     def test_model_knob_link_refresh_is_schema_driven(self) -> None:
         """Pin the schema/DOM-driven refresh and setter wiring (issue #79).
 
-        refreshModelKnobLinks() must contain no hard-coded model env list, and
-        every programmatic boundary (bulk refresh, select setter, Advanced raw
-        rerender, run-setup markup rebuild) must route through it. The
-        synthetic future knob name lives only in tests; production must have
-        no special case for it.
+        refreshModelKnobLinks() must discover link-bearing knobs without a
+        hard-coded list. Bulk markup boundaries use it, while the programmatic
+        select setter refreshes only its mounted target row; neither path
+        dispatches change. The synthetic future knob name lives only in tests;
+        production must have no special case for it.
         """
         html = ui_module.HTML
         refresh = html.split("function refreshModelKnobLinks() {", 1)[1].split(
@@ -1439,7 +1439,17 @@ assert(
         # Advanced raw rerenders and run-setup markup rebuilds both bulk-refresh.
         self.assertIn("refreshModelKnobLinks();", advanced)
         self.assertNotIn('renderKnobLinks("NEWS_MODEL")', advanced)
+        self.assertLess(
+            advanced.index('$("knobContainer").innerHTML'),
+            advanced.index("refreshModelKnobLinks();"),
+            "Advanced raw controls must be rebuilt before links are refreshed",
+        )
         self.assertIn("refreshModelKnobLinks();", run_setup)
+        self.assertLess(
+            run_setup.index('$("runSetupMount").innerHTML'),
+            run_setup.index("refreshModelKnobLinks();"),
+            "Run Setup markup must be rebuilt before links are refreshed",
+        )
         # The synthetic future knob must never become a production special case.
         self.assertNotIn("NEWS_MODEL_FUTURE_TASK", html)
 
@@ -1455,7 +1465,7 @@ assert(
         the future knob) without a special case, the select setter mutates
         without a synthetic change event, preset/reset paths refresh the
         correct rows, unmounted link-bearing knobs are skipped silently, and
-        non-link controls stay untouched.
+        non-link controls are excluded from link-row rendering.
         """
         html = ui_module.HTML
 
@@ -1481,8 +1491,11 @@ class FakeSelect extends FakeElement {
     this.tagName = "SELECT";
     this.options = [];
   }
-  insertAdjacentHTML(position, _html) {
-    throw new Error(`harness: unexpected ${position} injection into ${this.id}`);
+  insertAdjacentHTML(position, html) {
+    assert(position === "afterbegin", `harness: unexpected ${position} injection into ${this.id}`);
+    const match = html.match(/<option value="([^"]*)">/);
+    assert(match, `harness: malformed option injection into ${this.id}`);
+    this.options.unshift({ value: decodeEntities(match[1]) });
   }
 }
 const controls = {
@@ -1495,7 +1508,8 @@ const controls = {
   // Synthetic future link-bearing knob: must be refreshed without any
   // production special case (issue #79).
   NEWS_MODEL_FUTURE_TASK: new FakeSelect("futureModel"),
-  // Link-less select (backend knob) and a non-link control stay untouched.
+  // Link-less select and non-link controls are mutated normally but remain
+  // excluded from link-row rendering and synthetic change dispatch.
   NEWS_MODEL_BACKEND: new FakeSelect("backendSelect"),
   NEWS_BLOCK_REUSED_URLS: new FakeElement("blockCheckbox")
 };
@@ -1538,15 +1552,15 @@ const document = {
 const console = { warn: (...args) => warnings.push(args.join(" ")) };
 const state = { schema: null };
 const promptTemplateRaw = {};
-// Non-link helpers invoked by resetAllOverrides(); the link refresh under
-// test is the production refreshModelKnobLinks().
+// Non-link helpers required by resetAllOverrides(); the link refresh under
+// test remains the production refreshModelKnobLinks().
 function renderPresetSummary() {}
 function renderModelTuningPanels() {}
 function renderPromptProfilePanel() {}
 function restorePromptTemplateTask() {}
 function previewWithStatus() {}
-function collectEnv() { return {}; }
-function collectOptions() { return {}; }
+function setPromptTemplateEnv() {}
+function previewQuietly() {}
 // Compatibility-hint tail of refreshModelKnobLinks(): track invocations so
 // the harness proves the hint boundary still runs after each bulk refresh.
 let hintRenderCount = 0;
@@ -1614,6 +1628,7 @@ controls.NEWS_MODEL_LINKLESS.value = "x";
             + js_function_block("function refreshModelKnobLinks() {", "function renderTabs")
             + js_function_block("function resetAllOverrides() {", "function setKnobEnv(env) {")
             + js_function_block("function setKnobEnv(env) {", "async function savePresetEditor")
+            + js_function_block("function applyRunPreset(preset) {", "function resetAllOverrides")
             + r"""
 // ---- 1. Schema-driven bulk refresh ----------------------------------------
 refreshModelKnobLinks();
@@ -1649,9 +1664,20 @@ assert(
   containers.NEWS_MODEL_FUTURE_TASK.innerHTML.includes(linkRow("NEWS_MODEL_FUTURE_TASK-alt").page),
   "setControlValue did not refresh the synthetic future knob link row"
 );
+containers.NEWS_MODEL.innerHTML = '<a href="https://stale.test/external">stale</a>';
+setControlValue("NEWS_MODEL", "owner/external");
+assert(
+  controls.NEWS_MODEL.options.some(option => option.value === "owner/external"),
+  "setControlValue did not inject the external model option"
+);
+assert(controls.NEWS_MODEL.value === "owner/external", "external model value was not assigned");
+assert(
+  containers.NEWS_MODEL.innerHTML === '<span class="muted">No Hugging Face page for this external model</span>',
+  "external setter did not replace stale links"
+);
 assert(changeCalls.length === 0, `setControlValue dispatched a synthetic change: ${changeCalls.join(", ")}`);
 
-// ---- 3. Non-link and link-less controls stay untouched ---------------------
+// ---- 3. Non-link and link-less controls remain outside link rendering -----
 setControlValue("NEWS_BLOCK_REUSED_URLS", "1");
 assert(controls.NEWS_BLOCK_REUSED_URLS.checked === true, "checkbox setter regressed");
 setControlValue("NEWS_MODEL_BACKEND", "mlx-vlm");
@@ -1676,6 +1702,15 @@ assert(
   "preset application did not refresh the task model link row"
 );
 assert(!containers.NEWS_MODEL_IMAGE_ART_DIRECTION.innerHTML.includes("stale"), "stale task links survived preset application");
+containers.NEWS_MODEL_FUTURE_TASK.innerHTML = "stale before extracted preset";
+applyRunPreset({
+  id: "future-external",
+  env: { "NEWS_MODEL_FUTURE_TASK": "owner/preset-external" }
+});
+assert(
+  containers.NEWS_MODEL_FUTURE_TASK.innerHTML === '<span class="muted">No Hugging Face page for this external model</span>',
+  "applyRunPreset did not refresh the external future-model row"
+);
 assert(warnings.length === 0, `preset path warned: ${warnings.join(", ")}`);
 
 // ---- 5. Reset path: resetAllOverrides clears controls and re-renders -------
