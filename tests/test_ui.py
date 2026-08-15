@@ -535,6 +535,167 @@ class UITests(unittest.TestCase):
         self.assertIn("escapeHtml(entry.hardware)", ui_module.HTML)
         self.assertIn('data-links-for="${escapeHtml(knob.env)}"', ui_module.HTML)
 
+    def test_render_knob_links_execute_in_node_dom_harness(self) -> None:
+        """Execute the embedded renderKnobLinks renderer in a DOM-shaped Node harness.
+
+        The production functions are extracted from ui_module.HTML itself and run
+        in Node so known-link output, the external-model muted note, HTML
+        escaping, default fallback, stale cleanup, and defensive branches are
+        observed rather than inferred from source markers.
+        """
+        html = ui_module.HTML
+
+        def js_function_block(start: str, end: str) -> str:
+            return html[html.index(start) : html.index(end, html.index(start))]
+
+        js = (
+            r"""
+const assert = (condition, message) => {
+  if (!condition) throw new Error(message);
+};
+"""
+            + _FAKE_DOM_ELEMENT_JS
+            + r"""
+const state = { schema: null };
+const controls = {
+  NEWS_TEST_MODEL: new FakeElement("modelControl", "")
+};
+const containers = {
+  NEWS_TEST_MODEL: new FakeElement("modelLinks")
+};
+const warnings = [];
+// Production uses two selector shapes: [data-env="..."] resolves the control
+// read by currentControlValue/inputForKnob, while [data-links-for="..."]
+// resolves the .knob-links container written by renderKnobLinks. Unknown
+// selectors fail loudly so drift cannot silently exercise the wrong branch;
+// a missing container is the one intentional null return.
+const document = {
+  querySelector(selector) {
+    if (selector.startsWith('[data-env="') && selector.endsWith('"]')) {
+      const env = selector.slice('[data-env="'.length, -2);
+      if (!(env in controls)) throw new Error(`unexpected control selector: ${selector}`);
+      return controls[env];
+    }
+    if (selector.startsWith('[data-links-for="') && selector.endsWith('"]')) {
+      const env = selector.slice('[data-links-for="'.length, -2);
+      return containers[env] || null;
+    }
+    throw new Error(`unexpected selector: ${selector}`);
+  }
+};
+const console = { warn: (...args) => warnings.push(args.join(" ")) };
+"""
+            + js_function_block("function escapeHtml(text) {", "function formatDefault")
+            + js_function_block('function formatDefault(value, fallback="none") {', "function currentControlValue")
+            + js_function_block("function currentControlValue(env) {", "function setControlValue")
+            + js_function_block("function knobByEnv(env) {", "function inputForKnob")
+            + js_function_block('function inputForKnob(knob, { emptyLabel, optionLabels = {}, id = "" } = {}) {', "function knobField")
+            + js_function_block("function renderKnobLinks(env) {", "function refreshModelKnobLinks")
+            + r"""
+const control = controls.NEWS_TEST_MODEL;
+const container = containers.NEWS_TEST_MODEL;
+state.schema = {
+  current_env: {},
+  knobs: [
+    {
+      env: "NEWS_TEST_MODEL",
+      type: "select",
+      default: "known-model",
+      options: ["known-model", "other-model"],
+      option_links: {
+        "known-model": {
+          page: "https://example.test/model/known",
+          hardware: "https://example.test/model/known/hardware"
+        }
+      }
+    }
+  ]
+};
+const knob = state.schema.knobs[0];
+
+// The fixture mirrors the production container contract emitted by
+// inputForKnob: a data-env select plus a knob-links container when the
+// knob carries option_links.
+const inputMarkup = inputForKnob(knob);
+assert(inputMarkup.includes('<select data-env="NEWS_TEST_MODEL">'), "inputForKnob did not emit the data-env select");
+assert(inputMarkup.includes('<option value="">default: known-model</option>'), "inputForKnob did not format the default empty option");
+assert(inputMarkup.includes('<option value="known-model">known-model</option>'), "inputForKnob did not emit the known option");
+assert(inputMarkup.includes('<div class="knob-links" data-links-for="NEWS_TEST_MODEL"></div>'), "inputForKnob did not emit the knob-links container");
+
+// Known current value: exactly two anchors with the security attributes,
+// replacing any stale container content.
+control.value = "known-model";
+container.innerHTML = '<a href="https://stale.test/old">stale</a>';
+renderKnobLinks("NEWS_TEST_MODEL");
+const anchors = (container.innerHTML.match(/<a /g) || []).length;
+assert(anchors === 2, `expected exactly two anchors, got ${anchors}`);
+assert(container.innerHTML.includes('href="https://example.test/model/known"'), "page link URL missing");
+assert(container.innerHTML.includes('href="https://example.test/model/known/hardware"'), "hardware link URL missing");
+assert(container.innerHTML.includes(">Hugging Face page</a>"), "page anchor label missing");
+assert(container.innerHTML.includes(">Hardware compatibility</a>"), "hardware anchor label missing");
+assert((container.innerHTML.match(/target="_blank"/g) || []).length === 2, "both anchors must open in a new tab");
+assert((container.innerHTML.match(/rel="noopener noreferrer"/g) || []).length === 2, "both anchors must carry noopener noreferrer");
+assert(!container.innerHTML.includes("stale"), "stale container content was not replaced");
+
+// Empty control value falls back to the knob default for display only; the
+// select itself stays empty so collectEnv() submission semantics are unchanged.
+control.value = "";
+container.innerHTML = "stale links";
+renderKnobLinks("NEWS_TEST_MODEL");
+assert(container.innerHTML.includes('href="https://example.test/model/known"'), "default model links did not render for an empty control");
+assert(control.value === "", "renderer must not pre-select the default on the control");
+
+// Unknown/external value: muted note replaces any stale anchors.
+control.value = "external-model";
+container.innerHTML = '<a href="https://stale.test/old">stale</a>';
+renderKnobLinks("NEWS_TEST_MODEL");
+assert(container.innerHTML === '<span class="muted">No Hugging Face page for this external model</span>', "external model did not render the muted note");
+
+// HTML-sensitive URL characters pass through the real production escapeHtml:
+// assert literal entities, never a test-side escaping implementation.
+knob.option_links["known-model"] = {
+  page: 'https://example.test/m?a=1&b=<2>"3"',
+  hardware: 'https://example.test/h?x=4&y=<5>"6"'
+};
+control.value = "known-model";
+renderKnobLinks("NEWS_TEST_MODEL");
+assert(container.innerHTML.includes('href="https://example.test/m?a=1&amp;b=&lt;2&gt;&quot;3&quot;"'), "page URL was not escaped with literal entities");
+assert(container.innerHTML.includes('href="https://example.test/h?x=4&amp;y=&lt;5&gt;&quot;6&quot;"'), "hardware URL was not escaped with literal entities");
+assert(!container.innerHTML.includes("a=1&b=<2>"), "raw ampersand/angle markup leaked into page link");
+assert(!container.innerHTML.includes('b=<2>"'), "raw quote markup leaked into page link");
+assert(!container.innerHTML.includes("<2>"), "raw angle brackets leaked into rendered links");
+
+// Empty control with no default clears stale links instead of keeping them.
+knob.default = null;
+control.value = "";
+container.innerHTML = '<a href="https://stale.test/old">stale</a>';
+renderKnobLinks("NEWS_TEST_MODEL");
+assert(container.innerHTML === "", "stale links were not cleared for an empty value with no default");
+
+// Missing schema knob: the container shows the defensive unavailable note.
+containers.NEWS_TEST_MISSING = new FakeElement("missingLinks");
+renderKnobLinks("NEWS_TEST_MISSING");
+assert(containers.NEWS_TEST_MISSING.innerHTML === '<span class="muted">Links unavailable</span>', "missing knob did not render the unavailable note");
+
+// Missing container: warn and return without throwing.
+const warningCount = warnings.length;
+renderKnobLinks("NEWS_TEST_NO_CONTAINER");
+assert(warnings.length === warningCount + 1, "missing container did not emit the expected warning");
+assert(warnings[warningCount].includes('no [data-links-for="NEWS_TEST_NO_CONTAINER"] container'), "missing container warning text drifted");
+"""
+        )
+        node = shutil.which("node")
+        if node is None:
+            self.skipTest("Node.js is required for the embedded UI renderer harness")
+        result = subprocess.run(
+            [node, "--input-type=module", "-"],
+            input=js,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
+
     def test_recommendation_renderer_reads_schema_picks(self) -> None:
         html = ui_module.HTML
         # Keep the bounded source-contract guard focused on the complete
