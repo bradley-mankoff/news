@@ -113,159 +113,7 @@ class FakeElement {
     const marker = `data-use-hf-model="${modelId}"`;
     const markerStart = this._innerHTML.indexOf(marker);
     if (markerStart < 0) return null;
-    const buttonStart = this._innerHT    def test_wire_events_tuning_button_lookups_execute_in_node_dom_harness(self) -> None:
-        """Execute the production wireEvents() loop in a DOM-shaped Node harness.
-
-        wireEvents() must attach Save/Rename/Delete tuning handlers for every
-        task whose controls are present and tolerate partial control trees
-        (issue #117): a missing tuning button must not abort wiring of the
-        same task's other buttons or any later task. TASK_CONFIG, the $()
-        helper, and wireEvents() are extracted from HTML itself, not
-        reimplemented here, so the harness exercises the exact production
-        loop and its closures.
-        """
-        html = ui_module.HTML
-
-        def js_function_block(start: str, end: str) -> str:
-            return html[html.index(start) : html.index(end, html.index(start))]
-
-        js = (
-            r"""
-const assert = (condition, message) => {
-  if (!condition) throw new Error(message);
-};
-"""
-            + _FAKE_DOM_ELEMENT_JS
-            + r"""
-// ---- Fake DOM ------------------------------------------------------------
-// Register every static ID looked up directly by wireEvents() so the harness
-// can vary only the per-task tuning buttons without unrelated null hits.
-const STATIC_IDS = [
-  "previewBtn", "runBtn", "utilityPreviewBtn", "utilityRunBtn", "stopBtn",
-  "openRunPresetDrawerBtn", "savePresetBtn", "closeRunPresetDialogBtn",
-  "newPresetBtn", "reloadPresetsBtn", "applyPresetBtn", "renamePresetBtn",
-  "savePresetEditorBtn", "deletePresetBtn", "knobSearch", "clearKnobsBtn",
-  "resetDefaultsBtn", "promptProfileSelect", "restorePromptProfileBtn",
-  "comparePromptProfileBtn", "sourceSearch", "reloadSourcesBtn",
-  "newSourceBtn", "saveSourceBtn", "deleteSourceBtn", "reloadRecipientsBtn",
-  "newRecipientBtn", "saveRecipientBtn", "deleteRecipientBtn",
-  "newModelTuningPresetBtn", "reloadModelTuningPresetsBtn",
-  "saveModelTuningPresetBtn", "deleteModelTuningPresetBtn",
-  "actionSelect", "sourceOptions"
-];
-let elements = {};
-function makeElements(omitTuningButtonId) {
-  const map = {};
-  for (const id of STATIC_IDS) map[id] = new FakeElement(id);
-  for (const meta of Object.values(TASK_CONFIG)) {
-    map[meta.modelSelectId] = new FakeElement(meta.modelSelectId);
-    map[meta.presetSelectId] = new FakeElement(meta.presetSelectId);
-    if (meta.saveButtonId !== omitTuningButtonId) map[meta.saveButtonId] = new FakeElement(meta.saveButtonId);
-    if (meta.renameButtonId !== omitTuningButtonId) map[meta.renameButtonId] = new FakeElement(meta.renameButtonId);
-    if (meta.deleteButtonId !== omitTuningButtonId) map[meta.deleteButtonId] = new FakeElement(meta.deleteButtonId);
-  }
-  elements = map;
-}
-const document = { getElementById(id) { return elements[id] || null; } };
-// Stubs used only when a handler is clicked; handler installation itself is
-// the behavior under test. Bare function references in wireEvents() are
-// evaluated at wiring time, so each must exist in harness scope.
-const tuningCalls = [];
-async function saveModelTuningPreset(runtimeKey) { tuningCalls.push(["save", runtimeKey]); }
-async function renameModelTuningPreset(runtimeKey) { tuningCalls.push(["rename", runtimeKey]); }
-async function deleteModelTuningPreset(runtimeKey) { tuningCalls.push(["delete", runtimeKey]); }
-function setStatus(_message, _kind) {}
-function closeRunPresetDialog() {}
-function loadPresets() {}
-function renderAdvancedKnobs() {}
-function resetAllOverrides() {}
-function renderSources() {}
-function loadSources() {}
-function loadRecipients() {}
-"""
-            + js_function_block(
-                "    function $(id) { return document.getElementById(id); }",
-                "    function value(id)",
-            )
-            + js_function_block("    const TASK_CONFIG = {", "    const state = {")
-            + js_function_block(
-                "    function wireEvents() {",
-                "    function applySelectedPresetFromState",
-            )
-            + r"""
-const selectIds = meta => [meta.modelSelectId, meta.presetSelectId];
-const buttonIds = meta => [meta.saveButtonId, meta.renameButtonId, meta.deleteButtonId];
-
-// ---- Complete control tree ------------------------------------------------
-makeElements(null);
-wireEvents();
-for (const meta of Object.values(TASK_CONFIG)) {
-  for (const id of selectIds(meta)) {
-    assert(typeof elements[id].onchange === "function", `${id} did not receive its onchange handler`);
-  }
-  for (const id of buttonIds(meta)) {
-    assert(typeof elements[id].onclick === "function", `${id} did not receive its onclick handler`);
-  }
-}
-
-// Every tuning closure must preserve both its operation and task-specific runtimeKey.
-for (const meta of Object.values(TASK_CONFIG)) {
-  for (const [id, operation] of [
-    [meta.saveButtonId, "save"],
-    [meta.renameButtonId, "rename"],
-    [meta.deleteButtonId, "delete"],
-  ]) {
-    await elements[id].onclick();
-    const actual = tuningCalls.pop();
-    const expected = [operation, meta.runtimeKey];
-    assert(
-      JSON.stringify(actual) === JSON.stringify(expected),
-      `${id} invoked ${JSON.stringify(actual)} instead of ${operation}/${meta.runtimeKey}`
-    );
-  }
-}
-assert(tuningCalls.length === 0, "tuning callbacks left unexpected calls");
-
-// ---- Partial control trees -------------------------------------------------
-for (const absentId of ["article_tuning_save", "article_tuning_rename", "article_tuning_delete"]) {
-  makeElements(absentId);
-  wireEvents(); // must complete without throwing
-  assert(elements[absentId] === undefined, `${absentId} should stay absent in the partial fixture`);
-  const article = TASK_CONFIG.article_summary;
-  for (const id of selectIds(article)) {
-    assert(typeof elements[id].onchange === "function", `${id} lost its handler when ${absentId} was absent`);
-  }
-  for (const id of buttonIds(article)) {
-    if (id === absentId) continue;
-    assert(typeof elements[id].onclick === "function", `${id} lost its handler when ${absentId} was absent`);
-  }
-  // Later tasks must still be wired: an abort at the missing button is
-  // observable because it sits in the first task entry of the loop.
-  for (const meta of Object.values(TASK_CONFIG).slice(1)) {
-    for (const id of [...selectIds(meta), ...buttonIds(meta)]) {
-      const el = elements[id];
-      assert(
-        typeof el.onclick === "function" || typeof el.onchange === "function",
-        `${id} was not wired when ${absentId} was absent`
-      );
-    }
-  }
-}
-"""
-        )
-        node = shutil.which("node")
-        if node is None:
-            self.skipTest("Node.js is required for the embedded UI renderer harness")
-        result = subprocess.run(
-            [node, "--input-type=module", "-"],
-            input=js,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
-
-ML.lastIndexOf("<button", markerStart);
+    const buttonStart = this._innerHTML.lastIndexOf("<button", markerStart);
     const buttonEnd = this._innerHTML.indexOf(">", markerStart);
     const button = this._innerHTML.slice(buttonStart, buttonEnd + 1);
     return { disabled: button.includes(" disabled") };
@@ -3281,6 +3129,157 @@ assert($("previewPane").textContent === "fresh preview", "successful preview did
 assert(previewCount === 8, `expected 8 preview requests total, got ${previewCount}`);
 assert($("status").textContent === "preview failed", "successful preview overwrote the last error status");
 assert($("status").className === "bad", "successful preview cleared the bad status");
+"""
+        )
+        node = shutil.which("node")
+        if node is None:
+            self.skipTest("Node.js is required for the embedded UI renderer harness")
+        result = subprocess.run(
+            [node, "--input-type=module", "-"],
+            input=js,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
+
+    def test_wire_events_tuning_button_lookups_execute_in_node_dom_harness(self) -> None:
+        """Execute the production wireEvents() loop in a DOM-shaped Node harness.
+
+        wireEvents() must attach Save/Rename/Delete tuning handlers for every
+        task whose controls are present and tolerate partial control trees
+        (issue #117): a missing tuning button must not abort wiring of the
+        same task's other buttons or any later task. TASK_CONFIG, the $()
+        helper, and wireEvents() are extracted from HTML itself, not
+        reimplemented here, so the harness exercises the exact production
+        loop and its closures.
+        """
+        html = ui_module.HTML
+
+        def js_function_block(start: str, end: str) -> str:
+            return html[html.index(start) : html.index(end, html.index(start))]
+
+        js = (
+            r"""
+const assert = (condition, message) => {
+  if (!condition) throw new Error(message);
+};
+"""
+            + _FAKE_DOM_ELEMENT_JS
+            + r"""
+// ---- Fake DOM ------------------------------------------------------------
+// Register every static ID looked up directly by wireEvents() so the harness
+// can vary only the per-task tuning buttons without unrelated null hits.
+const STATIC_IDS = [
+  "previewBtn", "runBtn", "utilityPreviewBtn", "utilityRunBtn", "stopBtn",
+  "openRunPresetDrawerBtn", "savePresetBtn", "closeRunPresetDialogBtn",
+  "newPresetBtn", "reloadPresetsBtn", "applyPresetBtn", "renamePresetBtn",
+  "savePresetEditorBtn", "deletePresetBtn", "knobSearch", "clearKnobsBtn",
+  "resetDefaultsBtn", "promptProfileSelect", "restorePromptProfileBtn",
+  "comparePromptProfileBtn", "sourceSearch", "reloadSourcesBtn",
+  "newSourceBtn", "saveSourceBtn", "deleteSourceBtn", "reloadRecipientsBtn",
+  "newRecipientBtn", "saveRecipientBtn", "deleteRecipientBtn",
+  "newModelTuningPresetBtn", "reloadModelTuningPresetsBtn",
+  "saveModelTuningPresetBtn", "deleteModelTuningPresetBtn",
+  "actionSelect", "sourceOptions"
+];
+const selectIds = meta => [meta.modelSelectId, meta.presetSelectId];
+const buttonIds = meta => [meta.saveButtonId, meta.renameButtonId, meta.deleteButtonId];
+let elements = {};
+function makeElements(omitTuningButtonId) {
+  const map = {};
+  for (const id of STATIC_IDS) map[id] = new FakeElement(id);
+  for (const meta of Object.values(TASK_CONFIG)) {
+    map[meta.modelSelectId] = new FakeElement(meta.modelSelectId);
+    map[meta.presetSelectId] = new FakeElement(meta.presetSelectId);
+    for (const id of buttonIds(meta)) {
+      if (id !== omitTuningButtonId) map[id] = new FakeElement(id);
+    }
+  }
+  elements = map;
+}
+const document = { getElementById(id) { return elements[id] || null; } };
+// Stubs used only when a handler is clicked; handler installation itself is
+// the behavior under test. Bare function references in wireEvents() are
+// evaluated at wiring time, so each must exist in harness scope.
+const tuningCalls = [];
+async function saveModelTuningPreset(runtimeKey) { tuningCalls.push(["save", runtimeKey]); }
+async function renameModelTuningPreset(runtimeKey) { tuningCalls.push(["rename", runtimeKey]); }
+async function deleteModelTuningPreset(runtimeKey) { tuningCalls.push(["delete", runtimeKey]); }
+function setStatus(_message, _kind) {}
+function closeRunPresetDialog() {}
+function loadPresets() {}
+function renderAdvancedKnobs() {}
+function resetAllOverrides() {}
+function renderSources() {}
+function loadSources() {}
+function loadRecipients() {}
+"""
+            + js_function_block(
+                "    function $(id) { return document.getElementById(id); }",
+                "    function value(id)",
+            )
+            + js_function_block("    const TASK_CONFIG = {", "    const state = {")
+            + js_function_block(
+                "    function wireEvents() {",
+                "    function applySelectedPresetFromState",
+            )
+            + r"""
+// ---- Complete control tree ------------------------------------------------
+makeElements(null);
+wireEvents();
+for (const meta of Object.values(TASK_CONFIG)) {
+  for (const id of selectIds(meta)) {
+    assert(typeof elements[id].onchange === "function", `${id} did not receive its onchange handler`);
+  }
+  for (const id of buttonIds(meta)) {
+    assert(typeof elements[id].onclick === "function", `${id} did not receive its onclick handler`);
+  }
+}
+
+// Every tuning closure must preserve both its operation and task-specific runtimeKey.
+for (const meta of Object.values(TASK_CONFIG)) {
+  for (const [id, operation] of [
+    [meta.saveButtonId, "save"],
+    [meta.renameButtonId, "rename"],
+    [meta.deleteButtonId, "delete"],
+  ]) {
+    await elements[id].onclick();
+    const actual = tuningCalls.pop();
+    const expected = [operation, meta.runtimeKey];
+    assert(
+      JSON.stringify(actual) === JSON.stringify(expected),
+      `${id} invoked ${JSON.stringify(actual)} instead of ${operation}/${meta.runtimeKey}`
+    );
+  }
+}
+assert(tuningCalls.length === 0, "tuning callbacks left unexpected calls");
+
+// ---- Partial control trees -------------------------------------------------
+for (const absentId of ["article_tuning_save", "article_tuning_rename", "article_tuning_delete"]) {
+  makeElements(absentId);
+  wireEvents(); // must complete without throwing
+  assert(elements[absentId] === undefined, `${absentId} should stay absent in the partial fixture`);
+  const article = TASK_CONFIG.article_summary;
+  for (const id of selectIds(article)) {
+    assert(typeof elements[id].onchange === "function", `${id} lost its handler when ${absentId} was absent`);
+  }
+  for (const id of buttonIds(article)) {
+    if (id === absentId) continue;
+    assert(typeof elements[id].onclick === "function", `${id} lost its handler when ${absentId} was absent`);
+  }
+  // Later tasks must still be wired: an abort at the missing button is
+  // observable because it sits in the first task entry of the loop.
+  for (const meta of Object.values(TASK_CONFIG).slice(1)) {
+    for (const id of [...selectIds(meta), ...buttonIds(meta)]) {
+      const el = elements[id];
+      assert(
+        typeof el.onclick === "function" || typeof el.onchange === "function",
+        `${id} was not wired when ${absentId} was absent`
+      );
+    }
+  }
+}
 """
         )
         node = shutil.which("node")
