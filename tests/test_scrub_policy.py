@@ -42,7 +42,8 @@ class ScrubPolicyTest(unittest.TestCase):
 
     def test_gates_fail_without_freeze(self):
         prs = [self._pr(1, "feature/a")]
-        results = sp.gates({}, prs)
+        with mock.patch.object(sp, "board_in_progress", return_value=[]):
+            results = sp.gates({}, prs)
         self.assertFalse(dict((n, ok) for n, ok, _ in results)["freeze flag set"])
 
     def test_gates_unlabeled_pr_fails(self):

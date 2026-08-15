@@ -1318,6 +1318,7 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
             environ={},
             overrides={
                 "NEWS_MODEL": CODEX_TEST_MODEL_ALIAS,
+                "NEWS_MODEL_BACKEND": "mlx-lm",
                 "NEWS_MODEL_ARTICLE_SUMMARY": GEMMA_4_12B_IT_4BIT_MODEL_ALIAS,
                 "NEWS_MODEL_ARTICLE_SUMMARY_BASE_URL": "http://127.0.0.1:8090/v1",
                 "NEWS_MODEL_STORY_DRAFTING": QWWYTHOS_9B_4BIT_MODEL_REFERENCE,
@@ -1355,6 +1356,7 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
                 environ={},
                 overrides={
                     "NEWS_MODEL": CODEX_TEST_MODEL_ALIAS,
+                    "NEWS_MODEL_BACKEND": "mlx-lm",
                     "NEWS_MODEL_ARTICLE_SUMMARY": GEMMA_4_12B_IT_4BIT_MODEL_ALIAS,
                     "NEWS_MODEL_ARTICLE_SUMMARY_BASE_URL": "http://127.0.0.1:8090/v1",
                     "NEWS_MODEL_STORY_DRAFTING": QWWYTHOS_9B_4BIT_MODEL_REFERENCE,
