@@ -158,6 +158,11 @@ def _consume_dispatch_slot() -> None:
         _DISPATCH_BUDGET -= 1
 
 
+def remaining_dispatch_budget() -> int | None:
+    """Free dispatch slots after this poll's dispatches (None = not gated)."""
+    return _DISPATCH_BUDGET
+
+
 def dispatch(cfg: dict, env: dict, wf: str, branch: str, message: str,
              item_id: str, number: int) -> DispatchResult:
     """Start one Archon workflow and report why it did or did not start."""

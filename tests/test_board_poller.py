@@ -1322,6 +1322,131 @@ class ConflictDispatchSerializationTest(unittest.TestCase):
         self.assertFalse(state["item-4"]["conflict_fix_noted"])
 
 
+class FillConcurrencyGapTest(unittest.TestCase):
+    """The poller self-fills free dispatch slots from runnable Backlog."""
+
+    def _ctx(self, state, cap=6, repo="o/r"):
+        cfg = {
+            "repo": repo,
+            "default_lane": "Backlog",
+            "max_concurrent_workflows": cap,
+            "lanes": {"Backlog": "backlog", "Todo": "todo",
+                      "In Progress": "in_progress", "Done": "done"},
+            "dispatch": {"todo": {"default": "archon-fix-github-issue"}},
+        }
+        return cycle_adapter.PollContext(
+            cfg=cfg, env={}, state=state, project_id="p", field_id="f",
+            status_options={"Todo": "todo-opt", "Done": "done-opt"},
+            items=[], first_run=False,
+            done_lane_name="Done", todo_lane_name="Todo",
+            blocked_lane_name="Blocked", ready_lane_name="Ready for Review",
+            in_progress_lane_name="In Progress",
+            number_lane={}, number_state={}, seen=set(), fresh_dispatched=set())
+
+    def _item(self, number, labels=(), body="", state="OPEN"):
+        return {
+            "id": f"item-{number}",
+            "status": "Backlog",
+            "content": {
+                "__typename": "Issue",
+                "number": number,
+                "title": f"Issue {number}",
+                "state": state,
+                "url": f"https://example.com/{number}",
+                "repository": {"nameWithOwner": "o/r"},
+                "body": body,
+                "labels": {"nodes": [{"name": l} for l in labels]},
+            },
+        }
+
+    def test_fills_free_slots_from_runnable_backlog(self):
+        state = {}
+        items = [self._item(1), self._item(2), self._item(3)]
+        ctx = self._ctx(state, cap=2)
+        with (
+            patch.object(cycle_adapter, "remaining_dispatch_budget",
+                         return_value=6),
+            patch.object(cycle_adapter, "move_to_lane",
+                         return_value=True) as move,
+            patch.object(cycle_adapter, "log") as log,
+        ):
+            promoted = cycle_adapter._fill_concurrency_gap(
+                ctx, items, {}, {})
+        self.assertEqual(promoted, 2)
+        self.assertEqual(move.call_count, 2)
+        self.assertEqual([i["status"] for i in items[:2]], ["Todo", "Todo"])
+        self.assertEqual(items[2]["status"], "Backlog")
+
+    def test_does_not_exceed_cap(self):
+        state = {}
+        items = [self._item(n) for n in range(1, 8)]
+        ctx = self._ctx(state, cap=6)
+        with (
+            patch.object(cycle_adapter, "remaining_dispatch_budget",
+                         return_value=6),
+            patch.object(cycle_adapter, "move_to_lane", return_value=True),
+            patch.object(cycle_adapter, "log"),
+        ):
+            promoted = cycle_adapter._fill_concurrency_gap(ctx, items, {}, {})
+        self.assertEqual(promoted, 6)
+
+    def test_respects_active_runs(self):
+        state = {}
+        items = [self._item(1), self._item(2), self._item(3)]
+        ctx = self._ctx(state, cap=6)
+        with (
+            patch.object(cycle_adapter, "remaining_dispatch_budget",
+                         return_value=2),
+            patch.object(cycle_adapter, "move_to_lane", return_value=True) as move,
+            patch.object(cycle_adapter, "log"),
+        ):
+            promoted = cycle_adapter._fill_concurrency_gap(ctx, items, {}, {})
+        self.assertEqual(promoted, 2)
+        self.assertEqual(move.call_count, 2)
+
+    def test_skips_decision_only_needs_input_closed_dep_blocked(self):
+        state = {}
+        items = [
+            self._item(1, labels=["decision-only"]),
+            self._item(2, labels=["needs-input"]),
+            self._item(3, state="CLOSED"),
+            self._item(4, body="Depends on: #99\n"),
+            self._item(5),
+        ]
+        number_lane = {99: "Backlog"}
+        number_state = {99: "OPEN"}
+        ctx = self._ctx(state, cap=6)
+        with (
+            patch.object(cycle_adapter, "remaining_dispatch_budget",
+                         return_value=6),
+            patch.object(cycle_adapter, "move_to_lane", return_value=True) as move,
+            patch.object(cycle_adapter, "log") as log,
+        ):
+            promoted = cycle_adapter._fill_concurrency_gap(
+                ctx, items, number_lane, number_state)
+        self.assertEqual(promoted, 1)  # only #5
+        self.assertEqual(move.call_count, 1)
+        gap = [
+            c.args[0] for c in log.call_args_list
+            if "CONCURRENCY GAP" in c.args[0]]
+        self.assertEqual(len(gap), 1)
+        self.assertIn("dep_blocked=1", gap[0])
+
+    def test_full_budget_returns_zero(self):
+        state = {}
+        items = [self._item(1)]
+        ctx = self._ctx(state, cap=6)
+        with (
+            patch.object(cycle_adapter, "remaining_dispatch_budget",
+                         return_value=0),
+            patch.object(cycle_adapter, "move_to_lane") as move,
+            patch.object(cycle_adapter, "log"),
+        ):
+            promoted = cycle_adapter._fill_concurrency_gap(ctx, items, {}, {})
+        self.assertEqual(promoted, 0)
+        move.assert_not_called()
+
+
 class FmtDepsTest(unittest.TestCase):
     def test_formats_refs(self):
         self.assertEqual(fmt_deps([42, 57]), "#42, #57")
