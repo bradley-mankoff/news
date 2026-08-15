@@ -32,6 +32,18 @@ Archon workflow engine + stock Pi provider, no custom extensions.
   active/paused Archon runs **for this repo's codebase** before dispatching
   (foreign repos' runs in the shared archon home do not consume news slots),
   reserves slots within a poll, and holds dispatches if the status lookup fails.
+
+### Automatic capacity fill
+
+After the initial snapshot, each poll uses remaining workflow capacity to
+promote eligible repository Issues from `Backlog` to `Todo`, in issue-number
+order. An issue must be open, must not carry the configured decision-only or
+`needs-input` label, and must have all `Depends on` references satisfied.
+Closed, decision-only, `needs-input`, dependency-blocked, and failed-to-move
+items remain in Backlog. The initial poll is read-only; later promotions run
+after the current dispatch pass, so promoted Todo items dispatch on the next
+poll. `CONCURRENCY GAP` log lines explain why available capacity was not filled.
+
 - **news UI** — `uv run news ui` on `http://127.0.0.1:8766` (see the `news-dev` skill).
 
 ## Execution model

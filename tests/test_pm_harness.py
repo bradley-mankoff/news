@@ -166,8 +166,8 @@ class SyntheticProjectTest(unittest.TestCase):
         )
 
 
-class PollSafetyAndRetryTest(unittest.TestCase):
-    def test_initial_snapshot_does_not_promote_backlog(self) -> None:
+class ConcurrencyFillPollTest(unittest.TestCase):
+    def test_initial_snapshot_does_not_promote_existing_backlog(self) -> None:
         cfg = config()
         board_item = issue(7, "Backlog")
         state: dict = {}
@@ -176,7 +176,10 @@ class PollSafetyAndRetryTest(unittest.TestCase):
                 cycle,
                 "fetch_project",
                 return_value=(
-                    "project", "field", {"Todo": "todo-option"}, [board_item]
+                    "project",
+                    "field",
+                    {"Todo": "todo-option", "In Progress": "in-progress-option"},
+                    [board_item],
                 ),
             ),
             patch.object(cycle, "prepare_dispatch_budget"),
@@ -191,55 +194,99 @@ class PollSafetyAndRetryTest(unittest.TestCase):
         move.assert_not_called()
         dispatch.assert_not_called()
         self.assertEqual(board_item["status"], "Backlog")
+        self.assertTrue(state["_meta"]["snapshot_done"])
 
-    def test_backlog_promotion_dispatches_on_next_poll(self) -> None:
+    def test_backlog_fill_dispatches_on_the_next_poll(self) -> None:
         cfg = config()
-        backlog = issue(7, "Backlog")
-        backlog_next = issue(7, "Backlog")
-        todo = issue(7, "Todo")
-        state: dict = {}
+        backlog_item = issue(7, "Backlog")
+        todo_item = issue(7, "Todo")
+        state = {
+            "_meta": {"snapshot_done": True},
+            "item-7": {"issue_number": 7, "status": "Backlog"},
+        }
         with (
             patch.object(
                 cycle,
                 "fetch_project",
                 side_effect=[
-                    ("project", "field", {"Todo": "todo-option"}, [backlog]),
-                    ("project", "field", {"Todo": "todo-option"}, [backlog_next]),
-                    ("project", "field", {"In Progress": "progress-option"}, [todo]),
+                    (
+                        "project",
+                        "field",
+                        {"Todo": "todo-option", "In Progress": "in-progress-option"},
+                        [backlog_item],
+                    ),
+                    (
+                        "project",
+                        "field",
+                        {"Todo": "todo-option", "In Progress": "in-progress-option"},
+                        [todo_item],
+                    ),
                 ],
             ),
             patch.object(cycle, "prepare_dispatch_budget"),
             patch.object(cycle, "remaining_dispatch_budget", return_value=1),
+            patch.object(cycle, "reconcile_untracked_runs"),
             patch.object(cycle, "sync_runnable_labels"),
             patch.object(cycle, "fresh_issue_dispatch_guard", return_value=(True, "")),
-            patch.object(cycle, "dispatch", return_value=DispatchResult(True)) as dispatch,
             patch.object(cycle, "move_to_lane", return_value=True) as move,
+            patch.object(
+                cycle, "dispatch", return_value=DispatchResult(True, pid=123)
+            ) as dispatch,
             patch.object(cycle, "save_state"),
         ):
             cycle.poll(cfg, {}, state)
             dispatch.assert_not_called()
             cycle.poll(cfg, {}, state)
-            self.assertEqual(backlog_next["status"], "Todo")
-            dispatch.assert_not_called()
-            cycle.poll(cfg, {}, state)
 
         dispatch.assert_called_once()
-        self.assertEqual(move.call_count, 2)
+        self.assertEqual(
+            move.call_args_list,
+            [
+                call(
+                    cfg,
+                    {},
+                    "project",
+                    "item-7",
+                    "field",
+                    "todo-option",
+                ),
+                call(
+                    cfg,
+                    {},
+                    "project",
+                    "item-7",
+                    "field",
+                    "in-progress-option",
+                ),
+            ],
+        )
 
-    def test_unavailable_guard_retries_without_manual_recovery(self) -> None:
+
+class DispatchGuardRetryTest(unittest.TestCase):
+    def test_todo_retries_after_transient_lookup_deferral(self) -> None:
         cfg = config()
-        board_item = issue(8, "Todo")
+        board_item = issue(7, "Todo")
         state = {
             "_meta": {"snapshot_done": True},
-            "item-8": {"issue_number": 8, "status": "Backlog"},
+            "item-7": {
+                "issue_number": 7,
+                "status": "Todo",
+                "dispatch_guard_deferred": True,
+            },
         }
         with (
             patch.object(
-                cycle, "fetch_project",
-                return_value=("project", "field", {}, [board_item]),
+                cycle,
+                "fetch_project",
+                return_value=(
+                    "project",
+                    "field",
+                    {"In Progress": "in-progress-option"},
+                    [board_item],
+                ),
             ),
             patch.object(cycle, "prepare_dispatch_budget"),
-            patch.object(cycle, "remaining_dispatch_budget", return_value=0),
+            patch.object(cycle, "reconcile_untracked_runs"),
             patch.object(cycle, "sync_runnable_labels"),
             patch.object(
                 cycle,
@@ -249,19 +296,21 @@ class PollSafetyAndRetryTest(unittest.TestCase):
                     (True, ""),
                 ],
             ) as guard,
-            patch.object(cycle, "dispatch", return_value=DispatchResult(True)) as dispatch,
-            patch.object(cycle, "comment_issue") as comment,
+            patch.object(
+                cycle,
+                "dispatch",
+                return_value=DispatchResult(True, pid=123),
+            ) as dispatch,
+            patch.object(cycle, "move_to_lane", return_value=True),
             patch.object(cycle, "save_state"),
         ):
             cycle.poll(cfg, {}, state)
-            self.assertNotIn("recovery", state["item-8"])
-            self.assertTrue(state["item-8"]["dispatch_guard_deferred"])
+            self.assertTrue(state["item-7"]["dispatch_guard_deferred"])
             cycle.poll(cfg, {}, state)
 
         self.assertEqual(guard.call_count, 2)
         dispatch.assert_called_once()
-        comment.assert_not_called()
-        self.assertNotIn("dispatch_guard_deferred", state["item-8"])
+        self.assertNotIn("dispatch_guard_deferred", state["item-7"])
 
 
 class DecisionOnlyTest(unittest.TestCase):

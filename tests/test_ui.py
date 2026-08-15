@@ -2330,19 +2330,76 @@ assert.equal(hint.classList.contains("hidden"), false);
         self.assertIsNone(payload["error"])
         search.assert_called_once_with("qwythos", pipeline_tag="text-generation", limit=5)
 
+        expected_exceptions = (
+            OSError("hf down"),
+            ValueError("invalid catalog response"),
+            ImportError("huggingface-hub missing"),
+        )
+        for exception in expected_exceptions:
+            with self.subTest(exception=type(exception).__name__), patch.object(
+                ui_module, "search_huggingface_models", side_effect=exception
+            ):
+                status, _, body = self._invoke_get("/api/models/search?q=qwythos")
+
+            self.assertEqual(status, 200)
+            self.assertEqual(
+                json.loads(body),
+                {"query": "qwythos", "models": [], "error": str(exception)},
+            )
+
         with patch.object(
-            ui_module, "search_huggingface_models", side_effect=RuntimeError("hf down")
+            ui_module,
+            "search_huggingface_models",
+            side_effect=RuntimeError("programming bug"),
         ):
             status, _, body = self._invoke_get("/api/models/search?q=qwythos")
 
-        self.assertEqual(status, 200)
-        payload = json.loads(body)
-        self.assertEqual(payload["models"], [])
-        self.assertEqual(payload["error"], "hf down")
+        self.assertEqual(status, 400)
+        self.assertEqual(json.loads(body), {"error": "programming bug"})
 
         status, _, body = self._invoke_get("/api/models/search")
         self.assertEqual(status, 400)
         self.assertIn("Missing query parameter q.", json.loads(body)["error"])
+
+    def test_models_search_endpoint_invalid_limit_returns_400(self) -> None:
+        fake_models = [
+            {
+                "id": "owner/one",
+                "hf_url": "https://huggingface.co/owner/one",
+                "runtime_fit": {"status": "managed_mlx_lm", "reason": "ok"},
+            }
+        ]
+        with patch.object(
+            ui_module, "search_huggingface_models", return_value=fake_models
+        ) as search:
+            status, _, body = self._invoke_get("/api/models/search?q=qwythos&limit=abc")
+        self.assertEqual(status, 400)
+        self.assertEqual(
+            json.loads(body),
+            {"query": "qwythos", "models": [], "error": "--limit must be an integer, got 'abc'."},
+        )
+        search.assert_not_called()
+
+        # Values outside 1-50 (0, 999) stay successful too — they are clamped
+        # by search_huggingface_models; the handler does not range-validate.
+        for raw in ("1", "50", "0", "999"):
+            with self.subTest(limit=raw), patch.object(
+                ui_module, "search_huggingface_models", return_value=fake_models
+            ) as search:
+                status, _, body = self._invoke_get(f"/api/models/search?q=qwythos&limit={raw}")
+            self.assertEqual(status, 200)
+            payload = json.loads(body)
+            self.assertEqual(payload["models"], fake_models)
+            self.assertIsNone(payload["error"])
+            search.assert_called_once_with("qwythos", pipeline_tag=None, limit=int(raw))
+
+        with patch.object(
+            ui_module, "search_huggingface_models", return_value=fake_models
+        ) as search:
+            status, _, body = self._invoke_get("/api/models/search?q=qwythos")
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body)["models"], fake_models)
+        search.assert_called_once_with("qwythos", pipeline_tag=None, limit=20)
 
     def test_models_metadata_endpoint(self) -> None:
         fake_info = {
@@ -2362,15 +2419,34 @@ assert.equal(hint.classList.contains("hidden"), false);
         self.assertIsNone(payload["error"])
         fetch.assert_called_once_with("owner/repo")
 
-        with patch.object(
-            ui_module, "fetch_model_metadata", side_effect=ValueError("Model not found on Hugging Face: 'nope'")
-        ):
-            status, _, body = self._invoke_get("/api/models/metadata?model=nope")
+        expected_exceptions = (
+            OSError("network down"),
+            ValueError("Model not found on Hugging Face: 'nope'"),
+            ImportError("huggingface-hub missing"),
+        )
+        for exception in expected_exceptions:
+            with self.subTest(exception=type(exception).__name__), patch.object(
+                ui_module, "fetch_model_metadata", side_effect=exception
+            ):
+                status, _, body = self._invoke_get(
+                    "/api/models/metadata?model=owner%2Frepo"
+                )
 
-        self.assertEqual(status, 200)
-        payload = json.loads(body)
-        self.assertIsNone(payload["info"])
-        self.assertIn("Model not found", payload["error"])
+            self.assertEqual(status, 200)
+            self.assertEqual(
+                json.loads(body),
+                {"model": "owner/repo", "info": None, "error": str(exception)},
+            )
+
+        with patch.object(
+            ui_module,
+            "fetch_model_metadata",
+            side_effect=RuntimeError("programming bug"),
+        ):
+            status, _, body = self._invoke_get("/api/models/metadata?model=owner%2Frepo")
+
+        self.assertEqual(status, 400)
+        self.assertEqual(json.loads(body), {"error": "programming bug"})
 
         status, _, body = self._invoke_get("/api/models/metadata")
         self.assertEqual(status, 400)
@@ -2906,6 +2982,158 @@ for (const malformedRaw of malformedValues) {
             check=False,
         )
         self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
+
+    def test_wire_events_tuning_button_lookups_execute_in_node_dom_harness(self) -> None:
+        """Execute the production wireEvents() loop in a DOM-shaped Node harness.
+
+        wireEvents() must attach Save/Rename/Delete tuning handlers for every
+        task whose controls are present and tolerate partial control trees
+        (issue #117): a missing tuning button must not abort wiring of the
+        same task's other buttons or any later task. TASK_CONFIG, the $()
+        helper, and wireEvents() are extracted from HTML itself, not
+        reimplemented here, so the harness exercises the exact production
+        loop and its closures.
+        """
+        html = ui_module.HTML
+
+        def js_function_block(start: str, end: str) -> str:
+            return html[html.index(start) : html.index(end, html.index(start))]
+
+        js = (
+            r"""
+const assert = (condition, message) => {
+  if (!condition) throw new Error(message);
+};
+"""
+            + _FAKE_DOM_ELEMENT_JS
+            + r"""
+// ---- Fake DOM ------------------------------------------------------------
+// Register every static ID looked up directly by wireEvents() so the harness
+// can vary only the per-task tuning buttons without unrelated null hits.
+const STATIC_IDS = [
+  "previewBtn", "runBtn", "utilityPreviewBtn", "utilityRunBtn", "stopBtn",
+  "openRunPresetDrawerBtn", "savePresetBtn", "closeRunPresetDialogBtn",
+  "newPresetBtn", "reloadPresetsBtn", "applyPresetBtn", "renamePresetBtn",
+  "savePresetEditorBtn", "deletePresetBtn", "knobSearch", "clearKnobsBtn",
+  "resetDefaultsBtn", "promptProfileSelect", "restorePromptProfileBtn",
+  "comparePromptProfileBtn", "sourceSearch", "reloadSourcesBtn",
+  "newSourceBtn", "saveSourceBtn", "deleteSourceBtn", "reloadRecipientsBtn",
+  "newRecipientBtn", "saveRecipientBtn", "deleteRecipientBtn",
+  "newModelTuningPresetBtn", "reloadModelTuningPresetsBtn",
+  "saveModelTuningPresetBtn", "deleteModelTuningPresetBtn",
+  "actionSelect", "sourceOptions"
+];
+const selectIds = meta => [meta.modelSelectId, meta.presetSelectId];
+const buttonIds = meta => [meta.saveButtonId, meta.renameButtonId, meta.deleteButtonId];
+let elements = {};
+function makeElements(omitTuningButtonId) {
+  const map = {};
+  for (const id of STATIC_IDS) map[id] = new FakeElement(id);
+  for (const meta of Object.values(TASK_CONFIG)) {
+    map[meta.modelSelectId] = new FakeElement(meta.modelSelectId);
+    map[meta.presetSelectId] = new FakeElement(meta.presetSelectId);
+    for (const id of buttonIds(meta)) {
+      if (id !== omitTuningButtonId) map[id] = new FakeElement(id);
+    }
+  }
+  elements = map;
+}
+const document = { getElementById(id) { return elements[id] || null; } };
+// Stubs used only when a handler is clicked; handler installation itself is
+// the behavior under test. Bare function references in wireEvents() are
+// evaluated at wiring time, so each must exist in harness scope.
+const tuningCalls = [];
+async function saveModelTuningPreset(runtimeKey) { tuningCalls.push(["save", runtimeKey]); }
+async function renameModelTuningPreset(runtimeKey) { tuningCalls.push(["rename", runtimeKey]); }
+async function deleteModelTuningPreset(runtimeKey) { tuningCalls.push(["delete", runtimeKey]); }
+function setStatus(_message, _kind) {}
+function closeRunPresetDialog() {}
+function loadPresets() {}
+function renderAdvancedKnobs() {}
+function resetAllOverrides() {}
+function renderSources() {}
+function loadSources() {}
+function loadRecipients() {}
+"""
+            + js_function_block(
+                "    function $(id) { return document.getElementById(id); }",
+                "    function value(id)",
+            )
+            + js_function_block("    const TASK_CONFIG = {", "    const state = {")
+            + js_function_block(
+                "    function wireEvents() {",
+                "    function applySelectedPresetFromState",
+            )
+            + r"""
+// ---- Complete control tree ------------------------------------------------
+makeElements(null);
+wireEvents();
+for (const meta of Object.values(TASK_CONFIG)) {
+  for (const id of selectIds(meta)) {
+    assert(typeof elements[id].onchange === "function", `${id} did not receive its onchange handler`);
+  }
+  for (const id of buttonIds(meta)) {
+    assert(typeof elements[id].onclick === "function", `${id} did not receive its onclick handler`);
+  }
+}
+
+// Every tuning closure must preserve both its operation and task-specific runtimeKey.
+for (const meta of Object.values(TASK_CONFIG)) {
+  for (const [id, operation] of [
+    [meta.saveButtonId, "save"],
+    [meta.renameButtonId, "rename"],
+    [meta.deleteButtonId, "delete"],
+  ]) {
+    await elements[id].onclick();
+    const actual = tuningCalls.pop();
+    const expected = [operation, meta.runtimeKey];
+    assert(
+      JSON.stringify(actual) === JSON.stringify(expected),
+      `${id} invoked ${JSON.stringify(actual)} instead of ${operation}/${meta.runtimeKey}`
+    );
+  }
+}
+assert(tuningCalls.length === 0, "tuning callbacks left unexpected calls");
+
+// ---- Partial control trees -------------------------------------------------
+for (const absentId of ["article_tuning_save", "article_tuning_rename", "article_tuning_delete"]) {
+  makeElements(absentId);
+  wireEvents(); // must complete without throwing
+  assert(elements[absentId] === undefined, `${absentId} should stay absent in the partial fixture`);
+  const article = TASK_CONFIG.article_summary;
+  for (const id of selectIds(article)) {
+    assert(typeof elements[id].onchange === "function", `${id} lost its handler when ${absentId} was absent`);
+  }
+  for (const id of buttonIds(article)) {
+    if (id === absentId) continue;
+    assert(typeof elements[id].onclick === "function", `${id} lost its handler when ${absentId} was absent`);
+  }
+  // Later tasks must still be wired: an abort at the missing button is
+  // observable because it sits in the first task entry of the loop.
+  for (const meta of Object.values(TASK_CONFIG).slice(1)) {
+    for (const id of [...selectIds(meta), ...buttonIds(meta)]) {
+      const el = elements[id];
+      assert(
+        typeof el.onclick === "function" || typeof el.onchange === "function",
+        `${id} was not wired when ${absentId} was absent`
+      );
+    }
+  }
+}
+"""
+        )
+        node = shutil.which("node")
+        if node is None:
+            self.skipTest("Node.js is required for the embedded UI renderer harness")
+        result = subprocess.run(
+            [node, "--input-type=module", "-"],
+            input=js,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
+
     def test_schema_payload_includes_custom_catalog_entries(self) -> None:
         """The existing schema payload is the integration surface for merged
         catalog data: custom aliases appear in catalog cards and selector

@@ -193,6 +193,36 @@ class InspectWorktreeTest(unittest.TestCase):
             self.assertTrue(dirty["dirty"])
 
 
+class FetchArchonWorktreesTest(unittest.TestCase):
+    def test_lookup_failures_are_distinct_from_empty_results(self) -> None:
+        with patch(
+            "automation.pm_harness.archon.subprocess.run",
+            side_effect=subprocess.TimeoutExpired("archon", 60),
+        ):
+            timed_out = archon.fetch_archon_worktrees({})
+        self.assertEqual(timed_out.records, {})
+        self.assertEqual(timed_out.error, "archon_isolation_timeout")
+
+        with patch(
+            "automation.pm_harness.archon.subprocess.run",
+            return_value=subprocess.CompletedProcess(
+                ["archon"], 1, "", "permission denied"
+            ),
+        ):
+            failed = archon.fetch_archon_worktrees({})
+        self.assertEqual(failed.records, {})
+        self.assertEqual(failed.error, "archon_isolation_command_failed")
+
+    def test_successful_empty_lookup_has_no_error(self) -> None:
+        with patch(
+            "automation.pm_harness.archon.subprocess.run",
+            return_value=subprocess.CompletedProcess(["archon"], 0, "", ""),
+        ):
+            lookup = archon.fetch_archon_worktrees({})
+        self.assertEqual(lookup.records, {})
+        self.assertIsNone(lookup.error)
+
+
 class FetchWorkflowRunsTest(unittest.TestCase):
     def _fake_run(self, payload: str = "", returncode: int = 0):
         def fake(cmd, **kwargs):
