@@ -3406,7 +3406,7 @@ HTML = r"""<!doctype html>
       renderModelTuningPanels();
       renderPromptProfilePanel();
       refreshModelKnobLinks();
-      void previewQuietly("run");
+      void preview("run").catch(err => setStatus(err.message, "bad"));
     }
     function setKnobEnv(env) {
       document.querySelectorAll("[data-env]").forEach(el => {
@@ -4717,14 +4717,14 @@ HTML = r"""<!doctype html>
       $("resetDefaultsBtn").onclick = resetAllOverrides;
       $("promptProfileSelect").onchange = () => {
         renderPromptProfilePanel();
-        previewQuietly("run");
+        void preview("run").catch(err => setStatus(err.message, "bad"));
       };
       $("restorePromptProfileBtn").onclick = () => {
         const el = document.querySelector('[data-env="NEWS_PROMPT_PROFILE"]');
         if (el) el.value = "";
         document.querySelectorAll("[data-env^='NEWS_PROMPT_OVERRIDE_']").forEach(editor => { editor.value = ""; });
         renderPromptProfilePanel();
-        previewQuietly("run");
+        void preview("run").catch(err => setStatus(err.message, "bad"));
       };
       $("comparePromptProfileBtn").onclick = () => comparePromptProfiles().catch(err => setStatus(err.message, "bad"));
       $("sourceSearch").oninput = renderSources;
