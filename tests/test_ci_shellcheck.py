@@ -54,6 +54,20 @@ class CiShellCheckTests(unittest.TestCase):
         self.assertEqual(matches[0].get("name"), SHELLCHECK_STEP_NAME)
         self.assertNotIn("continue-on-error", matches[0])
 
+        shellcheck_index = steps.index(matches[0])
+        self.assertGreater(shellcheck_index, 0)
+        self.assertEqual(
+            steps[shellcheck_index - 1].get("uses"),
+            "actions/checkout@v4",
+        )
+        self.assertEqual(
+            steps[shellcheck_index + 1].get("uses"),
+            "astral-sh/setup-uv@v5",
+        )
+        runs = [step.get("run") for step in steps]
+        self.assertIn("uv sync --group dev", runs)
+        self.assertIn("uv run python -m pytest -q", runs)
+
     def test_readme_documents_shellcheck_command_and_ci_statement(self) -> None:
         readme = README.read_text(encoding="utf-8")
         self.assertIn(
