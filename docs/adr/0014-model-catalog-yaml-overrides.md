@@ -14,7 +14,7 @@ be customized by a user; editing only one of those registries would create a
 catalog/runtime mismatch. The built-in entries are code-reviewed contracts,
 so the question was how to let a local operator add or reword catalog entries
 without forking application code or weakening the reviewed identity rules
-(ADR 0010 runtime matrix, issue #124 GGUF boundary).
+(ADR 0017 runtime matrix, issue #124 GGUF boundary).
 
 ## Decision
 
@@ -89,7 +89,7 @@ cycle boundary, and `config.py` consumes the merged registry through
 - Let only the UI or CLI read YAML — rejected: alias resolution, selectors,
   presets, and model-server startup would disagree with the catalog.
 - Allow arbitrary file-qualified/GGUF references — rejected before issue
-  #75 by ADR 0010 and the `reference == hf_repo` invariant; now permitted
+  #75 by ADR 0017 and the `reference == hf_repo` invariant; now permitted
   only for `llama.cpp` entries with the strict `owner/repo/file.gguf` form
   under a bare `hf_repo`.
 - Add a model-registration database/API — rejected: this is a local,
