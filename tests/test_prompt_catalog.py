@@ -466,6 +466,13 @@ Citation precedence: Cite this source only for facts it directly supports.
         self.assertTrue(
             any("missing or empty instructions for title_generation" in item for item in violations)
         )
+
+        empty = dict(clean)
+        empty["title_generation"] = "   "
+        empty_violations = prompt_contracts.validate_editorial_instructions(empty)
+        self.assertTrue(
+            any("missing or empty instructions for title_generation" in item for item in empty_violations)
+        )
         self.assertTrue(any("brace" in item for item in violations))
         self.assertTrue(
             any("story_drafting" in item and "[[S1]]" in item for item in violations)
