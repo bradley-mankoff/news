@@ -19,8 +19,15 @@ are In Progress on the board.
 
 ## Prerequisites
 
-- `git-filter-repo` installed: `brew install git-filter-repo` (NOT installed on this
-  machine as of 2026-08-02 — verified).
+- `git-filter-repo` installed. The project dev environment provisions the pinned
+  test/operator tool automatically:
+
+  ```bash
+  uv sync --group dev   # installs git-filter-repo==2.47.0 into .venv
+  ```
+
+  Operators who run the scrub outside the project environment can instead install
+  it manually: `brew install git-filter-repo`.
 - `git` >= 2.38.
 - A clean mirror clone (see step 1) — never run `filter-repo` inside a live worktree.
 - `automation/security_audit.py` available on the machine running the scrub (it is
@@ -153,3 +160,27 @@ commits before rewriting — they are gone afterward).
 `automation/scrub_history.sh` automates steps 1-6 (clone, generate replacement files
 from redacted constants, filter-repo, audit verification) and by default only
 **prints** the push commands (`--dry-run`). A human passes `--execute` to push.
+
+## Local Fixture Rehearsal (Test)
+
+A real end-to-end rehearsal of the dry-run path runs in the normal test suite — no
+production repository, production refs, or network are involved:
+
+```bash
+uv sync --group dev
+uv run python -m pytest -q tests/test_scrub_history.py
+```
+
+The test builds a disposable local bare origin (with `develop`, `main`, and a tag)
+seeded with the same categories of personal data the scrub is designed to remove
+(content, filesystem paths, a commit message, and a personal author identity), then
+invokes `automation/scrub_history.sh --dry-run` through a `file://` URL using the
+pinned `git-filter-repo` and a temporary mailmap. It asserts that the rewritten
+mirror contains only the safe replacement values, that the history-only audit gate
+passes both inside the wrapper and via a direct `security_audit.py --history-only`
+invocation, that the push plan is printed but not executed, and that the fixture
+origin's refs remain unchanged.
+
+This rehearsal is **evidence only**. A passing dry run does not authorize a
+production force-push: `--execute` and any push to the real remote remain a
+separate, human-gated step.
