@@ -11,6 +11,10 @@ from .okf import write_okf_run_bundle
 from .diagnostics import RunDiagnostics
 
 
+class FinalizationError(RuntimeError):
+    """Raised when one or more durable run artifacts could not be saved."""
+
+
 @dataclass(frozen=True)
 class RunFinalizerConfig:
     run_id: str
@@ -88,21 +92,52 @@ class RunFinalizer:
     def finish(self) -> None:
         self.adapters.attach_pending_activity_snapshots(self.diagnostics)
         self.diagnostics.record_model_call_stats(self.adapters.model_call_stats_snapshot())
-        self._write_details()
-        self._write_history()
-        self._write_okf_run_bundle()
-        self._write_review()
-        self._write_beehiiv_paste()
-        self._cleanup_visible_outputs()
+        errors = [
+            error
+            for error in (
+                self._write_details(),
+                self._write_history(),
+                self._write_okf_run_bundle(),
+                self._write_review(),
+                self._write_beehiiv_paste(),
+                self._cleanup_visible_outputs(),
+            )
+            if error
+        ]
+        if not errors:
+            return
 
-    def _write_details(self) -> None:
+        bounded_errors = errors[:20]
+        self.diagnostics.event(
+            "artifact_finalization_failed",
+            errors=bounded_errors,
+            error_count=len(errors),
+        )
+        # Details are normally written first, but rewrite them after recording
+        # the aggregate failure so consumers can see why the run is incomplete.
+        try:
+            details_path = self.diagnostics.write_details_json(
+                self.config.latest_run_details_path
+            )
+            self._detail(f"Latest run details saved: {details_path}")
+        except Exception as error:
+            self._warning(f"Finalization failure details write failed: {error}")
+        raise FinalizationError(
+            "Run completed with missing durable artifacts: "
+            + "; ".join(bounded_errors)
+        )
+
+    def _write_details(self) -> str | None:
         try:
             details_path = self.diagnostics.write_details_json(self.config.latest_run_details_path)
             self._detail(f"Latest run details saved: {details_path}")
         except Exception as error:
-            self._warning(f"Latest run details write failed: {error}")
+            message = f"Latest run details write failed: {error}"
+            self._warning(message)
+            return message
+        return None
 
-    def _write_history(self) -> None:
+    def _write_history(self) -> str | None:
         try:
             self.adapters.write_run_history(
                 self.config.history_db_path,
@@ -119,9 +154,12 @@ class RunFinalizer:
             self._detail("Saved run history.")
             self._detail(f"Run history saved: {self.config.history_db_path}")
         except Exception as error:
-            self._warning(f"Run history write failed: {error}")
+            message = f"Run history write failed: {error}"
+            self._warning(message)
+            return message
+        return None
 
-    def _write_okf_run_bundle(self) -> None:
+    def _write_okf_run_bundle(self) -> str | None:
         try:
             bundle_path = self.adapters.write_okf_run_bundle(
                 self.config.history_db_path,
@@ -137,9 +175,12 @@ class RunFinalizer:
             )
             self._detail(f"OKF Run Bundle saved: {bundle_path}")
         except Exception as error:
-            self._warning(f"OKF Run Bundle write failed: {error}")
+            message = f"OKF Run Bundle write failed: {error}"
+            self._warning(message)
+            return message
+        return None
 
-    def _write_review(self) -> None:
+    def _write_review(self) -> str | None:
         try:
             review_path = self.diagnostics.write_run_review_markdown(
                 self.config.latest_run_markdown_path,
@@ -147,11 +188,14 @@ class RunFinalizer:
             )
             self._detail(f"Latest readable run review saved: {review_path}")
         except Exception as error:
-            self._warning(f"Latest readable run review write failed: {error}")
+            message = f"Latest readable run review write failed: {error}"
+            self._warning(message)
+            return message
+        return None
 
-    def _write_beehiiv_paste(self) -> None:
+    def _write_beehiiv_paste(self) -> str | None:
         if not self.report_body:
-            return
+            return None
         try:
             target_dir = self.config.beehiiv_paste_dir
             target_dir.mkdir(parents=True, exist_ok=True)
@@ -160,9 +204,12 @@ class RunFinalizer:
             target_path.write_text(self.report_body, encoding="utf-8")
             self._detail(f"Beehiiv paste file saved: {target_path}")
         except Exception as error:
-            self._warning(f"Beehiiv paste file write failed: {error}")
+            message = f"Beehiiv paste file write failed: {error}"
+            self._warning(message)
+            return message
+        return None
 
-    def _cleanup_visible_outputs(self) -> None:
+    def _cleanup_visible_outputs(self) -> str | None:
         try:
             deleted_count, deleted_bytes = self.adapters.cleanup_visible_outputs(
                 self.config.output_dir,
@@ -178,7 +225,10 @@ class RunFinalizer:
                     f"after publishing latest_run.md ({deleted_bytes} bytes)."
                 )
         except Exception as error:
-            self._warning(f"Visible daily output cleanup failed: {error}")
+            message = f"Visible daily output cleanup failed: {error}"
+            self._warning(message)
+            return message
+        return None
 
     def _detail(self, message: str) -> None:
         progress = self.adapters.progress

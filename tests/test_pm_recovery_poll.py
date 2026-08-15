@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import subprocess
 import unittest
 from unittest.mock import patch
 
@@ -98,6 +99,11 @@ class TerminalRecoveryPollTest(unittest.TestCase):
             patch.object(cycle_adapter, "sync_runnable_labels"),
             patch.object(cycle_adapter, "fetch_workflow_runs",
                          return_value=self._as_runs(runs)),
+            patch.object(
+                recovery_adapter,
+                "resolve_worktree_info_with_health",
+                return_value=(None, None),
+            ),
             patch.object(cycle_adapter, "fetch_workflow_run", return_value=None),
             patch.object(recovery_adapter, "inspect_worktree", return_value=dirty),
             patch.object(cycle_adapter, "save_state"),
@@ -297,6 +303,11 @@ class TerminalRecoveryPollTest(unittest.TestCase):
                 return_value=DispatchResult(True),
             ),
             patch.object(recovery_adapter, "fetch_workflow_runs", return_value=WorkflowRuns()),
+            patch.object(
+                recovery_adapter,
+                "resolve_worktree_info_with_health",
+                return_value=(None, None),
+            ),
             patch.object(cycle_adapter, "save_state"),
         ):
             cycle_adapter.poll(self._cfg(), {}, state)
@@ -351,6 +362,11 @@ class TerminalRecoveryPollTest(unittest.TestCase):
                 ],
             ),
             patch.object(recovery_adapter, "fetch_workflow_runs", return_value=WorkflowRuns()),
+            patch.object(
+                recovery_adapter,
+                "resolve_worktree_info_with_health",
+                return_value=(None, None),
+            ),
             patch.object(recovery_adapter, "inspect_worktree", return_value=False),
             patch.object(recovery_adapter, "comment_issue", return_value=True),
             patch.object(cycle_adapter, "save_state"),
@@ -436,6 +452,61 @@ class TerminalRecoveryPollTest(unittest.TestCase):
         self.assertTrue(any(
             "RUN LOOKUP UNAVAILABLE: archon_timeout" in c.args[0]
             for c in log.call_args_list))
+
+    def test_partial_run_lookup_does_not_recover_from_stale_row(self):
+        state = self._state()
+        stale = self._run(status="cancelled", run_id="stale-run")
+        partial = WorkflowRuns(
+            [stale], error="run_list_incomplete", partial=True
+        )
+        with self._run_poll(state, partial, False, False) as stack:
+            log = stack.enter_context(patch.object(cycle_adapter, "log"))
+            cycle_adapter.poll(self._cfg(), {}, state)
+        rec = state["item-92"]
+        self.assertEqual(rec["dispatch_msg"], "run")
+        self.assertNotIn("recovery", rec)
+        self.assertNotIn("last_observed_run_id", rec)
+        stack.dispatch.assert_not_called()
+        stack.inspect_worktree.assert_not_called()
+        self.assertTrue(any(
+            "RUN LOOKUP UNAVAILABLE: run_list_incomplete" in c.args[0]
+            for c in log.call_args_list))
+
+    def test_partial_review_lookup_retains_review_marker(self):
+        cfg = self._cfg()
+        cfg["dispatch"]["review"]["merge_ship_on_approve"] = True
+        state = self._state()
+        state["item-92"].update({
+            "status": "In Review",
+            "review_msg": "Review PR #153",
+            "ship_pr": 153,
+        })
+        item = self._item()
+        item["status"] = "In Review"
+        partial = WorkflowRuns(
+            [self._run(status="failed", run_id="stale-review")],
+            error="run_list_incomplete",
+            partial=True,
+        )
+        ship_view = subprocess.CompletedProcess(
+            ["gh"], 0, '{"number": 153, "state": "OPEN"}', ""
+        )
+        with (
+            patch.object(cycle_adapter, "fetch_project",
+                         return_value=("p", "f", {"Done": "done"}, [item])),
+            patch.object(cycle_adapter, "prepare_dispatch_budget"),
+            patch.object(cycle_adapter, "sync_runnable_labels"),
+            patch.object(cycle_adapter, "fetch_workflow_run", return_value=None),
+            patch.object(cycle_adapter, "fetch_workflow_runs", return_value=partial),
+            patch.object(cycle_adapter, "gh", return_value=ship_view),
+            patch.object(cycle_adapter, "fetch_verdict", return_value=(None, True)),
+            patch.object(cycle_adapter, "save_state"),
+        ):
+            cycle_adapter.poll(cfg, {}, state)
+        rec = state["item-92"]
+        self.assertEqual(rec["review_msg"], "Review PR #153")
+        self.assertNotIn("review_held", rec)
+        self.assertNotIn("review_run_id", rec)
 
     def test_unavailable_lookup_holds_ship_conflict_update(self):
         cfg = self._cfg()

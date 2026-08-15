@@ -431,6 +431,47 @@ class ConfigHelperTests(unittest.TestCase):
             config_module.canonical_model_endpoint("https://127.0.0.1:443/v1"),
         )
 
+    def test_canonical_model_endpoint_keeps_malformed_ports_distinct(self) -> None:
+        for malformed, valid in (
+            ("http://model.example:not-a-port/v1", "http://model.example/v1"),
+            ("http://model.example:99999/v1", "http://model.example/v1"),
+            ("https://model.example:not-a-port/v1", "https://model.example/v1"),
+        ):
+            with self.subTest(malformed=malformed):
+                self.assertNotEqual(
+                    config_module.canonical_model_endpoint(malformed),
+                    config_module.canonical_model_endpoint(valid),
+                )
+        self.assertEqual(
+            config_module.canonical_model_endpoint("http://user:pass@model.example/v1"),
+            config_module.canonical_model_endpoint("http://model.example/v1"),
+        )
+        with self.assertRaisesRegex(ValueError, "invalid port"):
+            config_module.managed_server_bind_key("http://model.example:not-a-port/v1")
+
+    def test_validate_managed_model_assignments_rejects_same_bind_port_on_distinct_paths(self) -> None:
+        with self.assertRaisesRegex(ValueError, "both bind 127.0.0.1:8090"):
+            config_module._validate_managed_model_assignments(
+                {
+                    "article_summary": SimpleNamespace(
+                        backend="mlx-lm",
+                        base_url="http://127.0.0.1:8090/v1-a",
+                        reference="shared",
+                        name="shared",
+                    ),
+                    "story_drafting": SimpleNamespace(
+                        backend="mlx-lm",
+                        base_url="http://127.0.0.1:8090/v1-b",
+                        reference="shared",
+                        name="shared",
+                    ),
+                },
+                model_reference="main",
+                model_name="main",
+                model_base_url="http://127.0.0.1:8080/v1",
+                model_backend="mlx-lm",
+            )
+
     def test_validate_managed_model_assignments_rejects_task_task_collision(self) -> None:
         # Two non-default managed assignments on the same canonical endpoint
         # with different models must fail early and identify the second task
@@ -502,6 +543,29 @@ class ConfigHelperTests(unittest.TestCase):
             model_base_url="http://127.0.0.1:8080/v1",
             model_backend="mlx-lm",
         )  # no raise: same canonical endpoint, same model
+
+    def test_validate_managed_model_assignments_rejects_external_task_on_managed_default_endpoint(self) -> None:
+        # An external assignment cannot silently share an endpoint owned by
+        # the managed default server: it would route an external model name
+        # into the process serving the default model.
+        with self.assertRaisesRegex(
+            ValueError,
+            r"Task 'article_summary'.*external backend on the managed default endpoint",
+        ):
+            config_module._validate_managed_model_assignments(
+                {
+                    "article_summary": SimpleNamespace(
+                        backend="external",
+                        base_url="http://localhost:8080/v1/",
+                        reference="external-ref",
+                        name="external-name",
+                    )
+                },
+                model_reference="main-ref",
+                model_name="main-name",
+                model_base_url="http://127.0.0.1:8080/v1",
+                model_backend="mlx-lm",
+            )
 
     def test_validate_managed_model_assignments_external_default_exempts_its_endpoint(self) -> None:
         # When the default endpoint is external (caller-managed), assignments
@@ -918,6 +982,17 @@ class ConfigHelperTests(unittest.TestCase):
         with patch.object(config_module, "UNSUPPORTED_MODEL_REFERENCES", {"blocked-ref"}):
             self.assertIsNone(config_module.hf_model_page_url("blocked-ref"))
 
+    def test_hf_model_page_url_edge_cases_never_emit_broken_links(self) -> None:
+        """Malformed / defensive inputs to hf_model_page_url must all yield
+        None (the 'never emit a broken link' contract), never a URL."""
+        ref = config_module.QWWYTHOS_9B_4BIT_MODEL_REFERENCE
+        self.assertIsNone(config_module.hf_model_page_url(None))
+        self.assertIsNone(config_module.hf_model_page_url(f"https://huggingface.co/{ref}/"))
+        self.assertIsNone(
+            config_module.hf_model_page_url(f"https://huggingface.co/https://hf.co/{ref}")
+        )
+        self.assertIsNone(config_module.hf_model_page_url("HTTPS://HUGGINGFACE.CO/foo/bar"))
+
     def test_registry_ui_locations_are_valid_unique_and_closed(self) -> None:
         """Every registered knob carries exactly one ui_location from the
         closed set, and registry environment names are unique (issue #115).
@@ -935,7 +1010,9 @@ class ConfigHelperTests(unittest.TestCase):
                 f"{knob['env']} has unknown ui_location {location!r}",
             )
         # The current contract: 4 Run Setup + 70 dedicated Advanced panel
-        # knobs, with every remaining registered knob raw-by-default.
+        # knobs, with every remaining registered knob raw-by-default. The
+        # backend knob keeps a registry default (issue #169) but stays raw
+        # until a dedicated control renders it.
         locations = {knob["env"]: knob["ui_location"] for knob in registry}
         self.assertEqual(
             sum(loc == config_module.UI_LOCATION_RUN_SETUP for loc in locations.values()),
@@ -2062,3 +2139,4 @@ class ConfigHelperTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

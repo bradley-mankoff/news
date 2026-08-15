@@ -514,6 +514,444 @@ assert(!advancedPanels.innerHTML.includes("undefined"), "undefined markup leaked
             )
         self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
 
+    def test_dedicated_renderers_emit_surfaced_controls(self) -> None:
+        """Execute every dedicated renderer and assert its controls are emitted.
+
+        This complements the registry parity guard by inspecting rendered HTML:
+        registry metadata may identify a control, but it cannot make a missing
+        model-tuning field or prompt-template editor appear in the DOM.
+        """
+        html = ui_module.HTML
+
+        def js_function_block(start: str, end: str) -> str:
+            return html[html.index(start) : html.index(end, html.index(start))]
+
+        js = (
+            r"""
+const assert = (condition, message) => {
+  if (!condition) throw new Error(message);
+};
+const elements = { promptTemplateEditors: { innerHTML: "" } };
+const $ = id => elements[id] || null;
+const document = {
+  querySelector: () => null,
+  querySelectorAll: () => []
+};
+"""
+            + js_function_block("    const TASK_CONFIG = {", "    const state = {")
+            + js_function_block("    const state = {", "    const icons = {")
+            + js_function_block(
+                "    const TASK_MAX_TOKENS_LABELS = {", "    const SAMPLING_FIELDS = ["
+            )
+            + js_function_block(
+                "    const SAMPLING_FIELDS = [", "    function samplingFields(prefix) {"
+            )
+            + js_function_block("function escapeHtml(text) {", "function formatDefault")
+            + js_function_block(
+                'function formatDefault(value, fallback="none") {',
+                "function currentControlValue",
+            )
+            + js_function_block(
+                "function currentControlValue(env) {", "function setControlValue"
+            )
+            + js_function_block("function knobByEnv(env) {", "function inputForKnob")
+            + js_function_block(
+                'function inputForKnob(knob, { emptyLabel, optionLabels = {}, id = "" } = {}) {',
+                "function knobField",
+            )
+            + js_function_block(
+                "function knobField(env, label, options={}) {", "function knobHint"
+            )
+            + js_function_block("function samplingFields(prefix) {", "function modelTuningPanel")
+            + js_function_block("function modelTuningPanel(task) {", "function renderAdvancedPanels")
+            + js_function_block(
+                "    let promptTemplateDirty = {};", "    function promptTemplateEnvMap() {"
+            )
+            + js_function_block(
+                "    function promptTemplateEnvMap() {", "    function promptTemplateRecord(task) {"
+            )
+            + js_function_block(
+                "    function renderPromptTemplateEditors() {", "    function currentPromptTemplateEnv() {"
+            )
+            + r"""
+const knobs = [];
+const knob = (env, type = "text") => ({ env, type, default: type === "number" ? 10 : "" });
+for (const task of Object.keys(TASK_CONFIG)) {
+  const meta = TASK_CONFIG[task];
+  knobs.push(knob(meta.baseUrlEnv));
+  knobs.push(knob(meta.taskMaxTokensEnv, "number"));
+  for (const [suffix] of SAMPLING_FIELDS) knobs.push(knob(`${meta.taskSamplingPrefix}_${suffix}`, "number"));
+}
+knobs.push(knob("NEWS_MODEL_MAX_INPUT_TOKENS", "number"));
+const templateTasks = [
+  ["article_summary", "NEWS_PROMPT_TEMPLATE_ARTICLE_SUMMARY", "Article Summarization"],
+  ["story_scale_screening", "NEWS_PROMPT_TEMPLATE_STORY_SCALE_SCREENING", "Story Scale Screening"],
+  ["story_drafting", "NEWS_PROMPT_TEMPLATE_STORY_DRAFTING", "Story Drafting"],
+  ["title_generation", "NEWS_PROMPT_TEMPLATE_TITLE_GENERATION", "Title Generation"],
+  ["image_art_direction", "NEWS_PROMPT_TEMPLATE_IMAGE_ART_DIRECTION", "Image Art Direction"]
+].map(([task, env_var, label]) => ({
+  task, env_var, label, system: `system ${task}`, user: `user ${task}`,
+  required_placeholders: [], optional_placeholders: [], placeholder_descriptions: {}
+}));
+state.schema = { knobs, current_env: {}, runtime: { model: {} }, prompt_templates: templateTasks };
+
+for (const task of Object.keys(TASK_CONFIG)) {
+  const meta = TASK_CONFIG[task];
+  const panel = modelTuningPanel(task);
+  assert(panel.includes(`data-env="${meta.presetEnv}"`), `${task} preset control missing`);
+  assert(panel.includes(`data-env="${meta.taskMaxTokensEnv}"`), `${task} max-token control missing`);
+  assert(panel.includes(`data-env="${meta.baseUrlEnv}"`), `${task} base URL control missing`);
+  for (const [suffix] of SAMPLING_FIELDS) {
+    const env = `${meta.taskSamplingPrefix}_${suffix}`;
+    assert(panel.includes(`data-env="${env}"`), `${task} sampling control missing: ${env}`);
+  }
+}
+assert(
+  modelTuningPanel("article_summary").includes('data-env="NEWS_MODEL_MAX_INPUT_TOKENS"'),
+  "shared model input cap control missing"
+);
+
+renderPromptTemplateEditors();
+for (const { task } of templateTasks) {
+  const markup = elements.promptTemplateEditors.innerHTML;
+  assert(markup.includes(`data-prompt-template-card="${task}"`), `${task} template card missing`);
+  assert(markup.includes(`data-template-system="${task}"`), `${task} system editor missing`);
+  assert(markup.includes(`data-template-user="${task}"`), `${task} user editor missing`);
+}
+"""
+        )
+        node = shutil.which("node")
+        if node is None:
+            self.skipTest("Node.js is required for the embedded UI renderer harness")
+        timeout_seconds = 30
+        try:
+            result = subprocess.run(
+                [node, "--input-type=module", "-"],
+                input=js,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=timeout_seconds,
+            )
+        except subprocess.TimeoutExpired as exc:
+            self.fail(
+                f"Node harness timed out after {timeout_seconds}s: "
+                f"stdout={exc.stdout!r} stderr={exc.stderr!r}"
+            )
+        self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
+
+    def test_model_tuning_panel_metadata_guard_executes_in_node_harness(self) -> None:
+        """Execute the production modelTuningPanel() renderer in a Node harness.
+
+        The panel must tolerate missing task metadata (issue #118) without
+        aborting the Advanced Settings render, while preserving safe rendering
+        with an initially empty schema and producing the full panel once
+        populated metadata arrives. TASK_CONFIG, state, the knob/sampling
+        helpers, and modelTuningPanel() are extracted from ui_module.HTML
+        itself, not reimplemented here.
+        """
+        html = ui_module.HTML
+
+        def js_function_block(start: str, end: str) -> str:
+            return html[html.index(start) : html.index(end, html.index(start))]
+
+        js = (
+            r"""
+const assert = (condition, message) => {
+  if (!condition) throw new Error(message);
+};
+"""
+            + r"""
+// inputForKnob reads current values through document.querySelector; the
+// harness has no DOM controls, so every lookup falls back to
+// state.schema.current_env, mirroring a schema-driven initial render.
+const document = { querySelector() { return null; } };
+const advancedPanels = { innerHTML: "" };
+const $ = (id) => id === "advancedPanels" ? advancedPanels : null;
+const decorateEnvHints = () => {};
+const renderPromptProfilePanel = () => {};
+const renderPromptTemplateEditors = () => {};
+"""
+            + js_function_block("    const TASK_CONFIG = {", "    const state = {")
+            + js_function_block("    const state = {", "    const icons = {")
+            + js_function_block(
+                "    const TASK_MAX_TOKENS_LABELS = {", "    const SAMPLING_FIELDS = ["
+            )
+            + js_function_block(
+                "    const SAMPLING_FIELDS = [", "    function samplingFields(prefix) {"
+            )
+            + js_function_block("function escapeHtml(text) {", "function formatDefault")
+            + js_function_block(
+                'function formatDefault(value, fallback="none") {',
+                "function currentControlValue",
+            )
+            + js_function_block(
+                "function currentControlValue(env) {", "function setControlValue"
+            )
+            + js_function_block("function knobByEnv(env) {", "function inputForKnob")
+            + js_function_block(
+                'function inputForKnob(knob, { emptyLabel, optionLabels = {}, id = "" } = {}) {',
+                "function knobField",
+            )
+            + js_function_block(
+                "function knobField(env, label, options={}) {", "function knobHint"
+            )
+            + js_function_block(
+                "function samplingFields(prefix) {", "function modelTuningPanel"
+            )
+            + js_function_block(
+                "function modelTuningPanel(task) {", "function renderAdvancedPanels"
+            )
+            + js_function_block(
+                "function renderAdvancedPanels() {", "function renderAdvancedKnobs"
+            )
+            + r"""
+// ---- 1. Missing task metadata ---------------------------------------------
+// An unknown task must render no markup instead of throwing, so one
+// unrecognized panel cannot abort the whole Advanced Settings render.
+assert(state.schema === null, "harness state must start with an empty schema");
+assert(modelTuningPanel("missing_task") === "", "unknown task must render the empty string");
+assert(modelTuningPanel("definitely_not_a_task") === "", "unknown task must render the empty string");
+
+// ---- 2. Empty initial schema metadata -------------------------------------
+// A known task with no schema yet must still render the panel shell with the
+// existing Resolved fallback and without any schema-backed knob controls.
+const emptyPanel = modelTuningPanel("article_summary");
+assert(typeof emptyPanel === "string" && emptyPanel.length > 0, "known task must render panel markup with an empty schema");
+assert(emptyPanel.includes("<h2>Article Summarization</h2>"), "panel label missing from empty-schema markup");
+assert(emptyPanel.includes("Resolved: -"), "empty-schema panel must show the Resolved fallback");
+assert(emptyPanel.includes('<select id="article_tuning_preset"'), "preset select id missing from empty-schema markup");
+assert(!emptyPanel.includes('data-env="NEWS_MODEL_MAX_INPUT_TOKENS"'), "schema-backed knob rendered without schema metadata");
+
+// ---- 3. Populated metadata arrival ----------------------------------------
+// Once runtime metadata and schema knobs arrive, the same panel must render
+// the resolved model and the shared cap, max tokens, base URL, and sampling
+// controls that were absent in the empty-schema state.
+state.schema = {
+  runtime: { model: { article_summary: { name: "gpt-4o", reference: "gpt-4o" } } },
+  current_env: {
+    NEWS_MODEL_ARTICLE_SUMMARY_BASE_URL: "http://localhost:11434/v1",
+    NEWS_MODEL_ARTICLE_SUMMARY_TEMPERATURE: "0.7"
+  },
+  knobs: [
+    { env: "NEWS_MODEL_MAX_INPUT_TOKENS", type: "number", default: 100000 },
+    { env: "NEWS_ARTICLE_SUMMARY_MAX_TOKENS", type: "number", default: 4000 },
+    { env: "NEWS_MODEL_ARTICLE_SUMMARY_BASE_URL", type: "text", default: "http://localhost:11434/v1" },
+    { env: "NEWS_MODEL_ARTICLE_SUMMARY_TEMPERATURE", type: "select", default: 0.7, options: ["0.2", "0.7", "1.0"] },
+    { env: "NEWS_MODEL_ARTICLE_SUMMARY_TOP_P", type: "select", default: 0.9, options: ["0.8", "0.9", "1.0"] }
+  ]
+};
+const populatedPanel = modelTuningPanel("article_summary");
+assert(populatedPanel.includes("Resolved: gpt-4o"), "resolved model name missing after metadata arrival");
+assert(populatedPanel.includes('data-env="NEWS_MODEL_MAX_INPUT_TOKENS"'), "shared cap knob missing after metadata arrival");
+assert(populatedPanel.includes('data-env="NEWS_ARTICLE_SUMMARY_MAX_TOKENS"'), "task max tokens knob missing after metadata arrival");
+assert(populatedPanel.includes('data-env="NEWS_MODEL_ARTICLE_SUMMARY_BASE_URL"'), "base URL knob missing after metadata arrival");
+assert(populatedPanel.includes('value="http://localhost:11434/v1"'), "base URL current value missing after metadata arrival");
+assert(populatedPanel.includes('data-env="NEWS_MODEL_ARTICLE_SUMMARY_TEMPERATURE"'), "sampling field missing after metadata arrival");
+assert(populatedPanel.includes('<option value="0.7" selected>0.7</option>'), "sampling field current value not selected after metadata arrival");
+
+// ---- 4. Known-task parity --------------------------------------------------
+// Every configured task must still produce panel markup with an empty schema
+// so the guard cannot silently suppress valid panels.
+for (const task of Object.keys(TASK_CONFIG)) {
+  const panel = modelTuningPanel(task);
+  assert(typeof panel === "string" && panel.length > 0, `${task} must render non-empty panel markup`);
+  assert(panel.includes(`<h2>${TASK_CONFIG[task].label}</h2>`), `${task} panel label missing`);
+}
+
+// ---- 5. Advanced Settings integration with missing metadata ---------------
+// Simulate configuration drift at the parent-render boundary. The missing
+// panel must interpolate as an empty string while later Advanced Settings
+// sections remain present.
+delete TASK_CONFIG.article_summary;
+let renderError = null;
+try {
+  renderAdvancedPanels();
+} catch (error) {
+  renderError = error;
+}
+assert(!renderError, `Advanced Settings render threw: ${renderError}`);
+assert(advancedPanels.innerHTML.includes("<h2>Story Writing</h2>"), "remaining model panel missing after a task is removed");
+assert(advancedPanels.innerHTML.includes("<h2>Run budgets and quotas</h2>"), "Budgets panel missing after a task is removed");
+assert(!advancedPanels.innerHTML.includes("undefined"), "undefined markup leaked into Advanced Settings");
+"""
+        )
+        node = shutil.which("node")
+        if node is None:
+            self.skipTest("Node.js is required for the embedded UI renderer harness")
+        timeout_seconds = 30
+        try:
+            result = subprocess.run(
+                [node, "--input-type=module", "-"],
+                input=js,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=timeout_seconds,
+            )
+        except subprocess.TimeoutExpired as exc:
+            self.fail(
+                f"Node harness timed out after {timeout_seconds}s: "
+                f"stdout={exc.stdout!r} stderr={exc.stderr!r}"
+            )
+        self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
+
+    def test_model_tuning_panel_metadata_guard_executes_in_node_harness(self) -> None:
+        """Execute the production modelTuningPanel() renderer in a Node harness.
+
+        The panel must tolerate missing task metadata (issue #118) without
+        aborting the Advanced Settings render, while preserving safe rendering
+        with an initially empty schema and producing the full panel once
+        populated metadata arrives. TASK_CONFIG, state, the knob/sampling
+        helpers, and modelTuningPanel() are extracted from ui_module.HTML
+        itself, not reimplemented here.
+        """
+        html = ui_module.HTML
+
+        def js_function_block(start: str, end: str) -> str:
+            return html[html.index(start) : html.index(end, html.index(start))]
+
+        js = (
+            r"""
+const assert = (condition, message) => {
+  if (!condition) throw new Error(message);
+};
+"""
+            + r"""
+// inputForKnob reads current values through document.querySelector; the
+// harness has no DOM controls, so every lookup falls back to
+// state.schema.current_env, mirroring a schema-driven initial render.
+const document = { querySelector() { return null; } };
+const advancedPanels = { innerHTML: "" };
+const $ = (id) => id === "advancedPanels" ? advancedPanels : null;
+const decorateEnvHints = () => {};
+const renderPromptProfilePanel = () => {};
+const renderPromptTemplateEditors = () => {};
+"""
+            + js_function_block("    const TASK_CONFIG = {", "    const state = {")
+            + js_function_block("    const state = {", "    const icons = {")
+            + js_function_block(
+                "    const TASK_MAX_TOKENS_LABELS = {", "    const SAMPLING_FIELDS = ["
+            )
+            + js_function_block(
+                "    const SAMPLING_FIELDS = [", "    function samplingFields(prefix) {"
+            )
+            + js_function_block("function escapeHtml(text) {", "function formatDefault")
+            + js_function_block(
+                'function formatDefault(value, fallback="none") {',
+                "function currentControlValue",
+            )
+            + js_function_block(
+                "function currentControlValue(env) {", "function setControlValue"
+            )
+            + js_function_block("function knobByEnv(env) {", "function inputForKnob")
+            + js_function_block(
+                'function inputForKnob(knob, { emptyLabel, optionLabels = {}, id = "" } = {}) {',
+                "function knobField",
+            )
+            + js_function_block(
+                "function knobField(env, label, options={}) {", "function knobHint"
+            )
+            + js_function_block(
+                "function samplingFields(prefix) {", "function modelTuningPanel"
+            )
+            + js_function_block(
+                "function modelTuningPanel(task) {", "function renderAdvancedPanels"
+            )
+            + js_function_block(
+                "function renderAdvancedPanels() {", "function renderAdvancedKnobs"
+            )
+            + r"""
+// ---- 1. Missing task metadata ---------------------------------------------
+// An unknown task must render no markup instead of throwing, so one
+// unrecognized panel cannot abort the whole Advanced Settings render.
+assert(state.schema === null, "harness state must start with an empty schema");
+assert(modelTuningPanel("missing_task") === "", "unknown task must render the empty string");
+assert(modelTuningPanel("definitely_not_a_task") === "", "unknown task must render the empty string");
+
+// ---- 2. Empty initial schema metadata -------------------------------------
+// A known task with no schema yet must still render the panel shell with the
+// existing Resolved fallback and without any schema-backed knob controls.
+const emptyPanel = modelTuningPanel("article_summary");
+assert(typeof emptyPanel === "string" && emptyPanel.length > 0, "known task must render panel markup with an empty schema");
+assert(emptyPanel.includes("<h2>Article Summarization</h2>"), "panel label missing from empty-schema markup");
+assert(emptyPanel.includes("Resolved: -"), "empty-schema panel must show the Resolved fallback");
+assert(emptyPanel.includes('<select id="article_tuning_preset"'), "preset select id missing from empty-schema markup");
+assert(!emptyPanel.includes('data-env="NEWS_MODEL_MAX_INPUT_TOKENS"'), "schema-backed knob rendered without schema metadata");
+
+// ---- 3. Populated metadata arrival ----------------------------------------
+// Once runtime metadata and schema knobs arrive, the same panel must render
+// the resolved model and the shared cap, max tokens, base URL, and sampling
+// controls that were absent in the empty-schema state.
+state.schema = {
+  runtime: { model: { article_summary: { name: "gpt-4o", reference: "gpt-4o" } } },
+  current_env: {
+    NEWS_MODEL_ARTICLE_SUMMARY_BASE_URL: "http://localhost:11434/v1",
+    NEWS_MODEL_ARTICLE_SUMMARY_TEMPERATURE: "0.7"
+  },
+  knobs: [
+    { env: "NEWS_MODEL_MAX_INPUT_TOKENS", type: "number", default: 100000 },
+    { env: "NEWS_ARTICLE_SUMMARY_MAX_TOKENS", type: "number", default: 4000 },
+    { env: "NEWS_MODEL_ARTICLE_SUMMARY_BASE_URL", type: "text", default: "http://localhost:11434/v1" },
+    { env: "NEWS_MODEL_ARTICLE_SUMMARY_TEMPERATURE", type: "select", default: 0.7, options: ["0.2", "0.7", "1.0"] },
+    { env: "NEWS_MODEL_ARTICLE_SUMMARY_TOP_P", type: "select", default: 0.9, options: ["0.8", "0.9", "1.0"] }
+  ]
+};
+const populatedPanel = modelTuningPanel("article_summary");
+assert(populatedPanel.includes("Resolved: gpt-4o"), "resolved model name missing after metadata arrival");
+assert(populatedPanel.includes('data-env="NEWS_MODEL_MAX_INPUT_TOKENS"'), "shared cap knob missing after metadata arrival");
+assert(populatedPanel.includes('data-env="NEWS_ARTICLE_SUMMARY_MAX_TOKENS"'), "task max tokens knob missing after metadata arrival");
+assert(populatedPanel.includes('data-env="NEWS_MODEL_ARTICLE_SUMMARY_BASE_URL"'), "base URL knob missing after metadata arrival");
+assert(populatedPanel.includes('value="http://localhost:11434/v1"'), "base URL current value missing after metadata arrival");
+assert(populatedPanel.includes('data-env="NEWS_MODEL_ARTICLE_SUMMARY_TEMPERATURE"'), "sampling field missing after metadata arrival");
+assert(populatedPanel.includes('<option value="0.7" selected>0.7</option>'), "sampling field current value not selected after metadata arrival");
+
+// ---- 4. Known-task parity --------------------------------------------------
+// Every configured task must still produce panel markup with an empty schema
+// so the guard cannot silently suppress valid panels.
+for (const task of Object.keys(TASK_CONFIG)) {
+  const panel = modelTuningPanel(task);
+  assert(typeof panel === "string" && panel.length > 0, `${task} must render non-empty panel markup`);
+  assert(panel.includes(`<h2>${TASK_CONFIG[task].label}</h2>`), `${task} panel label missing`);
+}
+
+// ---- 5. Advanced Settings integration with missing metadata ---------------
+// Simulate configuration drift at the parent-render boundary. The missing
+// panel must interpolate as an empty string while later Advanced Settings
+// sections remain present.
+delete TASK_CONFIG.article_summary;
+let renderError = null;
+try {
+  renderAdvancedPanels();
+} catch (error) {
+  renderError = error;
+}
+assert(!renderError, `Advanced Settings render threw: ${renderError}`);
+assert(advancedPanels.innerHTML.includes("<h2>Story Writing</h2>"), "remaining model panel missing after a task is removed");
+assert(advancedPanels.innerHTML.includes("<h2>Run budgets and quotas</h2>"), "Budgets panel missing after a task is removed");
+assert(!advancedPanels.innerHTML.includes("undefined"), "undefined markup leaked into Advanced Settings");
+"""
+        )
+        node = shutil.which("node")
+        if node is None:
+            self.skipTest("Node.js is required for the embedded UI renderer harness")
+        timeout_seconds = 30
+        try:
+            result = subprocess.run(
+                [node, "--input-type=module", "-"],
+                input=js,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=timeout_seconds,
+            )
+        except subprocess.TimeoutExpired as exc:
+            self.fail(
+                f"Node harness timed out after {timeout_seconds}s: "
+                f"stdout={exc.stdout!r} stderr={exc.stderr!r}"
+            )
+        self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
+
     def test_run_setup_single_default_model_card(self) -> None:
         html = ui_module.HTML
         run_setup = html.split("function renderRunSetup")[1].split("const SAMPLING_FIELDS")[0]
@@ -1406,7 +1844,7 @@ assert(SURFACED_ENVS.size === 0, "missing schema must not throw and must suppres
             "escapeHtml(pick.alias)",
             "escapeHtml(pick.reason)",
             'data-use-model="${escapeHtml(pick.alias)}"',
-            "btn.onclick = () => useModelReference(btn.dataset.useModel);",
+            "btn.onclick = () => useModelReference(btn.dataset.useModel, catalogBackendForReference(btn.dataset.useModel));",
         ):
             self.assertIn(snippet, block)
         # The renderer no longer re-filters full catalog entries by task notes.
@@ -1414,7 +1852,6 @@ assert(SURFACED_ENVS.size === 0, "missing schema must not throw and must suppres
         self.assertNotIn("modelCatalogEntries().filter", block)
         # Empty or partial pick lists keep the documented honest-gap message.
         self.assertIn("No verified curated model for this task yet", block)
-
     def test_model_backend_hint_markup_contract(self) -> None:
         """The Default model panel exposes an accessible backend-compatibility
         hint driven by catalog/HF backend metadata (issue #94)."""
@@ -3319,7 +3756,10 @@ assert(SURFACED_ENVS.size === 0, "missing schema must not throw and must suppres
         self.assertIn("state.schema.runtime_fit_labels", html)
         self.assertIn("labels[task] || task", html)
         self.assertIn('fit.status || "unknown"', html)
-        self.assertIn('fit.status === "external_only"', html)
+        self.assertIn(
+            "Object.prototype.hasOwnProperty.call(RUNTIME_FIT_BACKENDS, fit.status)",
+            html,
+        )
 
     def test_schema_endpoint_serves_label_maps(self) -> None:
         """The public schema route serializes both canonical label maps."""
@@ -3877,7 +4317,16 @@ const TASKS = """
             + js_function_block("function collectRunPresetEditor() {", "function prepRunPresetEditorFromCurrent")
             + js_function_block("function textToEnv(text) {", "function renderStats")
             + js_function_block("async function savePresetEditor() {", "async function renamePresetDisplayName")
+            + js_function_block("function applyRunPreset(preset) {", "function resetAllOverrides")
             + r"""
+
+// The preset application path also refreshes unrelated panels. Stub those
+// renderers so this harness can exercise the real orchestration function.
+function setKnobEnv(_env) {}
+function renderModelTuningPanels() {}
+function renderPromptProfilePanel() {}
+function refreshModelKnobLinks() {}
+async function previewQuietly(_scope) {}
 
 // ---- Render ---------------------------------------------------------------
 state.schema = { current_env: {}, prompt_templates: TASKS };
@@ -3995,13 +4444,15 @@ assert(
   "edited template is missing from the preset env"
 );
 
-// ---- Apply round-trip: the saved env restores the exact edited pair --------
+// ---- Apply round-trip: the real preset path restores the exact pair -------
 for (const t of TASKS) {
   const sys = templateSys(t.task);
   sys.value = "stale text";
   sys.fire("input");
 }
-setPromptTemplateEnv(savedPresetPayload.env);
+state.presets = [{ id: savedPresetPayload.id, env: savedPresetPayload.env }];
+applyRunPreset(state.presets[0]);
+assert(state.selectedRunPresetId === savedPresetPayload.id, "apply did not select the preset");
 assert(templateSys(editTask.task).value === editedSystem, "apply did not restore the edited system text");
 assert(templateUser(editTask.task).value === editedUser, "apply did not restore the edited user text");
 const envAfter = currentPromptTemplateEnv();
@@ -4514,7 +4965,6 @@ for (const absentId of ["article_tuning_save", "article_tuning_rename", "article
 
         self.assertEqual(status, 400)
         self.assertEqual(json.loads(body)["error"], "recommendation catalog failure")
-
     def test_schema_real_malformed_catalog_uses_error_envelope(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             catalog_path = Path(tmpdir) / "bad_catalog.yaml"
@@ -5017,6 +5467,105 @@ for (const absentId of ["article_tuning_save", "article_tuning_rename", "article
         self.assertIn("resetLog();", run_action)
         self.assertIn("startSpinner();", run_action)
         self.assertIn("new EventSource", run_action)
+
+    @unittest.skipUnless(shutil.which("node"), "node runtime required for browser renderer behavior tests")
+    def test_run_log_renderer_behavior(self) -> None:
+        html = ui_module.HTML
+        start = html.index("    const SPINNER_GLYPHS")
+        end = html.index("    function badgeClass", start)
+        renderer_source = html[start:end]
+        script = f"""
+import assert from "node:assert/strict";
+const logPane = {{ textContent: "", scrollTop: 0, scrollHeight: 0 }};
+const elements = new Map([["logPane", logPane]]);
+function $(id) {{
+  return elements.get(id) || {{ disabled: false, title: "" }};
+}}
+const state = {{ activeRun: null }};
+const statuses = [];
+let controlUpdates = 0;
+let reviewRefreshes = 0;
+function setStatus(text, cls) {{ statuses.push({{ text, cls }}); }}
+function updateRunControls() {{ controlUpdates += 1; }}
+function refreshReviewData() {{ reviewRefreshes += 1; }}
+function requestBody() {{ return {{}}; }}
+const apiCalls = [];
+async function api(path) {{
+  apiCalls.push(path);
+  if (path === "/api/run") return {{ run_id: "run-1" }};
+  return {{ run_id: "run-1", status: "completed", returncode: 0 }};
+}}
+globalThis.window = {{ setTimeout: () => 0 }};
+globalThis.setInterval = () => 1;
+globalThis.clearInterval = () => {{}};
+class FakeEventSource {{
+  static instances = [];
+  constructor(url) {{
+    this.url = url;
+    this.closed = false;
+    FakeEventSource.instances.push(this);
+  }}
+  close() {{ this.closed = true; }}
+  addEventListener() {{}}
+}}
+globalThis.EventSource = FakeEventSource;
+
+{renderer_source}
+
+resetLog();
+const firstMeter = "[3/9 clustering] [###-----------------] 1000/200000 steps";
+const finalMeter = "[3/9 clustering] [####################] 200000/200000 steps";
+appendLogEvent({{ kind: "progress", stage: "clustering", line: firstMeter, complete: false }});
+appendLogEvent({{ kind: "message", line: "WARNING: low coverage" }});
+appendLogEvent({{ kind: "progress", stage: "clustering", line: finalMeter, complete: true }});
+assert.equal(logState.rows.length, 2);
+assert.deepEqual(logState.rows.map(row => row.text), [finalMeter, "WARNING: low coverage"]);
+assert.equal(logState.rows[0].live, false);
+assert.equal(logState.rows[0].complete, true);
+assert.equal(logPane.textContent, `✓ ${{finalMeter}}\\nWARNING: low coverage`);
+appendLogEvent({{ kind: "progress", stage: "clustering", line: finalMeter, complete: true }});
+assert.equal(logState.rows.length, 2);
+assert.equal(logPane.textContent, `✓ ${{finalMeter}}\\nWARNING: low coverage`);
+
+for (const [status, glyph] of [["completed", "✓"], ["failed", "✗"], ["stopped", "■"]]) {{
+  resetLog();
+  state.activeRun = `run-${{status}}`;
+  startSpinner();
+  appendLogEvent({{ kind: "progress", stage: "clustering", line: firstMeter, complete: false }});
+  const events = new FakeEventSource("manual");
+  assert.equal(finalizeRun({{ run_id: `run-${{status}}`, status }}, events), true);
+  assert.equal(events.closed, true);
+  assert.equal(state.activeRun, null);
+  assert.equal(logState.spinnerTimer, null);
+  assert.ok(logPane.textContent.includes(`${{glyph}} [ui] ${{status}}`));
+}}
+const pendingEvents = new FakeEventSource("pending");
+state.activeRun = "run-pending";
+assert.equal(finalizeRun({{ run_id: "run-pending", status: "running" }}, pendingEvents), false);
+assert.equal(pendingEvents.closed, false);
+assert.equal(state.activeRun, "run-pending");
+
+state.activeRun = null;
+await runAction();
+assert.equal(state.activeRun, "run-1");
+const liveEvents = FakeEventSource.instances[FakeEventSource.instances.length - 1];
+liveEvents.onerror();
+await new Promise(resolve => setImmediate(resolve));
+assert.equal(liveEvents.closed, true);
+assert.equal(state.activeRun, null);
+assert.ok(statuses.some(item => item.text.startsWith("Live run stream disconnected")));
+assert.ok(apiCalls.includes("/api/runs/run-1"));
+assert.ok(reviewRefreshes >= 3);
+assert.ok(controlUpdates >= 3);
+"""
+        result = subprocess.run(
+            ["node", "--input-type=module"],
+            input=script,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_report_review_tab_contracts(self) -> None:
         html = ui_module.HTML

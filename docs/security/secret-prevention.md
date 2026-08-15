@@ -108,14 +108,23 @@ secret into the base branches.
   resolvable and no `GITHUB_TOKEN` is left in the checkout's git config.
 - The job grants only `contents: read`. No repository secret, write
   permission, PR comment, or SARIF upload is used; the container receives no
-  `GITHUB_TOKEN` and no `GITLEAKS_LICENSE`. The workspace is mounted
-  read-only (`/repo:ro`).
+  `GITHUB_TOKEN` and no `GITLEAKS_LICENSE`. The sanitized scan checkout and
+  trusted policy directory are both mounted read-only (`/repo:ro` and
+  `/trusted:ro`).
+- Before scanning, the workflow copies the PR checkout to a temporary target,
+  removes its `.gitleaks.toml` and `.gitleaksignore`, and materializes those
+  policy files from `BASE_SHA`. When the base has no custom config, the
+  materialized config extends Gitleaks' built-in rules. The scanner also uses
+  `--ignore-gitleaks-allow`, so PR-owned policy and inline allow comments
+  cannot suppress a finding.
 - The scanner is the official `ghcr.io/gitleaks/gitleaks:v8.30.1` container,
   the same detector release the local hook is pinned to. It runs
   `git --redact --no-banner --no-color --verbose --exit-code 1` with
-  `--log-opts="--no-merges ${BASE_SHA}..${HEAD_SHA}"`.
-- Scope is the PR's non-merge commit range only. CI does not scan all
-  repository history: known historical findings (documented in
+  `--gitleaks-ignore-path /trusted/.gitleaksignore`,
+  `--ignore-gitleaks-allow`, and
+  `--log-opts="--diff-merges=first-parent ${BASE_SHA}..${HEAD_SHA}"`.
+- Scope is the PR's merge-aware commit range. CI does not scan all repository
+  history: known historical findings (documented in
   `docs/security/audit-2026-08-02.md`) lie outside any new PR's range and
   stay the responsibility of the audit/scrub controls, not this gate.
 - Findings and scanner/image failures both exit nonzero and fail the check;
@@ -133,13 +142,34 @@ if necessary.
 BASE_BRANCH=develop
 BASE_SHA="$(git merge-base "origin/${BASE_BRANCH}" HEAD)"
 HEAD_SHA="$(git rev-parse HEAD)"
-test -n "$BASE_SHA"
-test -n "$HEAD_SHA"
+if [[ -z "${BASE_SHA:-}" || -z "${HEAD_SHA:-}" ]]; then
+  echo "Both BASE_SHA and HEAD_SHA are required" >&2
+  exit 1
+fi
+SCAN_ROOT="$(mktemp -d)"
+TRUSTED_ROOT="$(mktemp -d)"
+trap 'rm -rf "$SCAN_ROOT" "$TRUSTED_ROOT"' EXIT
+cp -a "$PWD/." "$SCAN_ROOT/"
+rm -f "$SCAN_ROOT/.gitleaks.toml" "$SCAN_ROOT/.gitleaksignore"
+if git cat-file -e "${BASE_SHA}:.gitleaks.toml" 2>/dev/null; then
+  git show "${BASE_SHA}:.gitleaks.toml" > "$TRUSTED_ROOT/gitleaks.toml"
+else
+  printf '[extend]\nuseDefault = true\n' > "$TRUSTED_ROOT/gitleaks.toml"
+fi
+if git cat-file -e "${BASE_SHA}:.gitleaksignore" 2>/dev/null; then
+  git show "${BASE_SHA}:.gitleaksignore" > "$TRUSTED_ROOT/.gitleaksignore"
+else
+  : > "$TRUSTED_ROOT/.gitleaksignore"
+fi
 docker run --rm \
-  --volume "$PWD:/repo:ro" \
+  --volume "$SCAN_ROOT:/repo:ro" \
+  --volume "$TRUSTED_ROOT:/trusted:ro" \
   ghcr.io/gitleaks/gitleaks:v8.30.1 \
-  git --redact --no-banner --no-color --verbose --exit-code 1 \
-  --log-opts="--no-merges ${BASE_SHA}..${HEAD_SHA}" \
+  git --config /trusted/gitleaks.toml \
+  --gitleaks-ignore-path /trusted/.gitleaksignore \
+  --ignore-gitleaks-allow \
+  --redact --no-banner --no-color --verbose --exit-code 1 \
+  --log-opts="--diff-merges=first-parent ${BASE_SHA}..${HEAD_SHA}" \
   /repo
 ```
 
@@ -204,7 +234,7 @@ is a deliberate detector change.
 | Control | What it scans | Runs when | Owner |
 |---------|---------------|-----------|-------|
 | Gitleaks pre-commit hook (this runbook) | Staged diff of future commits | Every `git commit` | Checked in, `.pre-commit-config.yaml` |
-| Gitleaks CI gate | PR non-merge commit range (`BASE_SHA..HEAD_SHA`) | Every pull request to `develop`/`main` | Checked in, `.github/workflows/ci.yml`, pinned `v8.30.1` |
+| Gitleaks CI gate | Merge-aware PR commit range (`BASE_SHA..HEAD_SHA`) | Every pull request to `develop`/`main` | Checked in, `.github/workflows/ci.yml`, pinned `v8.30.1` |
 | `automation/security_audit.py` | Working tree + full history | Manual | Checked in, exits 0 when clean |
 | `automation/scrub_history.sh` | Entire history (rewrite) | Gated, human approval | Checked in, dry-run by default |
 

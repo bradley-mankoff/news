@@ -3,12 +3,45 @@
 from __future__ import annotations
 
 import json
+import re
 from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from threading import Lock
 from typing import Any
+
+
+_DELIVERY_STATUSES = {
+    "sent",
+    "skipped: not_configured",
+    "skipped: user_disabled",
+    "failed",
+}
+_MAX_DELIVERY_TEXT = 240
+
+
+def _safe_delivery_text(value: Any) -> str:
+    """Return bounded, single-line delivery text without credential-shaped values."""
+    lines = str(value or "").splitlines()
+    if not lines:
+        return ""
+    text = lines[0].strip()
+    text = re.sub(
+        r"(?i)(password|passwd|secret|token|api[_-]?key)\s*[:=]\s*[^\s,;]+",
+        r"\1=[redacted]",
+        text,
+    )
+    text = re.sub(
+        r"(?i)([a-z][a-z0-9+.-]*://)([^/\s:@]+):([^@\s]+)@",
+        r"\1[redacted]@",
+        text,
+    )
+    return text[:_MAX_DELIVERY_TEXT]
+
+
+def _safe_delivery_type(value: Any) -> str:
+    return re.sub(r"[^A-Za-z0-9_.]", "", str(value or ""))[:80]
 
 
 @dataclass
@@ -134,22 +167,26 @@ class RunDiagnostics:
         phase: str = "",
         accepted_recipients: list[str] | None = None,
         rejected_recipients: list[str] | None = None,
+        sent_recipients: list[str] | None = None,
+        failed_recipients: list[str] | None = None,
     ) -> None:
-        """Record a normalized delivery outcome independently from run status.
+        """Record a bounded, user-safe delivery outcome independently from run status.
 
-        Callers must pass redacted, address-only delivery metadata. This method
-        normalizes supplied values but does not sanitize arbitrary exception or
-        SMTP payload text. ``status`` is one of ``sent``,
-        ``skipped: not_configured``, ``skipped: user_disabled``, or ``failed``.
-        Recording a delivery outcome never adds a run event:
-        ``run_status_from_events`` keeps describing report/run generation only.
+        Invalid status values are normalized to ``failed``. Error text is
+        single-line, credential-redacted, and bounded; detailed exceptions
+        belong in the local run log. Recording a delivery outcome never adds a
+        run event, so ``run_status_from_events`` keeps describing report/run
+        generation only.
         """
+        normalized_status = str(status or "").strip()
+        if normalized_status not in _DELIVERY_STATUSES:
+            normalized_status = "failed"
         self.delivery = {
-            "status": str(status or "").strip(),
+            "status": normalized_status,
             "recipients": [str(recipient) for recipient in (recipients or [])],
-            "reason": str(reason or ""),
-            "error_type": str(error_type or ""),
-            "error_message": str(error_message or ""),
+            "reason": _safe_delivery_text(reason),
+            "error_type": _safe_delivery_type(error_type),
+            "error_message": _safe_delivery_text(error_message),
             "phase": str(phase or ""),
             "accepted_recipients": [
                 str(recipient) for recipient in (accepted_recipients or [])
@@ -158,6 +195,14 @@ class RunDiagnostics:
                 str(recipient) for recipient in (rejected_recipients or [])
             ],
         }
+        if sent_recipients is not None:
+            self.delivery["sent_recipients"] = [
+                str(recipient) for recipient in sent_recipients
+            ]
+        if failed_recipients is not None:
+            self.delivery["failed_recipients"] = [
+                str(recipient) for recipient in failed_recipients
+            ]
 
     def to_dict(self) -> dict[str, Any]:
         return {

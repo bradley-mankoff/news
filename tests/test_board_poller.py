@@ -215,6 +215,19 @@ class WorkflowRecoveryTest(unittest.TestCase):
             )
 
 
+    def test_resolve_worktree_info_preserves_lookup_error(self):
+        with patch.object(
+            archon_adapter,
+            "fetch_archon_worktrees",
+            return_value=archon_adapter.WorktreeRecords(
+                error="archon_isolation_timeout"
+            ),
+        ):
+            self.assertEqual(
+                archon_adapter.resolve_worktree_info({}, 61),
+                {"error": "archon_isolation_timeout"},
+            )
+
     def test_recovery_comment_exposes_safe_actions(self):
         body = build_recovery_comment(
             141,
@@ -234,8 +247,11 @@ class WorkflowRecoveryTest(unittest.TestCase):
         with (
             patch.object(
                 recovery_adapter,
-                "resolve_worktree_info",
-                return_value={"branch": "archon/task-issue-141", "path": "/tmp/141"},
+                "resolve_worktree_info_with_health",
+                return_value=(
+                    {"branch": "archon/task-issue-141", "path": "/tmp/141"},
+                    None,
+                ),
             ),
             patch.object(
                 recovery_adapter,
@@ -252,7 +268,11 @@ class WorkflowRecoveryTest(unittest.TestCase):
     def test_fresh_dispatch_defers_when_run_lookup_is_unavailable(self):
         unavailable = WorkflowRuns(error="archon_timeout")
         with (
-            patch.object(recovery_adapter, "resolve_worktree_info", return_value=None),
+            patch.object(
+                recovery_adapter,
+                "resolve_worktree_info_with_health",
+                return_value=(None, None),
+            ),
             patch.object(recovery_adapter, "fetch_workflow_runs", return_value=unavailable),
             patch.object(recovery_adapter, "log") as log,
         ):
@@ -263,6 +283,129 @@ class WorkflowRecoveryTest(unittest.TestCase):
             "FRESH DISPATCH DEFERRED issue=141: "
             "run lookup unavailable (archon_timeout)"
         )
+
+    def test_fresh_dispatch_defers_when_worktree_lookup_is_unavailable(self):
+        with (
+            patch.object(
+                recovery_adapter,
+                "resolve_worktree_info_with_health",
+                return_value=(None, "archon_isolation_timeout"),
+            ),
+            patch.object(recovery_adapter, "fetch_workflow_runs") as fetch,
+            patch.object(recovery_adapter, "log") as log,
+        ):
+            allowed, reason = fresh_issue_dispatch_guard({}, 141)
+        self.assertFalse(allowed)
+        self.assertEqual(
+            reason,
+            "Archon worktree lookup unavailable: archon_isolation_timeout",
+        )
+        fetch.assert_not_called()
+        log.assert_called_once_with(
+            "FRESH DISPATCH DEFERRED issue=141: "
+            "worktree lookup unavailable (archon_isolation_timeout)"
+        )
+
+    def test_untracked_reconciliation_defers_on_unhealthy_snapshot(self):
+        item = {
+            "id": "item-141",
+            "status": "In Progress",
+            "content": {
+                "__typename": "Issue",
+                "number": 141,
+                "repository": {"nameWithOwner": "o/r"},
+            },
+        }
+        state = {}
+        with (
+            patch.object(
+                recovery_adapter,
+                "fetch_workflow_runs",
+                return_value=WorkflowRuns(
+                    [{"id": "stale"}], error="run_list_incomplete", partial=True
+                ),
+            ),
+            patch.object(recovery_adapter, "log") as log,
+        ):
+            recovery_adapter.reconcile_untracked_runs(
+                {"repo": "o/r"}, {}, state, [item], "In Progress"
+            )
+        self.assertNotIn("dispatch_msg", state["item-141"])
+        log.assert_called_once_with(
+            "RUN LOOKUP UNAVAILABLE: run_list_incomplete; "
+            "retaining untracked-run markers"
+        )
+
+    def test_fresh_dispatch_defers_when_worktree_cleanliness_is_unknown(self):
+        with (
+            patch.object(
+                recovery_adapter,
+                "resolve_worktree_info_with_health",
+                return_value=(
+                    {"branch": "archon/task-issue-141", "path": "/tmp/141"},
+                    None,
+                ),
+            ),
+            patch.object(
+                recovery_adapter,
+                "inspect_worktree",
+                return_value={
+                    "path": "/tmp/141",
+                    "exists": True,
+                    "dirty": None,
+                    "error": "git unavailable",
+                },
+            ),
+            patch.object(recovery_adapter, "fetch_workflow_runs") as fetch,
+        ):
+            allowed, reason = fresh_issue_dispatch_guard({}, 141)
+        self.assertFalse(allowed)
+        self.assertEqual(
+            reason,
+            "existing worktree cannot be verified: git unavailable",
+        )
+        fetch.assert_not_called()
+
+    def test_fresh_dispatch_allows_healthy_empty_lookup(self):
+        with (
+            patch.object(
+                recovery_adapter,
+                "resolve_worktree_info_with_health",
+                return_value=(None, None),
+            ),
+            patch.object(
+                recovery_adapter,
+                "fetch_workflow_runs",
+                return_value=WorkflowRuns(),
+            ),
+        ):
+            self.assertEqual(
+                fresh_issue_dispatch_guard({}, 141),
+                (True, ""),
+            )
+
+    def test_fresh_dispatch_refuses_matching_active_run(self):
+        active = WorkflowRuns([{
+            "id": "run-141",
+            "user_message": "Build feature from issue #141",
+            "started_at": "2026-08-07T10:00:00Z",
+            "status": "running",
+        }])
+        with (
+            patch.object(
+                recovery_adapter,
+                "resolve_worktree_info_with_health",
+                return_value=(None, None),
+            ),
+            patch.object(
+                recovery_adapter,
+                "fetch_workflow_runs",
+                return_value=active,
+            ),
+        ):
+            allowed, reason = fresh_issue_dispatch_guard({}, 141)
+        self.assertFalse(allowed)
+        self.assertEqual(reason, "Archon run run-141 is still active")
 
 
 class MatchIssuePrTest(unittest.TestCase):
@@ -1259,6 +1402,102 @@ class FillConcurrencyGapTest(unittest.TestCase):
             },
         }
 
+    def test_poll_promotes_backlog_then_dispatches_on_next_poll(self):
+        cfg = {
+            "repo": "o/r",
+            "state_file": "state.json",
+            "default_lane": "Backlog",
+            "max_concurrent_workflows": 2,
+            "lanes": {
+                "Backlog": "backlog",
+                "Todo": "todo",
+                "In Progress": "in_progress",
+                "Ready for Review": "ready",
+                "In Review": "review",
+                "Done": "done",
+            },
+            "dispatch": {
+                "todo": {"default": "archon-fix-github-issue"},
+                "review": {
+                    "ship_to": "main",
+                    "done_lane": "Done",
+                    "merge_ship_on_approve": False,
+                },
+            },
+        }
+        state = {}
+        items = [self._item(1), self._item(2)]
+        with (
+            patch.object(
+                cycle_adapter,
+                "fetch_project",
+                return_value=(
+                    "project", "field",
+                    {"Todo": "todo-opt", "Done": "done-opt"},
+                    items,
+                ),
+            ),
+            patch.object(cycle_adapter, "prepare_dispatch_budget"),
+            patch.object(
+                cycle_adapter, "remaining_dispatch_budget", return_value=2
+            ),
+            patch.object(cycle_adapter, "sync_runnable_labels"),
+            patch.object(cycle_adapter, "move_to_lane", return_value=True) as move,
+            patch.object(cycle_adapter, "fresh_issue_dispatch_guard",
+                         return_value=(True, "")) as guard,
+            patch.object(
+                cycle_adapter,
+                "dispatch",
+                return_value=DispatchResult(True, pid=1),
+            ) as dispatch,
+            patch.object(cycle_adapter, "reconcile_untracked_runs"),
+            patch.object(cycle_adapter, "_recheck_review_dispatch"),
+            patch.object(cycle_adapter, "_unblock_dependencies"),
+            patch.object(
+                cycle_adapter,
+                "_reconcile_completions",
+                return_value=(None, None),
+            ),
+            patch.object(cycle_adapter, "_enforce_ready_proof"),
+            patch.object(
+                cycle_adapter,
+                "_complete_reviews",
+                return_value=(None, None, "In Review", "main"),
+            ),
+            patch.object(cycle_adapter, "_remediate_ship_conflicts"),
+            patch.object(cycle_adapter, "save_state"),
+        ):
+            cycle_adapter.poll(cfg, {}, state)
+
+            # The first poll establishes a read-only snapshot.
+            self.assertEqual(dispatch.call_count, 0)
+            self.assertEqual(move.call_count, 0)
+            self.assertEqual([item["status"] for item in items], ["Backlog", "Backlog"])
+
+            # The second poll promotes runnable backlog items after the
+            # transition loop, without dispatching them yet.
+            cycle_adapter.poll(cfg, {}, state)
+            self.assertEqual(dispatch.call_count, 0)
+            self.assertEqual(move.call_count, 2)
+            self.assertEqual([item["status"] for item in items], ["Todo", "Todo"])
+
+            # On the following poll the persisted Backlog -> Todo transitions
+            # reach the normal dispatch path.
+            cycle_adapter.poll(cfg, {}, state)
+
+        # Promotion does not require another board edit before dispatch.
+        self.assertEqual(guard.call_count, 2)
+        self.assertEqual(dispatch.call_count, 2)
+        self.assertEqual(move.call_count, 2)
+        move.assert_has_calls([
+            call(cfg, {}, "project", "item-1", "field", "todo-opt"),
+            call(cfg, {}, "project", "item-2", "field", "todo-opt"),
+        ])
+        self.assertTrue(state["_meta"]["snapshot_done"])
+        self.assertEqual(
+            [state[item["id"]]["status"] for item in items], ["Todo", "Todo"]
+        )
+
     def test_fills_free_slots_from_runnable_backlog(self):
         state = {}
         items = [self._item(1), self._item(2), self._item(3)]
@@ -1332,6 +1571,77 @@ class FillConcurrencyGapTest(unittest.TestCase):
         self.assertEqual(len(gap), 1)
         self.assertIn("dep_blocked=1", gap[0])
 
+
+    def test_failed_move_does_not_promote_or_seed_state(self):
+        state = {}
+        item = self._item(8)
+        ctx = self._ctx(state)
+        with (
+            patch.object(cycle_adapter, "remaining_dispatch_budget", return_value=1),
+            patch.object(cycle_adapter, "move_to_lane", return_value=False) as move,
+            patch.object(cycle_adapter, "log") as log,
+        ):
+            promoted = cycle_adapter._fill_concurrency_gap(ctx, [item], {}, {})
+        self.assertEqual(promoted, 0)
+        self.assertEqual(item["status"], "Backlog")
+        self.assertEqual(state, {})
+        move.assert_called_once()
+        self.assertTrue(any(
+            "CONCURRENCY FILL MOVE FAILED issue=8" in call.args[0]
+            for call in log.call_args_list
+        ))
+
+    def test_lane_move_timeout_does_not_abort_fill(self):
+        state = {}
+        item = self._item(8)
+        ctx = self._ctx(state)
+        with (
+            patch.object(cycle_adapter, "remaining_dispatch_budget", return_value=1),
+            patch.object(
+                cycle_adapter,
+                "move_to_lane",
+                side_effect=subprocess.TimeoutExpired("gh", 60),
+            ),
+            patch.object(cycle_adapter, "log") as log,
+        ):
+            promoted = cycle_adapter._fill_concurrency_gap(ctx, [item], {}, {})
+        self.assertEqual(promoted, 0)
+        self.assertEqual(item["status"], "Backlog")
+        self.assertEqual(state, {})
+        self.assertTrue(any(
+            "TimeoutExpired" in call.args[0] for call in log.call_args_list
+        ))
+
+    def test_missing_todo_lane_is_reported(self):
+        state = {}
+        item = self._item(8)
+        ctx = self._ctx(state)
+        ctx.status_options = {}
+        with (
+            patch.object(cycle_adapter, "remaining_dispatch_budget", return_value=1),
+            patch.object(cycle_adapter, "move_to_lane") as move,
+            patch.object(cycle_adapter, "log") as log,
+        ):
+            promoted = cycle_adapter._fill_concurrency_gap(ctx, [item], {}, {})
+        self.assertEqual(promoted, 0)
+        move.assert_not_called()
+        self.assertTrue(any(
+            "MOVE SKIPPED issue=8" in call.args[0] for call in log.call_args_list
+        ))
+
+    def test_promotes_issue_when_all_dependencies_are_done(self):
+        state = {}
+        item = self._item(8, body="Depends on: #7")
+        ctx = self._ctx(state)
+        with (
+            patch.object(cycle_adapter, "remaining_dispatch_budget", return_value=1),
+            patch.object(cycle_adapter, "move_to_lane", return_value=True),
+        ):
+            promoted = cycle_adapter._fill_concurrency_gap(
+                ctx, [item], {7: "Done"}, {7: "CLOSED"})
+        self.assertEqual(promoted, 1)
+        self.assertEqual(item["status"], "Todo")
+
     def test_full_budget_returns_zero(self):
         state = {}
         items = [self._item(1)]
@@ -1345,6 +1655,98 @@ class FillConcurrencyGapTest(unittest.TestCase):
             promoted = cycle_adapter._fill_concurrency_gap(ctx, items, {}, {})
         self.assertEqual(promoted, 0)
         move.assert_not_called()
+
+
+class PollConcurrencyFillTest(unittest.TestCase):
+    """Verify fill wiring, first-poll safety, and next-poll dispatch timing."""
+
+    def _cfg(self):
+        return {
+            "repo": "o/r",
+            "state_file": "state.json",
+            "lanes": {
+                "Backlog": "backlog",
+                "Todo": "todo",
+                "In Progress": "in_progress",
+                "Ready for Review": "ready",
+                "In Review": "review",
+                "Done": "done",
+            },
+            "max_concurrent_workflows": 1,
+            "dispatch": {
+                "todo": {"default": "archon-fix-github-issue"},
+                "review": {
+                    "merge_ship_on_approve": False,
+                    "ship_to": "main",
+                    "done_lane": "Done",
+                },
+            },
+        }
+
+    def _item(self, status="Backlog"):
+        return {
+            "id": "item-8",
+            "status": status,
+            "content": {
+                "__typename": "Issue",
+                "number": 8,
+                "title": "Runnable backlog issue",
+                "url": "https://github.com/o/r/issues/8",
+                "body": "",
+                "state": "OPEN",
+                "repository": {"nameWithOwner": "o/r"},
+                "labels": {"nodes": []},
+            },
+        }
+
+    def test_snapshot_then_promotes_and_dispatches_on_next_poll(self):
+        state = {}
+        snapshot_item = self._item()
+        promoted_item = self._item()
+        todo_item = self._item("Todo")
+        with (
+            patch.object(
+                cycle_adapter,
+                "fetch_project",
+                side_effect=[
+                    ("p", "f", {"Todo": "todo-opt"}, [snapshot_item]),
+                    ("p", "f", {"Todo": "todo-opt"}, [promoted_item]),
+                    ("p", "f", {"Todo": "todo-opt"}, [todo_item]),
+                ],
+            ),
+            patch.object(cycle_adapter, "prepare_dispatch_budget"),
+            patch.object(cycle_adapter, "remaining_dispatch_budget", return_value=1),
+            patch.object(cycle_adapter, "sync_runnable_labels"),
+            patch.object(cycle_adapter, "reconcile_untracked_runs"),
+            patch.object(cycle_adapter, "_recheck_review_dispatch"),
+            patch.object(cycle_adapter, "_unblock_dependencies"),
+            patch.object(cycle_adapter, "_reconcile_completions", return_value=(None, {})),
+            patch.object(cycle_adapter, "_enforce_ready_proof"),
+            patch.object(
+                cycle_adapter,
+                "_complete_reviews",
+                return_value=(None, {}, "In Review", "main"),
+            ),
+            patch.object(cycle_adapter, "_remediate_ship_conflicts"),
+            patch.object(cycle_adapter, "fresh_issue_dispatch_guard", return_value=(True, "")),
+            patch.object(cycle_adapter, "dispatch", return_value=DispatchResult(True)) as dispatch,
+            patch.object(cycle_adapter, "move_to_lane", return_value=True) as move,
+            patch.object(cycle_adapter, "save_state"),
+        ):
+            cycle_adapter.poll(self._cfg(), {}, state)
+            self.assertEqual(snapshot_item["status"], "Backlog")
+            dispatch.assert_not_called()
+
+            cycle_adapter.poll(self._cfg(), {}, state)
+            self.assertEqual(promoted_item["status"], "Todo")
+            dispatch.assert_not_called()
+
+            cycle_adapter.poll(self._cfg(), {}, state)
+
+        move.assert_called_once_with(
+            self._cfg(), {}, "p", "item-8", "f", "todo-opt")
+        dispatch.assert_called_once()
+        self.assertEqual(dispatch.call_args.args[-1], 8)
 
 
 class FmtDepsTest(unittest.TestCase):

@@ -72,9 +72,31 @@ class EnsureContractTest(unittest.TestCase):
                 "completion-comment in wf.yaml")
             text = path.read_text()
             self.assertIn("## How to test", text)
-            self.assertIn("reads this section and creates a tracking issue", text)
+            self.assertIn("does not parse this section or create tracking issues", text)
+            self.assertNotIn("reads this section and creates a tracking issue", text)
             self.assertLess(text.index(TESTING_CONTRACT[:40]),
                             text.index("The comment must be factual"))
+
+    def test_refreshes_outdated_deferred_contract(self) -> None:
+        legacy_contract = CONTRACT.replace(
+            "does not parse this section or create tracking issues from it",
+            "reads this section and creates a tracking issue for every item",
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "wf.yaml"
+            path.write_text(
+                self._node().replace(
+                    "      Post a completion record.\n",
+                    "      Post a completion record.\n" + TESTING_CONTRACT + legacy_contract,
+                ),
+                encoding="utf-8",
+            )
+            note = ensure_contract(path, "completion-comment")
+            self.assertIn("Deferred-work", note)
+            text = path.read_text()
+            self.assertIn("does not parse this section or create tracking issues", text)
+            self.assertNotIn("reads this section and creates a tracking issue", text)
+            self.assertEqual(text.count("## Deferred work"), 1)
 
     def test_already_present_is_noop(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

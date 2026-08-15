@@ -613,6 +613,15 @@ class HistoryStoreHelperTests(unittest.TestCase):
                 row = con.execute(
                     "SELECT prompt_snapshots_json, settings_json FROM runs"
                 ).fetchone()
+                log_row = con.execute("SELECT byte_count, content FROM run_logs").fetchone()
+                self.assertNotIn("\r", log_row[1])
+                self.assertNotIn("\033", log_row[1])
+                self.assertNotIn("2000/200000 steps", log_row[1])
+                self.assertIn("1000/200000 steps", log_row[1])
+                self.assertIn("3000/200000 steps", log_row[1])
+                self.assertIn("200000/200000 steps", log_row[1])
+                self.assertIn("WARNING: low coverage", log_row[1])
+                self.assertEqual(log_row[0], len(log_row[1].encode("utf-8")))
             self.assertIn("Summarize exactly.", row[0])
             self.assertIn("prompt_profile_id", row[1])
 

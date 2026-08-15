@@ -857,3 +857,4 @@ def build_precomputed_global_story_synthesis(
         "citation_diagnostics": citation_diagnostics,
     }
     return story_drafting, token_stats, debug
+

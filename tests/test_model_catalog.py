@@ -107,6 +107,32 @@ class ModelCatalogTests(unittest.TestCase):
                     f"{entry.alias} reference must equal hf_repo (issue #92)",
                 )
 
+    def test_catalog_backends_agree_with_runtime_inference(self) -> None:
+        # Drift-guard (ship-review finding, #146): the picker must never offer
+        # a curated card whose backend label disagrees with the backend the
+        # pipeline actually infers for it (HANDOFF: "Model picker must validate
+        # runtime support").
+        for entry in model_catalog.CATALOG_MODELS.values():
+            self.assertEqual(
+                config.infer_model_backend(entry.alias),
+                entry.backend,
+                f"{entry.alias} backend label {entry.backend!r} disagrees with "
+                f"config.infer_model_backend()",
+            )
+            fit = model_catalog.runtime_fit_for_hf_model(
+                {"id": entry.hf_repo, "tags": [], "library_name": "", "pipeline_tag": None}
+            )
+            expected_fit = {
+                "mlx-vlm": model_catalog.RUNTIME_FIT_MANAGED_MLX_VLM,
+                "mlx-lm": model_catalog.RUNTIME_FIT_MANAGED_MLX_LM,
+                "llama.cpp": model_catalog.RUNTIME_FIT_MANAGED_LLAMA_CPP,
+            }[entry.backend]
+            self.assertEqual(
+                fit["status"],
+                expected_fit,
+                f"{entry.alias} curated fit verdict disagrees with its backend label",
+            )
+
     def test_default_catalog_model_is_the_default_alias(self) -> None:
         self.assertEqual(model_catalog.DEFAULT_CATALOG_MODEL_ALIAS, config.DEFAULT_MODEL_ALIAS)
         default = model_catalog.CATALOG_MODELS[model_catalog.DEFAULT_CATALOG_MODEL_ALIAS]
@@ -717,6 +743,8 @@ class ModelCatalogTests(unittest.TestCase):
             self.assertIn("is_default", record)
         defaults = [record for record in records if record["is_default"]]
         self.assertEqual([record["alias"] for record in defaults], ["gemma-4-12b-it-4bit"])
+        records_by_alias = {record["alias"]: record for record in records}
+        self.assertEqual(records_by_alias["gemma-e2b-tiny"]["backend"], "mlx-lm")
         qwythos = {record["alias"]: record for record in records if record["alias"].startswith("qwythos")}
         self.assertEqual(set(qwythos), {"qwythos-9b-4bit", "qwythos-9b-8bit"})
         for record in qwythos.values():
@@ -740,7 +768,7 @@ class ModelCatalogTests(unittest.TestCase):
                 model_catalog.RUNTIME_FIT_EXTERNAL_ONLY,
             ),
             (
-                {"id": "deadbydawn101/gemma-4-E2B-Heretic-Uncensored-mlx-4bit", "tags": ["mlx"], "library_name": "mlx", "pipeline_tag": "text-generation"},
+                {"id": "deadbydawn101/gemma-4-E2B-Heretic-Uncensored-mlx-4bit", "tags": ["mlx", "vision"], "library_name": "mlx", "pipeline_tag": "image-text-to-text"},
                 model_catalog.RUNTIME_FIT_MANAGED_MLX_LM,
             ),
             (

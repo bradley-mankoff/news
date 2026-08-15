@@ -7,10 +7,12 @@ import os
 import re
 import subprocess
 import tempfile
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
 from .model import (
+    WorkflowRunLookup,
     WorkflowRuns,
     WorkflowRunStatusMap,
     issue_number_from_message,
@@ -142,10 +144,10 @@ def fetch_workflow_runs(env: dict) -> WorkflowRuns:
     return _parse_workflow_runs(output)
 
 
-def fetch_workflow_run(env: dict, run_id: str | None) -> dict | None:
-    """Read one known run without depending on the fragile runs-list payload."""
+def fetch_workflow_run(env: dict, run_id: str | None) -> WorkflowRunLookup:
+    """Read one known run while distinguishing errors from not-found."""
     if not run_id:
-        return None
+        return WorkflowRunLookup(not_found=True)
     try:
         result = subprocess.run(
             ["archon", "workflow", "get", str(run_id), "--json"],
@@ -155,15 +157,35 @@ def fetch_workflow_run(env: dict, run_id: str | None) -> dict | None:
             env=env,
             cwd=str(ROOT),
         )
-    except (OSError, subprocess.TimeoutExpired):
-        return None
+    except subprocess.TimeoutExpired:
+        return WorkflowRunLookup(error="archon_run_timeout")
+    except OSError:
+        return WorkflowRunLookup(error="archon_run_unavailable")
     if result.returncode != 0:
-        return None
+        return WorkflowRunLookup(error="archon_run_command_failed")
     try:
         run = json.loads(result.stdout)
     except (TypeError, ValueError):
-        return None
-    return run if isinstance(run, dict) and run.get("id") else None
+        return WorkflowRunLookup(error="archon_run_json")
+    if not isinstance(run, dict) or not run.get("id"):
+        return WorkflowRunLookup(error="archon_run_shape")
+    return WorkflowRunLookup(run=run)
+
+
+def unpack_workflow_lookup(
+    lookup: WorkflowRunLookup | dict | None,
+) -> tuple[dict | None, str | None, bool]:
+    """Normalize exact-lookup results and preserve legacy test doubles.
+
+    Older callers/tests supplied a raw dict or ``None``. A raw ``None`` is
+    treated as confirmed absence only for that compatibility surface; real
+    ``fetch_workflow_run`` failures always return an explicit error.
+    """
+    if isinstance(lookup, WorkflowRunLookup):
+        return lookup.run, lookup.error, lookup.not_found
+    if isinstance(lookup, dict):
+        return lookup, None, False
+    return None, None, True
 
 
 def latest_workflow_run(
@@ -261,7 +283,28 @@ def parse_isolation_list(output: str) -> dict[str, dict[str, str]]:
     return records
 
 
-def fetch_archon_worktrees(env: dict) -> dict[str, dict[str, str]]:
+@dataclass(frozen=True)
+class WorktreeLookup:
+    """Isolation records plus the health of the Archon lookup."""
+
+    records: dict[str, dict[str, str]]
+    error: str | None = None
+
+
+class WorktreeRecords(dict[str, dict[str, str]]):
+    """Legacy dict-shaped isolation records with lookup health."""
+
+    def __init__(
+        self,
+        records: dict[str, dict[str, str]] | None = None,
+        *,
+        error: str | None = None,
+    ) -> None:
+        super().__init__(records or {})
+        self.error = error
+
+
+def fetch_archon_worktrees(env: dict) -> WorktreeLookup:
     try:
         result = subprocess.run(
             ["archon", "isolation", "list"],
@@ -271,9 +314,13 @@ def fetch_archon_worktrees(env: dict) -> dict[str, dict[str, str]]:
             env=env,
             cwd=str(ROOT),
         )
-    except (OSError, subprocess.TimeoutExpired):
-        return {}
-    return parse_isolation_list(result.stdout) if result.returncode == 0 else {}
+    except subprocess.TimeoutExpired:
+        return WorktreeLookup({}, "archon_isolation_timeout")
+    except OSError:
+        return WorktreeLookup({}, "archon_isolation_unavailable")
+    if result.returncode != 0:
+        return WorktreeLookup({}, "archon_isolation_command_failed")
+    return WorktreeLookup(parse_isolation_list(result.stdout))
 
 
 def inspect_worktree(path: str | Path | None) -> dict:
@@ -301,14 +348,43 @@ def inspect_worktree(path: str | Path | None) -> dict:
     }
 
 
-def resolve_worktree_info(env: dict, issue_number: int) -> dict[str, str] | None:
-    """Find an Archon worktree record for an issue."""
-    records = fetch_archon_worktrees(env)
+def _resolve_worktree_info_from_records(
+    records: dict[str, dict[str, str]],
+    issue_number: int,
+) -> dict[str, str] | None:
     pat = re.compile(rf"(?:task-issue-|issue-){issue_number}\b")
     for branch, record in records.items():
         if pat.search(branch):
             return {"branch": branch, **record}
     return None
+
+
+def resolve_worktree_info_with_health(
+    env: dict,
+    issue_number: int,
+) -> tuple[dict[str, str] | None, str | None]:
+    """Find an issue worktree without hiding isolation lookup failures."""
+    lookup = fetch_archon_worktrees(env)
+    if isinstance(lookup, WorktreeLookup):
+        if lookup.error:
+            return None, lookup.error
+        records = lookup.records
+    elif isinstance(lookup, WorktreeRecords):
+        if lookup.error:
+            return None, lookup.error
+        records = lookup
+    elif isinstance(lookup, dict):
+        # Preserve compatibility with callers/tests that provide legacy records.
+        records = lookup
+    else:
+        return None, "archon_isolation_shape"
+    return _resolve_worktree_info_from_records(records, issue_number), None
+
+
+def resolve_worktree_info(env: dict, issue_number: int) -> dict[str, str] | None:
+    """Find an Archon worktree record for an issue, preserving lookup health."""
+    info, error = resolve_worktree_info_with_health(env, issue_number)
+    return {"error": error} if error else info
 
 
 def resolve_worktree_branch(env: dict, issue_number: int) -> str | None:

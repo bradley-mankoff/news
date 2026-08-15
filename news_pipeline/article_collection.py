@@ -424,8 +424,9 @@ def _load_seen_urls(request: ArticleCollectionRequest, adapters: ArticleCollecti
             if key
         }
     except Exception as error:
-        logger.warning("Could not read DuckDB URL history: %s", error)
-        return set()
+        raise RuntimeError(
+            "URL reuse blocking history is unavailable; refusing to collect articles."
+        ) from error
 
 
 def _record_run_urls(
@@ -445,6 +446,10 @@ def _record_run_urls(
             articles=articles,
         )
     except Exception as error:
+        if request.url_reuse_blocking_enabled:
+            raise RuntimeError(
+                "Could not persist URL reuse history; refusing to complete the run safely."
+            ) from error
         logger.warning("Could not write DuckDB URL history: %s", error)
         adapters.append_unique_urls(request.run_used_urls_path, urls)
         return
