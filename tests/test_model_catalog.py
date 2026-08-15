@@ -839,6 +839,14 @@ class ModelCatalogTests(unittest.TestCase):
                 model_catalog.RUNTIME_FIT_MANAGED_MLX_LM,
             ),
             (
+                {"id": "someone/mixed-mlx-library-vlm", "tags": ["transformers", "safetensors", "image-text-to-text"], "library_name": "mlx", "pipeline_tag": "image-text-to-text"},
+                model_catalog.RUNTIME_FIT_MANAGED_MLX_VLM,
+            ),
+            (
+                {"id": "someone/mixed-mlx-tag-vlm", "tags": ["mlx", "transformers", "safetensors", "image-text-to-text"], "library_name": "transformers", "pipeline_tag": "image-text-to-text"},
+                model_catalog.RUNTIME_FIT_MANAGED_MLX_VLM,
+            ),
+            (
                 {"id": "someone/arbitrary-file.gguf", "tags": ["gguf", "mlx"], "library_name": "mlx", "pipeline_tag": "image-text-to-text"},
                 model_catalog.RUNTIME_FIT_EXTERNAL_ONLY,
             ),
@@ -1063,6 +1071,34 @@ class ModelCatalogTests(unittest.TestCase):
         self.assertEqual(kwargs["pipeline_tag"], "text-generation")
         self.assertEqual(kwargs["limit"], 50)
         self.assertEqual(kwargs["expand"], model_catalog.HF_SEARCH_EXPAND)
+
+    def test_vision_runtime_fit_propagates_through_hf_payloads(self) -> None:
+        vision_info = _fake_model_info(
+            id="someone/transformers-vlm",
+            tags=["safetensors", "transformers"],
+            library_name="transformers",
+            pipeline_tag="image-text-to-text",
+        )
+
+        search_api = MagicMock()
+        search_api.list_models.return_value = iter([vision_info])
+        with patch("huggingface_hub.HfApi", return_value=search_api):
+            search_item = model_catalog.search_huggingface_models(
+                "vision", pipeline_tag="image-text-to-text"
+            )[0]
+
+        metadata_api = MagicMock()
+        metadata_api.model_info.return_value = vision_info
+        with patch("huggingface_hub.HfApi", return_value=metadata_api):
+            metadata_item = model_catalog.fetch_model_metadata("someone/transformers-vlm")
+
+        for item in (search_item, metadata_item):
+            with self.subTest(item=item):
+                self.assertEqual(
+                    item["runtime_fit"]["status"],
+                    model_catalog.RUNTIME_FIT_EXTERNAL_ONLY,
+                )
+                self.assertIn("mmproj", item["runtime_fit"]["reason"])
 
     def test_search_in_catalog_flag_and_empty_results(self) -> None:
         curated = "mlx-community/gemma-4-12B-it-4bit"
