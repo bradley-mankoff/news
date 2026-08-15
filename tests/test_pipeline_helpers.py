@@ -997,6 +997,10 @@ class PipelineHelperTests(unittest.TestCase):
         self.assertEqual(settings["model_snapshots"]["default"]["revision_status"], "resolved")
         self.assertEqual(settings["model_snapshots"]["default"]["revision"], "sha123")
         self.assertEqual(settings["model_snapshots"]["title_generation"]["revision"], "sha123")
+        self.assertEqual(
+            settings["model_concurrency_source"],
+            "derived_from_stage_concurrency",
+        )
         self.assertIn("image_art_direction", settings["model_snapshots"])
         self.assertIn("story_discovery", settings["model_snapshots"])
         # Existing compatibility keys remain intact.

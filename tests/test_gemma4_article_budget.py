@@ -182,6 +182,25 @@ class Gemma4ArticleBudgetTests(unittest.TestCase):
         self.assertEqual(config.story_synthesis_concurrency, 6)
         self.assertEqual(config.model_concurrency, 6)
 
+    def test_explicit_model_concurrency_cannot_underprovision_stage_workers(self) -> None:
+        for server_concurrency, expected in ((2, 7), (9, 9)):
+            with self.subTest(server_concurrency=server_concurrency):
+                with patch.dict(
+                    os.environ,
+                    {
+                        "NEWS_MODEL": GEMMA_4_12B_IT_4BIT_MODEL_ALIAS,
+                        "NEWS_ARTICLE_SUMMARY_CONCURRENCY": "5",
+                        "NEWS_STORY_SYNTHESIS_CONCURRENCY": "7",
+                        "NEWS_MODEL_CONCURRENCY": str(server_concurrency),
+                    },
+                    clear=True,
+                ):
+                    config = load_runtime_config(materialize_outputs=False)
+
+                self.assertEqual(config.article_summary_concurrency, 5)
+                self.assertEqual(config.story_synthesis_concurrency, 7)
+                self.assertEqual(config.model_concurrency, expected)
+
     def test_explicit_pipeline_budget_override_wins(self) -> None:
         with patch.dict(
             os.environ,
