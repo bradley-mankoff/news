@@ -272,20 +272,30 @@ def _run_models(args: list[str]) -> int:
         return 0
     if subcommand == "search":
         # Detect --json before parsing so validation failures use the same
-        # JSON error envelope as lookup failures (issue #93).
-        as_json = "--json" in rest
+        # JSON error envelope as lookup failures (issue #93). Skip values
+        # consumed by the parser so flag-like values do not request JSON.
+        json_requested = False
         query = ""
-        for index, arg in enumerate(rest):
-            if arg == "--query" and index + 1 < len(rest):
-                query = rest[index + 1]
-            elif arg.startswith("--query="):
+        index = 0
+        while index < len(rest):
+            arg = rest[index]
+            if arg == "--query":
+                if index + 1 < len(rest):
+                    query = rest[index + 1]
+                index += 2
+                continue
+            if arg.startswith("--query="):
                 query = arg.split("=", 1)[1]
-        try:
-            query, pipeline_tag, limit, _ = _parse_models_search_args(rest)
-            results = search_huggingface_models(
-                query, pipeline_tag=pipeline_tag, limit=limit
-            )
-        except Exception as exc:
+                index += 1
+                continue
+            if arg in {"--task", "--limit"}:
+                index += 2
+                continue
+            if arg == "--json":
+                json_requested = True
+            index += 1
+
+        def report_search_error(exc: Exception, as_json: bool) -> int:
             print(str(exc), file=sys.stderr)
             if as_json:
                 print(
@@ -294,7 +304,20 @@ def _run_models(args: list[str]) -> int:
                     )
                 )
             return 2
-        if as_json:
+
+        try:
+            query, pipeline_tag, limit, parsed_as_json = _parse_models_search_args(rest)
+        except ValueError as exc:
+            return report_search_error(exc, json_requested)
+
+        try:
+            results = search_huggingface_models(
+                query, pipeline_tag=pipeline_tag, limit=limit
+            )
+        except Exception as exc:
+            return report_search_error(exc, parsed_as_json)
+
+        if parsed_as_json:
             print(json.dumps({"query": query, "models": results}, indent=2))
         else:
             for item in results:
