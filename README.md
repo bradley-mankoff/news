@@ -73,11 +73,9 @@ Secret prevention is automatic through the Gitleaks pre-commit hook in
 `uv run pre-commit install`. It scans staged changes only and uses redacted
 output. CI checks the PR's new commit range with the same pinned Gitleaks v8.30.1
 container: the `Secret scan` job in `.github/workflows/ci.yml` runs on every
-pull request to `develop`/`main`, scans a merge-aware PR commit range using
-`--diff-merges=first-parent`, redacts findings, rejects inline
-`gitleaks:allow` comments with `--ignore-gitleaks-allow`, and fails the check
-on any finding. Reproduce the gate locally with the Docker command in
-`docs/security/secret-prevention.md`.
+pull request to `develop`/`main`, scans only the PR's non-merge commits,
+redacts findings, and fails the check on any finding. Reproduce the gate
+locally with the Docker command in `docs/security/secret-prevention.md`.
 Runbook: `docs/security/secret-prevention.md`.
 
 ### Shell script checks
@@ -248,10 +246,6 @@ Daily Automation commands are documented in the
 Most Run Settings are controlled by `NEWS_` environment variables. The core
 ones are Run Preset selection, delivery mode and source scope, URL reuse
 blocking, model selection, and image generation.
-
-The accepted vocabulary separating Run Presets, Task Model Assignment, Model
-Tuning, Pipeline Budget, and Model Server Settings is defined in
-[`docs/adr/0007-model-configuration-vocabulary.md`](docs/adr/0007-model-configuration-vocabulary.md).
 
 The accepted vocabulary separating Run Presets, Task Model Assignment, Model
 Tuning, Pipeline Budget, and Model Server Settings is defined in
@@ -461,9 +455,13 @@ Curated models (4):
 Hugging Face search results carry runtime-fit verdicts (`managed_mlx_lm`,
 `managed_mlx_vlm`, `managed_llama_cpp`, or `external_only`) so unlaunchable
 repos are never picked for a managed backend (ADR 0017 runtime matrix);
-hardware fitting itself lives on the Hugging Face model page. The UI's
-"Model catalog" panel shows curated cards, task recommendations, and search
-with the same verdicts.
+hardware fitting itself lives on the Hugging Face model page. Only
+MLX-formatted, asset-complete VLM repositories are `managed_mlx_vlm`;
+Transformers+safetensors vision search results (`image-text-to-text`) are
+`external_only` because `mlx-vlm` needs pre-converted MLX weights plus an
+`mmproj` asset and does not convert them at launch. The UI's "Model
+catalog" panel shows curated cards, task recommendations, and search with the
+same verdicts.
 
 #### User-editable YAML overrides
 
@@ -480,8 +478,9 @@ file requires restarting `news` or the UI (no hot reload).
   `description`. Backends are limited to `mlx-lm`, `mlx-vlm`, `external`,
   and `llama.cpp`, with backend-scoped identity rules: MLX/external entries
   require `reference == hf_repo` (an owner/repo id — file-qualified `.gguf`
-  references are rejected for those backends), while `llama.cpp` entries use
-  a file-qualified `owner/repo/file.gguf` reference whose first two segments
+  references are rejected for those backends, preserving the ADR 0017 runtime
+  matrix and issue #92 drift guard), while `llama.cpp` entries use a
+  file-qualified `owner/repo/file.gguf` reference whose first two segments
   equal a bare `hf_repo` page id. `context_length` is optional and
   `task_notes` defaults to `{}`.
 - Aliases must match the safe pattern (lowercase letters, digits, `.`, `_`,
@@ -519,11 +518,16 @@ for the accepted architecture record.
 
 ### Runtime Matrix
 
-Supported runtimes (recorded in
+Initially supported runtimes (recorded in
 [`docs/adr/0017-runtime-matrix.md`](docs/adr/0017-runtime-matrix.md)):
 
 - `mlx-lm` — managed local MLX language-model server on Apple Silicon.
-- `mlx-vlm` — managed local MLX vision-language-model server on Apple Silicon.
+- `mlx-vlm` — managed local MLX vision-language-model server on Apple
+  Silicon. Managed only for repositories already carrying MLX-compatible
+  vision weights plus an `mmproj` asset; `mlx-vlm` does not convert source
+  Transformers weights at launch. Transformers+safetensors vision search
+  results are `external_only` and need an external OpenAI-compatible
+  endpoint (or conversion outside this application).
 - `llama.cpp` — managed local text-generation GGUF server across the
   platforms supported by the selected `llama-server` binary (issue #75).
 - `external` — any OpenAI-compatible endpoint.
