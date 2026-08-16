@@ -81,9 +81,9 @@ Piyaz does **not** replace git. You are not duplicating the factory: a ticket sa
 
 `.scratch/` is the same tickets as files, for repos with no Piyaz project and
 for OSS clones with no Piyaz login. News is wired for Piyaz: `factory.json`
-sets `tracker: piyaz` with `piyaz_project` filled once the **Daily News**
-project exists in Bradley's Team (do not reuse PIN). `new-idea` publishes
-there; `.scratch/` is the fallback while `piyaz_project` is unset.
+sets `tracker: piyaz` with `piyaz_project: DN` (**Daily News**, Bradley's
+Team, do not reuse PIN). `new-idea` publishes there; `.scratch/` is the
+fallback if the project is ever unset.
 
 ## Lights
 
