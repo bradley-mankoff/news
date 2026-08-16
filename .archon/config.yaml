@@ -22,6 +22,8 @@ recommendedWorkflows:
   - archon-fix-github-issue
   - archon-idea-to-pr
   - archon-smart-pr-review
+  - piyaz-batch
+  - piyaz-maintain
 
 # Mode B fusion panels (omp-modes). Luna only as panel-a, never as oneshot.
 aliases:

@@ -1,0 +1,53 @@
+name: piyaz-batch
+description: >-
+  Implement a batch of piyaz tasks end to end: context from the piyaz graph,
+  implementation, verification, and records written back (status in_review).
+  Use when work is tracked in the piyaz project for this repo.
+interactive: true
+
+nodes:
+  - id: implement
+    loop_group:
+      nodes:
+        - id: do-task
+          model: '@panel-b'
+          effort: max
+          prompt: |
+            You are implementing piyaz tasks in this repo (project NEWS, "Daily News"). Task batch refs: $ARGUMENTS
+
+            Each iteration implements ONE task that is not yet in_review, then records it:
+            1. Pick the next task in the batch. Fetch its context and current state with `bun .archon/scripts/piyaz.ts get <ref> planning` (fall back to `working` if planning is empty). This script is the piyaz interface on this provider — MCP tools are not available.
+            2. If it is not claimed, claim it: `bun .archon/scripts/piyaz.ts edit <ref> '[{"op":"add","collection":"assignees","value":"me"},{"op":"set","field":"status","value":"in_progress"}]'`
+            3. If its implementationPlan is missing or empty, write a short one first (piyaz_edit set implementationPlan via the script), then implement it exactly per the plan. Match the existing style: Python in news_pipeline/, tests in tests/, config in config/*.yaml, shortest correct diff.
+            4. Verify before recording: run the repo gate `.venv/bin/python3 -m pytest tests/ -q` and fix failures before recording.
+            5. Record the outcome in ONE call:
+               `bun .archon/scripts/piyaz.ts complete <ref> '<execution record: HOW it was built — files, functions, 3-5 sentences>' '<comma,separated,files>' '<decision: choice + why>'`
+               (repeat the decision argument as many times as needed). This writes the execution record, appends decisions, checks ALL acceptance criteria, sets files, and flips status to in_review.
+            6. Never set status to done — the human approves that.
+            When every task in the batch is in_review: <promise>COMPLETE</promise>
+          skills:
+            - tdd
+      until: COMPLETE
+      max_iterations: 10
+  - id: commit
+    bash: |
+      set -euo pipefail
+      git add -A
+      git diff --cached --quiet && { echo "no changes"; exit 0; }
+      git commit -m "piyaz-batch: implement batch"
+      git push -q origin HEAD 2>/dev/null || true
+    depends_on: [implement]
+  - id: self-review
+    model: '@panel-b'
+    effort: max
+    prompt: |
+      Review this batch's committed diff like a senior engineer before the gate: `git show --stat HEAD` and `git diff HEAD~1..HEAD`. Check correctness, security, and conformance to each task's acceptance criteria. File-cited findings only (path:line). Do not modify code.
+      Batch summary: $implement.output
+    skills:
+      - code-review
+    depends_on: [commit]
+  - id: gate
+    approval:
+      message: "piyaz batch complete — tasks are recorded as in_review. Approve to finish, or reject with feedback (records will be amended)."
+      capture_response: true
+    depends_on: [self-review]

@@ -1,5 +1,6 @@
 {
-  "tracker": "scratch",
+  "tracker": "piyaz",
+  "piyaz_project": null,
   "max_concurrent": 2,
   "default_tactic": "fusion-02",
   "allow_fusion": true,
