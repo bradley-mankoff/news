@@ -13,7 +13,7 @@ nodes:
           model: '@panel-b'
           effort: max
           prompt: |
-            You are implementing piyaz tasks in this repo (project NEWS, "Daily News"). Task batch refs: $ARGUMENTS
+            You are implementing piyaz tasks in this repo (project DN, "Daily News"). Task batch refs: $ARGUMENTS
 
             Each iteration implements ONE task that is not yet in_review, then records it:
             1. Pick the next task in the batch. Fetch its context and current state with `bun .archon/scripts/piyaz.ts get <ref> planning` (fall back to `working` if planning is empty). This script is the piyaz interface on this provider — MCP tools are not available.

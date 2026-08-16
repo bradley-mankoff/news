@@ -22,7 +22,8 @@ direct fix sessions). It is not a project-management constitution.
   and PR-range CI prevention, distinct from history audit/scrub)
 - Archon workflow inventory / machine setup → `docs/archon-workflows.md`,
   `docs/archon-setup.md`
-- Mode B factory (new-idea → Piyaz task graph) → `FACTORY.md`
+- Mode B factory (new-idea → Piyaz task graph) → `FACTORY.md`. Piyaz
+  project: **DN** ("Daily News", app.piyaz.ai, Bradley's Team).
 - Vendored matt skills (wrapper: `~/.claude/skills/`; archon commands:
   `.archon/commands/`) → `docs/archon-workflows.md` (Local edits)
 
@@ -77,7 +78,7 @@ an assigned issue branch / issue body.
 ## Piyaz dispatch policy
 
 Mode B factory work (the `new-idea` chain, `FACTORY.md`) is tracked in the
-Piyaz project **Daily News** (app.piyaz.ai, Bradley's Team) and executed
+Piyaz project **DN** ("Daily News", app.piyaz.ai, Bradley's Team) and executed
 through archon workflows — not by the session agent's own hands. The
 three-layer split: piyaz owns the task graph, archon owns execution, craft
 skills own per-task process. Git/GitHub stays the code layer: a Piyaz task
