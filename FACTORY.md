@@ -79,7 +79,11 @@ Then: merge (or ask QA to), mark the ticket **done**. Done means you (or QA) *sa
 
 Piyaz does **not** replace git. You are not duplicating the factory: a ticket says *what*, a PR says *the diff*. The implement workflow already opens a draft PR and can write `prUrl` back onto the Piyaz task. That is the join, not a second board.
 
-`.scratch/` is the same tickets as files, for repos with no Piyaz project (news today) and for OSS clones with no Piyaz login. Prefer Piyaz when you want the sidebar. Create **Daily News** in Bradley’s Team (do not reuse PIN). Then we flip news `factory.json` to that project; `new-idea` publishes there.
+`.scratch/` is the same tickets as files, for repos with no Piyaz project and
+for OSS clones with no Piyaz login. News is wired for Piyaz: `factory.json`
+sets `tracker: piyaz` with `piyaz_project` filled once the **Daily News**
+project exists in Bradley's Team (do not reuse PIN). `new-idea` publishes
+there; `.scratch/` is the fallback while `piyaz_project` is unset.
 
 ## Lights
 

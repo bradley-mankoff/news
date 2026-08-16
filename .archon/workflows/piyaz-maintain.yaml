@@ -1,0 +1,23 @@
+name: piyaz-maintain
+description: >-
+  Repo-level maintenance for a piyaz-managed repo — deps, CI, refactors,
+  anything not shaped as a piyaz task. Human gate before finishing.
+interactive: true
+
+nodes:
+  - id: do-maintenance
+    model: '@panel-b'
+    effort: max
+    prompt: |
+      Perform this repo-level maintenance: $ARGUMENTS
+
+      Rules:
+      - Keep changes minimal and boring; match existing style (Python in news_pipeline/, tests in tests/, config in config/*.yaml).
+      - Run the repo gate `.venv/bin/python3 -m pytest tests/ -q` after any code change and fix failures.
+      - Do not touch piyaz task state (no task is tracked for this work).
+      Report: files changed, what changed, any risks.
+  - id: gate
+    approval:
+      message: "Maintenance complete. Approve to keep, or reject with feedback."
+      capture_response: true
+    depends_on: [do-maintenance]
