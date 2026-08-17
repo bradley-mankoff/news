@@ -11,7 +11,7 @@ Archon's bundled, tried-and-tested ones installed in the archon home.
 |---|---|---|
 | `archon-fix-github-issue` | a bug, defect, regression, or small concrete task | `bug` (also the default for unlabeled) |
 | `archon-idea-to-pr` | a feature, enhancement, or new capability | `feature` |
-| `archon-plan-to-pr` | already carries an implementation plan (plan file attached to the ticket) | `plan` |
+| `archon-plan-to-pr` | already carries an implementation plan (plan file committed at `.agents/plans/<slug>.md` before labeling) | `plan` |
 | `archon-assist` | nothing above fits (exploration, one-off, infra) | — |
 
 ## Reviewing (2)
@@ -34,10 +34,13 @@ experiment that used them is abandoned (2026-08-17).
 
 ## Dispatch rules
 
-- **8pm CST cutoff (hard):** no work dispatches after 8pm CST (= 02:00 UTC,
-  inside DeepSeek's 01:00–04:00 UTC peak-pricing window). Tickets created
-  after 8pm CST queue and dispatch the next morning. Running workflows are
-  allowed to finish; nothing new starts.
+- **8pm CST cutoff (hard, poller-enforced):** no NEW workflow dispatches after
+  8pm CST (= 02:00 UTC, inside DeepSeek's 01:00–04:00 UTC peak-pricing window).
+  The board poller enforces this mechanically:
+  `automation/config.json` → `no_dispatch_after_local_hour: 20` — dispatch,
+  resume, and conflict-fix starts are deferred past that hour and queued for
+  the next morning. Running workflows are allowed to finish and merge.
+  Tickets created after 8pm CST queue and dispatch the next morning.
 - Attachment mechanics (news board): the board poller reads
   `automation/config.json` `dispatch.todo.label_overrides` — a ticket's label
   selects its doing workflow; `review.workflow` is the review default. Set the

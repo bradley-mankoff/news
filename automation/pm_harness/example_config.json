@@ -8,6 +8,7 @@
   "poll_timeout_seconds": 300,
   "state_file": "automation/state.json",
   "max_concurrent_workflows": 2,
+  "no_dispatch_after_local_hour": 20,
   "runnable_label": "runnable",
   "decision_only": {
     "label": "decision-only",
@@ -31,10 +32,11 @@
       "complete_move_to": "Ready for Review",
       "merge_develop_base": "develop",
       "conflict_fix_workflow": "INTEGRATION_CONFLICT_WORKFLOW",
-      "label_overrides": {
-        "bug": "BUGFIX_WORKFLOW",
-        "enhancement": "FEATURE_WORKFLOW"
-      }
+  "label_overrides": {
+   "bug": "BUGFIX_WORKFLOW",
+   "enhancement": "FEATURE_WORKFLOW",
+   "plan": "PLAN_WORKFLOW"
+  }
     },
     "review": {
       "workflow": "REVIEW_WORKFLOW",
