@@ -1,5 +1,10 @@
 # Archon Workflow Inventory
 
+**Ticket creator:** the minimal assignable menu (doing + review) lives in
+[`ticket-workflow-menu.md`](ticket-workflow-menu.md) — grok reads that when
+processing ideas into tickets. Dispatch rules include the hard 8pm CST cutoff
+(no new work after 8pm CST = 02:00 UTC, DeepSeek's peak window).
+
 Machine-local archon (archon-pi build, v0.7.0 = stock Archon) lives at
 `~/.local/share/archon-pi/archon-home/`.
 
