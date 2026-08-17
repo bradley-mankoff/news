@@ -1,19 +1,24 @@
 # Archon Workflow Inventory
 
+**Ticket creator:** the minimal assignable menu (doing + review) lives in
+[`ticket-workflow-menu.md`](ticket-workflow-menu.md) — grok reads that when
+processing ideas into tickets. Dispatch rules include the hard 8pm CST cutoff
+(no new work after 8pm CST = 02:00 UTC, DeepSeek's peak window).
+
 Machine-local archon (archon-pi build, v0.7.0 = stock Archon) lives at
 `~/.local/share/archon-pi/archon-home/`.
 
 ## Execution model
 
 - Routine nodes use the `pi` CLI with
-  `opencode-go/deepseek-v4-flash` at `effort: max` via the `small`/`medium`/`large`
-  tiers in `archon-home/config.yaml`.
-- Rigorous nodes use Pi's OpenAI Codex OAuth backend with
-  `provider: pi`, `model: openai-codex/gpt-5.6-luna`, and `effort: max`, matching
-  this session's `openai-codex/gpt-5.6-luna` model.
-  It covers planning, review, conflict resolution, issue drafting, and the
-  completion records that classify deferred work; the board poller then creates
-  deduped issues mechanically.
+  `opencode-go/deepseek-v4-flash` at `effort: max` via the `small`/`medium`
+  tiers in `archon-home/config.yaml` (scout + little things).
+- Planning, implementation, and review nodes run **GPT-5.6 Luna**
+  (`openai-codex/gpt-5.6-luna`, `effort: max`) — the `large` tier plus
+  explicit rigorous-node pins in the workflow YAMLs (OpenAI Codex
+  subscription, $0 marginal). It covers planning, review, conflict
+  resolution, issue drafting, and the completion records that classify
+  deferred work.
 - Both paths run at their maximum Pi reasoning setting: DeepSeek and the
   OpenAI Codex backend both use `effort: max`.
 - Pi OAuth credentials are configured with the interactive `/login` command.

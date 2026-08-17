@@ -21,21 +21,8 @@ defaults:
 recommendedWorkflows:
   - archon-fix-github-issue
   - archon-idea-to-pr
+  - archon-plan-to-pr
   - archon-smart-pr-review
+  - archon-comprehensive-pr-review
   - piyaz-batch
   - piyaz-maintain
-
-# Mode B fusion panels (omp-modes). Luna only as panel-a, never as oneshot.
-aliases:
-  '@panel-a':
-    provider: pi
-    model: openai-codex/gpt-5.6-luna
-    effort: max
-  '@panel-b':
-    provider: pi
-    model: opencode-go/deepseek-v4-flash
-    effort: max
-  '@judge':
-    provider: pi
-    model: xai/grok-4.6
-    effort: high
