@@ -8,6 +8,7 @@
   "poll_timeout_seconds": 300,
   "state_file": "automation/state.json",
   "max_concurrent_workflows": 10,
+  "no_dispatch_after_local_hour": 20,
   "runnable_label": "runnable",
   "decision_only": {
     "label": "decision-only",
@@ -40,7 +41,8 @@
       "label_overrides": {
         "bug": "archon-fix-github-issue",
         "feature": "archon-idea-to-pr",
-        "enhancement": "archon-idea-to-pr"
+        "enhancement": "archon-idea-to-pr",
+        "plan": "archon-plan-to-pr"
       }
     },
     "review": {
