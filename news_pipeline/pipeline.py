@@ -1110,6 +1110,9 @@ LOW_COVERAGE_SYNTHESIS_PATTERNS = [
 
 RUN_LOG_FILE: TextIO | None = None
 RUN_LOG_FILES: list[TextIO] = []
+# DN-22 sink-failure record: one entry per sink removed from
+# ``RUN_LOG_FILES`` after a write/flush failure, naming the sink and error.
+RUN_LOG_SINK_FAILURES: list[str] = []
 # Concise-writer state, scoped to the run_logging() lifecycle; None when no
 # run log is active (manual RUN_LOG_FILES handles in tests still write
 # through the normalized fallback path).
@@ -1364,13 +1367,35 @@ def _clean_progress_message(message: str) -> str:
     return run_log.clean_line(message)
 
 
+def _isolate_failed_run_log_sink(log_file: TextIO, exc: Exception) -> None:
+    """Drop one failed run-log sink and record which sink failed (DN-22).
+
+    A sink write/flush failure must never replace the run outcome: the
+    failing handle is removed from ``RUN_LOG_FILES`` so later lines skip
+    it, the failure is recorded by name in ``RUN_LOG_SINK_FAILURES`` (and
+    echoed to stderr), and surviving sinks are told via a logged warning.
+    Recursion terminates because every failure drops exactly that sink.
+    """
+    while log_file in RUN_LOG_FILES:
+        RUN_LOG_FILES.remove(log_file)
+    sink_name = str(getattr(log_file, "name", "") or repr(log_file))
+    failure = f"{sink_name}: {type(exc).__name__}: {exc}"
+    RUN_LOG_SINK_FAILURES.append(failure)
+    print(f"WARNING: run-log sink failure isolated: {failure}", file=sys.stderr)
+    if RUN_LOG_FILES:
+        _write_run_log(f"WARNING: run-log sink failure isolated: {failure}")
+
+
 def _write_run_log_line(line: str) -> None:
     if not RUN_LOG_FILES:
         return
-    for log_file in RUN_LOG_FILES:
-        log_file.write(f"{line.rstrip()}\n")
-    for log_file in RUN_LOG_FILES:
-        log_file.flush()
+    payload = f"{line.rstrip()}\n"
+    for log_file in list(RUN_LOG_FILES):
+        try:
+            log_file.write(payload)
+            log_file.flush()
+        except Exception as exc:  # isolation is the point of this handler
+            _isolate_failed_run_log_sink(log_file, exc)
 
 
 def _write_run_log(message: str) -> None:
@@ -1852,6 +1877,7 @@ def run_logging():
     global RUN_LOG_FILE
     global RUN_LOG_FILES
     global RUN_LOG_WRITER
+    global RUN_LOG_SINK_FAILURES
     for log_path in (RUN_LOG_PATH, LATEST_RUN_LOG_PATH):
         log_dir = os.path.dirname(log_path)
         if log_dir:
@@ -1863,6 +1889,7 @@ def run_logging():
     ) as latest_log_file:
         RUN_LOG_FILE = run_log_file
         RUN_LOG_FILES = [run_log_file, latest_log_file]
+        RUN_LOG_SINK_FAILURES = []
         RUN_LOG_WRITER = run_log.ConciseLogWriter(write_line=_write_run_log_line)
         header = (
             "# Daily news run log\n"
