@@ -19,6 +19,10 @@ docs/adr/README.md document but that no runtime code exercises:
   existing decision) and carry the required Status/Date/Context/Decision/
   Consequences sections.
 - CONTEXT.md vocabulary sections must have matching knowledge concepts.
+- The generated model-configuration knowledge concept must keep the Model
+  Catalog term, its catalog provenance sources, and the runtime-fit verdict
+  vocabulary across knowledge-bundle regenerations (DN-17; the projection is
+  regenerated from canonical inputs, never hand-edited).
 
 Style follows tests/test_okf.py: checked-in markdown invariants asserted with
 pathlib + regex, no new dependencies.
@@ -312,6 +316,35 @@ class DocsConsistencyTests(unittest.TestCase):
             "docs/adr/0017-runtime-matrix.md",
             _README.read_text(encoding="utf-8"),
         )
+
+    def test_generated_model_configuration_projection_keeps_catalog_term(self) -> None:
+        """`knowledge/system/model-configuration.md` is a generated OKF
+        projection regenerated from canonical inputs, never hand-edited; this
+        guard pins the Model Catalog term so any regeneration that drops it
+        fails the repository gate instead of shipping."""
+        knowledge = (
+            _REPO / "knowledge/system/model-configuration.md"
+        ).read_text(encoding="utf-8")
+
+        # The vocabulary term itself must survive regeneration.
+        self.assertIn("**Model Catalog**", knowledge)
+
+        # The declared regeneration path must still name the catalog's
+        # canonical inputs so the term can be re-derived, not just quoted.
+        for resource in (
+            "resource: ../../config/model_catalog.yaml",
+            "resource: ../../news_pipeline/model_catalog.py",
+        ):
+            self.assertIn(resource, knowledge)
+
+        # The accepted runtime-fit verdict vocabulary must stay in the bundle.
+        for verdict in (
+            "managed_mlx_lm",
+            "managed_mlx_vlm",
+            "managed_llama_cpp",
+            "external_only",
+        ):
+            self.assertIn(verdict, knowledge)
 
     def test_runtime_fit_documentation_preserves_exact_matching_and_advisory_bounds(
         self,
