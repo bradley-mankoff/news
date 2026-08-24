@@ -14,9 +14,26 @@ uv run python -c 'import platform; print(platform.machine())'
 On Apple Silicon, the platform check should print `arm64`. `uv` picks the
 Python version from `.python-version` (3.12) automatically.
 
-> **Package status**: `news-pipeline` (ADR 0009) is the public distribution
-> name, but the package is not published to PyPI yet — install instructions
-> will be added here at release time.
+## Install from PyPI
+
+**Package status**: not published yet. The commands below are gated on the
+published distribution name from ADR 0009 (`news-pipeline`; import package
+stays `news_pipeline`, CLI stays `news`) and become working instructions only
+at publish.
+
+Publish-step checklist:
+
+- [ ] Re-verify `news-pipeline` availability on PyPI at publish time (ADR 0009;
+      recorded fallbacks if contested: `daily-news-pipeline`,
+      `news-pipeline-cli` — switch `pyproject.toml` and this section together).
+- [ ] Confirm both install commands against the released version:
+
+```bash
+pip install news-pipeline
+uv tool install news-pipeline
+```
+
+- [ ] Verify `import news_pipeline` works and the `news` CLI is on `PATH`.
 
 ## Project Automation (product facts only)
 
