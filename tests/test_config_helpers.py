@@ -1558,6 +1558,20 @@ class ConfigHelperTests(unittest.TestCase):
         # prod preset now launches gemma
         self.assertEqual(config_module.run_preset_env("prod")["NEWS_MODEL"], "gemma-4-12b-it-4bit")
 
+    def test_default_model_knob_default_matches_resolved_reference(self) -> None:
+        """DN-19: the Default-model knob's registry default and config
+        resolution agree for a clean environment. The UI derives its knob
+        labels from the resolved runtime model reference, so the registry
+        default and the resolver must share one source and never drift."""
+        knob = next(
+            k for k in config_module.runtime_knob_registry() if k["env"] == "NEWS_MODEL"
+        )
+        resolution = config_module.resolve_runtime_config(
+            config_module.RuntimeConfigRequest(base_env={}, materialize_outputs=False)
+        )
+        self.assertEqual(knob["default"], resolution.config.model_reference)
+        self.assertEqual(resolution.config.model_reference, config_module.DEFAULT_MODEL_ALIAS)
+
     def test_yaml_scope_and_runtime_config_helpers_cover_edge_branches(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)

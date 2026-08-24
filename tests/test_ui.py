@@ -967,6 +967,13 @@ assert(!advancedPanels.innerHTML.includes("undefined"), "undefined markup leaked
             self.assertNotIn(f'knobField("{env}"', run_setup)
         # The readout binds to the top-level runtime.model {name, reference}.
         self.assertIn("defaultRuntime.name || defaultRuntime.reference", run_setup)
+        # The Default-model knob's empty-option label derives from the same
+        # resolved runtime reference; a hardcoded alias can drift (DN-19).
+        self.assertNotIn("default: gemma-4-12b-it-4bit", run_setup)
+        self.assertIn(
+            "emptyLabel: `default: ${formatDefault(defaultRuntime.name || defaultRuntime.reference)}`",
+            run_setup,
+        )
         # A failed runtime snapshot renders a visible banner, not a silent "-".
         self.assertIn("const runtimeError = schema.runtime_error || \"\";", run_setup)
         self.assertIn("Configuration error: ${escapeHtml(runtimeError)}", run_setup)
@@ -974,6 +981,132 @@ assert(!advancedPanels.innerHTML.includes("undefined"), "undefined markup leaked
             "function renderAdvancedKnobs"
         )[0]
         self.assertIn("renderPromptProfilePanel();", advanced)
+
+    def test_run_setup_default_model_label_follows_resolved_reference(self) -> None:
+        """Execute renderRunSetup in Node against two different resolved
+        runtime model references (DN-19): the Default-model knob's empty
+        option must always name the current resolution (name first, then
+        reference, then the formatDefault fallback), so changing the
+        reference updates the label instead of drifting from a hardcoded
+        alias."""
+        html = ui_module.HTML
+
+        def js_function_block(start: str, end: str) -> str:
+            begin = html.index(start)
+            return html[begin : html.index(end, begin)]
+
+        js = (
+            r"""
+const assert = (condition, message) => {
+  if (!condition) throw new Error(message);
+};
+"""
+            + r"""
+// inputForKnob reads current values through document.querySelector; the
+// harness has no DOM controls, so every lookup falls back to
+// state.schema.current_env, mirroring a schema-driven initial render.
+const document = { querySelector() { return null; } };
+const fakeElement = (id) => ({
+  id,
+  value: "",
+  innerHTML: "",
+  onchange: null,
+  classList: { add() {}, toggle() {} }
+});
+const elements = {};
+const $ = (id) => (elements[id] = elements[id] || fakeElement(id));
+// Sibling renderers are out of scope here; only their invocation matters.
+const renderPresetSummary = () => {};
+const renderModelTuningPanels = () => {};
+const decorateEnvHints = () => {};
+const renderPromptProfilePanel = () => {};
+const renderModelCatalogPanel = () => {};
+const refreshModelKnobLinks = () => {};
+"""
+            + js_function_block("    const state = {", "    const icons = {")
+            + js_function_block("function escapeHtml(text) {", "function formatDefault")
+            + js_function_block(
+                'function formatDefault(value, fallback="none") {',
+                "function currentControlValue",
+            )
+            + js_function_block(
+                "function currentControlValue(env) {", "function setControlValue"
+            )
+            + js_function_block("function value(id) {", "function checked(id)")
+            + js_function_block("function knobByEnv(env) {", "function inputForKnob")
+            + js_function_block(
+                'function inputForKnob(knob, { emptyLabel, optionLabels = {}, id = "" } = {}) {',
+                "function knobField",
+            )
+            + js_function_block(
+                'function knobField(env, label, options={}) {', "function knobHint"
+            )
+            + js_function_block(
+                "function renderRunSetup() {", "const TASK_MAX_TOKENS_LABELS"
+            )
+            + r"""
+state.schema = {
+  actions: ["run"],
+  prompt_profiles: [],
+  current_env: {},
+  runtime: { model: { name: "mlx-community/gemma-4-12B-it-4bit", reference: "gemma-4-12b-it-4bit" } },
+  knobs: [
+    { env: "NEWS_MODEL", type: "select", default: "gemma-4-12b-it-4bit", options: ["gemma-4-12b-it-4bit", "qwythos-9b-4bit"] }
+  ]
+};
+
+// Resolution with both fields: the label mirrors the Resolved readout's
+// name-first expression for the same snapshot.
+renderRunSetup();
+let markup = $("runSetupMount").innerHTML;
+assert(
+  markup.includes('<option value="">default: mlx-community/gemma-4-12B-it-4bit</option>'),
+  "empty-option label must derive from the resolved runtime model name"
+);
+
+// Changing the resolved reference updates the label on re-render: no stale
+// alias survives, and an unnamed resolution falls back to its reference.
+state.schema.runtime = { model: { name: "", reference: "qwythos-9b-4bit" } };
+renderRunSetup();
+markup = $("runSetupMount").innerHTML;
+assert(
+  markup.includes('<option value="">default: qwythos-9b-4bit</option>'),
+  "changing the reference must update the derived label"
+);
+assert(
+  !markup.includes("mlx-community/gemma-4-12B-it-4bit</option>"),
+  "stale resolved name must not survive the re-render"
+);
+
+// A failed/missing resolution has no reference: fall back instead of lying.
+state.schema.runtime = {};
+renderRunSetup();
+markup = $("runSetupMount").innerHTML;
+assert(
+  markup.includes('<option value="">default: none</option>'),
+  "missing resolution must render the formatDefault fallback"
+);
+"""
+        )
+        node = shutil.which("node")
+        if node is None:
+            self.skipTest("Node.js is required for the embedded UI renderer harness")
+        timeout_seconds = 30
+        try:
+            result = subprocess.run(
+                [node, "--input-type=module", "-"],
+                input=js,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=timeout_seconds,
+            )
+        except subprocess.TimeoutExpired as exc:
+            self.fail(
+                f"Node harness timed out after {timeout_seconds}s: "
+                f"stdout={exc.stdout!r} stderr={exc.stderr!r}"
+            )
+        self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
 
     def test_prompt_override_editors_and_restore_buttons_in_html(self) -> None:
         # The Editorial approach panel must expose editable per-stage editors

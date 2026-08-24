@@ -2866,7 +2866,12 @@ HTML = r"""<!doctype html>
         core: "Core",
         peripheral: "All"
       };
-      const defaultModel = knobField("NEWS_MODEL", "Default model", { emptyLabel: "default: gemma-4-12b-it-4bit" });
+      // The empty-option label derives from the resolved runtime model
+      // reference (DN-19), so changing the reference updates the label
+      // instead of drifting from a hardcoded alias.
+      const defaultModel = knobField("NEWS_MODEL", "Default model", {
+        emptyLabel: `default: ${formatDefault(defaultRuntime.name || defaultRuntime.reference)}`
+      });
       const sharedModelTokens = knobField("NEWS_MODEL_MAX_INPUT_TOKENS", "Shared model input cap");
       const articleTokenCap = knobField("NEWS_ARTICLE_SUMMARY_MAX_TOKENS", "Article summary max tokens");
       const storyTokenCap = knobField("NEWS_STORY_DRAFTING_MAX_TOKENS", "Story drafting max tokens");
