@@ -1,7 +1,7 @@
 {
   "tracker": "piyaz",
   "piyaz_project": "DN",
-  "max_concurrent": 1,
+  "max_concurrent": 3,
   "default_tactic": "oneshot",
   "allow_fusion": true,
   "review_workflow": "archon-smart-pr-review",
