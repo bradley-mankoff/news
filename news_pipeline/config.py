@@ -1750,20 +1750,6 @@ UI_LOCATIONS = frozenset(
 )
 
 
-# Closed set of browser UI locations for registered knobs (issue #115).
-# ui_location declares which surface owns the control: run_setup and
-# advanced_panels are rendered by dedicated controls (suppressed from the raw
-# Advanced override list), while advanced_raw knobs remain available in the
-# raw override list. The default keeps any existing or future unannotated
-# knob visible in the raw list (fail-safe: a setting cannot disappear).
-UI_LOCATION_RUN_SETUP = "run_setup"
-UI_LOCATION_ADVANCED_PANELS = "advanced_panels"
-UI_LOCATION_ADVANCED_RAW = "advanced_raw"
-UI_LOCATIONS = frozenset(
-    {UI_LOCATION_RUN_SETUP, UI_LOCATION_ADVANCED_PANELS, UI_LOCATION_ADVANCED_RAW}
-)
-
-
 def _runtime_knob(
     group: str,
     label: str,
@@ -1879,7 +1865,7 @@ def runtime_knob_registry() -> list[dict[str, Any]]:
         _runtime_knob("Run Settings", "Embedding model", "NEWS_EMBEDDING_MODEL", default="all-mpnet-base-v2", advanced=True),
         _runtime_knob("Run Settings", "Token encoding", "NEWS_TOKEN_ENCODING", default="o200k_base", advanced=True),
         _runtime_knob("Model Selection", "Default model", "NEWS_MODEL", "select", default=DEFAULT_MODEL_ALIAS, options=sorted(_catalog_model_aliases()), option_links=model_links, ui_location=UI_LOCATION_RUN_SETUP),
-        _runtime_knob("Model Selection", "Model backend", "NEWS_MODEL_BACKEND", "select", options=sorted(SUPPORTED_MODEL_BACKENDS)),
+        _runtime_knob("Model Selection", "Model backend", "NEWS_MODEL_BACKEND", "select", default=DEFAULT_MODEL_BACKEND, options=sorted(SUPPORTED_MODEL_BACKENDS)),
         _runtime_knob("Model Tuning", "Default tuning preset", "NEWS_MODEL_TUNING_PRESET", "select", options=tuning_presets),
         _runtime_knob("Model Tuning", "Model input cap", "NEWS_MODEL_MAX_INPUT_TOKENS", "number", minimum=1, step=1, ui_location=UI_LOCATION_ADVANCED_PANELS),
         _runtime_knob("Pipeline Budget", "Article text token limit", "NEWS_ARTICLE_TEXT_TOKEN_LIMIT", "number", minimum=1, step=1, ui_location=UI_LOCATION_ADVANCED_PANELS),

@@ -7,8 +7,10 @@ workflows") after an archon reinstall replaces the bundled YAMLs:
   - `completion-comment` node (with the `## Deferred work` human-follow-up
     contract) in archon-fix-github-issue.yaml and archon-idea-to-pr.yaml
   - `report-verdict` node in archon-smart-pr-review.yaml
-  - Target nodes are pinned to the portable `large` tier (`model: large`);
-    routine nodes inherit the configured default from archon-home/config.yaml.
+  - Rigorous nodes use Pi's OpenAI Codex OAuth model (`provider: pi`,
+    `model: openai-codex/gpt-5.6-luna`, `effort: max`), matching the current
+    ChatGPT/Codex session model. Routine nodes use DeepSeek V4 Flash through
+    the Pi tier at `effort: max`.
   - the full archon-fix-ship-conflicts.yaml (inline prompt node, no DB
     commands)
 
@@ -28,13 +30,13 @@ ARCHON_HOME = Path(os.environ.get("ARCHON_HOME",
                                   "~/.local/share/archon-pi/archon-home")).expanduser()
 WORKFLOWS = ARCHON_HOME / "workflows"
 
-# Portable tier assigned to target AI nodes. Resolves through the Archon
-# `tiers:` config, so an archon reinstall can never resurrect provider pins.
-MODEL_TIER = "large"
+MODEL_PROVIDER = "pi"
+MODEL_ID = "openai-codex/gpt-5.6-luna"
+MODEL_EFFORT = "max"
 
-# Explicit large-tier assignments. All other AI nodes inherit the default
-# tier/provider from archon-home/config.yaml.
-LARGE_TIER_NODES: dict[str, tuple[str, ...]] = {
+# Explicit rigorous assignments. All other AI nodes inherit the
+# DeepSeek V4 Flash tier/default from archon-home/config.yaml.
+RIGOROUS_NODES: dict[str, tuple[str, ...]] = {
     "archon-assist.yaml": ("assist",),
     "archon-pi-default.yaml": ("agent",),
     "archon-fix-develop-conflicts.yaml": ("resolve",),
@@ -74,6 +76,10 @@ LARGE_TIER_NODES: dict[str, tuple[str, ...]] = {
     ),
     "archon-workflow-builder.yaml": ("extract-intent", "generate-yaml"),
 }
+
+# Backwards-compat tier constants for PR branch tests (large tier)
+MODEL_TIER = "large"
+LARGE_TIER_NODES = RIGOROUS_NODES
 
 # The testing contract shared by both completion-comment nodes. The board
 # poller partitions this section into machine checks and human steps for the
@@ -341,7 +347,7 @@ nodes:
          result. Do NOT post a `VERDICT:` line.
     depends_on: []
     context: fresh
-    model: large
+    model: medium
 
 effort: max
 """
@@ -408,7 +414,7 @@ nodes:
          result. Do NOT post a `VERDICT:` line.
     depends_on: []
     context: fresh
-    model: large
+    model: medium
 
 effort: max
 
@@ -644,6 +650,44 @@ def ensure_spec_review(path: Path) -> str | None:
     return "added spec-review node to archon-review-block.yaml"
 
 
+def ensure_rigorous_models(path: Path, node_ids: tuple[str, ...]) -> str | None:
+    """Pin selected AI nodes to Pi's OpenAI Codex OAuth model at maximum effort."""
+    text = path.read_text()
+    original = text
+    missing: list[str] = []
+    for node_id in node_ids:
+        node = re.search(rf"(?m)^  - id: {re.escape(node_id)}[ \t]*\n", text)
+        if node is None:
+            missing.append(node_id)
+            continue
+        following = re.search(r"(?m)^  - id: ", text[node.end():])
+        block_end = node.end() + following.start() if following else len(text)
+        block = text[node.start():block_end]
+        body = re.sub(
+            r"(?m)^    (?:provider|model|effort|modelReasoningEffort):[^\n]*\n",
+            "",
+            block[len(node.group(0)):],
+        )
+        replacement = (
+            node.group(0)
+            + f"    provider: {MODEL_PROVIDER}\n"
+            + f"    model: {MODEL_ID}\n"
+            + f"    effort: {MODEL_EFFORT}\n"
+            + body
+        )
+        text = text[:node.start()] + replacement + text[block_end:]
+
+    if text != original:
+        path.write_text(text)
+        note = f"pinned rigorous Pi Codex nodes in {path.name}"
+    else:
+        note = None
+    if missing:
+        suffix = f" (missing nodes: {', '.join(missing)})"
+        return (note or f"checked rigorous Pi Codex nodes in {path.name}") + suffix
+    return note
+
+
 def ensure_tier_models(path: Path, node_ids: tuple[str, ...]) -> str | None:
     """Assign the portable `large` tier to selected AI nodes.
 
@@ -697,6 +741,15 @@ def apply_tier_models(changed: list[str]) -> None:
             changed.append(note)
 
 
+def apply_rigorous_models(changed: list[str]) -> None:
+    for fname, node_ids in RIGOROUS_NODES.items():
+        path = WORKFLOWS / fname
+        if not path.exists():
+            changed.append(f"MISSING {fname} for rigorous Pi Codex assignments (workflows dir: {WORKFLOWS})")
+            continue
+        note = ensure_rigorous_models(path, node_ids)
+        if note:
+            changed.append(note)
 
 
 def main() -> int:
@@ -774,7 +827,7 @@ def main() -> int:
     elif "name: archon-fix-develop-conflicts" not in develop.read_text():
         changed.append("archon-fix-develop-conflicts.yaml exists but looks wrong — "
                        "check its contents manually")
-    apply_tier_models(changed)
+    apply_rigorous_models(changed)
 
     if changed:
         print("\n".join(f"- {c}" for c in changed))
