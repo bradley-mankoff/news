@@ -787,6 +787,32 @@ metadata, and an independent `delivery_status`/`delivery` record (`sent`,
 read as `not recorded`). A run with a non-empty newsletter body also writes
 paste-ready Markdown to `output/beehiiv/YYYY-MM-DD.md` for manual publication.
 
+### Run provenance
+
+Every run persists its own provenance so any report can be traced back to the
+exact inputs that produced it. Provenance lives in `latest_run_details.json`
+and, durably, in each DuckDB `runs` row (`settings_json` and
+`prompt_snapshots_json`):
+
+- **Prompt**: the selected prompt profile id (`prompt_profile_id`), the
+  effective per-task editorial instructions, and any instruction or
+  full-template overrides with their sources. One JSON prompt snapshot per
+  logical model call records what was actually sent — timestamp, task,
+  per-call model snapshot, token estimates, the exact system/human messages,
+  and retry/fallback metadata.
+- **Model and revision**: `model_snapshots` captures each configured task
+  assignment's model reference, catalog id, repository, resolved revision,
+  revision status, backend, and the explicit Story Discovery no-LLM record.
+- **Tuning**: the effective Model Tuning and per-task sampling settings
+  (`model_tuning`, default/reasoning/task sampling) plus the pipeline budget.
+- **Translation policy**: a metadata-only snapshot of the effective policy
+  (enabled flag, status, target language, English-source gate).
+
+The persistence boundary is prompts-only, secrets-free: model responses and
+deterministic fallback content are never recorded (prompt snapshots capture
+what was sent, not what came back), credentials are redacted from failure
+provenance, and delivery records stay address-only with redacted error text.
+
 ### Open Knowledge Format projections
 
 The pipeline also writes two portable OKF v0.2 bundle forms:
