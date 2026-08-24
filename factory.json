@@ -4,6 +4,7 @@
   "max_concurrent": 1,
   "default_tactic": "oneshot",
   "allow_fusion": true,
+  "review_workflow": "archon-smart-pr-review",
   "base_branch": "develop",
   "gate": ".venv/bin/python3 -m pytest tests/ -q",
   "brief_max_chars": 24000,
