@@ -636,6 +636,40 @@ Citation precedence: Cite this source only for facts it directly supports.
             any("story_drafting" in item and "[[S1]]" in item for item in violations)
         )
 
+    def test_validate_editorial_instructions_rejects_whitespace_only_values(self) -> None:
+        # Whitespace-only slots hit the same missing/empty guard as absent
+        # slots: exactly one violation per task, with no brace or blocklist
+        # findings layered on top.
+        whitespace = {task: "  \n\t " for task in prompt_contracts.PROTOCOL_TASKS}
+        self.assertEqual(
+            prompt_contracts.validate_editorial_instructions(whitespace),
+            [
+                f"missing or empty instructions for {task}"
+                for task in prompt_contracts.PROTOCOL_TASKS
+            ],
+        )
+
+    def test_validate_editorial_instructions_rejects_screening_blocklist_language(
+        self,
+    ) -> None:
+        # Embedding the pipeline-owned screening contract sentence inside the
+        # editable story_scale_screening text trips EDITORIAL_BLOCKLIST even
+        # though it is brace-free (so no brace finding joins the violation).
+        clean = {
+            "article_summary": "Summarize factually.",
+            "story_scale_screening": "Be conservative. Return only valid JSON.",
+            "story_drafting": "Write a factual story.",
+            "title_generation": "Keep it short.",
+            "image_art_direction": "Depict the event.",
+        }
+        self.assertEqual(
+            prompt_contracts.validate_editorial_instructions(clean),
+            [
+                "instructions for story_scale_screening contain "
+                "pipeline-owned contract language: 'Return only valid JSON'"
+            ],
+        )
+
     def test_validate_editorial_instructions_rejects_non_string_values(self) -> None:
         # Untrusted YAML values are reported as violations instead of leaking
         # a raw TypeError from substring checks.
