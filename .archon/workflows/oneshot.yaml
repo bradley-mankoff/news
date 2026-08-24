@@ -1,12 +1,12 @@
 name: oneshot
 description: |
-  Single DeepSeek implementer in the worktree. Default tactic this week.
-  Use for well-specified, gated slices. Not a review workflow.
+  Single small-tier implementer in the worktree. Default tactic for
+  lights-off factory work. Use for well-specified, gated slices. Not a
+  review workflow.
 
 nodes:
   - id: implement
-    model: '@panel-b'
-    effort: max
+    model: small
     prompt: |
       Implement this slice in this worktree.
 

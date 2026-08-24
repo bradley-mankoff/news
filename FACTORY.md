@@ -42,15 +42,41 @@ What each gate is asking:
 
 ### Kick the factory
 
-Say **run the factory** (skill `run-factory`) in a Mode B session. That advances lights-off tickets (and only those). Parallel up to `factory.json` cap.
+Say **run the factory** (skill `run-factory`) in a Mode B session. That advances lights-off tickets (and only those). By default it runs **one workflow at a time** (`max_concurrent: 1`) and each slice uses the `oneshot` tactic — serial lights-off work, one slice implemented and pushed before the next is claimed.
+
+Two separate opt-ins add parallelism:
+
+- **`max_concurrent > 1`** in `factory.json` — the poller may run *multiple workflows in parallel*, each on its own slice. This is workflow concurrency.
+- A **`fusion-*` tag** on a ticket — that *one* workflow runs two parallel implementers (isolated copies) and a judge fuses the results. This is parallel nodes *inside* one workflow.
+
+Nothing is parallel unless you turn one of these on. With a local model, expect each slice to take noticeably longer than hosted work — that is the lights-off trade you chose.
 
 When something needs you (in-review, lights-on, “does this look right”): **that session should halt**. Cmux dings. The message should include the PR URL, the ticket ref, and a screenshot if it’s UI. SMS/iMessage is not wired yet — ding-on-halt is the current ping.
 
 Do not keep a factory session spinning after it owes you a look.
 
+### Stale runs and fresh briefs
+
+Each dispatch writes a local `.scratch/factory-ledger.json` record with the
+ticket ref, workflow, branch, PID, attempt, and last observed state. The next
+poller cycle reconciles it with live `workflow status` plus history `workflow
+runs` snapshots.
+
+If Archon disappears from the live/history snapshots after the dispatch grace
+period, or exceeds the configured runtime, the poller prints
+`STALE <ref>: <reason>`. It does not mark the ticket done,
+invent a tracker status or automatically retry. Re-open the ticket in
+Piyaz or change a scratch ticket back to `ready-for-agent` when you have
+decided to retry. Retries are bounded by `max_attempts` in `factory.json`.
+
+Every Archon dispatch receives a fresh brief containing the ticket text or
+Piyaz task details, acceptance criteria, decisions, the repository gate, and
+the in-review/PR contract. The brief is passed through the workflow request;
+the task graph remains the source of truth.
+
 ### What happens without you
 
-Unblocked lights-off tickets get claimed. Implementers write code. If the slice has a testable seam they should use **TDD** — red, green, the test is the ticket’s acceptance, not a souvenir. You do not type `/tdd`. A **draft PR** appears. The ticket goes **in review**.
+Unblocked lights-off tickets get claimed. Implementers write code. If the slice has a testable seam they should use **TDD** — red, green, the test is the ticket’s acceptance, not a souvenir. You do not type `/tdd`. A **draft PR** appears. The ticket goes **in review** on a later poller cycle once the run completes successfully; if the tracker sync fails it is retried on the next cycle. The poller still never marks **done** — that gate is yours (or QA’s).
 
 ### When something comes back
 
@@ -77,13 +103,9 @@ Then: merge (or ask QA to), mark the ticket **done**. Done means you (or QA) *sa
 **Piyaz is the task graph.** Ideas, slices, blocked-by, lights, in-review, done.
 **Git / GitHub is the code.** Commits, draft PRs, review comments, merge.
 
-Piyaz does **not** replace git. You are not duplicating the factory: a ticket says *what*, a PR says *the diff*. The implement workflow already opens a draft PR and can write `prUrl` back onto the Piyaz task. That is the join, not a second board.
+Piyaz does **not** replace git. You are not duplicating the factory: a ticket says *what*, a PR says *the diff*. The implement workflow opens a draft PR; the PR stays in GitHub. The deterministic join is the ticket’s status moving to **in review** — the task ref on the PR links the two. That is the join, not a second board.
 
-`.scratch/` is the same tickets as files, for repos with no Piyaz project and
-for OSS clones with no Piyaz login. News is wired for Piyaz: `factory.json`
-sets `tracker: piyaz` with `piyaz_project: DN` (**Daily News**, Bradley's
-Team, do not reuse PIN). `new-idea` publishes there; `.scratch/` is the
-fallback if the project is ever unset.
+`.scratch/` is the same tickets as files, for repos with no Piyaz project and for OSS clones with no Piyaz login. Prefer Piyaz when you want the sidebar.
 
 ## Lights
 
@@ -95,7 +117,9 @@ fallback if the project is ever unset.
 
 ## Optional tactic tags (on a ticket)
 
-`oneshot` — one DeepSeek implementer.
-`fusion-02` / `fusion-04` / `fusion-10` — Luna and DeepSeek in parallel, Grok fuses. Default is fusion-02.
+`oneshot` — one implementer on the `small` tier. **Default.**
+`fusion-02` / `fusion-04` / `fusion-10` — two `small` implementers in parallel (isolated copies), then a `large` judge fuses both into one result. Tagging is the only way to get parallel work inside a slice.
 
-You do not pick models. You pick “how hard is this slice?” if you care; otherwise the default is fine.
+The default local Archon profile maps `large` to Muse Spark 1.2 Contributor
+at `xhigh` and `small`/`medium` to Ox Alpha Free at `max`. Override those
+tiers in your Archon user config when the work needs a different profile.

@@ -76,4 +76,4 @@ automation/ui_runtime.json
 
 # pi CLI project-local state
 .pi/
-
+.scratch/factory-ledger.json*

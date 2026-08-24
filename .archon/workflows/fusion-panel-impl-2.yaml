@@ -22,7 +22,7 @@ nodes:
       find . -name .git -prune -o -exec chmod a-w {} +
 
   - id: panel-a
-    model: '@panel-a'
+    model: small
     retry: {max_attempts: 5, delay_ms: 5000, on_error: all}
     context: fresh
     depends_on: [setup]
@@ -33,7 +33,7 @@ nodes:
       Do not touch the checkout (it is read-only).
 
   - id: panel-b
-    model: '@panel-b'
+    model: small
     retry: {max_attempts: 5, delay_ms: 5000, on_error: all}
     context: fresh
     depends_on: [setup]

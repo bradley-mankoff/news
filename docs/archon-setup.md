@@ -53,10 +53,10 @@ poll. `CONCURRENCY GAP` log lines explain why available capacity was not filled.
   Codex OAuth backend: `provider: pi`, `model: openai-codex/gpt-5.6-luna`, and
   `effort: max`.
 - A workflow's `provider:` pin is overridden when its `model:` resolves to a
-  tier — the tier's provider wins (bundled workflows pinned to claude still run
-  on pi via the tiers). Explicit Luna nodes set `provider: pi`.
-- Tier-level `effort` does not route to pi; the curated workflows carry
-  workflow-level `effort: max`, and Luna nodes also pin `effort: max`.
+  tier — the tier's provider wins (bundled workflows pinned to claude still
+  run on pi via the tiers).
+- The curated workflows carry workflow-level `effort: max`, so maximum
+  reasoning applies to every node.
 
 ## Build quirks (learned the hard way)
 

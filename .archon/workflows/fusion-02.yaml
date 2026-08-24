@@ -1,6 +1,7 @@
 name: fusion-02
 description: |
-  Two-wide oneshot implement + Grok forced fuse. Easy unspecified / robustness.
+  Two-wide oneshot implement + forced fuse. Easy unspecified / robustness.
+  Two parallel small-tier implementers, one large-tier judge, one fused result.
   Triggers: tactic fusion-02. NOT a replacement for review/conflict workflows.
 
 nodes:
@@ -9,7 +10,7 @@ nodes:
 
   - id: judge
     command: fusion-judge-impl-fuse-forced
-    model: '@judge'
+    model: large
     retry: {max_attempts: 5, delay_ms: 5000, on_error: all}
     context: fresh
     depends_on: [panel]

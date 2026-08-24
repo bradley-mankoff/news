@@ -10,8 +10,7 @@ nodes:
     loop_group:
       nodes:
         - id: do-task
-          model: '@panel-b'
-          effort: max
+          model: small
           prompt: |
             You are implementing piyaz tasks in this repo (project DN, "Daily News"). Task batch refs: $ARGUMENTS
 
@@ -38,8 +37,7 @@ nodes:
       git push -q origin HEAD 2>/dev/null || true
     depends_on: [implement]
   - id: self-review
-    model: '@panel-b'
-    effort: max
+    model: large
     prompt: |
       Review this batch's committed diff like a senior engineer before the gate: `git show --stat HEAD` and `git diff HEAD~1..HEAD`. Check correctness, security, and conformance to each task's acceptance criteria. File-cited findings only (path:line). Do not modify code.
       Batch summary: $implement.output

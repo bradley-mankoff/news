@@ -6,8 +6,7 @@ interactive: true
 
 nodes:
   - id: do-maintenance
-    model: '@panel-b'
-    effort: max
+    model: small
     prompt: |
       Perform this repo-level maintenance: $ARGUMENTS
 

@@ -1,6 +1,7 @@
 name: fusion-04
 description: |
-  Two-wide PIV + Grok forced fuse. Real logic / invariants.
+  Two-wide PIV + forced fuse. Real logic / invariants.
+  Two parallel small-tier PIV implementers, one large-tier judge.
 
 nodes:
   - id: panel
@@ -8,7 +9,7 @@ nodes:
 
   - id: judge
     command: fusion-judge-impl-fuse-forced
-    model: '@judge'
+    model: large
     retry: {max_attempts: 5, delay_ms: 5000, on_error: all}
     context: fresh
     depends_on: [panel]
