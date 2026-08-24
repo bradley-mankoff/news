@@ -12,6 +12,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import news_pipeline.pipeline as pipeline
+from news_pipeline import run_log
 from news_pipeline.history_store import connect
 
 
@@ -397,6 +398,72 @@ class FailedRunLoggingTests(unittest.TestCase):
 
             finish.assert_called_once_with()
             active_finalizer_factory.assert_called_once_with(diagnostics, test_config)
+
+
+class RunLogSinkIsolationTests(unittest.TestCase):
+    """DN-22: a dead run-log sink must not replace the run outcome."""
+
+    def tearDown(self) -> None:
+        pipeline.RUN_LOG_FILES = []
+        pipeline.RUN_LOG_WRITER = None
+        pipeline.RUN_LOG_SINK_FAILURES = []
+
+    def test_dead_sink_does_not_mask_messages_and_failure_is_recorded(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            dead_path = root / "dead.log"
+            dead = dead_path.open("w", encoding="utf-8")
+            dead.close()  # writes now raise ValueError: closed file
+            healthy_path = root / "survivor.log"
+            with healthy_path.open("w", encoding="utf-8") as healthy:
+                pipeline.RUN_LOG_FILES = [dead, healthy]
+                pipeline._write_run_log("visible message")
+
+            # The dead sink was dropped from the active sinks.
+            self.assertEqual(
+                [log_file.name for log_file in pipeline.RUN_LOG_FILES],
+                [str(healthy_path)],
+            )
+            # Which sink failed, and why, is recorded.
+            failures = "\n".join(pipeline.RUN_LOG_SINK_FAILURES)
+            self.assertIn(str(dead_path), failures)
+            self.assertIn("ValueError", failures)
+            # The surviving sink kept the stream and records the failure too.
+            text = healthy_path.read_text(encoding="utf-8")
+            self.assertIn("visible message", text)
+            self.assertIn("dead.log", text)
+
+    def test_sink_dying_midrun_keeps_streaming_to_survivors(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            staging_path = root / "run_log_staging.log"
+            latest_path = root / "latest_run.log"
+            staging = staging_path.open("w", encoding="utf-8")
+            latest = latest_path.open("w", encoding="utf-8")
+            pipeline.RUN_LOG_FILES = [staging, latest]
+            pipeline.RUN_LOG_WRITER = run_log.ConciseLogWriter(
+                write_line=pipeline._write_run_log_line
+            )
+            try:
+                pipeline._write_run_log("[2/9 sources] starting collection")
+                staging.close()  # the staging sink dies mid-run
+                pipeline._write_run_log("WARNING: low coverage")
+                pipeline._write_run_log("[3/9 clustering] pairwise similarity")
+            finally:
+                pipeline.RUN_LOG_WRITER.flush()
+                pipeline.RUN_LOG_FILES = []
+                pipeline.RUN_LOG_WRITER = None
+            latest.close()
+
+            text = latest_path.read_text(encoding="utf-8")
+            self.assertIn("[2/9 sources] starting collection", text)
+            self.assertIn("WARNING: low coverage", text)
+            self.assertIn("[3/9 clustering] pairwise similarity", text)
+            self.assertIn("run_log_staging.log", text)
+            self.assertIn("ValueError", text)
+            self.assertEqual(
+                [log_file.name for log_file in pipeline.RUN_LOG_FILES], []
+            )
 
 
 if __name__ == "__main__":
