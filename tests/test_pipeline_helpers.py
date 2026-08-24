@@ -1009,6 +1009,17 @@ class PipelineHelperTests(unittest.TestCase):
         self.assertFalse(translation_policy["enabled"])
         self.assertEqual(translation_policy["status"], "disabled_not_implemented")
         self.assertEqual(translation_policy["target_language"], "en")
+        # Slice 01 (DN-10) records the deterministic enable rule alongside
+        # the effective English-only source gate.
+        self.assertEqual(
+            translation_policy["enable_rule"]["rule"],
+            "enabled and declared source language != target",
+        )
+        self.assertEqual(
+            translation_policy["enable_rule"]["unknown_language_status"],
+            "unknown_language",
+        )
+        self.assertFalse(translation_policy["enable_rule"]["content_sniffing"])
         self.assertEqual(translation_policy["source_gate"]["rule"], "language == 'en'")
         self.assertIsNone(translation_policy["translation_model_assignment"])
 
