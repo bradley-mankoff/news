@@ -3112,6 +3112,34 @@ HTML = r"""<!doctype html>
           </div>
         </section>`;
     }
+    // Registry-driven Advanced families (DN-18): the Budgets and Peripheral
+    // panels no longer hand-list envs. Fields derive from the shared knob
+    // registry (state.schema.knobs) filtered on ui_location ===
+    // "advanced_panels" and each family's registry group, so a newly registered
+    // knob appears in the right family without a second UI list. Envs owned by
+    // dedicated custom renderers (task tuning cards, prompt override/template
+    // editors, the shared model input cap) are excluded because those controls
+    // already live in their own panels; missing/unknown metadata fails safe to
+    // an empty field list.
+    function advancedPanelDedicatedEnvs() {
+      const dedicated = new Set(["NEWS_MODEL_MAX_INPUT_TOKENS"]);
+      Object.values(PROMPT_OVERRIDE_ENVS).forEach(env => dedicated.add(env));
+      Object.values(promptTemplateEnvMap()).forEach(env => dedicated.add(env));
+      Object.values(TASK_CONFIG).forEach(meta => {
+        dedicated.add(meta.presetEnv);
+        dedicated.add(meta.taskMaxTokensEnv);
+        dedicated.add(meta.baseUrlEnv);
+        SAMPLING_FIELDS.forEach(([suffix]) => dedicated.add(`${meta.taskSamplingPrefix}_${suffix}`));
+      });
+      return dedicated;
+    }
+    function advancedPanelFields(group) {
+      const dedicated = advancedPanelDedicatedEnvs();
+      return ((state.schema && state.schema.knobs) || [])
+        .filter(knob => knob.ui_location === "advanced_panels" && knob.group === group && !dedicated.has(knob.env))
+        .map(knob => knobField(knob.env, knob.label))
+        .join("");
+    }
     function renderAdvancedPanels() {
       // Static container from the #advanced view; guard keeps this idempotent.
       // Must run before renderModelTuningControls() so the tuning <select>s exist.
@@ -3130,26 +3158,14 @@ HTML = r"""<!doctype html>
           <p class="eyebrow">Budgets</p>
           <h2>Run budgets and quotas</h2>
           <div class="form-grid">
-            ${knobField("NEWS_SOURCE_COLLECTION_CONCURRENCY", "Source collection concurrency")}
-            ${knobField("NEWS_ARTICLE_SUMMARY_CONCURRENCY", "Article summary concurrency")}
-            ${knobField("NEWS_STORY_SYNTHESIS_CONCURRENCY", "Story synthesis concurrency")}
-            ${knobField("NEWS_ARTICLE_TEXT_TOKEN_LIMIT", "Article text token limit")}
-            ${knobField("NEWS_MAX_STORIES", "Max stories")}
-            ${knobField("NEWS_MIN_ARTICLES_PER_STORY", "Min articles per story")}
-            ${knobField("NEWS_STORY_CLUSTER_SIMILARITY_THRESHOLD", "Story cluster similarity")}
-            ${knobField("NEWS_STORY_SELECTION_OVERLAP_THRESHOLD", "Story selection overlap")}
-            ${knobField("NEWS_STORY_DEDUP_THRESHOLD", "Story dedup threshold")}
-            ${knobField("NEWS_STORY_BACKFILL_BATCH_MULTIPLIER", "Backfill batch multiplier")}
+            ${advancedPanelFields("Pipeline Budget")}
           </div>
         </section>
         <section class="panel">
           <p class="eyebrow">Peripheral</p>
           <h2>Optional run settings</h2>
           <div class="form-grid">
-            ${knobField("NEWS_IMAGE_ENABLED", "Image generation")}
-            ${knobField("NEWS_BLOCK_REUSED_URLS", "Block reused URLs")}
-            ${knobField("NEWS_STORY_SCALE_SCREENING_ENABLED", "Story scale screening")}
-            ${knobField("NEWS_RELAX_STORY_DRAFTING_GUARDS", "Relax story drafting guards")}
+            ${advancedPanelFields("Run Settings")}
           </div>
         </section>
         <section class="panel">

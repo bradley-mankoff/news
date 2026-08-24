@@ -286,11 +286,15 @@ class UITests(unittest.TestCase):
         self.assertIn("if (SURFACED_ENVS.has(knob.env)) return;", raw_filter)
 
     def test_surfaced_envs_parity_with_dedicated_renderers(self) -> None:
-        """Bidirectional registry/UI parity (issue #115): every surfaced
-        registry record maps to an actual dedicated UI reference, and every
-        dedicated UI reference maps back to one registered surfaced
-        environment. A stale metadata entry cannot hide an unrendered knob,
-        and a stale markup reference cannot point at a raw-only setting."""
+        """Bidirectional registry/UI parity (issue #115, DN-18): every surfaced
+        registry record maps to an actual dedicated UI reference or to a
+        generic Advanced panel family, and every dedicated UI reference maps
+        back to one registered surfaced environment. Since DN-18 the
+        Budgets/Peripheral families are rendered straight from the registry
+        (no literal env list survives in the browser source), so the drift
+        guard instead pins that every unclaimed advanced_panels knob belongs
+        to a family the browser actually renders — otherwise a stale metadata
+        entry could make a setting disappear."""
         html = ui_module.HTML
         run_setup = html.split("function renderRunSetup")[1].split("function renderAdvancedPanels")[0]
         advanced = html.split("function renderAdvancedPanels")[1].split("function renderAdvancedKnobs")[0]
@@ -300,8 +304,13 @@ class UITests(unittest.TestCase):
             set(re.findall(r'data-env="(NEWS_[A-Z_]+)"', run_setup))
             | set(re.findall(r'knobField\("(NEWS_[A-Z_]+)"', run_setup))
         )
-        # Direct advanced panel refs: Budgets/Peripheral knobField() calls.
-        direct_panels = set(re.findall(r'knobField\("(NEWS_[A-Z_]+)"', advanced))
+        # Budgets/Peripheral fields are registry-driven since DN-18: no literal
+        # env-name list may survive in the Advanced block.
+        self.assertEqual(
+            re.findall(r'knobField\("(NEWS_[A-Z_]+)"', advanced),
+            [],
+            "hand-listed knobField() env survived in the Advanced panels",
+        )
         # TASK_CONFIG-driven refs: preset/base-URL/max-token envs and the
         # sampling prefix composed with the SAMPLING_FIELDS suffixes.
         task_direct = set(
@@ -328,13 +337,14 @@ class UITests(unittest.TestCase):
         template_catalog = set(config_module.PROMPT_TEMPLATE_ENV_VARS.values())
         dedicated_refs = (
             direct_run_setup
-            | direct_panels
             | task_direct
             | task_sampling
             | override_map
             | template_catalog
+            | {"NEWS_MODEL_MAX_INPUT_TOKENS"}  # shared cap on every tuning card
         )
-        registry = {knob["env"]: knob["ui_location"] for knob in build_knob_registry()}
+        registry_knobs = build_knob_registry()
+        registry = {knob["env"]: knob["ui_location"] for knob in registry_knobs}
         surfaced = {env for env, loc in registry.items() if loc != "advanced_raw"}
         # Every dedicated UI reference maps back to a registered surfaced env.
         self.assertEqual(
@@ -342,9 +352,28 @@ class UITests(unittest.TestCase):
             [],
             "dedicated markup references an env that is not registry-surfaced",
         )
-        # Every surfaced registry env has an actual dedicated reference.
+        # Generic-family ownership (DN-18): the advanced_panels knobs no
+        # dedicated renderer claims must all belong to a family the browser
+        # renders via advancedPanelFields(); any other group would silently
+        # disappear from the UI and must be marked advanced_raw instead.
+        family_groups = re.findall(r'advancedPanelFields\("([^"]+)"\)', advanced)
+        self.assertEqual(family_groups, ["Pipeline Budget", "Run Settings"])
+        unclaimed = {
+            knob["env"]: knob["group"]
+            for knob in registry_knobs
+            if knob["ui_location"] == "advanced_panels"
+            and knob["env"] not in dedicated_refs
+        }
+        self.assertTrue(unclaimed, "expected registry-driven family knobs")
         self.assertEqual(
-            sorted(surfaced - dedicated_refs),
+            sorted(set(unclaimed.values())),
+            sorted(family_groups),
+            "unclaimed advanced_panels knob lives outside the registry-driven families",
+        )
+        # Every surfaced registry env still resolves to a renderer: a dedicated
+        # reference or a registry-driven family.
+        self.assertEqual(
+            sorted(surfaced - (dedicated_refs | set(unclaimed))),
             [],
             "registry-surfaced env has no dedicated UI reference",
         )
@@ -439,6 +468,14 @@ const renderPromptTemplateEditors = () => {};
             + js_function_block(
                 "function modelTuningPanel(task) {", "function renderAdvancedPanels"
             )
+            # Dedicated-env ownership maps consumed by advancedPanelDedicatedEnvs()
+            # inside renderAdvancedPanels (DN-18).
+            + js_function_block(
+                "    const PROMPT_OVERRIDE_ENVS = {", "    function selectedPromptProfile"
+            )
+            + js_function_block(
+                "    function promptTemplateEnvMap() {", "    function promptTemplateRecord"
+            )
             + js_function_block(
                 "function renderAdvancedPanels() {", "function renderAdvancedKnobs"
             )
@@ -514,6 +551,141 @@ assert(!advancedPanels.innerHTML.includes("undefined"), "undefined markup leaked
 """
         )
         node = _find_node()
+        if node is None:
+            self.skipTest("Node.js is required for the embedded UI renderer harness")
+        timeout_seconds = 30
+        try:
+            result = subprocess.run(
+                [node, "--input-type=module", "-"],
+                input=js,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=timeout_seconds,
+            )
+        except subprocess.TimeoutExpired as exc:
+            self.fail(
+                f"Node harness timed out after {timeout_seconds}s: "
+                f"stdout={exc.stdout!r} stderr={exc.stderr!r}"
+            )
+        self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
+
+    def test_advanced_panel_families_render_from_registry_in_node_harness(self) -> None:
+        """Execute the production Advanced family renderer in Node (DN-18).
+
+        The Budgets/Peripheral panels must be built from the shared knob
+        registry: a newly registered advanced_panels knob in a rendered
+        family appears with its registry label without any second UI list,
+        while knobs owned by dedicated renderers, other families, and other
+        ui_locations stay out. All functions are extracted from
+        ui_module.HTML itself, not reimplemented here.
+        """
+        html = ui_module.HTML
+
+        def js_function_block(start: str, end: str) -> str:
+            return html[html.index(start) : html.index(end, html.index(start))]
+
+        js = (
+            r"""
+const assert = (condition, message) => {
+  if (!condition) throw new Error(message);
+};
+"""
+            + r"""
+// inputForKnob reads current values through document.querySelector; the
+// harness has no DOM controls, so every lookup falls back to
+// state.schema.current_env, mirroring a schema-driven initial render.
+const document = { querySelector() { return null; } };
+const advancedPanels = { innerHTML: "" };
+const $ = (id) => id === "advancedPanels" ? advancedPanels : null;
+const decorateEnvHints = () => {};
+const renderPromptProfilePanel = () => {};
+const renderPromptTemplateEditors = () => {};
+"""
+            + js_function_block("    const TASK_CONFIG = {", "    const state = {")
+            + js_function_block("    const state = {", "    const icons = {")
+            + js_function_block(
+                "    const TASK_MAX_TOKENS_LABELS = {", "    const SAMPLING_FIELDS = ["
+            )
+            + js_function_block(
+                "    const SAMPLING_FIELDS = [", "    function samplingFields(prefix) {"
+            )
+            + js_function_block("function escapeHtml(text) {", "function formatDefault")
+            + js_function_block(
+                'function formatDefault(value, fallback="none") {',
+                "function currentControlValue",
+            )
+            + js_function_block(
+                "function currentControlValue(env) {", "function setControlValue"
+            )
+            + js_function_block("function knobByEnv(env) {", "function inputForKnob")
+            + js_function_block(
+                'function inputForKnob(knob, { emptyLabel, optionLabels = {}, id = "" } = {}) {',
+                "function knobField",
+            )
+            + js_function_block(
+                "function knobField(env, label, options={}) {", "function knobHint"
+            )
+            + js_function_block(
+                "function samplingFields(prefix) {", "function modelTuningPanel"
+            )
+            + js_function_block(
+                "function modelTuningPanel(task) {", "function renderAdvancedPanels"
+            )
+            + js_function_block(
+                "    const PROMPT_OVERRIDE_ENVS = {", "    function selectedPromptProfile"
+            )
+            + js_function_block(
+                "    function promptTemplateEnvMap() {", "    function promptTemplateRecord"
+            )
+            + js_function_block(
+                "function renderAdvancedPanels() {", "function renderAdvancedKnobs"
+            )
+            + r"""
+// ---- 1. Missing schema fails safe -----------------------------------------
+assert(state.schema === null, "harness state must start with an empty schema");
+assert(advancedPanelFields("Pipeline Budget") === "", "missing schema must render no budget fields");
+assert(advancedPanelFields("Run Settings") === "", "missing schema must render no peripheral fields");
+
+// ---- 2. Registry-driven families (DN-18) ----------------------------------
+// The registry is the only list: existing and brand-new advanced_panels
+// knobs appear in their group's family with the registry label, while
+// dedicated-renderer envs, other groups, and other locations stay out.
+state.schema = {
+  current_env: {},
+  prompt_templates: [],
+  knobs: [
+    { env: "NEWS_MAX_STORIES", group: "Pipeline Budget", label: "Max stories", type: "number", min: 1, step: 1, default: null, ui_location: "advanced_panels" },
+    { env: "NEWS_BRAND_NEW_BUDGET_KNOB", group: "Pipeline Budget", label: "Brand new budget knob", type: "number", min: 1, step: 1, default: null, ui_location: "advanced_panels" },
+    { env: "NEWS_BLOCK_REUSED_URLS", group: "Run Settings", label: "Block reused URLs", type: "bool", default: false, ui_location: "advanced_panels" },
+    { env: "NEWS_BRAND_NEW_PERIPHERAL_KNOB", group: "Run Settings", label: "Brand new peripheral knob", type: "text", default: null, ui_location: "advanced_panels" },
+    { env: "NEWS_PROMPT_OVERRIDE_ARTICLE_SUMMARY", group: "Run Settings", label: "Prompt override (article summary)", type: "text", default: null, ui_location: "advanced_panels" },
+    { env: "NEWS_MODEL_ARTICLE_SUMMARY_BASE_URL", group: "Model Server Settings", label: "Article writing base URL", type: "text", default: null, ui_location: "advanced_panels" },
+    { env: "NEWS_EMBEDDING_MODEL", group: "Run Settings", label: "Embedding model", type: "text", default: "all-mpnet-base-v2", ui_location: "advanced_raw" }
+  ]
+};
+const budgets = advancedPanelFields("Pipeline Budget");
+assert(budgets.includes('data-env="NEWS_MAX_STORIES"'), "existing budget knob missing from its family");
+assert(budgets.includes('data-env="NEWS_BRAND_NEW_BUDGET_KNOB"'), "new budget registry knob did not join its family without a second list");
+assert(budgets.includes("Brand new budget knob"), "registry label missing for the new budget knob");
+assert(!budgets.includes("NEWS_BLOCK_REUSED_URLS"), "peripheral knob leaked into the budgets family");
+const peripheral = advancedPanelFields("Run Settings");
+assert(peripheral.includes('data-env="NEWS_BLOCK_REUSED_URLS"'), "existing peripheral knob missing from its family");
+assert(peripheral.includes('data-env="NEWS_BRAND_NEW_PERIPHERAL_KNOB"'), "new peripheral registry knob did not join its family without a second list");
+assert(!peripheral.includes("NEWS_PROMPT_OVERRIDE_ARTICLE_SUMMARY"), "dedicated override editor env leaked into the generic family");
+assert(!peripheral.includes("NEWS_EMBEDDING_MODEL"), "raw-location knob leaked into the generic family");
+assert(!budgets.includes("NEWS_MODEL_ARTICLE_SUMMARY_BASE_URL"), "task-card env leaked into a generic family");
+
+// ---- 3. Full Advanced Settings integration -------------------------------
+renderAdvancedPanels();
+assert(advancedPanels.innerHTML.includes("<h2>Run budgets and quotas</h2>"), "Budgets panel heading missing");
+assert(advancedPanels.innerHTML.includes("<h2>Optional run settings</h2>"), "Peripheral panel heading missing");
+assert(advancedPanels.innerHTML.includes('data-env="NEWS_BRAND_NEW_BUDGET_KNOB"'), "new registry knob missing from the rendered Budgets panel");
+assert(advancedPanels.innerHTML.includes('data-env="NEWS_BRAND_NEW_PERIPHERAL_KNOB"'), "new registry knob missing from the rendered Peripheral panel");
+assert(!advancedPanels.innerHTML.includes("undefined"), "undefined markup leaked into Advanced Settings");
+"""
+        )
+        node = shutil.which("node")
         if node is None:
             self.skipTest("Node.js is required for the embedded UI renderer harness")
         timeout_seconds = 30
