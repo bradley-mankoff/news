@@ -8,5 +8,5 @@
   "gate": ".venv/bin/python3 -m pytest tests/ -q",
   "brief_max_chars": 24000,
   "max_run_hours": 24,
-  "max_attempts": 2
+  "max_attempts": 3
 }
