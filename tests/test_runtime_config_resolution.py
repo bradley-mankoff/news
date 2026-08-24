@@ -693,6 +693,15 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
                 materialize_outputs=False,
             )
 
+    def test_unknown_prompt_profile_error_includes_remediation_hint(self) -> None:
+        # Fail-fast ValueError from _build_runtime_config must say how to fix it.
+        with self.assertRaisesRegex(ValueError, "To fix: set NEWS_PROMPT_PROFILE"):
+            load_runtime_config(
+                environ={},
+                overrides={"NEWS_PROMPT_PROFILE": "bogus"},
+                materialize_outputs=False,
+            )
+
     def test_prompt_override_envs_resolve_into_runtime_config(self) -> None:
         config = load_runtime_config(
             environ={},

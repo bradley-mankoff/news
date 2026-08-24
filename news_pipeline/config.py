@@ -2512,7 +2512,8 @@ def _build_runtime_config(
     # files / docker-compose) counts as unset, matching sibling knobs and the
     # CLI/UI semantics. Strict validation of non-empty ids happens below.
     prompt_profile_id = _str_env(PROMPT_PROFILE_ENV_VAR, DEFAULT_PROMPT_PROFILE_ID) or DEFAULT_PROMPT_PROFILE_ID
-    # Resolved once at import time in pipeline.py; fails fast on unknown ids.
+    # Bound exactly once here; every consumer below reuses this binding
+    # instead of re-resolving the id. Fails fast on unknown ids.
     prompt_profile = get_prompt_profile(prompt_profile_id)
     # Per-stage prompt overrides: durable user edits from
     # config/prompt_overrides.yaml first, then NEWS_PROMPT_OVERRIDE_<TASK>
