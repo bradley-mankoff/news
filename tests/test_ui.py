@@ -685,7 +685,7 @@ assert(advancedPanels.innerHTML.includes('data-env="NEWS_BRAND_NEW_PERIPHERAL_KN
 assert(!advancedPanels.innerHTML.includes("undefined"), "undefined markup leaked into Advanced Settings");
 """
         )
-        node = shutil.which("node")
+        node = _find_node()
         if node is None:
             self.skipTest("Node.js is required for the embedded UI renderer harness")
         timeout_seconds = 30
@@ -841,7 +841,7 @@ assert(
 );
 """
         )
-        node = shutil.which("node")
+        node = _find_node()
         if node is None:
             self.skipTest("Node.js is required for the embedded UI renderer harness")
         timeout_seconds = 30
@@ -5454,6 +5454,235 @@ for (const absentId of ["article_tuning_save", "article_tuning_rename", "article
         self.assertIn("resetLog();", run_action)
         self.assertIn("startSpinner();", run_action)
         self.assertIn("new EventSource", run_action)
+
+    def test_run_log_reducer_and_stream_lifecycle_execute_in_node_dom_harness(self) -> None:
+        """Execute the embedded run-log reducer and SSE lifecycle in Node (DN-23).
+
+        The stage reducer, spinner, finalizeRun(), and the whole runAction()
+        wiring are extracted from ui_module.HTML itself, not reimplemented,
+        and driven against a minimal DOM/EventSource/timer harness. Terminal
+        cleanup and disconnect recovery must behave, not merely appear in the
+        source contracts asserted by test_run_log_renderer_contracts.
+        """
+        html = ui_module.HTML
+        js = (
+            r"""
+const assert = (condition, message) => {
+  if (!condition) throw new Error(message);
+};
+"""
+            + r"""
+// Minimal DOM: stable per-id element stubs carrying exactly what renderLog
+// and resetLog touch (textContent plus scroll bookkeeping).
+const elements = new Map();
+const elementFor = (id) => {
+  if (!elements.has(id)) {
+    elements.set(id, { textContent: "", scrollTop: 0, scrollHeight: 0 });
+  }
+  return elements.get(id);
+};
+const $ = (id) => elementFor(id);
+// Lifecycle collaborators record instead of touching the wider page.
+const statuses = [];
+const setStatus = (text, cls = "muted") => statuses.push([text, cls]);
+let reviewRefreshes = 0;
+const updateRunControls = () => {};
+const refreshReviewData = () => { reviewRefreshes += 1; };
+// Deterministic timers: intervals stay open until cleared and remember their
+// callbacks, timeouts queue so the harness decides when polling fires.
+let intervalSeq = 0;
+const openIntervals = [];
+const setInterval = (fn) => {
+  const id = ++intervalSeq;
+  openIntervals.push([id, fn]);
+  return id;
+};
+const clearInterval = (id) => {
+  const at = openIntervals.findIndex(([openId]) => openId === id);
+  if (at >= 0) openIntervals.splice(at, 1);
+};
+const tickSpinners = () => { for (const [, fn] of [...openIntervals]) fn(); };
+const pendingTimeouts = [];
+const window = {
+  setTimeout: (fn, delay) => { pendingTimeouts.push([fn, delay]); return pendingTimeouts.length; },
+};
+// Yield past an awaited status fetch so assertions observe the recovery
+// path's effects (it resumes on a microtask after the api promise).
+const settle = () => new Promise((resolve) => setImmediate(resolve));
+class EventSource {
+  static opened = [];
+  constructor(url) {
+    this.url = url;
+    this.closed = false;
+    this.onmessage = null;
+    this.onerror = null;
+    this.statusListener = null;
+    EventSource.opened.push(this);
+  }
+  addEventListener(kind, listener) { if (kind === "status") this.statusListener = listener; }
+  close() { this.closed = true; }
+}
+// API fake: POST /api/run mints run ids; status polls replay scripted payloads.
+const statusQueue = [];
+let runsStarted = 0;
+let statusFetches = 0;
+async function api(path, options = {}) {
+  if (path === "/api/run" && options.method === "POST") {
+    runsStarted += 1;
+    return { run_id: `run-${runsStarted}` };
+  }
+  if (path.startsWith("/api/runs/")) {
+    statusFetches += 1;
+    return statusQueue.shift();
+  }
+  throw new Error(`unexpected api call: ${path}`);
+}
+const requestBody = (action) => ({ action });
+"""
+            + html[html.index("    const state = {") : html.index("    const icons = {")]
+            + html[html.index("    const SPINNER_GLYPHS = [") : html.index("    function badgeClass")]
+            + r"""
+// ---- 1. Stage reducer replaces progress rows in place ----------------------
+resetLog();
+startSpinner();
+
+appendLogEvent({ kind: "progress", stage: "collect", line: "collecting feeds 3/10" });
+appendLogEvent({ kind: "message", line: "plain note" });
+appendLogEvent({ kind: "progress", stage: "summarize", line: "summarizing 1/2" });
+assert(logState.rows.length === 3, "each new stage or message adds one row");
+assert(logState.progressByStage.get("collect") === 0, "first-seen stage must claim its row index");
+assert(logState.progressByStage.get("summarize") === 2, "stage indexes must map to their own rows");
+
+appendLogEvent({ kind: "progress", stage: "collect", line: "collecting feeds 7/10" });
+appendLogEvent({ kind: "progress", stage: "collect", line: "collecting feeds 10/10", complete: true });
+assert(logState.rows.length === 3, "progress updates for a live stage must replace its row");
+assert(logState.rows[0].text === "collecting feeds 10/10", "latest progress text wins");
+assert(logState.rows[0].live === false && logState.rows[0].complete === true, "completed progress flips live off");
+
+assert(
+  elementFor("logPane").textContent === "✓ collecting feeds 10/10\nplain note\n⠋ summarizing 1/2",
+  `rendered log mismatch: ${JSON.stringify(elementFor("logPane").textContent)}`,
+);
+tickSpinners();
+assert(
+  elementFor("logPane").textContent.includes(`${SPINNER_GLYPHS[1]} summarizing 1/2`),
+  "spinner ticks must redecorate only live rows",
+);
+assert(!elementFor("logPane").textContent.includes(`${SPINNER_GLYPHS[1]} collecting`), "completed rows must keep their glyph");
+
+const rowsBeforeDuplicate = logState.rows.length;
+appendLogEvent({ kind: "progress", stage: "summarize", line: "summarizing 1/2" });
+assert(logState.rows.length === rowsBeforeDuplicate, "identical duplicate progress text must not grow the log");
+appendLogEvent({ kind: "message", line: "alpha\n\nbeta" });
+assert(logState.rows.length === rowsBeforeDuplicate + 2, "multi-line messages split into rows, blanks skipped");
+
+// ---- 2. finalizeRun ignores non-terminal statuses ---------------------------
+assert(openIntervals.length === 1, "scenario setup must leave the spinner running");
+resetLog();
+assert(openIntervals.length === 0, "resetLog must stop a live spinner");
+assert(elementFor("logPane").textContent === "", "resetLog must clear the log pane");
+startSpinner();
+appendLogEvent({ kind: "progress", stage: "write", line: "writing report" });
+const liveEvents = new EventSource("/api/runs/run-a/events");
+state.activeRun = "run-a";
+const reviewsBeforeNonTerminal = reviewRefreshes;
+assert(finalizeRun({ status: "running", run_id: "run-a" }, liveEvents) === false, "non-terminal status must not finalize");
+assert(liveEvents.closed === false, "non-terminal status must leave the stream open");
+assert(openIntervals.length === 1, "non-terminal status must keep the spinner alive");
+assert(reviewRefreshes === reviewsBeforeNonTerminal, "non-terminal status must not refresh review data");
+assert(state.activeRun === "run-a", "non-terminal status must keep the run active");
+
+// ---- 3. Every terminal status cleans up -------------------------------------
+for (const [status, glyph] of [["completed", "✓"], ["failed", "✗"], ["stopped", "■"]]) {
+  resetLog();
+  startSpinner();
+  appendLogEvent({ kind: "progress", stage: "write", line: "writing report" });
+  const events = new EventSource(`/api/runs/run-t/events`);
+  state.activeRun = "run-t";
+  const reviewsBefore = reviewRefreshes;
+  assert(finalizeRun({ status, run_id: "run-t" }, events) === true, `${status} must finalize`);
+  assert(events.closed, `${status} must close the stream`);
+  assert(openIntervals.length === 0, `${status} must stop the spinner`);
+  assert(state.activeRun === null, `${status} must release the active run`);
+  assert(reviewRefreshes === reviewsBefore + 1, `${status} must refresh durable review data`);
+  assert(logState.rows.every((row) => !row.live), `${status} must clear live flags on stage rows`);
+  assert(
+    logState.rows[logState.rows.length - 1].text === `${glyph} [ui] ${status}`,
+    `${status} must append its terminal glyph line`,
+  );
+}
+
+// ---- 4. Disconnect mid-run recovers via status polling ----------------------
+statusQueue.push({ status: "running", run_id: "run-1" });
+statusQueue.push({ status: "completed", run_id: "run-1" });
+const streamsBeforeRun = EventSource.opened.length;
+await runAction("run");
+assert(state.activeRun === "run-1", "runAction must track the started run");
+assert(openIntervals.length === 1, "runAction must spin while streaming");
+assert(EventSource.opened.length === streamsBeforeRun + 1, "runAction must open exactly one stream");
+assert(EventSource.opened[streamsBeforeRun].url === "/api/runs/run-1/events", "stream URL must target the started run");
+const stream = EventSource.opened[streamsBeforeRun];
+stream.onmessage({ data: JSON.stringify({ kind: "progress", stage: "collect", line: "collecting feeds 1/10" }) });
+assert(logState.rows.length === 1, "streamed progress must reach the reducer");
+
+stream.onerror();
+await settle();
+assert(stream.closed, "disconnect must close the dead EventSource");
+assert(openIntervals.length === 0, "disconnect must stop the spinner");
+assert(statuses.some(([text]) => text.startsWith("Live run stream disconnected")), "disconnect must warn the user");
+assert(pendingTimeouts.length === 1 && pendingTimeouts[0][1] === 1000, "recovery polls the run status one second later");
+assert(statusFetches === 1, "recovery must have checked the run status endpoint exactly once");
+assert(state.activeRun === "run-1", "a still-running report must keep the run active");
+
+stream.onerror();
+await settle();
+assert(pendingTimeouts.length === 1, "a second error must not stack another recovery poll");
+
+const reviewsAtDisconnect = reviewRefreshes;
+await pendingTimeouts.shift()[0]();
+assert(statusFetches === 2, "polling must continue until the run reaches a terminal status");
+assert(state.activeRun === null, "recovered terminal status must release the run");
+assert(stream.closed, "recovered terminal status must close the stream");
+assert(reviewRefreshes === reviewsAtDisconnect + 1, "recovered completion must refresh durable review data");
+assert(logState.rows[logState.rows.length - 1].text === "✓ [ui] completed", "recovered completion must land its glyph line");
+assert(pendingTimeouts.length === 0, "terminal status must end polling");
+
+// ---- 5. Invalid stream data takes the same recovery path -------------------
+statusQueue.push({ status: "stopped", run_id: "run-2" });
+const streamsBeforeSecondRun = EventSource.opened.length;
+const fetchesBeforeInvalid = statusFetches;
+await runAction("run");
+const brokenStream = EventSource.opened[streamsBeforeSecondRun];
+brokenStream.onmessage({ data: "{not json" });
+await settle();
+assert(statusFetches === fetchesBeforeInvalid + 1, "invalid-data recovery must poll the run status once");
+assert(pendingTimeouts.length === 0, "a terminal report must end polling immediately");
+assert(brokenStream.closed, "invalid data must abandon the stream");
+assert(openIntervals.length === 0, "invalid data must stop the spinner");
+assert(statuses.some(([text]) => text.startsWith("Live run stream sent invalid data")), "invalid data must warn the user");
+assert(state.activeRun === null, "recovered stop must release the run");
+assert(logState.rows[logState.rows.length - 1].text === "■ [ui] stopped", "recovered stop must land its glyph line");
+"""
+        )
+        node = _find_node()
+        if node is None:
+            self.skipTest("Node.js is required for the embedded UI renderer harness")
+        timeout_seconds = 30
+        try:
+            result = subprocess.run(
+                [node, "--input-type=module", "-"],
+                input=js,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=timeout_seconds,
+            )
+        except subprocess.TimeoutExpired as exc:
+            self.fail(
+                f"Node harness timed out after {timeout_seconds}s: "
+                f"stdout={exc.stdout!r} stderr={exc.stderr!r}"
+            )
+        self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
 
     def test_report_review_tab_contracts(self) -> None:
         html = ui_module.HTML
