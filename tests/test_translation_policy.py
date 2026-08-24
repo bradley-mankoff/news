@@ -75,6 +75,26 @@ class TranslationDecisionTests(unittest.TestCase):
             )["runs"]
         )
 
+    def test_target_language_blank_fallback_to_default(self) -> None:
+        for blank in (None, "", "   ", 0):
+            with self.subTest(blank=blank):
+                decision = translation_decision(
+                    enabled=True, source_language="fr", target_language=blank
+                )
+                self.assertEqual(decision["target_language"], DEFAULT_TARGET_LANGUAGE)
+                # blank target is still English, so fr != en -> needs_translation
+                self.assertTrue(decision["runs"])
+                self.assertEqual(decision["status"], STATUS_NEEDS_TRANSLATION)
+
+    def test_target_language_normalization_fallback_consistency(self) -> None:
+        self.assertEqual(
+            translation_decision(enabled=True, source_language="de", target_language="  ")["target_language"],
+            build_translation_provenance(
+                original_text="", translated_text="", source_language="fr",
+                target_language="  ", model=None, status=""
+            ).target_language,
+        )
+
 
 class TranslationProvenanceTests(unittest.TestCase):
     def test_provenance_keeps_original_and_translated_text_with_context(self) -> None:
