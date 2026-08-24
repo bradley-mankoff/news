@@ -1,6 +1,7 @@
 name: fusion-10
 description: |
-  Two-wide fused plan, then two-wide implement, then fused impl. Plan is scarce.
+  Two-wide fused plan, then two-wide implement, then fused impl. Planning and
+  review use the large tier; implementation uses the small tier.
 
 nodes:
   - id: plan
@@ -8,7 +9,7 @@ nodes:
 
   - id: judge-plan
     command: fusion-judge-plan-fuse-forced
-    model: '@judge'
+    model: large
     retry: {max_attempts: 5, delay_ms: 5000, on_error: all}
     context: fresh
     depends_on: [plan]
@@ -33,7 +34,7 @@ nodes:
 
   - id: judge-impl
     command: fusion-judge-impl-fuse-forced
-    model: '@judge'
+    model: large
     retry: {max_attempts: 5, delay_ms: 5000, on_error: all}
     context: fresh
     depends_on: [panel]

@@ -25,9 +25,7 @@ Archon's bundled, tried-and-tested ones installed in the archon home.
 
 | Model | Role | Basis |
 |---|---|---|
-| **GPT-5.6 Luna** | planning, implementation, review — the `large` tier plus the rigorous-node pins in the workflows | openai-codex subscription, $0 marginal |
-| **DeepSeek V4 Flash** | scout + routine/little nodes — the `small`/`medium` tiers | opencode-go subscription |
-| **Grok 4.6** | ticket creation ONLY; held in reserve. Never add grok to doing/review workflows | xai, reserve |
+| **Qwen3.8 27B Q4 (local)** | every node — ticket creation, scout/routine, planning, implementation, and review — the `small`/`medium`/`large` tiers all resolve to `local-qwen/qwen3.8-27b-q4` on the `pi` provider | local llama-server at `http://127.0.0.1:8080/v1` (`--parallel 1` serial capacity, max reasoning) |
 
 Do not add third-party or discounted models to this menu. The fusion
 experiment that used them is abandoned (2026-08-17).
@@ -35,8 +33,10 @@ experiment that used them is abandoned (2026-08-17).
 ## Dispatch rules
 
 - **8pm CST cutoff (hard, poller-enforced):** no NEW workflow dispatches after
-  8pm CST (= 02:00 UTC, inside DeepSeek's 01:00–04:00 UTC peak-pricing window).
-  The board poller enforces this mechanically:
+  8pm CST (= 02:00 UTC). This is a legacy operational quiet-hours policy
+  predating the local-Qwen setup — not a model-cost requirement (the local
+  model has no per-token pricing). The board poller enforces this
+  mechanically:
   `automation/config.json` → `no_dispatch_after_local_hour: 20` — dispatch,
   resume, and conflict-fix starts are deferred past that hour and queued for
   the next morning. Running workflows are allowed to finish and merge.

@@ -11,7 +11,7 @@ nodes:
       find . -name .git -prune -o -exec chmod a-w {} +
 
   - id: plan-a
-    model: '@panel-a'
+    model: large
     retry: {max_attempts: 5, delay_ms: 5000, on_error: all}
     context: fresh
     depends_on: [setup]
@@ -22,7 +22,7 @@ nodes:
       Do not touch the checkout.
 
   - id: plan-b
-    model: '@panel-b'
+    model: large
     retry: {max_attempts: 5, delay_ms: 5000, on_error: all}
     context: fresh
     depends_on: [setup]

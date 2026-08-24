@@ -21,7 +21,7 @@ nodes:
       find . -name .git -prune -o -exec chmod a-w {} +
 
   - id: piv-a
-    model: '@panel-a'
+    model: small
     depends_on: [setup]
     loop:
       until: VALIDATED
@@ -34,7 +34,7 @@ nodes:
         Do not touch the checkout.
 
   - id: piv-b
-    model: '@panel-b'
+    model: small
     depends_on: [setup]
     loop:
       until: VALIDATED

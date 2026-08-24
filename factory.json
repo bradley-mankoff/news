@@ -1,9 +1,12 @@
 {
   "tracker": "piyaz",
   "piyaz_project": "DN",
-  "max_concurrent": 2,
-  "default_tactic": "fusion-02",
+  "max_concurrent": 1,
+  "default_tactic": "oneshot",
   "allow_fusion": true,
   "base_branch": "develop",
-  "gate": ".venv/bin/python3 -m pytest tests/ -q"
+  "gate": ".venv/bin/python3 -m pytest tests/ -q",
+  "brief_max_chars": 24000,
+  "max_run_hours": 24,
+  "max_attempts": 2
 }

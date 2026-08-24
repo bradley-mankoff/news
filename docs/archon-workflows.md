@@ -1,39 +1,57 @@
 # Archon Workflow Inventory
 
 **Ticket creator:** the minimal assignable menu (doing + review) lives in
-[`ticket-workflow-menu.md`](ticket-workflow-menu.md) — grok reads that when
-processing ideas into tickets. Dispatch rules include the hard 8pm CST cutoff
-(no new work after 8pm CST = 02:00 UTC, DeepSeek's peak window).
+[`ticket-workflow-menu.md`](ticket-workflow-menu.md) — the ticket creator
+reads that when processing ideas into tickets. Dispatch rules include the
+poller-enforced 8pm CST quiet-hours cutoff (no new work after 8pm CST; a
+legacy operational policy, not a model-cost requirement).
 
 Machine-local archon (archon-pi build, v0.7.0 = stock Archon) lives at
 `~/.local/share/archon-pi/archon-home/`.
 
 ## Execution model
 
-- Routine nodes use the `pi` CLI with
-  `opencode-go/deepseek-v4-flash` at `effort: max` via the `small`/`medium`
-  tiers in `archon-home/config.yaml` (scout + little things).
-- Planning, implementation, and review nodes run **GPT-5.6 Luna**
-  (`openai-codex/gpt-5.6-luna`, `effort: max`) — the `large` tier plus
-  explicit rigorous-node pins in the workflow YAMLs (OpenAI Codex
-  subscription, $0 marginal). It covers planning, review, conflict
-  resolution, issue drafting, and the completion records that classify
-  deferred work.
-- Both paths run at their maximum Pi reasoning setting: DeepSeek and the
-  OpenAI Codex backend both use `effort: max`.
-- Pi OAuth credentials are configured with the interactive `/login` command.
-  The OpenAI Codex subscription is stored in `~/.pi/agent/auth.json`; the
-  routine OpenCode credential remains alongside it.
+- Every node runs on the `pi` CLI with `local-qwen/qwen3.8-27b-q4` — the
+  local llama-server worker at `http://127.0.0.1:8080/v1` — at `effort: max`.
+  The `small`, `medium`, and `large` tiers in `archon-home/config.yaml` and
+  the default assistant (`assistants.pi`) all resolve to that same local
+  model. There is no separate opencode assistant (local-qwen is Pi-only) and
+  no per-token cost.
+- All paths run at the maximum Pi reasoning setting: the tiers carry
+  `effort: max`, and the curated workflows pin workflow-level `effort: max`.
+- The local model needs no OAuth: `local-qwen` is registered in
+  `~/.pi/agent/models.json` with a dummy local key (`apiKey:
+  sk-local-qwen-dummy`) pointing at the local server. Pi tool credentials, if
+  any, remain separate in `~/.pi/agent/auth.json`.
 - Bundled workflow defaults are disabled (repo `.archon/config.yaml` →
   `defaults.loadDefaultWorkflows: false`). The usable set is the 17 files in
   `archon-home/workflows/`.
-- Tier model refs use the tier's provider; explicit Pi model refs select the
-  OpenAI Codex backend. Routine nodes therefore remain on Pi/DeepSeek while
-  rigorous nodes use Pi/OpenAI Codex.
+- Tier model refs use the tier's provider; every tier's provider is `pi`, so
+  routine and rigorous nodes alike run on the same local model.
 - Only workflows pinned to claude with **no tier model** stay claude-locked
   (archived below).
 
-## Usable workflows (Pi: OpenAI Codex + OpenCode)
+## Parallelism: serial by default
+
+llama-server runs the local model with `--parallel 1` (one slot), so AI
+requests are serialized at the model. Two opt-in knobs create parallelism,
+and both end up queueing behind that single slot:
+
+- **Mode B factory** (`news/factory.json`): `max_concurrent: 1` +
+  `default_tactic: "oneshot"` — workflows dispatch one at a time, serially.
+  Raising `max_concurrent` fans independent workflows out in parallel; they
+  then share the one llama-server slot.
+- **Fusion** (`allow_fusion: true`): fusion-tagged workflows embed parallel
+  AI nodes inside a single workflow run (parallel planners/implementers plus
+  a judge — e.g. the `archon-review-block` five-agent review block). Those
+  parallel nodes are real AI nodes, but they still share the one
+  llama-server slot, so they queue behind each other rather than running
+  concurrently at the model.
+
+Higher factory caps and fusion are retained opt-ins; serial execution is the
+default because the local worker serves one request at a time.
+
+## Usable workflows (Pi: local Qwen)
 
 | Workflow | Intent |
 |---|---|
@@ -59,8 +77,8 @@ Machine-local archon (archon-pi build, v0.7.0 = stock Archon) lives at
 
 Reason: pinned to the claude provider with **no tier model reference**, so the
 tier override does not apply; they need the Claude Code binary and/or
-claude-only features (hooks, interactive relay). Routine nodes use
-pi/opencode-go; rigorous nodes use Pi's OpenAI Codex backend. Original YAMLs are preserved at
+claude-only features (hooks, interactive relay). All pi-usable nodes run on
+the local Qwen model. Original YAMLs are preserved at
 `~/.local/share/archon-pi/archon-home/workflows-archived/`.
 
 | Workflow | Original intent | Why archived |

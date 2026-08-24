@@ -10,6 +10,7 @@ from automation.apply_workflow_edits import (
     TESTING_CONTRACT,
     ensure_contract,
     ensure_node,
+    ensure_tier_models,
 )
 
 
@@ -114,6 +115,94 @@ class EnsureContractTest(unittest.TestCase):
                             encoding="utf-8")
             note = ensure_contract(path, "completion-comment")
             self.assertIn("end not found", note)
+
+
+class EnsureTierModelsTest(unittest.TestCase):
+    LEGACY_BLOCK = (
+        "  - id: resolve\n"
+        "    provider: pi\n"
+        "    model: openai-codex/gpt-5.6-luna\n"
+        "    modelReasoningEffort: max\n"
+        "    effort: max\n"
+        "    prompt: |\n"
+        "      Resolve conflicts.\n"
+        "    depends_on: []\n"
+        "    context: fresh\n"
+    )
+    EXPECTED_BLOCK = (
+        "  - id: resolve\n"
+        "    model: large\n"
+        "    prompt: |\n"
+        "      Resolve conflicts.\n"
+        "    depends_on: []\n"
+        "    context: fresh\n"
+    )
+
+    def test_legacy_pinned_block_becomes_tier_based(self) -> None:
+        # Regression: a node pinned by the old patcher (provider + literal
+        # model + effort) must become exactly one correctly indented
+        # `model: large`, with no leftover provider/effort/model fields.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "wf.yaml"
+            path.write_text(self.LEGACY_BLOCK, encoding="utf-8")
+            note = ensure_tier_models(path, ("resolve",))
+            self.assertEqual(note, "pinned model: large on nodes in wf.yaml")
+            text = path.read_text()
+            self.assertEqual(text, self.EXPECTED_BLOCK)
+            self.assertEqual(text.count("model: large"), 1)
+            self.assertNotIn("provider:", text)
+            self.assertNotIn("effort:", text)
+            self.assertNotIn("modelReasoningEffort", text)
+            self.assertNotIn("gpt-5.6-luna", text)
+
+    def test_repeated_application_is_noop(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "wf.yaml"
+            path.write_text(self.LEGACY_BLOCK, encoding="utf-8")
+            self.assertIsNotNone(ensure_tier_models(path, ("resolve",)))
+            rewritten = path.read_text()
+            self.assertIsNone(ensure_tier_models(path, ("resolve",)))
+            self.assertIsNone(ensure_tier_models(path, ("resolve",)))
+            self.assertEqual(path.read_text(), rewritten)
+            self.assertEqual(path.read_text().count("model: large"), 1)
+
+    def test_clean_node_still_gets_tier_assignment(self) -> None:
+        # A target node with no model fields at all still gets `model: large`.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "wf.yaml"
+            path.write_text("  - id: agent\n    prompt: |\n      Assist.\n"
+                            "    context: fresh\n", encoding="utf-8")
+            note = ensure_tier_models(path, ("agent",))
+            self.assertEqual(note, "pinned model: large on nodes in wf.yaml")
+            text = path.read_text()
+            self.assertIn("    model: large\n    prompt: |", text)
+            self.assertEqual(text.count("model: large"), 1)
+
+    def test_unrelated_nodes_untouched(self) -> None:
+        # Only target nodes are rewritten; other nodes keep their fields,
+        # so unrelated workflow surgery survives re-running the helper.
+        other = ("  - id: other\n"
+                 "    provider: pi\n"
+                 "    model: openai-codex/gpt-5.6-luna\n"
+                 "    effort: max\n"
+                 "    context: fresh\n")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "wf.yaml"
+            path.write_text(self.LEGACY_BLOCK + "\n" + other, encoding="utf-8")
+            ensure_tier_models(path, ("resolve",))
+            text = path.read_text()
+            self.assertIn(self.EXPECTED_BLOCK, text)
+            self.assertIn(other, text)
+            self.assertEqual(text.count("model: large"), 1)
+
+    def test_missing_node_reports(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "wf.yaml"
+            path.write_text("  - id: other\n    context: fresh\n",
+                            encoding="utf-8")
+            note = ensure_tier_models(path, ("resolve",))
+            self.assertIn("missing nodes: resolve", note)
+            self.assertIn("checked large-tier nodes", note)
 
 
 if __name__ == "__main__":
