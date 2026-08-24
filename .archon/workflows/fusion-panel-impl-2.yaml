@@ -1,0 +1,55 @@
+name: fusion-panel-impl-2
+description: |
+  Two-wide implement block. Isolated copies a/b. No panel-c.
+  Include from fusion-02. Terminal node: verify-clean.
+
+nodes:
+  - id: setup
+    bash: |
+      set -euo pipefail
+      mkdir -p "$ARTIFACTS_DIR/panels" "$ARTIFACTS_DIR/reports"
+      rm -rf "$ARTIFACTS_DIR"/panels/* "$ARTIFACTS_DIR"/reports/* \
+             "$ARTIFACTS_DIR"/fused 2>/dev/null || true
+      for p in a b; do
+        DEST="$ARTIFACTS_DIR/panels/$p"
+        mkdir -p "$DEST"
+        if git rev-parse --verify HEAD >/dev/null 2>&1; then
+          git archive HEAD | tar -x -C "$DEST"
+        else
+          rsync -a --exclude='.git' ./ "$DEST"/
+        fi
+      done
+      find . -name .git -prune -o -exec chmod a-w {} +
+
+  - id: panel-a
+    model: small
+    retry: {max_attempts: 5, delay_ms: 5000, on_error: all}
+    context: fresh
+    depends_on: [setup]
+    prompt: |
+      Independent implementer. Work ONLY in $ARTIFACTS_DIR/panels/a.
+      Request: $ARGUMENTS
+      Implement, then write $ARTIFACTS_DIR/reports/a.md (files, rationale, how to verify).
+      Do not touch the checkout (it is read-only).
+
+  - id: panel-b
+    model: small
+    retry: {max_attempts: 5, delay_ms: 5000, on_error: all}
+    context: fresh
+    depends_on: [setup]
+    prompt: |
+      Independent implementer. Work ONLY in $ARTIFACTS_DIR/panels/b.
+      Request: $ARGUMENTS
+      Implement, then write $ARTIFACTS_DIR/reports/b.md (files, rationale, how to verify).
+      Do not touch the checkout (it is read-only).
+
+  - id: verify-clean
+    bash: |
+      set -euo pipefail
+      DIRTY=$(git status --porcelain || true)
+      if [ -n "$DIRTY" ]; then
+        echo "PANEL ISOLATION VIOLATION:" >&2
+        echo "$DIRTY" >&2
+        exit 1
+      fi
+    depends_on: [panel-a, panel-b]

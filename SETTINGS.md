@@ -29,7 +29,8 @@ is defined in
 | `NEWS_PROMPT_PROFILE` | `balanced` | Editorial tone for the five LLM prompt stages. One of `balanced`, `consensus-and-contradiction`, `explain-like-im-five`, `facts-only`, `playful`. |
 | `NEWS_PROMPT_OVERRIDE_<TASK>` | _(unset)_ | Per-stage editorial override layered on top of `NEWS_PROMPT_PROFILE` and `config/prompt_overrides.yaml` (override wins). Tasks: `ARTICLE_SUMMARY`, `STORY_SCALE_SCREENING`, `STORY_DRAFTING`, `TITLE_GENERATION`, `IMAGE_ART_DIRECTION`. Unset/empty = use profile text. Editable from the UI's Editorial approach panel. |
 | `NEWS_PROMPT_TEMPLATE_<TASK>` | _(unset)_ | Advanced full-template override (ADR 0015): a JSON object `{"system": ..., "user": ...}` of Python `string.Template` texts replacing the whole system/user prompt for that task. Tasks match `NEWS_PROMPT_OVERRIDE_<TASK>`. Unset/empty = built-in template. Non-empty values must parse and validate (required placeholders, contract markers) or config resolution fails. Editable from the Advanced Settings full-template editors. |
-| `NEWS_MODEL` | `gemma-4-12b-it-4bit` | Default friendly alias or full model repo/name. Task-specific model assignments inherit this value unless overridden. Stages with no LLM call of their own (story discovery) inherit this value. |
+| `NEWS_MODEL` | `gemma-4-12b-it-4bit` | Default friendly alias or full model repo/name. Model identity only: it never selects a backend or workload concurrency defaults. Task-specific model assignments inherit this value unless overridden. Stages with no LLM call of their own (story discovery) inherit this value. |
+| `NEWS_MODEL_BACKEND` | `mlx-vlm` | Backend for the default model: `mlx-lm`, `mlx-vlm`, `external`, or `llama.cpp`. Unset/empty resolves to the fixed default `mlx-vlm`; a known catalog model whose declared backend differs (for example `gemma-e2b-tiny` → `mlx-lm`, Qwythos GGUF aliases → `llama.cpp`) must set this explicitly or config resolution fails with an actionable message. |
 | `NEWS_SOURCE_SCOPE` | `core` | `core` selects active English core sources. `peripheral` selects core plus peripheral sources. |
 | `NEWS_DELIVERY_MODE` | `owner` | Optional email delivery policy: `disabled` (no delivery, `skipped: user_disabled`), `owner` (sends only to `NEWS_PRIMARY_RECIPIENT`), or `recipients` (explicit opt-in: active `config/recipients.yaml` entries, with the owner included only when listed). An explicitly configured `NEWS_EMAIL_RECIPIENTS` fallback is used only when the catalog is empty; an all-paused catalog records `skipped: user_disabled`. Legacy `NEWS_RECIPIENT_SCOPE` maps to this mode when the new variable is unset. |
 | `NEWS_RECIPIENT_SCOPE` | `primary` | Legacy migration value: `primary` maps to `NEWS_DELIVERY_MODE=owner`, `all` maps to `recipients`. Prefer `NEWS_DELIVERY_MODE`. |
@@ -66,6 +67,9 @@ The `bradley` terminology was replaced with `primary` (issue #23):
 | `NEWS_MODEL_MAX_INPUT_TOKENS` | Model Tuning synthesis prompt ceiling; older article context is trimmed if exceeded. |
 | `NEWS_ARTICLE_TEXT_TOKEN_LIMIT` | Pipeline Budget truncation for scraped article text before summarization. |
 | `NEWS_RELAX_STORY_DRAFTING_GUARDS` | Allows short/degraded fallback story drafting output when explicitly enabled. |
+| `NEWS_ARTICLE_SUMMARY_CONCURRENCY` | Pipeline Budget worker count for article summaries. Fixed `4` default for every model choice; explicit values still win. |
+| `NEWS_STORY_SYNTHESIS_CONCURRENCY` | Pipeline Budget worker count for story synthesis. Fixed `4` default for every model choice; explicit values still win. |
+| `NEWS_MODEL_CONCURRENCY` | Model Server Settings parallelism for the model server. Defaults to `4`, rising only when an explicit `NEWS_ARTICLE_SUMMARY_CONCURRENCY`/`NEWS_STORY_SYNTHESIS_CONCURRENCY` needs a larger server pool; model identity never changes it. |
 | `NEWS_MODEL_TEMPERATURE`, `NEWS_MODEL_TOP_P`, `NEWS_MODEL_TOP_K`, `NEWS_MODEL_MIN_P` | Default sampling settings. |
 | `NEWS_MODEL_PRESENCE_PENALTY`, `NEWS_MODEL_REPETITION_PENALTY` | Default repetition controls. |
 | `NEWS_MODEL_REASONING_TEMPERATURE`, `NEWS_MODEL_REASONING_TOP_P`, `NEWS_MODEL_REASONING_TOP_K`, `NEWS_MODEL_REASONING_MIN_P` | Sampling settings for reasoning-heavy tasks. |
@@ -82,14 +86,24 @@ Built-in model aliases:
 | `gemma-4-12b-it-4bit` | `mlx-community/gemma-4-12B-it-4bit` (default) | [mlx-community/gemma-4-12B-it-4bit](https://huggingface.co/mlx-community/gemma-4-12B-it-4bit) |
 | `qwythos-9b-4bit` | `huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-Q4_K.gguf` (managed `llama.cpp`) | [huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF](https://huggingface.co/huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF) |
 | `qwythos-9b-8bit` | `huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-Q8_0.gguf` (managed `llama.cpp`) | [huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF](https://huggingface.co/huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF) |
+| `qwen3-8b-4bit` | `mlx-community/Qwen3-8B-4bit` (runtime-verified, managed `mlx-lm`; 40,960-token context) | [mlx-community/Qwen3-8B-4bit](https://huggingface.co/mlx-community/Qwen3-8B-4bit) |
+| `qwen3-14b-4bit` | `mlx-community/Qwen3-14B-4bit` (runtime-verified, managed `mlx-lm`; 40,960-token context) | [mlx-community/Qwen3-14B-4bit](https://huggingface.co/mlx-community/Qwen3-14B-4bit) |
 
 The legacy `qwythos-9b-*` aliases are supported again through the managed
 `llama.cpp` backend (issue #75): each resolves to its exact GGUF file
 reference and is served by an operator-installed `llama-server` binary. The
-default model remains the MLX Gemma 4 12B entry above.
+`qwen3-8b-4bit` / `qwen3-14b-4bit` entries are runtime-verified MLX
+language models served by the managed `mlx-lm` backend; selecting either as
+the default requires `NEWS_MODEL_BACKEND=mlx-lm`, and the evidence record
+lives in [`docs/model-runtime-verification.md`](docs/model-runtime-verification.md).
+The default model remains the MLX Gemma 4 12B entry above.
 
 Each model page shows Hugging Face's native Hardware Compatibility panel
 (GGUF/MLX quantizations) — the UI model picker links directly to it.
+
+See [`docs/adr/0019-model-catalog-owns-curated-models-and-runtime-fit-verdicts.md`](docs/adr/0019-model-catalog-owns-curated-models-and-runtime-fit-verdicts.md)
+for the accepted Model Catalog ownership record (curated models,
+per-task recommendations, and runtime-fit verdicts).
 
 | Variable | Default | Description |
 |---|---|---|
@@ -110,7 +124,9 @@ Print the fully resolved local server command without running the pipeline:
 
 ```bash
 NEWS_MODEL=gemma-4-12b-it-4bit uv run news model-server-command
-NEWS_MODEL=qwythos-9b-4bit NEWS_LLAMA_CPP_SERVER=/opt/llama/llama-server uv run news model-server-command
+NEWS_MODEL=qwythos-9b-4bit NEWS_MODEL_BACKEND=llama.cpp NEWS_LLAMA_CPP_SERVER=/opt/llama/llama-server uv run news model-server-command
+NEWS_MODEL=qwen3-8b-4bit NEWS_MODEL_BACKEND=mlx-lm uv run news model-server-command
+NEWS_MODEL=qwen3-14b-4bit NEWS_MODEL_BACKEND=mlx-lm uv run news model-server-command
 ```
 
 The llama.cpp preview prints the exact `llama-server` command (`--hf-repo`,
@@ -180,6 +196,10 @@ per-process snapshot, so restart `news` or the UI after editing. It is not a
 Run Setting and does not change the default model
 (`DEFAULT_MODEL_ALIAS` stays code-owned).
 
+Baseline catalog ownership (curated built-ins, recommendations, and
+runtime-fit verdicts) is recorded in
+[`docs/adr/0019-model-catalog-owns-curated-models-and-runtime-fit-verdicts.md`](docs/adr/0019-model-catalog-owns-curated-models-and-runtime-fit-verdicts.md).
+
 `config/prompt_overrides.yaml` is a partial editorial-instruction override
 map for the five prompt tasks (article summary, story scale screening, story
 drafting, title generation, image art direction). It is a sentence-level
@@ -247,9 +267,10 @@ The old topic-scoped controls are rejected when present:
 `NEWS_TOPIC_EMBEDDING_THRESHOLD`, `NEWS_PER_SOURCE_TOPIC_ARTICLE_CAP`, and
 `NEWS_SUMMARY_SCOPE`.
 
-Model backend, cache, concurrency, and image-generation details are derived from
+Model backend (fixed default `mlx-vlm`), cache, concurrency (fixed stage
+and server defaults), and image-generation details are derived from
 explicit Run Settings or hard-coded defaults rather than hidden model-size
-bundles.
+bundles or model-identity inference.
 
 ## Daily Automation
 

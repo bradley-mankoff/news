@@ -28,7 +28,7 @@ Archon workflow engine + stock Pi provider, no custom extensions.
   (`launchctl list | grep news-board-poller`; log `automation/board_poller.log`;
   state `automation/state.json`).
 - The board poller enforces the committed
-  `automation/config.json:max_concurrent_workflows` limit (`4` here), counts
+  `automation/config.json:max_concurrent_workflows` limit (`10` here), counts
   active/paused Archon runs **for this repo's codebase** before dispatching
   (foreign repos' runs in the shared archon home do not consume news slots),
   reserves slots within a poll, and holds dispatches if the status lookup fails.
@@ -53,10 +53,10 @@ poll. `CONCURRENCY GAP` log lines explain why available capacity was not filled.
   Codex OAuth backend: `provider: pi`, `model: openai-codex/gpt-5.6-luna`, and
   `effort: max`.
 - A workflow's `provider:` pin is overridden when its `model:` resolves to a
-  tier — the tier's provider wins (bundled workflows pinned to claude still run
-  on pi via the tiers). Explicit Luna nodes set `provider: pi`.
-- Tier-level `effort` does not route to pi; the curated workflows carry
-  workflow-level `effort: max`, and Luna nodes also pin `effort: max`.
+  tier — the tier's provider wins (bundled workflows pinned to claude still
+  run on pi via the tiers).
+- The curated workflows carry workflow-level `effort: max`, so maximum
+  reasoning applies to every node.
 
 ## Build quirks (learned the hard way)
 

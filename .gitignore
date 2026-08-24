@@ -50,10 +50,12 @@ Thumbs.db
 .agents/
 .archon/
 !.archon/
-.archon/config.yaml
+# .archon/config.yaml is committed: Mode B @panel/@judge aliases live there.
 .archon/mcp/
 !.archon/commands/
 !.archon/commands/*.md
+!.archon/workflows/
+!.archon/workflows/*.yaml
 .claude/
 
 # R
@@ -68,9 +70,10 @@ git_cheat_sheet.txt
 # Automation runtime state
 automation/state.json
 automation/board_poller.log
+.scratch/factory-dispatch.log
 automation/archon-runs.log
 automation/ui_runtime.json
 
 # pi CLI project-local state
 .pi/
-
+.scratch/factory-ledger.json*

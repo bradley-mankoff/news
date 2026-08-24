@@ -244,7 +244,7 @@ def _runtime_snapshot(
                 "backend": config.model_backend,
                 "base_url": config.model_base_url,
                 "concurrency": config.model_concurrency,
-                "concurrency_source": "derived_from_model_stage_concurrency",
+                "concurrency_source": "derived_from_stage_concurrency",
                 "article_summary_concurrency": config.article_summary_concurrency,
                 "story_synthesis_concurrency": config.story_synthesis_concurrency,
                 "server_command": config.model_server_command,
@@ -2520,9 +2520,28 @@ HTML = r"""<!doctype html>
         el.insertAdjacentHTML("afterbegin", `<option value="${escapeHtml(valueText)}">${escapeHtml(valueText)}</option>`);
       }
       el.value = valueText;
+      // Programmatic select updates do not dispatch `change`; when this select
+      // has a mounted link row, refresh it immediately. Other controls still
+      // receive their value updates, while preset/reset callers perform the
+      // bulk refresh (issue #79).
+      if (el.tagName === "SELECT" && document.querySelector(`[data-links-for="${env}"]`)) {
+        renderKnobLinks(env);
+      }
     }
     function knobByEnv(env) {
       return (state.schema && state.schema.knobs || []).find(knob => knob.env === env) || null;
+    }
+    // Effective NEWS_MODEL_BACKEND: an explicit control value wins; an
+    // empty/unset control resolves to the registry's fixed default, matching
+    // config resolution (issue #169). The DOM value is never rewritten, so
+    // submitted override semantics stay unchanged.
+    function effectiveModelBackend() {
+      const current = String(currentControlValue("NEWS_MODEL_BACKEND") || "").trim();
+      if (current) return current;
+      const knob = knobByEnv("NEWS_MODEL_BACKEND");
+      return knob && knob.default !== undefined && knob.default !== null && knob.default !== ""
+        ? String(knob.default)
+        : "";
     }
     function inputForKnob(knob, { emptyLabel, optionLabels = {}, id = "" } = {}) {
       const current = currentControlValue(knob.env);
@@ -2705,16 +2724,20 @@ HTML = r"""<!doctype html>
         `<a href="${escapeHtml(entry.hardware)}" target="_blank" rel="noopener noreferrer" title="Native Hardware Compatibility panel (GGUF/MLX) on the model page">Hardware compatibility</a>`
       ].join(" · ");
     }
-    // Programmatic value changes (preset apply, clear/reset, startup restore)
-    // do not fire `change` events, so re-render links after those paths or the
-    // .knob-links container keeps the previous model's links.
+    // Programmatic value changes (preset apply, clear/reset, startup restore,
+    // model-tuning setters) do not fire `change` events, so re-render links
+    // after those paths or the .knob-links container keeps the previous
+    // model's links. Discovery is schema-driven (issue #79): every registry
+    // knob carrying non-empty option_links is a model link candidate. The
+    // mounted-container precheck skips unmounted knobs without invoking the
+    // renderer; direct renderKnobLinks() calls still warn on missing containers.
     function refreshModelKnobLinks() {
-      renderKnobLinks("NEWS_MODEL");
-      renderKnobLinks("NEWS_MODEL_ARTICLE_SUMMARY");
-      renderKnobLinks("NEWS_MODEL_STORY_DRAFTING");
-      renderKnobLinks("NEWS_MODEL_STORY_SCALE_SCREENING");
-      renderKnobLinks("NEWS_MODEL_TITLE_GENERATION");
-      renderKnobLinks("NEWS_MODEL_IMAGE_ART_DIRECTION");
+      ((state.schema && state.schema.knobs) || []).forEach(knob => {
+        if (!(knob.option_links && Object.keys(knob.option_links).length)) return;
+        if (document.querySelector(`[data-links-for="${knob.env}"]`)) {
+          renderKnobLinks(knob.env);
+        }
+      });
       // Preset apply, reset/clear, and startup restore re-render the hint so
       // a stale mismatch message cannot outlive a matching model/backend pair.
       const reference = currentControlValue("NEWS_MODEL");
@@ -2843,7 +2866,12 @@ HTML = r"""<!doctype html>
         core: "Core",
         peripheral: "All"
       };
-      const defaultModel = knobField("NEWS_MODEL", "Default model", { emptyLabel: "default: gemma-4-12b-it-4bit" });
+      // The empty-option label derives from the resolved runtime model
+      // reference (DN-19), so changing the reference updates the label
+      // instead of drifting from a hardcoded alias.
+      const defaultModel = knobField("NEWS_MODEL", "Default model", {
+        emptyLabel: `default: ${formatDefault(defaultRuntime.name || defaultRuntime.reference)}`
+      });
       const sharedModelTokens = knobField("NEWS_MODEL_MAX_INPUT_TOKENS", "Shared model input cap");
       const articleTokenCap = knobField("NEWS_ARTICLE_SUMMARY_MAX_TOKENS", "Article summary max tokens");
       const storyTokenCap = knobField("NEWS_STORY_DRAFTING_MAX_TOKENS", "Story drafting max tokens");
@@ -3053,6 +3081,10 @@ HTML = r"""<!doctype html>
           searchHuggingFaceModels().catch(err => setStatus(err.message, "bad"));
         }
       };
+      // The markup rebuild above recreates the NEWS_MODEL .knob-links row;
+      // refresh links here so the run-setup card is authoritative whenever
+      // renderRunSetup() is invoked (issue #79).
+      refreshModelKnobLinks();
     }
     // Knob labels for each task's per-task max-tokens env (modelTuningPanel).
     const TASK_MAX_TOKENS_LABELS = {
@@ -3327,6 +3359,7 @@ HTML = r"""<!doctype html>
       $("preset_name").value = preset.name || preset.id || "";
       $("preset_description").value = preset.description || "";
       $("preset_env").value = envToText(preset.env || {});
+      setPromptTemplateEnv(preset.env || {});
     }
     function collectRunPresetEditor() {
       return {
@@ -3388,7 +3421,7 @@ HTML = r"""<!doctype html>
       // Merge the Advanced full-template editors into the saved env and run
       // the same authoritative validation the runtime uses, so an invalid
       // template can never be persisted.
-      body.env = { ...currentPromptTemplateEnv(), ...body.env };
+      body.env = { ...body.env, ...currentPromptTemplateEnv() };
       await validatePromptTemplateEnv(body.env);
       const exists = state.presets.some(preset => preset.id === body.id);
       await api("/api/presets", { method: exists ? "PATCH" : "POST", body: JSON.stringify(body) });
@@ -3458,7 +3491,10 @@ HTML = r"""<!doctype html>
         `;
       }).join("");
       decorateEnvHints($("knobContainer"));
-      renderKnobLinks("NEWS_MODEL");
+      // The raw override rebuild recreates every mounted .knob-links row, so
+      // refresh all of them (not just NEWS_MODEL) or recreated task model
+      // containers keep the previous model's links (issue #79).
+      refreshModelKnobLinks();
     }
     function collectModelTuningPresetBody(task) {
       return modelTuningPayload(task);
@@ -4524,10 +4560,11 @@ HTML = r"""<!doctype html>
       renderModelBackendHint(requiredBackendForSelectedModel());
     }
     // Live compatibility hint under the Default model control: compares the
-    // selected model's known backend with the explicit NEWS_MODEL_BACKEND
-    // override (unsaved Advanced Settings edits included via
+    // selected model's known backend with the effective NEWS_MODEL_BACKEND
+    // (explicit control value, or the fixed registry default when the
+    // control is empty; unsaved Advanced Settings edits included via
     // currentControlValue). Never mutates the backend control; an empty
-    // override means config.py infers the backend from the model.
+    // override means the fixed default applies, not model inference.
     function renderModelBackendHint(requiredBackend = "") {
       const hint = document.getElementById("modelBackendHint");
       if (!hint) return;

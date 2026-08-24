@@ -1,0 +1,47 @@
+name: fusion-02
+description: |
+  Two-wide oneshot implement + forced fuse. Easy unspecified / robustness.
+  Two parallel small-tier implementers, one large-tier judge, one fused result.
+  Triggers: tactic fusion-02. NOT a replacement for review/conflict workflows.
+
+nodes:
+  - id: panel
+    include: fusion-panel-impl-2
+
+  - id: judge
+    command: fusion-judge-impl-fuse-forced
+    model: large
+    retry: {max_attempts: 5, delay_ms: 5000, on_error: all}
+    context: fresh
+    depends_on: [panel]
+    output_format:
+      type: object
+      properties:
+        verdict: { type: string }
+        mode: { type: string, enum: [fuse] }
+        chosen: { type: string, enum: [a, b] }
+      required: [verdict, mode, chosen]
+
+  - id: apply-fused
+    bash: |
+      set -euo pipefail
+      SRC="$ARTIFACTS_DIR/fused"
+      test -d "$SRC" && test -n "$(ls -A "$SRC")" || { echo "fused missing: $SRC" >&2; exit 1; }
+      chmod -R u+w . 2>/dev/null || true
+      rsync -a --exclude='.git' "$SRC/" ./
+      git status --short
+    depends_on: [judge]
+    when: "$judge.output.mode == 'fuse'"
+
+  - id: draft-pr
+    bash: |
+      set -euo pipefail
+      git add -A
+      git diff --cached --quiet && { echo "no changes"; exit 0; }
+      REF="${FACTORY_REF:-task}"
+      git commit -m "factory: $REF"
+      git push -u origin HEAD
+      gh pr create --draft --base "${FACTORY_BASE_BRANCH:-develop}" \
+        --title "factory: $REF" \
+        --body "Factory slice \`$REF\` (fusion-02). Draft. Human/QA merge."
+    depends_on: [apply-fused]

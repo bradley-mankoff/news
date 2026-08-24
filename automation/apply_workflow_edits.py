@@ -77,6 +77,10 @@ RIGOROUS_NODES: dict[str, tuple[str, ...]] = {
     "archon-workflow-builder.yaml": ("extract-intent", "generate-yaml"),
 }
 
+# Backwards-compat tier constants for PR branch tests (large tier)
+MODEL_TIER = "large"
+LARGE_TIER_NODES = RIGOROUS_NODES
+
 # The testing contract shared by both completion-comment nodes. The board
 # poller partitions this section into machine checks and human steps for the
 # Ready for Review comment; the ready-review QA agent reuses recorded
@@ -684,6 +688,59 @@ def ensure_rigorous_models(path: Path, node_ids: tuple[str, ...]) -> str | None:
     return note
 
 
+def ensure_tier_models(path: Path, node_ids: tuple[str, ...]) -> str | None:
+    """Assign the portable `large` tier to selected AI nodes.
+
+    Strips any legacy `provider:`, literal `model:`, or `effort:` fields
+    (including Codex `modelReasoningEffort`) from each target node and leaves
+    exactly one correctly indented `model: large`. Idempotent: a node already
+    carrying only `model: large` is untouched. Other nodes are never edited.
+    """
+    text = path.read_text()
+    original = text
+    missing: list[str] = []
+    for node_id in node_ids:
+        node = re.search(rf"(?m)^  - id: {re.escape(node_id)}[ \t]*\n", text)
+        if node is None:
+            missing.append(node_id)
+            continue
+        following = re.search(r"(?m)^  - id: ", text[node.end():])
+        block_end = node.end() + following.start() if following else len(text)
+        block = text[node.start():block_end]
+        body = re.sub(
+            r"(?m)^    (?:provider|model|effort|modelReasoningEffort):[^\n]*\n",
+            "",
+            block[len(node.group(0)):],
+        )
+        replacement = (
+            node.group(0)
+            + f"    model: {MODEL_TIER}\n"
+            + body
+        )
+        text = text[:node.start()] + replacement + text[block_end:]
+
+    if text != original:
+        path.write_text(text)
+        note = f"pinned model: {MODEL_TIER} on nodes in {path.name}"
+    else:
+        note = None
+    if missing:
+        suffix = f" (missing nodes: {', '.join(missing)})"
+        return (note or f"checked large-tier nodes in {path.name}") + suffix
+    return note
+
+
+def apply_tier_models(changed: list[str]) -> None:
+    for fname, node_ids in LARGE_TIER_NODES.items():
+        path = WORKFLOWS / fname
+        if not path.exists():
+            changed.append(f"MISSING {fname} for large-tier assignments (workflows dir: {WORKFLOWS})")
+            continue
+        note = ensure_tier_models(path, node_ids)
+        if note:
+            changed.append(note)
+
+
 def apply_rigorous_models(changed: list[str]) -> None:
     for fname, node_ids in RIGOROUS_NODES.items():
         path = WORKFLOWS / fname
@@ -693,8 +750,6 @@ def apply_rigorous_models(changed: list[str]) -> None:
         note = ensure_rigorous_models(path, node_ids)
         if note:
             changed.append(note)
-
-
 
 
 def main() -> int:

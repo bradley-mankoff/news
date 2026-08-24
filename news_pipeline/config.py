@@ -92,6 +92,14 @@ QWWYTHOS_9B_4BIT_MODEL_ALIAS = "qwythos-9b-4bit"
 QWWYTHOS_9B_4BIT_MODEL_REFERENCE = f"{QWWYTHOS_REPO}/{QWWYTHOS_Q4K_FILENAME}"
 QWWYTHOS_9B_8BIT_MODEL_ALIAS = "qwythos-9b-8bit"
 QWWYTHOS_9B_8BIT_MODEL_REFERENCE = f"{QWWYTHOS_REPO}/{QWWYTHOS_Q8_FILENAME}"
+# Runtime-verified Qwen3 MLX language models (issue #89): mlx-community
+# 4-bit distributions served by the managed mlx-lm backend on Apple
+# Silicon, verified per docs/model-runtime-verification.md. MLX entries
+# keep reference == hf_repo (no .gguf suffix).
+QWEN3_8B_4BIT_MODEL_ALIAS = "qwen3-8b-4bit"
+QWEN3_8B_4BIT_MODEL_REPO = "mlx-community/Qwen3-8B-4bit"
+QWEN3_14B_4BIT_MODEL_ALIAS = "qwen3-14b-4bit"
+QWEN3_14B_4BIT_MODEL_REPO = "mlx-community/Qwen3-14B-4bit"
 MODEL_BACKEND_MLX_LM = "mlx-lm"
 MODEL_BACKEND_MLX_VLM = "mlx-vlm"
 MODEL_BACKEND_EXTERNAL = "external"
@@ -102,6 +110,12 @@ SUPPORTED_MODEL_BACKENDS = (
     MODEL_BACKEND_EXTERNAL,
     MODEL_BACKEND_LLAMA_CPP,
 )
+# Fixed product default backend (issue #169): an unset NEWS_MODEL_BACKEND
+# resolves to this value, never to selected-model inference. It matches the
+# current launchable default (gemma-4-12b-it-4bit on mlx-vlm). A known
+# catalog model whose declared backend differs must set NEWS_MODEL_BACKEND
+# explicitly; model identity never silently selects a backend.
+DEFAULT_MODEL_BACKEND = MODEL_BACKEND_MLX_VLM
 # Legacy identifier retained for API compatibility; the Qwythos GGUF models
 # are now served by the managed llama.cpp backend (issue #75).
 QWWYTHOS_MODEL_BACKEND = MODEL_BACKEND_LLAMA_CPP
@@ -172,6 +186,12 @@ MODEL_ALIASES = {
     QWWYTHOS_9B_8BIT_MODEL_ALIAS: QWWYTHOS_9B_8BIT_MODEL_REFERENCE,
     f"https://huggingface.co/{QWWYTHOS_9B_8BIT_MODEL_REFERENCE}": QWWYTHOS_9B_8BIT_MODEL_REFERENCE,
     f"https://hf.co/{QWWYTHOS_9B_8BIT_MODEL_REFERENCE}": QWWYTHOS_9B_8BIT_MODEL_REFERENCE,
+    QWEN3_8B_4BIT_MODEL_ALIAS: QWEN3_8B_4BIT_MODEL_REPO,
+    f"https://huggingface.co/{QWEN3_8B_4BIT_MODEL_REPO}": QWEN3_8B_4BIT_MODEL_REPO,
+    f"https://hf.co/{QWEN3_8B_4BIT_MODEL_REPO}": QWEN3_8B_4BIT_MODEL_REPO,
+    QWEN3_14B_4BIT_MODEL_ALIAS: QWEN3_14B_4BIT_MODEL_REPO,
+    f"https://huggingface.co/{QWEN3_14B_4BIT_MODEL_REPO}": QWEN3_14B_4BIT_MODEL_REPO,
+    f"https://hf.co/{QWEN3_14B_4BIT_MODEL_REPO}": QWEN3_14B_4BIT_MODEL_REPO,
 }
 # Custom aliases added through config/model_catalog.yaml (issue #90) extend
 # this mapping at use time via _catalog_model_aliases(); MODEL_ALIASES itself
@@ -558,12 +578,18 @@ def _task_assignment_entry(
     task: str,
     *,
     reference: str,
+    default_backend: str,
+    inherited: bool,
     base_url: str,
     presets: dict[str, dict[str, Any]],
     model_concurrency: int,
 ) -> TaskModelAssignment:
     name = resolve_model_name(reference)
-    backend = infer_model_backend(reference)
+    # Inherited task assignments (no per-task model override) carry the
+    # resolved default backend so diagnostics and server commands never
+    # disagree with the default assignment (issue #169). A task-specific
+    # model override keeps its catalog/inferred backend metadata.
+    backend = default_backend if inherited else infer_model_backend(reference)
     tuning = _configured_model_tuning(reference, task=task, presets=presets)
     return TaskModelAssignment(
         task=task,
@@ -601,7 +627,9 @@ def _configured_model_assignments(
     task_entries = {}
     for task, _, _ in MODEL_TASK_KNOB_SPECS:
         env_suffix = task.upper()
-        reference = _str_env(f"NEWS_MODEL_{env_suffix}", default_reference) or default_reference
+        raw_reference = _str_env(f"NEWS_MODEL_{env_suffix}", "")
+        inherited = not raw_reference
+        reference = raw_reference or default_reference
         base_url = _str_env(
             f"NEWS_MODEL_{env_suffix}_BASE_URL",
             default_server_settings.base_url,
@@ -609,6 +637,8 @@ def _configured_model_assignments(
         task_entries[task] = _task_assignment_entry(
             task,
             reference=reference,
+            default_backend=default_backend,
+            inherited=inherited,
             base_url=base_url,
             presets=presets,
             model_concurrency=model_concurrency,
@@ -1619,6 +1649,15 @@ def configured_model_api_key() -> str:
     return _str_env("NEWS_MODEL_API_KEY", "not-needed") or "not-needed"
 
 
+def _catalog_declared_backend(model_reference: str) -> str | None:
+    """Return the catalog-declared backend for a reference or alias, if any."""
+    clean = (model_reference or "").strip()
+    return (
+        _model_catalog.catalog_model_backend(clean)
+        or _model_catalog.catalog_model_backend(resolve_model_name(clean))
+    )
+
+
 def _validate_llama_cpp_backend_compatibility(model_reference: str, backend: str) -> None:
     """Reject known catalog MLX/llama.cpp backend mismatches fail-fast.
 
@@ -1629,15 +1668,10 @@ def _validate_llama_cpp_backend_compatibility(model_reference: str, backend: str
     llama-server apply its documented default quantization. mlx-lm/mlx-vlm
     cross-overrides and external selections keep their existing behavior.
     """
-    clean = (model_reference or "").strip()
-    resolved = resolve_model_name(clean)
-    declared = (
-        _model_catalog.catalog_model_backend(clean)
-        or _model_catalog.catalog_model_backend(resolved)
-    )
+    mlx_backends = (MODEL_BACKEND_MLX_LM, MODEL_BACKEND_MLX_VLM)
+    declared = _catalog_declared_backend(model_reference)
     if declared is None or declared == backend:
         return
-    mlx_backends = (MODEL_BACKEND_MLX_LM, MODEL_BACKEND_MLX_VLM)
     if backend == MODEL_BACKEND_LLAMA_CPP and declared in mlx_backends:
         raise ValueError(
             f"NEWS_MODEL_BACKEND=llama.cpp cannot serve {model_reference!r}: the "
@@ -1654,17 +1688,41 @@ def _validate_llama_cpp_backend_compatibility(model_reference: str, backend: str
 
 
 def _configured_model_backend(model_reference: str) -> str:
-    """Resolve the default model's backend: NEWS_MODEL_BACKEND override
-    (validated against SUPPORTED_MODEL_BACKENDS) or inferred from the
-    reference. Per-task models always use inference. Known catalog
-    MLX/llama.cpp mismatches fail fast; unknown references may be selected
-    with any backend."""
+    """Resolve the default model's backend.
+
+    NEWS_MODEL_BACKEND override (validated against SUPPORTED_MODEL_BACKENDS)
+    wins; an empty/unset value resolves to the fixed DEFAULT_MODEL_BACKEND,
+    never to selected-model inference (issue #169). A known catalog model
+    whose declared backend differs from the fixed default must be paired
+    with an explicit NEWS_MODEL_BACKEND and fails fast with an actionable
+    message; raw GGUF references likewise require the llama.cpp backend
+    explicitly. Inherited task assignments use the resolved default backend;
+    explicit task assignments retain catalog/inferred backend metadata.
+    Known catalog MLX/llama.cpp mismatches fail fast; unknown references may
+    be selected with any backend.
+    """
     configured = _str_env("NEWS_MODEL_BACKEND", "").strip().lower()
     if configured and configured not in SUPPORTED_MODEL_BACKENDS:
         raise ValueError(
             "NEWS_MODEL_BACKEND must be one of: " + ", ".join(SUPPORTED_MODEL_BACKENDS)
         )
-    backend = configured or infer_model_backend(model_reference)
+    backend = configured or DEFAULT_MODEL_BACKEND
+    if not configured:
+        declared = _catalog_declared_backend(model_reference)
+        if declared is not None and declared != backend:
+            raise ValueError(
+                f"NEWS_MODEL={model_reference!r} requires NEWS_MODEL_BACKEND={declared}: "
+                "the model catalog declares that backend for this model, and the "
+                f"default backend is {DEFAULT_MODEL_BACKEND}. Set "
+                f"NEWS_MODEL_BACKEND={declared} explicitly to use this model."
+            )
+        if resolve_model_name(model_reference).lower().endswith(".gguf"):
+            raise ValueError(
+                f"NEWS_MODEL={model_reference!r} requires NEWS_MODEL_BACKEND=llama.cpp: "
+                "GGUF references are served by the managed llama.cpp backend, and "
+                f"the default backend is {DEFAULT_MODEL_BACKEND}. Set "
+                "NEWS_MODEL_BACKEND=llama.cpp explicitly to use this model."
+            )
     if backend == MODEL_BACKEND_EXTERNAL and not _str_env("NEWS_MODEL_BASE_URL", ""):
         raise ValueError(
             "NEWS_MODEL_BACKEND=external requires NEWS_MODEL_BASE_URL to point at an "
@@ -1675,23 +1733,6 @@ def _configured_model_backend(model_reference: str) -> str:
     return backend
 
 
-
-
-def _default_story_synthesis_concurrency(model_reference: str) -> int:
-    if is_codex_test_model_reference(model_reference):
-        return 2
-    resolved_name = resolve_model_name(model_reference).lower()
-    # Retained legacy branch (issue #124 Deviation 3): raw Qwythos references
-    # not covered by UNSUPPORTED_MODEL_REFERENCES still route to mlx-vlm.
-    if "qwythos" in resolved_name or is_gemma_4_model_reference(model_reference):
-        return 1
-    return DEFAULT_STORY_SYNTHESIS_CONCURRENCY
-
-
-def _default_article_summary_concurrency(model_reference: str) -> int:
-    if is_codex_test_model_reference(model_reference):
-        return 8
-    return DEFAULT_ARTICLE_SUMMARY_CONCURRENCY
 
 
 
@@ -1824,7 +1865,7 @@ def runtime_knob_registry() -> list[dict[str, Any]]:
         _runtime_knob("Run Settings", "Embedding model", "NEWS_EMBEDDING_MODEL", default="all-mpnet-base-v2", advanced=True),
         _runtime_knob("Run Settings", "Token encoding", "NEWS_TOKEN_ENCODING", default="o200k_base", advanced=True),
         _runtime_knob("Model Selection", "Default model", "NEWS_MODEL", "select", default=DEFAULT_MODEL_ALIAS, options=sorted(_catalog_model_aliases()), option_links=model_links, ui_location=UI_LOCATION_RUN_SETUP),
-        _runtime_knob("Model Selection", "Model backend", "NEWS_MODEL_BACKEND", "select", options=sorted(SUPPORTED_MODEL_BACKENDS)),
+        _runtime_knob("Model Selection", "Model backend", "NEWS_MODEL_BACKEND", "select", default=DEFAULT_MODEL_BACKEND, options=sorted(SUPPORTED_MODEL_BACKENDS)),
         _runtime_knob("Model Tuning", "Default tuning preset", "NEWS_MODEL_TUNING_PRESET", "select", options=tuning_presets),
         _runtime_knob("Model Tuning", "Model input cap", "NEWS_MODEL_MAX_INPUT_TOKENS", "number", minimum=1, step=1, ui_location=UI_LOCATION_ADVANCED_PANELS),
         _runtime_knob("Pipeline Budget", "Article text token limit", "NEWS_ARTICLE_TEXT_TOKEN_LIMIT", "number", minimum=1, step=1, ui_location=UI_LOCATION_ADVANCED_PANELS),
@@ -2636,29 +2677,25 @@ def _build_runtime_config(
     model_server_settings = _configured_model_server_settings(model_base_url)
     article_summary_concurrency = max(
         1,
-        _int_env(
-            "NEWS_ARTICLE_SUMMARY_CONCURRENCY",
-            _default_article_summary_concurrency(default_reference),
-        ),
+        _int_env("NEWS_ARTICLE_SUMMARY_CONCURRENCY", DEFAULT_ARTICLE_SUMMARY_CONCURRENCY),
     )
     story_synthesis_concurrency = max(
         1,
-        _int_env(
-            "NEWS_STORY_SYNTHESIS_CONCURRENCY",
-            _default_story_synthesis_concurrency(default_reference),
-        ),
+        _int_env("NEWS_STORY_SYNTHESIS_CONCURRENCY", DEFAULT_STORY_SYNTHESIS_CONCURRENCY),
     )
     source_collection_concurrency = max(
         1,
         _int_env("NEWS_SOURCE_COLLECTION_CONCURRENCY", DEFAULT_SOURCE_COLLECTION_CONCURRENCY),
     )
+    # Model-server concurrency is model-neutral (issue #169): it derives
+    # only from the fixed server default plus the resolved stage values, so
+    # the server is never below the active stage worker counts.
     model_concurrency = max(
         1,
         _int_env(
             "NEWS_MODEL_CONCURRENCY",
             max(
-                _default_article_summary_concurrency(default_reference),
-                _default_story_synthesis_concurrency(default_reference),
+                DEFAULT_PIPELINE_CONCURRENCY,
                 article_summary_concurrency,
                 story_synthesis_concurrency,
             ),

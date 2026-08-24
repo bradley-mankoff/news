@@ -1,0 +1,30 @@
+name: oneshot
+description: |
+  Single small-tier implementer in the worktree. Default tactic for
+  lights-off factory work. Use for well-specified, gated slices. Not a
+  review workflow.
+
+nodes:
+  - id: implement
+    model: small
+    prompt: |
+      Implement this slice in this worktree.
+
+      $ARGUMENTS
+
+      Match existing style. Shortest correct diff. Run the repo gate if one
+      exists (pytest, node verify.js, etc.) and fix failures before you stop.
+      Write a short record of files + decisions to $ARTIFACTS_DIR/record.md.
+
+  - id: draft-pr
+    bash: |
+      set -euo pipefail
+      git add -A
+      git diff --cached --quiet && { echo "no changes"; exit 0; }
+      REF="${FACTORY_REF:-task}"
+      git commit -m "factory: $REF"
+      git push -u origin HEAD
+      gh pr create --draft --base "${FACTORY_BASE_BRANCH:-develop}" \
+        --title "factory: $REF" \
+        --body "Factory slice \`$REF\`. Draft. Human/QA merge. Issue: $REF"
+    depends_on: [implement]

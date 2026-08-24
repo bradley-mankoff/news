@@ -1,0 +1,127 @@
+name: new-idea
+description: |
+  Formal idea → tickets chain. Mode B only. Orchestration, planning, and
+  ticket review use the large tier. Stops when Piyaz (or scratch) has slices.
+  Invoke via the new-idea skill, a pasted *handoff*.md, or: archon workflow run new-idea.
+  NOT for implementing. NOT Mode A. Human sits every gate.
+interactive: true
+
+nodes:
+  - id: ingest
+    prompt: |
+      You are starting the new-idea chain. Do not implement.
+
+      Input: $ARGUMENTS
+
+      1. If the input is a path to a file whose name contains `handoff` or that
+         ends in `.md`, read it. Treat it as a Mode A handoff. Summarise the idea
+         in five lines.
+      2. If the input is prose, that prose is the idea.
+      3. Lights: if the human already said lights-on or lights-off, record it.
+         If not, ask once and wait. Taste / look / naming → recommend lights-on.
+      4. Write `$ARTIFACTS_DIR/idea.md` with: idea, lights, source (handoff path
+         or "prose"), and nothing else.
+
+      Stop after the file exists. Next node grills.
+    model: large
+
+  - id: lights-gate
+    approval:
+      message: "Lights-on (you sit it) or lights-off (factory may claim)? Approve to continue."
+      capture_response: true
+    depends_on: [ingest]
+
+  - id: grill
+    prompt: |
+      Run a grill-me interview on `$ARTIFACTS_DIR/idea.md` plus the human's
+      lights answer: $lights-gate.output
+
+      Do not implement. Do not write tickets yet.
+
+      Force choices: who, what is already true, what may stay broken, what
+      "done in one sitting" is. Stop when remaining questions are implementation.
+
+      Pull in other skills only when the talk needs them:
+      - names / CONTEXT.md / ADR → domain-modeling
+      - where a module interface sits, how to test it → codebase-design
+      - unknown terrain → wayfinder
+
+      Append the decisions to `$ARTIFACTS_DIR/idea.md` under ## Grill.
+    skills:
+      - grill-me
+    model: large
+    depends_on: [lights-gate]
+
+  - id: spec
+    prompt: |
+      to-spec: synthesise `$ARTIFACTS_DIR/idea.md`. No second interview.
+
+      Write `$ARTIFACTS_DIR/spec.md`: problem, solution, user stories,
+      implementation decisions (no file paths), testing seams, out of scope,
+      lights.
+
+      Do not publish yet. The next gate is the human.
+    skills:
+      - to-spec
+    model: large
+    depends_on: [grill]
+
+  - id: spec-gate
+    approval:
+      message: "Approve this spec (stories + out of scope), or reject with what to change."
+      capture_response: true
+    depends_on: [spec]
+
+  - id: tickets
+    prompt: |
+      If $spec-gate.output is a rejection, revise `$ARTIFACTS_DIR/spec.md` first
+      from that feedback.
+
+      to-tickets on `$ARTIFACTS_DIR/spec.md`. Vertical slices only. Each ticket
+      demoable, one sitting, with Blocked by.
+
+      Write `$ARTIFACTS_DIR/tickets.md` listing every slice (title, blocked by,
+      ACs, suggested tactic oneshot|fusion-02|fusion-04|fusion-10).
+      Do not publish yet.
+    skills:
+      - to-tickets
+    model: large
+    depends_on: [spec-gate]
+
+  - id: tickets-gate
+    approval:
+      message: "Approve this ticket cut (coarse/fine/edges), or reject with merge/split/rewire."
+      capture_response: true
+    depends_on: [tickets]
+
+  - id: publish
+    prompt: |
+      Publish the approved tickets. Read factory.json in the repo.
+
+      If tracker is piyaz and piyaz_project is set:
+        Convert $ARTIFACTS_DIR/tickets.md into ONE piyaz_create payload:
+          - "tasks": one object per slice with a stable "key" ("01", "02", …),
+            title, 2-4 sentence description, acceptanceCriteria as a list of
+            binary strings, and tags containing lights-on|lights-off plus the
+            suggested tactic oneshot|fusion-02|fusion-04|fusion-10.
+          - "edges": one object per dependency:
+            {"source":"<dependent key>","target":"<blocker key>",
+             "type":"depends_on","note":"<what the blocker must provide>"}.
+            Omit "edges" when nothing is blocked.
+          - "onDuplicate": "skip" so re-running publish does not duplicate.
+        Write $ARTIFACTS_DIR/piyaz-batch.json with that payload, then run:
+          PROJECT="$(python3 -c 'import json; print(json.load(open("factory.json"))["piyaz_project"])')"
+          bun .archon/scripts/mode-b-piyaz.ts create-batch "$PROJECT" "$ARTIFACTS_DIR/piyaz-batch.json"
+        The adapter prints the created and deduplicated Piyaz task refs.
+        Say clearly: these tasks are on the Piyaz sidebar.
+
+      If tracker is scratch, or Piyaz is missing:
+        write `.scratch/<slug>/spec.md` and `.scratch/<slug>/issues/NN-*.md`
+        (ready-for-agent, Lights, Blocked by, ACs).
+        Say clearly: these are not on the Piyaz sidebar.
+
+      In both cases, write $ARTIFACTS_DIR/published.md with the refs: the
+      Piyaz task refs printed by the adapter, or the local NN-*.md refs.
+      Do not implement any slice.
+    model: large
+    depends_on: [tickets-gate]

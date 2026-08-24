@@ -22,6 +22,8 @@ direct fix sessions). It is not a project-management constitution.
   and PR-range CI prevention, distinct from history audit/scrub)
 - Archon workflow inventory / machine setup → `docs/archon-workflows.md`,
   `docs/archon-setup.md`
+- Mode B factory (new-idea → Piyaz task graph) → `FACTORY.md`. Piyaz
+  project: **DN** ("Daily News", app.piyaz.ai, Bradley's Team).
 - Vendored matt skills (wrapper: `~/.claude/skills/`; archon commands:
   `.archon/commands/`) → `docs/archon-workflows.md` (Local edits)
 
@@ -72,3 +74,40 @@ python3 automation/create_issue.py "<title>" --body "<shaped markdown>"
 
 That lands the issue in Backlog. Do not start implementation until you are on
 an assigned issue branch / issue body.
+
+## Piyaz dispatch policy
+
+Mode B factory work (the `new-idea` chain, `FACTORY.md`) is tracked in the
+Piyaz project **DN** ("Daily News", app.piyaz.ai, Bradley's Team) and executed
+through archon workflows — not by the session agent's own hands. The
+three-layer split: piyaz owns the task graph, archon owns execution, craft
+skills own per-task process. Git/GitHub stays the code layer: a Piyaz task
+says *what*, the PR says *the diff*.
+
+- On any Mode B factory request (run the factory, new-idea): run the piyaz
+  flow — plan/claim tasks via the piyaz MCP tools — then dispatch archon
+  instead of implementing directly:
+  - `archon workflow run piyaz-batch --branch feat/news-<taskrefs> "<task refs>"` for task-shaped work (always in the background).
+  - `archon workflow run piyaz-maintain --branch chore/<name> "<message>"` for repo-level work (deps, CI, refactors).
+- The session agent owns: piyaz planning/claims, archon dispatch,
+  reconciliation (verify workers' records landed and ACs are checked), and the
+  human gates. It does NOT implement product code directly unless the human
+  explicitly overrides for a given request.
+- **Push `origin/develop` before every dispatch.** Archon clones the worktree
+  from the integration branch, not the local checkout — a local-only commit
+  starves the worker of your latest config and workflow changes.
+- **Merge target is `origin/archon/task-<branch>`**, not `<branch>`: archon
+  prefixes worktree branches (`--branch feat/news-9` becomes
+  `archon/task-feat/news-9`). After merging, push `develop` back to origin.
+- Workers read task context and write records through
+  `.archon/scripts/piyaz.ts` (the piyaz MCP endpoint, OAuth credential from
+  the omp agent.db; provider `pi` ignores per-node MCP, so the script is the
+  interface here — `.archon/mcp/piyaz.json` is retained for MCP-capable
+  providers). They stop at `in_review`, never `done`; the human approves that
+  flip on Piyaz.
+- Verification battery: `.venv/bin/python3 -m pytest tests/ -q` is the repo
+  gate workers must pass before recording a task.
+- Capacity: the archon engine cap (`MAX_CONCURRENT_CONVERSATIONS`) is 10
+  shared with the piyaz trial repo (`_lab/piyaz_trial`, parked at 0). Before
+  dispatching any batch, check `archon workflow status --json`; do not start
+  another while the shared cap is saturated.

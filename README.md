@@ -261,8 +261,9 @@ When running from a shell, put `NEWS_` assignments on the same command line or
 export them first:
 
 ```bash
-NEWS_MODEL=gemma-e2b-tiny NEWS_IMAGE_ENABLED=0 uv run news run
+NEWS_MODEL=gemma-e2b-tiny NEWS_MODEL_BACKEND=mlx-lm NEWS_IMAGE_ENABLED=0 uv run news run
 export NEWS_MODEL=gemma-e2b-tiny
+export NEWS_MODEL_BACKEND=mlx-lm
 uv run news run
 ```
 
@@ -303,8 +304,12 @@ Key Run Settings:
   independent calls — Image Art Direction (text-free FLUX prompt) and Title
   Generation (overlay headline) — each routed to its own assignment.
 - `NEWS_MODEL_BACKEND`: optional backend override for the default model
-  (`mlx-lm`, `mlx-vlm`, `external`, or `llama.cpp`; inferred from the model
-  reference otherwise — see [Runtime Matrix](#runtime-matrix)).
+  (`mlx-lm`, `mlx-vlm`, `external`, or `llama.cpp`). When unset, the fixed
+  product default `mlx-vlm` applies — model identity never selects a
+  backend. A known model whose declared backend differs (for example
+  `gemma-e2b-tiny` needs `mlx-lm`, and the Qwythos GGUF aliases need
+  `llama.cpp`) must set this explicitly or config resolution fails with an
+  actionable message — see [Runtime Matrix](#runtime-matrix).
 
 ### Prompt Profiles
 
@@ -394,7 +399,7 @@ override because its renderer escapes them safely.
 ### Model Selection
 
 ```bash
-NEWS_MODEL=gemma-e2b-tiny uv run news run
+NEWS_MODEL=gemma-e2b-tiny NEWS_MODEL_BACKEND=mlx-lm uv run news run
 NEWS_MODEL=gemma-4-12b-it-4bit uv run news run --preset NAME
 ```
 
@@ -420,6 +425,8 @@ Built-in aliases:
 - `gemma-4-12b-it-4bit`: [`mlx-community/gemma-4-12B-it-4bit`](https://huggingface.co/mlx-community/gemma-4-12B-it-4bit) (default; the standard Gemma 4 12B instruction model, 256K-token context)
 - `qwythos-9b-4bit`: [`huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF`](https://huggingface.co/huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF) (legacy 9B Q4_K GGUF, managed `llama.cpp`)
 - `qwythos-9b-8bit`: [`huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF`](https://huggingface.co/huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF) (legacy 9B Q8_0 GGUF, managed `llama.cpp`)
+- `qwen3-8b-4bit`: [`mlx-community/Qwen3-8B-4bit`](https://huggingface.co/mlx-community/Qwen3-8B-4bit) (runtime-verified Qwen3 8B 4-bit MLX, managed `mlx-lm`; 40,960-token context)
+- `qwen3-14b-4bit`: [`mlx-community/Qwen3-14B-4bit`](https://huggingface.co/mlx-community/Qwen3-14B-4bit) (runtime-verified Qwen3 14B 4-bit MLX, managed `mlx-lm`; 40,960-token context)
 
 The legacy `qwythos-9b-*` aliases are supported again through the managed
 `llama.cpp` backend (issue #75): each resolves to its exact GGUF file
@@ -442,7 +449,7 @@ uv run news models catalog
 uv run news models search --query gemma --task text-generation --limit 5
 ```
 
-Curated models (4):
+Curated models (6):
 
 - `gemma-4-12b-it-4bit` — mlx-vlm, 256K-token context, default model
   ([Hugging Face](https://huggingface.co/mlx-community/gemma-4-12B-it-4bit))
@@ -452,11 +459,22 @@ Curated models (4):
   ([Hugging Face](https://huggingface.co/huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF))
 - `qwythos-9b-8bit` — llama.cpp, legacy Q8_0 GGUF (requires an installed `llama-server`)
   ([Hugging Face](https://huggingface.co/huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF))
+- `qwen3-8b-4bit` — mlx-lm, runtime-verified smaller/speed-oriented Qwen3 4-bit MLX option (40,960-token context)
+  ([Hugging Face](https://huggingface.co/mlx-community/Qwen3-8B-4bit))
+- `qwen3-14b-4bit` — mlx-lm, runtime-verified larger/quality-oriented Qwen3 4-bit MLX option (40,960-token context, host-sensitive)
+  ([Hugging Face](https://huggingface.co/mlx-community/Qwen3-14B-4bit))
+
+The Qwen3 MLX entries were verified by launching the exact managed server on
+Apple Silicon and exercising readiness plus bounded completions; see
+[`docs/model-runtime-verification.md`](docs/model-runtime-verification.md)
+for the recorded evidence, host, package versions, and task-contract
+results.
 
 Hugging Face search results carry runtime-fit verdicts (`managed_mlx_lm`,
-`managed_mlx_vlm`, `managed_llama_cpp`, or `external_only`) so unlaunchable
-repos are never picked for a managed backend (ADR 0017 runtime matrix);
-hardware fitting itself lives on the Hugging Face model page. The UI's
+`managed_mlx_vlm`, `managed_llama_cpp`, or `external_only`) as advisory
+picker/configuration hints. They do not guarantee hardware fit, compatibility,
+or successful launch; hardware fitting itself lives on the Hugging Face model
+page (see ADR 0019 and the ADR 0017 runtime matrix). The UI's
 "Model catalog" panel shows curated cards, task recommendations, and search
 with the same verdicts.
 
@@ -509,8 +527,10 @@ models:
     description: A user-verified text-generation GGUF model.
 ```
 
-See [`docs/adr/0014-model-catalog-yaml-overrides.md`](docs/adr/0014-model-catalog-yaml-overrides.md)
-for the accepted architecture record.
+See [`docs/adr/0019-model-catalog-owns-curated-models-and-runtime-fit-verdicts.md`](docs/adr/0019-model-catalog-owns-curated-models-and-runtime-fit-verdicts.md)
+for the accepted baseline architecture record, and
+[`docs/adr/0014-model-catalog-yaml-overrides.md`](docs/adr/0014-model-catalog-yaml-overrides.md)
+for the YAML-overlay extension decision.
 
 ### Runtime Matrix
 
@@ -518,7 +538,12 @@ Supported runtimes (recorded in
 [`docs/adr/0017-runtime-matrix.md`](docs/adr/0017-runtime-matrix.md)):
 
 - `mlx-lm` — managed local MLX language-model server on Apple Silicon.
-- `mlx-vlm` — managed local MLX vision-language-model server on Apple Silicon.
+- `mlx-vlm` — managed local MLX vision-language-model server on Apple
+  Silicon. Managed only for repositories already carrying MLX-compatible
+  vision weights plus an `mmproj` asset; `mlx-vlm` does not convert source
+  Transformers weights at launch. Transformers+safetensors vision search
+  results are `external_only` and need an external OpenAI-compatible
+  endpoint (or conversion outside this application).
 - `llama.cpp` — managed local text-generation GGUF server across the
   platforms supported by the selected `llama-server` binary (issue #75).
 - `external` — any OpenAI-compatible endpoint.
@@ -536,8 +561,8 @@ local `.gguf` paths (`--model`). Text-generation GGUF is supported;
 multimodal GGUF (separate `mmproj` file) is not.
 
 ```bash
-NEWS_MODEL=qwythos-9b-4bit uv run news run
-NEWS_MODEL=/models/local-model.gguf uv run news run
+NEWS_MODEL=qwythos-9b-4bit NEWS_MODEL_BACKEND=llama.cpp uv run news run
+NEWS_MODEL=/models/local-model.gguf NEWS_MODEL_BACKEND=llama.cpp uv run news run
 NEWS_MODEL=some-owner/some-gguf-repo NEWS_MODEL_BACKEND=llama.cpp uv run news run
 ```
 
@@ -545,17 +570,26 @@ Print the exact managed command without starting a server or downloading a
 model (the command is a preview only):
 
 ```bash
-NEWS_MODEL=qwythos-9b-4bit NEWS_LLAMA_CPP_SERVER=/opt/llama/llama-server uv run news model-server-command
+NEWS_MODEL=qwythos-9b-4bit NEWS_MODEL_BACKEND=llama.cpp NEWS_LLAMA_CPP_SERVER=/opt/llama/llama-server uv run news model-server-command
+NEWS_MODEL=qwen3-8b-4bit NEWS_MODEL_BACKEND=mlx-lm uv run news model-server-command
+NEWS_MODEL=qwen3-14b-4bit NEWS_MODEL_BACKEND=mlx-lm uv run news model-server-command
 ```
 
 ```text
 /opt/llama/llama-server --hf-repo huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF --hf-file Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-Q4_K.gguf --alias huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-Q4_K.gguf --parallel 4 --host 127.0.0.1 --port 8080 --n-predict <max-tokens-if-configured>
 ```
 
-The default model's backend is inferred from the model reference unless
-`NEWS_MODEL_BACKEND` is set to `mlx-lm`, `mlx-vlm`, `external`, or
-`llama.cpp` (any other value fails fast; known catalog MLX/llama.cpp
-mismatches fail fast too). To run the default model against an external
+`NEWS_MODEL` selects model identity only; it never picks a backend. An
+unset `NEWS_MODEL_BACKEND` resolves to the fixed product default `mlx-vlm`
+(the backend of the default Gemma 4 12B model). Known catalog models whose
+declared backend differs — `gemma-e2b-tiny` (`mlx-lm`), the
+`qwythos-9b-*` GGUF aliases (`llama.cpp`), and the runtime-verified
+`qwen3-8b-4bit` / `qwen3-14b-4bit` MLX entries (`mlx-lm`) — must set
+`NEWS_MODEL_BACKEND` explicitly; config resolution fails fast with an
+actionable message naming the required value instead of silently launching
+the wrong server. Any
+other explicit value fails fast; known catalog MLX/llama.cpp mismatches
+fail fast too. To run the default model against an external
 OpenAI-compatible endpoint — no managed server is started; the pipeline waits
 for and probes the endpoint:
 
@@ -644,7 +678,12 @@ sampling env vars like `NEWS_MODEL_ARTICLE_SUMMARY_TEMPERATURE` or
 
 Pipeline Budget settings are separate from model selection and tuning. They
 cover article text caps, article summary caps, recency windows, article/story
-limits, and story thresholds.
+limits, and story thresholds. Stage concurrency defaults are fixed pipeline
+values — `NEWS_ARTICLE_SUMMARY_CONCURRENCY` and
+`NEWS_STORY_SYNTHESIS_CONCURRENCY` default to `4` for every model choice, and
+`NEWS_MODEL_CONCURRENCY` (Model Server Settings) defaults to `4`, rising only
+when an explicitly configured stage worker count needs a larger server pool.
+Model identity never changes these defaults.
 
 ### Model Server Settings
 
@@ -682,7 +721,7 @@ select ownership.
 
 ```bash
 NEWS_IMAGE_ENABLED=0 uv run news run --preset NAME
-NEWS_MODEL=gemma-e2b-tiny NEWS_IMAGE_ENABLED=0 uv run news run
+NEWS_MODEL=gemma-e2b-tiny NEWS_MODEL_BACKEND=mlx-lm NEWS_IMAGE_ENABLED=0 uv run news run
 NEWS_IMAGE_ENABLED=1 uv run news run --preset NAME
 ```
 
@@ -807,7 +846,7 @@ For even faster runs, override the model explicitly and tighten the
 recency window:
 
 ```bash
-NEWS_MODEL=gemma-e2b-tiny NEWS_RECENT_WINDOW_HOURS=6 uv run news run
+NEWS_MODEL=gemma-e2b-tiny NEWS_MODEL_BACKEND=mlx-lm NEWS_RECENT_WINDOW_HOURS=6 uv run news run
 ```
 
 To preview the resolved config before launching a run, use the UI or

@@ -10,6 +10,11 @@ docs/adr/README.md document but that no runtime code exercises:
   vocabulary, README.md and SETTINGS.md must link the accepted decision, and
   SETTINGS.md must keep Prompt Profile ownership with the Prompt Catalog ADR
   (guards the model-configuration vocabulary contract).
+- ADR 0019 must stay `Accepted` with the Model Catalog ownership and
+  runtime-fit vocabulary, and README.md, SETTINGS.md, CONTEXT.md, and the
+  model-configuration knowledge concept must link it while ADR 0014/0017 keep
+  their narrower overlay/runtime decisions (guards the catalog-ownership
+  contract).
 - New ADRs must be uniquely numbered (never re-using or renumbering an
   existing decision) and carry the required Status/Date/Context/Decision/
   Consequences sections.
@@ -36,6 +41,29 @@ _SETTINGS = _REPO / "SETTINGS.md"
 _ADR_0007_LINK = "docs/adr/0007-model-configuration-vocabulary.md"
 _PROMPT_CATALOG_ADR_LINK = (
     "docs/adr/0018-prompt-catalog-owns-editorial-instructions.md"
+)
+_MODEL_CATALOG_ADR = (
+    _REPO / "docs/adr/0019-model-catalog-owns-curated-models-and-runtime-fit-verdicts.md"
+)
+_MODEL_CATALOG_ADR_LINK = (
+    "docs/adr/0019-model-catalog-owns-curated-models-and-runtime-fit-verdicts.md"
+)
+# Exact code vocabulary owned by the baseline catalog record (mirrors
+# news_pipeline/model_catalog.py and the CLI command names verbatim).
+_MODEL_CATALOG_ADR_TERMS = (
+    "CatalogModel",
+    "BUILTIN_CATALOG_MODELS",
+    "RUNTIME_FIT_MANAGED_MLX_LM",
+    "RUNTIME_FIT_MANAGED_MLX_VLM",
+    "RUNTIME_FIT_MANAGED_LLAMA_CPP",
+    "RUNTIME_FIT_EXTERNAL_ONLY",
+    "managed_mlx_lm",
+    "managed_mlx_vlm",
+    "managed_llama_cpp",
+    "external_only",
+    "runtime_fit_for_hf_model()",
+    "news models catalog",
+    "news models search",
 )
 _ADR_0007_BOUNDARY_TERMS = (
     "Task Model Assignment",
@@ -131,6 +159,62 @@ class DocsConsistencyTests(unittest.TestCase):
             "Catalog ADR",
         )
 
+    def test_adr_0007_and_0017_guard_independent_model_backend_concurrency(self) -> None:
+        """Accepted ADRs, README, and SETTINGS must describe the issue #169
+        ownership boundary: model selection never infers a backend or
+        workload/server concurrency, the fixed default backend is `mlx-vlm`,
+        and stage/server concurrency defaults are fixed model-neutral values."""
+        adr_0007 = _ADR_0007.read_text(encoding="utf-8")
+        adr_0017 = (_REPO / "docs/adr/0017-runtime-matrix.md").read_text(
+            encoding="utf-8"
+        )
+        readme = _README.read_text(encoding="utf-8")
+        settings = _SETTINGS.read_text(encoding="utf-8")
+
+        # Independent ownership: model selection never picks a backend.
+        self.assertIn("never infers a backend", adr_0007)
+        self.assertIn("**not** inferred from the model reference", adr_0017)
+        self.assertIn("it never picks a backend", readme)
+        self.assertIn("never selects a backend", settings)
+
+        # Fixed default backend documented everywhere.
+        for doc, text in (
+            ("ADR 0007", adr_0007),
+            ("ADR 0017", adr_0017),
+            ("README.md", readme),
+            ("SETTINGS.md", settings),
+        ):
+            self.assertIn("mlx-vlm", text, f"{doc} must name the fixed default backend")
+        self.assertIn("DEFAULT_MODEL_BACKEND", adr_0017)
+        self.assertIn("NEWS_MODEL_BACKEND", settings)
+        self.assertIn("`mlx-vlm`", settings)
+
+        # The old selected-model inference policy must not survive.
+        self.assertNotIn(
+            "the backend is\ninferred from the model reference",
+            adr_0017,
+            "ADR 0017 must not retain selected-model backend inference",
+        )
+        self.assertNotIn(
+            "inferred from the model\nreference otherwise",
+            readme,
+            "README must not retain selected-model backend inference",
+        )
+
+        # Fixed model-neutral concurrency defaults.
+        self.assertIn("Stage concurrency defaults are fixed pipeline values", adr_0007)
+        self.assertIn("model-neutral", adr_0007)
+        self.assertIn("every model choice", readme)
+        self.assertIn("NEWS_MODEL_CONCURRENCY", settings)
+
+        # Inherited task assignments use the resolved default backend.
+        self.assertIn("Inherited task assignments", adr_0007)
+        normalized_0007 = re.sub(r"\s+", " ", adr_0007)
+        self.assertIn(
+            "carry the resolved default backend",
+            normalized_0007,
+        )
+
     def test_adr_collision_references_and_targets_are_repaired(self) -> None:
         targets = {
             "docs/adr/0016-project-license.md": "0016",
@@ -164,6 +248,159 @@ class DocsConsistencyTests(unittest.TestCase):
             text = (_REPO / relative).read_text(encoding="utf-8")
             self.assertNotIn("docs/adr/0010-", text, relative)
             self.assertNotIn("ADR 0010", text, relative)
+
+    def test_model_catalog_adr_is_accepted_and_linked(self) -> None:
+        """ADR 0019 must stay accepted, anchor the exact catalog/runtime-fit
+        vocabulary, be linked from the runtime/domain/knowledge documents,
+        and reference its sibling overlay/runtime decisions instead of
+        absorbing them."""
+        self.assertTrue(
+            _MODEL_CATALOG_ADR.is_file(),
+            "docs/adr/0019-model-catalog-owns-curated-models-and-"
+            "runtime-fit-verdicts.md must exist",
+        )
+        adr = _MODEL_CATALOG_ADR.read_text(encoding="utf-8")
+        context = (_REPO / "CONTEXT.md").read_text(encoding="utf-8")
+        knowledge = (
+            _REPO / "knowledge/system/model-configuration.md"
+        ).read_text(encoding="utf-8")
+
+        # The baseline decision must carry the exact accepted status line,
+        # never a regression back to Proposed.
+        self.assertTrue(
+            re.search(r"^Status: Accepted$", adr, re.M),
+            "ADR 0019 must have the exact status line 'Status: Accepted'",
+        )
+        self.assertNotIn("Status: Proposed", adr)
+
+        # The record must anchor the load-bearing catalog vocabulary so code
+        # terminology cannot silently drift in documentation.
+        for term in _MODEL_CATALOG_ADR_TERMS:
+            self.assertIn(term, adr, f"ADR 0019 missing vocabulary term {term!r}")
+
+        # Runtime-fit verdicts are conservative picker/config hints, never
+        # hardware-fit, quality, safety, chat-template, or launch guarantees.
+        # Assert the negative boundary wrap-independently so normal prose
+        # rewraps do not make the guard brittle.
+        self.assertIn("advisory", adr)
+        self.assertIn("does not", adr)
+        self.assertIn("guarantee", adr)
+
+        # Runtime, domain, and knowledge documents must link the accepted
+        # decision so the ownership chain stays navigable.
+        for doc, text in (
+            ("README.md", _README.read_text(encoding="utf-8")),
+            ("SETTINGS.md", _SETTINGS.read_text(encoding="utf-8")),
+            ("CONTEXT.md", context),
+            ("knowledge/system/model-configuration.md", knowledge),
+        ):
+            self.assertIn(
+                _MODEL_CATALOG_ADR_LINK,
+                text,
+                f"{doc} must link to the accepted Model Catalog ADR",
+            )
+
+        # The baseline record keeps the overlay/runtime decisions in their
+        # own ADRs; the runtime docs keep their narrower existing links.
+        self.assertIn("docs/adr/0014-model-catalog-yaml-overrides.md", adr)
+        self.assertIn("docs/adr/0017-runtime-matrix.md", adr)
+        self.assertIn(
+            "docs/adr/0014-model-catalog-yaml-overrides.md",
+            _README.read_text(encoding="utf-8"),
+        )
+        self.assertIn(
+            "docs/adr/0017-runtime-matrix.md",
+            _README.read_text(encoding="utf-8"),
+        )
+
+    def test_runtime_fit_documentation_preserves_exact_matching_and_advisory_bounds(
+        self,
+    ) -> None:
+        adr = _MODEL_CATALOG_ADR.read_text(encoding="utf-8")
+        readme = _README.read_text(encoding="utf-8")
+
+        runtime_fit = re.sub(
+            r"\s+",
+            " ",
+            adr.split("### Runtime-fit verdicts", 1)[1].split(
+                "### Advisory boundary", 1
+            )[0],
+        ).lower()
+        for term in (
+            "repository `id` exactly equals the merged entry's `hf_repo`",
+            "alias/reference matching is used by catalog/config lookup, not by `runtime_fit_for_hf_model()`",
+            "bare org id or prefix sibling never matches",
+            "repository metadata heuristics",
+        ):
+            self.assertIn(
+                term,
+                runtime_fit,
+                f"ADR 0019 missing runtime-fit term {term!r}",
+            )
+
+        model_catalog = re.sub(
+            r"\s+",
+            " ",
+            readme.split("### Model Catalog", 1)[1].split(
+                "#### User-editable YAML overrides", 1
+            )[0],
+        ).lower()
+        for term in (
+            "as advisory picker/configuration hints",
+            "do not guarantee hardware fit, compatibility, or successful launch",
+            "hardware fitting itself lives on the hugging face model page",
+        ):
+            self.assertIn(
+                term,
+                model_catalog,
+                f"README missing runtime-fit term {term!r}",
+            )
+        self.assertNotIn(
+            "unlaunchable repos are never picked",
+            model_catalog,
+            "README must not present runtime-fit verdicts as launch protection",
+        )
+
+    def test_model_catalog_adr_sibling_links_resolve(self) -> None:
+        """Links inside docs/adr/ must use sibling-relative targets that
+        resolve from the source file's parent directory, never a
+        `docs/adr/...` prefix (which would resolve to
+        docs/adr/docs/adr/...)."""
+        introduced_links = {
+            _MODEL_CATALOG_ADR: (
+                "0014-model-catalog-yaml-overrides.md",
+                "0017-runtime-matrix.md",
+                "0007-model-configuration-vocabulary.md",
+            ),
+            _REPO / "docs/adr/0014-model-catalog-yaml-overrides.md": (
+                "0019-model-catalog-owns-curated-models-and-runtime-fit-"
+                "verdicts.md",
+            ),
+            _REPO / "docs/adr/0017-runtime-matrix.md": (
+                "0019-model-catalog-owns-curated-models-and-runtime-fit-"
+                "verdicts.md",
+            ),
+        }
+        for source, targets in introduced_links.items():
+            text = source.read_text(encoding="utf-8")
+            for target in targets:
+                self.assertIn(
+                    f"]({target})",
+                    text,
+                    f"{source.name} must link sibling target {target} "
+                    "sibling-relative style",
+                )
+                self.assertTrue(
+                    (source.parent / target).is_file(),
+                    f"{source.name}: sibling target {target} must resolve "
+                    "from the source file's parent directory",
+                )
+            self.assertNotIn(
+                "](docs/adr/",
+                text,
+                f"{source.name} must not use docs/adr/... link targets "
+                "(they resolve to docs/adr/docs/adr/...)",
+            )
 
     def test_adrs_are_uniquely_numbered_and_well_formed(self) -> None:
         adr_paths = sorted(_REPO.glob("docs/adr/[0-9][0-9][0-9][0-9]-*.md"))

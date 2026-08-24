@@ -1,0 +1,44 @@
+name: fusion-plan-2
+description: |
+  Two-wide plan block. Writes $ARTIFACTS_DIR/plans/{a,b}/. Include from fusion-10.
+
+nodes:
+  - id: setup
+    bash: |
+      set -euo pipefail
+      mkdir -p "$ARTIFACTS_DIR/plans"
+      rm -rf "$ARTIFACTS_DIR"/plans/* "$ARTIFACTS_DIR"/fused-plan.md 2>/dev/null || true
+      find . -name .git -prune -o -exec chmod a-w {} +
+
+  - id: plan-a
+    model: large
+    retry: {max_attempts: 5, delay_ms: 5000, on_error: all}
+    context: fresh
+    depends_on: [setup]
+    prompt: |
+      Independent planner. Write only $ARTIFACTS_DIR/plans/a/PLAN.md and NOTES.md.
+      Request: $ARGUMENTS
+      PLAN.md must be executable by someone who has not seen this chat.
+      Do not touch the checkout.
+
+  - id: plan-b
+    model: large
+    retry: {max_attempts: 5, delay_ms: 5000, on_error: all}
+    context: fresh
+    depends_on: [setup]
+    prompt: |
+      Independent planner. Write only $ARTIFACTS_DIR/plans/b/PLAN.md and NOTES.md.
+      Request: $ARGUMENTS
+      PLAN.md must be executable by someone who has not seen this chat.
+      Do not touch the checkout.
+
+  - id: verify-clean
+    bash: |
+      set -euo pipefail
+      DIRTY=$(git status --porcelain || true)
+      if [ -n "$DIRTY" ]; then
+        echo "PLAN ISOLATION VIOLATION:" >&2
+        echo "$DIRTY" >&2
+        exit 1
+      fi
+    depends_on: [plan-a, plan-b]

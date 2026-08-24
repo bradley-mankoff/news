@@ -133,8 +133,10 @@ class CatalogModel:
 # qwythos-9b-* GGUF pair (llama.cpp), aligned with config.py constants and
 # MODEL_ALIASES. MLX entries keep reference == hf_repo (issue #92); llama.cpp
 # entries use a file-qualified reference (owner/repo/file.gguf) with a bare
-# hf_repo page id. Adding more requires runtime verification on Apple Silicon
-# or an operator-installed llama-server binary - out of scope for this issue.
+# hf_repo page id. Adding a launchable built-in requires Apple-Silicon
+# runtime verification for MLX entries (recorded in
+# docs/model-runtime-verification.md, issue #89) or an operator-installed
+# llama-server binary for GGUF entries.
 BUILTIN_CATALOG_MODELS: dict[str, CatalogModel] = {
     "gemma-4-12b-it-4bit": CatalogModel(
         alias="gemma-4-12b-it-4bit",
@@ -205,6 +207,59 @@ BUILTIN_CATALOG_MODELS: dict[str, CatalogModel] = {
             "backend with an operator-installed llama-server binary (issue #75)."
         ),
         task_notes={},
+    ),
+    "qwen3-8b-4bit": CatalogModel(
+        alias="qwen3-8b-4bit",
+        reference="mlx-community/Qwen3-8B-4bit",
+        name="Qwen3 8B Instruct (4-bit)",
+        backend="mlx-lm",
+        hf_repo="mlx-community/Qwen3-8B-4bit",
+        context_length=40960,
+        description=(
+            "MLX 4-bit Qwen3 8B instruction model, served by the managed "
+            "mlx-lm backend on Apple Silicon (verification and host limits: "
+            "docs/model-runtime-verification.md)."
+        ),
+        task_notes={
+            "speed": (
+                "Verified fast Qwen3 MLX option on the recorded Apple-Silicon "
+                "host: sub-second short completions; prefer it over the 14B "
+                "entry for speed-oriented runs."
+            ),
+            "structured_output": (
+                "Verified JSON structured-output contract under the pipeline's "
+                "enable_thinking=False call shape; a faster structured-output "
+                "pick than the default Gemma 4 12B for short contracts."
+            ),
+        },
+    ),
+    "qwen3-14b-4bit": CatalogModel(
+        alias="qwen3-14b-4bit",
+        reference="mlx-community/Qwen3-14B-4bit",
+        name="Qwen3 14B Instruct (4-bit)",
+        backend="mlx-lm",
+        hf_repo="mlx-community/Qwen3-14B-4bit",
+        context_length=40960,
+        description=(
+            "MLX 4-bit Qwen3 14B instruction model, served by the managed "
+            "mlx-lm backend on Apple Silicon; the larger Qwen3 MLX option, "
+            "host-sensitive (verification and host limits: "
+            "docs/model-runtime-verification.md)."
+        ),
+        task_notes={
+            "factual_extraction": (
+                "Verified extraction smoke (JSON) on the recorded host; the "
+                "higher-capacity Qwen3 MLX extraction pick."
+            ),
+            "synthesis": (
+                "Verified synthesis smoke (two-fact summary) on the recorded "
+                "host; a higher-capacity Qwen3 MLX drafting pick."
+            ),
+            "citation_fidelity": (
+                "Verified citation-marker preservation ([[S1]]/[[S2]] style) "
+                "on the recorded host."
+            ),
+        },
     ),
 }
 
@@ -437,22 +492,20 @@ def _validate_catalog_entry(
         reference = _validate_catalog_gguf_reference(
             raw_entry["reference"], alias, path, "reference"
         )
-        mismatched = reference.rsplit("/", 1)[0] != hf_repo
-        mismatch_error = (
-            f"{path} model {alias!r} reference must be a file-qualified "
-            f".gguf reference under hf_repo; got reference={reference!r}, "
-            f"hf_repo={hf_repo!r}."
-        )
+        if reference.rsplit("/", 1)[0] != hf_repo:
+            raise ValueError(
+                f"{path} model {alias!r} reference must be a file-qualified "
+                f".gguf reference under hf_repo; got reference={reference!r}, "
+                f"hf_repo={hf_repo!r}."
+            )
     else:
         reference = _validate_catalog_repo_id(raw_entry["reference"], alias, path, "reference")
         hf_repo = _validate_catalog_repo_id(raw_entry["hf_repo"], alias, path, "hf_repo")
-        mismatched = reference != hf_repo
-        mismatch_error = (
-            f"{path} model {alias!r} reference must equal hf_repo (issue #92 "
-            f"drift guard); got reference={reference!r}, hf_repo={hf_repo!r}."
-        )
-    if mismatched:
-        raise ValueError(mismatch_error)
+        if reference != hf_repo:
+            raise ValueError(
+                f"{path} model {alias!r} reference must equal hf_repo (issue #92 "
+                f"drift guard); got reference={reference!r}, hf_repo={hf_repo!r}."
+            )
     name = str(raw_entry["name"]).strip()
     description = str(raw_entry["description"]).strip()
     if not name:
@@ -647,10 +700,12 @@ def runtime_fit_for_hf_model(info: Mapping[str, Any]) -> dict[str, str]:
     Returns ``{"status": ..., "reason": ...}`` where status is one of the
     ``RUNTIME_FIT_*`` constants. Rules are conservative (ADR 0017): code-owned
     curated repos and user-declared catalog entries are classified by their
-    declared backend, while MLX libraries and transformers+safetensors
-    text/vision repos are classified by metadata; everything else is
-    ``external_only`` (never a hard block - only a verdict plus a picker
-    guard). User YAML metadata is advisory, not project verification.
+    declared backend, while MLX libraries and transformers+safetensors text
+    repos are classified by metadata; transformers+safetensors vision repos
+    are ``external_only`` because mlx-vlm needs pre-converted MLX weights and
+    an mmproj asset; everything else is ``external_only`` (never a hard block
+    - only a verdict plus a picker guard). User YAML metadata is advisory,
+    not project verification.
     """
     repo_id = str(info.get("id") or "")
     tags = {str(tag).lower() for tag in (info.get("tags") or [])}
@@ -738,13 +793,21 @@ def runtime_fit_for_hf_model(info: Mapping[str, Any]) -> dict[str, str]:
     if library_name == "transformers" and "safetensors" in tags:
         if pipeline_tag == "image-text-to-text":
             return {
-                "status": RUNTIME_FIT_MANAGED_MLX_VLM,
-                "reason": "Transformers vision-language model; launchable by the managed mlx-vlm server.",
+                "status": RUNTIME_FIT_EXTERNAL_ONLY,
+                "reason": (
+                    "Transformers vision model: mlx-vlm needs pre-converted MLX "
+                    "weights and mmproj; use an external OpenAI-compatible "
+                    "endpoint (NEWS_MODEL_BACKEND=external)."
+                ),
             }
         if pipeline_tag in ("text-generation", "text2text-generation"):
             return {
                 "status": RUNTIME_FIT_MANAGED_MLX_LM,
-                "reason": "Transformers text model; launchable by the managed mlx-lm server.",
+                "reason": (
+                    "Transformers text model; launchable by the managed mlx-lm "
+                    "server, which converts weights on load (requires "
+                    "torch/transformers, architecture-dependent)."
+                ),
             }
         return {
             "status": RUNTIME_FIT_EXTERNAL_ONLY,

@@ -819,9 +819,22 @@ class ConfigHelperTests(unittest.TestCase):
             config_module.infer_model_backend("/models/local.gguf"),
             config_module.MODEL_BACKEND_LLAMA_CPP,
         )
-        self.assertEqual(config_module._default_article_summary_concurrency(config_module.CODEX_TEST_MODEL_ALIAS), 8)
-        self.assertEqual(config_module._default_story_synthesis_concurrency(config_module.CODEX_TEST_MODEL_ALIAS), 2)
-        self.assertEqual(config_module._default_story_synthesis_concurrency("gemma-4-vision"), 1)
+        # Concurrency defaults are model-neutral (issue #169): the fixed
+        # constants apply to every model choice, including the tiny model
+        # that previously got model-specific 8/2 defaults.
+        self.assertEqual(
+            config_module.DEFAULT_ARTICLE_SUMMARY_CONCURRENCY,
+            config_module.DEFAULT_PIPELINE_CONCURRENCY,
+        )
+        self.assertEqual(
+            config_module.DEFAULT_STORY_SYNTHESIS_CONCURRENCY,
+            config_module.DEFAULT_PIPELINE_CONCURRENCY,
+        )
+        # The fixed backend default never falls back to model inference.
+        self.assertEqual(
+            config_module.DEFAULT_MODEL_BACKEND,
+            config_module.MODEL_BACKEND_MLX_VLM,
+        )
         knob = config_module._runtime_knob("Group", "Label", "NEWS_TEST", secret=True, options=["one"])
         self.assertTrue(knob["secret"])
         self.assertEqual(knob["options"], ["one"])
@@ -856,6 +869,10 @@ class ConfigHelperTests(unittest.TestCase):
             backend_knobs[0]["options"],
             ["external", "llama.cpp", "mlx-lm", "mlx-vlm"],
         )
+        # The registry exposes the fixed default backend so UI/schema
+        # consumers resolve the same effective value as config resolution
+        # when the control is empty (issue #169).
+        self.assertEqual(backend_knobs[0]["default"], config_module.DEFAULT_MODEL_BACKEND)
         # NEWS_LLAMA_CPP_SERVER is an advanced Model Server Settings knob.
         llama_binary_knobs = [
             knob for knob in registry if knob["env"] == "NEWS_LLAMA_CPP_SERVER"
@@ -887,8 +904,19 @@ class ConfigHelperTests(unittest.TestCase):
             self.assertEqual(knob["type"], "text")
             self.assertTrue(knob["advanced"])
         # Drift-guard: every model knob option maps to an HF page + hardware
-        # link; the backend knob (not a model choice) carries none.
-        model_knob_envs = ("NEWS_MODEL", "NEWS_MODEL_ARTICLE_SUMMARY", "NEWS_MODEL_STORY_DRAFTING")
+        # link; the backend knob (not a model choice) carries none. The model
+        # knob family is NEWS_MODEL plus the generated per-task model knobs
+        # (issue #79), derived from MODEL_TASK_KNOB_SPECS rather than a second
+        # manifest, so adding a future task cannot drift the guard.
+        model_knob_envs = (
+            "NEWS_MODEL",
+            *(f"NEWS_MODEL_{task.upper()}" for task, _, _ in config_module.MODEL_TASK_KNOB_SPECS),
+        )
+        self.assertEqual(
+            {knob["env"] for knob in registry if knob["option_links"]},
+            set(model_knob_envs),
+            "option_links must be carried exactly by NEWS_MODEL and the generated task model knobs",
+        )
         for env in model_knob_envs:
             model_knob = next(knob for knob in registry if knob["env"] == env)
             self.assertEqual(
@@ -943,6 +971,16 @@ class ConfigHelperTests(unittest.TestCase):
             config_module.hf_model_page_url(config_module.QWWYTHOS_9B_8BIT_MODEL_REFERENCE),
             qwythos_page,
         )
+        # The runtime-verified Qwen3 aliases resolve to their exact MLX pages
+        # (issue #89), for alias, URL, and raw reference inputs.
+        for alias, repo in (
+            (config_module.QWEN3_8B_4BIT_MODEL_ALIAS, config_module.QWEN3_8B_4BIT_MODEL_REPO),
+            (config_module.QWEN3_14B_4BIT_MODEL_ALIAS, config_module.QWEN3_14B_4BIT_MODEL_REPO),
+        ):
+            page = f"https://huggingface.co/{repo}"
+            self.assertEqual(config_module.hf_model_page_url(alias), page)
+            self.assertEqual(config_module.hf_model_page_url(f"https://hf.co/{repo}"), page)
+            self.assertEqual(config_module.hf_model_page_url(f"https://huggingface.co/{repo}"), page)
         self.assertIsNone(config_module.hf_model_page_url("gpt-4o-mini"))
         self.assertIsNone(config_module.hf_model_page_url("openai/gpt-4o"))
         self.assertIsNone(config_module.hf_model_page_url("foo.gguf"))
@@ -1328,6 +1366,72 @@ class ConfigHelperTests(unittest.TestCase):
             self.assertIsNotNone(url, alias)
             self.assertIn(url, docs_text, f"{alias} page URL missing from README/SETTINGS")
 
+    def test_fixed_backend_default_and_known_mismatch_errors(self) -> None:
+        """Unset NEWS_MODEL_BACKEND resolves to DEFAULT_MODEL_BACKEND; known
+        catalog/GGUF models whose backend differs fail fast with an
+        actionable explicit-backend message (issue #169)."""
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(
+                config_module._configured_model_backend(config_module.DEFAULT_MODEL_ALIAS),
+                config_module.DEFAULT_MODEL_BACKEND,
+            )
+        with patch.dict(os.environ, {}, clear=True):
+            with self.assertRaisesRegex(
+                ValueError,
+                r"NEWS_MODEL='gemma-e2b-tiny' requires NEWS_MODEL_BACKEND=mlx-lm",
+            ):
+                config_module._configured_model_backend(config_module.CODEX_TEST_MODEL_ALIAS)
+        with patch.dict(os.environ, {}, clear=True):
+            with self.assertRaisesRegex(
+                ValueError,
+                r"NEWS_MODEL_BACKEND=llama.cpp",
+            ):
+                config_module._configured_model_backend("/models/local.gguf")
+        # An explicit override remains authoritative for the same model.
+        with patch.dict(
+            os.environ,
+            {"NEWS_MODEL_BACKEND": "mlx-lm"},
+            clear=True,
+        ):
+            self.assertEqual(
+                config_module._configured_model_backend(config_module.CODEX_TEST_MODEL_ALIAS),
+                config_module.MODEL_BACKEND_MLX_LM,
+            )
+
+    def test_inherited_assignments_use_resolved_default_backend(self) -> None:
+        """Tasks without a model override carry the resolved default backend,
+        while a task-specific model keeps its catalog/inferred backend
+        (issue #169)."""
+        with patch.dict(os.environ, {}, clear=True):
+            config = config_module.load_runtime_config(
+                environ={
+                    "NEWS_MODEL": config_module.CODEX_TEST_MODEL_ALIAS,
+                    "NEWS_MODEL_BACKEND": "mlx-lm",
+                    "NEWS_MODEL_ARTICLE_SUMMARY": config_module.GEMMA_4_12B_IT_4BIT_MODEL_ALIAS,
+                    "NEWS_MODEL_ARTICLE_SUMMARY_BASE_URL": "http://127.0.0.1:8090/v1",
+                },
+                materialize_outputs=False,
+            )
+        self.assertEqual(config.model_backend, "mlx-lm")
+        self.assertEqual(config.model_assignments["default"].backend, "mlx-lm")
+        # Inherited tasks share the resolved default backend.
+        for task in (
+            config_module.MODEL_TASK_STORY_DRAFTING,
+            config_module.MODEL_TASK_STORY_SCALE_SCREENING,
+            config_module.MODEL_TASK_TITLE_GENERATION,
+            config_module.MODEL_TASK_IMAGE_ART_DIRECTION,
+        ):
+            self.assertEqual(
+                config.model_assignments[task].backend,
+                "mlx-lm",
+                f"{task} must inherit the resolved default backend",
+            )
+        # The task-specific Gemma override keeps its catalog backend.
+        self.assertEqual(
+            config.model_assignments[config_module.MODEL_TASK_ARTICLE_SUMMARY].backend,
+            "mlx-vlm",
+        )
+
     def test_custom_catalog_aliases_reach_runtime_surfaces(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             path = Path(tmpdir) / "custom_catalog.yaml"
@@ -1443,8 +1547,30 @@ class ConfigHelperTests(unittest.TestCase):
         self.assertIn("gemma-4-12b-it-4bit", knob["options"])
         self.assertIn("qwythos-9b-8bit", knob["options"])
         self.assertIn("qwythos-9b-4bit", knob["options"])
+        # Runtime-verified Qwen3 aliases appear in every model selector with
+        # their HF page links (issue #89).
+        for alias in ("qwen3-8b-4bit", "qwen3-14b-4bit"):
+            self.assertIn(alias, knob["options"])
+            self.assertEqual(
+                knob["option_links"][alias]["page"],
+                f"https://huggingface.co/{model_catalog.CATALOG_MODELS[alias].hf_repo}",
+            )
         # prod preset now launches gemma
         self.assertEqual(config_module.run_preset_env("prod")["NEWS_MODEL"], "gemma-4-12b-it-4bit")
+
+    def test_default_model_knob_default_matches_resolved_reference(self) -> None:
+        """DN-19: the Default-model knob's registry default and config
+        resolution agree for a clean environment. The UI derives its knob
+        labels from the resolved runtime model reference, so the registry
+        default and the resolver must share one source and never drift."""
+        knob = next(
+            k for k in config_module.runtime_knob_registry() if k["env"] == "NEWS_MODEL"
+        )
+        resolution = config_module.resolve_runtime_config(
+            config_module.RuntimeConfigRequest(base_env={}, materialize_outputs=False)
+        )
+        self.assertEqual(knob["default"], resolution.config.model_reference)
+        self.assertEqual(resolution.config.model_reference, config_module.DEFAULT_MODEL_ALIAS)
 
     def test_yaml_scope_and_runtime_config_helpers_cover_edge_branches(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1930,14 +2056,17 @@ class ConfigHelperTests(unittest.TestCase):
             "--port 8081 --n-predict 2048",
         )
         self.assertEqual(config_module._coerce_source_text_list(123), [])
+        # Stage concurrency helpers were removed (issue #169); the fixed
+        # constant is the source of truth.
         self.assertEqual(
-            config_module._default_story_synthesis_concurrency("some-other-model"),
             config_module.DEFAULT_STORY_SYNTHESIS_CONCURRENCY,
+            config_module.DEFAULT_PIPELINE_CONCURRENCY,
         )
         self.assertEqual(config_module.infer_model_backend("other-model"), "mlx-lm")
         # Raw GGUF references infer the managed llama.cpp backend (issue
         # #75); the retained "qwythos" heuristic branch only serves non-GGUF
-        # raw ids.
+        # raw ids. infer_model_backend stays model-aware for task-specific
+        # assignments even though the default backend is fixed (issue #169).
         self.assertEqual(
             config_module.infer_model_backend(config_module.QWWYTHOS_9B_4BIT_MODEL_REFERENCE),
             config_module.MODEL_BACKEND_LLAMA_CPP,

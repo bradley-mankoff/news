@@ -4,12 +4,31 @@ from __future__ import annotations
 
 import json
 import subprocess
+from datetime import datetime
 
 from .archon import resolve_worktree_branch
 from .model import ACTIVE_WORKFLOW_STATUSES, DispatchResult
 from .runtime import DRY_RUN, ROOT, gh, log
 
 _DISPATCH_BUDGET: int | None = None
+
+
+def cutoff_reached(cfg: dict, now: datetime | None = None) -> bool:
+    """True when the local hour is at/after `no_dispatch_after_local_hour`
+    (24h clock, 0-23; absent/None disables the gate). Local = the machine's
+    wall clock (America/Chicago on this box), which is what the 8pm CST
+    no-work-after rule means. Running workflows are allowed to finish; this
+    only blocks NEW starts."""
+    raw = cfg.get("no_dispatch_after_local_hour")
+    if raw is None:
+        return False
+    try:
+        hour = int(raw)
+    except (TypeError, ValueError):
+        return False
+    if now is None:
+        now = datetime.now().astimezone()
+    return now.hour >= hour
 
 def resume_existing_worktree(
     cfg: dict,
@@ -25,6 +44,8 @@ def resume_existing_worktree(
     if DRY_RUN:
         log(f"[dry-run] RESUME issue={issue_number} branch={full_branch} wf={wf}")
         return True, message, None
+    if cutoff_reached(cfg):
+        return False, "after local-hour dispatch cutoff — queued until morning", None
     if not _dispatch_slot_available(wf, issue_number):
         return False, "Archon workflow capacity is full", None
     log_path = ROOT / "automation" / "archon-runs.log"
@@ -169,6 +190,10 @@ def dispatch(cfg: dict, env: dict, wf: str, branch: str, message: str,
     if DRY_RUN:
         log(f"[dry-run] DISPATCH wf={wf} branch={branch} issue={number}")
         return DispatchResult(True, "dry-run")
+    if cutoff_reached(cfg):
+        log(f"DISPATCH DEFERRED item={item_id} issue={number} wf={wf}: "
+            "after local-hour dispatch cutoff — queued until the next morning")
+        return DispatchResult(False, "after-hours-cutoff")
     if not _dispatch_slot_available(wf, number):
         return DispatchResult(False, "capacity")
     log_path = ROOT / "automation" / "archon-runs.log"

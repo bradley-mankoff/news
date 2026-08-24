@@ -1,5 +1,11 @@
 # Archon Workflow Inventory
 
+**Ticket creator:** the minimal assignable menu (doing + review) lives in
+[`ticket-workflow-menu.md`](ticket-workflow-menu.md) — the ticket creator
+reads that when processing ideas into tickets. Dispatch rules include the
+poller-enforced 8pm CST quiet-hours cutoff (no new work after 8pm CST; a
+legacy operational policy, not a model-cost requirement).
+
 Machine-local archon (archon-pi build, v0.7.0 = stock Archon) lives at
 `~/.local/share/archon-pi/archon-home/`.
 
@@ -22,13 +28,32 @@ Machine-local archon (archon-pi build, v0.7.0 = stock Archon) lives at
 - Bundled workflow defaults are disabled (repo `.archon/config.yaml` →
   `defaults.loadDefaultWorkflows: false`). The usable set is the 17 files in
   `archon-home/workflows/`.
-- Tier model refs use the tier's provider; explicit Pi model refs select the
-  OpenAI Codex backend. Routine nodes therefore remain on Pi/DeepSeek while
-  rigorous nodes use Pi/OpenAI Codex.
+- Tier model refs use the tier's provider; every tier's provider is `pi`, so
+  routine and rigorous nodes alike run on the same local model.
 - Only workflows pinned to claude with **no tier model** stay claude-locked
   (archived below).
 
-## Usable workflows (Pi: OpenAI Codex + OpenCode)
+## Parallelism: serial by default
+
+llama-server runs the local model with `--parallel 1` (one slot), so AI
+requests are serialized at the model. Two opt-in knobs create parallelism,
+and both end up queueing behind that single slot:
+
+- **Mode B factory** (`news/factory.json`): `max_concurrent: 1` +
+  `default_tactic: "oneshot"` — workflows dispatch one at a time, serially.
+  Raising `max_concurrent` fans independent workflows out in parallel; they
+  then share the one llama-server slot.
+- **Fusion** (`allow_fusion: true`): fusion-tagged workflows embed parallel
+  AI nodes inside a single workflow run (parallel planners/implementers plus
+  a judge — e.g. the `archon-review-block` five-agent review block). Those
+  parallel nodes are real AI nodes, but they still share the one
+  llama-server slot, so they queue behind each other rather than running
+  concurrently at the model.
+
+Higher factory caps and fusion are retained opt-ins; serial execution is the
+default because the local worker serves one request at a time.
+
+## Usable workflows (Pi: local Qwen)
 
 | Workflow | Intent |
 |---|---|
@@ -54,8 +79,8 @@ Machine-local archon (archon-pi build, v0.7.0 = stock Archon) lives at
 
 Reason: pinned to the claude provider with **no tier model reference**, so the
 tier override does not apply; they need the Claude Code binary and/or
-claude-only features (hooks, interactive relay). Routine nodes use
-pi/opencode-go; rigorous nodes use Pi's OpenAI Codex backend. Original YAMLs are preserved at
+claude-only features (hooks, interactive relay). All pi-usable nodes run on
+the local Qwen model. Original YAMLs are preserved at
 `~/.local/share/archon-pi/archon-home/workflows-archived/`.
 
 | Workflow | Original intent | Why archived |

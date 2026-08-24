@@ -1,0 +1,58 @@
+name: fusion-panel-piv-2
+description: |
+  Two-wide PIV block. Isolated copies a/b. Include from fusion-04.
+
+nodes:
+  - id: setup
+    bash: |
+      set -euo pipefail
+      mkdir -p "$ARTIFACTS_DIR/panels" "$ARTIFACTS_DIR/reports"
+      rm -rf "$ARTIFACTS_DIR"/panels/* "$ARTIFACTS_DIR"/reports/* \
+             "$ARTIFACTS_DIR"/fused 2>/dev/null || true
+      for p in a b; do
+        DEST="$ARTIFACTS_DIR/panels/$p"
+        mkdir -p "$DEST"
+        if git rev-parse --verify HEAD >/dev/null 2>&1; then
+          git archive HEAD | tar -x -C "$DEST"
+        else
+          rsync -a --exclude='.git' ./ "$DEST"/
+        fi
+      done
+      find . -name .git -prune -o -exec chmod a-w {} +
+
+  - id: piv-a
+    model: small
+    depends_on: [setup]
+    loop:
+      until: VALIDATED
+      max_iterations: 6
+      fresh_context: true
+      prompt: |
+        PIV in $ARTIFACTS_DIR/panels/a only. Request: $ARGUMENTS
+        Plan, implement, validate (run tests in the copy). Fix failures.
+        When complete AND validated, write $ARTIFACTS_DIR/reports/a.md and end with <promise>VALIDATED</promise>.
+        Do not touch the checkout.
+
+  - id: piv-b
+    model: small
+    depends_on: [setup]
+    loop:
+      until: VALIDATED
+      max_iterations: 6
+      fresh_context: true
+      prompt: |
+        PIV in $ARTIFACTS_DIR/panels/b only. Request: $ARGUMENTS
+        Plan, implement, validate (run tests in the copy). Fix failures.
+        When complete AND validated, write $ARTIFACTS_DIR/reports/b.md and end with <promise>VALIDATED</promise>.
+        Do not touch the checkout.
+
+  - id: verify-clean
+    bash: |
+      set -euo pipefail
+      DIRTY=$(git status --porcelain || true)
+      if [ -n "$DIRTY" ]; then
+        echo "PANEL ISOLATION VIOLATION:" >&2
+        echo "$DIRTY" >&2
+        exit 1
+      fi
+    depends_on: [piv-a, piv-b]
