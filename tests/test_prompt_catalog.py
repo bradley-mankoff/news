@@ -655,13 +655,11 @@ Citation precedence: Cite this source only for facts it directly supports.
             ],
         )
 
-    def test_validate_editorial_instructions_rejects_screening_blocklist_language(
-        self,
-    ) -> None:
+    def test_validate_editorial_instructions_rejects_screening_blocklist_language(self) -> None:
         # Embedding the pipeline-owned screening contract sentence inside the
         # editable story_scale_screening text trips EDITORIAL_BLOCKLIST even
         # though it is brace-free (so no brace finding joins the violation).
-        clean = {
+        violating = {
             "article_summary": "Summarize factually.",
             "story_scale_screening": "Be conservative. Return only valid JSON.",
             "story_drafting": "Write a factual story.",
@@ -669,7 +667,7 @@ Citation precedence: Cite this source only for facts it directly supports.
             "image_art_direction": "Depict the event.",
         }
         self.assertEqual(
-            prompt_contracts.validate_editorial_instructions(clean),
+            prompt_contracts.validate_editorial_instructions(violating),
             [
                 "instructions for story_scale_screening contain "
                 "pipeline-owned contract language: 'Return only valid JSON'"
