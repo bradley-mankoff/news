@@ -219,7 +219,10 @@ def get_prompt_profile(profile_id: str) -> PromptProfile:
     if profile is None:
         valid = ", ".join(sorted(PROMPT_PROFILES)) or "none configured"
         raise ValueError(
-            f"Unknown prompt profile {profile_id!r}. Available profiles: {valid}."
+            f"Unknown prompt profile {profile_id!r}. Available profiles: {valid}. "
+            f"To fix: set {PROMPT_PROFILE_ENV_VAR} (or --prompt-profile) to one "
+            f"of these ids, or unset it to fall back to the default "
+            f"({DEFAULT_PROMPT_PROFILE_ID!r})."
         )
     return profile
 

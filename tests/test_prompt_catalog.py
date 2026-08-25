@@ -423,6 +423,12 @@ Citation precedence: Cite this source only for facts it directly supports.
         with self.assertRaisesRegex(ValueError, "Available profiles: .*balanced"):
             prompt_catalog.get_prompt_profile("nope")
 
+    def test_get_unknown_profile_error_includes_remediation_hint(self) -> None:
+        with self.assertRaisesRegex(
+            ValueError, r"To fix: set NEWS_PROMPT_PROFILE.*default \('balanced'\)"
+        ):
+            prompt_catalog.get_prompt_profile("nope")
+
     def test_resolve_instructions_defaults_to_balanced(self) -> None:
         resolved = prompt_catalog.resolve_prompt_instructions()
         self.assertEqual(resolved, prompt_catalog.DEFAULT_PROMPT_INSTRUCTIONS)
