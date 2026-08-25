@@ -1243,6 +1243,7 @@ class RunSession:
         self.activity_snapshots: list[dict[str, Any]] = []
         self.run_log_file: TextIO | None = None
         self.run_log_files: list[TextIO] = []
+        self.run_log_sink_failures: list[str] = []  # DN-22: per-run sink failure record
         self.managed_model_server_active = False
         self.managed_model_server_ready = False
         self.managed_model_server_external = False
@@ -1304,6 +1305,7 @@ class RunSession:
                 "RUN_ACTIVITY_SNAPSHOTS",
                 "RUN_LOG_FILE",
                 "RUN_LOG_FILES",
+                "RUN_LOG_SINK_FAILURES",
                 "MANAGED_MODEL_SERVER_ACTIVE",
                 "MANAGED_MODEL_SERVER_READY",
                 "MANAGED_MODEL_SERVER_EXTERNAL",
@@ -1336,6 +1338,7 @@ class RunSession:
                 "RUN_ACTIVITY_SNAPSHOTS": self.activity_snapshots,
                 "RUN_LOG_FILE": self.run_log_file,
                 "RUN_LOG_FILES": self.run_log_files,
+                "RUN_LOG_SINK_FAILURES": self.run_log_sink_failures,
                 "MANAGED_MODEL_SERVER_ACTIVE": self.managed_model_server_active,
                 "MANAGED_MODEL_SERVER_READY": self.managed_model_server_ready,
                 "MANAGED_MODEL_SERVER_EXTERNAL": self.managed_model_server_external,
@@ -1353,6 +1356,7 @@ class RunSession:
         self.activity_snapshots = RUN_ACTIVITY_SNAPSHOTS
         self.run_log_file = RUN_LOG_FILE
         self.run_log_files = RUN_LOG_FILES
+        self.run_log_sink_failures = RUN_LOG_SINK_FAILURES
         self.managed_model_server_active = MANAGED_MODEL_SERVER_ACTIVE
         self.managed_model_server_ready = MANAGED_MODEL_SERVER_READY
         self.managed_model_server_external = MANAGED_MODEL_SERVER_EXTERNAL
@@ -1381,9 +1385,23 @@ def _isolate_failed_run_log_sink(log_file: TextIO, exc: Exception) -> None:
     sink_name = str(getattr(log_file, "name", "") or repr(log_file))
     failure = f"{sink_name}: {type(exc).__name__}: {exc}"
     RUN_LOG_SINK_FAILURES.append(failure)
-    print(f"WARNING: run-log sink failure isolated: {failure}", file=sys.stderr)
+    try:
+        print(f"WARNING: run-log sink failure isolated: {failure}", file=sys.stderr)
+    except Exception:
+        pass  # isolation must never raise, even if stderr is broken (DN-22)
     if RUN_LOG_FILES:
-        _write_run_log(f"WARNING: run-log sink failure isolated: {failure}")
+        try:
+            # DN-22: write warning directly to the funnel — do not route
+            # through ConciseLogWriter/parse_stream; telemetry must not be suppressed
+            ts = datetime.now().isoformat(timespec="seconds")
+            _write_run_log_line(f"{ts} WARNING: run-log sink failure isolated: {failure}")
+        except Exception:
+            pass
+    else:
+        try:
+            progress_tracker.warning(f"run-log sink failure isolated; no sinks remain: {failure}")
+        except Exception:
+            pass
 
 
 def _write_run_log_line(line: str) -> None:
@@ -1391,6 +1409,8 @@ def _write_run_log_line(line: str) -> None:
         return
     payload = f"{line.rstrip()}\n"
     for log_file in list(RUN_LOG_FILES):
+        if log_file not in RUN_LOG_FILES:
+            continue  # already isolated by earlier failure in this batch (DN-22)
         try:
             log_file.write(payload)
             log_file.flush()
@@ -1898,9 +1918,12 @@ def run_logging():
             f"# Timestamped log: {RUN_LOG_PATH}\n"
             f"# Rolling log: {LATEST_RUN_LOG_PATH}\n\n"
         )
-        for log_file in RUN_LOG_FILES:
-            log_file.write(header)
-            log_file.flush()
+        for log_file in list(RUN_LOG_FILES):
+            try:
+                log_file.write(header)
+                log_file.flush()
+            except Exception as exc:  # DN-22: header sink failure must not replace run outcome
+                _isolate_failed_run_log_sink(log_file, exc)
         try:
             yield
         finally:
