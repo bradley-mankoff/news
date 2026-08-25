@@ -10,6 +10,22 @@ from pathlib import Path
 from threading import Lock
 from typing import Any
 
+# Known report detail keys; anything else passed to ``record_report`` is
+# dropped so a typo'd kwarg cannot persist into the diagnostics JSON.
+_REPORT_DETAIL_KEYS = frozenset(
+    {
+        "path",
+        "prompt_label",
+        "recipient_count",
+        "recipients",
+        "token_stats",
+        "reference_report_count",
+        "citation_source_count",
+        "citation_group_count",
+        "image_art",
+    }
+)
+
 
 @dataclass
 class RunDiagnostics:
@@ -118,7 +134,10 @@ class RunDiagnostics:
                     return
 
     def record_report(self, **details: Any) -> None:
-        self.reports.append(details)
+        """Record one finished report, keeping only known detail keys."""
+        self.reports.append(
+            {key: value for key, value in details.items() if key in _REPORT_DETAIL_KEYS}
+        )
 
     def record_artifact(self, name: str, path: str, **details: Any) -> None:
         self.artifacts[name] = {"path": path, **details}

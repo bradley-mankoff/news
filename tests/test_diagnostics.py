@@ -425,6 +425,28 @@ class DiagnosticsTests(unittest.TestCase):
         summary_markdown = diagnostics.to_summary_markdown()
         self.assertIn("- Delivery: not recorded", summary_markdown)
 
+    def test_record_report_drops_unknown_keys(self) -> None:
+        diagnostics = RunDiagnostics(
+            run_started_at="2026-06-01T10:00:00",
+            settings={},
+        )
+        diagnostics.record_report(
+            path="output/daily_outputs/latest_run.md",
+            recipient_count=2,
+            recipients=["reader@example.com"],
+            recipient_counts=2,  # typo'd key must not persist
+        )
+        self.assertEqual(
+            diagnostics.to_dict()["reports"],
+            [
+                {
+                    "path": "output/daily_outputs/latest_run.md",
+                    "recipient_count": 2,
+                    "recipients": ["reader@example.com"],
+                }
+            ],
+        )
+
     def test_prompt_snapshot_recording_sequences_and_round_trip(self) -> None:
         diagnostics = RunDiagnostics(
             run_started_at="2026-06-01T10:00:00",
