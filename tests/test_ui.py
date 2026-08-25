@@ -77,6 +77,25 @@ from news_pipeline.ui import (
 )
 
 
+def _find_node() -> str | None:
+    """Return a real Node.js binary path, or None when unavailable.
+
+    Prefers the Homebrew install because ~/.bun/bin/node is a symlink to
+    bun, which cannot run ``node --input-type=module -`` scripts.
+    """
+    for candidate in (
+        "/opt/homebrew/opt/node/bin/node",
+        "/opt/homebrew/bin/node",
+        "/usr/local/bin/node",
+    ):
+        if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+            return candidate
+    found = shutil.which("node")
+    if found and os.path.basename(os.path.realpath(found)) != "bun":
+        return found
+    return None
+
+
 _FAKE_DOM_ELEMENT_JS = r'''
 const decodeEntities = (text) => String(text)
   .replaceAll("&lt;", "<")
@@ -494,7 +513,7 @@ assert(advancedPanels.innerHTML.includes("<h2>Run budgets and quotas</h2>"), "Bu
 assert(!advancedPanels.innerHTML.includes("undefined"), "undefined markup leaked into Advanced Settings");
 """
         )
-        node = shutil.which("node")
+        node = _find_node()
         if node is None:
             self.skipTest("Node.js is required for the embedded UI renderer harness")
         timeout_seconds = 30
@@ -941,7 +960,7 @@ assert(
 );
 """
         )
-        node = shutil.which("node")
+        node = _find_node()
         if node is None:
             self.skipTest("Node.js is required for the embedded UI renderer harness")
         timeout_seconds = 30
@@ -1301,7 +1320,7 @@ assert(warnings.length === 0, `reset path warned: ${warnings.join(", ")}`);
 assert(hintRenderCount >= 3, "refreshModelKnobLinks did not re-render the compatibility hint after bulk/preset/reset");
 """
         )
-        node = shutil.which("node")
+        node = _find_node()
         if node is None:
             self.skipTest("Node.js is required for the embedded UI renderer harness")
         timeout_seconds = 30
@@ -1380,7 +1399,7 @@ syncSurfacedEnvs();
 assert(SURFACED_ENVS.size === 0, "missing schema must not throw and must suppress nothing");
 """
         )
-        node = shutil.which("node")
+        node = _find_node()
         if node is None:
             self.skipTest("Node.js is required for the embedded UI renderer harness")
         timeout_seconds = 30
@@ -3482,7 +3501,7 @@ assert(elements.modelSearchResults.textContent.includes("Fit: unknown — no sta
 assert(elements.modelSearchResults.textContent.includes("Fit: unknown — empty status"), "empty fit status did not fall back to unknown");
 assert(elements.modelSearchResults.querySelector('button[data-use-hf-model="owner/external"]').disabled, "empty schema enabled external-only model");
 """ )
-        node = shutil.which("node")
+        node = _find_node()
         if node is None:
             self.skipTest("Node.js is required for the embedded UI renderer harness")
         result = subprocess.run(
@@ -3722,7 +3741,7 @@ const defaultEnabledButton = elements.modelSearchResults.querySelector('button[d
 assert(defaultEnabledButton && !defaultEnabledButton.disabled, "explicit external did not enable external-only model");
 '''
         )
-        node = shutil.which("node")
+        node = _find_node()
         if node is None:
             self.skipTest("Node.js is required for the embedded UI renderer harness")
         result = subprocess.run(
@@ -4139,7 +4158,7 @@ assert(
 );
 """
         )
-        node = shutil.which("node")
+        node = _find_node()
         if node is None:
             self.skipTest("Node.js is required for the embedded UI renderer harness")
         result = subprocess.run(
@@ -4335,7 +4354,7 @@ assert($("status").textContent === "preview failed", "successful preview overwro
 assert($("status").className === "bad", "successful preview cleared the bad status");
 """
         )
-        node = shutil.which("node")
+        node = _find_node()
         if node is None:
             self.skipTest("Node.js is required for the embedded UI renderer harness")
         result = subprocess.run(
@@ -4486,7 +4505,7 @@ for (const absentId of ["article_tuning_save", "article_tuning_rename", "article
 }
 """
         )
-        node = shutil.which("node")
+        node = _find_node()
         if node is None:
             self.skipTest("Node.js is required for the embedded UI renderer harness")
         result = subprocess.run(

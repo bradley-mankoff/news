@@ -73,6 +73,10 @@ default because the local worker serves one request at a time.
 | `archon-review-block` | Building block included by idea-to-pr / plan-to-pr / issue-review-full — not standalone. |
 | `archon-pi-default` | Minimal fallback oneshot. |
 
+QA is lights-off here: `archon-smart-pr-review` (the In Review lane trigger)
+and the factory auto-review run every machine check — pytest, review agents,
+verdict-gated merge. The human only judges vision/taste.
+
 ## Archived workflows (claude-only — not discovered)
 
 Reason: pinned to the claude provider with **no tier model reference**, so the

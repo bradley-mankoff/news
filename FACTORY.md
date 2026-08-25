@@ -83,10 +83,10 @@ Unblocked lights-off tickets get claimed. Implementers write code. If the slice 
 Open the draft PR. You are not doing a full code review unless you want to. You are checking:
 
 1. Does this match the **ticket**, not a larger dream?
-2. Is there a test or a machine check that would fail if the story were a lie?
-3. Anything that is actually taste? If yes, it should have been lights-on — bounce it rather than rubber-stamp.
+2. Is there a **machine check** that would fail if the story were a lie? pytest and archon-smart-pr-review already ran it — the machine verifies, the human does not re-check test output.
+3. Anything that is actually taste? Taste is the only human gate left — if yes, it should have been lights-on — bounce it rather than rubber-stamp.
 
-Then: merge (or ask QA to), mark the ticket **done**. Done means you (or QA) *saw* the ACs. Confident prose is not evidence.
+Then: merge, mark the ticket **done**. Done means the machine checks saw the ACs; confident prose is not evidence.
 
 **Lights-on tickets:** you stay in the session. The factory will not claim them. You are the criterion.
 

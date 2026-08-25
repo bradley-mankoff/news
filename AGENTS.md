@@ -105,8 +105,9 @@ says *what*, the PR says *the diff*.
   interface here — `.archon/mcp/piyaz.json` is retained for MCP-capable
   providers). They stop at `in_review`, never `done`; the human approves that
   flip on Piyaz.
-- Verification battery: `.venv/bin/python3 -m pytest tests/ -q` is the repo
-  gate workers must pass before recording a task.
+- Verification battery is machine-owned: `.venv/bin/python3 -m pytest tests/ -q`
+  is the repo gate workers must pass before recording a task, and
+  archon-smart-pr-review / factory auto-review handle QA — the machine runs every check, the human only judges vision/taste.
 - Capacity: the archon engine cap (`MAX_CONCURRENT_CONVERSATIONS`) is 10
   shared with the piyaz trial repo (`_lab/piyaz_trial`, parked at 0). Before
   dispatching any batch, check `archon workflow status --json`; do not start
