@@ -273,6 +273,41 @@ and server defaults), and image-generation details are derived from
 explicit Run Settings or hard-coded defaults rather than hidden model-size
 bundles or model-identity inference.
 
+## Troubleshooting
+
+### `ValueError: Prompt profile '…' violates pipeline-owned output contracts`
+
+Config resolution fails fast — before any model call — when the selected
+Prompt Profile or the effective profile-plus-override editorial instructions
+would weaken or collide with the pipeline-owned output contracts
+([ADR 0011](docs/adr/0011-prompt-contracts-pipeline-owned-and-validated.md)).
+The `ValueError` names the profile id and every violation; nothing was sent
+to a model. Example:
+
+```text
+ValueError: Prompt profile 'playful' violates pipeline-owned output contracts: instructions for story_drafting contain pipeline-owned contract language: 'Headline:'
+```
+
+| Violation in the message | Cause | Fix |
+|---|---|---|
+| `instructions for <task> contain pipeline-owned contract language: '<marker>'` | An editorial sentence embeds machine-contract text such as `DATABASE_ENTRY:`, `Headline:`/`Main story:`/`Contradictions:`, `[[S1]]`, or a "Return only valid JSON" phrase. | Reword the sentence to carry editorial tone only; contract sentences are injected by code and cannot be overridden. |
+| `story_scale_screening instructions contain a brace; …` | The scale-screening editorial sentence contains `{` or `}` under the default editorial-policy guard. | Remove the braces from the sentence. |
+| `missing or empty instructions for <task>` / `instructions for <task> must be a string` | A task slot resolved blank, missing, or non-string. | Restore non-empty plain-text instructions for that task. |
+
+Fix a violating value where it lives (precedence is `profile < YAML < env/UI`):
+
+1. Empty or reword the offending entry under `overrides:` in
+   [`config/prompt_overrides.yaml`](config/prompt_overrides.yaml); blank or
+   missing entries fall back to the selected profile's sentence.
+2. Unset the offending `NEWS_PROMPT_OVERRIDE_<TASK>` variable, or reset that
+   stage in the UI's Editorial approach panel.
+3. If no override is set, the built-in profile itself violates the contracts.
+   Built-in profiles are code-owned (`news_pipeline/prompt_catalog.py`), so
+   this only happens after local edits: pick another built-in via
+   `NEWS_PROMPT_PROFILE` or restore the stock catalog.
+
+Then re-run; config resolution validates again before the first prompt.
+
 ## Daily Automation
 
 The desktop application supports exactly one daily personal Run Session

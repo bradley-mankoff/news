@@ -14,9 +14,26 @@ uv run python -c 'import platform; print(platform.machine())'
 On Apple Silicon, the platform check should print `arm64`. `uv` picks the
 Python version from `.python-version` (3.12) automatically.
 
-> **Package status**: `news-pipeline` (ADR 0009) is the public distribution
-> name, but the package is not published to PyPI yet — install instructions
-> will be added here at release time.
+## Install from PyPI
+
+**Package status**: not published yet. The commands below are gated on the
+published distribution name from ADR 0009 (`news-pipeline`; import package
+stays `news_pipeline`, CLI stays `news`) and become working instructions only
+at publish.
+
+Publish-step checklist:
+
+- [ ] Re-verify `news-pipeline` availability on PyPI at publish time (ADR 0009;
+      recorded fallbacks if contested: `daily-news-pipeline`,
+      `news-pipeline-cli` — switch `pyproject.toml` and this section together).
+- [ ] Confirm both install commands against the released version:
+
+```bash
+pip install news-pipeline
+uv tool install news-pipeline
+```
+
+- [ ] Verify `import news_pipeline` works and the `news` CLI is on `PATH`.
 
 ## Project Automation (product facts only)
 
@@ -769,6 +786,32 @@ metadata, and an independent `delivery_status`/`delivery` record (`sent`,
 `skipped: not_configured`, `skipped: user_disabled`, or `failed`; older rows
 read as `not recorded`). A run with a non-empty newsletter body also writes
 paste-ready Markdown to `output/beehiiv/YYYY-MM-DD.md` for manual publication.
+
+### Run provenance
+
+Every run persists its own provenance so any report can be traced back to the
+exact inputs that produced it. Provenance lives in `latest_run_details.json`
+and, durably, in each DuckDB `runs` row (`settings_json` and
+`prompt_snapshots_json`):
+
+- **Prompt**: the selected prompt profile id (`prompt_profile_id`), the
+  effective per-task editorial instructions, and any instruction or
+  full-template overrides with their sources. One JSON prompt snapshot per
+  logical model call records what was actually sent — timestamp, task,
+  per-call model snapshot, token estimates, the exact system/human messages,
+  and retry/fallback metadata.
+- **Model and revision**: `model_snapshots` captures each configured task
+  assignment's model reference, catalog id, repository, resolved revision,
+  revision status, backend, and the explicit Story Discovery no-LLM record.
+- **Tuning**: the effective Model Tuning and per-task sampling settings
+  (`model_tuning`, default/reasoning/task sampling) plus the pipeline budget.
+- **Translation policy**: a metadata-only snapshot of the effective policy
+  (enabled flag, status, target language, English-source gate).
+
+The persistence boundary is prompts-only, secrets-free: model responses and
+deterministic fallback content are never recorded (prompt snapshots capture
+what was sent, not what came back), credentials are redacted from failure
+provenance, and delivery records stay address-only with redacted error text.
 
 ### Open Knowledge Format projections
 

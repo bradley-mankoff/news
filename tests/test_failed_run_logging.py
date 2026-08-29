@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import tempfile
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from dataclasses import replace
 from datetime import datetime
 from io import StringIO
@@ -12,6 +12,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import news_pipeline.pipeline as pipeline
+from news_pipeline import run_log
 from news_pipeline.history_store import connect
 
 
@@ -397,6 +398,279 @@ class FailedRunLoggingTests(unittest.TestCase):
 
             finish.assert_called_once_with()
             active_finalizer_factory.assert_called_once_with(diagnostics, test_config)
+
+
+class RunLogSinkIsolationTests(unittest.TestCase):
+    """DN-22: a dead run-log sink must not replace the run outcome."""
+
+    def tearDown(self) -> None:
+        for log_file in list(pipeline.RUN_LOG_FILES):
+            try:
+                if not log_file.closed:
+                    log_file.close()
+            except Exception:
+                pass
+        if getattr(pipeline, "RUN_LOG_FILE", None) is not None:
+            try:
+                if not pipeline.RUN_LOG_FILE.closed:  # type: ignore[union-attr]
+                    pipeline.RUN_LOG_FILE.close()  # type: ignore[union-attr]
+            except Exception:
+                pass
+        pipeline.RUN_LOG_FILES = []
+        pipeline.RUN_LOG_WRITER = None
+        pipeline.RUN_LOG_SINK_FAILURES = []
+        pipeline.RUN_LOG_FILE = None  # symmetry with FailedRunLoggingTests tearDown
+
+    def test_dead_sink_does_not_mask_messages_and_failure_is_recorded(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            dead_path = root / "dead.log"
+            dead = dead_path.open("w", encoding="utf-8")
+            dead.close()  # writes now raise ValueError: closed file
+            healthy_path = root / "survivor.log"
+            with healthy_path.open("w", encoding="utf-8") as healthy:
+                pipeline.RUN_LOG_FILES = [dead, healthy]
+                pipeline._write_run_log("visible message")
+
+            # The dead sink was dropped from the active sinks.
+            self.assertEqual(
+                [log_file.name for log_file in pipeline.RUN_LOG_FILES],
+                [str(healthy_path)],
+            )
+            # Which sink failed, and why, is recorded.
+            failures = "\n".join(pipeline.RUN_LOG_SINK_FAILURES)
+            self.assertIn(str(dead_path), failures)
+            self.assertIn("ValueError", failures)
+            # The surviving sink kept the stream and records the failure too.
+            text = healthy_path.read_text(encoding="utf-8")
+            self.assertIn("visible message", text)
+            self.assertIn("dead.log", text)
+
+    def test_sink_dying_midrun_keeps_streaming_to_survivors(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            staging_path = root / "run_log_staging.log"
+            latest_path = root / "latest_run.log"
+            staging = staging_path.open("w", encoding="utf-8")
+            latest = latest_path.open("w", encoding="utf-8")
+            pipeline.RUN_LOG_FILES = [staging, latest]
+            pipeline.RUN_LOG_WRITER = run_log.ConciseLogWriter(
+                write_line=pipeline._write_run_log_line
+            )
+            try:
+                pipeline._write_run_log("[2/9 sources] starting collection")
+                staging.close()  # the staging sink dies mid-run
+                pipeline._write_run_log("WARNING: low coverage")
+                pipeline._write_run_log("[3/9 clustering] pairwise similarity")
+            finally:
+                pipeline.RUN_LOG_WRITER.flush()
+                pipeline.RUN_LOG_FILES = []
+                pipeline.RUN_LOG_WRITER = None
+            latest.close()
+
+            text = latest_path.read_text(encoding="utf-8")
+            self.assertIn("[2/9 sources] starting collection", text)
+            self.assertIn("WARNING: low coverage", text)
+            self.assertIn("[3/9 clustering] pairwise similarity", text)
+            self.assertIn("run_log_staging.log", text)
+            self.assertIn("ValueError", text)
+            self.assertEqual(
+                [log_file.name for log_file in pipeline.RUN_LOG_FILES], []
+            )
+
+    def test_header_sink_failure_does_not_abort_run_logging(self) -> None:
+        """HIGH-1: header write failure on one sink must not abort run_logging."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            run_log_path = root / "run.log"
+            latest_path = root / "latest.log"
+            orig_open = open  # noqa: PTH123 - intentional interception
+
+            def failing_open(path, *args, **kwargs):
+                handle = orig_open(path, *args, **kwargs)
+                if str(path) == str(run_log_path):
+                    orig_write = handle.write
+
+                    def bad_write(data):
+                        if "# Daily news run log" in data:
+                            raise OSError("No space left on device")
+                        return orig_write(data)
+
+                    handle.write = bad_write  # type: ignore[method-assign]
+                return handle
+
+            with patch.object(pipeline, "RUN_LOG_PATH", str(run_log_path)), patch.object(
+                pipeline, "LATEST_RUN_LOG_PATH", str(latest_path)
+            ), patch("builtins.open", side_effect=failing_open):
+                with pipeline.run_logging():
+                    pipeline._write_run_log("hello after header")
+            # Survivor rolling log still has header-evidence + message and warning
+            text = latest_path.read_text(encoding="utf-8")
+            self.assertIn("hello after header", text)
+            self.assertIn("run-log sink failure isolated", text)
+            failures = "\n".join(pipeline.RUN_LOG_SINK_FAILURES)
+            self.assertIn("OSError", failures)
+            self.assertIn("run.log", failures)
+
+    def test_sink_failure_does_not_mask_successful_run(self) -> None:
+        """HIGH-2 success path: dead sink must not mask successful RunSession."""
+        timestamp = "2026-06-06_14-00-00"
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            output_dir = root / "daily_outputs"
+            run_output_dir = output_dir / ".staging" / timestamp
+            test_config = replace(
+                pipeline.CONFIG,
+                run_started_at=datetime(2026, 6, 6, 14, 0, 0),
+                run_date="2026-06-06",
+                timestamp=timestamp,
+                output_dir=output_dir,
+                run_output_dir=run_output_dir,
+                run_staging_dir=run_output_dir,
+                latest_run_markdown_path=output_dir / "latest_run.md",
+                latest_run_log_path=output_dir / "latest_run.log",
+                latest_run_details_path=output_dir / "latest_run_details.json",
+                history_db_path=root / "history" / "news_history.duckdb",
+            )
+
+            session_sink_failures: list[str] = []
+
+            def run_with_dead_sink() -> None:
+                for f in list(pipeline.RUN_LOG_FILES):
+                    if "run_log_" in getattr(f, "name", ""):
+                        f.close()
+                        break
+                pipeline.progress_tracker.detail("synthetic detail after sink death")
+                # capture failures before RunSession restores globals
+                session_sink_failures.extend(list(pipeline.RUN_LOG_SINK_FAILURES))
+
+            session = pipeline.RunSession(test_config)
+            with redirect_stdout(StringIO()):
+                session.run(run_with_dead_sink)
+
+            latest_text = (output_dir / "latest_run.log").read_text(encoding="utf-8")
+            self.assertIn("synthetic detail after sink death", latest_text)
+            self.assertIn("run-log sink failure isolated", latest_text)
+            # failures are observable via survivor log and via session/captured list
+            # (module global is restored after RunSession, so check captured or session attr)
+            combined = "\n".join(session_sink_failures + session.run_log_sink_failures)
+            self.assertIn("ValueError", combined)
+
+    def test_sink_failure_does_not_mask_failed_run_outcome(self) -> None:
+        """HIGH-2 failure path: sink death must not swallow the original RuntimeError."""
+        timestamp = "2026-06-06_15-00-00"
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            output_dir = root / "daily_outputs"
+            run_output_dir = output_dir / ".staging" / timestamp
+            test_config = replace(
+                pipeline.CONFIG,
+                run_started_at=datetime(2026, 6, 6, 15, 0, 0),
+                run_date="2026-06-06",
+                timestamp=timestamp,
+                output_dir=output_dir,
+                run_output_dir=run_output_dir,
+                run_staging_dir=run_output_dir,
+                latest_run_markdown_path=output_dir / "latest_run.md",
+                latest_run_log_path=output_dir / "latest_run.log",
+                latest_run_details_path=output_dir / "latest_run_details.json",
+                history_db_path=root / "history" / "news_history.duckdb",
+            )
+
+            def fail_after_sink_dead() -> None:
+                for f in list(pipeline.RUN_LOG_FILES):
+                    if "run_log_" in getattr(f, "name", ""):
+                        f.close()
+                        break
+                raise RuntimeError("synthetic failure")
+
+            with redirect_stdout(StringIO()):
+                with self.assertRaisesRegex(RuntimeError, "synthetic failure"):
+                    pipeline.RunSession(test_config).run(fail_after_sink_dead)
+
+            latest_text = (output_dir / "latest_run.log").read_text(encoding="utf-8")
+            self.assertIn("RuntimeError: synthetic failure", latest_text)
+            self.assertIn("run-log sink failure isolated", latest_text)
+            details = json.loads((output_dir / "latest_run_details.json").read_text(encoding="utf-8"))
+            self.assertEqual(details["events"][-1]["label"], "failed")
+
+    def test_oserror_sink_is_isolated_like_valueerror(self) -> None:
+        """MEDIUM-4: OSError (ENOSPC) and flush-only failures must be isolated."""
+        healthy = StringIO()
+        healthy.name = "/tmp/healthy.log"  # type: ignore[attr-defined]
+
+        class WriteFail(StringIO):  # type: ignore[type-arg]
+            name = "/tmp/diskfull.log"  # type: ignore[assignment]
+
+            def write(self, s):
+                raise OSError("No space left on device")
+
+        class FlushFail(StringIO):  # type: ignore[type-arg]
+            name = "/tmp/flushfail.log"  # type: ignore[assignment]
+
+            def flush(self):
+                raise OSError("No space left on device")
+
+        for bad in (WriteFail(), FlushFail()):
+            pipeline.RUN_LOG_FILES = [bad, healthy]  # type: ignore[assignment]
+            pipeline.RUN_LOG_SINK_FAILURES = []
+            with redirect_stderr(StringIO()):
+                pipeline._write_run_log_line("hello oserror")
+            self.assertIn("OSError", "\n".join(pipeline.RUN_LOG_SINK_FAILURES))
+            self.assertIn("hello oserror", healthy.getvalue())
+            pipeline.RUN_LOG_FILES = []
+
+    def test_stderr_and_survivor_warning_are_emitted(self) -> None:
+        """MEDIUM-5: triple observable — stderr and survivor warning format."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            dead_path = root / "dead.log"
+            dead = dead_path.open("w", encoding="utf-8")
+            dead.close()
+            healthy_path = root / "ok.log"
+            with healthy_path.open("w", encoding="utf-8") as healthy:
+                pipeline.RUN_LOG_FILES = [dead, healthy]
+                pipeline.RUN_LOG_SINK_FAILURES = []
+                buf = StringIO()
+                with redirect_stderr(buf):
+                    pipeline._write_run_log("visible")
+                stderr_text = buf.getvalue()
+                self.assertIn("WARNING: run-log sink failure isolated", stderr_text)
+                self.assertIn("dead.log", stderr_text)
+                self.assertIn("ValueError", stderr_text)
+            text = healthy_path.read_text(encoding="utf-8")
+            self.assertRegex(text, r"WARNING: run-log sink failure isolated: .*dead\.log.*ValueError")
+            self.assertIn("visible", text)
+
+    def test_both_sinks_dead_records_each_once(self) -> None:
+        """L-4: both dead should record each sink once, no duplicate warning spam."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            d1 = (root / "d1.log").open("w", encoding="utf-8")
+            d1.close()
+            d2 = (root / "d2.log").open("w", encoding="utf-8")
+            d2.close()
+            pipeline.RUN_LOG_FILES = [d1, d2]
+            pipeline.RUN_LOG_SINK_FAILURES = []
+            with redirect_stderr(StringIO()):
+                pipeline._write_run_log_line("hi")
+            self.assertEqual(len(pipeline.RUN_LOG_SINK_FAILURES), 2)
+            self.assertEqual(len([f for f in pipeline.RUN_LOG_SINK_FAILURES if "d1.log" in f]), 1)
+            self.assertEqual(len([f for f in pipeline.RUN_LOG_SINK_FAILURES if "d2.log" in f]), 1)
+            self.assertEqual(pipeline.RUN_LOG_FILES, [])
+
+    def test_run_logging_resets_sink_failures(self) -> None:
+        """L-1: per-session reset — stale failures must not leak."""
+        pipeline.RUN_LOG_SINK_FAILURES = ["stale: ValueError: boom"]
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            with patch.object(pipeline, "RUN_LOG_PATH", str(root / "a.log")), patch.object(
+                pipeline, "LATEST_RUN_LOG_PATH", str(root / "b.log")
+            ):
+                with pipeline.run_logging():
+                    self.assertEqual(pipeline.RUN_LOG_SINK_FAILURES, [])
+                # also empty after clean exit via RunSession reset of global
+                # run_logging leaves RUN_LOG_SINK_FAILURES at [] until next entry
 
 
 if __name__ == "__main__":

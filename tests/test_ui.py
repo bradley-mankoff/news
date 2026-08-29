@@ -286,11 +286,15 @@ class UITests(unittest.TestCase):
         self.assertIn("if (SURFACED_ENVS.has(knob.env)) return;", raw_filter)
 
     def test_surfaced_envs_parity_with_dedicated_renderers(self) -> None:
-        """Bidirectional registry/UI parity (issue #115): every surfaced
-        registry record maps to an actual dedicated UI reference, and every
-        dedicated UI reference maps back to one registered surfaced
-        environment. A stale metadata entry cannot hide an unrendered knob,
-        and a stale markup reference cannot point at a raw-only setting."""
+        """Bidirectional registry/UI parity (issue #115, DN-18): every surfaced
+        registry record maps to an actual dedicated UI reference or to a
+        generic Advanced panel family, and every dedicated UI reference maps
+        back to one registered surfaced environment. Since DN-18 the
+        Budgets/Peripheral families are rendered straight from the registry
+        (no literal env list survives in the browser source), so the drift
+        guard instead pins that every unclaimed advanced_panels knob belongs
+        to a family the browser actually renders — otherwise a stale metadata
+        entry could make a setting disappear."""
         html = ui_module.HTML
         run_setup = html.split("function renderRunSetup")[1].split("function renderAdvancedPanels")[0]
         advanced = html.split("function renderAdvancedPanels")[1].split("function renderAdvancedKnobs")[0]
@@ -300,8 +304,13 @@ class UITests(unittest.TestCase):
             set(re.findall(r'data-env="(NEWS_[A-Z_]+)"', run_setup))
             | set(re.findall(r'knobField\("(NEWS_[A-Z_]+)"', run_setup))
         )
-        # Direct advanced panel refs: Budgets/Peripheral knobField() calls.
-        direct_panels = set(re.findall(r'knobField\("(NEWS_[A-Z_]+)"', advanced))
+        # Budgets/Peripheral fields are registry-driven since DN-18: no literal
+        # env-name list may survive in the Advanced block.
+        self.assertEqual(
+            re.findall(r'knobField\("(NEWS_[A-Z_]+)"', advanced),
+            [],
+            "hand-listed knobField() env survived in the Advanced panels",
+        )
         # TASK_CONFIG-driven refs: preset/base-URL/max-token envs and the
         # sampling prefix composed with the SAMPLING_FIELDS suffixes.
         task_direct = set(
@@ -328,13 +337,14 @@ class UITests(unittest.TestCase):
         template_catalog = set(config_module.PROMPT_TEMPLATE_ENV_VARS.values())
         dedicated_refs = (
             direct_run_setup
-            | direct_panels
             | task_direct
             | task_sampling
             | override_map
             | template_catalog
+            | {"NEWS_MODEL_MAX_INPUT_TOKENS"}  # shared cap on every tuning card
         )
-        registry = {knob["env"]: knob["ui_location"] for knob in build_knob_registry()}
+        registry_knobs = build_knob_registry()
+        registry = {knob["env"]: knob["ui_location"] for knob in registry_knobs}
         surfaced = {env for env, loc in registry.items() if loc != "advanced_raw"}
         # Every dedicated UI reference maps back to a registered surfaced env.
         self.assertEqual(
@@ -342,9 +352,28 @@ class UITests(unittest.TestCase):
             [],
             "dedicated markup references an env that is not registry-surfaced",
         )
-        # Every surfaced registry env has an actual dedicated reference.
+        # Generic-family ownership (DN-18): the advanced_panels knobs no
+        # dedicated renderer claims must all belong to a family the browser
+        # renders via advancedPanelFields(); any other group would silently
+        # disappear from the UI and must be marked advanced_raw instead.
+        family_groups = re.findall(r'advancedPanelFields\("([^"]+)"\)', advanced)
+        self.assertEqual(family_groups, ["Pipeline Budget", "Run Settings"])
+        unclaimed = {
+            knob["env"]: knob["group"]
+            for knob in registry_knobs
+            if knob["ui_location"] == "advanced_panels"
+            and knob["env"] not in dedicated_refs
+        }
+        self.assertTrue(unclaimed, "expected registry-driven family knobs")
         self.assertEqual(
-            sorted(surfaced - dedicated_refs),
+            sorted(set(unclaimed.values())),
+            sorted(family_groups),
+            "unclaimed advanced_panels knob lives outside the registry-driven families",
+        )
+        # Every surfaced registry env still resolves to a renderer: a dedicated
+        # reference or a registry-driven family.
+        self.assertEqual(
+            sorted(surfaced - (dedicated_refs | set(unclaimed))),
             [],
             "registry-surfaced env has no dedicated UI reference",
         )
@@ -438,6 +467,14 @@ const renderPromptTemplateEditors = () => {};
             )
             + js_function_block(
                 "function modelTuningPanel(task) {", "function renderAdvancedPanels"
+            )
+            # Dedicated-env ownership maps consumed by advancedPanelDedicatedEnvs()
+            # inside renderAdvancedPanels (DN-18).
+            + js_function_block(
+                "    const PROMPT_OVERRIDE_ENVS = {", "    function selectedPromptProfile"
+            )
+            + js_function_block(
+                "    function promptTemplateEnvMap() {", "    function promptTemplateRecord"
             )
             + js_function_block(
                 "function renderAdvancedPanels() {", "function renderAdvancedKnobs"
@@ -533,6 +570,141 @@ assert(!advancedPanels.innerHTML.includes("undefined"), "undefined markup leaked
             )
         self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
 
+    def test_advanced_panel_families_render_from_registry_in_node_harness(self) -> None:
+        """Execute the production Advanced family renderer in Node (DN-18).
+
+        The Budgets/Peripheral panels must be built from the shared knob
+        registry: a newly registered advanced_panels knob in a rendered
+        family appears with its registry label without any second UI list,
+        while knobs owned by dedicated renderers, other families, and other
+        ui_locations stay out. All functions are extracted from
+        ui_module.HTML itself, not reimplemented here.
+        """
+        html = ui_module.HTML
+
+        def js_function_block(start: str, end: str) -> str:
+            return html[html.index(start) : html.index(end, html.index(start))]
+
+        js = (
+            r"""
+const assert = (condition, message) => {
+  if (!condition) throw new Error(message);
+};
+"""
+            + r"""
+// inputForKnob reads current values through document.querySelector; the
+// harness has no DOM controls, so every lookup falls back to
+// state.schema.current_env, mirroring a schema-driven initial render.
+const document = { querySelector() { return null; } };
+const advancedPanels = { innerHTML: "" };
+const $ = (id) => id === "advancedPanels" ? advancedPanels : null;
+const decorateEnvHints = () => {};
+const renderPromptProfilePanel = () => {};
+const renderPromptTemplateEditors = () => {};
+"""
+            + js_function_block("    const TASK_CONFIG = {", "    const state = {")
+            + js_function_block("    const state = {", "    const icons = {")
+            + js_function_block(
+                "    const TASK_MAX_TOKENS_LABELS = {", "    const SAMPLING_FIELDS = ["
+            )
+            + js_function_block(
+                "    const SAMPLING_FIELDS = [", "    function samplingFields(prefix) {"
+            )
+            + js_function_block("function escapeHtml(text) {", "function formatDefault")
+            + js_function_block(
+                'function formatDefault(value, fallback="none") {',
+                "function currentControlValue",
+            )
+            + js_function_block(
+                "function currentControlValue(env) {", "function setControlValue"
+            )
+            + js_function_block("function knobByEnv(env) {", "function inputForKnob")
+            + js_function_block(
+                'function inputForKnob(knob, { emptyLabel, optionLabels = {}, id = "" } = {}) {',
+                "function knobField",
+            )
+            + js_function_block(
+                "function knobField(env, label, options={}) {", "function knobHint"
+            )
+            + js_function_block(
+                "function samplingFields(prefix) {", "function modelTuningPanel"
+            )
+            + js_function_block(
+                "function modelTuningPanel(task) {", "function renderAdvancedPanels"
+            )
+            + js_function_block(
+                "    const PROMPT_OVERRIDE_ENVS = {", "    function selectedPromptProfile"
+            )
+            + js_function_block(
+                "    function promptTemplateEnvMap() {", "    function promptTemplateRecord"
+            )
+            + js_function_block(
+                "function renderAdvancedPanels() {", "function renderAdvancedKnobs"
+            )
+            + r"""
+// ---- 1. Missing schema fails safe -----------------------------------------
+assert(state.schema === null, "harness state must start with an empty schema");
+assert(advancedPanelFields("Pipeline Budget") === "", "missing schema must render no budget fields");
+assert(advancedPanelFields("Run Settings") === "", "missing schema must render no peripheral fields");
+
+// ---- 2. Registry-driven families (DN-18) ----------------------------------
+// The registry is the only list: existing and brand-new advanced_panels
+// knobs appear in their group's family with the registry label, while
+// dedicated-renderer envs, other groups, and other locations stay out.
+state.schema = {
+  current_env: {},
+  prompt_templates: [],
+  knobs: [
+    { env: "NEWS_MAX_STORIES", group: "Pipeline Budget", label: "Max stories", type: "number", min: 1, step: 1, default: null, ui_location: "advanced_panels" },
+    { env: "NEWS_BRAND_NEW_BUDGET_KNOB", group: "Pipeline Budget", label: "Brand new budget knob", type: "number", min: 1, step: 1, default: null, ui_location: "advanced_panels" },
+    { env: "NEWS_BLOCK_REUSED_URLS", group: "Run Settings", label: "Block reused URLs", type: "bool", default: false, ui_location: "advanced_panels" },
+    { env: "NEWS_BRAND_NEW_PERIPHERAL_KNOB", group: "Run Settings", label: "Brand new peripheral knob", type: "text", default: null, ui_location: "advanced_panels" },
+    { env: "NEWS_PROMPT_OVERRIDE_ARTICLE_SUMMARY", group: "Run Settings", label: "Prompt override (article summary)", type: "text", default: null, ui_location: "advanced_panels" },
+    { env: "NEWS_MODEL_ARTICLE_SUMMARY_BASE_URL", group: "Model Server Settings", label: "Article writing base URL", type: "text", default: null, ui_location: "advanced_panels" },
+    { env: "NEWS_EMBEDDING_MODEL", group: "Run Settings", label: "Embedding model", type: "text", default: "all-mpnet-base-v2", ui_location: "advanced_raw" }
+  ]
+};
+const budgets = advancedPanelFields("Pipeline Budget");
+assert(budgets.includes('data-env="NEWS_MAX_STORIES"'), "existing budget knob missing from its family");
+assert(budgets.includes('data-env="NEWS_BRAND_NEW_BUDGET_KNOB"'), "new budget registry knob did not join its family without a second list");
+assert(budgets.includes("Brand new budget knob"), "registry label missing for the new budget knob");
+assert(!budgets.includes("NEWS_BLOCK_REUSED_URLS"), "peripheral knob leaked into the budgets family");
+const peripheral = advancedPanelFields("Run Settings");
+assert(peripheral.includes('data-env="NEWS_BLOCK_REUSED_URLS"'), "existing peripheral knob missing from its family");
+assert(peripheral.includes('data-env="NEWS_BRAND_NEW_PERIPHERAL_KNOB"'), "new peripheral registry knob did not join its family without a second list");
+assert(!peripheral.includes("NEWS_PROMPT_OVERRIDE_ARTICLE_SUMMARY"), "dedicated override editor env leaked into the generic family");
+assert(!peripheral.includes("NEWS_EMBEDDING_MODEL"), "raw-location knob leaked into the generic family");
+assert(!budgets.includes("NEWS_MODEL_ARTICLE_SUMMARY_BASE_URL"), "task-card env leaked into a generic family");
+
+// ---- 3. Full Advanced Settings integration -------------------------------
+renderAdvancedPanels();
+assert(advancedPanels.innerHTML.includes("<h2>Run budgets and quotas</h2>"), "Budgets panel heading missing");
+assert(advancedPanels.innerHTML.includes("<h2>Optional run settings</h2>"), "Peripheral panel heading missing");
+assert(advancedPanels.innerHTML.includes('data-env="NEWS_BRAND_NEW_BUDGET_KNOB"'), "new registry knob missing from the rendered Budgets panel");
+assert(advancedPanels.innerHTML.includes('data-env="NEWS_BRAND_NEW_PERIPHERAL_KNOB"'), "new registry knob missing from the rendered Peripheral panel");
+assert(!advancedPanels.innerHTML.includes("undefined"), "undefined markup leaked into Advanced Settings");
+"""
+        )
+        node = _find_node()
+        if node is None:
+            self.skipTest("Node.js is required for the embedded UI renderer harness")
+        timeout_seconds = 30
+        try:
+            result = subprocess.run(
+                [node, "--input-type=module", "-"],
+                input=js,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=timeout_seconds,
+            )
+        except subprocess.TimeoutExpired as exc:
+            self.fail(
+                f"Node harness timed out after {timeout_seconds}s: "
+                f"stdout={exc.stdout!r} stderr={exc.stderr!r}"
+            )
+        self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
+
     def test_run_setup_single_default_model_card(self) -> None:
         html = ui_module.HTML
         run_setup = html.split("function renderRunSetup")[1].split("const SAMPLING_FIELDS")[0]
@@ -548,6 +720,13 @@ assert(!advancedPanels.innerHTML.includes("undefined"), "undefined markup leaked
             self.assertNotIn(f'knobField("{env}"', run_setup)
         # The readout binds to the top-level runtime.model {name, reference}.
         self.assertIn("defaultRuntime.name || defaultRuntime.reference", run_setup)
+        # The Default-model knob's empty-option label derives from the same
+        # resolved runtime reference; a hardcoded alias can drift (DN-19).
+        self.assertNotIn("default: gemma-4-12b-it-4bit", run_setup)
+        self.assertIn(
+            "emptyLabel: `default: ${formatDefault(defaultRuntime.name || defaultRuntime.reference)}`",
+            run_setup,
+        )
         # A failed runtime snapshot renders a visible banner, not a silent "-".
         self.assertIn("const runtimeError = schema.runtime_error || \"\";", run_setup)
         self.assertIn("Configuration error: ${escapeHtml(runtimeError)}", run_setup)
@@ -555,6 +734,132 @@ assert(!advancedPanels.innerHTML.includes("undefined"), "undefined markup leaked
             "function renderAdvancedKnobs"
         )[0]
         self.assertIn("renderPromptProfilePanel();", advanced)
+
+    def test_run_setup_default_model_label_follows_resolved_reference(self) -> None:
+        """Execute renderRunSetup in Node against two different resolved
+        runtime model references (DN-19): the Default-model knob's empty
+        option must always name the current resolution (name first, then
+        reference, then the formatDefault fallback), so changing the
+        reference updates the label instead of drifting from a hardcoded
+        alias."""
+        html = ui_module.HTML
+
+        def js_function_block(start: str, end: str) -> str:
+            begin = html.index(start)
+            return html[begin : html.index(end, begin)]
+
+        js = (
+            r"""
+const assert = (condition, message) => {
+  if (!condition) throw new Error(message);
+};
+"""
+            + r"""
+// inputForKnob reads current values through document.querySelector; the
+// harness has no DOM controls, so every lookup falls back to
+// state.schema.current_env, mirroring a schema-driven initial render.
+const document = { querySelector() { return null; } };
+const fakeElement = (id) => ({
+  id,
+  value: "",
+  innerHTML: "",
+  onchange: null,
+  classList: { add() {}, toggle() {} }
+});
+const elements = {};
+const $ = (id) => (elements[id] = elements[id] || fakeElement(id));
+// Sibling renderers are out of scope here; only their invocation matters.
+const renderPresetSummary = () => {};
+const renderModelTuningPanels = () => {};
+const decorateEnvHints = () => {};
+const renderPromptProfilePanel = () => {};
+const renderModelCatalogPanel = () => {};
+const refreshModelKnobLinks = () => {};
+"""
+            + js_function_block("    const state = {", "    const icons = {")
+            + js_function_block("function escapeHtml(text) {", "function formatDefault")
+            + js_function_block(
+                'function formatDefault(value, fallback="none") {',
+                "function currentControlValue",
+            )
+            + js_function_block(
+                "function currentControlValue(env) {", "function setControlValue"
+            )
+            + js_function_block("function value(id) {", "function checked(id)")
+            + js_function_block("function knobByEnv(env) {", "function inputForKnob")
+            + js_function_block(
+                'function inputForKnob(knob, { emptyLabel, optionLabels = {}, id = "" } = {}) {',
+                "function knobField",
+            )
+            + js_function_block(
+                'function knobField(env, label, options={}) {', "function knobHint"
+            )
+            + js_function_block(
+                "function renderRunSetup() {", "const TASK_MAX_TOKENS_LABELS"
+            )
+            + r"""
+state.schema = {
+  actions: ["run"],
+  prompt_profiles: [],
+  current_env: {},
+  runtime: { model: { name: "mlx-community/gemma-4-12B-it-4bit", reference: "gemma-4-12b-it-4bit" } },
+  knobs: [
+    { env: "NEWS_MODEL", type: "select", default: "gemma-4-12b-it-4bit", options: ["gemma-4-12b-it-4bit", "qwythos-9b-4bit"] }
+  ]
+};
+
+// Resolution with both fields: the label mirrors the Resolved readout's
+// name-first expression for the same snapshot.
+renderRunSetup();
+let markup = $("runSetupMount").innerHTML;
+assert(
+  markup.includes('<option value="">default: mlx-community/gemma-4-12B-it-4bit</option>'),
+  "empty-option label must derive from the resolved runtime model name"
+);
+
+// Changing the resolved reference updates the label on re-render: no stale
+// alias survives, and an unnamed resolution falls back to its reference.
+state.schema.runtime = { model: { name: "", reference: "qwythos-9b-4bit" } };
+renderRunSetup();
+markup = $("runSetupMount").innerHTML;
+assert(
+  markup.includes('<option value="">default: qwythos-9b-4bit</option>'),
+  "changing the reference must update the derived label"
+);
+assert(
+  !markup.includes("mlx-community/gemma-4-12B-it-4bit</option>"),
+  "stale resolved name must not survive the re-render"
+);
+
+// A failed/missing resolution has no reference: fall back instead of lying.
+state.schema.runtime = {};
+renderRunSetup();
+markup = $("runSetupMount").innerHTML;
+assert(
+  markup.includes('<option value="">default: none</option>'),
+  "missing resolution must render the formatDefault fallback"
+);
+"""
+        )
+        node = _find_node()
+        if node is None:
+            self.skipTest("Node.js is required for the embedded UI renderer harness")
+        timeout_seconds = 30
+        try:
+            result = subprocess.run(
+                [node, "--input-type=module", "-"],
+                input=js,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=timeout_seconds,
+            )
+        except subprocess.TimeoutExpired as exc:
+            self.fail(
+                f"Node harness timed out after {timeout_seconds}s: "
+                f"stdout={exc.stdout!r} stderr={exc.stderr!r}"
+            )
+        self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
 
     def test_prompt_override_editors_and_restore_buttons_in_html(self) -> None:
         # The Editorial approach panel must expose editable per-stage editors
@@ -5149,6 +5454,235 @@ for (const absentId of ["article_tuning_save", "article_tuning_rename", "article
         self.assertIn("resetLog();", run_action)
         self.assertIn("startSpinner();", run_action)
         self.assertIn("new EventSource", run_action)
+
+    def test_run_log_reducer_and_stream_lifecycle_execute_in_node_dom_harness(self) -> None:
+        """Execute the embedded run-log reducer and SSE lifecycle in Node (DN-23).
+
+        The stage reducer, spinner, finalizeRun(), and the whole runAction()
+        wiring are extracted from ui_module.HTML itself, not reimplemented,
+        and driven against a minimal DOM/EventSource/timer harness. Terminal
+        cleanup and disconnect recovery must behave, not merely appear in the
+        source contracts asserted by test_run_log_renderer_contracts.
+        """
+        html = ui_module.HTML
+        js = (
+            r"""
+const assert = (condition, message) => {
+  if (!condition) throw new Error(message);
+};
+"""
+            + r"""
+// Minimal DOM: stable per-id element stubs carrying exactly what renderLog
+// and resetLog touch (textContent plus scroll bookkeeping).
+const elements = new Map();
+const elementFor = (id) => {
+  if (!elements.has(id)) {
+    elements.set(id, { textContent: "", scrollTop: 0, scrollHeight: 0 });
+  }
+  return elements.get(id);
+};
+const $ = (id) => elementFor(id);
+// Lifecycle collaborators record instead of touching the wider page.
+const statuses = [];
+const setStatus = (text, cls = "muted") => statuses.push([text, cls]);
+let reviewRefreshes = 0;
+const updateRunControls = () => {};
+const refreshReviewData = () => { reviewRefreshes += 1; };
+// Deterministic timers: intervals stay open until cleared and remember their
+// callbacks, timeouts queue so the harness decides when polling fires.
+let intervalSeq = 0;
+const openIntervals = [];
+const setInterval = (fn) => {
+  const id = ++intervalSeq;
+  openIntervals.push([id, fn]);
+  return id;
+};
+const clearInterval = (id) => {
+  const at = openIntervals.findIndex(([openId]) => openId === id);
+  if (at >= 0) openIntervals.splice(at, 1);
+};
+const tickSpinners = () => { for (const [, fn] of [...openIntervals]) fn(); };
+const pendingTimeouts = [];
+const window = {
+  setTimeout: (fn, delay) => { pendingTimeouts.push([fn, delay]); return pendingTimeouts.length; },
+};
+// Yield past an awaited status fetch so assertions observe the recovery
+// path's effects (it resumes on a microtask after the api promise).
+const settle = () => new Promise((resolve) => setImmediate(resolve));
+class EventSource {
+  static opened = [];
+  constructor(url) {
+    this.url = url;
+    this.closed = false;
+    this.onmessage = null;
+    this.onerror = null;
+    this.statusListener = null;
+    EventSource.opened.push(this);
+  }
+  addEventListener(kind, listener) { if (kind === "status") this.statusListener = listener; }
+  close() { this.closed = true; }
+}
+// API fake: POST /api/run mints run ids; status polls replay scripted payloads.
+const statusQueue = [];
+let runsStarted = 0;
+let statusFetches = 0;
+async function api(path, options = {}) {
+  if (path === "/api/run" && options.method === "POST") {
+    runsStarted += 1;
+    return { run_id: `run-${runsStarted}` };
+  }
+  if (path.startsWith("/api/runs/")) {
+    statusFetches += 1;
+    return statusQueue.shift();
+  }
+  throw new Error(`unexpected api call: ${path}`);
+}
+const requestBody = (action) => ({ action });
+"""
+            + html[html.index("    const state = {") : html.index("    const icons = {")]
+            + html[html.index("    const SPINNER_GLYPHS = [") : html.index("    function badgeClass")]
+            + r"""
+// ---- 1. Stage reducer replaces progress rows in place ----------------------
+resetLog();
+startSpinner();
+
+appendLogEvent({ kind: "progress", stage: "collect", line: "collecting feeds 3/10" });
+appendLogEvent({ kind: "message", line: "plain note" });
+appendLogEvent({ kind: "progress", stage: "summarize", line: "summarizing 1/2" });
+assert(logState.rows.length === 3, "each new stage or message adds one row");
+assert(logState.progressByStage.get("collect") === 0, "first-seen stage must claim its row index");
+assert(logState.progressByStage.get("summarize") === 2, "stage indexes must map to their own rows");
+
+appendLogEvent({ kind: "progress", stage: "collect", line: "collecting feeds 7/10" });
+appendLogEvent({ kind: "progress", stage: "collect", line: "collecting feeds 10/10", complete: true });
+assert(logState.rows.length === 3, "progress updates for a live stage must replace its row");
+assert(logState.rows[0].text === "collecting feeds 10/10", "latest progress text wins");
+assert(logState.rows[0].live === false && logState.rows[0].complete === true, "completed progress flips live off");
+
+assert(
+  elementFor("logPane").textContent === "✓ collecting feeds 10/10\nplain note\n⠋ summarizing 1/2",
+  `rendered log mismatch: ${JSON.stringify(elementFor("logPane").textContent)}`,
+);
+tickSpinners();
+assert(
+  elementFor("logPane").textContent.includes(`${SPINNER_GLYPHS[1]} summarizing 1/2`),
+  "spinner ticks must redecorate only live rows",
+);
+assert(!elementFor("logPane").textContent.includes(`${SPINNER_GLYPHS[1]} collecting`), "completed rows must keep their glyph");
+
+const rowsBeforeDuplicate = logState.rows.length;
+appendLogEvent({ kind: "progress", stage: "summarize", line: "summarizing 1/2" });
+assert(logState.rows.length === rowsBeforeDuplicate, "identical duplicate progress text must not grow the log");
+appendLogEvent({ kind: "message", line: "alpha\n\nbeta" });
+assert(logState.rows.length === rowsBeforeDuplicate + 2, "multi-line messages split into rows, blanks skipped");
+
+// ---- 2. finalizeRun ignores non-terminal statuses ---------------------------
+assert(openIntervals.length === 1, "scenario setup must leave the spinner running");
+resetLog();
+assert(openIntervals.length === 0, "resetLog must stop a live spinner");
+assert(elementFor("logPane").textContent === "", "resetLog must clear the log pane");
+startSpinner();
+appendLogEvent({ kind: "progress", stage: "write", line: "writing report" });
+const liveEvents = new EventSource("/api/runs/run-a/events");
+state.activeRun = "run-a";
+const reviewsBeforeNonTerminal = reviewRefreshes;
+assert(finalizeRun({ status: "running", run_id: "run-a" }, liveEvents) === false, "non-terminal status must not finalize");
+assert(liveEvents.closed === false, "non-terminal status must leave the stream open");
+assert(openIntervals.length === 1, "non-terminal status must keep the spinner alive");
+assert(reviewRefreshes === reviewsBeforeNonTerminal, "non-terminal status must not refresh review data");
+assert(state.activeRun === "run-a", "non-terminal status must keep the run active");
+
+// ---- 3. Every terminal status cleans up -------------------------------------
+for (const [status, glyph] of [["completed", "✓"], ["failed", "✗"], ["stopped", "■"]]) {
+  resetLog();
+  startSpinner();
+  appendLogEvent({ kind: "progress", stage: "write", line: "writing report" });
+  const events = new EventSource(`/api/runs/run-t/events`);
+  state.activeRun = "run-t";
+  const reviewsBefore = reviewRefreshes;
+  assert(finalizeRun({ status, run_id: "run-t" }, events) === true, `${status} must finalize`);
+  assert(events.closed, `${status} must close the stream`);
+  assert(openIntervals.length === 0, `${status} must stop the spinner`);
+  assert(state.activeRun === null, `${status} must release the active run`);
+  assert(reviewRefreshes === reviewsBefore + 1, `${status} must refresh durable review data`);
+  assert(logState.rows.every((row) => !row.live), `${status} must clear live flags on stage rows`);
+  assert(
+    logState.rows[logState.rows.length - 1].text === `${glyph} [ui] ${status}`,
+    `${status} must append its terminal glyph line`,
+  );
+}
+
+// ---- 4. Disconnect mid-run recovers via status polling ----------------------
+statusQueue.push({ status: "running", run_id: "run-1" });
+statusQueue.push({ status: "completed", run_id: "run-1" });
+const streamsBeforeRun = EventSource.opened.length;
+await runAction("run");
+assert(state.activeRun === "run-1", "runAction must track the started run");
+assert(openIntervals.length === 1, "runAction must spin while streaming");
+assert(EventSource.opened.length === streamsBeforeRun + 1, "runAction must open exactly one stream");
+assert(EventSource.opened[streamsBeforeRun].url === "/api/runs/run-1/events", "stream URL must target the started run");
+const stream = EventSource.opened[streamsBeforeRun];
+stream.onmessage({ data: JSON.stringify({ kind: "progress", stage: "collect", line: "collecting feeds 1/10" }) });
+assert(logState.rows.length === 1, "streamed progress must reach the reducer");
+
+stream.onerror();
+await settle();
+assert(stream.closed, "disconnect must close the dead EventSource");
+assert(openIntervals.length === 0, "disconnect must stop the spinner");
+assert(statuses.some(([text]) => text.startsWith("Live run stream disconnected")), "disconnect must warn the user");
+assert(pendingTimeouts.length === 1 && pendingTimeouts[0][1] === 1000, "recovery polls the run status one second later");
+assert(statusFetches === 1, "recovery must have checked the run status endpoint exactly once");
+assert(state.activeRun === "run-1", "a still-running report must keep the run active");
+
+stream.onerror();
+await settle();
+assert(pendingTimeouts.length === 1, "a second error must not stack another recovery poll");
+
+const reviewsAtDisconnect = reviewRefreshes;
+await pendingTimeouts.shift()[0]();
+assert(statusFetches === 2, "polling must continue until the run reaches a terminal status");
+assert(state.activeRun === null, "recovered terminal status must release the run");
+assert(stream.closed, "recovered terminal status must close the stream");
+assert(reviewRefreshes === reviewsAtDisconnect + 1, "recovered completion must refresh durable review data");
+assert(logState.rows[logState.rows.length - 1].text === "✓ [ui] completed", "recovered completion must land its glyph line");
+assert(pendingTimeouts.length === 0, "terminal status must end polling");
+
+// ---- 5. Invalid stream data takes the same recovery path -------------------
+statusQueue.push({ status: "stopped", run_id: "run-2" });
+const streamsBeforeSecondRun = EventSource.opened.length;
+const fetchesBeforeInvalid = statusFetches;
+await runAction("run");
+const brokenStream = EventSource.opened[streamsBeforeSecondRun];
+brokenStream.onmessage({ data: "{not json" });
+await settle();
+assert(statusFetches === fetchesBeforeInvalid + 1, "invalid-data recovery must poll the run status once");
+assert(pendingTimeouts.length === 0, "a terminal report must end polling immediately");
+assert(brokenStream.closed, "invalid data must abandon the stream");
+assert(openIntervals.length === 0, "invalid data must stop the spinner");
+assert(statuses.some(([text]) => text.startsWith("Live run stream sent invalid data")), "invalid data must warn the user");
+assert(state.activeRun === null, "recovered stop must release the run");
+assert(logState.rows[logState.rows.length - 1].text === "■ [ui] stopped", "recovered stop must land its glyph line");
+"""
+        )
+        node = _find_node()
+        if node is None:
+            self.skipTest("Node.js is required for the embedded UI renderer harness")
+        timeout_seconds = 30
+        try:
+            result = subprocess.run(
+                [node, "--input-type=module", "-"],
+                input=js,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=timeout_seconds,
+            )
+        except subprocess.TimeoutExpired as exc:
+            self.fail(
+                f"Node harness timed out after {timeout_seconds}s: "
+                f"stdout={exc.stdout!r} stderr={exc.stderr!r}"
+            )
+        self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
 
     def test_report_review_tab_contracts(self) -> None:
         html = ui_module.HTML
