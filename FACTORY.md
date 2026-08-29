@@ -35,7 +35,7 @@ Or tell omp `new-idea` and point at the handoff. Same chain.
 
 What each gate is asking:
 
-- **Lights** — will you judge this by looking? If yes, on. If pytest can fail for the thing you care about, off.
+- **Lights** — human gate is *only* UI aesthetics/user-friendliness + final newsletter/output review. If you will judge by looking at the app or the rendered report/newsletter, lights-on. Everything else — even “just run a command and verify output” — is lights-off. Machine runs pytest + archon-smart-pr-review and records the evidence; you never re-run commands to confirm what the machine already checked.
 - **Grill** (inside the workflow) — who, what’s already true, what may stay broken, done-in-one-sitting. `/domain-modeling` / `/codebase-design` / `/wayfinder` join only if the talk needs them. You’re done when remaining questions are implementation.
 - **Spec** — stories + out of scope. Approving means later PRs that implement *this* you will accept.
 - **Tickets** — vertical slices (demo that ticket alone), each with blocked-by. Too coarse / too fine / wrong edges → send back.
@@ -80,15 +80,14 @@ Unblocked lights-off tickets get claimed. Implementers write code. If the slice 
 
 ### When something comes back
 
-Open the draft PR. You are not doing a full code review unless you want to. You are checking:
+Open the draft PR only to judge what only you can judge:
 
-1. Does this match the **ticket**, not a larger dream?
-2. Is there a **machine check** that would fail if the story were a lie? pytest and archon-smart-pr-review already ran it — the machine verifies, the human does not re-check test output.
-3. Anything that is actually taste? Taste is the only human gate left — if yes, it should have been lights-on — bounce it rather than rubber-stamp.
+1. Does the UI look right? (layout, copy, controls, placement). If yes/no — that’s taste, and it should have been lights-on.
+2. Does the finished newsletter/output look right? (report rendering, story selection, images). Open the report.
+
+Do NOT re-run commands or re-check pytest output — the machine already recorded `Machine checks` on the issue and in the PR. The `## How to test` section on every issue separates `### Machine checks` (already executed, with recorded pass/fail) from `### Human checks` (only UI look + final output). If the machine checks are green, accept them.
 
 Then: merge, mark the ticket **done**. Done means the machine checks saw the ACs; confident prose is not evidence.
-
-**Lights-on tickets:** you stay in the session. The factory will not claim them. You are the criterion.
 
 **Wrong spec or wrong cut:** say so. Revise tickets. Do not let anyone “just add a bit” off-graph.
 
@@ -111,9 +110,9 @@ Piyaz does **not** replace git. You are not duplicating the factory: a ticket sa
 
 | You say | Meaning |
 |---|---|
-| lights-on | You sit it. Factory will not claim it. |
-| lights-off, or nothing + it has a test gate | Factory may claim it. |
-| taste / look / naming | Treat as on even if you forgot. |
+| lights-on | You will judge UI aesthetics/user-friendliness or the final newsletter/report by looking. Factory never claims it. |
+| lights-off, or nothing | Factory may claim it. Machine runs every `Machine checks` (pytest, archon-smart-pr-review, `output/**` artifacts) and records pass/fail. You never re-run commands to verify output. |
+| `just run X and check output` | Still lights-off — machine already did it. Tell the human only about UI look + final output. |
 
 ## Optional tactic tags (on a ticket)
 

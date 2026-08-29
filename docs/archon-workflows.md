@@ -55,8 +55,8 @@ default because the local worker serves one request at a time.
 
 | Workflow | Intent |
 |---|---|
-| `archon-fix-github-issue` | Classify issue → investigate (bug) or plan (feature) → implement → validate → **draft PR** → smart review (code-review always + conditional error-handling/test-coverage/comment-quality/docs-impact) → self-fix → report on the issue. Leaves the PR draft — the machine runs the recorded checks (implementation run + ready-review QA) and the human covers only the `### Human checks` steps, then the issue moves to In Review. Local copy adds a `completion-comment` node: posts `## What shipped` / `## Decisions` / `## Acceptance criteria` / `## How to test` (with evidence) on the issue; the `## How to test` section separates `### Machine checks` (commands + recorded results) from `### Human checks` (steps that need a person), and the poller partitions it the same way for the Ready for Review comment. |
-| `archon-idea-to-pr` | Feature idea/issue → plan → implement → validate → ready PR → comprehensive review block (5 parallel review agents) → synthesize → fix → summary comment. Local copy adds a `completion-comment` node with the same structured record as fix-github-issue. |
+| `archon-fix-github-issue` | Classify issue → investigate (bug) or plan (feature) → implement → validate → **draft PR** → smart review → self-fix → report. Leaves PR draft — machine records `### Machine checks` (pytest + review, with evidence) and `### Human checks` is **only** UI look + final report read. |
+| `archon-idea-to-pr` | Feature idea/issue → plan → implement → validate → ready PR → comprehensive review block → fix → summary. Same machine/human split: machine owns every command-output check; human only glances at UI / final newsletter. |
 | `archon-plan-to-pr` | Execute an existing plan file end to end (same review block as idea-to-pr). |
 | `archon-feature-development` | Implement from a plan file or a GitHub issue containing a plan. |
 | `archon-comprehensive-pr-review` | Full 5-agent review of a PR with auto-fixes (always all agents). |
@@ -73,10 +73,7 @@ default because the local worker serves one request at a time.
 | `archon-review-block` | Building block included by idea-to-pr / plan-to-pr / issue-review-full — not standalone. |
 | `archon-pi-default` | Minimal fallback oneshot. |
 
-QA is lights-off here: `archon-smart-pr-review` (the In Review lane trigger)
-and the factory auto-review run every machine check — pytest, review agents,
-verdict-gated merge. The human only judges vision/taste.
-
+QA is lights-off here: `archon-smart-pr-review` and the factory auto-review run every machine check — pytest, review agents, `output/**` artifacts, verdict-gated merge. The human only judges two things: **UI aesthetics/user-friendliness** (does the panel look right in Pix / browser) and **final newsletter/report output** (does the rendered report read right). Every “run this command and check the output” check is machine-owned — even if the ticket is “just a test”, it is lights-off and the machine records `### Machine checks` vs `### Human checks` on the issue/PR.
 ## Archived workflows (claude-only — not discovered)
 
 Reason: pinned to the claude provider with **no tier model reference**, so the
