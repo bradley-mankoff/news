@@ -7,6 +7,7 @@ description: |
 nodes:
   - id: implement
     model: small
+    effort: high
     prompt: |
       Implement this slice in this worktree.
 
