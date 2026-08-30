@@ -134,7 +134,6 @@ from .article_collection import (
     collect_article_candidates,
 )
 from . import article_summarization as article_summarization_stage
-from . import translation_policy
 from .prompt_contracts import (
     IMAGE_ART_JSON_CONTRACT,
     IMAGE_ART_OVERLAY_PROTOCOL,
@@ -3256,44 +3255,6 @@ def _model_snapshots() -> dict[str, Any]:
     return snapshots
 
 
-def _translation_policy_snapshot() -> dict[str, Any]:
-    """Snapshot the currently effective translation policy (metadata only).
-
-    Records both layers of the translation contract: the deterministic
-    enable rule shipped by slice 01 (issue #33) — translation only ever
-    runs when explicitly enabled AND the source declares a language that
-    differs from the target, with undeclared languages recording a status
-    instead of guessing — plus the currently effective behavior, which
-    still filters active sources to declared English because no translation
-    stage exists yet (issue #172 / DN-11 owns it).
-    """
-    return {
-        "enabled": False,
-        "status": "disabled_not_implemented",
-        "target_language": translation_policy.DEFAULT_TARGET_LANGUAGE,
-        "enable_rule": {
-            "rule": "enabled and declared source language != target",
-            "statuses": [
-                translation_policy.STATUS_DISABLED,
-                translation_policy.STATUS_UNKNOWN_LANGUAGE,
-                translation_policy.STATUS_SAME_LANGUAGE,
-                translation_policy.STATUS_NEEDS_TRANSLATION,
-            ],
-            "unknown_language_status": translation_policy.STATUS_UNKNOWN_LANGUAGE,
-            "content_sniffing": False,
-            "source_retagging": False,
-        },
-        "source_gate": {
-            "rule": "language == 'en'",
-            "language": "en",
-            "unknown_language_sources_excluded": True,
-        },
-        "translation_model_assignment": None,
-        "note": (
-            "Translation is not implemented; active sources are filtered to "
-            "declared English sources and content is not retagged."
-        ),
-    }
 
 
 def _logical_task_assignment_key(task_name: str) -> str:
@@ -4967,7 +4928,6 @@ def _new_run_diagnostics(source_count: int) -> RunDiagnostics:
             "prompt_template_overrides": _json_ready(CONFIG.prompt_template_overrides),
             "prompt_template_sources": _json_ready(PROMPT_TEMPLATE_SOURCES),
             "model_snapshots": _model_snapshots(),
-            "translation_policy": _translation_policy_snapshot(),
             "model_max_input_tokens": MODEL_MAX_INPUT_TOKENS,
             "model_default_sampling": _sampling_to_dict(MODEL_DEFAULT_SAMPLING),
             "model_reasoning_sampling": _sampling_to_dict(MODEL_REASONING_SAMPLING),

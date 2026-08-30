@@ -3,7 +3,7 @@
 The Model Catalog owns the code-reviewed baseline of models the pipeline's
 backends can actually launch, with per-task recommendations (factual
 extraction, structured output, synthesis, citation fidelity, speed, context
-length, translation) instead of parameter count or popularity. An optional
+length) instead of parameter count or popularity. An optional
 user overlay can add advisory entries; every Hugging Face search result is
 annotated with a runtime-fit verdict so the picker never presents a catalog
 entry as project-verified unless it is code-owned (HANDOFF: "Model picker must
@@ -70,7 +70,6 @@ MODEL_RECOMMENDATION_TASKS = (
     "citation_fidelity",
     "speed",
     "context_length",
-    "translation",
 )
 
 MODEL_TASK_LABELS: dict[str, str] = {
@@ -80,7 +79,6 @@ MODEL_TASK_LABELS: dict[str, str] = {
     "citation_fidelity": "Citation fidelity",
     "speed": "Speed",
     "context_length": "Context length",
-    "translation": "Translation",
 }
 
 MODEL_RECOMMENDATION_TASK_NOTES: dict[str, str] = {
@@ -107,10 +105,6 @@ MODEL_RECOMMENDATION_TASK_NOTES: dict[str, str] = {
     "context_length": (
         "The default Gemma 4 12B model offers 256K-token context, keeping "
         "long source text intact across all stages."
-    ),
-    "translation": (
-        "No verified curated model yet; the translation stage is not "
-        "implemented in this release - search below for a candidate."
     ),
 }
 
@@ -627,8 +621,7 @@ def recommend_models(task: str) -> list[dict[str, Any]]:
 
     Entries that carry a task note come first (catalog order), then the
     default model as a fallback when it is not already included. Returns an
-    empty list when no curated entry covers the task (translation - the honest
-    documented gap).
+    empty list when no curated entry covers the task.
     """
     if task not in MODEL_RECOMMENDATION_TASKS:
         raise ValueError(

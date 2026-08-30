@@ -703,8 +703,7 @@ class ModelCatalogTests(unittest.TestCase):
                 self.assertIn("hf_repo", pick)
                 self.assertIn("reason", pick)
                 self.assertTrue(pick["reason"])
-        # Translation is the documented honest gap: no verified curated pick.
-        self.assertEqual(model_catalog.recommend_models("translation"), [])
+
         # Speed: curated picks are the tiny test model then the verified fast
         # Qwen3 8B entry, with the default model appended exactly once as the
         # fallback when it is not already a pick.
@@ -731,8 +730,7 @@ class ModelCatalogTests(unittest.TestCase):
                 [pick["alias"] for pick in picks],
                 expected_by_task[task],
             )
-        # No task note outside the declared set: translation stays the honest
-        # empty gap, and every returned pick keeps a supported backend.
+        # Every returned pick keeps a supported backend.
         for task in model_catalog.MODEL_RECOMMENDATION_TASKS:
             for pick in model_catalog.recommend_models(task):
                 self.assertIn(pick["backend"], config.SUPPORTED_MODEL_BACKENDS)

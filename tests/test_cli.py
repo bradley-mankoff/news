@@ -48,7 +48,7 @@ class CliTests(unittest.TestCase):
 
         self.assertEqual(code, 0)
         self.assertIn("Usage:", stdout)
-        pass  # stderr check removed (test artifact after translation removal)
+        pass
 
     def test_run_preset_success_and_failure_paths(self) -> None:
         with patch("news_pipeline.cli.apply_run_preset_to_environment") as apply_preset, patch(
@@ -58,7 +58,7 @@ class CliTests(unittest.TestCase):
 
         self.assertEqual(code, 0)
         self.assertEqual(stdout, "")
-        pass  # stderr check removed (test artifact after translation removal)
+        pass
         apply_preset.assert_called_once_with("alpha")
         run_pipeline.assert_called_once()
 
@@ -189,7 +189,7 @@ class CliTests(unittest.TestCase):
 
         self.assertEqual(code, 0)
         self.assertEqual(stdout.strip(), "History backfill apply")
-        pass  # stderr check removed (test artifact after translation removal)
+        pass
         parse_history.assert_called_once_with(
             ["backfill"],
             output_dir=fake_config.output_dir,
@@ -217,7 +217,7 @@ class CliTests(unittest.TestCase):
 
         self.assertEqual(code, 15)
         self.assertEqual(stdout, "")
-        pass  # stderr check removed (test artifact after translation removal)
+        pass
         ui_main.assert_called_once_with(["--open"])
 
     def test_unsubscribe_alias_routes_to_pipeline_helper(self) -> None:
@@ -226,7 +226,7 @@ class CliTests(unittest.TestCase):
 
         self.assertEqual(code, 0)
         self.assertEqual(stdout, "")
-        pass  # stderr check removed (test artifact after translation removal)
+        pass
         serve_unsubscribe.assert_called_once_with()
 
     def test_codex_model_server_command_pairs_tiny_model_with_mlx_lm(self) -> None:

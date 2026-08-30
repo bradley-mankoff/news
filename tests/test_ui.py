@@ -2209,10 +2209,9 @@ assert(SURFACED_ENVS.size === 0, "missing schema must not throw and must suppres
             self.assertEqual(len(payload["model_catalog"]), 6)
             self.assertEqual(payload["model_catalog"][0]["alias"], "gemma-4-12b-it-4bit")
             self.assertIn("factual_extraction", payload["model_recommendation_tasks"])
-            self.assertEqual(len(payload["model_recommendation_tasks"]), 7)
+            self.assertEqual(len(payload["model_recommendation_tasks"]), len(model_catalog.MODEL_RECOMMENDATION_TASKS))
             # Server-owned recommendations: every task maps exactly to the
-            # authoritative helper output (default fallback, no duplicates,
-            # and the intentional empty translation list).
+            # authoritative helper output (default fallback, no duplicates).
             self.assertEqual(
                 payload["model_recommendations"],
                 {
@@ -2220,7 +2219,6 @@ assert(SURFACED_ENVS.size === 0, "missing schema must not throw and must suppres
                     for task in model_catalog.MODEL_RECOMMENDATION_TASKS
                 },
             )
-            self.assertEqual(payload["model_recommendations"]["translation"], [])
             self.assertEqual(
                 [pick["alias"] for pick in payload["model_recommendations"]["speed"]],
                 ["gemma-e2b-tiny", "qwen3-8b-4bit", model_catalog.DEFAULT_CATALOG_MODEL_ALIAS],
@@ -3623,7 +3621,6 @@ assert(SURFACED_ENVS.size === 0, "missing schema must not throw and must suppres
         # The canonical dictionaries are served verbatim as copied projections.
         self.assertEqual(payload["model_task_labels"], model_catalog.MODEL_TASK_LABELS)
         self.assertEqual(payload["runtime_fit_labels"], model_catalog.RUNTIME_FIT_LABELS)
-        self.assertEqual(payload["model_task_labels"]["translation"], "Translation")
         self.assertEqual(payload["runtime_fit_labels"]["external_only"], "External only")
 
         # A label added on the Python side appears in the schema response
@@ -4868,7 +4865,7 @@ for (const absentId of ["article_tuning_save", "article_tuning_rename", "article
                         for task in model_catalog.MODEL_RECOMMENDATION_TASKS
                     },
                 )
-                self.assertEqual(payload["model_recommendations"]["translation"], [])
+
                 speed_picks = payload["model_recommendations"]["speed"]
                 self.assertEqual(
                     [pick["alias"] for pick in speed_picks],

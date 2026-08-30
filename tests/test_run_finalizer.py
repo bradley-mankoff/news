@@ -329,11 +329,6 @@ class RunFinalizerTests(unittest.TestCase):
                             "revision_status": "resolved",
                         }
                     },
-                    "translation_policy": {
-                        "enabled": False,
-                        "status": "disabled_not_implemented",
-                        "target_language": "en",
-                    },
                 }
             )
             finalizer.diagnostics.record_prompt_snapshot(
@@ -363,7 +358,6 @@ class RunFinalizerTests(unittest.TestCase):
                 details["settings"]["model_snapshots"]["default"]["revision"],
                 "sha123",
             )
-            self.assertFalse(details["settings"]["translation_policy"]["enabled"])
             self.assertEqual(len(details["prompt_snapshots"]), 1)
             self.assertEqual(details["prompt_snapshots"][0]["sequence"], 1)
             self.assertEqual(
@@ -377,7 +371,6 @@ class RunFinalizerTests(unittest.TestCase):
                 ).fetchone()
             self.assertIn("prompt_profile_id", row[0])
             self.assertIn("model_snapshots", row[0])
-            self.assertIn("translation_policy", row[0])
             self.assertIn("Summarize exactly.", row[1])
 
     def test_finish_failed_preserves_prompt_snapshots_and_provenance(self) -> None:

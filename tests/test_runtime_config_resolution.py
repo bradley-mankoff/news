@@ -105,7 +105,7 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
             "image_art_direction",
         ):
             self.assertEqual(config.model_assignments[task].reference, "gemma-4-12b-it-4bit")
-        # No translation assignment; only default + the five stages.
+        # Only default + the five stages.
         self.assertEqual(
             set(config.model_assignments),
             {"default", "article_summary", "story_drafting",

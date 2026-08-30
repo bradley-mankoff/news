@@ -49,7 +49,6 @@ def _write_sources(path: Path, newline: str = "\n") -> None:
             "    region: Europe",
             "    url: https://example.com/beta.xml",
             "    language: es",
-            "    requires_translation: false",
             "",
         ]
     )
@@ -95,22 +94,18 @@ class SourceCatalogTests(unittest.TestCase):
             self.assertEqual(_source_block_key(["  - key: [oops\n"], 0, 1), "")
             self.assertEqual(_find_source_range(["sources:\n", "  - key: Alpha\n"], "missing"), None)
 
-    def test_core_sources_do_not_require_translation(self) -> None:
+    def test_core_sources_are_english(self) -> None:
         sources_path = CONFIG_DIR / "sources.yaml"
         payload = yaml.safe_load(sources_path.read_text(encoding="utf-8")) or {}
-        core_translation_sources = [
+        core_non_english_sources = [
             str(source.get("key") or source.get("name") or "")
             for source in payload.get("sources", [])
             if isinstance(source, dict)
             and str(source.get("tier") or "").strip().lower() == "core"
-            and (
-                str(source.get("language") or "").strip().lower() != "en"
-                or bool(source.get("requires_translation", source.get("translate")))
-            )
+            and str(source.get("language") or "").strip().lower() != "en"
         ]
 
-        self.assertEqual(core_translation_sources, [])
-
+        self.assertEqual(core_non_english_sources, [])
     def test_source_loading_excludes_non_english_sources_for_all_scopes(self) -> None:
         with TemporaryDirectory() as tmpdir:
             path = Path(tmpdir) / "sources.yaml"

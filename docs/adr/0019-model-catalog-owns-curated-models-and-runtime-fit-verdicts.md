@@ -59,9 +59,9 @@ entries (the code remains authoritative for exact references):
 
 Curated entries carry deterministic per-task recommendation notes across the
 fixed task vocabulary (factual extraction, structured output, synthesis,
-citation fidelity, speed, context length, translation), not parameter count
+citation fidelity, speed, context length), not parameter count
 or popularity; `recommend_models()` projects ordered picks and returns an
-honest empty list for tasks with no verified pick (translation).
+honest empty list for tasks with no verified pick.
 
 ### Runtime-fit verdicts
 

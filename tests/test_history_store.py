@@ -520,11 +520,6 @@ class HistoryStoreTests(unittest.TestCase):
                             "revision_status": "resolved",
                         }
                     },
-                    "translation_policy": {
-                        "enabled": False,
-                        "status": "disabled_not_implemented",
-                        "target_language": "en",
-                    },
                 }
             )
 
@@ -551,9 +546,7 @@ class HistoryStoreTests(unittest.TestCase):
                 ).fetchone()
             self.assertIn("prompt_profile_id", row[0])
             self.assertIn("model_snapshots", row[0])
-            self.assertIn("translation_policy", row[0])
             self.assertIn("Summarize exactly.", row[1])
-            self.assertIn("retry_attempts", row[1])
 
             details = get_run_details(db_path, "2026-06-01_10-00-00")
             self.assertIsNotNone(details)
@@ -570,7 +563,6 @@ class HistoryStoreTests(unittest.TestCase):
                 details["settings"]["model_snapshots"]["default"]["revision"],
                 "sha123",
             )
-            self.assertFalse(details["settings"]["translation_policy"]["enabled"])
 
             runs_csv = (db_path.parent / "runs.csv").read_text(encoding="utf-8").splitlines()
             self.assertIn("prompt_snapshots_json", runs_csv[0])

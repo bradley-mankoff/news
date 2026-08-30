@@ -452,8 +452,8 @@ Each model page shows Hugging Face's native Hardware Compatibility panel
 The Model Catalog is the code-owned baseline registry: built-in models are
 verified for the supported backends, while user-overlay entries remain
 advisory. It provides recommendations per task — factual extraction,
-structured output, synthesis, citation fidelity, speed, context length, and
-translation — rather than parameter count or popularity:
+structured output, synthesis, citation fidelity, speed, and context length
+— rather than parameter count or popularity:
 
 ```bash
 uv run news models catalog
@@ -805,8 +805,6 @@ and, durably, in each DuckDB `runs` row (`settings_json` and
   revision status, backend, and the explicit Story Discovery no-LLM record.
 - **Tuning**: the effective Model Tuning and per-task sampling settings
   (`model_tuning`, default/reasoning/task sampling) plus the pipeline budget.
-- **Translation policy**: a metadata-only snapshot of the effective policy
-  (enabled flag, status, target language, English-source gate).
 
 The persistence boundary is prompts-only, secrets-free: model responses and
 deterministic fallback content are never recorded (prompt snapshots capture
