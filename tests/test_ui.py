@@ -5879,6 +5879,148 @@ assert(logState.rows[logState.rows.length - 1].text === "■ [ui] stopped", "rec
         # Report Review remains the report surface; the tab links to it.
         self.assertIn('$("openReviewFromScheduleBtn").onclick = () => { showTab("review"); refreshReviewData(); };', html)
 
+    def test_wizard_stepper_shell_contracts(self) -> None:
+        html = ui_module.HTML
+        self.assertIn('<div id="wizardStepper">', html)
+        self.assertIn('id="wizardStepMount"', html)
+        self.assertIn('Step ${wizardState.step}/5', html)
+        self.assertIn('id="wizardNext"', html)
+        self.assertIn('id="wizardBack"', html)
+        self.assertIn('let wizardState = { step: 1, values: {} }', html)
+        self.assertIn('WIZARD_STORAGE_KEY', html)
+        self.assertIn('localStorage.getItem(WIZARD_STORAGE_KEY)', html)
+        self.assertIn('localStorage.setItem(WIZARD_STORAGE_KEY', html)
+        self.assertIn('state.schema.current_env', html)
+        self.assertIn('wizardState.values', html)
+        self.assertIn('get("wizard")', html)
+        self.assertIn('!== "0"', html)
+        self.assertIn('wizardEnabled()', html)
+        self.assertIn('renderWizardStepper()', html)
+        boot = html.split("async function init()")[1].split("init().catch")[0]
+        self.assertIn("loadWizardState();", boot)
+        self.assertIn("renderWizardStepper();", boot)
+        self.assertLess(boot.index("loadWizardState();"), boot.index("renderWizardStepper();"))
+
+    def test_wizard_stepper_renders_five_steps_and_preserves_state_in_node_harness(self) -> None:
+        html = ui_module.HTML
+
+        def js_block(start: str, end: str) -> str:
+            return html[html.index(start): html.index(end, html.index(start))]
+
+        js = (
+            r"""
+const assert = (c, m) => { if (!c) throw new Error(m); };
+"""
+            + r"""
+let stored = {};
+const localStorage = {
+  getItem(k) { return stored[k] || null; },
+  setItem(k, v) { stored[k] = String(v); }
+};
+let search = "";
+const window = { location: { get search() { return search; } } };
+globalThis.URLSearchParams = URLSearchParams;
+let wizardInput = { dataset: { wizardField: "" }, value: "" };
+const document = {
+  _els: {},
+  getElementById(id) {
+    if (!this._els[id]) this._els[id] = { id, innerHTML: "", classList: { add(){}, remove(){}, contains(){return false;} }, querySelector(sel){ return wizardInput; } };
+    return this._els[id];
+  },
+  querySelector(sel) {
+    if (sel.includes("wizardStepMount") || sel.includes("data-wizard-field")) return wizardInput;
+    return null;
+  }
+};
+document.getElementById("wizardStepper").querySelector = (sel) => document.querySelector(sel);
+const $ = (id) => document.getElementById(id);
+"""
+            + js_block("function escapeHtml(text) {", "function formatDefault")
+            + js_block('    const state = {', '    const WIZARD_STEPS')
+            + js_block('    const WIZARD_STEPS = [', '    const WIZARD_STORAGE_KEY')
+            + js_block('    const WIZARD_STORAGE_KEY = "', '    let wizardState')
+            + js_block('    let wizardState = { step:', '    function wizardEnabled()')
+            + js_block('    function wizardEnabled() {', '    function loadWizardState()')
+            + js_block('    function loadWizardState() {', '    function saveWizardState()')
+            + js_block('    function saveWizardState() {', '    function currentWizardStep()')
+            + js_block('    function currentWizardStep() {', '    function persistWizardStepInput()')
+            + js_block('    function persistWizardStepInput() {', '    function wizardNext()')
+            + js_block('    function wizardNext() {', '    function wizardBack()')
+            + js_block('    function wizardBack() {', '    function renderWizardStepper()')
+            + js_block('    function renderWizardStepper() {', '    const icons = {')
+            + r"""
+// wrap render to keep mutable wizardInput in sync with what render produced
+const _origRenderWizardStepper = renderWizardStepper;
+renderWizardStepper = function() {
+  _origRenderWizardStepper();
+  const stepper = document.getElementById("wizardStepper");
+  const m = stepper.innerHTML.match(/data-wizard-field="([^"]+)"[^>]*value="([^"]*)"/);
+  if (m) { wizardInput.dataset.wizardField = m[1]; wizardInput.value = m[2]; }
+};
+// init schema and load
+state.schema = { current_env: { existing_env: "keep_me" } };
+loadWizardState();
+assert(wizardState.step === 1, "initial step should be 1");
+assert(wizardState.values.existing_env === "keep_me", "env should seed wizardState");
+renderWizardStepper();
+let stepperHtml = document.getElementById("wizardStepper").innerHTML;
+assert(stepperHtml.includes("Step 1/5"), "step 1 progress missing");
+assert(stepperHtml.includes("wizardStepMount"), "per-step mount missing");
+// simulate typing in step 1 via DOM -> persist, then Next preserves it
+renderWizardStepper();
+// user types hello1 into the visible input; oninput would save, but we mimic by setting value then saving via persist
+let inp = document.querySelector("#wizardStepMount [data-wizard-field]");
+if (inp) { inp.value = "hello1"; wizardState.values[inp.dataset.wizardField] = inp.value; saveWizardState(); }
+// re-render so DOM reflects saved value before Next's persist reads it
+renderWizardStepper();
+wizardNext();
+assert(wizardState.step === 2, "Next should advance to 2");
+assert(wizardState.values["wizard_step_1"] === "hello1", "prior step value lost after Next");
+stepperHtml = document.getElementById("wizardStepper").innerHTML;
+assert(stepperHtml.includes("Step 2/5"), "step 2 progress missing");
+// step 2 typing
+renderWizardStepper();
+inp = document.querySelector("#wizardStepMount [data-wizard-field]");
+if (inp) { inp.value = "hello2"; wizardState.values[inp.dataset.wizardField] = inp.value; saveWizardState(); }
+renderWizardStepper();
+wizardNext();
+assert(wizardState.step === 3, "should be step 3");
+wizardNext();
+assert(wizardState.step === 4, "should be step 4");
+wizardNext();
+assert(wizardState.step === 5, "should be step 5");
+stepperHtml = document.getElementById("wizardStepper").innerHTML;
+assert(stepperHtml.includes("Step 5/5"), "step 5 progress missing");
+assert(wizardState.values["wizard_step_1"] === "hello1", "step 1 value lost after 4 Nexts");
+assert(wizardState.values["wizard_step_2"] === "hello2", "step 2 value lost");
+wizardBack();
+assert(wizardState.step === 4, "Back should go to 4");
+assert(wizardState.values["wizard_step_1"] === "hello1", "value lost after Back");
+// localStorage draft persists
+const draft = JSON.parse(stored[WIZARD_STORAGE_KEY]);
+assert(draft.step === 4, "localStorage step should be 4");
+assert(draft.values["wizard_step_1"] === "hello1", "localStorage should preserve values");
+// state.schema.current_env mirrors draft
+assert(state.schema.current_env["wizard_step_1"] === "hello1", "current_env should mirror wizardState");
+// escape hatch ?wizard=0 shows mount not stepper
+search = "?wizard=0";
+renderWizardStepper();
+// after escape hatch, stepper hidden and mount handling would be tested via wizardEnabled
+assert(!wizardEnabled(), "wizardEnabled should be false with ?wizard=0");
+search = "";
+assert(wizardEnabled(), "wizardEnabled should be true without param");
+// verify all 5 placeholders render across steps
+search = "";
+for (let i=1;i<=5;i++) { wizardState.step=i; renderWizardStepper(); const h=document.getElementById("wizardStepper").innerHTML; assert(h.includes(`Step ${i}/5`), `missing Step ${i}/5`); }
+"""
+        )
+        node = _find_node()
+        if node is None:
+            self.skipTest("Node.js is required for the embedded UI renderer harness")
+        result = subprocess.run([node, "--input-type=module", "-"], input=js, capture_output=True, text=True, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
+
 
 if __name__ == "__main__":
+
     unittest.main()
