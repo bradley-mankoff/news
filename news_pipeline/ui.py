@@ -2113,6 +2113,15 @@ HTML = r"""<!doctype html>
       .dialog-grid { grid-template-columns: 1fr; }
       .banner { top: 88px; }
     }
+    .wizard-stepper { display: grid; gap: 12px; }
+    .wizard-progress { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+    .wizard-progress-bar { flex: 1; height: 6px; background: var(--line); border-radius: 999px; overflow: hidden; }
+    .wizard-progress-fill { height: 100%; background: var(--blue); transition: width 0.2s ease; }
+    .wizard-step { background: var(--surface); border: 1px solid var(--line); border-radius: 18px; padding: 16px; box-shadow: var(--shadow); }
+    .wizard-nav { display: flex; gap: 8px; justify-content: flex-end; }
+    .advanced-drawer { border: 1px solid var(--line); border-radius: 14px; padding: 12px; background: #fcfbf7; }
+    .advanced-drawer.hidden { display: none !important; }
+    .advanced-drawer .warn { background: #fdf8ec; border: 1px solid #e2cf9f; border-radius: 10px; padding: 8px 10px; }
   </style>
 </head>
 <body>
@@ -2123,6 +2132,7 @@ HTML = r"""<!doctype html>
   <main>
     <nav id="tabs"></nav>
     <section id="runSetup" class="view active">
+      <div id="wizardStepper" class="wizard-stepper hidden"></div>
       <div id="runSetupMount"></div>
     </section>
     <section id="review" class="view">
@@ -2395,6 +2405,195 @@ HTML = r"""<!doctype html>
       ["sources", "Sources", "newspaper"],
       ["recipients", "Recipients", "person"]
     ];
+    const WIZARD_STEPS = [
+      { id: "audience", title: "Audience", placeholder: "Step 1 placeholder — audience" },
+      { id: "topics", title: "Topics", placeholder: "Step 2 placeholder — topics" },
+      { id: "sources", title: "Sources", placeholder: "Step 3 placeholder — sources" },
+      { id: "style", title: "Style", placeholder: "Step 4 placeholder — style" },
+      { id: "review", title: "Review", placeholder: "Step 5 placeholder — review" }
+    ];
+    const WIZARD_STORAGE_KEY = "wizardStateDraft";
+    let wizardState = { step: 1, values: {} };
+    function wizardEnabled() {
+      try {
+        return new URLSearchParams(window.location.search).get("wizard") !== "0";
+      } catch (_err) {
+        return true;
+      }
+    }
+    function loadWizardState() {
+      let draft = {};
+      try {
+        const raw = (typeof localStorage !== "undefined" && localStorage.getItem(WIZARD_STORAGE_KEY)) || "";
+        draft = raw ? JSON.parse(raw) : {};
+      } catch (_err) { draft = {}; }
+      const env = (state.schema && state.schema.current_env) || {};
+      const values = { ...env };
+      if (draft.values && typeof draft.values === "object") {
+        Object.assign(values, draft.values);
+      }
+      const step = Number(draft.step);
+      wizardState = {
+        step: step >= 1 && step <= WIZARD_STEPS.length ? step : 1,
+        values
+      };
+    }
+    function saveWizardState() {
+      try {
+        if (typeof localStorage !== "undefined") {
+          localStorage.setItem(WIZARD_STORAGE_KEY, JSON.stringify(wizardState));
+        }
+      } catch (_err) {}
+      if (state.schema) {
+        state.schema.current_env = { ...(state.schema.current_env || {}), ...wizardState.values };
+      }
+    }
+    function currentWizardStep() {
+      return WIZARD_STEPS[wizardState.step - 1] || WIZARD_STEPS[0];
+    }
+    function persistWizardStepInput() {
+      const input = document.querySelector("#wizardStepMount [data-wizard-field]");
+      if (input) {
+        wizardState.values[input.dataset.wizardField] = input.value;
+      }
+    }
+    function wizardNext() {
+      persistWizardStepInput();
+      if (wizardState.step < WIZARD_STEPS.length) wizardState.step += 1;
+      saveWizardState();
+      renderWizardStepper();
+    }
+    function wizardBack() {
+      persistWizardStepInput();
+      if (wizardState.step > 1) wizardState.step -= 1;
+      saveWizardState();
+      renderWizardStepper();
+    }
+    function advancedDrawerCount() {
+      const dedicated = advancedPanelDedicatedEnvs();
+      return ((state.schema && state.schema.knobs) || []).filter(knob => knob.ui_location === "advanced_panels" && !dedicated.has(knob.env)).length;
+    }
+    function renderAdvancedDrawer() {
+      const search = (value("advancedSearch") || "").toLowerCase();
+      const dedicated = advancedPanelDedicatedEnvs();
+      const knobs = ((state.schema && state.schema.knobs) || []).filter(knob => {
+        if (knob.ui_location !== "advanced_panels" || dedicated.has(knob.env)) return false;
+        if (!search) return true;
+        const hay = `${knob.env} ${knob.label}`.toLowerCase();
+        return hay.includes(search);
+      });
+      const groups = {};
+      knobs.forEach(knob => { (groups[knob.group] ||= []).push(knob); });
+      const count = advancedDrawerCount();
+      const filteredCount = knobs.length;
+      const countLabel = search ? `${filteredCount}/${count} advanced` : `${count} advanced`;
+      const countEl = $("advancedCount");
+      if (countEl) countEl.textContent = `(${countLabel})`;
+      const link = $("showAdvancedLink");
+      if (link) link.textContent = `Show advanced (+${count} advanced)`;
+      if (!knobs.length) {
+        return search ? `<p class="muted">No advanced settings match "${escapeHtml(search)}".</p>` : `<p class="muted">No advanced settings.</p>`;
+      }
+      const ordered = Object.keys(groups).sort();
+      return ordered.map(group => `
+        <div class="knob-group">
+          <h2>${escapeHtml(group)}</h2>
+          <div class="knobs">${groups[group].map(knob => `
+            <div class="knob">
+              <label>${escapeHtml(knob.label)}</label>
+              ${inputForKnob(knob)}
+              <code>${escapeHtml(knob.env)}</code>
+            </div>
+          `).join("")}</div>
+        </div>
+      `).join("");
+    }
+    function toggleAdvancedDrawer() {
+      const drawer = $("advancedDrawer");
+      if (!drawer) return;
+      drawer.classList.toggle("hidden");
+      const link = $("showAdvancedLink");
+      if (link) link.textContent = drawer.classList.contains("hidden") ? `Show advanced (+${advancedDrawerCount()} advanced)` : "Hide advanced";
+    }
+    function renderWizardStepper() {
+      const stepper = $("wizardStepper");
+      const mount = $("runSetupMount");
+      if (!stepper || !mount) return;
+      if (!wizardEnabled()) {
+        stepper.classList.add("hidden");
+        stepper.innerHTML = "";
+        return;
+      }
+      stepper.classList.remove("hidden");
+      loadWizardState();
+      const step = currentWizardStep();
+      const total = WIZARD_STEPS.length;
+      const field = `wizard_step_${wizardState.step}`;
+      const fieldValue = wizardState.values[field] || "";
+      const isReview = wizardState.step === total;
+      stepper.innerHTML = `
+        <div class="panel wizard-step">
+          <p class="eyebrow">Step ${wizardState.step}/5</p>
+          <h2>${escapeHtml(step.title)}</h2>
+          <div id="wizardStepMount">
+            <p class="muted">${escapeHtml(step.placeholder)}</p>
+            <label class="field"><span>Value for ${escapeHtml(step.id)}</span><input data-wizard-field="${escapeHtml(field)}" value="${escapeHtml(fieldValue)}"></label>
+            ${isReview ? `
+              <div class="toolbar" style="margin-top:12px">
+                <a id="showAdvancedLink" href="#">Show advanced (+${advancedDrawerCount()} advanced)</a>
+              </div>
+              <div id="advancedDrawer" class="advanced-drawer hidden">
+                <p class="warn">Advanced settings may break the run. Prefer defaults unless you need to tune the pipeline.</p>
+                <div class="toolbar">
+                  <input id="advancedSearch" placeholder="Filter advanced settings">
+                  <span id="advancedCount"></span>
+                  <button id="clearAdvancedSearchBtn">Clear</button>
+                </div>
+                <div id="advancedDrawerContent" class="stack"></div>
+              </div>
+            ` : ""}
+          </div>
+          <div class="wizard-nav" style="margin-top:12px">
+            <button id="wizardBack"${wizardState.step === 1 ? " disabled" : ""}>Back</button>
+            <button id="wizardNext" class="primary"${wizardState.step === total ? " disabled" : ""}>Next</button>
+          </div>
+        </div>
+      `;
+      const nextBtn = $("wizardNext");
+      const backBtn = $("wizardBack");
+      if (nextBtn) nextBtn.onclick = wizardNext;
+      if (backBtn) backBtn.onclick = wizardBack;
+      const input = stepper.querySelector("[data-wizard-field]");
+      if (input) {
+        input.oninput = () => { wizardState.values[field] = input.value; saveWizardState(); };
+      }
+      if (isReview) {
+        const drawerContent = $("advancedDrawerContent");
+        if (drawerContent) drawerContent.innerHTML = renderAdvancedDrawer();
+        const searchInput = $("advancedSearch");
+        if (searchInput) searchInput.oninput = () => {
+          const dc = $("advancedDrawerContent");
+          if (dc) dc.innerHTML = renderAdvancedDrawer();
+          decorateEnvHints(dc);
+          refreshModelKnobLinks();
+        };
+        const clearBtn = $("clearAdvancedSearchBtn");
+        if (clearBtn) clearBtn.onclick = () => {
+          const si = $("advancedSearch");
+          if (si) si.value = "";
+          const dc2 = $("advancedDrawerContent");
+          if (dc2) dc2.innerHTML = renderAdvancedDrawer();
+          decorateEnvHints(dc2);
+          refreshModelKnobLinks();
+        };
+        const link = $("showAdvancedLink");
+        if (link) link.onclick = (e) => { e.preventDefault(); toggleAdvancedDrawer(); };
+        if (drawerContent) {
+          decorateEnvHints(drawerContent);
+          refreshModelKnobLinks();
+        }
+      }
+    }
     const KNOB_HINTS = {
       NEWS_DELIVERY_MODE: "Chooses the delivery policy: no delivery, owner only (default), or explicit configured recipients. Legacy NEWS_RECIPIENT_SCOPE still maps to this mode when set.",
       NEWS_RECIPIENT_SCOPE: "Legacy migration value for NEWS_DELIVERY_MODE (primary -> owner, all -> recipients); prefer the delivery mode control.",
@@ -2731,8 +2930,9 @@ HTML = r"""<!doctype html>
       renderModelBackendHint(requiredBackendForSelectedModel());
     }
     function renderTabs() {
+      const visibleTabs = wizardEnabled() ? tabs.filter(([id]) => id !== "advanced" && id !== "modelTuning") : tabs;
       $("tabs").innerHTML = `<button id="navToggle" class="nav-toggle" title="Collapse navigation" aria-label="Collapse navigation"><span class="collapse-icon">${icons.chevronLeft}</span><span class="expand-icon">${icons.chevronRight}</span></button>` +
-        tabs.map(([id, label, icon]) => `<button class="tab-button" data-tab="${id}" title="${escapeHtml(label)}">${icons[icon]}<span class="tab-text">${escapeHtml(label)}</span></button>`).join("");
+        visibleTabs.map(([id, label, icon]) => `<button class="tab-button" data-tab="${id}" title="${escapeHtml(label)}">${icons[icon]}<span class="tab-text">${escapeHtml(label)}</span></button>`).join("");
       $("navToggle").onclick = () => {
         document.body.classList.toggle("nav-collapsed");
         const collapsed = document.body.classList.contains("nav-collapsed");
@@ -4790,6 +4990,7 @@ HTML = r"""<!doctype html>
       }
       updateRunControls();
       renderTabs();
+      renderWizardStepper();
       renderRunSetup();
       renderAdvancedPanels();
       renderAdvancedKnobs();
