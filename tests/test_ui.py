@@ -377,7 +377,7 @@ class UITests(unittest.TestCase):
             [],
             "registry-surfaced env has no dedicated UI reference",
         )
-        self.assertEqual(len(surfaced), 74)
+        self.assertEqual(len(surfaced), 75)
         # The five per-task model selectors stay raw Advanced overrides even
         # though TASK_CONFIG references them (modelEnv is not a dedicated
         # control; no data-env input is generated for it).

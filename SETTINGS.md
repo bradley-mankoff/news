@@ -21,6 +21,18 @@ Profiles are editorial tone bundles, not model configuration; their ownership
 is defined in
 [`docs/adr/0018-prompt-catalog-owns-editorial-instructions.md`](docs/adr/0018-prompt-catalog-owns-editorial-instructions.md).
 
+## Wizard (5-step curated)
+
+The control panel opens as a 5-step wizard (default `?wizard=1`; `?wizard=0` restores the legacy wall). Steps are pre-filled from `state.schema.knobs[].default` / `DEFAULT_MODEL_ALIAS` so empty never looks unset, and one-line help comes from `KNOB_HINTS` inline. Changing any step updates `state.schema.current_env` and the `uv run news run` preview; the final run writes the effective env to `output/latest_run_details.json`.
+
+1. Preset / Goal — `NEWS_PRESET` + `NEWS_PROMPT_PROFILE` editorial tone
+2. Sources — `NEWS_SOURCE_SCOPE` (`core` / `peripheral`)
+3. Model — `NEWS_MODEL` default with Resolved readout; per-task picker collapsed in `<details>`
+4. Delivery — `NEWS_DELIVERY_MODE` + `NEWS_PRIMARY_RECIPIENT`
+5. Review & Run — stats + preview `uv run news run` + Run button
+
+Everything else lives behind Advanced.
+
 ## Default Run Settings
 
 | Variable | Default | Description |

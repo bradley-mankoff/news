@@ -944,12 +944,12 @@ class ConfigHelperTests(unittest.TestCase):
                 config_module.UI_LOCATIONS,
                 f"{knob['env']} has unknown ui_location {location!r}",
             )
-        # The current contract: 4 Run Setup + 70 dedicated Advanced panel
+        # The current contract: 5 Run Setup + 70 dedicated Advanced panel
         # knobs, with every remaining registered knob raw-by-default.
         locations = {knob["env"]: knob["ui_location"] for knob in registry}
         self.assertEqual(
             sum(loc == config_module.UI_LOCATION_RUN_SETUP for loc in locations.values()),
-            4,
+            5,
         )
         self.assertEqual(
             sum(loc == config_module.UI_LOCATION_ADVANCED_PANELS for loc in locations.values()),
@@ -957,7 +957,7 @@ class ConfigHelperTests(unittest.TestCase):
         )
         self.assertEqual(
             sum(loc == config_module.UI_LOCATION_ADVANCED_RAW for loc in locations.values()),
-            len(registry) - 74,
+            len(registry) - 75,
         )
 
     def test_registry_ui_location_families_are_annotated_exactly(self) -> None:
@@ -969,7 +969,7 @@ class ConfigHelperTests(unittest.TestCase):
         locations = {knob["env"]: knob["ui_location"] for knob in registry}
         self.assertEqual(
             {env for env, loc in locations.items() if loc == config_module.UI_LOCATION_RUN_SETUP},
-            {"NEWS_MODEL", "NEWS_SOURCE_SCOPE", "NEWS_DELIVERY_MODE", "NEWS_PROMPT_PROFILE"},
+            {"NEWS_MODEL", "NEWS_SOURCE_SCOPE", "NEWS_DELIVERY_MODE", "NEWS_PROMPT_PROFILE", "NEWS_PRIMARY_RECIPIENT"},
         )
         advanced_panels = {
             env for env, loc in locations.items() if loc == config_module.UI_LOCATION_ADVANCED_PANELS
