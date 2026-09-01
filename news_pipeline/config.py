@@ -1781,6 +1781,7 @@ def runtime_knob_registry() -> list[dict[str, Any]]:
         _runtime_knob("Run Settings", "Source scope", "NEWS_SOURCE_SCOPE", "select", default="core", options=list(SOURCE_SCOPES), ui_location=UI_LOCATION_RUN_SETUP),
         _runtime_knob("Run Settings", "Recipient scope", "NEWS_RECIPIENT_SCOPE", "select", default="primary", options=list(RECIPIENT_SCOPES)),
         _runtime_knob("Run Settings", "Delivery mode", DELIVERY_MODE_ENV_VAR, "select", default=DELIVERY_MODE_OWNER, options=list(DELIVERY_MODES), ui_location=UI_LOCATION_RUN_SETUP),
+        _runtime_knob("Run Settings", "Primary recipient", "NEWS_PRIMARY_RECIPIENT", default="primary@example.com", ui_location=UI_LOCATION_RUN_SETUP),
         _runtime_knob("Run Settings", "Block reused URLs", "NEWS_BLOCK_REUSED_URLS", "bool", default=False, ui_location=UI_LOCATION_ADVANCED_PANELS),
         _runtime_knob("Run Settings", "Image generation", "NEWS_IMAGE_ENABLED", "bool", default=False, ui_location=UI_LOCATION_ADVANCED_PANELS),
         _runtime_knob("Run Settings", "Story scale screening", "NEWS_STORY_SCALE_SCREENING_ENABLED", "bool", ui_location=UI_LOCATION_ADVANCED_PANELS),

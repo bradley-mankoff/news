@@ -2509,6 +2509,9 @@ HTML = r"""<!doctype html>
       ["recipients", "Recipients", "person"]
     ];
     const KNOB_HINTS = {
+      NEWS_PRESET: "Saved run preset selecting stored Run Settings; explicit shell/UI overrides win over preset values.",
+      NEWS_PROMPT_PROFILE: "Editorial tone profile for the five LLM prompt stages (balanced, playful, facts-only, etc.).",
+      NEWS_PRIMARY_RECIPIENT: "Owner email address used when delivery mode is owner or recipients.",
       NEWS_DELIVERY_MODE: "Chooses the delivery policy: no delivery, owner only (default), or explicit configured recipients. Legacy NEWS_RECIPIENT_SCOPE still maps to this mode when set.",
       NEWS_RECIPIENT_SCOPE: "Legacy migration value for NEWS_DELIVERY_MODE (primary -> owner, all -> recipients); prefer the delivery mode control.",
       NEWS_SOURCE_SCOPE: "Chooses the source pool: core sources only, or the full source list.",
@@ -2573,6 +2576,16 @@ HTML = r"""<!doctype html>
       "--language-samples": "Sample count used by source language detection.",
       "--min-language-confidence": "Minimum confidence accepted for source language detection."
     };
+    const wizardSteps = [
+      { id: "preset", title: "Preset / Goal", envs: ["NEWS_PRESET", "NEWS_PROMPT_PROFILE"], description: "Choose a saved preset and editorial tone." },
+      { id: "sources", title: "Sources", envs: ["NEWS_SOURCE_SCOPE"], description: "Pick core or all sources." },
+      { id: "model", title: "Model", envs: ["NEWS_MODEL"], description: "Default model with Resolved readout; per-task picker collapsed.", collapsed: true },
+      { id: "delivery", title: "Delivery", envs: ["NEWS_DELIVERY_MODE", "NEWS_PRIMARY_RECIPIENT"], description: "How and where the report is delivered." },
+      { id: "review", title: "Review & Run", preview: true, description: "Check stats, preview command, and run." }
+    ];
+    let wizardState = { step: Number(localStorage.getItem("wizardStep") || 1) };
+    function isWizardEnabled() { return new URLSearchParams(window.location.search).get("wizard") !== "0"; }
+    function wizardHint(env) { return KNOB_HINTS[env] || ""; }
     const sourceFields = ["key","name","language","tier","region","nations","url","homepage","provider_type","intended_role","weight","can_enrich_coverage","strict_source_match","source_match_mode","source_match_aliases","notes"];
 
     function $(id) { return document.getElementById(id); }
@@ -2952,7 +2965,133 @@ HTML = r"""<!doctype html>
       ];
       $("stats").innerHTML = items.map(([label, val]) => `<div class="stat"><span class="muted">${escapeHtml(label)}</span><strong>${escapeHtml(String(val ?? ""))}</strong></div>`).join("");
     }
+    function wizardPresetOptions() {
+      const presets = (state.schema && state.schema.presets && state.schema.presets.presets) || state.presets || [];
+      const selected = state.selectedRunPresetId || "";
+      const opts = [`<option value="">none (custom)</option>`].concat(presets.map(p => `<option value="${escapeHtml(p.id)}"${selected === p.id ? " selected" : ""}>${escapeHtml(p.name || p.id)}</option>`));
+      return opts.join("");
+    }
+    function renderWizardStepContent() {
+      const step = wizardSteps[wizardState.step - 1];
+      if (!step) return "";
+      if (step.preview) {
+        return `
+        <p class="muted">Review snapshot below, check command preview, then Run. Changing any wizard field updates the preview and run details.</p>
+        <p class="muted">Preview: <code>uv run news run</code> — use Next/Back to adjust earlier steps or Preview/Run in the banner.</p>`;
+      }
+      const fields = step.envs.map(env => {
+        if (env === "NEWS_PRESET") {
+          return `<label class="field"><span>Preset</span><select id="wizard_preset" data-env="${env}">${wizardPresetOptions()}</select><code>${env}</code><p class="muted">${escapeHtml(wizardHint(env))}</p></label>`;
+        }
+        const label = env === "NEWS_PROMPT_PROFILE" ? "Prompt profile" : env === "NEWS_SOURCE_SCOPE" ? "Source scope" : env === "NEWS_MODEL" ? "Default model" : env === "NEWS_DELIVERY_MODE" ? "Delivery mode" : env === "NEWS_PRIMARY_RECIPIENT" ? "Primary recipient" : env;
+        const opts = env === "NEWS_MODEL" ? { emptyLabel: `default: ${formatDefault((state.schema && state.schema.runtime && state.schema.runtime.model && (state.schema.runtime.model.name || state.schema.runtime.model.reference)) || "gemma-4-12b-it-4bit")}` } : {};
+        const field = knobField(env, label, opts);
+        if (!field) {
+          const knob = knobByEnv(env);
+          const def = knob && knob.default !== undefined ? formatDefault(knob.default) : "";
+          return `<label class="field"><span>${escapeHtml(label)}</span><input data-env="${escapeHtml(env)}" value="${escapeHtml(currentControlValue(env))}" placeholder="${escapeHtml(String(def))}"><code>${escapeHtml(env)}</code><p class="muted">${escapeHtml(wizardHint(env))}</p></label>`;
+        }
+        return field.replace("</label>", `<p class="muted">${escapeHtml(wizardHint(env))}</p></label>`);
+      }).join("");
+      let extra = "";
+      if (step.id === "model") {
+        const runtime = (state.schema && state.schema.runtime && state.schema.runtime.model) || {};
+        const resolved = runtime.name || runtime.reference || "-";
+        extra = `<p class="muted">Resolved: ${escapeHtml(resolved)}</p><details class="details"><summary>Per-task model overrides (optional)</summary><div class="form-grid">` +
+          ["NEWS_MODEL_ARTICLE_SUMMARY","NEWS_MODEL_STORY_DRAFTING","NEWS_MODEL_STORY_SCALE_SCREENING","NEWS_MODEL_TITLE_GENERATION","NEWS_MODEL_IMAGE_ART_DIRECTION"].map(e => knobField(e, e.replace("NEWS_MODEL_","").replace(/_/g," ")) || "").join("") + `</div></details>`;
+      }
+      return `<div class="form-grid">${fields}</div>${extra}`;
+    }
+    function syncWizardEnv() {
+      document.querySelectorAll("#wizardContent [data-env]").forEach(el => {
+        const env = el.dataset.env;
+        const val = el.type === "checkbox" ? (el.checked ? "1" : "") : el.value.trim();
+        if (!state.schema) state.schema = {};
+        if (!state.schema.current_env) state.schema.current_env = {};
+        state.schema.current_env[env] = val;
+        if (env === "NEWS_PRESET") {
+          state.selectedRunPresetId = val;
+        }
+      });
+    }
+    function bindWizardEvents() {
+      const content = $("wizardContent");
+      if (!content) return;
+      content.querySelectorAll("[data-env]").forEach(el => {
+        el.addEventListener("change", () => { syncWizardEnv(); previewQuietly("run"); renderStats(); });
+        el.addEventListener("input", () => { syncWizardEnv(); previewQuietly("run"); });
+      });
+      const presetSel = $("wizard_preset");
+      if (presetSel) presetSel.addEventListener("change", () => { state.selectedRunPresetId = presetSel.value; syncWizardEnv(); previewQuietly("run"); renderPresetSummary(); });
+    }
+    function renderWizard() {
+      const step = wizardSteps[wizardState.step - 1];
+      const progress = `Step ${wizardState.step} / ${wizardSteps.length}`;
+      const h = `
+        <div id="wizardStepper" class="panel">
+          <p class="eyebrow">${progress} — ${escapeHtml(step.title)}</p>
+          <h2>${escapeHtml(step.title)}</h2>
+          <p class="muted">${escapeHtml(step.description || "")}</p>
+          <div id="wizardContent" class="stack">${renderWizardStepContent()}</div>
+          <div class="toolbar" style="margin-top:12px">
+            <button id="wizardBack" ${wizardState.step <= 1 ? "disabled" : ""}>Back</button>
+            <button id="wizardNext" class="primary" ${wizardState.step >= wizardSteps.length ? "style=\"display:none\"" : ""}>Next</button>
+          </div>
+        </div>`;
+      return h;
+    }
+    function renderWizardShellExtras() {
+      return `
+        <section class="panel"><p class="eyebrow">Snapshot</p><h2>Effective runtime snapshot</h2><div id="stats" class="stats"></div></section>
+        <section class="panel"><h2>Command preview</h2><pre id="previewPane"></pre></section>
+        <section class="panel"><div class="toolbar"><h2 style="margin-right:auto">Run log</h2><button id="stopBtn" class="danger">Stop</button></div><pre id="logPane" role="log" aria-live="polite" aria-label="Run log"></pre></section>`;
+    }
     function renderRunSetup() {
+      if (typeof isWizardEnabled === "function" && isWizardEnabled() && typeof wizardSteps !== "undefined" && typeof wizardState !== "undefined") {
+        const schema = state.schema || {};
+        const runtimeError = schema.runtime_error || "";
+        const wizardHtml = renderWizard();
+        $("runSetupMount").innerHTML = `
+        <div class="banner panel">
+          <div class="banner-copy">
+            <p class="eyebrow">Guided wizard</p>
+            <h2>Daily news — 5 steps</h2>
+            <p id="presetSummary" class="muted"></p>
+          </div>
+          <div class="banner-actions">
+            <button id="resetDefaultsBtn">Reset defaults</button>
+            <button id="openRunPresetDrawerBtn">Preset drawer</button>
+            <button id="previewBtn">Preview</button>
+            <button id="runBtn" class="primary">Run</button>
+          </div>
+        </div>
+        <div class="stack">
+          ${runtimeError ? `<p class="bad" style="margin:0 0 8px">Configuration error: ${escapeHtml(runtimeError)}</p>` : ""}
+          ${wizardHtml}
+          ${renderWizardShellExtras()}
+          <section class="panel" id="wizardReviewPanel" style="${wizardState.step === 5 ? "" : "display:none"}">
+            <p class="muted">Changing a wizard field updates the preview and run details.</p>
+          </section>
+        </div>`;
+        renderPresetSummary();
+        renderStats();
+        decorateEnvHints($("runSetupMount"));
+        bindWizardEvents();
+        const back = $("wizardBack");
+        const next = $("wizardNext");
+        if (back) back.onclick = () => { if (wizardState.step > 1) { syncWizardEnv(); wizardState.step -= 1; localStorage.setItem("wizardStep", String(wizardState.step)); renderRunSetup(); previewQuietly("run"); } };
+        if (next) next.onclick = () => { if (wizardState.step < wizardSteps.length) { syncWizardEnv(); wizardState.step += 1; localStorage.setItem("wizardStep", String(wizardState.step)); renderRunSetup(); previewQuietly("run"); } };
+        const pb = $("previewBtn");
+        const rb = $("runBtn");
+        if (pb) pb.onclick = () => previewWithStatus("run");
+        if (rb) rb.onclick = () => runAction("run").catch(err => setStatus(err.message, "bad"));
+        const reset = $("resetDefaultsBtn");
+        if (reset) reset.onclick = resetAllOverrides;
+        const drawer = $("openRunPresetDrawerBtn");
+        if (drawer) drawer.onclick = () => { renderRunPresetDrawer(); openRunPresetDialog(); };
+        previewQuietly("run");
+        return;
+      }
       const schema = state.schema || {};
       const runtime = schema.runtime || {};
       const defaultRuntime = runtime.model ? runtime.model : {};
@@ -3049,6 +3188,7 @@ HTML = r"""<!doctype html>
                 </select>
                 <code>NEWS_SOURCE_SCOPE</code>
               </label>
+              ${knobField("NEWS_PRIMARY_RECIPIENT", "Primary recipient")}
             </div>
           </section>
           <section class="panel">
@@ -4802,10 +4942,10 @@ HTML = r"""<!doctype html>
         : `<p class="muted">No differences from balanced.</p>`;
     }
     function wireEvents() {
-      $("previewBtn").onclick = () => previewWithStatus("run");
-      $("runBtn").onclick = () => runAction("run").catch(err => setStatus(err.message, "bad"));
-      $("utilityPreviewBtn").onclick = () => previewWithStatus(value("actionSelect") || "run");
-      $("utilityRunBtn").onclick = () => runAction(value("actionSelect") || "run").catch(err => setStatus(err.message, "bad"));
+      if ($("previewBtn")) $("previewBtn").onclick = () => previewWithStatus("run");
+      if ($("runBtn")) $("runBtn").onclick = () => runAction("run").catch(err => setStatus(err.message, "bad"));
+      if ($("utilityPreviewBtn")) $("utilityPreviewBtn").onclick = () => previewWithStatus(value("actionSelect") || "run");
+      if ($("utilityRunBtn")) $("utilityRunBtn").onclick = () => runAction(value("actionSelect") || "run").catch(err => setStatus(err.message, "bad"));
       $("stopBtn").onclick = () => {
         const runId = state.activeRun;
         if (!runId) return;
@@ -4813,50 +4953,50 @@ HTML = r"""<!doctype html>
           .then(() => setStatus("Stop requested; waiting for the run to finish…", "warn"))
           .catch(err => setStatus(`Stop failed: ${err.message}`, "bad"));
       };
-      $("openRunPresetDrawerBtn").onclick = () => { renderRunPresetDrawer(); openRunPresetDialog(); };
-      $("savePresetBtn").onclick = () => { prepRunPresetEditorFromCurrent(); renderRunPresetDrawer(); openRunPresetDialog(); };
-      $("closeRunPresetDialogBtn").onclick = closeRunPresetDialog;
-      $("newPresetBtn").onclick = () => { editRunPreset(""); $("preset_env").value = envToText(collectEnv()); };
-      $("reloadPresetsBtn").onclick = loadPresets;
-      $("applyPresetBtn").onclick = () => {
+      if ($("openRunPresetDrawerBtn")) $("openRunPresetDrawerBtn").onclick = () => { renderRunPresetDrawer(); openRunPresetDialog(); };
+      if ($("savePresetBtn")) $("savePresetBtn").onclick = () => { prepRunPresetEditorFromCurrent(); renderRunPresetDrawer(); openRunPresetDialog(); };
+      if ($("closeRunPresetDialogBtn")) $("closeRunPresetDialogBtn").onclick = closeRunPresetDialog;
+      if ($("newPresetBtn")) $("newPresetBtn").onclick = () => { editRunPreset(""); $("preset_env").value = envToText(collectEnv()); };
+      if ($("reloadPresetsBtn")) $("reloadPresetsBtn").onclick = loadPresets;
+      if ($("applyPresetBtn")) $("applyPresetBtn").onclick = () => {
         const id = value("preset_id").trim();
         const preset = state.presets.find(item => item.id === id);
         if (!preset) return;
         applyRunPreset(preset);
         closeRunPresetDialog();
       };
-      $("renamePresetBtn").onclick = () => renamePresetDisplayName().catch(err => setStatus(err.message, "bad"));
-      $("savePresetEditorBtn").onclick = () => savePresetEditor().catch(err => setStatus(err.message, "bad"));
-      $("deletePresetBtn").onclick = () => deleteSelectedPreset().catch(err => setStatus(err.message, "bad"));
-      $("knobSearch").oninput = renderAdvancedKnobs;
-      $("clearKnobsBtn").onclick = resetAllOverrides;
-      $("resetDefaultsBtn").onclick = resetAllOverrides;
-      $("promptProfileSelect").onchange = () => {
+      if ($("renamePresetBtn")) $("renamePresetBtn").onclick = () => renamePresetDisplayName().catch(err => setStatus(err.message, "bad"));
+      if ($("savePresetEditorBtn")) $("savePresetEditorBtn").onclick = () => savePresetEditor().catch(err => setStatus(err.message, "bad"));
+      if ($("deletePresetBtn")) $("deletePresetBtn").onclick = () => deleteSelectedPreset().catch(err => setStatus(err.message, "bad"));
+      if ($("knobSearch")) $("knobSearch").oninput = renderAdvancedKnobs;
+      if ($("clearKnobsBtn")) $("clearKnobsBtn").onclick = resetAllOverrides;
+      if ($("resetDefaultsBtn")) $("resetDefaultsBtn").onclick = resetAllOverrides;
+      if ($("promptProfileSelect")) $("promptProfileSelect").onchange = () => {
         renderPromptProfilePanel();
         void previewWithStatus("run");
       };
-      $("restorePromptProfileBtn").onclick = () => {
+      if ($("restorePromptProfileBtn")) $("restorePromptProfileBtn").onclick = () => {
         const el = document.querySelector('[data-env="NEWS_PROMPT_PROFILE"]');
         if (el) el.value = "";
         document.querySelectorAll("[data-env^='NEWS_PROMPT_OVERRIDE_']").forEach(editor => { editor.value = ""; });
         renderPromptProfilePanel();
         void previewWithStatus("run");
       };
-      $("comparePromptProfileBtn").onclick = () => comparePromptProfiles().catch(err => setStatus(err.message, "bad"));
-      $("sourceSearch").oninput = renderSources;
-      $("reloadSourcesBtn").onclick = loadSources;
-      $("newSourceBtn").onclick = () => editSource("");
-      $("saveSourceBtn").onclick = () => saveSource().catch(err => setStatus(err.message, "bad"));
-      $("deleteSourceBtn").onclick = () => deleteSelectedSource().catch(err => setStatus(err.message, "bad"));
-      $("reloadRecipientsBtn").onclick = loadRecipients;
-      $("newRecipientBtn").onclick = () => editRecipient("");
-      $("saveRecipientBtn").onclick = () => saveRecipient().catch(err => setStatus(err.message, "bad"));
-      $("deleteRecipientBtn").onclick = () => deleteSelectedRecipient().catch(err => setStatus(err.message, "bad"));
-      $("newModelTuningPresetBtn").onclick = () => { editModelTuningPreset(""); $("modelTuningPresetTuning").value = "{}"; };
-      $("reloadModelTuningPresetsBtn").onclick = () => reloadModelTuningPresets().catch(err => $("modelTuningPresetError").textContent = err.message);
-      $("saveModelTuningPresetBtn").onclick = () => saveModelTuningEditor().catch(err => $("modelTuningPresetError").textContent = err.message);
-      $("deleteModelTuningPresetBtn").onclick = () => deleteModelTuningEditor().catch(err => $("modelTuningPresetError").textContent = err.message);
-      $("actionSelect").onchange = () => $("sourceOptions").classList.toggle("hidden", !["check-sources","prune-sources","source-languages"].includes(value("actionSelect")));
+      if ($("comparePromptProfileBtn")) $("comparePromptProfileBtn").onclick = () => comparePromptProfiles().catch(err => setStatus(err.message, "bad"));
+      if ($("sourceSearch")) $("sourceSearch").oninput = renderSources;
+      if ($("reloadSourcesBtn")) $("reloadSourcesBtn").onclick = loadSources;
+      if ($("newSourceBtn")) $("newSourceBtn").onclick = () => editSource("");
+      if ($("saveSourceBtn")) $("saveSourceBtn").onclick = () => saveSource().catch(err => setStatus(err.message, "bad"));
+      if ($("deleteSourceBtn")) $("deleteSourceBtn").onclick = () => deleteSelectedSource().catch(err => setStatus(err.message, "bad"));
+      if ($("reloadRecipientsBtn")) $("reloadRecipientsBtn").onclick = loadRecipients;
+      if ($("newRecipientBtn")) $("newRecipientBtn").onclick = () => editRecipient("");
+      if ($("saveRecipientBtn")) $("saveRecipientBtn").onclick = () => saveRecipient().catch(err => setStatus(err.message, "bad"));
+      if ($("deleteRecipientBtn")) $("deleteRecipientBtn").onclick = () => deleteSelectedRecipient().catch(err => setStatus(err.message, "bad"));
+      if ($("newModelTuningPresetBtn")) $("newModelTuningPresetBtn").onclick = () => { editModelTuningPreset(""); $("modelTuningPresetTuning").value = "{}"; };
+      if ($("reloadModelTuningPresetsBtn")) $("reloadModelTuningPresetsBtn").onclick = () => reloadModelTuningPresets().catch(err => $("modelTuningPresetError").textContent = err.message);
+      if ($("saveModelTuningPresetBtn")) $("saveModelTuningPresetBtn").onclick = () => saveModelTuningEditor().catch(err => $("modelTuningPresetError").textContent = err.message);
+      if ($("deleteModelTuningPresetBtn")) $("deleteModelTuningPresetBtn").onclick = () => deleteModelTuningEditor().catch(err => $("modelTuningPresetError").textContent = err.message);
+      if ($("actionSelect") && $("sourceOptions")) $("actionSelect").onchange = () => $("sourceOptions").classList.toggle("hidden", !["check-sources","prune-sources","source-languages"].includes(value("actionSelect")));
       Object.values(TASK_CONFIG).forEach(meta => {
         const modelSelect = $(meta.modelSelectId);
         if (modelSelect) modelSelect.onchange = () => {
@@ -4957,8 +5097,8 @@ HTML = r"""<!doctype html>
       } else {
         setStatus("");
       }
-      $("sourceOptions").classList.add("hidden");
-      $("actionSelect").onchange();
+      if ($("sourceOptions")) $("sourceOptions").classList.add("hidden");
+      if ($("actionSelect") && typeof $("actionSelect").onchange === "function") $("actionSelect").onchange();
       await preview("run").catch(err => setStatus(err.message, "bad"));
     }
     init().catch(err => setStatus(err.message, "bad"));
