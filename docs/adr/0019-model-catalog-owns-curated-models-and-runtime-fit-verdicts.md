@@ -45,17 +45,21 @@ lookup, and Hugging Face runtime-fit classification.
 
 ### Curated baseline
 
-`BUILTIN_CATALOG_MODELS` is the code-reviewed baseline, currently four
-entries (the code remains authoritative for exact references):
+`BUILTIN_CATALOG_MODELS` is the code-reviewed baseline, currently ten entries
+(the code remains authoritative for exact references):
 
-- `gemma-4-12b-it-4bit` — `mlx-vlm`, the default model, 256K-token context
-  (`262_144`); the verified structured-output/synthesis/citation-fidelity
-  pick.
-- `gemma-e2b-tiny` — `mlx-lm`, the Codex-safe speed/test model.
-- `qwythos-9b-4bit` — `llama.cpp`, file-qualified GGUF reference served by
-  the managed llama.cpp backend (issue #75).
-- `qwythos-9b-8bit` — `llama.cpp`, file-qualified GGUF reference served by
-  the managed llama.cpp backend (issue #75).
+- `gemma-4-e2b-it-mlx-4bit` and `gemma-4-e4b-it-mlx-4bit` — `mlx-community`
+  4-bit MLX distributions served by `mlx-lm`.
+- `gemma-4-12b-it-mlx-4bit` — `mlx-community` 4-bit MLX distribution served
+  by `mlx-vlm`, the default model with 256K-token context.
+- `gemma-4-26b-a4b-it-mlx-4bit` and `gemma-4-31b-it-mlx-4bit` —
+  `mlx-community` 4-bit MLX distributions served by `mlx-lm`.
+- `gemma-4-e2b-it-gguf-ud-q4-k-xl`,
+  `gemma-4-e4b-it-gguf-ud-q4-k-xl`,
+  `gemma-4-12b-it-gguf-ud-q4-k-xl`,
+  `gemma-4-26b-a4b-it-gguf-ud-q4-k-xl`, and
+  `gemma-4-31b-it-gguf-ud-q4-k-xl` — Unsloth `UD-Q4_K_XL` GGUF
+  distributions served by `llama.cpp`.
 
 Curated entries carry deterministic per-task recommendation notes across the
 fixed task vocabulary (factual extraction, structured output, synthesis,

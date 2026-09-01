@@ -13,17 +13,17 @@ presets:
       NEWS_RECIPIENT_SCOPE: primary
       NEWS_BLOCK_REUSED_URLS: '0'
       NEWS_IMAGE_ENABLED: '0'
-      NEWS_MODEL: gemma-4-12b-it-4bit
+      NEWS_MODEL: gemma-4-12b-it-mlx-4bit
       NEWS_MODEL_BACKEND: mlx-vlm
   dev:
     name: Dev
-    description: Small core-source review run with the Codex-safe tiny model.
+    description: Small core-source review run with the Gemma 4 E2B MLX model.
     env:
       NEWS_SOURCE_SCOPE: core
       NEWS_RECIPIENT_SCOPE: primary
       NEWS_BLOCK_REUSED_URLS: '0'
       NEWS_IMAGE_ENABLED: '0'
-      NEWS_MODEL: gemma-e2b-tiny
+      NEWS_MODEL: gemma-4-e2b-it-mlx-4bit
       NEWS_MODEL_BACKEND: mlx-lm
       NEWS_MIN_ARTICLES_PER_STORY: '2'
       NEWS_RELAX_STORY_DRAFTING_GUARDS: '1'
@@ -36,7 +36,7 @@ presets:
       NEWS_RECIPIENT_SCOPE: primary
       NEWS_BLOCK_REUSED_URLS: '0'
       NEWS_IMAGE_ENABLED: '1'
-      NEWS_MODEL: gemma-4-12b-it-4bit
+      NEWS_MODEL: gemma-4-12b-it-mlx-4bit
       NEWS_MODEL_BACKEND: mlx-vlm
       NEWS_MIN_ARTICLES_PER_STORY: '4'
   loose-local-prod:
@@ -48,7 +48,7 @@ presets:
       NEWS_RECIPIENT_SCOPE: primary
       NEWS_BLOCK_REUSED_URLS: '0'
       NEWS_IMAGE_ENABLED: '1'
-      NEWS_MODEL: gemma-4-12b-it-4bit
+      NEWS_MODEL: gemma-4-12b-it-mlx-4bit
       NEWS_MODEL_BACKEND: mlx-vlm
       NEWS_MIN_ARTICLES_PER_STORY: '4'
       NEWS_STORY_CLUSTER_SIMILARITY_THRESHOLD: '0.27'
@@ -61,6 +61,6 @@ presets:
       NEWS_RECIPIENT_SCOPE: all
       NEWS_BLOCK_REUSED_URLS: '1'
       NEWS_IMAGE_ENABLED: '1'
-      NEWS_MODEL: gemma-4-12b-it-4bit
+      NEWS_MODEL: gemma-4-12b-it-mlx-4bit
       NEWS_MODEL_BACKEND: mlx-vlm
       NEWS_MIN_ARTICLES_PER_STORY: '4'

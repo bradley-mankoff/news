@@ -10,8 +10,8 @@ from news_pipeline.config import (
     DEFAULT_MODEL_ALIAS,
     DEFAULT_ARTICLE_TEXT_TOKEN_LIMIT,
     DEFAULT_TOTAL_ARTICLE_SUMMARY_CAP,
-    GEMMA_4_12B_IT_4BIT_MODEL_ALIAS,
-    QWWYTHOS_9B_4BIT_MODEL_ALIAS,
+    GEMMA_4_12B_IT_MLX_4BIT_MODEL_ALIAS,
+    GEMMA_4_E2B_IT_GGUF_MODEL_ALIAS,
     is_gemma_4_model_reference,
     load_runtime_config,
 )
@@ -44,7 +44,7 @@ def _article_ids(count: int, *, prefix: str = "a") -> list[str]:
 
 
 class Gemma4ArticleBudgetTests(unittest.TestCase):
-    def test_gemma_4_detection_and_qwythos_alias(self) -> None:
+    def test_gemma_4_detection_and_gguf_alias(self) -> None:
         self.assertTrue(is_gemma_4_model_reference(CODEX_TEST_MODEL_ALIAS))
         self.assertTrue(is_gemma_4_model_reference(CODEX_TEST_MODEL_NAME))
         self.assertTrue(
@@ -52,14 +52,11 @@ class Gemma4ArticleBudgetTests(unittest.TestCase):
                 "mlx-community/gemma-4-26B-A4B-it-heretic-4bit"
             )
         )
-        # The Qwythos alias now resolves to a managed llama.cpp GGUF
-        # assignment (issue #75); it is not a Gemma 4 model, and resolution
-        # no longer fails fast.
-        self.assertFalse(is_gemma_4_model_reference(QWWYTHOS_9B_4BIT_MODEL_ALIAS))
+        self.assertTrue(is_gemma_4_model_reference(GEMMA_4_E2B_IT_GGUF_MODEL_ALIAS))
         resolved = load_runtime_config(
             materialize_outputs=False,
             environ={
-                "NEWS_MODEL": QWWYTHOS_9B_4BIT_MODEL_ALIAS,
+                "NEWS_MODEL": GEMMA_4_E2B_IT_GGUF_MODEL_ALIAS,
                 "NEWS_MODEL_BACKEND": "llama.cpp",
             },
         )
@@ -76,7 +73,7 @@ class Gemma4ArticleBudgetTests(unittest.TestCase):
         with patch.dict(os.environ, {}, clear=True):
             gemma_config = load_runtime_config(
                 materialize_outputs=False,
-                environ={"NEWS_MODEL": GEMMA_4_12B_IT_4BIT_MODEL_ALIAS},
+                environ={"NEWS_MODEL": GEMMA_4_12B_IT_MLX_4BIT_MODEL_ALIAS},
             )
 
         self.assertEqual(
@@ -133,7 +130,7 @@ class Gemma4ArticleBudgetTests(unittest.TestCase):
         with patch.dict(
             os.environ,
             {
-                "NEWS_MODEL": GEMMA_4_12B_IT_4BIT_MODEL_ALIAS,
+                "NEWS_MODEL": GEMMA_4_12B_IT_MLX_4BIT_MODEL_ALIAS,
             },
             clear=True,
         ):
@@ -145,13 +142,13 @@ class Gemma4ArticleBudgetTests(unittest.TestCase):
 
     def test_concurrency_defaults_are_identical_across_model_choices(self) -> None:
         # Cross-model equality (issue #169): the same fixed stage/server
-        # defaults resolve for the default Gemma, the tiny model (with its
-        # required explicit backend), and the llama.cpp Qwythos alias.
+        # defaults resolve for the default Gemma, the E2B MLX model, and the
+        # E2B GGUF model.
         configs = []
         for model, backend in (
             (DEFAULT_MODEL_ALIAS, None),
             (CODEX_TEST_MODEL_ALIAS, "mlx-lm"),
-            (QWWYTHOS_9B_4BIT_MODEL_ALIAS, "llama.cpp"),
+            (GEMMA_4_E2B_IT_GGUF_MODEL_ALIAS, "llama.cpp"),
         ):
             env = {"NEWS_MODEL": model}
             if backend:
@@ -170,7 +167,7 @@ class Gemma4ArticleBudgetTests(unittest.TestCase):
         with patch.dict(
             os.environ,
             {
-                "NEWS_MODEL": GEMMA_4_12B_IT_4BIT_MODEL_ALIAS,
+                "NEWS_MODEL": GEMMA_4_12B_IT_MLX_4BIT_MODEL_ALIAS,
                 "NEWS_ARTICLE_SUMMARY_CONCURRENCY": "3",
                 "NEWS_STORY_SYNTHESIS_CONCURRENCY": "6",
             },
@@ -188,7 +185,7 @@ class Gemma4ArticleBudgetTests(unittest.TestCase):
                 with patch.dict(
                     os.environ,
                     {
-                        "NEWS_MODEL": GEMMA_4_12B_IT_4BIT_MODEL_ALIAS,
+                        "NEWS_MODEL": GEMMA_4_12B_IT_MLX_4BIT_MODEL_ALIAS,
                         "NEWS_ARTICLE_SUMMARY_CONCURRENCY": "5",
                         "NEWS_STORY_SYNTHESIS_CONCURRENCY": "7",
                         "NEWS_MODEL_CONCURRENCY": str(server_concurrency),
@@ -205,7 +202,7 @@ class Gemma4ArticleBudgetTests(unittest.TestCase):
         with patch.dict(
             os.environ,
             {
-                "NEWS_MODEL": GEMMA_4_12B_IT_4BIT_MODEL_ALIAS,
+                "NEWS_MODEL": GEMMA_4_12B_IT_MLX_4BIT_MODEL_ALIAS,
                 "NEWS_TOTAL_ARTICLE_SUMMARY_CAP": "55",
             },
             clear=True,

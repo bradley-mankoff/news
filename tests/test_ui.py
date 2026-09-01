@@ -28,7 +28,7 @@ from news_pipeline.config import (
     CODEX_TEST_MODEL_ALIAS,
     DELIVERY_MODE_OWNER,
     DeliveryProfile,
-    GEMMA_4_12B_IT_4BIT_MODEL_ALIAS,
+    GEMMA_4_12B_IT_MLX_4BIT_MODEL_ALIAS,
 )
 from news_pipeline.diagnostics import RunDiagnostics
 from news_pipeline.history_store import write_run_history
@@ -158,6 +158,23 @@ class _Sample:
 
 
 class UITests(unittest.TestCase):
+    def test_embedded_browser_script_is_syntax_valid(self) -> None:
+        """The real browser payload must parse as JavaScript before serving."""
+        node = _find_node()
+        if node is None:
+            self.skipTest("Node.js is required for the embedded UI syntax check")
+        match = re.search(r"<script>([\s\S]*)</script>", ui_module.HTML)
+        self.assertIsNotNone(match, "UI HTML must contain its browser script")
+        result = subprocess.run(
+            [node, "--check"],
+            input=match.group(1),
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=30,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
+
     def test_env_info_tooltips_are_focusable_and_announced(self) -> None:
         html = ui_module.HTML
         # Trigger is keyboard-reachable with an accessible name and ARIA wiring.
@@ -456,7 +473,7 @@ const renderPromptTemplateEditors = () => {};
             )
             + js_function_block("function knobByEnv(env) {", "function inputForKnob")
             + js_function_block(
-                'function inputForKnob(knob, { emptyLabel, optionLabels = {}, id = "" } = {}) {',
+                'function inputForKnob(knob, { emptyLabel, optionLabels = {}, id = "", selectDefault = false } = {}) {',
                 "function knobField",
             )
             + js_function_block(
@@ -620,7 +637,7 @@ const renderPromptTemplateEditors = () => {};
             )
             + js_function_block("function knobByEnv(env) {", "function inputForKnob")
             + js_function_block(
-                'function inputForKnob(knob, { emptyLabel, optionLabels = {}, id = "" } = {}) {',
+                'function inputForKnob(knob, { emptyLabel, optionLabels = {}, id = "", selectDefault = false } = {}) {',
                 "function knobField",
             )
             + js_function_block(
@@ -708,8 +725,8 @@ assert(!advancedPanels.innerHTML.includes("undefined"), "undefined markup leaked
     def test_run_setup_single_default_model_card(self) -> None:
         html = ui_module.HTML
         run_setup = html.split("function renderRunSetup")[1].split("const SAMPLING_FIELDS")[0]
-        # Exactly one "Default model" knob; the four per-task model cards are gone.
-        self.assertEqual(run_setup.count('knobField("NEWS_MODEL", "Default model"'), 1)
+        # Exactly one "Model" knob; the four per-task model cards are gone.
+        self.assertEqual(run_setup.count('knobField("NEWS_MODEL", "Model"'), 1)
         for env in (
             "NEWS_MODEL_ARTICLE_SUMMARY",
             "NEWS_MODEL_STORY_DRAFTING",
@@ -720,8 +737,7 @@ assert(!advancedPanels.innerHTML.includes("undefined"), "undefined markup leaked
             self.assertNotIn(f'knobField("{env}"', run_setup)
         # The readout binds to the top-level runtime.model {name, reference}.
         self.assertIn("defaultRuntime.name || defaultRuntime.reference", run_setup)
-        # The Default-model knob's empty-option label derives from the same
-        # resolved runtime reference; a hardcoded alias can drift (DN-19).
+        # The Model knob's empty-option label derives from the same
         self.assertNotIn("default: gemma-4-12b-it-4bit", run_setup)
         self.assertIn(
             "emptyLabel: `default: ${formatDefault(defaultRuntime.name || defaultRuntime.reference)}`",
@@ -737,11 +753,10 @@ assert(!advancedPanels.innerHTML.includes("undefined"), "undefined markup leaked
 
     def test_run_setup_default_model_label_follows_resolved_reference(self) -> None:
         """Execute renderRunSetup in Node against two different resolved
-        runtime model references (DN-19): the Default-model knob's empty
-        option must always name the current resolution (name first, then
-        reference, then the formatDefault fallback), so changing the
-        reference updates the label instead of drifting from a hardcoded
-        alias."""
+        runtime model references (DN-19): the Model knob's empty option must
+        always name the current resolution (name first, then reference, then
+        the formatDefault fallback), so changing the reference updates the
+        label instead of drifting from a hardcoded alias."""
         html = ui_module.HTML
 
         def js_function_block(start: str, end: str) -> str:
@@ -788,7 +803,7 @@ const refreshModelKnobLinks = () => {};
             + js_function_block("function value(id) {", "function checked(id)")
             + js_function_block("function knobByEnv(env) {", "function inputForKnob")
             + js_function_block(
-                'function inputForKnob(knob, { emptyLabel, optionLabels = {}, id = "" } = {}) {',
+                'function inputForKnob(knob, { emptyLabel, optionLabels = {}, id = "", selectDefault = false } = {}) {',
                 "function knobField",
             )
             + js_function_block(
@@ -802,9 +817,20 @@ state.schema = {
   actions: ["run"],
   prompt_profiles: [],
   current_env: {},
-  runtime: { model: { name: "mlx-community/gemma-4-12B-it-4bit", reference: "gemma-4-12b-it-4bit" } },
+  runtime: { model: { name: "mlx-community/gemma-4-12B-it-4bit", reference: "gemma-4-12b-it-mlx-4bit" } },
   knobs: [
-    { env: "NEWS_MODEL", type: "select", default: "gemma-4-12b-it-4bit", options: ["gemma-4-12b-it-4bit", "qwythos-9b-4bit"] }
+    { env: "NEWS_MODEL", type: "select", default: "gemma-4-12b-it-mlx-4bit", options: [
+      "gemma-4-12b-it-mlx-4bit",
+      "gemma-4-e2b-it-mlx-4bit",
+      "gemma-4-e2b-it-gguf-ud-q4-k-xl",
+      "gemma-4-e4b-it-mlx-4bit",
+      "gemma-4-e4b-it-gguf-ud-q4-k-xl",
+      "gemma-4-12b-it-gguf-ud-q4-k-xl",
+      "gemma-4-26b-a4b-it-mlx-4bit",
+      "gemma-4-26b-a4b-it-gguf-ud-q4-k-xl",
+      "gemma-4-31b-it-mlx-4bit",
+      "gemma-4-31b-it-gguf-ud-q4-k-xl"
+    ] }
   ]
 };
 
@@ -813,17 +839,17 @@ state.schema = {
 renderRunSetup();
 let markup = $("runSetupMount").innerHTML;
 assert(
-  markup.includes('<option value="">default: mlx-community/gemma-4-12B-it-4bit</option>'),
-  "empty-option label must derive from the resolved runtime model name"
+  markup.includes('<option value="gemma-4-12b-it-mlx-4bit" selected>gemma-4-12b-it-mlx-4bit</option>'),
+  "the populated model default must be selected when the control is blank"
 );
 
 // Changing the resolved reference updates the label on re-render: no stale
-// alias survives, and an unnamed resolution falls back to its reference.
-state.schema.runtime = { model: { name: "", reference: "qwythos-9b-4bit" } };
+// model name survives, and an unnamed resolution falls back to its reference.
+state.schema.runtime = { model: { name: "", reference: "gemma-4-12b-it-gguf-ud-q4-k-xl" } };
 renderRunSetup();
 markup = $("runSetupMount").innerHTML;
 assert(
-  markup.includes('<option value="">default: qwythos-9b-4bit</option>'),
+  markup.includes('<option value="">default: gemma-4-12b-it-gguf-ud-q4-k-xl</option>'),
   "changing the reference must update the derived label"
 );
 assert(
@@ -1082,18 +1108,18 @@ assert(
         self.assertIn("knob-links", ui_module.HTML)
         self.assertIn('rel="noopener noreferrer"', ui_module.HTML)
         self.assertIn("No Hugging Face page for this external model", ui_module.HTML)
-        self.assertIn("Native Hardware Compatibility panel", ui_module.HTML)
-        self.assertIn("escapeHtml(entry.page)", ui_module.HTML)
-        self.assertIn("escapeHtml(entry.hardware)", ui_module.HTML)
+        self.assertNotIn("Native Hardware Compatibility panel", ui_module.HTML)
+        self.assertIn('`<a href="${escapeHtml(entry.page)}" target="_blank" rel="noopener noreferrer">Hugging Face page</a>`', ui_module.HTML)
+        self.assertNotIn("escapeHtml(entry.hardware)", ui_module.HTML)
         self.assertIn('data-links-for="${escapeHtml(knob.env)}"', ui_module.HTML)
 
     def test_render_knob_links_execute_in_node_dom_harness(self) -> None:
         """Execute the embedded renderKnobLinks renderer in a DOM-shaped Node harness.
 
         The production functions are extracted from ui_module.HTML itself and run
-        in Node so known-link output, the external-model muted note, HTML
-        escaping, default fallback, stale cleanup, and defensive branches are
-        observed rather than inferred from source markers.
+        in Node so the single known page-link output, the external-model muted
+        note, HTML escaping, default fallback, stale cleanup, and defensive
+        branches are observed rather than inferred from source markers.
         """
         html = ui_module.HTML
 
@@ -1145,7 +1171,7 @@ const console = { warn: (...args) => warnings.push(args.join(" ")) };
             + js_function_block('function formatDefault(value, fallback="none") {', "function currentControlValue")
             + js_function_block("function currentControlValue(env) {", "function setControlValue")
             + js_function_block("function knobByEnv(env) {", "function inputForKnob")
-            + js_function_block('function inputForKnob(knob, { emptyLabel, optionLabels = {}, id = "" } = {}) {', "function knobField")
+            + js_function_block('function inputForKnob(knob, { emptyLabel, optionLabels = {}, id = "", selectDefault = false } = {}) {', "function knobField")
             + js_function_block("function renderKnobLinks(env) {", "function refreshModelKnobLinks")
             + r"""
 const control = controls.NEWS_TEST_MODEL;
@@ -1178,21 +1204,20 @@ assert(inputMarkup.includes('<option value="">default: known-model</option>'), "
 assert(inputMarkup.includes('<option value="known-model">known-model</option>'), "inputForKnob did not emit the known option");
 assert(inputMarkup.includes('<div class="knob-links" data-links-for="NEWS_TEST_MODEL"></div>'), "inputForKnob did not emit the knob-links container");
 
-// Known current value: exactly two anchors with the security attributes,
-// replacing any stale container content.
+// Known current value: exactly one page anchor with the security attributes,
+// replacing any stale container content. Hardware metadata must not render a
+// duplicate link.
 control.value = "known-model";
 container.innerHTML = '<a href="https://stale.test/old">stale</a>';
 renderKnobLinks("NEWS_TEST_MODEL");
 const anchors = (container.innerHTML.match(/<a /g) || []).length;
-assert(anchors === 2, `expected exactly two anchors, got ${anchors}`);
+assert(anchors === 1, `expected exactly one anchor, got ${anchors}`);
 assert(container.innerHTML.includes(
   '<a href="https://example.test/model/known" target="_blank" rel="noopener noreferrer">Hugging Face page</a>'
 ), "page URL is not bound to the page anchor");
-assert(container.innerHTML.includes(
-  '<a href="https://example.test/model/known/hardware" target="_blank" rel="noopener noreferrer" title="Native Hardware Compatibility panel (GGUF/MLX) on the model page">Hardware compatibility</a>'
-), "hardware URL is not bound to the hardware anchor");
-assert((container.innerHTML.match(/target="_blank"/g) || []).length === 2, "both anchors must open in a new tab");
-assert((container.innerHTML.match(/rel="noopener noreferrer"/g) || []).length === 2, "both anchors must carry noopener noreferrer");
+assert((container.innerHTML.match(/target="_blank"/g) || []).length === 1, "the page anchor must open in a new tab");
+assert((container.innerHTML.match(/rel="noopener noreferrer"/g) || []).length === 1, "the page anchor must carry noopener noreferrer");
+assert(!container.innerHTML.includes("hardware"), "hardware metadata rendered a duplicate link");
 assert(!container.innerHTML.includes("stale"), "stale container content was not replaced");
 
 // Empty control value falls back to the knob default for display only; the
@@ -1218,7 +1243,7 @@ knob.option_links["known-model"] = {
 control.value = "known-model";
 renderKnobLinks("NEWS_TEST_MODEL");
 assert(container.innerHTML.includes('href="https://example.test/m?a=1&amp;b=&lt;2&gt;&quot;3&quot;"'), "page URL was not escaped with literal entities");
-assert(container.innerHTML.includes('href="https://example.test/h?x=4&amp;y=&lt;5&gt;&quot;6&quot;"'), "hardware URL was not escaped with literal entities");
+assert(!container.innerHTML.includes('href="https://example.test/h?'), "hardware metadata rendered a duplicate link");
 assert(!container.innerHTML.includes("a=1&b=<2>"), "raw ampersand/angle markup leaked into page link");
 assert(!container.innerHTML.includes('b=<2>"'), "raw quote markup leaked into page link");
 assert(!container.innerHTML.includes("<2>"), "raw angle brackets leaked into rendered links");
@@ -1748,10 +1773,10 @@ assert(SURFACED_ENVS.size === 0, "missing schema must not throw and must suppres
         self.assertIn("No verified curated model for this task yet", block)
 
     def test_model_backend_hint_markup_contract(self) -> None:
-        """The Default model panel exposes an accessible backend-compatibility
+        """The Model panel exposes an accessible backend-compatibility
         hint driven by catalog/HF backend metadata (issue #94)."""
         html = ui_module.HTML
-        # Markup and accessibility: the hint sits under the Default model
+        # Markup and accessibility: the hint sits under the Model
         # control and is announced politely; the hidden class starts it empty.
         self.assertIn('id="modelBackendHint"', html)
         self.assertIn('aria-live="polite"', html)
@@ -2206,8 +2231,8 @@ assert(SURFACED_ENVS.size === 0, "missing schema must not throw and must suppres
             self.assertEqual(payload["sources"]["total"], 1)
             self.assertEqual(payload["recipients"]["total"], 1)
             # Model catalog keys are local-only (offline) additions.
-            self.assertEqual(len(payload["model_catalog"]), 6)
-            self.assertEqual(payload["model_catalog"][0]["alias"], "gemma-4-12b-it-4bit")
+            self.assertEqual(len(payload["model_catalog"]), 10)
+            self.assertEqual(payload["model_catalog"][0]["alias"], model_catalog.DEFAULT_CATALOG_MODEL_ALIAS)
             self.assertIn("factual_extraction", payload["model_recommendation_tasks"])
             self.assertEqual(len(payload["model_recommendation_tasks"]), len(model_catalog.MODEL_RECOMMENDATION_TASKS))
             # Server-owned recommendations: every task maps exactly to the
@@ -2221,7 +2246,7 @@ assert(SURFACED_ENVS.size === 0, "missing schema must not throw and must suppres
             )
             self.assertEqual(
                 [pick["alias"] for pick in payload["model_recommendations"]["speed"]],
-                ["gemma-e2b-tiny", "qwen3-8b-4bit", model_catalog.DEFAULT_CATALOG_MODEL_ALIAS],
+                ["gemma-4-e2b-it-mlx-4bit", model_catalog.DEFAULT_CATALOG_MODEL_ALIAS],
             )
 
             helper_file = root / "nested" / "payload.yaml"
@@ -2858,7 +2883,7 @@ assert(SURFACED_ENVS.size === 0, "missing schema must not throw and must suppres
                     {
                         "action": "run",
                         "env": {
-                            "NEWS_MODEL_ARTICLE_SUMMARY": GEMMA_4_12B_IT_4BIT_MODEL_ALIAS,
+                            "NEWS_MODEL_ARTICLE_SUMMARY": GEMMA_4_12B_IT_MLX_4BIT_MODEL_ALIAS,
                         },
                     }
                 )
@@ -2880,7 +2905,7 @@ assert(SURFACED_ENVS.size === 0, "missing schema must not throw and must suppres
                     {
                         "action": "run",
                         "env": {
-                            "NEWS_MODEL_ARTICLE_SUMMARY": GEMMA_4_12B_IT_4BIT_MODEL_ALIAS,
+                            "NEWS_MODEL_ARTICLE_SUMMARY": GEMMA_4_12B_IT_MLX_4BIT_MODEL_ALIAS,
                             "NEWS_MODEL_ARTICLE_SUMMARY_BASE_URL": "http://localhost:8080/v1",
                         },
                     }
@@ -3466,15 +3491,15 @@ assert(SURFACED_ENVS.size === 0, "missing schema must not throw and must suppres
             ui_module, "search_huggingface_models", return_value=fake_models
         ) as search:
             status, _, body = self._invoke_get(
-                "/api/models/search?q=qwythos&pipeline_tag=text-generation&limit=5"
+                "/api/models/search?q=gemma-4&pipeline_tag=text-generation&limit=5"
             )
 
         self.assertEqual(status, 200)
         payload = json.loads(body)
-        self.assertEqual(payload["query"], "qwythos")
+        self.assertEqual(payload["query"], "gemma-4")
         self.assertEqual(payload["models"], fake_models)
         self.assertIsNone(payload["error"])
-        search.assert_called_once_with("qwythos", pipeline_tag="text-generation", limit=5)
+        search.assert_called_once_with("gemma-4", pipeline_tag="text-generation", limit=5)
 
         expected_exceptions = (
             OSError("hf down"),
@@ -3485,12 +3510,12 @@ assert(SURFACED_ENVS.size === 0, "missing schema must not throw and must suppres
             with self.subTest(exception=type(exception).__name__), patch.object(
                 ui_module, "search_huggingface_models", side_effect=exception
             ):
-                status, _, body = self._invoke_get("/api/models/search?q=qwythos")
+                status, _, body = self._invoke_get("/api/models/search?q=gemma-4")
 
             self.assertEqual(status, 200)
             self.assertEqual(
                 json.loads(body),
-                {"query": "qwythos", "models": [], "error": str(exception)},
+                {"query": "gemma-4", "models": [], "error": str(exception)},
             )
 
         with patch.object(
@@ -3498,7 +3523,7 @@ assert(SURFACED_ENVS.size === 0, "missing schema must not throw and must suppres
             "search_huggingface_models",
             side_effect=RuntimeError("programming bug"),
         ):
-            status, _, body = self._invoke_get("/api/models/search?q=qwythos")
+            status, _, body = self._invoke_get("/api/models/search?q=gemma-4")
 
         self.assertEqual(status, 400)
         self.assertEqual(json.loads(body), {"error": "programming bug"})
@@ -3518,11 +3543,11 @@ assert(SURFACED_ENVS.size === 0, "missing schema must not throw and must suppres
         with patch.object(
             ui_module, "search_huggingface_models", return_value=fake_models
         ) as search:
-            status, _, body = self._invoke_get("/api/models/search?q=qwythos&limit=abc")
+            status, _, body = self._invoke_get("/api/models/search?q=gemma-4&limit=abc")
         self.assertEqual(status, 400)
         self.assertEqual(
             json.loads(body),
-            {"query": "qwythos", "models": [], "error": "--limit must be an integer, got 'abc'."},
+            {"query": "gemma-4", "models": [], "error": "--limit must be an integer, got 'abc'."},
         )
         search.assert_not_called()
 
@@ -3532,20 +3557,20 @@ assert(SURFACED_ENVS.size === 0, "missing schema must not throw and must suppres
             with self.subTest(limit=raw), patch.object(
                 ui_module, "search_huggingface_models", return_value=fake_models
             ) as search:
-                status, _, body = self._invoke_get(f"/api/models/search?q=qwythos&limit={raw}")
+                status, _, body = self._invoke_get(f"/api/models/search?q=gemma-4&limit={raw}")
             self.assertEqual(status, 200)
             payload = json.loads(body)
             self.assertEqual(payload["models"], fake_models)
             self.assertIsNone(payload["error"])
-            search.assert_called_once_with("qwythos", pipeline_tag=None, limit=int(raw))
+            search.assert_called_once_with("gemma-4", pipeline_tag=None, limit=int(raw))
 
         with patch.object(
             ui_module, "search_huggingface_models", return_value=fake_models
         ) as search:
-            status, _, body = self._invoke_get("/api/models/search?q=qwythos")
+            status, _, body = self._invoke_get("/api/models/search?q=gemma-4")
         self.assertEqual(status, 200)
         self.assertEqual(json.loads(body)["models"], fake_models)
-        search.assert_called_once_with("qwythos", pipeline_tag=None, limit=20)
+        search.assert_called_once_with("gemma-4", pipeline_tag=None, limit=20)
 
     def test_models_metadata_endpoint(self) -> None:
         fake_info = {
@@ -4869,59 +4894,48 @@ for (const absentId of ["article_tuning_save", "article_tuning_rename", "article
                 speed_picks = payload["model_recommendations"]["speed"]
                 self.assertEqual(
                     [pick["alias"] for pick in speed_picks],
-                    ["gemma-e2b-tiny", "qwen3-8b-4bit", "smoke-model", model_catalog.DEFAULT_CATALOG_MODEL_ALIAS],
+                    ["gemma-4-e2b-it-mlx-4bit", "smoke-model", model_catalog.DEFAULT_CATALOG_MODEL_ALIAS],
                 )
                 self.assertEqual(
-                    speed_picks[2]["reason"],
+                    speed_picks[1]["reason"],
                     "Overlay-specific speed recommendation.",
                 )
 
         self.assertEqual(
             [entry["alias"] for entry in payload["model_catalog"]],
-            [
-                "gemma-4-12b-it-4bit",
-                "gemma-e2b-tiny",
-                "qwythos-9b-4bit",
-                "qwythos-9b-8bit",
-                "qwen3-8b-4bit",
-                "qwen3-14b-4bit",
-                "smoke-model",
-            ],
+            [*model_catalog.BUILTIN_CATALOG_MODELS, "smoke-model"],
         )
         self.assertEqual(
             {entry["alias"]: entry["backend"] for entry in payload["model_catalog"]},
             {
-                "gemma-4-12b-it-4bit": "mlx-vlm",
-                "gemma-e2b-tiny": "mlx-lm",
-                "qwythos-9b-4bit": "llama.cpp",
-                "qwythos-9b-8bit": "llama.cpp",
-                "qwen3-8b-4bit": "mlx-lm",
-                "qwen3-14b-4bit": "mlx-lm",
+                **{
+                    alias: entry.backend
+                    for alias, entry in model_catalog.BUILTIN_CATALOG_MODELS.items()
+                },
                 "smoke-model": "mlx-lm",
             },
         )
-        qwen3_entries = {
-            entry["alias"]: entry
-            for entry in payload["model_catalog"]
-            if entry["alias"].startswith("qwen3")
-        }
-        for entry in qwen3_entries.values():
-            self.assertEqual(entry["context_length"], 40960)
+        catalog_records = {entry["alias"]: entry for entry in payload["model_catalog"]}
+        for alias, entry in model_catalog.BUILTIN_CATALOG_MODELS.items():
             self.assertEqual(
-                entry["hf_url"],
-                f"https://huggingface.co/{entry['reference']}",
+                catalog_records[alias]["hf_url"],
+                f"https://huggingface.co/{entry.hf_repo}",
             )
         model_knob = next(knob for knob in payload["knobs"] if knob["env"] == "NEWS_MODEL")
-        self.assertIn("smoke-model", model_knob["options"])
+        self.assertEqual(model_knob["label"], "Model")
+        self.assertEqual(model_knob["default"], model_catalog.DEFAULT_CATALOG_MODEL_ALIAS)
+        self.assertEqual(
+            model_knob["options"],
+            sorted([*model_catalog.BUILTIN_CATALOG_MODELS, "smoke-model"]),
+        )
         self.assertEqual(
             model_knob["option_links"]["smoke-model"]["page"],
             "https://huggingface.co/mlx-community/smoke-model",
         )
-        for alias in ("qwen3-8b-4bit", "qwen3-14b-4bit"):
-            self.assertIn(alias, model_knob["options"])
+        for alias, entry in model_catalog.BUILTIN_CATALOG_MODELS.items():
             self.assertEqual(
                 model_knob["option_links"][alias]["page"],
-                f"https://huggingface.co/{model_catalog.CATALOG_MODELS[alias].hf_repo}",
+                f"https://huggingface.co/{entry.hf_repo}",
             )
         task_knob = next(knob for knob in payload["knobs"] if knob["env"] == "NEWS_MODEL_STORY_DRAFTING")
         self.assertIn("smoke-model", task_knob["options"])
@@ -5895,11 +5909,12 @@ assert(logState.rows[logState.rows.length - 1].text === "■ [ui] stopped", "rec
         self.assertIn('get("wizard")', html)
         self.assertIn('!== "0"', html)
         self.assertIn('wizardEnabled()', html)
-        self.assertIn('renderWizardStepper()', html)
         boot = html.split("async function init()")[1].split("init().catch")[0]
         self.assertIn("loadWizardState();", boot)
         self.assertIn("renderWizardStepper();", boot)
         self.assertLess(boot.index("loadWizardState();"), boot.index("renderWizardStepper();"))
+        self.assertIn("Check snapshot, preview command, and run.", html)
+        self.assertNotIn("Check stats, preview command, and run.", html)
 
     def test_wizard_stepper_renders_five_steps_and_preserves_state_in_node_harness(self) -> None:
         html = ui_module.HTML
@@ -5957,11 +5972,13 @@ renderWizardStepper = function() {
   const m = stepper.innerHTML.match(/data-wizard-field="([^"]+)"[^>]*value="([^"]*)"/);
   if (m) { wizardInput.dataset.wizardField = m[1]; wizardInput.value = m[2]; }
 };
+stored["wizardStateDraft"] = JSON.stringify({ step: 5, values: { draft_env: "preserve_me" } });
 // init schema and load
 state.schema = { current_env: { existing_env: "keep_me" } };
 loadWizardState();
-assert(wizardState.step === 1, "initial step should be 1");
+assert(wizardState.step === 1, "refresh should always start at step 1");
 assert(wizardState.values.existing_env === "keep_me", "env should seed wizardState");
+assert(wizardState.values.draft_env === "preserve_me", "draft values should survive refresh");
 renderWizardStepper();
 let stepperHtml = document.getElementById("wizardStepper").innerHTML;
 assert(stepperHtml.includes("Step 1/5"), "step 1 progress missing");

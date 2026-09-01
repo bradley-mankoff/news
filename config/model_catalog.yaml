@@ -11,8 +11,8 @@
 # exactly. Example metadata override:
 #
 # models:
-#   gemma-e2b-tiny:
-#     description: "Local wording for the tiny verification model."
+#   gemma-4-e2b-it-mlx-4bit:
+#     description: "Local wording for the Gemma 4 E2B MLX model."
 #     task_notes:
 #       speed: "Use this entry for fast local checks."
 #

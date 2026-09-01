@@ -104,12 +104,12 @@ class SchedulerTests(unittest.TestCase):
     def test_validate_schedule_spec_defaults_to_owner_and_filters_overrides(self) -> None:
         hour, minute, preset, mode, overrides = validate_schedule_spec(
             "08:15",
-            overrides={"NEWS_MODEL": "gemma-4-12b-it-4bit", "NEWS_SMTP_PASSWORD": "x"},
+            overrides={"NEWS_MODEL": "gemma-4-12b-it-mlx-4bit", "NEWS_SMTP_PASSWORD": "x"},
         )
         self.assertEqual((hour, minute), (8, 15))
         self.assertEqual(preset, "")
         self.assertEqual(mode, DELIVERY_MODE_OWNER)
-        self.assertEqual(overrides, {"NEWS_MODEL": "gemma-4-12b-it-4bit"})
+        self.assertEqual(overrides, {"NEWS_MODEL": "gemma-4-12b-it-mlx-4bit"})
         for explicit in ("disabled", "owner", "recipients"):
             self.assertEqual(
                 validate_schedule_spec("08:15", delivery_mode=explicit)[3], explicit
@@ -129,7 +129,7 @@ class SchedulerTests(unittest.TestCase):
             **_SECRETS,
             "NEWS_PRESET": "default",
             "NEWS_ACTIVE_PRESET": "default",
-            "NEWS_MODEL": "gemma-4-12b-it-4bit",
+            "NEWS_MODEL": "gemma-4-12b-it-mlx-4bit",
             "NEWS_TOKEN_ENCODING": "o200k_base",
             "NEWS_OUTPUT_DIR": "/tmp/out",
             "SOME_UNREGISTERED_VAR": "keep-out",
@@ -142,7 +142,7 @@ class SchedulerTests(unittest.TestCase):
         self.assertNotIn("NEWS_ACTIVE_PRESET", safe)
         self.assertNotIn("SOME_UNREGISTERED_VAR", safe)
         self.assertNotIn("NEWS_TOPIC_IDS", safe)
-        self.assertEqual(safe["NEWS_MODEL"], "gemma-4-12b-it-4bit")
+        self.assertEqual(safe["NEWS_MODEL"], "gemma-4-12b-it-mlx-4bit")
         self.assertEqual(safe["NEWS_TOKEN_ENCODING"], "o200k_base")
         self.assertEqual(safe["NEWS_OUTPUT_DIR"], "/tmp/out")
 

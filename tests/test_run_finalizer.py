@@ -322,7 +322,7 @@ class RunFinalizerTests(unittest.TestCase):
                     "prompt_instructions": {"article_summary": "Summarize."},
                     "model_snapshots": {
                         "default": {
-                            "reference": "gemma-4-12b-it-4bit",
+                            "reference": "gemma-4-12b-it-mlx-4bit",
                             "repository": "mlx-community/gemma-4-12B-it-4bit",
                             "model_id": "mlx-community/gemma-4-12B-it-4bit",
                             "revision": "sha123",
