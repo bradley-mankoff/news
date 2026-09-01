@@ -2113,6 +2113,15 @@ HTML = r"""<!doctype html>
       .dialog-grid { grid-template-columns: 1fr; }
       .banner { top: 88px; }
     }
+    .wizard-stepper { display: grid; gap: 12px; }
+    .wizard-progress { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+    .wizard-progress-bar { flex: 1; height: 6px; background: var(--line); border-radius: 999px; overflow: hidden; }
+    .wizard-progress-fill { height: 100%; background: var(--blue); transition: width 0.2s ease; }
+    .wizard-step { background: var(--surface); border: 1px solid var(--line); border-radius: 18px; padding: 16px; box-shadow: var(--shadow); }
+    .wizard-nav { display: flex; gap: 8px; justify-content: flex-end; }
+    .advanced-drawer { border: 1px solid var(--line); border-radius: 14px; padding: 12px; background: #fcfbf7; }
+    .advanced-drawer.hidden { display: none !important; }
+    .advanced-drawer .warn { background: #fdf8ec; border: 1px solid #e2cf9f; border-radius: 10px; padding: 8px 10px; }
   </style>
 </head>
 <body>
@@ -2403,7 +2412,11 @@ HTML = r"""<!doctype html>
       if (draft.values && typeof draft.values === "object") {
         Object.assign(values, draft.values);
       }
-      const step = Number(draft.step);
+      if (state.schema) {
+        state.schema.current_env = { ...(state.schema.current_env || {}), ...values };
+      }
+      const savedStep = draft.step ?? (typeof localStorage !== "undefined" && localStorage.getItem("wizardStep"));
+      const step = Number(savedStep);
       wizardState = {
         step: step >= 1 && step <= WIZARD_STEPS.length ? step : 1,
         values
@@ -2413,6 +2426,7 @@ HTML = r"""<!doctype html>
       try {
         if (typeof localStorage !== "undefined") {
           localStorage.setItem(WIZARD_STORAGE_KEY, JSON.stringify(wizardState));
+          localStorage.setItem("wizardStep", String(wizardState.step));
         }
       } catch (_err) {}
       if (state.schema) {
@@ -2444,6 +2458,19 @@ HTML = r"""<!doctype html>
       const stepper = document.getElementById("wizardStepper");
       const mount = document.getElementById("runSetupMount");
       if (!stepper || !mount) return;
+      if (typeof renderWizard === "function") {
+        if (!wizardEnabled()) {
+          stepper.classList.add("hidden");
+          stepper.innerHTML = "";
+          mount.classList.remove("hidden");
+          const restoreRun = document.getElementById("runBtn_hidden");
+          if (restoreRun) restoreRun.id = "runBtn";
+        } else {
+          stepper.classList.add("hidden");
+          stepper.innerHTML = "";
+        }
+        return;
+      }
       if (!wizardEnabled()) {
         stepper.classList.add("hidden");
         mount.classList.remove("hidden");
@@ -2508,6 +2535,52 @@ HTML = r"""<!doctype html>
       ["sources", "Sources", "newspaper"],
       ["recipients", "Recipients", "person"]
     ];
+    function advancedDrawerCount() {
+      const dedicated = advancedPanelDedicatedEnvs();
+      return ((state.schema && state.schema.knobs) || []).filter(knob => knob.ui_location === "advanced_panels" && !dedicated.has(knob.env)).length;
+    }
+    function renderAdvancedDrawer() {
+      const search = (value("advancedSearch") || "").toLowerCase();
+      const dedicated = advancedPanelDedicatedEnvs();
+      const knobs = ((state.schema && state.schema.knobs) || []).filter(knob => {
+        if (knob.ui_location !== "advanced_panels" || dedicated.has(knob.env)) return false;
+        if (!search) return true;
+        const hay = `${knob.env} ${knob.label}`.toLowerCase();
+        return hay.includes(search);
+      });
+      const groups = {};
+      knobs.forEach(knob => { (groups[knob.group] ||= []).push(knob); });
+      const count = advancedDrawerCount();
+      const filteredCount = knobs.length;
+      const countLabel = search ? `${filteredCount}/${count} advanced` : `${count} advanced`;
+      const countEl = $("advancedCount");
+      if (countEl) countEl.textContent = `(${countLabel})`;
+      const link = $("showAdvancedLink");
+      if (link) link.textContent = `Show advanced (+${count} advanced)`;
+      if (!knobs.length) {
+        return search ? `<p class="muted">No advanced settings match "${escapeHtml(search)}".</p>` : `<p class="muted">No advanced settings.</p>`;
+      }
+      const ordered = Object.keys(groups).sort();
+      return ordered.map(group => `
+        <div class="knob-group">
+          <h2>${escapeHtml(group)}</h2>
+          <div class="knobs">${groups[group].map(knob => `
+            <div class="knob">
+              <label>${escapeHtml(knob.label)}</label>
+              ${inputForKnob(knob)}
+              <code>${escapeHtml(knob.env)}</code>
+            </div>
+          `).join("")}</div>
+        </div>
+      `).join("");
+    }
+    function toggleAdvancedDrawer() {
+      const drawer = $("advancedDrawer");
+      if (!drawer) return;
+      drawer.classList.toggle("hidden");
+      const link = $("showAdvancedLink");
+      if (link) link.textContent = drawer.classList.contains("hidden") ? `Show advanced (+${advancedDrawerCount()} advanced)` : "Hide advanced";
+    }
     const KNOB_HINTS = {
       NEWS_PRESET: "Saved run preset selecting stored Run Settings; explicit shell/UI overrides win over preset values.",
       NEWS_PROMPT_PROFILE: "Editorial tone profile for the five LLM prompt stages (balanced, playful, facts-only, etc.).",
@@ -2583,7 +2656,7 @@ HTML = r"""<!doctype html>
       { id: "delivery", title: "Delivery", envs: ["NEWS_DELIVERY_MODE", "NEWS_PRIMARY_RECIPIENT"], description: "How and where the report is delivered." },
       { id: "review", title: "Review & Run", preview: true, description: "Check stats, preview command, and run." }
     ];
-    let wizardState = { step: Number(localStorage.getItem("wizardStep") || 1) };
+    // W1 owns the persisted wizardState; W2 adds curated step content.
     function isWizardEnabled() { return new URLSearchParams(window.location.search).get("wizard") !== "0"; }
     function wizardHint(env) { return KNOB_HINTS[env] || ""; }
     const sourceFields = ["key","name","language","tier","region","nations","url","homepage","provider_type","intended_role","weight","can_enrich_coverage","strict_source_match","source_match_mode","source_match_aliases","notes"];
@@ -2857,8 +2930,9 @@ HTML = r"""<!doctype html>
       renderModelBackendHint(requiredBackendForSelectedModel());
     }
     function renderTabs() {
+      const visibleTabs = wizardEnabled() ? tabs.filter(([id]) => id !== "advanced" && id !== "modelTuning") : tabs;
       $("tabs").innerHTML = `<button id="navToggle" class="nav-toggle" title="Collapse navigation" aria-label="Collapse navigation"><span class="collapse-icon">${icons.chevronLeft}</span><span class="expand-icon">${icons.chevronRight}</span></button>` +
-        tabs.map(([id, label, icon]) => `<button class="tab-button" data-tab="${id}" title="${escapeHtml(label)}">${icons[icon]}<span class="tab-text">${escapeHtml(label)}</span></button>`).join("");
+        visibleTabs.map(([id, label, icon]) => `<button class="tab-button" data-tab="${id}" title="${escapeHtml(label)}">${icons[icon]}<span class="tab-text">${escapeHtml(label)}</span></button>`).join("");
       $("navToggle").onclick = () => {
         document.body.classList.toggle("nav-collapsed");
         const collapsed = document.body.classList.contains("nav-collapsed");
@@ -2977,7 +3051,19 @@ HTML = r"""<!doctype html>
       if (step.preview) {
         return `
         <p class="muted">Review snapshot below, check command preview, then Run. Changing any wizard field updates the preview and run details.</p>
-        <p class="muted">Preview: <code>uv run news run</code> — use Next/Back to adjust earlier steps or Preview/Run in the banner.</p>`;
+        <p class="muted">Preview: <code>uv run news run</code> — use Next/Back to adjust earlier steps or Preview/Run in the banner.</p>
+        <div class="toolbar" style="margin-top:12px">
+          <a id="showAdvancedLink" href="#">Show advanced (+${advancedDrawerCount()} advanced)</a>
+        </div>
+        <div id="advancedDrawer" class="advanced-drawer hidden">
+          <p class="warn">Advanced settings may break the run. Prefer defaults unless you need to tune the pipeline.</p>
+          <div class="toolbar">
+            <input id="advancedSearch" placeholder="Filter advanced settings">
+            <span id="advancedCount"></span>
+            <button id="clearAdvancedSearchBtn">Clear</button>
+          </div>
+          <div id="advancedDrawerContent" class="stack"></div>
+        </div>`;
       }
       const fields = step.envs.map(env => {
         if (env === "NEWS_PRESET") {
@@ -3009,10 +3095,12 @@ HTML = r"""<!doctype html>
         if (!state.schema) state.schema = {};
         if (!state.schema.current_env) state.schema.current_env = {};
         state.schema.current_env[env] = val;
+        wizardState.values[env] = val;
         if (env === "NEWS_PRESET") {
           state.selectedRunPresetId = val;
         }
       });
+      saveWizardState();
     }
     function bindWizardEvents() {
       const content = $("wizardContent");
@@ -3028,7 +3116,7 @@ HTML = r"""<!doctype html>
       const step = wizardSteps[wizardState.step - 1];
       const progress = `Step ${wizardState.step} / ${wizardSteps.length}`;
       const h = `
-        <div id="wizardStepper" class="panel">
+        <div class="panel">
           <p class="eyebrow">${progress} — ${escapeHtml(step.title)}</p>
           <h2>${escapeHtml(step.title)}</h2>
           <p class="muted">${escapeHtml(step.description || "")}</p>
@@ -3050,6 +3138,11 @@ HTML = r"""<!doctype html>
       if (typeof isWizardEnabled === "function" && isWizardEnabled() && typeof wizardSteps !== "undefined" && typeof wizardState !== "undefined") {
         const schema = state.schema || {};
         const runtimeError = schema.runtime_error || "";
+        const legacyStepper = $("wizardStepper");
+        if (legacyStepper) {
+          legacyStepper.classList.add("hidden");
+          legacyStepper.innerHTML = "";
+        }
         const wizardHtml = renderWizard();
         $("runSetupMount").innerHTML = `
         <div class="banner panel">
@@ -3077,10 +3170,29 @@ HTML = r"""<!doctype html>
         renderStats();
         decorateEnvHints($("runSetupMount"));
         bindWizardEvents();
+        const advancedDrawerContent = $("advancedDrawerContent");
+        if (advancedDrawerContent && wizardState.step === wizardSteps.length) {
+          const refreshAdvancedDrawer = () => {
+            advancedDrawerContent.innerHTML = renderAdvancedDrawer();
+            decorateEnvHints(advancedDrawerContent);
+            refreshModelKnobLinks();
+          };
+          refreshAdvancedDrawer();
+          const searchInput = $("advancedSearch");
+          if (searchInput) searchInput.oninput = refreshAdvancedDrawer;
+          const clearBtn = $("clearAdvancedSearchBtn");
+          if (clearBtn) clearBtn.onclick = () => {
+            const search = $("advancedSearch");
+            if (search) search.value = "";
+            refreshAdvancedDrawer();
+          };
+          const link = $("showAdvancedLink");
+          if (link) link.onclick = event => { event.preventDefault(); toggleAdvancedDrawer(); };
+        }
         const back = $("wizardBack");
         const next = $("wizardNext");
-        if (back) back.onclick = () => { if (wizardState.step > 1) { syncWizardEnv(); wizardState.step -= 1; localStorage.setItem("wizardStep", String(wizardState.step)); renderRunSetup(); previewQuietly("run"); } };
-        if (next) next.onclick = () => { if (wizardState.step < wizardSteps.length) { syncWizardEnv(); wizardState.step += 1; localStorage.setItem("wizardStep", String(wizardState.step)); renderRunSetup(); previewQuietly("run"); } };
+        if (back) back.onclick = () => { if (wizardState.step > 1) { syncWizardEnv(); wizardState.step -= 1; saveWizardState(); renderRunSetup(); previewQuietly("run"); } };
+        if (next) next.onclick = () => { if (wizardState.step < wizardSteps.length) { syncWizardEnv(); wizardState.step += 1; saveWizardState(); renderRunSetup(); previewQuietly("run"); } };
         const pb = $("previewBtn");
         const rb = $("runBtn");
         if (pb) pb.onclick = () => previewWithStatus("run");
@@ -5045,6 +5157,7 @@ HTML = r"""<!doctype html>
       }
       updateRunControls();
       renderTabs();
+      renderWizardStepper();
       renderRunSetup();
       renderWizardStepper();
       renderAdvancedPanels();
