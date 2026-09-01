@@ -513,7 +513,7 @@ class HistoryStoreTests(unittest.TestCase):
                     "prompt_instructions": {"article_summary": "Summarize."},
                     "model_snapshots": {
                         "default": {
-                            "reference": "gemma-4-12b-it-4bit",
+                            "reference": "gemma-4-12b-it-mlx-4bit",
                             "repository": "mlx-community/gemma-4-12B-it-4bit",
                             "model_id": "mlx-community/gemma-4-12B-it-4bit",
                             "revision": "sha123",
@@ -735,8 +735,8 @@ class HistoryStoreTests(unittest.TestCase):
                 "preset_id": preset_id,
                 "url_reuse_blocking_enabled": blocking,
                 "source_count": 1,
-                "model": "gemma-e2b-tiny",
-                "model_label": "default_model",
+                "model": "gemma-4-e2b-it-mlx-4bit",
+                "model_label": "gemma-4-e2b-it-mlx-4bit",
                 "story_cluster_similarity_threshold": 0.31,
                 "story_selection_overlap_threshold": 0.25,
                 "story_embedding_dedup_threshold": 0.85,

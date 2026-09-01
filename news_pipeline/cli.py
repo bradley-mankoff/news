@@ -167,8 +167,8 @@ def _print_model_server_command() -> int:
 
 def _print_codex_model_server_command() -> int:
     os.environ["NEWS_CODEX_TESTING"] = "1"
-    # Codex testing selects the tiny MLX-LM model; pair it explicitly without
-    # overriding a backend the caller deliberately configured.
+    # Codex testing selects the smallest Gemma 4 MLX model; pair it explicitly
+    # without overriding a backend the caller deliberately configured.
     if not os.environ.get("NEWS_MODEL_BACKEND", "").strip():
         os.environ["NEWS_MODEL_BACKEND"] = MODEL_BACKEND_MLX_LM
     return _print_model_server_command()

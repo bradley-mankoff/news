@@ -79,9 +79,9 @@ cycle boundary, and `config.py` consumes the merged registry through
   schema/cards, selector options, recommendations, alias resolution, backend
   inference, and runtime-fit matching without Python changes.
 - Safer: identity fields, backends, and repo shapes stay validated; the
-  legacy Qwythos GGUF aliases are curated built-ins again (issue #75) and a
-  custom alias/reference colliding with a built-in identity fails closed
-  before it can become a selector option.
+  ten Gemma 4 MLX/GGUF choices remain code-owned built-ins, and a custom
+  alias/reference colliding with a built-in identity fails closed before it
+  can become a selector option.
 - Harder/off-limits: no UI editor, CRUD endpoint, or persistence API for the
   YAML file; no live Hugging Face verification or hardware-fit guarantee for
   user entries; no multimodal GGUF or per-model chat-template editing; no
