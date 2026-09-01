@@ -360,6 +360,34 @@ base environment, then explicit overrides, then the forced schedule delivery
 mode. Test path overrides (`NEWS_SCHEDULE_STATE`, `NEWS_SCHEDULE_PLIST`,
 `NEWS_SCHEDULE_LOCK`, `NEWS_SCHEDULE_LOG_DIR`) exist for automation and tests.
 
+Cadence: exactly one daily `HH:MM` in local time via `launchd`
+`StartCalendarInterval` (macOS only). The Schedule tab and `news schedule
+status [--json]` compute the next firing as `HH:MM (local time, once daily)`;
+if the machine is asleep, off, or not logged in at `HH:MM`, `launchd` does
+not fire and does not queue a catch-up — the next eligible daily window runs
+instead, or run `uv run news schedule run` immediately (foreground, fails
+closed when disabled/corrupt).
+
+Model and hardware fit: scheduled runs inherit the preset/model choice; larger
+models need more unified memory/VRAM. Default `gemma-4-12b-it-4bit` (`mlx-vlm`,
+256K) expects Apple Silicon with 32GB+ RAM; `qwen3-8b-4bit` (`mlx-lm`, 40,960,
+verified) is the smaller `mlx-lm` pick and `qwen3-14b-4bit` (`mlx-lm`, 40,960,
+host-sensitive, 64GB-class verified) is larger; `qwythos-9b-*` GGUFs use the
+managed `llama.cpp` backend with an operator-installed `llama-server`. See
+`config/model_catalog.yaml` and each Hugging Face model page’s Hardware
+Compatibility panel. A mismatched `NEWS_MODEL_BACKEND` fails fast with the
+required value; an OOM should be retried with a smaller alias (e.g.
+`gemma-e2b-tiny` with `NEWS_MODEL_BACKEND=mlx-lm` or `qwen3-8b-4bit`).
+
+Failure semantics: report generation and delivery are independent — a completed
+report is never hidden by delivery. `skipped: not_configured` (no sender/
+recipient/SMTP), `skipped: user_disabled` (disabled or all-paused), or `failed`
+(transport) is recorded with delivery phase and accepted/rejected lists in
+`output/daily_outputs/latest_run_details.json` and DuckDB/CSV history; the
+Schedule tab and `news schedule status [--json]` surface `enabled`,
+`launchd` `loaded`/`not-loaded`/`unavailable`, and last run id/time/run/report/delivery
+without secrets. Retry is the next daily firing or `uv run news schedule run`.
+
 Platform and lifecycle limits: macOS-only (launchd required); a non-macOS or
 missing-`launchctl` environment reports `supported=false` and
 `launchd_status=unavailable` instead of pretending the schedule is active.
@@ -381,7 +409,7 @@ separate from the GitHub-board automation under `automation/`.
 | `uv run news check-sources` | Check configured source connectivity. |
 | `uv run news source-languages` | Detect or verify source language tags. |
 | `uv run news serve-unsubscribe` | Start the local unsubscribe endpoint. |
-| `uv run news schedule status [--json]` | Show the daily schedule state: enabled/disabled, time, preset, delivery mode, launchd status, and last-run projection. |
+| `uv run news schedule status [--json]` | Show the daily schedule state: enabled/disabled, time, preset, delivery mode, launchd `loaded`/`not-loaded`/`unavailable`, and last run id/time/run/report/delivery without leaking secrets. |
 | `uv run news schedule enable --time HH:MM [--preset NAME] [--delivery-mode MODE]` | Validate and install the daily schedule (idempotent; replaces any existing job). |
 | `uv run news schedule disable` | Boot out the agent, remove the plist, and mark the schedule disabled. |
 | `uv run news schedule run` | Foreground scheduled-run entry point used by launchd; fails closed when disabled/corrupt. |

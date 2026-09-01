@@ -200,15 +200,47 @@ The **Schedule** tab enables exactly one daily personal Run Session. Pick a
 local time (`HH:MM`), a saved Run Preset (or default settings), and a delivery
 mode; **Enable schedule** persists the choice and installs a per-user macOS
 LaunchAgent. The UI does not need to stay open: `launchd` starts
-`news schedule run` once per day in your local time zone. Disabling boots out
-the agent and removes the plist; repeated enable/update/disable is idempotent.
+`news schedule run` once per day in your local time zone via
+`StartCalendarInterval` (macOS only). Disabling boots out the agent and removes
+the plist; repeated enable/update/disable is idempotent.
 
 ```bash
 uv run news schedule status [--json]
 uv run news schedule enable --time 07:30 --preset NAME --delivery-mode owner
 uv run news schedule disable
-uv run news schedule run   # foreground entry point used by launchd
+uv run news schedule run   # foreground entry point used by launchd; also manual run
 ```
+
+Cadence is computer-on: exactly one `HH:MM` in local time, once daily. The
+Schedule tab and `news schedule status [--json]` show the next firing as
+`HH:MM (local time, once daily)` computed from `StartCalendarInterval`. If
+the machine is asleep, off, or not logged in at that time, `launchd` does not
+fire and does not queue a catch-up — the next eligible daily window runs
+instead, or run `uv run news schedule run` immediately.
+
+Model and hardware fit: scheduled runs inherit the preset/model choice;
+larger models need more unified memory/VRAM. The default
+`gemma-4-12b-it-4bit` (`mlx-vlm`, 256K context) expects Apple Silicon with
+32GB+ unified memory; `qwen3-8b-4bit` (`mlx-lm`, 40,960 context, verified on a
+64GB-class host) is the smaller `mlx-lm` option while `qwen3-14b-4bit`
+(`mlx-lm`, 40,960, host-sensitive) is larger; `qwythos-9b-4bit`/`qwythos-9b-8bit`
+GGUFs use the managed `llama.cpp` backend with an operator-installed
+`llama-server`. See `config/model_catalog.yaml` and each Hugging Face model
+page’s Hardware Compatibility panel. A mismatched `NEWS_MODEL_BACKEND` fails
+fast with the required value; if a scheduled `mlx` run OOMs, re-enable with a
+smaller alias such as `gemma-e2b-tiny` (`NEWS_MODEL_BACKEND=mlx-lm`) or
+`qwen3-8b-4bit`.
+
+Failure semantics: report generation and delivery are independent — a
+completed report is never hidden by delivery. `skipped: not_configured` (no
+sender/recipient/SMTP), `skipped: user_disabled` (disabled or all-paused), or
+`failed` (transport error) is recorded with the delivery phase and
+accepted/rejected recipient lists in
+`output/daily_outputs/latest_run_details.json` (and DuckDB/CSV history). `news
+schedule status [--json]` and the Schedule tab surface `enabled`, `launchd`
+`loaded`/`not-loaded`/`unavailable`, and the last run id/time/run/report/delivery
+status without leaking secrets. Retry is the next daily firing or a manual
+`uv run news schedule run`.
 
 Scheduled runs default to **owner-only** delivery; `disabled` and explicit
 configured-recipient delivery remain available as opt-ins. Delivery outcome
