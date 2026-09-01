@@ -2132,7 +2132,7 @@ HTML = r"""<!doctype html>
   <main>
     <nav id="tabs"></nav>
     <section id="runSetup" class="view active">
-      <div id="wizardStepper" class="wizard-stepper hidden"></div>
+      <div id="wizardStepper"></div>
       <div id="runSetupMount"></div>
     </section>
     <section id="review" class="view">
@@ -2385,26 +2385,6 @@ HTML = r"""<!doctype html>
       schedule: null,
       scheduleError: null
     };
-    const icons = {
-      chevronLeft: `<svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg>`,
-      chevronRight: `<svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>`,
-      gear: `<svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.05.05a2 2 0 1 1-2.83 2.83l-.05-.05A1.7 1.7 0 0 0 15 19.4a1.7 1.7 0 0 0-1 .6 1.7 1.7 0 0 0-.4 1.1V21a2 2 0 1 1-4 0v-.08A1.7 1.7 0 0 0 8.6 19.4a1.7 1.7 0 0 0-1.88.34l-.05.05a2 2 0 1 1-2.83-2.83l.05-.05A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-.6-1 1.7 1.7 0 0 0-1.1-.4H3a2 2 0 1 1 0-4h.08A1.7 1.7 0 0 0 4.6 8.6a1.7 1.7 0 0 0-.34-1.88l-.05-.05a2 2 0 1 1 2.83-2.83l.05.05A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-.6 1.7 1.7 0 0 0 .4-1.1V3a2 2 0 1 1 4 0v.08A1.7 1.7 0 0 0 15 4.6a1.7 1.7 0 0 0 1.88-.34l.05-.05a2 2 0 1 1 2.83 2.83l-.05.05A1.7 1.7 0 0 0 19.4 9c.36.24.72.47 1 .6.34.16.72.2 1.1.2h.5a2 2 0 1 1 0 4h-.08A1.7 1.7 0 0 0 20.4 14c-.28.13-.64.36-1 .6Z"/></svg>`,
-      microscope: `<svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 18h8"/><path d="M3 22h18"/><path d="M14 22a7 7 0 0 0 7-7"/><path d="M9 14h2"/><path d="M8 6h4"/><path d="m9 6 6 6"/><path d="m11 4 6 6"/><path d="M12 6 9 9"/><path d="m17 10-3 3"/></svg>`,
-      newspaper: `<svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 1.5 17V5.5H18A2.5 2.5 0 0 1 20.5 8v11.5Z"/><path d="M20.5 8H23v9a2.5 2.5 0 0 1-2.5 2.5"/><path d="M5 9h8"/><path d="M5 13h10"/><path d="M5 17h6"/></svg>`,
-      clock: `<svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>`,
-      book: `<svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 7v14"/><path d="M3 18a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h5a4 4 0 0 1 4 4 4 4 0 0 1 4-4h5a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-6a3 3 0 0 0-3 3 3 3 0 0 0-3-3z"/></svg>`,
-      person: `<svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21a8 8 0 0 0-16 0"/><circle cx="12" cy="7" r="4"/></svg>`,
-      sliders: `<svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 6h-8"/><path d="M21 12h-8"/><path d="M21 18h-8"/><path d="M8 6H3"/><path d="M8 12H3"/><path d="M8 18H3"/><path d="M8 4v4"/><path d="M8 10v4"/><path d="M8 16v4"/></svg>`
-    };
-    const tabs = [
-      ["runSetup", "Run Setup", "gear"],
-      ["review", "Report Review", "book"],
-      ["schedule", "Schedule", "clock"],
-      ["advanced", "Advanced Settings", "microscope"],
-      ["modelTuning", "Model Tuning", "sliders"],
-      ["sources", "Sources", "newspaper"],
-      ["recipients", "Recipients", "person"]
-    ];
     const WIZARD_STEPS = [
       { id: "audience", title: "Audience", placeholder: "Step 1 placeholder — audience" },
       { id: "topics", title: "Topics", placeholder: "Step 2 placeholder — topics" },
@@ -2432,7 +2412,11 @@ HTML = r"""<!doctype html>
       if (draft.values && typeof draft.values === "object") {
         Object.assign(values, draft.values);
       }
-      const step = Number(draft.step);
+      if (state.schema) {
+        state.schema.current_env = { ...(state.schema.current_env || {}), ...values };
+      }
+      const savedStep = draft.step ?? (typeof localStorage !== "undefined" && localStorage.getItem("wizardStep"));
+      const step = Number(savedStep);
       wizardState = {
         step: step >= 1 && step <= WIZARD_STEPS.length ? step : 1,
         values
@@ -2442,6 +2426,7 @@ HTML = r"""<!doctype html>
       try {
         if (typeof localStorage !== "undefined") {
           localStorage.setItem(WIZARD_STORAGE_KEY, JSON.stringify(wizardState));
+          localStorage.setItem("wizardStep", String(wizardState.step));
         }
       } catch (_err) {}
       if (state.schema) {
@@ -2469,6 +2454,87 @@ HTML = r"""<!doctype html>
       saveWizardState();
       renderWizardStepper();
     }
+    function renderWizardStepper() {
+      const stepper = document.getElementById("wizardStepper");
+      const mount = document.getElementById("runSetupMount");
+      if (!stepper || !mount) return;
+      if (typeof renderWizard === "function") {
+        if (!wizardEnabled()) {
+          stepper.classList.add("hidden");
+          stepper.innerHTML = "";
+          mount.classList.remove("hidden");
+          const restoreRun = document.getElementById("runBtn_hidden");
+          if (restoreRun) restoreRun.id = "runBtn";
+        } else {
+          stepper.classList.add("hidden");
+          stepper.innerHTML = "";
+        }
+        return;
+      }
+      if (!wizardEnabled()) {
+        stepper.classList.add("hidden");
+        mount.classList.remove("hidden");
+        stepper.innerHTML = "";
+        const restoreRun = document.getElementById("runBtn_hidden");
+        if (restoreRun) restoreRun.id = "runBtn";
+        return;
+      }
+      mount.classList.add("hidden");
+      stepper.classList.remove("hidden");
+      // Avoid duplicate #runBtn ids: the hidden mount's Run button stays in DOM but hidden; rename it so the
+      // visible wizard Run button is the sole #runBtn for Playwright/tests.
+      const hiddenRun = mount.querySelector("#runBtn");
+      if (hiddenRun) hiddenRun.id = "runBtn_hidden";
+      const step = currentWizardStep();
+      const total = WIZARD_STEPS.length;
+      const field = `wizard_step_${wizardState.step}`;
+      const fieldValue = wizardState.values[field] || "";
+      stepper.innerHTML = `
+        <div class="panel">
+          <p class="eyebrow">Step ${wizardState.step}/5</p>
+          <h2>${escapeHtml(step.title)}</h2>
+          <div id="wizardStepMount">
+            <p class="muted">${escapeHtml(step.placeholder)}</p>
+            <label class="field"><span>Value for ${escapeHtml(step.id)}</span><input data-wizard-field="${escapeHtml(field)}" value="${escapeHtml(fieldValue)}"></label>
+          </div>
+          <div class="toolbar">
+            <button id="wizardBack"${wizardState.step === 1 ? " disabled" : ""}>Back</button>
+            <button id="wizardNext" class="primary"${wizardState.step === total ? " disabled" : ""}>Next</button>
+            <button id="runBtn" class="primary">Run</button>
+          </div>
+        </div>
+      `;
+      const nextBtn = document.getElementById("wizardNext");
+      const backBtn = document.getElementById("wizardBack");
+      if (nextBtn) nextBtn.onclick = wizardNext;
+      if (backBtn) backBtn.onclick = wizardBack;
+      const wizardRunBtn = stepper.querySelector("#runBtn");
+      if (wizardRunBtn) wizardRunBtn.onclick = () => { saveWizardState(); runAction("run").catch(err => setStatus(err.message, "bad")); };
+      const input = stepper.querySelector("[data-wizard-field]");
+      if (input) {
+        input.oninput = () => { wizardState.values[field] = input.value; saveWizardState(); };
+      }
+    }
+    const icons = {
+      chevronLeft: `<svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg>`,
+      chevronRight: `<svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>`,
+      gear: `<svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.05.05a2 2 0 1 1-2.83 2.83l-.05-.05A1.7 1.7 0 0 0 15 19.4a1.7 1.7 0 0 0-1 .6 1.7 1.7 0 0 0-.4 1.1V21a2 2 0 1 1-4 0v-.08A1.7 1.7 0 0 0 8.6 19.4a1.7 1.7 0 0 0-1.88.34l-.05.05a2 2 0 1 1-2.83-2.83l.05-.05A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-.6-1 1.7 1.7 0 0 0-1.1-.4H3a2 2 0 1 1 0-4h.08A1.7 1.7 0 0 0 4.6 8.6a1.7 1.7 0 0 0-.34-1.88l-.05-.05a2 2 0 1 1 2.83-2.83l.05.05A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-.6 1.7 1.7 0 0 0 .4-1.1V3a2 2 0 1 1 4 0v.08A1.7 1.7 0 0 0 15 4.6a1.7 1.7 0 0 0 1.88-.34l.05-.05a2 2 0 1 1 2.83 2.83l-.05.05A1.7 1.7 0 0 0 19.4 9c.36.24.72.47 1 .6.34.16.72.2 1.1.2h.5a2 2 0 1 1 0 4h-.08A1.7 1.7 0 0 0 20.4 14c-.28.13-.64.36-1 .6Z"/></svg>`,
+      microscope: `<svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 18h8"/><path d="M3 22h18"/><path d="M14 22a7 7 0 0 0 7-7"/><path d="M9 14h2"/><path d="M8 6h4"/><path d="m9 6 6 6"/><path d="m11 4 6 6"/><path d="M12 6 9 9"/><path d="m17 10-3 3"/></svg>`,
+      newspaper: `<svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 1.5 17V5.5H18A2.5 2.5 0 0 1 20.5 8v11.5Z"/><path d="M20.5 8H23v9a2.5 2.5 0 0 1-2.5 2.5"/><path d="M5 9h8"/><path d="M5 13h10"/><path d="M5 17h6"/></svg>`,
+      clock: `<svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>`,
+      book: `<svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 7v14"/><path d="M3 18a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h5a4 4 0 0 1 4 4 4 4 0 0 1 4-4h5a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-6a3 3 0 0 0-3 3 3 3 0 0 0-3-3z"/></svg>`,
+      person: `<svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21a8 8 0 0 0-16 0"/><circle cx="12" cy="7" r="4"/></svg>`,
+      sliders: `<svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 6h-8"/><path d="M21 12h-8"/><path d="M21 18h-8"/><path d="M8 6H3"/><path d="M8 12H3"/><path d="M8 18H3"/><path d="M8 4v4"/><path d="M8 10v4"/><path d="M8 16v4"/></svg>`
+    };
+    const tabs = [
+      ["runSetup", "Run Setup", "gear"],
+      ["review", "Report Review", "book"],
+      ["schedule", "Schedule", "clock"],
+      ["advanced", "Advanced Settings", "microscope"],
+      ["modelTuning", "Model Tuning", "sliders"],
+      ["sources", "Sources", "newspaper"],
+      ["recipients", "Recipients", "person"]
+    ];
     function advancedDrawerCount() {
       const dedicated = advancedPanelDedicatedEnvs();
       return ((state.schema && state.schema.knobs) || []).filter(knob => knob.ui_location === "advanced_panels" && !dedicated.has(knob.env)).length;
@@ -2515,86 +2581,10 @@ HTML = r"""<!doctype html>
       const link = $("showAdvancedLink");
       if (link) link.textContent = drawer.classList.contains("hidden") ? `Show advanced (+${advancedDrawerCount()} advanced)` : "Hide advanced";
     }
-    function renderWizardStepper() {
-      const stepper = $("wizardStepper");
-      const mount = $("runSetupMount");
-      if (!stepper || !mount) return;
-      if (!wizardEnabled()) {
-        stepper.classList.add("hidden");
-        stepper.innerHTML = "";
-        return;
-      }
-      stepper.classList.remove("hidden");
-      loadWizardState();
-      const step = currentWizardStep();
-      const total = WIZARD_STEPS.length;
-      const field = `wizard_step_${wizardState.step}`;
-      const fieldValue = wizardState.values[field] || "";
-      const isReview = wizardState.step === total;
-      stepper.innerHTML = `
-        <div class="panel wizard-step">
-          <p class="eyebrow">Step ${wizardState.step}/5</p>
-          <h2>${escapeHtml(step.title)}</h2>
-          <div id="wizardStepMount">
-            <p class="muted">${escapeHtml(step.placeholder)}</p>
-            <label class="field"><span>Value for ${escapeHtml(step.id)}</span><input data-wizard-field="${escapeHtml(field)}" value="${escapeHtml(fieldValue)}"></label>
-            ${isReview ? `
-              <div class="toolbar" style="margin-top:12px">
-                <a id="showAdvancedLink" href="#">Show advanced (+${advancedDrawerCount()} advanced)</a>
-              </div>
-              <div id="advancedDrawer" class="advanced-drawer hidden">
-                <p class="warn">Advanced settings may break the run. Prefer defaults unless you need to tune the pipeline.</p>
-                <div class="toolbar">
-                  <input id="advancedSearch" placeholder="Filter advanced settings">
-                  <span id="advancedCount"></span>
-                  <button id="clearAdvancedSearchBtn">Clear</button>
-                </div>
-                <div id="advancedDrawerContent" class="stack"></div>
-              </div>
-            ` : ""}
-          </div>
-          <div class="wizard-nav" style="margin-top:12px">
-            <button id="wizardBack"${wizardState.step === 1 ? " disabled" : ""}>Back</button>
-            <button id="wizardNext" class="primary"${wizardState.step === total ? " disabled" : ""}>Next</button>
-          </div>
-        </div>
-      `;
-      const nextBtn = $("wizardNext");
-      const backBtn = $("wizardBack");
-      if (nextBtn) nextBtn.onclick = wizardNext;
-      if (backBtn) backBtn.onclick = wizardBack;
-      const input = stepper.querySelector("[data-wizard-field]");
-      if (input) {
-        input.oninput = () => { wizardState.values[field] = input.value; saveWizardState(); };
-      }
-      if (isReview) {
-        const drawerContent = $("advancedDrawerContent");
-        if (drawerContent) drawerContent.innerHTML = renderAdvancedDrawer();
-        const searchInput = $("advancedSearch");
-        if (searchInput) searchInput.oninput = () => {
-          const dc = $("advancedDrawerContent");
-          if (dc) dc.innerHTML = renderAdvancedDrawer();
-          decorateEnvHints(dc);
-          refreshModelKnobLinks();
-        };
-        const clearBtn = $("clearAdvancedSearchBtn");
-        if (clearBtn) clearBtn.onclick = () => {
-          const si = $("advancedSearch");
-          if (si) si.value = "";
-          const dc2 = $("advancedDrawerContent");
-          if (dc2) dc2.innerHTML = renderAdvancedDrawer();
-          decorateEnvHints(dc2);
-          refreshModelKnobLinks();
-        };
-        const link = $("showAdvancedLink");
-        if (link) link.onclick = (e) => { e.preventDefault(); toggleAdvancedDrawer(); };
-        if (drawerContent) {
-          decorateEnvHints(drawerContent);
-          refreshModelKnobLinks();
-        }
-      }
-    }
     const KNOB_HINTS = {
+      NEWS_PRESET: "Saved run preset selecting stored Run Settings; explicit shell/UI overrides win over preset values.",
+      NEWS_PROMPT_PROFILE: "Editorial tone profile for the five LLM prompt stages (balanced, playful, facts-only, etc.).",
+      NEWS_PRIMARY_RECIPIENT: "Owner email address used when delivery mode is owner or recipients.",
       NEWS_DELIVERY_MODE: "Chooses the delivery policy: no delivery, owner only (default), or explicit configured recipients. Legacy NEWS_RECIPIENT_SCOPE still maps to this mode when set.",
       NEWS_RECIPIENT_SCOPE: "Legacy migration value for NEWS_DELIVERY_MODE (primary -> owner, all -> recipients); prefer the delivery mode control.",
       NEWS_SOURCE_SCOPE: "Chooses the source pool: core sources only, or the full source list.",
@@ -2659,6 +2649,16 @@ HTML = r"""<!doctype html>
       "--language-samples": "Sample count used by source language detection.",
       "--min-language-confidence": "Minimum confidence accepted for source language detection."
     };
+    const wizardSteps = [
+      { id: "preset", title: "Preset / Goal", envs: ["NEWS_PRESET", "NEWS_PROMPT_PROFILE"], description: "Choose a saved preset and editorial tone." },
+      { id: "sources", title: "Sources", envs: ["NEWS_SOURCE_SCOPE"], description: "Pick core or all sources." },
+      { id: "model", title: "Model", envs: ["NEWS_MODEL"], description: "Default model with Resolved readout; per-task picker collapsed.", collapsed: true },
+      { id: "delivery", title: "Delivery", envs: ["NEWS_DELIVERY_MODE", "NEWS_PRIMARY_RECIPIENT"], description: "How and where the report is delivered." },
+      { id: "review", title: "Review & Run", preview: true, description: "Check stats, preview command, and run." }
+    ];
+    // W1 owns the persisted wizardState; W2 adds curated step content.
+    function isWizardEnabled() { return new URLSearchParams(window.location.search).get("wizard") !== "0"; }
+    function wizardHint(env) { return KNOB_HINTS[env] || ""; }
     const sourceFields = ["key","name","language","tier","region","nations","url","homepage","provider_type","intended_role","weight","can_enrich_coverage","strict_source_match","source_match_mode","source_match_aliases","notes"];
 
     function $(id) { return document.getElementById(id); }
@@ -3039,7 +3039,171 @@ HTML = r"""<!doctype html>
       ];
       $("stats").innerHTML = items.map(([label, val]) => `<div class="stat"><span class="muted">${escapeHtml(label)}</span><strong>${escapeHtml(String(val ?? ""))}</strong></div>`).join("");
     }
+    function wizardPresetOptions() {
+      const presets = (state.schema && state.schema.presets && state.schema.presets.presets) || state.presets || [];
+      const selected = state.selectedRunPresetId || "";
+      const opts = [`<option value="">none (custom)</option>`].concat(presets.map(p => `<option value="${escapeHtml(p.id)}"${selected === p.id ? " selected" : ""}>${escapeHtml(p.name || p.id)}</option>`));
+      return opts.join("");
+    }
+    function renderWizardStepContent() {
+      const step = wizardSteps[wizardState.step - 1];
+      if (!step) return "";
+      if (step.preview) {
+        return `
+        <p class="muted">Review snapshot below, check command preview, then Run. Changing any wizard field updates the preview and run details.</p>
+        <p class="muted">Preview: <code>uv run news run</code> — use Next/Back to adjust earlier steps or Preview/Run in the banner.</p>
+        <div class="toolbar" style="margin-top:12px">
+          <a id="showAdvancedLink" href="#">Show advanced (+${advancedDrawerCount()} advanced)</a>
+        </div>
+        <div id="advancedDrawer" class="advanced-drawer hidden">
+          <p class="warn">Advanced settings may break the run. Prefer defaults unless you need to tune the pipeline.</p>
+          <div class="toolbar">
+            <input id="advancedSearch" placeholder="Filter advanced settings">
+            <span id="advancedCount"></span>
+            <button id="clearAdvancedSearchBtn">Clear</button>
+          </div>
+          <div id="advancedDrawerContent" class="stack"></div>
+        </div>`;
+      }
+      const fields = step.envs.map(env => {
+        if (env === "NEWS_PRESET") {
+          return `<label class="field"><span>Preset</span><select id="wizard_preset" data-env="${env}">${wizardPresetOptions()}</select><code>${env}</code><p class="muted">${escapeHtml(wizardHint(env))}</p></label>`;
+        }
+        const label = env === "NEWS_PROMPT_PROFILE" ? "Prompt profile" : env === "NEWS_SOURCE_SCOPE" ? "Source scope" : env === "NEWS_MODEL" ? "Default model" : env === "NEWS_DELIVERY_MODE" ? "Delivery mode" : env === "NEWS_PRIMARY_RECIPIENT" ? "Primary recipient" : env;
+        const opts = env === "NEWS_MODEL" ? { emptyLabel: `default: ${formatDefault((state.schema && state.schema.runtime && state.schema.runtime.model && (state.schema.runtime.model.name || state.schema.runtime.model.reference)) || "gemma-4-12b-it-4bit")}` } : {};
+        const field = knobField(env, label, opts);
+        if (!field) {
+          const knob = knobByEnv(env);
+          const def = knob && knob.default !== undefined ? formatDefault(knob.default) : "";
+          return `<label class="field"><span>${escapeHtml(label)}</span><input data-env="${escapeHtml(env)}" value="${escapeHtml(currentControlValue(env))}" placeholder="${escapeHtml(String(def))}"><code>${escapeHtml(env)}</code><p class="muted">${escapeHtml(wizardHint(env))}</p></label>`;
+        }
+        return field.replace("</label>", `<p class="muted">${escapeHtml(wizardHint(env))}</p></label>`);
+      }).join("");
+      let extra = "";
+      if (step.id === "model") {
+        const runtime = (state.schema && state.schema.runtime && state.schema.runtime.model) || {};
+        const resolved = runtime.name || runtime.reference || "-";
+        extra = `<p class="muted">Resolved: ${escapeHtml(resolved)}</p><details class="details"><summary>Per-task model overrides (optional)</summary><div class="form-grid">` +
+          ["NEWS_MODEL_ARTICLE_SUMMARY","NEWS_MODEL_STORY_DRAFTING","NEWS_MODEL_STORY_SCALE_SCREENING","NEWS_MODEL_TITLE_GENERATION","NEWS_MODEL_IMAGE_ART_DIRECTION"].map(e => knobField(e, e.replace("NEWS_MODEL_","").replace(/_/g," ")) || "").join("") + `</div></details>`;
+      }
+      return `<div class="form-grid">${fields}</div>${extra}`;
+    }
+    function syncWizardEnv() {
+      document.querySelectorAll("#wizardContent [data-env]").forEach(el => {
+        const env = el.dataset.env;
+        const val = el.type === "checkbox" ? (el.checked ? "1" : "") : el.value.trim();
+        if (!state.schema) state.schema = {};
+        if (!state.schema.current_env) state.schema.current_env = {};
+        state.schema.current_env[env] = val;
+        wizardState.values[env] = val;
+        if (env === "NEWS_PRESET") {
+          state.selectedRunPresetId = val;
+        }
+      });
+      saveWizardState();
+    }
+    function bindWizardEvents() {
+      const content = $("wizardContent");
+      if (!content) return;
+      content.querySelectorAll("[data-env]").forEach(el => {
+        el.addEventListener("change", () => { syncWizardEnv(); previewQuietly("run"); renderStats(); });
+        el.addEventListener("input", () => { syncWizardEnv(); previewQuietly("run"); });
+      });
+      const presetSel = $("wizard_preset");
+      if (presetSel) presetSel.addEventListener("change", () => { state.selectedRunPresetId = presetSel.value; syncWizardEnv(); previewQuietly("run"); renderPresetSummary(); });
+    }
+    function renderWizard() {
+      const step = wizardSteps[wizardState.step - 1];
+      const progress = `Step ${wizardState.step} / ${wizardSteps.length}`;
+      const h = `
+        <div class="panel">
+          <p class="eyebrow">${progress} — ${escapeHtml(step.title)}</p>
+          <h2>${escapeHtml(step.title)}</h2>
+          <p class="muted">${escapeHtml(step.description || "")}</p>
+          <div id="wizardContent" class="stack">${renderWizardStepContent()}</div>
+          <div class="toolbar" style="margin-top:12px">
+            <button id="wizardBack" ${wizardState.step <= 1 ? "disabled" : ""}>Back</button>
+            <button id="wizardNext" class="primary" ${wizardState.step >= wizardSteps.length ? "style=\"display:none\"" : ""}>Next</button>
+          </div>
+        </div>`;
+      return h;
+    }
+    function renderWizardShellExtras() {
+      return `
+        <section class="panel"><p class="eyebrow">Snapshot</p><h2>Effective runtime snapshot</h2><div id="stats" class="stats"></div></section>
+        <section class="panel"><h2>Command preview</h2><pre id="previewPane"></pre></section>
+        <section class="panel"><div class="toolbar"><h2 style="margin-right:auto">Run log</h2><button id="stopBtn" class="danger">Stop</button></div><pre id="logPane" role="log" aria-live="polite" aria-label="Run log"></pre></section>`;
+    }
     function renderRunSetup() {
+      if (typeof isWizardEnabled === "function" && isWizardEnabled() && typeof wizardSteps !== "undefined" && typeof wizardState !== "undefined") {
+        const schema = state.schema || {};
+        const runtimeError = schema.runtime_error || "";
+        const legacyStepper = $("wizardStepper");
+        if (legacyStepper) {
+          legacyStepper.classList.add("hidden");
+          legacyStepper.innerHTML = "";
+        }
+        const wizardHtml = renderWizard();
+        $("runSetupMount").innerHTML = `
+        <div class="banner panel">
+          <div class="banner-copy">
+            <p class="eyebrow">Guided wizard</p>
+            <h2>Daily news — 5 steps</h2>
+            <p id="presetSummary" class="muted"></p>
+          </div>
+          <div class="banner-actions">
+            <button id="resetDefaultsBtn">Reset defaults</button>
+            <button id="openRunPresetDrawerBtn">Preset drawer</button>
+            <button id="previewBtn">Preview</button>
+            <button id="runBtn" class="primary">Run</button>
+          </div>
+        </div>
+        <div class="stack">
+          ${runtimeError ? `<p class="bad" style="margin:0 0 8px">Configuration error: ${escapeHtml(runtimeError)}</p>` : ""}
+          ${wizardHtml}
+          ${renderWizardShellExtras()}
+          <section class="panel" id="wizardReviewPanel" style="${wizardState.step === 5 ? "" : "display:none"}">
+            <p class="muted">Changing a wizard field updates the preview and run details.</p>
+          </section>
+        </div>`;
+        renderPresetSummary();
+        renderStats();
+        decorateEnvHints($("runSetupMount"));
+        bindWizardEvents();
+        const advancedDrawerContent = $("advancedDrawerContent");
+        if (advancedDrawerContent && wizardState.step === wizardSteps.length) {
+          const refreshAdvancedDrawer = () => {
+            advancedDrawerContent.innerHTML = renderAdvancedDrawer();
+            decorateEnvHints(advancedDrawerContent);
+            refreshModelKnobLinks();
+          };
+          refreshAdvancedDrawer();
+          const searchInput = $("advancedSearch");
+          if (searchInput) searchInput.oninput = refreshAdvancedDrawer;
+          const clearBtn = $("clearAdvancedSearchBtn");
+          if (clearBtn) clearBtn.onclick = () => {
+            const search = $("advancedSearch");
+            if (search) search.value = "";
+            refreshAdvancedDrawer();
+          };
+          const link = $("showAdvancedLink");
+          if (link) link.onclick = event => { event.preventDefault(); toggleAdvancedDrawer(); };
+        }
+        const back = $("wizardBack");
+        const next = $("wizardNext");
+        if (back) back.onclick = () => { if (wizardState.step > 1) { syncWizardEnv(); wizardState.step -= 1; saveWizardState(); renderRunSetup(); previewQuietly("run"); } };
+        if (next) next.onclick = () => { if (wizardState.step < wizardSteps.length) { syncWizardEnv(); wizardState.step += 1; saveWizardState(); renderRunSetup(); previewQuietly("run"); } };
+        const pb = $("previewBtn");
+        const rb = $("runBtn");
+        if (pb) pb.onclick = () => previewWithStatus("run");
+        if (rb) rb.onclick = () => runAction("run").catch(err => setStatus(err.message, "bad"));
+        const reset = $("resetDefaultsBtn");
+        if (reset) reset.onclick = resetAllOverrides;
+        const drawer = $("openRunPresetDrawerBtn");
+        if (drawer) drawer.onclick = () => { renderRunPresetDrawer(); openRunPresetDialog(); };
+        previewQuietly("run");
+        return;
+      }
       const schema = state.schema || {};
       const runtime = schema.runtime || {};
       const defaultRuntime = runtime.model ? runtime.model : {};
@@ -3136,6 +3300,7 @@ HTML = r"""<!doctype html>
                 </select>
                 <code>NEWS_SOURCE_SCOPE</code>
               </label>
+              ${knobField("NEWS_PRIMARY_RECIPIENT", "Primary recipient")}
             </div>
           </section>
           <section class="panel">
@@ -4889,10 +5054,10 @@ HTML = r"""<!doctype html>
         : `<p class="muted">No differences from balanced.</p>`;
     }
     function wireEvents() {
-      $("previewBtn").onclick = () => previewWithStatus("run");
-      $("runBtn").onclick = () => runAction("run").catch(err => setStatus(err.message, "bad"));
-      $("utilityPreviewBtn").onclick = () => previewWithStatus(value("actionSelect") || "run");
-      $("utilityRunBtn").onclick = () => runAction(value("actionSelect") || "run").catch(err => setStatus(err.message, "bad"));
+      if ($("previewBtn")) $("previewBtn").onclick = () => previewWithStatus("run");
+      if ($("runBtn")) $("runBtn").onclick = () => runAction("run").catch(err => setStatus(err.message, "bad"));
+      if ($("utilityPreviewBtn")) $("utilityPreviewBtn").onclick = () => previewWithStatus(value("actionSelect") || "run");
+      if ($("utilityRunBtn")) $("utilityRunBtn").onclick = () => runAction(value("actionSelect") || "run").catch(err => setStatus(err.message, "bad"));
       $("stopBtn").onclick = () => {
         const runId = state.activeRun;
         if (!runId) return;
@@ -4900,50 +5065,50 @@ HTML = r"""<!doctype html>
           .then(() => setStatus("Stop requested; waiting for the run to finish…", "warn"))
           .catch(err => setStatus(`Stop failed: ${err.message}`, "bad"));
       };
-      $("openRunPresetDrawerBtn").onclick = () => { renderRunPresetDrawer(); openRunPresetDialog(); };
-      $("savePresetBtn").onclick = () => { prepRunPresetEditorFromCurrent(); renderRunPresetDrawer(); openRunPresetDialog(); };
-      $("closeRunPresetDialogBtn").onclick = closeRunPresetDialog;
-      $("newPresetBtn").onclick = () => { editRunPreset(""); $("preset_env").value = envToText(collectEnv()); };
-      $("reloadPresetsBtn").onclick = loadPresets;
-      $("applyPresetBtn").onclick = () => {
+      if ($("openRunPresetDrawerBtn")) $("openRunPresetDrawerBtn").onclick = () => { renderRunPresetDrawer(); openRunPresetDialog(); };
+      if ($("savePresetBtn")) $("savePresetBtn").onclick = () => { prepRunPresetEditorFromCurrent(); renderRunPresetDrawer(); openRunPresetDialog(); };
+      if ($("closeRunPresetDialogBtn")) $("closeRunPresetDialogBtn").onclick = closeRunPresetDialog;
+      if ($("newPresetBtn")) $("newPresetBtn").onclick = () => { editRunPreset(""); $("preset_env").value = envToText(collectEnv()); };
+      if ($("reloadPresetsBtn")) $("reloadPresetsBtn").onclick = loadPresets;
+      if ($("applyPresetBtn")) $("applyPresetBtn").onclick = () => {
         const id = value("preset_id").trim();
         const preset = state.presets.find(item => item.id === id);
         if (!preset) return;
         applyRunPreset(preset);
         closeRunPresetDialog();
       };
-      $("renamePresetBtn").onclick = () => renamePresetDisplayName().catch(err => setStatus(err.message, "bad"));
-      $("savePresetEditorBtn").onclick = () => savePresetEditor().catch(err => setStatus(err.message, "bad"));
-      $("deletePresetBtn").onclick = () => deleteSelectedPreset().catch(err => setStatus(err.message, "bad"));
-      $("knobSearch").oninput = renderAdvancedKnobs;
-      $("clearKnobsBtn").onclick = resetAllOverrides;
-      $("resetDefaultsBtn").onclick = resetAllOverrides;
-      $("promptProfileSelect").onchange = () => {
+      if ($("renamePresetBtn")) $("renamePresetBtn").onclick = () => renamePresetDisplayName().catch(err => setStatus(err.message, "bad"));
+      if ($("savePresetEditorBtn")) $("savePresetEditorBtn").onclick = () => savePresetEditor().catch(err => setStatus(err.message, "bad"));
+      if ($("deletePresetBtn")) $("deletePresetBtn").onclick = () => deleteSelectedPreset().catch(err => setStatus(err.message, "bad"));
+      if ($("knobSearch")) $("knobSearch").oninput = renderAdvancedKnobs;
+      if ($("clearKnobsBtn")) $("clearKnobsBtn").onclick = resetAllOverrides;
+      if ($("resetDefaultsBtn")) $("resetDefaultsBtn").onclick = resetAllOverrides;
+      if ($("promptProfileSelect")) $("promptProfileSelect").onchange = () => {
         renderPromptProfilePanel();
         void previewWithStatus("run");
       };
-      $("restorePromptProfileBtn").onclick = () => {
+      if ($("restorePromptProfileBtn")) $("restorePromptProfileBtn").onclick = () => {
         const el = document.querySelector('[data-env="NEWS_PROMPT_PROFILE"]');
         if (el) el.value = "";
         document.querySelectorAll("[data-env^='NEWS_PROMPT_OVERRIDE_']").forEach(editor => { editor.value = ""; });
         renderPromptProfilePanel();
         void previewWithStatus("run");
       };
-      $("comparePromptProfileBtn").onclick = () => comparePromptProfiles().catch(err => setStatus(err.message, "bad"));
-      $("sourceSearch").oninput = renderSources;
-      $("reloadSourcesBtn").onclick = loadSources;
-      $("newSourceBtn").onclick = () => editSource("");
-      $("saveSourceBtn").onclick = () => saveSource().catch(err => setStatus(err.message, "bad"));
-      $("deleteSourceBtn").onclick = () => deleteSelectedSource().catch(err => setStatus(err.message, "bad"));
-      $("reloadRecipientsBtn").onclick = loadRecipients;
-      $("newRecipientBtn").onclick = () => editRecipient("");
-      $("saveRecipientBtn").onclick = () => saveRecipient().catch(err => setStatus(err.message, "bad"));
-      $("deleteRecipientBtn").onclick = () => deleteSelectedRecipient().catch(err => setStatus(err.message, "bad"));
-      $("newModelTuningPresetBtn").onclick = () => { editModelTuningPreset(""); $("modelTuningPresetTuning").value = "{}"; };
-      $("reloadModelTuningPresetsBtn").onclick = () => reloadModelTuningPresets().catch(err => $("modelTuningPresetError").textContent = err.message);
-      $("saveModelTuningPresetBtn").onclick = () => saveModelTuningEditor().catch(err => $("modelTuningPresetError").textContent = err.message);
-      $("deleteModelTuningPresetBtn").onclick = () => deleteModelTuningEditor().catch(err => $("modelTuningPresetError").textContent = err.message);
-      $("actionSelect").onchange = () => $("sourceOptions").classList.toggle("hidden", !["check-sources","prune-sources","source-languages"].includes(value("actionSelect")));
+      if ($("comparePromptProfileBtn")) $("comparePromptProfileBtn").onclick = () => comparePromptProfiles().catch(err => setStatus(err.message, "bad"));
+      if ($("sourceSearch")) $("sourceSearch").oninput = renderSources;
+      if ($("reloadSourcesBtn")) $("reloadSourcesBtn").onclick = loadSources;
+      if ($("newSourceBtn")) $("newSourceBtn").onclick = () => editSource("");
+      if ($("saveSourceBtn")) $("saveSourceBtn").onclick = () => saveSource().catch(err => setStatus(err.message, "bad"));
+      if ($("deleteSourceBtn")) $("deleteSourceBtn").onclick = () => deleteSelectedSource().catch(err => setStatus(err.message, "bad"));
+      if ($("reloadRecipientsBtn")) $("reloadRecipientsBtn").onclick = loadRecipients;
+      if ($("newRecipientBtn")) $("newRecipientBtn").onclick = () => editRecipient("");
+      if ($("saveRecipientBtn")) $("saveRecipientBtn").onclick = () => saveRecipient().catch(err => setStatus(err.message, "bad"));
+      if ($("deleteRecipientBtn")) $("deleteRecipientBtn").onclick = () => deleteSelectedRecipient().catch(err => setStatus(err.message, "bad"));
+      if ($("newModelTuningPresetBtn")) $("newModelTuningPresetBtn").onclick = () => { editModelTuningPreset(""); $("modelTuningPresetTuning").value = "{}"; };
+      if ($("reloadModelTuningPresetsBtn")) $("reloadModelTuningPresetsBtn").onclick = () => reloadModelTuningPresets().catch(err => $("modelTuningPresetError").textContent = err.message);
+      if ($("saveModelTuningPresetBtn")) $("saveModelTuningPresetBtn").onclick = () => saveModelTuningEditor().catch(err => $("modelTuningPresetError").textContent = err.message);
+      if ($("deleteModelTuningPresetBtn")) $("deleteModelTuningPresetBtn").onclick = () => deleteModelTuningEditor().catch(err => $("modelTuningPresetError").textContent = err.message);
+      if ($("actionSelect") && $("sourceOptions")) $("actionSelect").onchange = () => $("sourceOptions").classList.toggle("hidden", !["check-sources","prune-sources","source-languages"].includes(value("actionSelect")));
       Object.values(TASK_CONFIG).forEach(meta => {
         const modelSelect = $(meta.modelSelectId);
         if (modelSelect) modelSelect.onchange = () => {
@@ -4975,6 +5140,8 @@ HTML = r"""<!doctype html>
     async function init() {
       state.schema = await api("/api/schema");
       syncSurfacedEnvs();
+      loadWizardState();
+      renderWizardStepper();
       let bootWarning = "";
       let activeRunStatus = "";
       try {
@@ -4992,6 +5159,7 @@ HTML = r"""<!doctype html>
       renderTabs();
       renderWizardStepper();
       renderRunSetup();
+      renderWizardStepper();
       renderAdvancedPanels();
       renderAdvancedKnobs();
       renderStats();
@@ -5042,8 +5210,8 @@ HTML = r"""<!doctype html>
       } else {
         setStatus("");
       }
-      $("sourceOptions").classList.add("hidden");
-      $("actionSelect").onchange();
+      if ($("sourceOptions")) $("sourceOptions").classList.add("hidden");
+      if ($("actionSelect") && typeof $("actionSelect").onchange === "function") $("actionSelect").onchange();
       await preview("run").catch(err => setStatus(err.message, "bad"));
     }
     init().catch(err => setStatus(err.message, "bad"));
