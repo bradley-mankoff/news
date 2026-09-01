@@ -2123,6 +2123,7 @@ HTML = r"""<!doctype html>
   <main>
     <nav id="tabs"></nav>
     <section id="runSetup" class="view active">
+      <div id="wizardStepper"></div>
       <div id="runSetupMount"></div>
     </section>
     <section id="review" class="view">
@@ -2375,6 +2376,118 @@ HTML = r"""<!doctype html>
       schedule: null,
       scheduleError: null
     };
+    const WIZARD_STEPS = [
+      { id: "audience", title: "Audience", placeholder: "Step 1 placeholder — audience" },
+      { id: "topics", title: "Topics", placeholder: "Step 2 placeholder — topics" },
+      { id: "sources", title: "Sources", placeholder: "Step 3 placeholder — sources" },
+      { id: "style", title: "Style", placeholder: "Step 4 placeholder — style" },
+      { id: "review", title: "Review", placeholder: "Step 5 placeholder — review" }
+    ];
+    const WIZARD_STORAGE_KEY = "wizardStateDraft";
+    let wizardState = { step: 1, values: {} };
+    function wizardEnabled() {
+      try {
+        return new URLSearchParams(window.location.search).get("wizard") !== "0";
+      } catch (_err) {
+        return true;
+      }
+    }
+    function loadWizardState() {
+      let draft = {};
+      try {
+        const raw = (typeof localStorage !== "undefined" && localStorage.getItem(WIZARD_STORAGE_KEY)) || "";
+        draft = raw ? JSON.parse(raw) : {};
+      } catch (_err) { draft = {}; }
+      const env = (state.schema && state.schema.current_env) || {};
+      const values = { ...env };
+      if (draft.values && typeof draft.values === "object") {
+        Object.assign(values, draft.values);
+      }
+      const step = Number(draft.step);
+      wizardState = {
+        step: step >= 1 && step <= WIZARD_STEPS.length ? step : 1,
+        values
+      };
+    }
+    function saveWizardState() {
+      try {
+        if (typeof localStorage !== "undefined") {
+          localStorage.setItem(WIZARD_STORAGE_KEY, JSON.stringify(wizardState));
+        }
+      } catch (_err) {}
+      if (state.schema) {
+        state.schema.current_env = { ...(state.schema.current_env || {}), ...wizardState.values };
+      }
+    }
+    function currentWizardStep() {
+      return WIZARD_STEPS[wizardState.step - 1] || WIZARD_STEPS[0];
+    }
+    function persistWizardStepInput() {
+      const input = document.querySelector("#wizardStepMount [data-wizard-field]");
+      if (input) {
+        wizardState.values[input.dataset.wizardField] = input.value;
+      }
+    }
+    function wizardNext() {
+      persistWizardStepInput();
+      if (wizardState.step < WIZARD_STEPS.length) wizardState.step += 1;
+      saveWizardState();
+      renderWizardStepper();
+    }
+    function wizardBack() {
+      persistWizardStepInput();
+      if (wizardState.step > 1) wizardState.step -= 1;
+      saveWizardState();
+      renderWizardStepper();
+    }
+    function renderWizardStepper() {
+      const stepper = document.getElementById("wizardStepper");
+      const mount = document.getElementById("runSetupMount");
+      if (!stepper || !mount) return;
+      if (!wizardEnabled()) {
+        stepper.classList.add("hidden");
+        mount.classList.remove("hidden");
+        stepper.innerHTML = "";
+        const restoreRun = document.getElementById("runBtn_hidden");
+        if (restoreRun) restoreRun.id = "runBtn";
+        return;
+      }
+      mount.classList.add("hidden");
+      stepper.classList.remove("hidden");
+      // Avoid duplicate #runBtn ids: the hidden mount's Run button stays in DOM but hidden; rename it so the
+      // visible wizard Run button is the sole #runBtn for Playwright/tests.
+      const hiddenRun = mount.querySelector("#runBtn");
+      if (hiddenRun) hiddenRun.id = "runBtn_hidden";
+      const step = currentWizardStep();
+      const total = WIZARD_STEPS.length;
+      const field = `wizard_step_${wizardState.step}`;
+      const fieldValue = wizardState.values[field] || "";
+      stepper.innerHTML = `
+        <div class="panel">
+          <p class="eyebrow">Step ${wizardState.step}/5</p>
+          <h2>${escapeHtml(step.title)}</h2>
+          <div id="wizardStepMount">
+            <p class="muted">${escapeHtml(step.placeholder)}</p>
+            <label class="field"><span>Value for ${escapeHtml(step.id)}</span><input data-wizard-field="${escapeHtml(field)}" value="${escapeHtml(fieldValue)}"></label>
+          </div>
+          <div class="toolbar">
+            <button id="wizardBack"${wizardState.step === 1 ? " disabled" : ""}>Back</button>
+            <button id="wizardNext" class="primary"${wizardState.step === total ? " disabled" : ""}>Next</button>
+            <button id="runBtn" class="primary">Run</button>
+          </div>
+        </div>
+      `;
+      const nextBtn = document.getElementById("wizardNext");
+      const backBtn = document.getElementById("wizardBack");
+      if (nextBtn) nextBtn.onclick = wizardNext;
+      if (backBtn) backBtn.onclick = wizardBack;
+      const wizardRunBtn = stepper.querySelector("#runBtn");
+      if (wizardRunBtn) wizardRunBtn.onclick = () => { saveWizardState(); runAction("run").catch(err => setStatus(err.message, "bad")); };
+      const input = stepper.querySelector("[data-wizard-field]");
+      if (input) {
+        input.oninput = () => { wizardState.values[field] = input.value; saveWizardState(); };
+      }
+    }
     const icons = {
       chevronLeft: `<svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg>`,
       chevronRight: `<svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>`,
@@ -4775,6 +4888,8 @@ HTML = r"""<!doctype html>
     async function init() {
       state.schema = await api("/api/schema");
       syncSurfacedEnvs();
+      loadWizardState();
+      renderWizardStepper();
       let bootWarning = "";
       let activeRunStatus = "";
       try {
@@ -4791,6 +4906,7 @@ HTML = r"""<!doctype html>
       updateRunControls();
       renderTabs();
       renderRunSetup();
+      renderWizardStepper();
       renderAdvancedPanels();
       renderAdvancedKnobs();
       renderStats();
