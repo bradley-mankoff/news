@@ -320,9 +320,16 @@ class ReportReviewBrowserTests(unittest.TestCase):
                     )
 
                     # Next/Back replaces the wizard markup. The fresh Model
-                    # step must bind both the search and keyboard handlers.
+                    # step must retain the selected model before any control
+                    # is used again.
                     page.locator("#wizardNext").click()
                     page.locator("#wizardBack").click()
+                    expect(page.locator('[data-env="NEWS_MODEL"]')).to_have_value(
+                        "owner/test-model"
+                    )
+
+                    # The fresh Model step must also bind both the search and
+                    # keyboard handlers.
                     page.locator("#modelCatalogDisclosure > summary").click()
                     page.locator("#modelSearchQuery").fill("gemma")
                     page.locator("#modelSearchQuery").press("Enter")
@@ -355,6 +362,12 @@ class ReportReviewBrowserTests(unittest.TestCase):
                         "owner/test-model"
                     )
                     self.assertEqual(len(legacy_requests), 1)
+                    legacy_page.locator(
+                        'button[data-use-hf-model="owner/test-model"]'
+                    ).click()
+                    expect(legacy_page.locator('[data-env="NEWS_MODEL"]')).to_have_value(
+                        "owner/test-model"
+                    )
                     legacy_page.reload(wait_until="load")
                     legacy_page.locator("#modelCatalogDisclosure > summary").click()
                     legacy_page.locator("#modelSearchQuery").fill("gemma")
@@ -363,10 +376,17 @@ class ReportReviewBrowserTests(unittest.TestCase):
                         "owner/test-model"
                     )
                     self.assertEqual(len(legacy_requests), 2)
+                    legacy_page.locator(
+                        'button[data-use-hf-model="owner/test-model"]'
+                    ).click()
+                    expect(legacy_page.locator('[data-env="NEWS_MODEL"]')).to_have_value(
+                        "owner/test-model"
+                    )
                     legacy_page.close()
                     page.close()
                 finally:
                     browser.close()
+
 
 
 if __name__ == "__main__":

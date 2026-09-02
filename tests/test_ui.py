@@ -4262,12 +4262,18 @@ function hydrateRoot(root) {
     element._markup = tag;
     element.tagName = (tag.match(/^<([a-z]+)/i) || ["", ""])[1].toUpperCase();
     element.type = (tag.match(/\btype="([^"]*)"/) || ["", ""])[1];
+    const classAttr = tag.match(/\bclass="([^"]*)"/);
+    if (classAttr) element.className = classAttr[1];
     for (const attr of tag.matchAll(/\b(data-[\w-]+)="([^"]*)"/g)) {
       const key = attr[1].slice(5).replace(/-([a-z])/g, (_match, letter) => letter.toUpperCase());
       element.dataset[key] = decodeEntities(attr[2]);
     }
     const valueAttr = tag.match(/\bvalue="([^"]*)"/);
     if (valueAttr) element.value = decodeEntities(valueAttr[1]);
+    const envAttr = tag.match(/\bdata-env="([^"]*)"/);
+    if (envAttr && state.schema && state.schema.current_env && Object.prototype.hasOwnProperty.call(state.schema.current_env, envAttr[1])) {
+      element.value = state.schema.current_env[envAttr[1]];
+    }
     element.open = element.tagName === "DETAILS" && /\sopen(?:\s|>)/.test(tag);
     element._root = root;
     root._children.push(element);
@@ -4281,7 +4287,11 @@ function hydrateRoot(root) {
     element.tagName = match[1].toUpperCase();
     element._root = root;
     element.dataset.env = env[1];
+    if (state.schema && state.schema.current_env && Object.prototype.hasOwnProperty.call(state.schema.current_env, env[1])) {
+      element.value = state.schema.current_env[env[1]];
+    }
     root._children.push(element);
+    elements[env[1]] = element;
   }
 }
 const mount = new FakeElement("runSetupMount");
@@ -4325,8 +4335,10 @@ function knobByEnv(env) {
 function knobField(env, _label, options = {}) {
   if (env !== "NEWS_MODEL") return "";
   const knob = knobByEnv(env) || { default: "default-model", options: ["default-model"] };
+  const current = state.schema.current_env[env] || "";
+  const values = [...new Set([...(knob.options || []), ...(current ? [current] : [])])];
   const emptyLabel = options.emptyLabel || `default: ${formatDefault(knob.default)}`;
-  return `<select data-env="NEWS_MODEL"><option value="">${emptyLabel}</option>${knob.options.map(option => `<option value="${option}">${option}</option>`).join("")}</select>`;
+  return `<select data-env="NEWS_MODEL"><option value="">${emptyLabel}</option>${values.map(option => `<option value="${option}"${option === current ? " selected" : ""}>${option}</option>`).join("")}</select>`;
 }
 function modelTaskLabels() { return state.schema.model_task_labels || {}; }
 function runtimeFitLabels() { return state.schema.runtime_fit_labels || {}; }
@@ -4336,8 +4348,6 @@ function catalogBackendForReference(reference) {
   return entry ? entry.backend : "";
 }
 const RUNTIME_FIT_BACKENDS = {};
-function effectiveModelBackend() { return state.schema.current_env.NEWS_MODEL_BACKEND || "mlx-vlm"; }
-function requiredBackendForSelectedModel() { return ""; }
 function renderPresetSummary() {}
 function renderStats() {}
 function decorateEnvHints() {}
@@ -4366,13 +4376,16 @@ let apiCalls = 0;
             + js_function_block("    function renderWizardShellExtras() {", "    function renderRunSetup")
             + js_function_block("    function renderRunSetup() {", "    // Knob labels")
             + js_function_block("    function useModelReference(", "    function bindModelCatalogEvents() {")
+            + js_function_block("    function effectiveModelBackend() {", "    function inputForKnob")
+            + js_function_block("    function requiredBackendForSelectedModel() {", "    function useModelReference(")
+            + js_function_block("    function renderModelBackendHint(requiredBackend = \"\") {", "    function bindModelCatalogEvents()")
             + js_function_block("    function renderModelCatalogPanel() {", "    function renderRecommendations")
             + js_function_block("    function renderRecommendations(task) {", "    async function searchHuggingFaceModels")
             + js_function_block("    async function searchHuggingFaceModels() {", "    async function comparePromptProfiles")
             + js_function_block("    function bindModelCatalogEvents() {", "    function renderModelCatalogPanel")
             + r"""
 state.schema = {
-  current_env: {},
+  current_env: { NEWS_MODEL: "safe-alias", NEWS_MODEL_BACKEND: "mlx-lm" },
   runtime: { model: { name: "Default Gemma", reference: "default-model" } },
   knobs: [
     { env: "NEWS_MODEL", default: "default-model", options: ["default-model"] },
@@ -4424,6 +4437,9 @@ const driveCatalog = async (surface, expectedCalls) => {
 wizardMode = true;
 wizardState.step = 3;
 renderRunSetup();
+const initialHint = $("modelBackendHint");
+assert(initialHint && !initialHint.className.split(/\s+/).includes("hidden"), "wizard initial mismatch hint stayed hidden");
+assert(initialHint.textContent === "This model needs NEWS_MODEL_BACKEND=mlx-vlm", "wizard initial mismatch hint was wrong");
 await driveCatalog("wizard", 0);
 assert(typeof $("wizardNext").onclick === "function", "wizard Next handler missing");
 assert(typeof $("wizardBack").onclick === "function", "wizard Back handler missing");
