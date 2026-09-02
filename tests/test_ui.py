@@ -999,6 +999,7 @@ const decorateEnvHints = () => {};
 const renderPromptProfilePanel = () => {};
 const renderModelCatalogPanel = () => {};
 const refreshModelKnobLinks = () => {};
+const resetAllOverrides = () => {};
 const knobField = () => "";
 function currentControlValue(_env) { return ""; }
 function positionEnvTooltip() {}
