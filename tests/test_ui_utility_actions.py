@@ -306,6 +306,86 @@ assert(
         )
         self._run_node(script)
 
+    def test_render_run_setup_covers_default_wizard_and_legacy_utility_modes(self) -> None:
+        """Keep the wizard/legacy utility surface boundary explicit."""
+        html = ui_module.HTML
+        start = html.index("function renderRunSetup() {")
+        end = html.index("    // Knob labels", start)
+        render_run_setup = html[start:end]
+        script = (
+            r"""
+const assert = (condition, message) => {
+  if (!condition) throw new Error(message);
+};
+let search = "";
+const window = { location: { get search() { return search; } } };
+const elements = {};
+class FakeElement {
+  constructor(id) {
+    this.id = id;
+    this.innerHTML = "";
+    this.classList = {
+      add() {},
+      toggle() {}
+    };
+    this.onclick = null;
+    this.onchange = null;
+    this.onkeydown = null;
+  }
+}
+function $(id) {
+  return elements[id] || (elements[id] = new FakeElement(id));
+}
+function escapeHtml(text) {
+  return String(text ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
+}
+function formatDefault(value, fallback = "none") { return value || fallback; }
+function currentControlValue(_env) { return ""; }
+function knobField(_env, _label, _options = {}) { return ""; }
+function selectedUtilityAction() { return state.selectedUtilityAction; }
+function isWizardEnabled() { return new URLSearchParams(window.location.search).get("wizard") !== "0"; }
+const SOURCE_UTILITY_ACTIONS = ["check-sources", "prune-sources", "source-languages"];
+const wizardSteps = [{ title: "Preset" }, { title: "Review" }];
+const wizardState = { step: 1 };
+const state = { schema: { actions: ["run", "check-sources"], runtime: {}, prompt_profiles: [], knobs: [] }, selectedUtilityAction: "run" };
+const renderWizard = () => "<div>Guided wizard</div>";
+const renderWizardShellExtras = () => "<div>Run details</div>";
+const renderPresetSummary = () => {};
+const renderStats = () => {};
+const decorateEnvHints = () => {};
+const bindWizardEvents = () => {};
+const decorateUtilityHints = () => {};
+const renderModelTuningPanels = () => {};
+const renderPromptProfilePanel = () => {};
+const renderModelCatalogPanel = () => {};
+const updateRunControls = () => {};
+const refreshModelKnobLinks = () => {};
+const resetAllOverrides = () => {};
+const previewQuietly = () => {};
+"""
+            + render_run_setup
+            + r"""
+search = "";
+renderRunSetup();
+assert(
+  $("runSetupMount").innerHTML.includes("Guided wizard"),
+  "the default URL must render the guided wizard"
+);
+assert(
+  !$("runSetupMount").innerHTML.includes("data-utility-action"),
+  "the guided wizard must not expose legacy utility controls"
+);
+
+search = "?wizard=0";
+renderRunSetup();
+assert(
+  $("runSetupMount").innerHTML.includes('data-utility-action="run"'),
+  "the legacy URL must render the utility action controls"
+);
+"""
+        )
+        self._run_node(script)
+
 
 if __name__ == "__main__":
     unittest.main()
