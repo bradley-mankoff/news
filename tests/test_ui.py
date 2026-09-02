@@ -764,7 +764,8 @@ const fakeElement = (id) => ({
   value: "",
   innerHTML: "",
   onchange: null,
-  classList: { add() {}, toggle() {} }
+  classList: { add() {}, toggle() {} },
+  querySelectorAll() { return []; }
 });
 const elements = {};
 const $ = (id) => (elements[id] = elements[id] || fakeElement(id));
@@ -872,7 +873,7 @@ assert(
 
         utility_helpers = html[
             html.index("    const SOURCE_UTILITY_ACTIONS") : html.index(
-                "    function renderRunSetup"
+                "    function decorateUtilityHints"
             )
         ]
         utility_tooltip_helpers = html[
