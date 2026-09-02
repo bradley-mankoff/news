@@ -277,11 +277,75 @@ VERDICT_NODE = """  # Final gate: post the review verdict on the PR so the board
          - Otherwise -> `approve`
          An "unresolved" finding is one the fix pass did not claim to fix; if the fix pass
          says all findings were fixed (or none existed), the verdict is `approve`.
-      3. Post the verdict on the PR: `gh pr comment <number> --body "<summary>"` where the
-         summary is 3-6 lines covering what was reviewed and the fix-pass outcome.
+      3. Post the verdict on the PR: `gh pr comment <number> --body "<summary>"` where
+         the summary is 3-6 lines covering what was reviewed and the fix-pass outcome.
          The LAST line of the body MUST be exactly `VERDICT: <approve|request-changes|block>`.
          No other line may start with `VERDICT:`.
+    depends_on: [push-fixes]
+    context: fresh
+"""
+
+IMPLEMENT_FIXES_NODE = """  - id: implement-fixes
+    model: large
+    prompt: |
+      You are the stage-only implementation step of a PR review run. Read the synthesized
+      review and apply only its CRITICAL and HIGH fixes in the current PR worktree.
+
+      ## Inputs
+
+      - Synthesized review: `$synthesize.output`
+      - Full review artifact: read `$ARTIFACTS_DIR/review/consolidated-review.md` when present
+
+      ## Steps
+
+      1. Read the synthesized review and the full review artifact. Identify every CRITICAL
+         and HIGH finding and make only the smallest safe code or test edits needed to fix
+         those findings. Do not fix MEDIUM or LOW findings.
+      2. If there are no CRITICAL or HIGH findings, leave the worktree unchanged and record
+         that no fixes were required.
+      3. Write the existing fix report to
+         `$ARTIFACTS_DIR/review/fix-report.md`, including each CRITICAL/HIGH finding,
+         whether it was fixed, and any findings left unresolved.
+      4. This is a stage-only node: do NOT run `git add`, `git commit`, or `git push`.
+         Leave all review-fix edits in the worktree for the deterministic verification and
+         push stages. Never change the PR from draft or alter its branch policy.
+    depends_on: [synthesize]
+    context: fresh
+"""
+
+VERIFY_FIXES_NODE = """  - id: verify-fixes
+    bash: |
+      set -euo pipefail
+      if command -v uv >/dev/null 2>&1; then
+        uv sync --group dev
+        uv run python -m pytest -q
+      elif [ -x .venv/bin/python ]; then
+        .venv/bin/python -m pytest -q
+      else
+        echo "verify-fixes: neither uv nor .venv/bin/python test runner available" >&2
+        exit 1
+      fi
+      git add -A
+      git diff --cached --check
     depends_on: [implement-fixes]
+    context: fresh
+"""
+
+PUSH_FIXES_NODE = """  - id: push-fixes
+    bash: |
+      set -euo pipefail
+      if [ -z "$(git status --porcelain)" ]; then
+        echo "No review-fix edits to commit or push."
+        exit 0
+      fi
+      git add -A
+      if git diff --cached --quiet; then
+        echo "No review-fix edits to commit or push."
+        exit 0
+      fi
+      git commit -m "fix: apply PR review findings"
+      git push origin HEAD
+    depends_on: [verify-fixes]
     context: fresh
 """
 
@@ -511,6 +575,117 @@ def ensure_node(path: Path, node_id: str, node_text: str,
     return f"added {node_id} node to {path.name}"
 
 
+
+def _node_span(text: str, node_id: str) -> tuple[int, int] | None:
+    """Return the byte span for one top-level workflow node.
+
+    A top-level comment is a boundary too, so replacing a node never consumes
+    the explanatory comments that commonly sit immediately before the next
+    node.
+    """
+    header = re.search(
+        rf"(?m)^  - id: {re.escape(node_id)}[ \t]*\n",
+        text,
+    )
+    if header is None:
+        return None
+    boundary = re.search(
+        r"(?m)^(?:  - id: |  #|[^\s#])",
+        text[header.end():],
+    )
+    end = header.end() + boundary.start() if boundary else len(text)
+    return header.start(), end
+
+
+def _insert_at(text: str, position: int, node_text: str) -> str:
+    """Insert a canonical node at a top-level boundary."""
+    return text[:position] + node_text + text[position:]
+
+
+def ensure_smart_review_nodes(path: Path) -> str | None:
+    """Install the stage-only smart-review fix chain exactly once.
+
+    Archon reinstalls restore the DB-backed implementation command, while
+    partially patched files may contain only one of the new nodes. Replacing
+    each owned node in place and inserting only missing IDs handles both
+    states without touching the review prompt or unrelated workflow nodes.
+    """
+    text = path.read_text()
+    original = text
+    changed: list[str] = []
+
+    implement = _node_span(text, "implement-fixes")
+    if implement is None:
+        synthesize = _node_span(text, "synthesize")
+        if synthesize is None:
+            return ("synthesize node not found in "
+                    f"{path.name}; insert smart-review fix chain manually")
+        text = _insert_at(text, synthesize[1], IMPLEMENT_FIXES_NODE)
+        changed.append("added implement-fixes")
+    else:
+        start, end = implement
+        if text[start:end].strip() != IMPLEMENT_FIXES_NODE.strip():
+            text = text[:start] + IMPLEMENT_FIXES_NODE + text[end:]
+            changed.append("replaced implement-fixes")
+
+    verify = _node_span(text, "verify-fixes")
+    if verify is None:
+        report = _node_span(text, "report-verdict")
+        position = report[0] if report else _node_span(text, "implement-fixes")[1]
+        text = _insert_at(text, position, VERIFY_FIXES_NODE)
+        changed.append("added verify-fixes")
+    elif text[verify[0]:verify[1]].strip() != VERIFY_FIXES_NODE.strip():
+        text = (text[:verify[0]] + VERIFY_FIXES_NODE
+                + text[verify[1]:])
+        changed.append("replaced verify-fixes")
+
+    push = _node_span(text, "push-fixes")
+    if push is None:
+        report = _node_span(text, "report-verdict")
+        position = report[0] if report else _node_span(text, "verify-fixes")[1]
+        text = _insert_at(text, position, PUSH_FIXES_NODE)
+        changed.append("added push-fixes")
+    elif text[push[0]:push[1]].strip() != PUSH_FIXES_NODE.strip():
+        text = text[:push[0]] + PUSH_FIXES_NODE + text[push[1]:]
+        changed.append("replaced push-fixes")
+
+    report = _node_span(text, "report-verdict")
+    if report is None:
+        push = _node_span(text, "push-fixes")
+        if push is None:
+            return (f"push-fixes insertion failed in {path.name}; "
+                    "insert report-verdict manually")
+        text = _insert_at(text, push[1], VERDICT_NODE)
+        changed.append("added report-verdict")
+        report = _node_span(text, "report-verdict")
+
+    report_start, report_end = report
+    report_text = text[report_start:report_end]
+    dependency = re.search(
+        r"(?m)^    depends_on: \[([^\]]*)\][ \t]*$",
+        report_text,
+    )
+    if dependency is None:
+        return f"report-verdict dependency not found in {path.name}; rewire manually"
+    dependencies = [
+        item.strip() for item in dependency.group(1).split(",")
+        if item.strip() and item.strip() != "implement-fixes"
+    ]
+    if "push-fixes" not in dependencies:
+        dependencies.append("push-fixes")
+    new_dependency = "    depends_on: [" + ", ".join(dependencies) + "]"
+    if dependency.group(0) != new_dependency:
+        absolute_start = report_start + dependency.start()
+        absolute_end = report_start + dependency.end()
+        text = text[:absolute_start] + new_dependency + text[absolute_end:]
+        changed.append("rewired report-verdict")
+
+    if text == original:
+        return None
+    path.write_text(text)
+    return f"hardened {path.name}: {', '.join(changed)}"
+
+
 def ensure_contract(path: Path, node_id: str) -> str | None:
     """Insert completion-comment contracts into an existing node if missing,
     and refresh an outdated How-to-test contract."""
@@ -701,9 +876,6 @@ def main() -> int:
         ("archon-idea-to-pr.yaml", "completion-comment", IDEA_NODE,
          "- id: workflow-summary\n    command: archon-workflow-summary\n"
          "    depends_on: [review]\n    context: fresh"),
-        ("archon-smart-pr-review.yaml", "report-verdict", VERDICT_NODE,
-         "- id: implement-fixes\n    command: archon-implement-review-fixes\n"
-         "    depends_on: [synthesize]"),
     ):
         path = WORKFLOWS / fname
         if not path.exists():
@@ -714,6 +886,14 @@ def main() -> int:
             if note:
                 changed.append(note)
         note = ensure_node(path, node_id, node_text, anchor)
+        if note:
+            changed.append(note)
+
+    smart = WORKFLOWS / "archon-smart-pr-review.yaml"
+    if not smart.exists():
+        changed.append(f"MISSING {smart.name} (workflows dir: {WORKFLOWS})")
+    else:
+        note = ensure_smart_review_nodes(smart)
         if note:
             changed.append(note)
 
