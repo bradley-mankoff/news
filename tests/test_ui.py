@@ -1738,7 +1738,7 @@ assert(SURFACED_ENVS.size === 0, "missing schema must not throw and must suppres
             "escapeHtml(pick.alias)",
             "escapeHtml(pick.reason)",
             'data-use-model="${escapeHtml(pick.alias)}"',
-            "btn.onclick = () => useModelReference(btn.dataset.useModel);",
+            "btn.onclick = () => useModelReference(btn.dataset.useModel, catalogBackendForReference(btn.dataset.useModel));",
         ):
             self.assertIn(snippet, block)
         # The renderer no longer re-filters full catalog entries by task notes.
@@ -4073,7 +4073,6 @@ const assert = (condition, message) => {
   if (!condition) throw new Error(message);
 };
 const elements = {
-  recommendationTask: { value: "speed", onchange: null },
   modelSearchBtn: { onclick: null },
   modelSearchQuery: { onkeydown: null },
 };
@@ -4094,6 +4093,13 @@ function setStatus(text, cls) { statusError = `${cls}:${text}`; }
                 "    function renderModelCatalogPanel() {",
             )
             + r"""
+// Search and Enter bind even when the optional recommendation select is absent.
+bindModelCatalogEvents();
+assert(typeof elements.modelSearchBtn.onclick === "function", "Search binding missing on partial DOM");
+assert(typeof elements.modelSearchQuery.onkeydown === "function", "Enter binding missing on partial DOM");
+
+// Adding the select and binding again must preserve all controls.
+elements.recommendationTask = { value: "speed", onchange: null };
 bindModelCatalogEvents();
 assert(typeof elements.recommendationTask.onchange === "function", "recommendation binding missing");
 elements.recommendationTask.onchange();
