@@ -4337,7 +4337,6 @@ function catalogBackendForReference(reference) {
 }
 const RUNTIME_FIT_BACKENDS = {};
 function effectiveModelBackend() { return state.schema.current_env.NEWS_MODEL_BACKEND || "mlx-vlm"; }
-function renderModelBackendHint() {}
 function requiredBackendForSelectedModel() { return ""; }
 function renderPresetSummary() {}
 function renderStats() {}
