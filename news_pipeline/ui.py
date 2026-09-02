@@ -3289,9 +3289,7 @@ HTML = r"""<!doctype html>
         "codex-model-server-command": "Show the command for starting the Codex model server.",
         "serve-unsubscribe": "Serve the unsubscribe page for managing email preferences."
       };
-      const selectedAction = (schema.actions || []).includes(state.selectedUtilityAction)
-        ? state.selectedUtilityAction
-        : (schema.actions || [])[0] || "run";
+      const selectedAction = selectedUtilityAction();
       const utilityActions = (schema.actions || []).map((action, index) => {
         const label = actionLabels[action] || String(action).replaceAll("-", " ").replace(/(^|\s)\S/g, char => char.toUpperCase());
         const selected = action === selectedAction;
@@ -3508,7 +3506,7 @@ HTML = r"""<!doctype html>
       renderPromptProfilePanel();
       renderModelCatalogPanel();
       if (typeof decorateUtilityHints === "function") decorateUtilityHints($("utilityActions"));
-      $("sourceOptions").classList.toggle("hidden", !["check-sources", "prune-sources", "source-languages"].includes(selectedAction));
+      $("sourceOptions").classList.toggle("hidden", !SOURCE_UTILITY_ACTIONS.includes(selectedAction));
       if (typeof updateRunControls === "function") updateRunControls();
       $("recommendationTask").onchange = () => renderRecommendations(value("recommendationTask"));
       $("modelSearchBtn").onclick = () => searchHuggingFaceModels().catch(err => setStatus(err.message, "bad"));
