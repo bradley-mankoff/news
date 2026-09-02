@@ -4841,6 +4841,10 @@ const state = { schema: null, selectedRunPresetId: "" };
 const promptTemplateRaw = {};
 const flush = () => new Promise(resolve => setTimeout(resolve, 0));
 
+// Utility controls are outside this harness's assertions; wireEvents() still
+// invokes the production binder, so keep that dependency inert here.
+function bindUtilityEvents() {}
+
 // ---- Non-preview reset/profile dependencies are stubbed -------------------
 function renderPresetSummary() {}
 function renderModelTuningPanels() {}
@@ -5006,6 +5010,9 @@ function resetAllOverrides() {}
 function renderSources() {}
 function loadSources() {}
 function loadRecipients() {}
+// Utility controls are outside this harness's assertions; wireEvents() still
+// invokes the production binder, so keep that dependency inert here.
+function bindUtilityEvents() {}
 """
             + js_function_block(
                 "    function $(id) { return document.getElementById(id); }",
