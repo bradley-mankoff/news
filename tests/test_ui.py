@@ -764,7 +764,8 @@ const fakeElement = (id) => ({
   value: "",
   innerHTML: "",
   onchange: null,
-  classList: { add() {}, toggle() {} }
+  classList: { add() {}, toggle() {} },
+  querySelectorAll() { return []; }
 });
 const elements = {};
 const $ = (id) => (elements[id] = elements[id] || fakeElement(id));
@@ -777,6 +778,7 @@ const renderModelCatalogPanel = () => {};
 const refreshModelKnobLinks = () => {};
 """
             + js_function_block("    const state = {", "    const icons = {")
+            + js_function_block("const SOURCE_UTILITY_ACTIONS", "function renderRunSetup() {")
             + js_function_block("function escapeHtml(text) {", "function formatDefault")
             + js_function_block(
                 'function formatDefault(value, fallback="none") {',
@@ -859,6 +861,271 @@ assert(
                 f"Node harness timed out after {timeout_seconds}s: "
                 f"stdout={exc.stdout!r} stderr={exc.stderr!r}"
             )
+        self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
+
+    def test_utility_actions_node_harness_covers_render_events_and_run_state(self) -> None:
+        """Exercise utility rendering, dispatch, help, and active-run state."""
+        html = ui_module.HTML
+
+        def js_function_block(start: str, end: str) -> str:
+            begin = html.index(start)
+            return html[begin : html.index(end, begin)]
+
+        utility_helpers = html[
+            html.index("    const SOURCE_UTILITY_ACTIONS") : html.index(
+                "    function decorateUtilityHints"
+            )
+        ]
+        utility_tooltip_helpers = html[
+            html.index("function attachEnvTooltip") : html.index(
+                "function decorateEnvHints"
+            )
+        ]
+        js = (
+            r"""
+const assert = (condition, message) => {
+  if (!condition) throw new Error(message);
+};
+const decodeEntities = text => String(text)
+  .replaceAll("&lt;", "<")
+  .replaceAll("&gt;", ">")
+  .replaceAll("&quot;", '"')
+  .replaceAll("&amp;", "&");
+const byId = {};
+let utilityButtons = [];
+let utilityHelpButtons = [];
+function makeClassList(initial = []) {
+  const classes = new Set(initial);
+  return {
+    add(...names) { names.forEach(name => classes.add(name)); },
+    remove(...names) { names.forEach(name => classes.delete(name)); },
+    contains(name) { return classes.has(name); },
+    toggle(name, force) {
+      const next = force === undefined ? !classes.has(name) : Boolean(force);
+      if (next) classes.add(name); else classes.delete(name);
+      return next;
+    }
+  };
+}
+class FakeElement {
+  constructor(id = "", initialClasses = []) {
+    this.id = id;
+    this.value = "";
+    this.dataset = {};
+    this.attributes = {};
+    this.classList = makeClassList(initialClasses);
+    this.disabled = false;
+    this.onclick = null;
+    this._listeners = {};
+    this._innerHTML = "";
+  }
+  set innerHTML(value) {
+    this._innerHTML = String(value);
+    if (this.id === "runSetupMount") parseMarkup(this._innerHTML);
+  }
+  get innerHTML() { return this._innerHTML; }
+  setAttribute(name, value) { this.attributes[name] = String(value); }
+  getAttribute(name) { return this.attributes[name] ?? null; }
+  addEventListener(type, listener) {
+    (this._listeners[type] = this._listeners[type] || []).push(listener);
+  }
+  fire(type, key = undefined) {
+    const event = {
+      key,
+      defaultPrevented: false,
+      preventDefault() { this.defaultPrevented = true; }
+    };
+    for (const listener of this._listeners[type] || []) listener.call(this, event);
+    return event;
+  }
+  querySelectorAll(_selector) { return []; }
+}
+function parseMarkup(markup) {
+  utilityButtons = [];
+  utilityHelpButtons = [];
+  for (const match of markup.matchAll(/\bid="([^"]+)"/g)) {
+    if (!byId[match[1]]) byId[match[1]] = new FakeElement(match[1]);
+  }
+  const buttonPattern = /<button\b([^>]*?)data-utility-action="([^"]+)"([^>]*)>/g;
+  for (const match of markup.matchAll(buttonPattern)) {
+    const attrs = `${match[1]}${match[3]}`;
+    const classes = (attrs.match(/\bclass="([^"]*)"/)?.[1] || "").split(/\s+/).filter(Boolean);
+    const action = decodeEntities(match[2]);
+    const button = new FakeElement("", classes);
+    button.dataset.utilityAction = action;
+    button.setAttribute("data-utility-action", action);
+    for (const name of ["aria-pressed", "aria-label", "data-action", "value"]) {
+      const attr = attrs.match(new RegExp(`\\b${name}="([^"]*)"`));
+      if (attr) button.setAttribute(name, decodeEntities(attr[1]));
+    }
+    utilityButtons.push(button);
+  }
+  for (const match of markup.matchAll(/<button\b([^>]*?)>/g)) {
+    const attrs = match[1];
+    if (!/\bclass="[^"]*\butility-help\b/.test(attrs)) continue;
+    const button = new FakeElement("", ["utility-help"]);
+    for (const name of ["aria-label", "aria-describedby"]) {
+      const attr = attrs.match(new RegExp(`\\b${name}="([^"]*)"`));
+      if (attr) button.setAttribute(name, decodeEntities(attr[1]));
+    }
+    utilityHelpButtons.push(button);
+  }
+  for (const match of markup.matchAll(/<span\b([^>]*?)id="([^"]+)"([^>]*)>/g)) {
+    const attrs = `${match[1]}${match[3]}`;
+    const tip = byId[match[2]] || (byId[match[2]] = new FakeElement(match[2]));
+    if (/\bclass="[^"]*\benv-tooltip\b/.test(attrs)) tip.classList.add("env-tooltip");
+    if (/\bclass="[^"]*\bhidden\b/.test(attrs)) tip.classList.add("hidden");
+  }
+  const actions = byId.utilityActions;
+  if (actions) {
+    actions.querySelectorAll = selector => selector === ".utility-help" ? utilityHelpButtons : [];
+  }
+}
+byId.runSetupMount = new FakeElement("runSetupMount");
+function $(id) { return byId[id] || null; }
+const document = {
+  addEventListener() {},
+  querySelector() { return null; },
+  querySelectorAll(selector) {
+    return selector === "[data-utility-action]" ? utilityButtons : [];
+  },
+  getElementById(id) { return byId[id] || null; }
+};
+const isWizardEnabled = () => false;
+const state = { schema: null, selectedUtilityAction: "run", activeRun: null };
+const renderPresetSummary = () => {};
+const renderModelTuningPanels = () => {};
+const decorateEnvHints = () => {};
+const renderPromptProfilePanel = () => {};
+const renderModelCatalogPanel = () => {};
+const refreshModelKnobLinks = () => {};
+const resetAllOverrides = () => {};
+const knobField = () => "";
+function currentControlValue(_env) { return ""; }
+function positionEnvTooltip() {}
+const liveTooltips = new Map();
+const calls = [];
+function previewWithStatus(action) { calls.push(["preview", action]); }
+function runAction(action) { calls.push(["run", action]); return Promise.resolve(); }
+function setStatus(_message, _kind) {}
+const TASK_CONFIG = {};
+"""
+            + js_function_block("function escapeHtml(text) {", "function formatDefault")
+            + js_function_block(
+                'function formatDefault(value, fallback="none") {',
+                "function currentControlValue",
+            )
+            + utility_helpers
+            + utility_tooltip_helpers
+            + js_function_block(
+                "function decorateUtilityHints(root=document) {",
+                "function renderRunSetup() {",
+            )
+            + js_function_block(
+                "    function updateRunControls() {", "    async function previewQuietly"
+            )
+            + js_function_block("    function wireEvents() {", "    function applySelectedPresetFromState")
+            + js_function_block("function renderRunSetup() {", "const TASK_MAX_TOKENS_LABELS")
+            + r"""
+state.schema = {
+  actions: ["run", "check-sources", "<future>&\""],
+  current_env: {},
+  runtime: {},
+  knobs: [],
+  prompt_profiles: []
+};
+state.selectedUtilityAction = "check-sources";
+renderRunSetup();
+let markup = $("runSetupMount").innerHTML;
+let buttons = utilityButtons;
+const actions = state.schema.actions;
+assert(
+  JSON.stringify(buttons.map(button => button.dataset.utilityAction)) === JSON.stringify(actions) &&
+    JSON.stringify(buttons.map(button => button.getAttribute("data-action"))) === JSON.stringify(actions) &&
+    JSON.stringify(buttons.map(button => button.getAttribute("value"))) === JSON.stringify(actions),
+  "utility buttons must preserve schema order and exact action values"
+);
+assert(
+  buttons.filter(button => button.getAttribute("aria-pressed") === "true").length === 1 &&
+    buttons[1].classList.contains("selected"),
+  "the configured utility action must be the only selected button"
+);
+assert(
+  !$("sourceOptions").classList.contains("hidden"),
+  "source options must be visible for a source utility"
+);
+assert(
+  markup.includes('data-utility-action="&lt;future&gt;&amp;&quot;"') &&
+    !markup.includes('data-utility-action="<future>&"'),
+  "schema action values must be escaped in attributes"
+);
+assert(
+  markup.includes('aria-label="Help for &lt;future&gt;&amp;&quot;"') &&
+    markup.includes('Run the &lt;future&gt;&amp;&quot; utility.'),
+  "dynamic utility labels and hints must remain escaped"
+);
+const helpIds = utilityHelpButtons.map(button => button.getAttribute("aria-describedby"));
+assert(
+  helpIds.length === actions.length &&
+    new Set(helpIds).size === helpIds.length &&
+    helpIds.every(id => $(id)),
+  "each utility help trigger must have a unique existing ARIA target"
+);
+const helpTrigger = utilityHelpButtons[2];
+let event = helpTrigger.fire("focus");
+assert(!$(helpIds[2]).classList.contains("hidden"), "focusing help must show its tooltip");
+event = helpTrigger.fire("keydown", " ");
+assert(event.defaultPrevented && !$(helpIds[2]).classList.contains("hidden"), "Space must activate utility help");
+event = helpTrigger.fire("keydown", "Escape");
+assert(event.defaultPrevented && $(helpIds[2]).classList.contains("hidden"), "Escape must hide utility help");
+wireEvents();
+buttons[1].onclick();
+assert(
+  state.selectedUtilityAction === "check-sources",
+  "clicking a utility action must update the selected action"
+);
+$("utilityPreviewBtn").onclick();
+$("utilityRunBtn").onclick();
+assert(
+  JSON.stringify(calls) === JSON.stringify([
+    ["preview", "check-sources"], ["run", "check-sources"]
+  ]),
+  "utility controls must dispatch the selected action"
+);
+state.activeRun = "run-1";
+updateRunControls();
+assert($("runBtn").disabled, "the primary Run control must disable during an active run");
+assert($("utilityRunBtn").disabled, "utility Run must disable during an active run");
+assert(
+  buttons.every(button => button.disabled),
+  "utility action selection must disable during an active run"
+);
+state.activeRun = null;
+updateRunControls();
+assert(!$("runBtn").disabled, "the primary Run control must restore after the run ends");
+assert(!$("utilityRunBtn").disabled, "utility Run must restore after the run ends");
+assert(
+  buttons.every(button => !button.disabled),
+  "utility action selection must restore after the run ends"
+);
+state.selectedUtilityAction = "removed-action";
+renderRunSetup();
+assert(
+  utilityButtons[0].getAttribute("aria-pressed") === "true",
+  "selection must fall back to the first schema action"
+);
+"""
+        )
+        node = _find_node()
+        if node is None:
+            self.skipTest("Node.js is required for the embedded UI renderer harness")
+        result = subprocess.run(
+            [node, "--input-type=module", "-"],
+            input=js,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
         self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
 
     def test_prompt_override_editors_and_restore_buttons_in_html(self) -> None:
@@ -4574,6 +4841,10 @@ const state = { schema: null, selectedRunPresetId: "" };
 const promptTemplateRaw = {};
 const flush = () => new Promise(resolve => setTimeout(resolve, 0));
 
+// Utility controls are outside this harness's assertions; wireEvents() still
+// invokes the production binder, so keep that dependency inert here.
+function bindUtilityEvents() {}
+
 // ---- Non-preview reset/profile dependencies are stubbed -------------------
 function renderPresetSummary() {}
 function renderModelTuningPanels() {}
@@ -4739,6 +5010,9 @@ function resetAllOverrides() {}
 function renderSources() {}
 function loadSources() {}
 function loadRecipients() {}
+// Utility controls are outside this harness's assertions; wireEvents() still
+// invokes the production binder, so keep that dependency inert here.
+function bindUtilityEvents() {}
 """
             + js_function_block(
                 "    function $(id) { return document.getElementById(id); }",
