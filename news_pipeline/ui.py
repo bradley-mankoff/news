@@ -3170,6 +3170,7 @@ HTML = r"""<!doctype html>
       return `
         <section class="panel"><p class="eyebrow">Snapshot</p><h2>Effective runtime snapshot</h2><div id="stats" class="stats"></div></section>
         <section class="panel"><h2>Command preview</h2><pre id="previewPane"></pre></section>
+        ${renderUtilityActionPanel()}
         <section class="panel"><div class="toolbar"><h2 style="margin-right:auto">Run log</h2><button id="stopBtn" class="danger">Stop</button></div><pre id="logPane" role="log" aria-live="polite" aria-label="Run log"></pre></section>`;
     }
     const SOURCE_UTILITY_ACTIONS = ["check-sources", "prune-sources", "source-languages"];
@@ -3189,6 +3190,75 @@ HTML = r"""<!doctype html>
       });
       const sourceOptions = $("sourceOptions");
       if (sourceOptions) sourceOptions.classList.toggle("hidden", !SOURCE_UTILITY_ACTIONS.includes(action));
+    }
+    function renderUtilityActionPanel() {
+      const schema = state.schema || {};
+      const actionLabels = {
+        run: "Run pipeline",
+        "check-sources": "Check sources",
+        "prune-sources": "Prune sources",
+        "source-languages": "Source languages",
+        "model-server-command": "Model server command",
+        "codex-model-server-command": "Codex model server command",
+        "serve-unsubscribe": "Serve unsubscribe"
+      };
+      const actionHints = {
+        run: "Run the daily news pipeline and create the report.",
+        "check-sources": "Check configured sources for reachability and scraping problems.",
+        "prune-sources": "Remove stale or unusable sources from the source catalog.",
+        "source-languages": "Detect the languages used by configured news sources.",
+        "model-server-command": "Show the command for starting the local model server.",
+        "codex-model-server-command": "Show the command for starting the Codex model server.",
+        "serve-unsubscribe": "Serve the unsubscribe page for managing email preferences."
+      };
+      const selectedAction = selectedUtilityAction();
+      const utilityActions = (schema.actions || []).map((action, index) => {
+        const label = actionLabels[action] || String(action).replaceAll("-", " ").replace(/(^|\s)\S/g, char => char.toUpperCase());
+        const selected = action === selectedAction;
+        const hint = actionHints[action] || `Run the ${label.toLowerCase()} utility.`;
+        return `<div class="utility-action">
+          <button type="button" class="utility-action-button${selected ? " selected" : ""}" data-utility-action="${escapeHtml(action)}" data-action="${escapeHtml(action)}" value="${escapeHtml(action)}" aria-label="${escapeHtml(label)}" aria-pressed="${selected}">${escapeHtml(label)}</button>
+          <button type="button" class="utility-help" tabindex="0" role="button" aria-label="Help for ${escapeHtml(label)}" aria-describedby="utility-action-tip-${index}">?</button>
+          <span id="utility-action-tip-${index}" class="env-tooltip hidden" role="tooltip">${escapeHtml(hint)}</span>
+        </div>`;
+      }).join("");
+      return `<section class="panel">
+        <details class="details">
+          <summary>Utilities</summary>
+          <div id="utilityActions" class="utility-actions" role="group" aria-label="Utility actions">${utilityActions}</div>
+          <div id="sourceOptions" class="${SOURCE_UTILITY_ACTIONS.includes(selectedAction) ? "" : "hidden"}">
+            <div class="form-grid">
+              <label class="field"><span>Limit</span><input id="opt_limit" type="number" min="1"><code>--limit</code></label>
+              <label class="field"><span>Recent days</span><input id="opt_recent_days" type="number" min="1" value="7"><code>--recent-days</code></label>
+              <label class="field"><span>Timeout</span><input id="opt_timeout" type="number" min="1"><code>--timeout</code></label>
+              <label class="field"><span>Concurrency</span><input id="opt_concurrency" type="number" min="1"><code>--concurrency</code></label>
+              <label class="field"><span>Section</span><select id="opt_section"><option value=""></option><option>sources</option><option>all</option></select><code>--section</code></label>
+              <label class="field"><span>Language model</span><input id="opt_language_model"><code>--language-model</code></label>
+              <label class="field"><span>Language samples</span><input id="opt_language_samples" type="number" min="1"><code>--language-samples</code></label>
+              <label class="field"><span>Min language confidence</span><input id="opt_min_language_confidence" type="number" step="0.01" min="0" max="1"><code>--min-language-confidence</code></label>
+            </div>
+            <div class="toolbar">
+              <label><input id="opt_probe_articles" type="checkbox"> Probe articles</label>
+              <label><input id="opt_prune_unscrapable" type="checkbox"> Prune unscrapable</label>
+              <label><input id="opt_only_failures" type="checkbox"> Only failures</label>
+              <label><input id="opt_write_languages" type="checkbox"> Write languages</label>
+              <label><input id="opt_overwrite_languages" type="checkbox"> Overwrite languages</label>
+              <label><input id="opt_json" type="checkbox"> JSON</label>
+            </div>
+            <div class="toolbar">
+              <button id="utilityPreviewBtn">Preview utility</button>
+              <button id="utilityRunBtn" class="primary">Run utility</button>
+            </div>
+          </div>
+        </details>
+      </section>`;
+    }
+    function bindUtilityEvents() {
+      if (typeof document.querySelectorAll === "function") document.querySelectorAll("[data-utility-action]").forEach(button => {
+        button.onclick = () => selectUtilityAction(button.dataset.utilityAction);
+      });
+      if ($("utilityPreviewBtn")) $("utilityPreviewBtn").onclick = () => previewWithStatus(selectedUtilityAction());
+      if ($("utilityRunBtn")) $("utilityRunBtn").onclick = () => runAction(selectedUtilityAction()).catch(err => setStatus(err.message, "bad"));
     }
     function decorateUtilityHints(root=document) {
       root.querySelectorAll(".utility-help").forEach(trigger => {
@@ -3233,6 +3303,9 @@ HTML = r"""<!doctype html>
         renderStats();
         decorateEnvHints($("runSetupMount"));
         bindWizardEvents();
+        decorateUtilityHints($("runSetupMount"));
+        bindUtilityEvents();
+        updateRunControls();
         const advancedDrawerContent = $("advancedDrawerContent");
         if (advancedDrawerContent && wizardState.step === wizardSteps.length) {
           const refreshAdvancedDrawer = () => {
@@ -3271,35 +3344,6 @@ HTML = r"""<!doctype html>
       const runtime = schema.runtime || {};
       const defaultRuntime = runtime.model ? runtime.model : {};
       const runtimeError = schema.runtime_error || "";
-      const actionLabels = {
-        run: "Run pipeline",
-        "check-sources": "Check sources",
-        "prune-sources": "Prune sources",
-        "source-languages": "Source languages",
-        "model-server-command": "Model server command",
-        "codex-model-server-command": "Codex model server command",
-        "serve-unsubscribe": "Serve unsubscribe"
-      };
-      const actionHints = {
-        run: "Run the daily news pipeline and create the report.",
-        "check-sources": "Check configured sources for reachability and scraping problems.",
-        "prune-sources": "Remove stale or unusable sources from the source catalog.",
-        "source-languages": "Detect the languages used by configured news sources.",
-        "model-server-command": "Show the command for starting the local model server.",
-        "codex-model-server-command": "Show the command for starting the Codex model server.",
-        "serve-unsubscribe": "Serve the unsubscribe page for managing email preferences."
-      };
-      const selectedAction = selectedUtilityAction();
-      const utilityActions = (schema.actions || []).map((action, index) => {
-        const label = actionLabels[action] || String(action).replaceAll("-", " ").replace(/(^|\s)\S/g, char => char.toUpperCase());
-        const selected = action === selectedAction;
-        const hint = actionHints[action] || `Run the ${label.toLowerCase()} utility.`;
-        return `<div class="utility-action">
-          <button type="button" class="utility-action-button${selected ? " selected" : ""}" data-utility-action="${escapeHtml(action)}" data-action="${escapeHtml(action)}" value="${escapeHtml(action)}" aria-label="${escapeHtml(label)}" aria-pressed="${selected}">${escapeHtml(label)}</button>
-          <button type="button" class="utility-help" tabindex="0" role="button" aria-label="Help for ${escapeHtml(label)}" aria-describedby="utility-action-tip-${index}">?</button>
-          <span id="utility-action-tip-${index}" class="env-tooltip hidden" role="tooltip">${escapeHtml(hint)}</span>
-        </div>`;
-      }).join("");
       const promptProfileOptions = (schema.prompt_profiles || []).map(p => `<option value="${escapeHtml(p.id)}"${currentControlValue("NEWS_PROMPT_PROFILE") === p.id ? " selected" : ""}>${escapeHtml(p.name)}</option>`).join("");
       const sourceScopes = {
         core: "Core",
@@ -3460,36 +3504,7 @@ HTML = r"""<!doctype html>
               <div id="modelSearchResults" class="stack"></div>
             </details>
           </section>
-          <section class="panel">
-            <details class="details">
-              <summary>Utilities</summary>
-              <div id="utilityActions" class="utility-actions" role="group" aria-label="Utility actions">${utilityActions}</div>
-              <div id="sourceOptions">
-                <div class="form-grid">
-                  <label class="field"><span>Limit</span><input id="opt_limit" type="number" min="1"><code>--limit</code></label>
-                  <label class="field"><span>Recent days</span><input id="opt_recent_days" type="number" min="1" value="7"><code>--recent-days</code></label>
-                  <label class="field"><span>Timeout</span><input id="opt_timeout" type="number" min="1"><code>--timeout</code></label>
-                  <label class="field"><span>Concurrency</span><input id="opt_concurrency" type="number" min="1"><code>--concurrency</code></label>
-                  <label class="field"><span>Section</span><select id="opt_section"><option value=""></option><option>sources</option><option>all</option></select><code>--section</code></label>
-                  <label class="field"><span>Language model</span><input id="opt_language_model"><code>--language-model</code></label>
-                  <label class="field"><span>Language samples</span><input id="opt_language_samples" type="number" min="1"><code>--language-samples</code></label>
-                  <label class="field"><span>Min language confidence</span><input id="opt_min_language_confidence" type="number" step="0.01" min="0" max="1"><code>--min-language-confidence</code></label>
-                </div>
-                <div class="toolbar">
-                  <label><input id="opt_probe_articles" type="checkbox"> Probe articles</label>
-                  <label><input id="opt_prune_unscrapable" type="checkbox"> Prune unscrapable</label>
-                  <label><input id="opt_only_failures" type="checkbox"> Only failures</label>
-                  <label><input id="opt_write_languages" type="checkbox"> Write languages</label>
-                  <label><input id="opt_overwrite_languages" type="checkbox"> Overwrite languages</label>
-                  <label><input id="opt_json" type="checkbox"> JSON</label>
-                </div>
-                <div class="toolbar">
-                  <button id="utilityPreviewBtn">Preview utility</button>
-                  <button id="utilityRunBtn" class="primary">Run utility</button>
-                </div>
-              </div>
-            </details>
-          </section>
+          ${renderUtilityActionPanel()}
           <section class="panel">
             <h2>Command preview</h2>
             <pre id="previewPane"></pre>
@@ -3506,7 +3521,8 @@ HTML = r"""<!doctype html>
       renderPromptProfilePanel();
       renderModelCatalogPanel();
       if (typeof decorateUtilityHints === "function") decorateUtilityHints($("utilityActions"));
-      $("sourceOptions").classList.toggle("hidden", !SOURCE_UTILITY_ACTIONS.includes(selectedAction));
+      const sourceOptions = $("sourceOptions");
+      if (sourceOptions) sourceOptions.classList.toggle("hidden", !SOURCE_UTILITY_ACTIONS.includes(selectedUtilityAction()));
       if (typeof updateRunControls === "function") updateRunControls();
       $("recommendationTask").onchange = () => renderRecommendations(value("recommendationTask"));
       $("modelSearchBtn").onclick = () => searchHuggingFaceModels().catch(err => setStatus(err.message, "bad"));
@@ -5145,11 +5161,7 @@ HTML = r"""<!doctype html>
     function wireEvents() {
       if ($("previewBtn")) $("previewBtn").onclick = () => previewWithStatus("run");
       if ($("runBtn")) $("runBtn").onclick = () => runAction("run").catch(err => setStatus(err.message, "bad"));
-      if (typeof document.querySelectorAll === "function") document.querySelectorAll("[data-utility-action]").forEach(button => {
-        button.onclick = () => selectUtilityAction(button.dataset.utilityAction);
-      });
-      if ($("utilityPreviewBtn")) $("utilityPreviewBtn").onclick = () => previewWithStatus(selectedUtilityAction());
-      if ($("utilityRunBtn")) $("utilityRunBtn").onclick = () => runAction(selectedUtilityAction()).catch(err => setStatus(err.message, "bad"));
+      bindUtilityEvents();
       $("stopBtn").onclick = () => {
         const runId = state.activeRun;
         if (!runId) return;
