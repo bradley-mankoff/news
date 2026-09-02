@@ -325,7 +325,8 @@ VERIFY_FIXES_NODE = """  - id: verify-fixes
         echo "verify-fixes: neither uv nor .venv/bin/python test runner available" >&2
         exit 1
       fi
-      git diff --check
+      git add -A
+      git diff --cached --check
     depends_on: [implement-fixes]
     context: fresh
 """
