@@ -76,7 +76,7 @@ the task graph remains the source of truth.
 
 ### What happens without you
 
-Unblocked lights-off tickets get claimed. Implementers write code. If the slice has a testable seam they should use **TDD** — red, green, the test is the ticket’s acceptance, not a souvenir. You do not type `/tdd`. A **draft PR** appears. The ticket goes **in review** on a later poller cycle once the run completes successfully; if the tracker sync fails it is retried on the next cycle. The poller still never marks **done** — that gate is yours (or QA’s).
+Unblocked lights-off tickets get claimed. Implementers write code. If the slice has a testable seam they should use **TDD** — red, green, the test is the ticket’s acceptance, not a souvenir. You do not type `/tdd`. Before creating or pushing a draft PR, the factory runs the repository test gate and `git diff --check` in a deterministic validation barrier; failed validation leaves no new PR head to notify on. A **draft PR** appears only after that barrier passes. The ticket goes **in review** on a later poller cycle once the run completes successfully; if the tracker sync fails it is retried on the next cycle. The poller still never marks **done** — that gate is yours (or QA’s).
 
 ### When something comes back
 

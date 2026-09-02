@@ -17,6 +17,17 @@ nodes:
       exists (pytest, node verify.js, etc.) and fix failures before you stop.
       Write a short record of files + decisions to $ARTIFACTS_DIR/record.md.
 
+  - id: validate
+    bash: |
+      set -euo pipefail
+      if [[ -x .venv/bin/python3 ]]; then
+        .venv/bin/python3 -m pytest tests/ -q
+      else
+        uv run python -m pytest -q
+      fi
+      git diff --check
+    depends_on: [implement]
+
   - id: draft-pr
     bash: |
       set -euo pipefail
@@ -28,4 +39,4 @@ nodes:
       gh pr create --draft --base "${FACTORY_BASE_BRANCH:-develop}" \
         --title "factory: $REF" \
         --body "Factory slice \`$REF\`. Draft. Human/QA merge. Issue: $REF"
-    depends_on: [implement]
+    depends_on: [validate]
