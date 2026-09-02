@@ -4365,7 +4365,7 @@ let apiCalls = 0;
             + js_function_block("    function renderWizard() {", "    function renderWizardShellExtras")
             + js_function_block("    function renderWizardShellExtras() {", "    function renderRunSetup")
             + js_function_block("    function renderRunSetup() {", "    // Knob labels")
-            + js_function_block("    function useModelReference(", "    function renderModelCatalogPanel")
+            + js_function_block("    function useModelReference(", "    function bindModelCatalogEvents() {")
             + js_function_block("    function renderModelCatalogPanel() {", "    function renderRecommendations")
             + js_function_block("    function renderRecommendations(task) {", "    async function searchHuggingFaceModels")
             + js_function_block("    async function searchHuggingFaceModels() {", "    async function comparePromptProfiles")
