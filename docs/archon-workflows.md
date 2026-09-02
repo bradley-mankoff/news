@@ -60,7 +60,7 @@ default because the local worker serves one request at a time.
 | `archon-plan-to-pr` | Execute an existing plan file end to end (same review block as idea-to-pr). |
 | `archon-feature-development` | Implement from a plan file or a GitHub issue containing a plan. |
 | `archon-comprehensive-pr-review` | Full 5-agent review of a PR with auto-fixes (always all agents). |
-| `archon-smart-pr-review` | Classify PR complexity → run only the relevant review agents → synthesize → auto-fix CRITICAL/HIGH. **The In Review lane trigger.** Local copy has the ntfy MCP notify nodes stripped (MCP is claude-only; pi ignores it) and adds a `report-verdict` node: after the fix pass it posts `VERDICT: approve|request-changes|block` as the last line of a PR comment — the board poller merges the ship PR only on `approve`. |
+| `archon-smart-pr-review` | Classify PR complexity → run only the relevant review agents → synthesize → stage-only auto-fix of CRITICAL/HIGH findings → deterministic test/diff verification → gated push. **The In Review lane trigger.** Local copy has the ntfy MCP notify nodes stripped (MCP is claude-only; pi ignores it) and adds a `report-verdict` node: after the fix chain it posts `VERDICT: approve|request-changes|block` as the last line of a PR comment — the board poller merges the ship PR only on `approve`. |
 | `archon-issue-review-full` | Full fix + comprehensive review pipeline for one issue. |
 | `archon-validate-pr` | E2E bug validation: run main vs feature branch, produce verdict report. |
 | `archon-create-issue` | File a bug report with reproduction evidence. Requires the `agent-browser` skill only for web-UI repro playbooks (installed globally). |
@@ -110,8 +110,7 @@ The three added nodes are inline `prompt:` nodes in the workflow YAMLs — they 
 not depend on DB-registered commands, so they survive archon updates unless the
 YAML is overwritten. If a workflow file is replaced, re-apply:
 
-- `archon-smart-pr-review.yaml`: `report-verdict` node after `implement-fixes`
-  (posts `VERDICT: <approve|request-changes|block>` on the PR).
+- `archon-smart-pr-review.yaml`: stage-only `implement-fixes` reads the synthesized review, applies only CRITICAL/HIGH fixes, writes `review/fix-report.md`, and never commits or pushes. `verify-fixes` then runs the repository test gate (`.venv/bin/python3 -m pytest tests/ -q`, falling back to `uv run pytest -q`) plus `git diff --check`; only a successful verification reaches `push-fixes`, which commits/pushes changes and is a no-op for a clean worktree. `report-verdict` depends on that push node, so no review-fix commit or push can occur after a failed validation. The patcher preserves the existing draft-PR, branch, no-fix, and verdict behavior.
 - `archon-fix-github-issue.yaml`: `completion-comment` node after `report`
   (posts the structured completion record on the issue, including the
   `## How to test` handoff and the `## Deferred work` section the board poller
