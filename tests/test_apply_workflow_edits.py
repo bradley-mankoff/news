@@ -11,6 +11,7 @@ from automation.apply_workflow_edits import (
     ensure_contract,
     ensure_node,
     ensure_tier_models,
+    ensure_smart_review_nodes,
 )
 
 
@@ -203,6 +204,88 @@ class EnsureTierModelsTest(unittest.TestCase):
             note = ensure_tier_models(path, ("resolve",))
             self.assertIn("missing nodes: resolve", note)
             self.assertIn("checked large-tier nodes", note)
+
+
+class EnsureSmartReviewNodesTest(unittest.TestCase):
+    LEGACY_WORKFLOW = (
+        "name: smart-review\n"
+        "nodes:\n"
+        "  - id: synthesize\n"
+        "    prompt: |\n"
+        "      Synthesize the review.\n"
+        "    depends_on: []\n"
+        "    context: fresh\n"
+        "  - id: implement-fixes\n"
+        "    command: archon-implement-review-fixes\n"
+        "    depends_on: [synthesize]\n"
+        "    context: fresh\n"
+        "  - id: report-verdict\n"
+        "    prompt: |\n"
+        "      Report the verdict.\n"
+        "    depends_on: [implement-fixes]\n"
+        "    context: fresh\n"
+    )
+
+    def test_replaces_legacy_fix_command_with_gated_stage_chain(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "smart-review.yaml"
+            path.write_text(self.LEGACY_WORKFLOW, encoding="utf-8")
+
+            note = ensure_smart_review_nodes(path)
+
+            self.assertIn("hardened smart-review.yaml", note or "")
+            text = path.read_text(encoding="utf-8")
+            nodes = [
+                "implement-fixes",
+                "verify-fixes",
+                "push-fixes",
+                "report-verdict",
+            ]
+            positions = [text.index(f"  - id: {node}\n") for node in nodes]
+            self.assertEqual(positions, sorted(positions))
+            for node in nodes:
+                self.assertEqual(text.count(f"  - id: {node}\n"), 1)
+
+            implement = text[positions[0]:positions[1]]
+            verify = text[positions[1]:positions[2]]
+            push = text[positions[2]:positions[3]]
+            report = text[positions[3]:]
+            self.assertNotIn("command: archon-implement-review-fixes\n", text)
+            self.assertIn("stage-only implementation step", implement)
+            self.assertIn("do NOT run `git add`, `git commit`, or `git push`",
+                          implement)
+            self.assertIn("uv sync --group dev", verify)
+            self.assertIn("uv run python -m pytest -q", verify)
+            self.assertIn("git diff --check", verify)
+            self.assertIn("    depends_on: [implement-fixes]\n", verify)
+            self.assertIn("    depends_on: [verify-fixes]\n", push)
+            self.assertIn("    depends_on: [push-fixes]\n", report)
+            self.assertNotIn("depends_on: [implement-fixes]", report)
+
+    def test_second_application_is_byte_for_byte_noop(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "smart-review.yaml"
+            path.write_text(self.LEGACY_WORKFLOW, encoding="utf-8")
+            ensure_smart_review_nodes(path)
+            patched = path.read_bytes()
+
+            self.assertIsNone(ensure_smart_review_nodes(path))
+            self.assertEqual(path.read_bytes(), patched)
+
+
+class OneshotWorkflowTest(unittest.TestCase):
+    def test_validate_gates_draft_pr(self) -> None:
+        path = (Path(__file__).parents[1] / ".archon" / "workflows"
+                / "oneshot.yaml")
+        text = path.read_text(encoding="utf-8")
+        implement = text.index("  - id: implement\n")
+        validate = text.index("  - id: validate\n")
+        draft_pr = text.index("  - id: draft-pr\n")
+
+        self.assertLess(implement, validate)
+        self.assertLess(validate, draft_pr)
+        draft_node = text[draft_pr:]
+        self.assertIn("    depends_on: [validate]\n", draft_node)
 
 
 if __name__ == "__main__":
