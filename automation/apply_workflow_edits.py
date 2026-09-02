@@ -316,12 +316,13 @@ IMPLEMENT_FIXES_NODE = """  - id: implement-fixes
 VERIFY_FIXES_NODE = """  - id: verify-fixes
     bash: |
       set -euo pipefail
-      if [ -x .venv/bin/python3 ]; then
-        .venv/bin/python3 -m pytest tests/ -q
-      elif command -v uv >/dev/null 2>&1; then
-        uv run pytest -q
+      if command -v uv >/dev/null 2>&1; then
+        uv sync --group dev
+        uv run python -m pytest -q
+      elif [ -x .venv/bin/python ]; then
+        .venv/bin/python -m pytest -q
       else
-        echo "verify-fixes: no .venv/bin/python3 or uv test runner available" >&2
+        echo "verify-fixes: neither uv nor .venv/bin/python test runner available" >&2
         exit 1
       fi
       git diff --check

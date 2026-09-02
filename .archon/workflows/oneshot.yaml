@@ -20,10 +20,14 @@ nodes:
   - id: validate
     bash: |
       set -euo pipefail
-      if [[ -x .venv/bin/python3 ]]; then
+      if command -v uv >/dev/null 2>&1; then
+        uv sync --group dev
+        uv run python -m pytest -q
+      elif [[ -x .venv/bin/python3 ]]; then
         .venv/bin/python3 -m pytest tests/ -q
       else
-        uv run python -m pytest -q
+        echo "validate: neither uv nor .venv/bin/python3 test runner available" >&2
+        exit 1
       fi
       git diff --check
     depends_on: [implement]
