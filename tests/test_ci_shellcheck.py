@@ -68,6 +68,16 @@ class CiShellCheckTests(unittest.TestCase):
         self.assertIn("uv sync --group dev", runs)
         self.assertIn("uv run python -m pytest -q", runs)
 
+    def test_ci_concurrency_cancels_obsolete_runs(self) -> None:
+        cfg = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
+        concurrency = cfg["concurrency"]
+        self.assertEqual(
+            concurrency["group"],
+            "${{ github.event.pull_request.number || github.ref }}",
+        )
+        self.assertIs(concurrency["cancel-in-progress"], True)
+
+
     def test_readme_documents_shellcheck_command_and_ci_statement(self) -> None:
         readme = README.read_text(encoding="utf-8")
         self.assertIn(
