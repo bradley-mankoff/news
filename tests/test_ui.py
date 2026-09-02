@@ -1738,7 +1738,7 @@ assert(SURFACED_ENVS.size === 0, "missing schema must not throw and must suppres
             "escapeHtml(pick.alias)",
             "escapeHtml(pick.reason)",
             'data-use-model="${escapeHtml(pick.alias)}"',
-            "btn.onclick = () => useModelReference(btn.dataset.useModel);",
+            "btn.onclick = () => useModelReference(btn.dataset.useModel, catalogBackendForReference(btn.dataset.useModel));",
         ):
             self.assertIn(snippet, block)
         # The renderer no longer re-filters full catalog entries by task notes.
@@ -1840,6 +1840,10 @@ assert(SURFACED_ENVS.size === 0, "missing schema must not throw and must suppres
         block = html.split('<p class="eyebrow">Model catalog</p>', 1)[1].split(
             "<summary>Utilities</summary>", 1
         )[0]
+        self.assertIn(
+            "Click Search or press Enter to search Hugging Face.",
+            html,
+        )
         for snippet in (
             "Model catalog and Hugging Face search",
             "Built-in models are verified for the managed backends",
@@ -4052,6 +4056,428 @@ assert(defaultEnabledButton && !defaultEnabledButton.disabled, "explicit externa
             capture_output=True,
             text=True,
             check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
+
+    def test_model_catalog_event_binding_handles_partial_dom_and_rejections(self) -> None:
+        """Exercise shared catalog bindings through missing-DOM and error paths."""
+        html = ui_module.HTML
+
+        def js_function_block(start: str, end: str) -> str:
+            begin = html.index(start)
+            return html[begin : html.index(end, begin)]
+
+        js = (
+            r"""
+const assert = (condition, message) => {
+  if (!condition) throw new Error(message);
+};
+const elements = {
+  modelSearchBtn: { onclick: null },
+  modelSearchQuery: { onkeydown: null },
+};
+const $ = (id) => elements[id] || null;
+const value = (id) => $(id) ? $(id).value : "";
+let recommendation = "";
+let searchCalls = 0;
+let statusError = "";
+function renderRecommendations(task) { recommendation = task; }
+async function searchHuggingFaceModels() {
+  searchCalls += 1;
+  throw new Error("HF unavailable");
+}
+function setStatus(text, cls) { statusError = `${cls}:${text}`; }
+"""
+            + js_function_block(
+                "    function bindModelCatalogEvents() {",
+                "    function renderModelCatalogPanel() {",
+            )
+            + r"""
+// Search and Enter bind even when the optional recommendation select is absent.
+bindModelCatalogEvents();
+assert(typeof elements.modelSearchBtn.onclick === "function", "Search binding missing on partial DOM");
+assert(typeof elements.modelSearchQuery.onkeydown === "function", "Enter binding missing on partial DOM");
+
+// Adding the select and binding again must preserve all controls.
+elements.recommendationTask = { value: "speed", onchange: null };
+bindModelCatalogEvents();
+assert(typeof elements.recommendationTask.onchange === "function", "recommendation binding missing");
+elements.recommendationTask.onchange();
+assert(recommendation === "speed", "recommendation binding used the wrong value");
+assert(typeof elements.modelSearchBtn.onclick === "function", "Search binding missing");
+assert(typeof elements.modelSearchQuery.onkeydown === "function", "Enter binding missing");
+
+// Property assignments remain idempotent when the shared binder runs again.
+bindModelCatalogEvents();
+await elements.modelSearchBtn.onclick();
+assert(searchCalls === 1, "repeated binding duplicated the click action");
+assert(statusError === "bad:HF unavailable", "click rejection did not reach status");
+let prevented = false;
+await elements.modelSearchQuery.onkeydown({
+  key: "Enter",
+  preventDefault() { prevented = true; },
+});
+assert(prevented, "Enter did not prevent the default form action");
+assert(searchCalls === 2, "Enter did not invoke Search");
+assert(statusError === "bad:HF unavailable", "Enter rejection did not reach status");
+
+// Search stays usable when the optional recommendation select is absent.
+elements.recommendationTask = null;
+bindModelCatalogEvents();
+assert(typeof elements.modelSearchBtn.onclick === "function", "Search was disabled by a missing select");
+await elements.modelSearchBtn.onclick();
+assert(searchCalls === 3, "partial DOM Search did not invoke once");
+
+// Optional Search controls may be absent without making the binder throw.
+elements.modelSearchBtn = null;
+elements.modelSearchQuery = null;
+bindModelCatalogEvents();
+"""
+        )
+        node = _find_node()
+        if node is None:
+            self.skipTest("Node.js is required for the embedded UI renderer harness")
+        result = subprocess.run(
+            [node, "--input-type=module", "-"],
+            input=js,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=30,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
+
+    def test_model_catalog_disclosure_is_lazy_on_both_render_surfaces(self) -> None:
+        """Exercise wizard Model step 3 and legacy Run Setup with fresh DOM."""
+        html = ui_module.HTML
+
+        def js_function_block(start: str, end: str) -> str:
+            begin = html.index(start)
+            return html[begin : html.index(end, begin)]
+
+        js = (
+            r"""
+const assert = (condition, message) => {
+  if (!condition) throw new Error(message);
+};
+const decodeEntities = text => String(text)
+  .replaceAll("&lt;", "<")
+  .replaceAll("&gt;", ">")
+  .replaceAll("&quot;", '"')
+  .replaceAll("&amp;", "&");
+const elements = {};
+class FakeElement {
+  constructor(id) {
+    this.id = id;
+    this.value = "";
+    this.dataset = {};
+    this._innerHTML = "";
+    this._markup = "";
+    this._buttons = [];
+    this._listeners = {};
+    this.onclick = null;
+    this.onchange = null;
+    this.onkeydown = null;
+    this.open = false;
+    this.className = "";
+    this.classList = {
+      add: name => { this.className = `${this.className} ${name}`.trim(); },
+      remove: name => { this.className = this.className.split(/\s+/).filter(item => item && item !== name).join(" "); },
+      toggle: (name, force) => {
+        const enabled = force === undefined ? !this.className.split(/\s+/).includes(name) : force;
+        if (enabled) this.classList.add(name); else this.classList.remove(name);
+      }
+    };
+  }
+  set innerHTML(value) {
+    this._innerHTML = String(value);
+    if (this.id === "runSetupMount") hydrateRoot(this);
+    else this._parseButtons();
+  }
+  get innerHTML() { return this._innerHTML; }
+  get textContent() {
+    return this._textContent !== undefined
+      ? this._textContent
+      : decodeEntities(this._innerHTML.replace(/<[^>]*>/g, ""));
+  }
+  set textContent(value) { this._textContent = String(value); }
+  get options() {
+    const source = this._innerHTML || this._markup;
+    return [...source.matchAll(/<option value="([^"]*)"([^>]*)>([\s\S]*?)<\/option>/g)]
+      .map(match => ({ value: decodeEntities(match[1]), selected: /\sselected(?:\s|>)/.test(match[2]) }));
+  }
+  insertAdjacentHTML(_position, markup) {
+    const match = String(markup).match(/<option value="([^"]*)">/);
+    if (match) this._innerHTML = `<option value="${match[1]}">${match[1]}</option>${this._innerHTML}`;
+  }
+  _parseButtons() {
+    this._buttons = [];
+    for (const match of this._innerHTML.matchAll(/<button\b([^>]*)>([\s\S]*?)<\/button>/g)) {
+      const button = new FakeElement("");
+      button.disabled = /\sdisabled(?:\s|$)/.test(match[1]);
+      for (const attr of match[1].matchAll(/\b(data-[\w-]+)="([^"]*)"/g)) {
+        const key = attr[1].slice(5).replace(/-([a-z])/g, (_match, letter) => letter.toUpperCase());
+        button.dataset[key] = decodeEntities(attr[2]);
+      }
+      this._buttons.push(button);
+    }
+  }
+  querySelector(selector) {
+    const match = selector.match(/^button\[data-([a-z-]+)="([^"]*)"\]$/);
+    if (!match) return null;
+    const key = match[1].replace(/-([a-z])/g, (_match, letter) => letter.toUpperCase());
+    return this._buttons.find(button => button.dataset[key] === decodeEntities(match[2])) || null;
+  }
+  querySelectorAll(selector) {
+    const match = selector.match(/^\[data-([a-z-]+)\]$/);
+    if (!match) return [];
+    const key = match[1].replace(/-([a-z])/g, (_match, letter) => letter.toUpperCase());
+    return this._buttons.filter(button => Object.prototype.hasOwnProperty.call(button.dataset, key));
+  }
+  dispatchEvent(event) {
+    if (event.type === "change" && typeof this.onchange === "function") this.onchange(event);
+  }
+  fire(type, event = {}) {
+    event.target = this;
+    if (typeof this[`on${type}`] === "function") this[`on${type}`](event);
+    for (const fn of this._listeners[type] || []) fn.call(this, event);
+  }
+  addEventListener(type, fn) {
+    (this._listeners[type] = this._listeners[type] || []).push(fn);
+  }
+}
+function hydrateRoot(root) {
+  for (const id of Object.keys(elements)) {
+    if (elements[id] !== root && id !== "status") delete elements[id];
+  }
+  root._children = [];
+  const markup = root._innerHTML;
+  for (const match of markup.matchAll(/\bid="([^"]+)"/g)) {
+    const id = match[1];
+    if (elements[id]) continue;
+    const tagStart = markup.lastIndexOf("<", match.index);
+    const tagEnd = markup.indexOf(">", match.index);
+    const tag = markup.slice(tagStart, tagEnd + 1);
+    const element = new FakeElement(id);
+    element._markup = tag;
+    element.tagName = (tag.match(/^<([a-z]+)/i) || ["", ""])[1].toUpperCase();
+    element.type = (tag.match(/\btype="([^"]*)"/) || ["", ""])[1];
+    const classAttr = tag.match(/\bclass="([^"]*)"/);
+    if (classAttr) element.className = classAttr[1];
+    for (const attr of tag.matchAll(/\b(data-[\w-]+)="([^"]*)"/g)) {
+      const key = attr[1].slice(5).replace(/-([a-z])/g, (_match, letter) => letter.toUpperCase());
+      element.dataset[key] = decodeEntities(attr[2]);
+    }
+    const valueAttr = tag.match(/\bvalue="([^"]*)"/);
+    if (valueAttr) element.value = decodeEntities(valueAttr[1]);
+    const envAttr = tag.match(/\bdata-env="([^"]*)"/);
+    if (envAttr && state.schema && state.schema.current_env && Object.prototype.hasOwnProperty.call(state.schema.current_env, envAttr[1])) {
+      element.value = state.schema.current_env[envAttr[1]];
+    }
+    element.open = element.tagName === "DETAILS" && /\sopen(?:\s|>)/.test(tag);
+    element._root = root;
+    root._children.push(element);
+    elements[id] = element;
+  }
+  for (const match of markup.matchAll(/<([a-z]+)\b([^>]*)>/gi)) {
+    const env = match[2].match(/\bdata-env="([^"]+)"/);
+    if (!env || root._children.some(child => child.dataset.env === env[1])) continue;
+    const element = new FakeElement(`env:${env[1]}`);
+    element._markup = match[0];
+    element.tagName = match[1].toUpperCase();
+    element._root = root;
+    element.dataset.env = env[1];
+    if (state.schema && state.schema.current_env && Object.prototype.hasOwnProperty.call(state.schema.current_env, env[1])) {
+      element.value = state.schema.current_env[env[1]];
+    }
+    root._children.push(element);
+    elements[env[1]] = element;
+  }
+}
+const mount = new FakeElement("runSetupMount");
+mount._root = mount;
+mount._children = [];
+elements.runSetupMount = mount;
+elements.status = new FakeElement("status");
+const document = {
+  getElementById(id) { return elements[id] || null; },
+  querySelector(selector) {
+    const env = selector.match(/^\[data-env="([^"]+)"\]$/);
+    return env ? (mount._children || []).find(child => child.dataset.env === env[1]) || null : null;
+  },
+  querySelectorAll() { return []; }
+};
+class Event {
+  constructor(type) { this.type = type; }
+}
+const state = { schema: null, selectedModelReference: "", selectedModelRequiredBackend: "" };
+let wizardState = { step: 3, values: {} };
+const wizardSteps = [
+  { id: "preset", title: "Preset / Goal", envs: ["NEWS_PRESET"], description: "Preset" },
+  { id: "sources", title: "Sources", envs: ["NEWS_SOURCE_SCOPE"], description: "Sources" },
+  { id: "model", title: "Model", envs: ["NEWS_MODEL"], description: "Model" },
+  { id: "delivery", title: "Delivery", envs: ["NEWS_DELIVERY_MODE"], description: "Delivery" },
+  { id: "review", title: "Review & Run", preview: true, description: "Review" }
+];
+let wizardMode = true;
+function isWizardEnabled() { return wizardMode; }
+function wizardHint() { return ""; }
+function formatDefault(value, fallback = "none") { return value || fallback; }
+function $(id) { return elements[id] || null; }
+function value(id) { return $(id) ? $(id).value : ""; }
+function currentControlValue(env) {
+  const element = document.querySelector(`[data-env="${env}"]`);
+  return element ? element.value : (state.schema.current_env[env] || "");
+}
+function knobByEnv(env) {
+  return (state.schema.knobs || []).find(knob => knob.env === env) || null;
+}
+function knobField(env, _label, options = {}) {
+  if (env !== "NEWS_MODEL") return "";
+  const knob = knobByEnv(env) || { default: "default-model", options: ["default-model"] };
+  const current = state.schema.current_env[env] || "";
+  const values = [...new Set([...(knob.options || []), ...(current ? [current] : [])])];
+  const emptyLabel = options.emptyLabel || `default: ${formatDefault(knob.default)}`;
+  return `<select data-env="NEWS_MODEL"><option value="">${emptyLabel}</option>${values.map(option => `<option value="${option}"${option === current ? " selected" : ""}>${option}</option>`).join("")}</select>`;
+}
+function modelTaskLabels() { return state.schema.model_task_labels || {}; }
+function runtimeFitLabels() { return state.schema.runtime_fit_labels || {}; }
+function modelCatalogEntries() { return state.schema.model_catalog || []; }
+function catalogBackendForReference(reference) {
+  const entry = modelCatalogEntries().find(item => item.alias === reference || item.reference === reference);
+  return entry ? entry.backend : "";
+}
+const RUNTIME_FIT_BACKENDS = {};
+function renderPresetSummary() {}
+function renderStats() {}
+function decorateEnvHints() {}
+function renderModelTuningPanels() {}
+function renderPromptProfilePanel() {}
+function refreshModelKnobLinks() {}
+function bindWizardEvents() {}
+function syncWizardEnv() {}
+function saveWizardState() {}
+function previewQuietly() {}
+function advancedDrawerCount() { return 0; }
+function resetAllOverrides() {}
+function previewWithStatus() {}
+async function api(path) {
+  apiCalls += 1;
+  assert(path.includes("q=catalog"), `unexpected search path: ${path}`);
+  return { models: [], error: null };
+}
+function setStatus() {}
+let apiCalls = 0;
+"""
+            + js_function_block("    function escapeHtml(text) {", "    function formatDefault")
+            + js_function_block("    function modelCatalogMarkup() {", "    function renderWizardStepContent")
+            + js_function_block("    function renderWizardStepContent() {", "    function syncWizardEnv")
+            + js_function_block("    function renderWizard() {", "    function renderWizardShellExtras")
+            + js_function_block("    function renderWizardShellExtras() {", "    function renderRunSetup")
+            + js_function_block("    function renderRunSetup() {", "    // Knob labels")
+            + js_function_block("    function useModelReference(", "    function renderModelBackendHint")
+            + js_function_block("    function effectiveModelBackend() {", "    function inputForKnob")
+            + js_function_block("    function requiredBackendForSelectedModel() {", "    function useModelReference(")
+            + js_function_block("    function renderModelBackendHint(requiredBackend = \"\") {", "    function bindModelCatalogEvents()")
+            + js_function_block("    function renderModelCatalogPanel() {", "    function renderRecommendations")
+            + js_function_block("    function renderRecommendations(task) {", "    async function searchHuggingFaceModels")
+            + js_function_block("    async function searchHuggingFaceModels() {", "    async function comparePromptProfiles")
+            + js_function_block("    function bindModelCatalogEvents() {", "    function renderModelCatalogPanel")
+            + r"""
+state.schema = {
+  current_env: { NEWS_MODEL: "safe-alias", NEWS_MODEL_BACKEND: "mlx-lm" },
+  runtime: { model: { name: "Default Gemma", reference: "default-model" } },
+  knobs: [
+    { env: "NEWS_MODEL", default: "default-model", options: ["default-model"] },
+    { env: "NEWS_MODEL_BACKEND", default: "mlx-vlm", options: ["mlx-vlm"] }
+  ],
+  actions: ["run"],
+  prompt_profiles: [],
+  model_recommendation_tasks: ["speed"],
+  model_task_labels: { speed: "Speed" },
+  model_catalog: [{
+    alias: "safe-alias",
+    name: "Safe model",
+    description: "Curated",
+    backend: "mlx-vlm",
+    context_length: 8192,
+    hf_url: "https://example.test/safe"
+  }],
+  model_recommendations: {
+    speed: [{ alias: "recommended", name: "Recommended", reason: "Fast" }]
+  },
+  runtime_fit_labels: {}
+};
+const disclosureCount = markup => (markup.match(/<details id="modelCatalogDisclosure"/g) || []).length;
+const assertClosedAndResolved = surface => {
+  assert(disclosureCount(mount.innerHTML) === 1, `${surface} rendered duplicate disclosures`);
+  assert(!/<details id="modelCatalogDisclosure"[^>]*\bopen\b/.test(mount.innerHTML), `${surface} disclosure was not closed`);
+  assert(mount.innerHTML.includes("Resolved: Default Gemma"), `${surface} hid the resolved default`);
+};
+const driveCatalog = async (surface, expectedCalls) => {
+  assertClosedAndResolved(surface);
+  assert(apiCalls === expectedCalls, `${surface} searched during initial render`);
+  const disclosure = $("modelCatalogDisclosure");
+  disclosure.open = true;
+  disclosure.fire("toggle");
+  assert(apiCalls === expectedCalls, `${surface} searched while opening disclosure`);
+  $("modelSearchQuery").value = "catalog";
+  await $("modelSearchBtn").onclick();
+  assert(apiCalls === expectedCalls + 1, `${surface} Search did not make one request`);
+  const recommendation = $("recommendationTask");
+  recommendation.value = "speed";
+  recommendation.onchange();
+  const recommendationUse = $("recommendationReadout").querySelector('button[data-use-model="recommended"]');
+  assert(recommendationUse && typeof recommendationUse.onclick === "function", `${surface} recommendation handler missing`);
+  recommendationUse.onclick();
+  const catalogUse = $("catalogCards").querySelector('button[data-use-model="safe-alias"]');
+  assert(catalogUse && typeof catalogUse.onclick === "function", `${surface} catalog handler missing`);
+  catalogUse.onclick();
+};
+wizardMode = true;
+wizardState.step = 3;
+renderRunSetup();
+const initialHint = $("modelBackendHint");
+assert(initialHint && !initialHint.className.split(/\s+/).includes("hidden"), "wizard initial mismatch hint stayed hidden");
+assert(initialHint.textContent === "This model needs NEWS_MODEL_BACKEND=mlx-vlm", "wizard initial mismatch hint was wrong");
+await driveCatalog("wizard", 0);
+assert(typeof $("wizardNext").onclick === "function", "wizard Next handler missing");
+assert(typeof $("wizardBack").onclick === "function", "wizard Back handler missing");
+await $("wizardNext").onclick();
+await $("wizardBack").onclick();
+assertClosedAndResolved("wizard rerender");
+assert(apiCalls === 1, "wizard Next/Back searched Hugging Face");
+$("recommendationTask").value = "speed";
+$("recommendationTask").onchange();
+assert(typeof $("recommendationReadout").querySelector('button[data-use-model="recommended"]').onclick === "function", "wizard recommendation lost after Back");
+assert(typeof $("catalogCards").querySelector('button[data-use-model="safe-alias"]').onclick === "function", "wizard catalog Use lost after Back");
+$("modelSearchQuery").value = "catalog";
+let prevented = 0;
+await $("modelSearchQuery").onkeydown({ key: "Enter", preventDefault() { prevented += 1; } });
+assert(prevented === 1 && apiCalls === 2, "wizard Enter lost after Back");
+
+wizardMode = false;
+renderRunSetup();
+await driveCatalog("legacy", 2);
+renderRunSetup();
+assertClosedAndResolved("legacy rerender");
+assert(apiCalls === 3, "legacy re-render searched Hugging Face");
+$("modelSearchQuery").value = "catalog";
+prevented = 0;
+await $("modelSearchQuery").onkeydown({ key: "Enter", preventDefault() { prevented += 1; } });
+assert(prevented === 1 && apiCalls === 4, "legacy Enter lost after re-render");
+"""
+        )
+        node = _find_node()
+        if node is None:
+            self.skipTest("Node.js is required for the embedded UI renderer harness")
+        result = subprocess.run(
+            [node, "--input-type=module", "-"],
+            input=js,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=30,
         )
         self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
 

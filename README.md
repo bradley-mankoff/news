@@ -485,9 +485,11 @@ Hugging Face search results carry runtime-fit verdicts (`managed_mlx_lm`,
 `managed_mlx_vlm`, `managed_llama_cpp`, or `external_only`) as advisory
 picker/configuration hints. They do not guarantee hardware fit, compatibility,
 or successful launch; hardware fitting itself lives on the Hugging Face model
-page (see ADR 0019 and the ADR 0017 runtime matrix). The UI's "Model catalog"
-panel shows curated cards, task recommendations, and search with the same
-verdicts.
+page (see ADR 0019 and the ADR 0017 runtime matrix). The UI exposes these
+through a closed **Browse models** disclosure in both legacy Run Setup and
+wizard Model step 3. The resolved default remains visible; opening the
+disclosure shows curated cards and task recommendations, while Hugging Face
+requests occur only after clicking Search or pressing Enter.
 
 #### User-editable YAML overrides
 

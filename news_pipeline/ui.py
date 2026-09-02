@@ -3045,6 +3045,48 @@ HTML = r"""<!doctype html>
       const opts = [`<option value="">none (custom)</option>`].concat(presets.map(p => `<option value="${escapeHtml(p.id)}"${selected === p.id ? " selected" : ""}>${escapeHtml(p.name || p.id)}</option>`));
       return opts.join("");
     }
+    function modelCatalogMarkup() {
+      return `
+        <details id="modelCatalogDisclosure" class="details">
+          <summary>Browse models</summary>
+          <p class="muted">The default model is ready to use. Open this section only if you want to compare models, choose a different one, or search Hugging Face. Click Search or press Enter to search Hugging Face.</p>
+          <div class="model-catalog-content">
+            <p class="eyebrow">Model catalog</p>
+            <h2>Model catalog and Hugging Face search</h2>
+            <p class="muted">Built-in models are verified for the managed backends; user-overlay entries and searchable Hugging Face models carry advisory runtime-fit verdicts (hardware fitting lives on the Hugging Face model page).</p>
+            <div class="form-grid">
+              <label class="field"><span>Recommendation task</span>
+                <select id="recommendationTask">
+                  <option value="">Pick a task…</option>
+                </select>
+                <code>task</code>
+              </label>
+            </div>
+            <div id="recommendationReadout" class="stack"></div>
+            <div id="catalogCards" class="stack"></div>
+            <details class="details" open>
+              <summary>Search Hugging Face</summary>
+              <div class="form-grid">
+                <label class="field"><span>Query</span><input id="modelSearchQuery" type="text" placeholder="e.g. gemma"><code>q</code></label>
+                <label class="field"><span>Pipeline tag</span>
+                  <select id="modelSearchPipeline">
+                    <option value="">any</option>
+                    <option value="text-generation">text-generation</option>
+                    <option value="text2text-generation">text2text-generation</option>
+                    <option value="image-text-to-text">image-text-to-text</option>
+                  </select>
+                  <code>pipeline_tag</code>
+                </label>
+                <label class="field"><span>Limit</span><input id="modelSearchLimit" type="number" min="1" max="50" value="10"><code>limit</code></label>
+              </div>
+              <div class="toolbar">
+                <button id="modelSearchBtn">Search</button>
+              </div>
+              <div id="modelSearchResults" class="stack"></div>
+            </details>
+          </div>
+        </details>`;
+    }
     function renderWizardStepContent() {
       const step = wizardSteps[wizardState.step - 1];
       if (!step) return "";
@@ -3083,7 +3125,7 @@ HTML = r"""<!doctype html>
       if (step.id === "model") {
         const runtime = (state.schema && state.schema.runtime && state.schema.runtime.model) || {};
         const resolved = runtime.name || runtime.reference || "-";
-        extra = `<p class="muted">Resolved: ${escapeHtml(resolved)}</p><details class="details"><summary>Per-task model overrides (optional)</summary><div class="form-grid">` +
+        extra = `<p class="muted">Resolved: ${escapeHtml(resolved)}</p><p id="modelBackendHint" class="muted hidden" aria-live="polite"></p>${modelCatalogMarkup()}<details class="details"><summary>Per-task model overrides (optional)</summary><div class="form-grid">` +
           ["NEWS_MODEL_ARTICLE_SUMMARY","NEWS_MODEL_STORY_DRAFTING","NEWS_MODEL_STORY_SCALE_SCREENING","NEWS_MODEL_TITLE_GENERATION","NEWS_MODEL_IMAGE_ART_DIRECTION"].map(e => knobField(e, e.replace("NEWS_MODEL_","").replace(/_/g," ")) || "").join("") + `</div></details>`;
       }
       return `<div class="form-grid">${fields}</div>${extra}`;
@@ -3170,6 +3212,11 @@ HTML = r"""<!doctype html>
         renderStats();
         decorateEnvHints($("runSetupMount"));
         bindWizardEvents();
+        if (wizardState.step === 3) {
+          renderModelCatalogPanel();
+          bindModelCatalogEvents();
+          if (typeof renderModelBackendHint === "function") renderModelBackendHint(requiredBackendForSelectedModel());
+        }
         const advancedDrawerContent = $("advancedDrawerContent");
         if (advancedDrawerContent && wizardState.step === wizardSteps.length) {
           const refreshAdvancedDrawer = () => {
@@ -3336,39 +3383,7 @@ HTML = r"""<!doctype html>
             <p class="muted">Per-task model alternatives and sampling are in Advanced Settings.</p>
           </section>
           <section class="panel">
-            <p class="eyebrow">Model catalog</p>
-            <h2>Model catalog and Hugging Face search</h2>
-            <p class="muted">Built-in models are verified for the managed backends; user-overlay entries and searchable Hugging Face models carry advisory runtime-fit verdicts (hardware fitting lives on the Hugging Face model page).</p>
-            <div class="form-grid">
-              <label class="field"><span>Recommendation task</span>
-                <select id="recommendationTask">
-                  <option value="">Pick a task…</option>
-                </select>
-                <code>task</code>
-              </label>
-            </div>
-            <div id="recommendationReadout" class="stack"></div>
-            <div id="catalogCards" class="stack"></div>
-            <details class="details">
-              <summary>Search Hugging Face</summary>
-              <div class="form-grid">
-                <label class="field"><span>Query</span><input id="modelSearchQuery" type="text" placeholder="e.g. gemma"><code>q</code></label>
-                <label class="field"><span>Pipeline tag</span>
-                  <select id="modelSearchPipeline">
-                    <option value="">any</option>
-                    <option value="text-generation">text-generation</option>
-                    <option value="text2text-generation">text2text-generation</option>
-                    <option value="image-text-to-text">image-text-to-text</option>
-                  </select>
-                  <code>pipeline_tag</code>
-                </label>
-                <label class="field"><span>Limit</span><input id="modelSearchLimit" type="number" min="1" max="50" value="10"><code>limit</code></label>
-              </div>
-              <div class="toolbar">
-                <button id="modelSearchBtn">Search</button>
-              </div>
-              <div id="modelSearchResults" class="stack"></div>
-            </details>
+            ${typeof modelCatalogMarkup === "function" ? modelCatalogMarkup() : ""}
           </section>
           <section class="panel">
             <details class="details">
@@ -3422,14 +3437,7 @@ HTML = r"""<!doctype html>
       $("actionSelect").onchange = () => {
         $("sourceOptions").classList.toggle("hidden", !["check-sources","prune-sources","source-languages"].includes(value("actionSelect")));
       };
-      $("recommendationTask").onchange = () => renderRecommendations(value("recommendationTask"));
-      $("modelSearchBtn").onclick = () => searchHuggingFaceModels().catch(err => setStatus(err.message, "bad"));
-      $("modelSearchQuery").onkeydown = ev => {
-        if (ev.key === "Enter") {
-          ev.preventDefault();
-          searchHuggingFaceModels().catch(err => setStatus(err.message, "bad"));
-        }
-      };
+      if (typeof bindModelCatalogEvents === "function") bindModelCatalogEvents();
       // The markup rebuild above recreates the NEWS_MODEL .knob-links row;
       // refresh links here so the run-setup card is authoritative whenever
       // renderRunSetup() is invoked (issue #79).
@@ -4935,6 +4943,19 @@ HTML = r"""<!doctype html>
       }
       hint.textContent = `This model needs NEWS_MODEL_BACKEND=${required}`;
       hint.classList.remove("hidden");
+    }
+    function bindModelCatalogEvents() {
+      const select = $("recommendationTask");
+      if (select) select.onchange = () => renderRecommendations(value("recommendationTask"));
+      const searchButton = $("modelSearchBtn");
+      if (searchButton) searchButton.onclick = () => searchHuggingFaceModels().catch(err => setStatus(err.message, "bad"));
+      const searchQuery = $("modelSearchQuery");
+      if (searchQuery) searchQuery.onkeydown = ev => {
+        if (ev.key === "Enter") {
+          ev.preventDefault();
+          searchHuggingFaceModels().catch(err => setStatus(err.message, "bad"));
+        }
+      };
     }
     function renderModelCatalogPanel() {
       const select = $("recommendationTask");
