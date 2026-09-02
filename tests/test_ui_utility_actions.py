@@ -515,11 +515,13 @@ const wizardSteps = [{ title: "Preset" }, { title: "Review" }];
 const wizardState = { step: 1 };
 const state = { schema: { actions: ["run", "check-sources"], runtime: {}, prompt_profiles: [], knobs: [] }, selectedUtilityAction: "run" };
 const renderWizard = () => "<div>Guided wizard</div>";
-const renderWizardShellExtras = () => "<div>Run details</div>";
+const renderUtilityActionPanel = () => '<div data-utility-action="run"></div><button id="utilityPreviewBtn"></button><button id="utilityRunBtn"></button>';
+const renderWizardShellExtras = () => `<div>Run details</div>${renderUtilityActionPanel()}`;
 const renderPresetSummary = () => {};
 const renderStats = () => {};
 const decorateEnvHints = () => {};
 const bindWizardEvents = () => {};
+const bindUtilityEvents = () => {};
 const decorateUtilityHints = () => {};
 const renderModelTuningPanels = () => {};
 const renderPromptProfilePanel = () => {};
@@ -538,8 +540,10 @@ assert(
   "the default URL must render the guided wizard"
 );
 assert(
-  !$("runSetupMount").innerHTML.includes("data-utility-action"),
-  "the guided wizard must not expose legacy utility controls"
+  $("runSetupMount").innerHTML.includes('data-utility-action="run"') &&
+    $("runSetupMount").innerHTML.includes('id="utilityPreviewBtn"') &&
+    $("runSetupMount").innerHTML.includes('id="utilityRunBtn"'),
+  "the default wizard must expose the utility action controls"
 );
 
 search = "?wizard=0";
