@@ -3049,7 +3049,7 @@ HTML = r"""<!doctype html>
       return `
         <details id="modelCatalogDisclosure" class="details">
           <summary>Browse models</summary>
-          <p class="muted">Your current model is ready to use. Open this to compare curated models or search Hugging Face. Searching Hugging Face happens only when you click Search.</p>
+          <p class="muted">Your current model is ready to use. Open this to compare curated models or search Hugging Face. Click Search or press Enter to search Hugging Face.</p>
           <div class="model-catalog-content">
             <p class="eyebrow">Model catalog</p>
             <h2>Model catalog and Hugging Face search</h2>
@@ -4946,8 +4946,7 @@ HTML = r"""<!doctype html>
     }
     function bindModelCatalogEvents() {
       const select = $("recommendationTask");
-      if (!select) return;
-      select.onchange = () => renderRecommendations(value("recommendationTask"));
+      if (select) select.onchange = () => renderRecommendations(value("recommendationTask"));
       const searchButton = $("modelSearchBtn");
       if (searchButton) searchButton.onclick = () => searchHuggingFaceModels().catch(err => setStatus(err.message, "bad"));
       const searchQuery = $("modelSearchQuery");

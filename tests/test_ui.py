@@ -1840,6 +1840,10 @@ assert(SURFACED_ENVS.size === 0, "missing schema must not throw and must suppres
         block = html.split('<p class="eyebrow">Model catalog</p>', 1)[1].split(
             "<summary>Utilities</summary>", 1
         )[0]
+        self.assertIn(
+            "Click Search or press Enter to search Hugging Face.",
+            html,
+        )
         for snippet in (
             "Model catalog and Hugging Face search",
             "Built-in models are verified for the managed backends",
@@ -4052,6 +4056,88 @@ assert(defaultEnabledButton && !defaultEnabledButton.disabled, "explicit externa
             capture_output=True,
             text=True,
             check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
+
+    def test_model_catalog_event_binding_handles_partial_dom_and_rejections(self) -> None:
+        """Exercise shared catalog bindings through missing-DOM and error paths."""
+        html = ui_module.HTML
+
+        def js_function_block(start: str, end: str) -> str:
+            begin = html.index(start)
+            return html[begin : html.index(end, begin)]
+
+        js = (
+            r"""
+const assert = (condition, message) => {
+  if (!condition) throw new Error(message);
+};
+const elements = {
+  recommendationTask: { value: "speed", onchange: null },
+  modelSearchBtn: { onclick: null },
+  modelSearchQuery: { onkeydown: null },
+};
+const $ = (id) => elements[id] || null;
+const value = (id) => $(id) ? $(id).value : "";
+let recommendation = "";
+let searchCalls = 0;
+let statusError = "";
+function renderRecommendations(task) { recommendation = task; }
+async function searchHuggingFaceModels() {
+  searchCalls += 1;
+  throw new Error("HF unavailable");
+}
+function setStatus(text, cls) { statusError = `${cls}:${text}`; }
+"""
+            + js_function_block(
+                "    function bindModelCatalogEvents() {",
+                "    function renderModelCatalogPanel() {",
+            )
+            + r"""
+bindModelCatalogEvents();
+assert(typeof elements.recommendationTask.onchange === "function", "recommendation binding missing");
+elements.recommendationTask.onchange();
+assert(recommendation === "speed", "recommendation binding used the wrong value");
+assert(typeof elements.modelSearchBtn.onclick === "function", "Search binding missing");
+assert(typeof elements.modelSearchQuery.onkeydown === "function", "Enter binding missing");
+
+// Property assignments remain idempotent when the shared binder runs again.
+bindModelCatalogEvents();
+await elements.modelSearchBtn.onclick();
+assert(searchCalls === 1, "repeated binding duplicated the click action");
+assert(statusError === "bad:HF unavailable", "click rejection did not reach status");
+let prevented = false;
+await elements.modelSearchQuery.onkeydown({
+  key: "Enter",
+  preventDefault() { prevented = true; },
+});
+assert(prevented, "Enter did not prevent the default form action");
+assert(searchCalls === 2, "Enter did not invoke Search");
+assert(statusError === "bad:HF unavailable", "Enter rejection did not reach status");
+
+// Search stays usable when the optional recommendation select is absent.
+elements.recommendationTask = null;
+bindModelCatalogEvents();
+assert(typeof elements.modelSearchBtn.onclick === "function", "Search was disabled by a missing select");
+await elements.modelSearchBtn.onclick();
+assert(searchCalls === 3, "partial DOM Search did not invoke once");
+
+// Optional Search controls may be absent without making the binder throw.
+elements.modelSearchBtn = null;
+elements.modelSearchQuery = null;
+bindModelCatalogEvents();
+"""
+        )
+        node = _find_node()
+        if node is None:
+            self.skipTest("Node.js is required for the embedded UI renderer harness")
+        result = subprocess.run(
+            [node, "--input-type=module", "-"],
+            input=js,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=30,
         )
         self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
 
