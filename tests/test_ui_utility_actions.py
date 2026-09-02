@@ -472,6 +472,95 @@ assert(
         )
         self._run_node(script)
 
+    def test_utility_actions_reach_preview_request_body(self) -> None:
+        """Exercise the production utility preview path through its API body."""
+        html = ui_module.HTML
+
+        def block(start: str, end: str) -> str:
+            begin = html.index(start)
+            return html[begin : html.index(end, begin)]
+
+        script = (
+            r"""
+const assert = (condition, message) => {
+  if (!condition) throw new Error(message);
+};
+class FakeElement {
+  constructor(value = "") {
+    this.value = value;
+    this.checked = false;
+    this.textContent = "";
+    this.onclick = null;
+  }
+}
+const elements = {};
+for (const id of [
+  "utilityPreviewBtn", "utilityRunBtn", "previewPane",
+  "opt_limit", "opt_recent_days", "opt_timeout", "opt_concurrency",
+  "opt_section", "opt_language_model", "opt_language_samples",
+  "opt_min_language_confidence", "opt_probe_articles",
+  "opt_prune_unscrapable", "opt_only_failures", "opt_write_languages",
+  "opt_overwrite_languages", "opt_json"
+]) elements[id] = new FakeElement();
+function $(id) { return elements[id] || null; }
+function value(id) { const el = $(id); return el ? el.value : ""; }
+function checked(id) { const el = $(id); return Boolean(el && el.checked); }
+function collectEnv() { return { NEWS_TEST: "yes" }; }
+function setStatus(_message, _kind) {}
+function updateRunControls() {}
+function resetLog() {}
+function startSpinner() {}
+function refreshReviewData() {}
+const document = { querySelectorAll: () => [] };
+const state = { selectedRunPresetId: "daily", selectedUtilityAction: "run", activeRun: null };
+function selectedUtilityAction() { return state.selectedUtilityAction; }
+class EventSource {
+  addEventListener() {}
+  close() {}
+}
+const requests = [];
+async function api(path, options = {}) {
+  requests.push({ path, body: JSON.parse(options.body) });
+  if (path === "/api/run") return { run_id: "run-1" };
+  return { command_text: "preview", runtime_error: null };
+}
+"""
+            + block("    function collectOptions() {", "    function requestBody")
+            + block('    function requestBody(action="run") {', "    function envToText")
+            + block('    async function preview(action="run") {', "    function updateRunControls")
+            + block('    async function runAction(action="run") {', "    function badgeClass")
+            + block("    function bindUtilityEvents() {", "    function decorateUtilityHints")
+            + r"""
+elements.opt_limit.value = "3";
+elements.opt_recent_days.value = "7";
+elements.opt_only_failures.checked = true;
+bindUtilityEvents();
+function assertRequest(path, action) {
+  assert(requests.length === 1, `${action} should issue one request`);
+  const request = requests[0];
+  assert(request.path === path, `${action} used the wrong API path`);
+  assert(request.body.action === action, `${action} was not serialized in the request body`);
+  assert(request.body.preset === "daily", `${action} dropped the selected preset`);
+  assert(request.body.env.NEWS_TEST === "yes", `${action} dropped collected environment values`);
+  assert(request.body.options.limit === "3", `${action} dropped the source limit`);
+  assert(request.body.options.recent_days === "7", `${action} dropped the recent-days option`);
+  assert(request.body.options.only_failures === true, `${action} dropped checkbox options`);
+}
+for (const action of ["check-sources", "prune-sources", "source-languages"]) {
+  state.selectedUtilityAction = action;
+  requests.length = 0;
+  await elements.utilityPreviewBtn.onclick();
+  assertRequest("/api/preview", action);
+  state.activeRun = null;
+  requests.length = 0;
+  await elements.utilityRunBtn.onclick();
+  assertRequest("/api/run", action);
+  state.activeRun = null;
+}
+"""
+        )
+        self._run_node(script)
+
     def test_render_run_setup_covers_default_wizard_and_legacy_utility_modes(self) -> None:
         """Keep the wizard/legacy utility surface boundary explicit."""
         html = ui_module.HTML
