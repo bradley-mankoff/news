@@ -256,7 +256,10 @@ class EnsureSmartReviewNodesTest(unittest.TestCase):
                           implement)
             self.assertIn("uv sync --group dev", verify)
             self.assertIn("uv run python -m pytest -q", verify)
-            self.assertIn("git diff --check", verify)
+            self.assertIn("git add -A", verify)
+            self.assertIn("git diff --cached --check", verify)
+            self.assertLess(verify.index("git add -A"),
+                            verify.index("git diff --cached --check"))
             self.assertIn("    depends_on: [implement-fixes]\n", verify)
             self.assertIn("    depends_on: [verify-fixes]\n", push)
             self.assertIn("    depends_on: [push-fixes]\n", report)
@@ -284,6 +287,11 @@ class OneshotWorkflowTest(unittest.TestCase):
 
         self.assertLess(implement, validate)
         self.assertLess(validate, draft_pr)
+        validate_node = text[validate:draft_pr]
+        self.assertIn("git add -A", validate_node)
+        self.assertIn("git diff --cached --check", validate_node)
+        self.assertLess(validate_node.index("git add -A"),
+                        validate_node.index("git diff --cached --check"))
         draft_node = text[draft_pr:]
         self.assertIn("    depends_on: [validate]\n", draft_node)
 
