@@ -3049,7 +3049,7 @@ HTML = r"""<!doctype html>
       return `
         <details id="modelCatalogDisclosure" class="details">
           <summary>Browse models</summary>
-          <p class="muted">Your current model is ready to use. Open this to compare curated models or search Hugging Face. Click Search or press Enter to search Hugging Face.</p>
+          <p class="muted">The default model is ready to use. Open this section only if you want to compare models, choose a different one, or search Hugging Face. Click Search or press Enter to search Hugging Face.</p>
           <div class="model-catalog-content">
             <p class="eyebrow">Model catalog</p>
             <h2>Model catalog and Hugging Face search</h2>
