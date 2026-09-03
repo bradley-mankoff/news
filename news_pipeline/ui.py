@@ -2415,18 +2415,13 @@ HTML = r"""<!doctype html>
       if (state.schema) {
         state.schema.current_env = { ...(state.schema.current_env || {}), ...values };
       }
-      const savedStep = draft.step ?? (typeof localStorage !== "undefined" && localStorage.getItem("wizardStep"));
-      const step = Number(savedStep);
-      wizardState = {
-        step: step >= 1 && step <= WIZARD_STEPS.length ? step : 1,
-        values
-      };
+      // Draft values persist across refresh; wizard position starts at Step 1.
+      wizardState = { step: 1, values };
     }
     function saveWizardState() {
       try {
         if (typeof localStorage !== "undefined") {
           localStorage.setItem(WIZARD_STORAGE_KEY, JSON.stringify(wizardState));
-          localStorage.setItem("wizardStep", String(wizardState.step));
         }
       } catch (_err) {}
       if (state.schema) {
@@ -2652,9 +2647,9 @@ HTML = r"""<!doctype html>
     const wizardSteps = [
       { id: "preset", title: "Preset / Goal", envs: ["NEWS_PRESET", "NEWS_PROMPT_PROFILE"], description: "Choose a saved preset and editorial tone." },
       { id: "sources", title: "Sources", envs: ["NEWS_SOURCE_SCOPE"], description: "Pick core or all sources." },
-      { id: "model", title: "Model", envs: ["NEWS_MODEL"], description: "Default model with Resolved readout; per-task picker collapsed.", collapsed: true },
+      { id: "model", title: "Model", envs: ["NEWS_MODEL"], description: "Selected model with Resolved readout; per-task picker collapsed.", collapsed: true },
       { id: "delivery", title: "Delivery", envs: ["NEWS_DELIVERY_MODE", "NEWS_PRIMARY_RECIPIENT"], description: "How and where the report is delivered." },
-      { id: "review", title: "Review & Run", preview: true, description: "Check stats, preview command, and run." }
+      { id: "review", title: "Review & Run", preview: true, description: "Check snapshot, preview command, and run." }
     ];
     // W1 owns the persisted wizardState; W2 adds curated step content.
     function isWizardEnabled() { return new URLSearchParams(window.location.search).get("wizard") !== "0"; }
@@ -2728,15 +2723,16 @@ HTML = r"""<!doctype html>
         ? String(knob.default)
         : "";
     }
-    function inputForKnob(knob, { emptyLabel, optionLabels = {}, id = "" } = {}) {
+    function inputForKnob(knob, { emptyLabel, optionLabels = {}, id = "", selectDefault = false } = {}) {
       const current = currentControlValue(knob.env);
+      const selected = current || (selectDefault && knob.default !== undefined && knob.default !== null ? String(knob.default) : "");
       const idAttr = id ? ` id="${escapeHtml(id)}"` : "";
       if (knob.type === "select") {
         const options = [...new Set(knob.options || [])];
         if (current && !options.includes(current)) options.unshift(current);
         const opts = [
           `<option value="">${escapeHtml(emptyLabel || `default: ${formatDefault(knob.default)}`)}</option>`,
-          ...options.map(opt => `<option value="${escapeHtml(opt)}"${current === opt ? " selected" : ""}>${escapeHtml(optionLabels[opt] || opt)}</option>`)
+          ...options.map(opt => `<option value="${escapeHtml(opt)}"${selected === opt ? " selected" : ""}>${escapeHtml(optionLabels[opt] || opt)}</option>`)
         ].join("");
         return `<select${idAttr} data-env="${escapeHtml(knob.env)}">${opts}</select>` + (knob.option_links && Object.keys(knob.option_links).length
           ? `<div class="knob-links" data-links-for="${escapeHtml(knob.env)}"></div>` : "");
@@ -2900,13 +2896,7 @@ HTML = r"""<!doctype html>
         container.innerHTML = `<span class="muted">No Hugging Face page for this external model</span>`;
         return;
       }
-      // page and hardware are the same URL on purpose: HF's native Hardware
-      // Compatibility panel lives on the model page (see _model_option_links);
-      // a future "#hardware" anchor is a one-line change here.
-      container.innerHTML = [
-        `<a href="${escapeHtml(entry.page)}" target="_blank" rel="noopener noreferrer">Hugging Face page</a>`,
-        `<a href="${escapeHtml(entry.hardware)}" target="_blank" rel="noopener noreferrer" title="Native Hardware Compatibility panel (GGUF/MLX) on the model page">Hardware compatibility</a>`
-      ].join(" · ");
+      container.innerHTML = `<a href="${escapeHtml(entry.page)}" target="_blank" rel="noopener noreferrer">Hugging Face page</a>`;
     }
     // Programmatic value changes (preset apply, clear/reset, startup restore,
     // model-tuning setters) do not fire `change` events, so re-render links
@@ -3019,13 +3009,16 @@ HTML = r"""<!doctype html>
       const scaleScreening = model.story_scale_screening || assignments.story_scale_screening || {};
       const titleGeneration = model.title_generation || assignments.title_generation || {};
       const imageArtDirection = model.image_art_direction || assignments.image_art_direction || {};
+      const activeScope = runtime.source_scope || "-";
+      const activeSources = source.selected && activeScope in (source.selected || {}) ? source.selected[activeScope] : "-";
       const items = [
         ["Run preset", state.selectedRunPresetId || runtime.preset_id || "custom"],
-        ["Source scope", runtime.source_scope || "-"],
+        ["Source scope", activeScope],
         ["Recipient scope", runtime.recipient_scope || "-"],
         ["Sources", source.total ?? 0],
         ["Core selected", source.selected ? source.selected.core : "-"],
         ["Peripheral selected", source.selected ? source.selected.peripheral : "-"],
+        ["Active sources", activeSources],
         ["Recipients", `${recipients.total ?? 0} total`],
         ["Model", model.reference || "-"],
         ["Article Summarization", articleSummary.reference || "-"],
@@ -3069,8 +3062,8 @@ HTML = r"""<!doctype html>
         if (env === "NEWS_PRESET") {
           return `<label class="field"><span>Preset</span><select id="wizard_preset" data-env="${env}">${wizardPresetOptions()}</select><code>${env}</code><p class="muted">${escapeHtml(wizardHint(env))}</p></label>`;
         }
-        const label = env === "NEWS_PROMPT_PROFILE" ? "Prompt profile" : env === "NEWS_SOURCE_SCOPE" ? "Source scope" : env === "NEWS_MODEL" ? "Default model" : env === "NEWS_DELIVERY_MODE" ? "Delivery mode" : env === "NEWS_PRIMARY_RECIPIENT" ? "Primary recipient" : env;
-        const opts = env === "NEWS_MODEL" ? { emptyLabel: `default: ${formatDefault((state.schema && state.schema.runtime && state.schema.runtime.model && (state.schema.runtime.model.name || state.schema.runtime.model.reference)) || "gemma-4-12b-it-4bit")}` } : {};
+        const label = env === "NEWS_PROMPT_PROFILE" ? "Prompt profile" : env === "NEWS_SOURCE_SCOPE" ? "Source scope" : env === "NEWS_MODEL" ? "Model" : env === "NEWS_DELIVERY_MODE" ? "Delivery mode" : env === "NEWS_PRIMARY_RECIPIENT" ? "Primary recipient" : env;
+        const opts = env === "NEWS_MODEL" ? { selectDefault: true, emptyLabel: `default: ${formatDefault((state.schema && state.schema.runtime && state.schema.runtime.model && (state.schema.runtime.model.name || state.schema.runtime.model.reference)) || "gemma-4-12b-it-mlx-4bit")}` } : {};
         const field = knobField(env, label, opts);
         if (!field) {
           const knob = knobByEnv(env);
@@ -3170,6 +3163,7 @@ HTML = r"""<!doctype html>
         renderStats();
         decorateEnvHints($("runSetupMount"));
         bindWizardEvents();
+        refreshModelKnobLinks();
         const advancedDrawerContent = $("advancedDrawerContent");
         if (advancedDrawerContent && wizardState.step === wizardSteps.length) {
           const refreshAdvancedDrawer = () => {
@@ -3217,8 +3211,8 @@ HTML = r"""<!doctype html>
       };
       // The empty-option label derives from the resolved runtime model
       // reference (DN-19), so changing the reference updates the label
-      // instead of drifting from a hardcoded alias.
-      const defaultModel = knobField("NEWS_MODEL", "Default model", {
+      const defaultModel = knobField("NEWS_MODEL", "Model", {
+        selectDefault: true,
         emptyLabel: `default: ${formatDefault(defaultRuntime.name || defaultRuntime.reference)}`
       });
       const sharedModelTokens = knobField("NEWS_MODEL_MAX_INPUT_TOKENS", "Shared model input cap");
@@ -3326,8 +3320,7 @@ HTML = r"""<!doctype html>
             <div id="stats" class="stats"></div>
           </section>
           <section class="panel model-card">
-            <p class="eyebrow">Model</p>
-            <h2>Default model</h2>
+            <h2>Model</h2>
             <p class="muted">Resolved: ${escapeHtml(defaultRuntime.name || defaultRuntime.reference || "-")}</p>
             <div class="form-grid">
               ${defaultModel}
@@ -4011,6 +4004,12 @@ HTML = r"""<!doctype html>
     async function preview(action="run") {
       const data = await api("/api/preview", { method: "POST", body: JSON.stringify(requestBody(action)) });
       $("previewPane").textContent = data.command_text + (data.runtime_error ? `\n\nPreview error: ${data.runtime_error}` : "");
+      if (data && data.runtime) {
+        state.schema = state.schema || {};
+        state.schema.runtime = data.runtime;
+        renderStats();
+        renderPresetSummary();
+      }
       return data;
     }
     function previewWithStatus(action="run") {

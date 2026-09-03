@@ -17,6 +17,22 @@ nodes:
       exists (pytest, node verify.js, etc.) and fix failures before you stop.
       Write a short record of files + decisions to $ARTIFACTS_DIR/record.md.
 
+  - id: validate
+    bash: |
+      set -euo pipefail
+      if command -v uv >/dev/null 2>&1; then
+        uv sync --group dev
+        uv run python -m pytest -q
+      elif [[ -x .venv/bin/python3 ]]; then
+        .venv/bin/python3 -m pytest tests/ -q
+      else
+        echo "validate: neither uv nor .venv/bin/python3 test runner available" >&2
+        exit 1
+      fi
+      git add -A
+      git diff --cached --check
+    depends_on: [implement]
+
   - id: draft-pr
     bash: |
       set -euo pipefail
@@ -28,4 +44,4 @@ nodes:
       gh pr create --draft --base "${FACTORY_BASE_BRANCH:-develop}" \
         --title "factory: $REF" \
         --body "Factory slice \`$REF\`. Draft. Human/QA merge. Issue: $REF"
-    depends_on: [implement]
+    depends_on: [validate]

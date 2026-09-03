@@ -85,21 +85,7 @@ ASSISTANT_CONTEXT_CORE_PATTERNS = (
     "**/.DS_Store",
 )
 RUN_OUTPUT_TIMESTAMP_RE = re.compile(r"\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}")
-QWWYTHOS_REPO = "huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF"
-QWWYTHOS_Q4K_FILENAME = "Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-Q4_K.gguf"
-QWWYTHOS_Q8_FILENAME = "Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-Q8_0.gguf"
-QWWYTHOS_9B_4BIT_MODEL_ALIAS = "qwythos-9b-4bit"
-QWWYTHOS_9B_4BIT_MODEL_REFERENCE = f"{QWWYTHOS_REPO}/{QWWYTHOS_Q4K_FILENAME}"
-QWWYTHOS_9B_8BIT_MODEL_ALIAS = "qwythos-9b-8bit"
-QWWYTHOS_9B_8BIT_MODEL_REFERENCE = f"{QWWYTHOS_REPO}/{QWWYTHOS_Q8_FILENAME}"
-# Runtime-verified Qwen3 MLX language models (issue #89): mlx-community
-# 4-bit distributions served by the managed mlx-lm backend on Apple
-# Silicon, verified per docs/model-runtime-verification.md. MLX entries
-# keep reference == hf_repo (no .gguf suffix).
-QWEN3_8B_4BIT_MODEL_ALIAS = "qwen3-8b-4bit"
-QWEN3_8B_4BIT_MODEL_REPO = "mlx-community/Qwen3-8B-4bit"
-QWEN3_14B_4BIT_MODEL_ALIAS = "qwen3-14b-4bit"
-QWEN3_14B_4BIT_MODEL_REPO = "mlx-community/Qwen3-14B-4bit"
+# Managed model backends.
 MODEL_BACKEND_MLX_LM = "mlx-lm"
 MODEL_BACKEND_MLX_VLM = "mlx-vlm"
 MODEL_BACKEND_EXTERNAL = "external"
@@ -110,23 +96,65 @@ SUPPORTED_MODEL_BACKENDS = (
     MODEL_BACKEND_EXTERNAL,
     MODEL_BACKEND_LLAMA_CPP,
 )
+
+# Curated Gemma 4 instruction variants. Each MLX entry is the consistent
+# mlx-community 4-bit distribution; each GGUF entry is Unsloth's
+# UD-Q4_K_XL file from the matching repository.
+GEMMA_4_E2B_IT_MLX_4BIT_MODEL_ALIAS = "gemma-4-e2b-it-mlx-4bit"
+GEMMA_4_E2B_IT_MLX_4BIT_MODEL_REPO = "mlx-community/gemma-4-e2b-it-4bit"
+GEMMA_4_E2B_IT_GGUF_MODEL_ALIAS = "gemma-4-e2b-it-gguf-ud-q4-k-xl"
+GEMMA_4_E2B_IT_GGUF_MODEL_REPO = "unsloth/gemma-4-E2B-it-GGUF"
+GEMMA_4_E2B_IT_GGUF_MODEL_FILENAME = "gemma-4-E2B-it-UD-Q4_K_XL.gguf"
+GEMMA_4_E2B_IT_GGUF_MODEL_REFERENCE = (
+    f"{GEMMA_4_E2B_IT_GGUF_MODEL_REPO}/{GEMMA_4_E2B_IT_GGUF_MODEL_FILENAME}"
+)
+
+GEMMA_4_E4B_IT_MLX_4BIT_MODEL_ALIAS = "gemma-4-e4b-it-mlx-4bit"
+GEMMA_4_E4B_IT_MLX_4BIT_MODEL_REPO = "mlx-community/gemma-4-e4b-it-4bit"
+GEMMA_4_E4B_IT_GGUF_MODEL_ALIAS = "gemma-4-e4b-it-gguf-ud-q4-k-xl"
+GEMMA_4_E4B_IT_GGUF_MODEL_REPO = "unsloth/gemma-4-E4B-it-GGUF"
+GEMMA_4_E4B_IT_GGUF_MODEL_FILENAME = "gemma-4-E4B-it-UD-Q4_K_XL.gguf"
+GEMMA_4_E4B_IT_GGUF_MODEL_REFERENCE = (
+    f"{GEMMA_4_E4B_IT_GGUF_MODEL_REPO}/{GEMMA_4_E4B_IT_GGUF_MODEL_FILENAME}"
+)
+
+GEMMA_4_12B_IT_MLX_4BIT_MODEL_ALIAS = "gemma-4-12b-it-mlx-4bit"
+GEMMA_4_12B_IT_MLX_4BIT_MODEL_REPO = "mlx-community/gemma-4-12B-it-4bit"
+GEMMA_4_12B_IT_GGUF_MODEL_ALIAS = "gemma-4-12b-it-gguf-ud-q4-k-xl"
+GEMMA_4_12B_IT_GGUF_MODEL_REPO = "unsloth/gemma-4-12B-it-GGUF"
+GEMMA_4_12B_IT_GGUF_MODEL_FILENAME = "gemma-4-12b-it-UD-Q4_K_XL.gguf"
+GEMMA_4_12B_IT_GGUF_MODEL_REFERENCE = (
+    f"{GEMMA_4_12B_IT_GGUF_MODEL_REPO}/{GEMMA_4_12B_IT_GGUF_MODEL_FILENAME}"
+)
+
+GEMMA_4_26B_A4B_IT_MLX_4BIT_MODEL_ALIAS = "gemma-4-26b-a4b-it-mlx-4bit"
+GEMMA_4_26B_A4B_IT_MLX_4BIT_MODEL_REPO = "mlx-community/gemma-4-26b-a4b-it-4bit"
+GEMMA_4_26B_A4B_IT_GGUF_MODEL_ALIAS = "gemma-4-26b-a4b-it-gguf-ud-q4-k-xl"
+GEMMA_4_26B_A4B_IT_GGUF_MODEL_REPO = "unsloth/gemma-4-26B-A4B-it-GGUF"
+GEMMA_4_26B_A4B_IT_GGUF_MODEL_FILENAME = "gemma-4-26B-A4B-it-UD-Q4_K_XL.gguf"
+GEMMA_4_26B_A4B_IT_GGUF_MODEL_REFERENCE = (
+    f"{GEMMA_4_26B_A4B_IT_GGUF_MODEL_REPO}/"
+    f"{GEMMA_4_26B_A4B_IT_GGUF_MODEL_FILENAME}"
+)
+
+GEMMA_4_31B_IT_MLX_4BIT_MODEL_ALIAS = "gemma-4-31b-it-mlx-4bit"
+GEMMA_4_31B_IT_MLX_4BIT_MODEL_REPO = "mlx-community/gemma-4-31b-it-4bit"
+GEMMA_4_31B_IT_GGUF_MODEL_ALIAS = "gemma-4-31b-it-gguf-ud-q4-k-xl"
+GEMMA_4_31B_IT_GGUF_MODEL_REPO = "unsloth/gemma-4-31B-it-GGUF"
+GEMMA_4_31B_IT_GGUF_MODEL_FILENAME = "gemma-4-31B-it-UD-Q4_K_XL.gguf"
+GEMMA_4_31B_IT_GGUF_MODEL_REFERENCE = (
+    f"{GEMMA_4_31B_IT_GGUF_MODEL_REPO}/{GEMMA_4_31B_IT_GGUF_MODEL_FILENAME}"
+)
+
 # Fixed product default backend (issue #169): an unset NEWS_MODEL_BACKEND
 # resolves to this value, never to selected-model inference. It matches the
-# current launchable default (gemma-4-12b-it-4bit on mlx-vlm). A known
-# catalog model whose declared backend differs must set NEWS_MODEL_BACKEND
-# explicitly; model identity never silently selects a backend.
+# default Gemma 4 12B MLX model. A known catalog model whose declared backend
+# differs must set NEWS_MODEL_BACKEND explicitly; model identity never silently
+# selects a backend.
 DEFAULT_MODEL_BACKEND = MODEL_BACKEND_MLX_VLM
-# Legacy identifier retained for API compatibility; the Qwythos GGUF models
-# are now served by the managed llama.cpp backend (issue #75).
-QWWYTHOS_MODEL_BACKEND = MODEL_BACKEND_LLAMA_CPP
-# Standard Gemma 4 12B instruction model, MLX 4-bit distribution. The default
-# must be a repo id (never owner/repo/file.gguf): mlx-vlm rejects file-qualified
-# references with HFValidationError (issue #124).
-GEMMA_4_12B_IT_4BIT_MODEL_ALIAS = "gemma-4-12b-it-4bit"
-GEMMA_4_12B_IT_4BIT_MODEL_REPO = "mlx-community/gemma-4-12B-it-4bit"
-DEFAULT_MODEL_ALIAS = GEMMA_4_12B_IT_4BIT_MODEL_ALIAS
-CODEX_TEST_MODEL_ALIAS = "gemma-e2b-tiny"
-CODEX_TEST_MODEL_NAME = "deadbydawn101/gemma-4-E2B-Heretic-Uncensored-mlx-4bit"
+DEFAULT_MODEL_ALIAS = GEMMA_4_12B_IT_MLX_4BIT_MODEL_ALIAS
+CODEX_TEST_MODEL_ALIAS = GEMMA_4_E2B_IT_MLX_4BIT_MODEL_ALIAS
+CODEX_TEST_MODEL_NAME = GEMMA_4_E2B_IT_MLX_4BIT_MODEL_REPO
 MODEL_TASK_ARTICLE_SUMMARY = "article_summary"
 MODEL_TASK_STORY_DRAFTING = "story_drafting"
 MODEL_TASK_STORY_SCALE_SCREENING = "story_scale_screening"
@@ -174,36 +202,21 @@ VALID_SOURCE_MATCH_MODES = {
     SOURCE_MATCH_MODE_WIRE_ATTRIBUTION,
 }
 MODEL_ALIASES = {
-    GEMMA_4_12B_IT_4BIT_MODEL_ALIAS: GEMMA_4_12B_IT_4BIT_MODEL_REPO,
-    f"https://huggingface.co/{GEMMA_4_12B_IT_4BIT_MODEL_REPO}": GEMMA_4_12B_IT_4BIT_MODEL_REPO,
-    f"https://hf.co/{GEMMA_4_12B_IT_4BIT_MODEL_REPO}": GEMMA_4_12B_IT_4BIT_MODEL_REPO,
-    CODEX_TEST_MODEL_ALIAS: CODEX_TEST_MODEL_NAME,
-    f"https://huggingface.co/{CODEX_TEST_MODEL_NAME}": CODEX_TEST_MODEL_NAME,
-    f"https://hf.co/{CODEX_TEST_MODEL_NAME}": CODEX_TEST_MODEL_NAME,
-    QWWYTHOS_9B_4BIT_MODEL_ALIAS: QWWYTHOS_9B_4BIT_MODEL_REFERENCE,
-    f"https://huggingface.co/{QWWYTHOS_9B_4BIT_MODEL_REFERENCE}": QWWYTHOS_9B_4BIT_MODEL_REFERENCE,
-    f"https://hf.co/{QWWYTHOS_9B_4BIT_MODEL_REFERENCE}": QWWYTHOS_9B_4BIT_MODEL_REFERENCE,
-    QWWYTHOS_9B_8BIT_MODEL_ALIAS: QWWYTHOS_9B_8BIT_MODEL_REFERENCE,
-    f"https://huggingface.co/{QWWYTHOS_9B_8BIT_MODEL_REFERENCE}": QWWYTHOS_9B_8BIT_MODEL_REFERENCE,
-    f"https://hf.co/{QWWYTHOS_9B_8BIT_MODEL_REFERENCE}": QWWYTHOS_9B_8BIT_MODEL_REFERENCE,
-    QWEN3_8B_4BIT_MODEL_ALIAS: QWEN3_8B_4BIT_MODEL_REPO,
-    f"https://huggingface.co/{QWEN3_8B_4BIT_MODEL_REPO}": QWEN3_8B_4BIT_MODEL_REPO,
-    f"https://hf.co/{QWEN3_8B_4BIT_MODEL_REPO}": QWEN3_8B_4BIT_MODEL_REPO,
-    QWEN3_14B_4BIT_MODEL_ALIAS: QWEN3_14B_4BIT_MODEL_REPO,
-    f"https://huggingface.co/{QWEN3_14B_4BIT_MODEL_REPO}": QWEN3_14B_4BIT_MODEL_REPO,
-    f"https://hf.co/{QWEN3_14B_4BIT_MODEL_REPO}": QWEN3_14B_4BIT_MODEL_REPO,
+    GEMMA_4_E2B_IT_MLX_4BIT_MODEL_ALIAS: GEMMA_4_E2B_IT_MLX_4BIT_MODEL_REPO,
+    GEMMA_4_E2B_IT_GGUF_MODEL_ALIAS: GEMMA_4_E2B_IT_GGUF_MODEL_REFERENCE,
+    GEMMA_4_E4B_IT_MLX_4BIT_MODEL_ALIAS: GEMMA_4_E4B_IT_MLX_4BIT_MODEL_REPO,
+    GEMMA_4_E4B_IT_GGUF_MODEL_ALIAS: GEMMA_4_E4B_IT_GGUF_MODEL_REFERENCE,
+    GEMMA_4_12B_IT_MLX_4BIT_MODEL_ALIAS: GEMMA_4_12B_IT_MLX_4BIT_MODEL_REPO,
+    GEMMA_4_12B_IT_GGUF_MODEL_ALIAS: GEMMA_4_12B_IT_GGUF_MODEL_REFERENCE,
+    GEMMA_4_26B_A4B_IT_MLX_4BIT_MODEL_ALIAS: GEMMA_4_26B_A4B_IT_MLX_4BIT_MODEL_REPO,
+    GEMMA_4_26B_A4B_IT_GGUF_MODEL_ALIAS: GEMMA_4_26B_A4B_IT_GGUF_MODEL_REFERENCE,
+    GEMMA_4_31B_IT_MLX_4BIT_MODEL_ALIAS: GEMMA_4_31B_IT_MLX_4BIT_MODEL_REPO,
+    GEMMA_4_31B_IT_GGUF_MODEL_ALIAS: GEMMA_4_31B_IT_GGUF_MODEL_REFERENCE,
 }
 # Custom aliases added through config/model_catalog.yaml (issue #90) extend
 # this mapping at use time via _catalog_model_aliases(); MODEL_ALIASES itself
 # stays the built-in-only baseline so the README/SETTINGS drift guard covers
 # exactly the documented built-ins.
-# Qwythos GGUF references are now launchable by the managed llama.cpp
-# backend (issue #75): the legacy aliases, raw owner/repo/file.gguf
-# references, and their URL forms all resolve to the managed llama.cpp
-# assignment. This compatibility set stays empty so any genuinely rejected
-# future reference fails fast in resolve_model_name before launch; never add
-# an alias here (the registry build and hf_model_page_url depend on the
-# aliases/unsupported sets staying disjoint).
 UNSUPPORTED_MODEL_REFERENCES: set[str] = set()
 CODEX_RUNTIME_ENV_VARS = ("CODEX_SANDBOX", "CODEX_CI", "CODEX_THREAD_ID")
 REMOVED_TOPIC_ENV_VARS = (
@@ -1419,12 +1432,7 @@ def _bounded_env_float(
 
 
 def _catalog_model_aliases() -> dict[str, str]:
-    """MODEL_ALIASES plus validated YAML catalog additions (issue #90).
-
-    The default empty overlay leaves the mapping identical to MODEL_ALIASES.
-    Custom aliases/references that collide with UNSUPPORTED_MODEL_REFERENCES
-    fail closed so a legacy Qwythos entry can never become a selector option.
-    """
+    """Return friendly catalog aliases plus validated YAML additions."""
     aliases = dict(MODEL_ALIASES)
     for alias, reference in _model_catalog.custom_catalog_aliases().items():
         if alias in UNSUPPORTED_MODEL_REFERENCES or reference in UNSUPPORTED_MODEL_REFERENCES:
@@ -1440,12 +1448,8 @@ def _catalog_model_aliases() -> dict[str, str]:
 def resolve_model_name(model_reference: str) -> str:
     """Resolve a friendly model alias to its configured model reference.
 
-    The returned reference may use a managed MLX/llama.cpp backend or an
-    external OpenAI-compatible endpoint; callers use backend inference
-    separately. Raises ValueError for references in
-    UNSUPPORTED_MODEL_REFERENCES (kept empty today - issue #75 re-enabled
-    the legacy Qwythos GGUF references under the managed llama.cpp backend)
-    so genuinely rejected stale configs fail before launch.
+    Hugging Face page URLs are accepted as input but are never returned as
+    selector options. Callers use backend inference separately.
     """
     clean_reference = (model_reference or "").strip()
     if not clean_reference:
@@ -1454,27 +1458,25 @@ def resolve_model_name(model_reference: str) -> str:
         raise ValueError(
             f"Unsupported model reference: {clean_reference}. This reference "
             f"was removed; the default is now {DEFAULT_MODEL_ALIAS} "
-            f"({GEMMA_4_12B_IT_4BIT_MODEL_REPO}). Set NEWS_MODEL to the new "
+            f"({GEMMA_4_12B_IT_MLX_4BIT_MODEL_REPO}). Set NEWS_MODEL to the new "
             "alias, or use NEWS_MODEL_BACKEND=external with an "
             "OpenAI-compatible endpoint (NEWS_MODEL_BASE_URL) for legacy models."
         )
-    return _catalog_model_aliases().get(clean_reference, clean_reference)
+    aliases = _catalog_model_aliases()
+    resolved = aliases.get(clean_reference)
+    if resolved is not None:
+        return resolved
+    for prefix in HF_URL_PREFIXES:
+        if clean_reference.startswith(prefix):
+            return aliases.get(clean_reference[len(prefix) :], clean_reference[len(prefix) :])
+    return clean_reference
 
 
 HF_URL_PREFIXES = ("https://huggingface.co/", "https://hf.co/")
 
 
 def hf_model_page_url(model_choice: str) -> str | None:
-    """Return the Hugging Face model-page URL for a model choice, or None.
-
-    Aliases and https://huggingface.co/... / https://hf.co/... URL keys in
-    the merged alias map (built-in MODEL_ALIASES plus validated YAML catalog
-    additions) are normalized through resolve_model_name first. Only repos
-    derived from alias-map values are ever emitted: external ids, unknown
-    URL-shaped ids, and ids without an owner/name shape (no "/") all yield
-    None so callers can render a muted note instead of a broken link.
-    Unsupported references also yield None rather than raising.
-    """
+    """Return the Hugging Face model-page URL for a known model choice."""
     clean = (model_choice or "").strip()
     if not clean:
         return None
@@ -1482,27 +1484,17 @@ def hf_model_page_url(model_choice: str) -> str | None:
         resolved = resolve_model_name(clean)
     except ValueError:
         return None
-    # Only URLs derived from known alias values (built-in or YAML-added) are
-    # emitted; anything else (external ids, unknown URLs) yields None so
-    # callers render a muted note instead of a broken link.
+    # Only URLs derived from known catalog values are emitted; external ids,
+    # unknown URLs, and ids without an owner/name shape yield None.
     alias_values = _catalog_model_aliases().values()
     if resolved not in alias_values:
-        if not any(resolved.startswith(prefix) for prefix in HF_URL_PREFIXES):
-            return None
-        prefix = next(prefix for prefix in HF_URL_PREFIXES if resolved.startswith(prefix))
-        resolved = resolved[len(prefix):]
-        if resolved not in alias_values:
-            return None
+        return None
     repo = resolved
-    # No GGUF aliases exist today (issue #124); this branch is a defensive
-    # guard in case a file-qualified reference is ever re-added.
     if repo.endswith(".gguf") and "/" in repo:
         repo = repo.rsplit("/", 1)[0]
-    if "/" not in repo:  # external/unknown ids have no HF repo page
+    if "/" not in repo:
         return None
     return f"https://huggingface.co/{repo}"
-
-
 def _model_option_links() -> dict[str, dict[str, str]]:
     """Map every model alias option (built-in plus YAML-added) that resolves
     to a Hugging Face repo to its HF page + hardware links.
@@ -1567,29 +1559,26 @@ def _configured_model_reference() -> str:
 def infer_model_backend(model_reference: str) -> str:
     """Infer the managed backend for a model reference.
 
-    Catalog-declared backends win for exact alias/reference matches (issue
-    #90) so a catalog card and the launched server never disagree; YAML
-    entries use the backend they declare. Raw ``.gguf`` references infer the
-    managed llama.cpp backend (issue #75). Unlisted references keep the
-    legacy heuristic fallback: the retained "qwythos" branch only matches
-    raw non-GGUF references and exists for legacy/external configs (issue
-    #124 Deviation 3).
+    Catalog-declared backends win for exact alias/reference matches. Raw
+    ``.gguf`` references infer the managed llama.cpp backend. Unlisted
+    references retain the historical Gemma/VLM-versus-MLX-LM heuristic.
     """
     clean = (model_reference or "").strip()
     if not clean:
         clean = DEFAULT_MODEL_ALIAS
-    catalog_backend = _model_catalog.catalog_model_backend(clean)
+    resolved = resolve_model_name(clean)
+    catalog_backend = (
+        _model_catalog.catalog_model_backend(clean)
+        or _model_catalog.catalog_model_backend(resolved)
+    )
     if catalog_backend is not None:
         return catalog_backend
-    if clean.lower().endswith(".gguf"):
+    if resolved.lower().endswith(".gguf"):
         return MODEL_BACKEND_LLAMA_CPP
-    if is_codex_test_model_reference(model_reference):
-        # Guard second: the tiny model's repo id also contains "gemma-4" and
-        # would otherwise be misclassified as mlx-vlm (its catalog entry
-        # already declares mlx-lm, so this branch only serves raw ids).
+    if is_codex_test_model_reference(clean):
         return MODEL_BACKEND_MLX_LM
-    resolved_name = resolve_model_name(model_reference).lower()
-    if "qwythos" in resolved_name or "gemma-4" in resolved_name or "gemma4" in resolved_name:
+    resolved_name = resolved.lower()
+    if "gemma-4" in resolved_name or "gemma4" in resolved_name:
         return MODEL_BACKEND_MLX_VLM
     return MODEL_BACKEND_MLX_LM
 
@@ -1819,7 +1808,7 @@ def runtime_knob_registry() -> list[dict[str, Any]]:
         _runtime_knob("Run Settings", "Relax story drafting guards", "NEWS_RELAX_STORY_DRAFTING_GUARDS", "bool", advanced=True, ui_location=UI_LOCATION_ADVANCED_PANELS),
         _runtime_knob("Run Settings", "Embedding model", "NEWS_EMBEDDING_MODEL", default="all-mpnet-base-v2", advanced=True),
         _runtime_knob("Run Settings", "Token encoding", "NEWS_TOKEN_ENCODING", default="o200k_base", advanced=True),
-        _runtime_knob("Model Selection", "Default model", "NEWS_MODEL", "select", default=DEFAULT_MODEL_ALIAS, options=sorted(_catalog_model_aliases()), option_links=model_links, ui_location=UI_LOCATION_RUN_SETUP),
+        _runtime_knob("Model Selection", "Model", "NEWS_MODEL", "select", default=DEFAULT_MODEL_ALIAS, options=sorted(_catalog_model_aliases()), option_links=model_links, ui_location=UI_LOCATION_RUN_SETUP),
         _runtime_knob("Model Selection", "Model backend", "NEWS_MODEL_BACKEND", "select", default=DEFAULT_MODEL_BACKEND, options=sorted(SUPPORTED_MODEL_BACKENDS)),
         _runtime_knob("Model Tuning", "Default tuning preset", "NEWS_MODEL_TUNING_PRESET", "select", options=tuning_presets),
         _runtime_knob("Model Tuning", "Model input cap", "NEWS_MODEL_MAX_INPUT_TOKENS", "number", minimum=1, step=1, ui_location=UI_LOCATION_ADVANCED_PANELS),

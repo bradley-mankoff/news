@@ -518,12 +518,12 @@ class ConfigHelperTests(unittest.TestCase):
                 "story_drafting": SimpleNamespace(
                     backend="mlx-lm",
                     base_url="https://api.example.com/v1",
-                    reference="gemma-e2b-tiny",
-                    name="deadbydawn101/gemma-4-E2B-Heretic-Uncensored-mlx-4bit",
+                    reference="gemma-4-e2b-it-mlx-4bit",
+                    name="mlx-community/gemma-4-e2b-it-4bit",
                 ),
             },
-            model_reference="gemma-e2b-tiny",
-            model_name="deadbydawn101/gemma-4-E2B-Heretic-Uncensored-mlx-4bit",
+            model_reference="gemma-4-e2b-it-mlx-4bit",
+            model_name="mlx-community/gemma-4-e2b-it-4bit",
             model_base_url="https://api.example.com/v1",
             model_backend="external",
         )  # no raise: an external default endpoint serves many models
@@ -540,12 +540,12 @@ class ConfigHelperTests(unittest.TestCase):
                     "story_drafting": SimpleNamespace(
                         backend="mlx-lm",
                         base_url="http://localhost:8090/v1",
-                        reference="gemma-e2b-tiny",
-                        name="deadbydawn101/gemma-4-E2B-Heretic-Uncensored-mlx-4bit",
+                        reference="gemma-4-e2b-it-mlx-4bit",
+                        name="mlx-community/gemma-4-e2b-it-4bit",
                     ),
                 },
-                model_reference="gemma-e2b-tiny",
-                model_name="deadbydawn101/gemma-4-E2B-Heretic-Uncensored-mlx-4bit",
+                model_reference="gemma-4-e2b-it-mlx-4bit",
+                model_name="mlx-community/gemma-4-e2b-it-4bit",
                 model_base_url="https://api.example.com/v1",
                 model_backend="external",
             )
@@ -701,34 +701,52 @@ class ConfigHelperTests(unittest.TestCase):
             config_module.resolve_model_name(config_module.DEFAULT_MODEL_ALIAS),
         )
         self.assertEqual(
-            config_module.resolve_model_name(config_module.GEMMA_4_12B_IT_4BIT_MODEL_ALIAS),
-            config_module.GEMMA_4_12B_IT_4BIT_MODEL_REPO,
+            config_module.resolve_model_name(config_module.GEMMA_4_12B_IT_MLX_4BIT_MODEL_ALIAS),
+            config_module.GEMMA_4_12B_IT_MLX_4BIT_MODEL_REPO,
         )
-        # The legacy Qwythos aliases now resolve to their exact GGUF file
-        # references under the managed llama.cpp backend (issue #75).
+        gguf_models = (
+            (
+                config_module.GEMMA_4_E2B_IT_GGUF_MODEL_ALIAS,
+                config_module.GEMMA_4_E2B_IT_GGUF_MODEL_REFERENCE,
+            ),
+            (
+                config_module.GEMMA_4_31B_IT_GGUF_MODEL_ALIAS,
+                config_module.GEMMA_4_31B_IT_GGUF_MODEL_REFERENCE,
+            ),
+        )
+        for alias, reference in gguf_models:
+            self.assertEqual(config_module.resolve_model_name(alias), reference)
+            self.assertEqual(config_module.resolve_model_name(reference), reference)
+            for prefix in ("https://huggingface.co/", "https://hf.co/"):
+                self.assertEqual(
+                    config_module.resolve_model_name(f"{prefix}{reference}"),
+                    reference,
+                )
+        with patch.object(config_module, "UNSUPPORTED_MODEL_REFERENCES", {"blocked"}):
+            with self.assertRaisesRegex(ValueError, "Unsupported model reference"):
+                config_module.resolve_model_name("blocked")
+        self.assertTrue(config_module.is_codex_test_model_reference(config_module.CODEX_TEST_MODEL_ALIAS))
+        self.assertTrue(config_module.is_gemma_4_model_reference("gemma-4-vision"))
+        self.assertFalse(config_module.is_gemma_4_model_reference("gpt-4o-mini"))
+        with patch.dict(os.environ, {"CODEX_SANDBOX": "1", "NEWS_CODEX_TESTING": "1"}, clear=True):
+            self.assertTrue(config_module.codex_model_guard_active())
+            self.assertEqual(config_module._configured_model_reference(), config_module.CODEX_TEST_MODEL_ALIAS)
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertFalse(config_module.codex_model_guard_active())
+            self.assertEqual(config_module._configured_model_reference(), config_module.DEFAULT_MODEL_ALIAS)
+        with patch.dict(os.environ, {"CODEX_SANDBOX": "1", "NEWS_CODEX_TESTING": "1"}, clear=True):
+            config_module.ensure_codex_safe_model_reference(config_module.CODEX_TEST_MODEL_ALIAS)
+            with self.assertRaises(RuntimeError):
+                config_module.ensure_codex_safe_model_reference("bad-model")
+        self.assertEqual(config_module.infer_model_backend("gemma-4-vision"), "mlx-vlm")
         self.assertEqual(
-            config_module.resolve_model_name(config_module.QWWYTHOS_9B_4BIT_MODEL_ALIAS),
-            config_module.QWWYTHOS_9B_4BIT_MODEL_REFERENCE,
+            config_module.infer_model_backend(config_module.GEMMA_4_E2B_IT_GGUF_MODEL_REFERENCE),
+            config_module.MODEL_BACKEND_LLAMA_CPP,
         )
         self.assertEqual(
-            config_module.resolve_model_name(config_module.QWWYTHOS_9B_8BIT_MODEL_ALIAS),
-            config_module.QWWYTHOS_9B_8BIT_MODEL_REFERENCE,
+            config_module.infer_model_backend("/models/local.gguf"),
+            config_module.MODEL_BACKEND_LLAMA_CPP,
         )
-        # Raw GGUF references resolve to themselves; their URL forms map to
-        # the bare reference like every other alias URL key.
-        for supported in (
-            config_module.QWWYTHOS_9B_8BIT_MODEL_REFERENCE,
-            config_module.QWWYTHOS_9B_4BIT_MODEL_REFERENCE,
-        ):
-            self.assertEqual(config_module.resolve_model_name(supported), supported)
-        for url_form in (
-            f"https://huggingface.co/{config_module.QWWYTHOS_9B_4BIT_MODEL_REFERENCE}",
-            f"https://hf.co/{config_module.QWWYTHOS_9B_4BIT_MODEL_REFERENCE}",
-        ):
-            self.assertEqual(
-                config_module.resolve_model_name(url_form),
-                config_module.QWWYTHOS_9B_4BIT_MODEL_REFERENCE,
-            )
         with patch.object(config_module, "UNSUPPORTED_MODEL_REFERENCES", {"blocked"}):
             with self.assertRaisesRegex(ValueError, "Unsupported model reference"):
                 config_module.resolve_model_name("blocked")
@@ -748,7 +766,7 @@ class ConfigHelperTests(unittest.TestCase):
         self.assertEqual(config_module.infer_model_backend("gemma-4-vision"), "mlx-vlm")
         # Raw GGUF references infer the managed llama.cpp backend (issue #75).
         self.assertEqual(
-            config_module.infer_model_backend(config_module.QWWYTHOS_9B_4BIT_MODEL_REFERENCE),
+            config_module.infer_model_backend(config_module.GEMMA_4_E2B_IT_GGUF_MODEL_REFERENCE),
             config_module.MODEL_BACKEND_LLAMA_CPP,
         )
         self.assertEqual(
@@ -872,51 +890,13 @@ class ConfigHelperTests(unittest.TestCase):
             set(config_module.UNSUPPORTED_MODEL_REFERENCES) & set(config_module.MODEL_ALIASES),
             set(),
         )
-        # hf_model_page_url: alias, URL keys, MLX repo, external id and empty input.
-        gemma_page = f"https://huggingface.co/{config_module.GEMMA_4_12B_IT_4BIT_MODEL_REPO}"
-        self.assertEqual(
-            config_module.hf_model_page_url(config_module.GEMMA_4_12B_IT_4BIT_MODEL_ALIAS),
-            gemma_page,
-        )
-        self.assertEqual(
-            config_module.hf_model_page_url(f"https://hf.co/{config_module.GEMMA_4_12B_IT_4BIT_MODEL_REPO}"),
-            gemma_page,
-        )
-        self.assertEqual(
-            config_module.hf_model_page_url(f"https://huggingface.co/{config_module.GEMMA_4_12B_IT_4BIT_MODEL_REPO}"),
-            gemma_page,
-        )
-        self.assertEqual(
-            config_module.hf_model_page_url(f"  https://hf.co/{config_module.GEMMA_4_12B_IT_4BIT_MODEL_REPO}  "),
-            gemma_page,
-        )
-        self.assertEqual(
-            config_module.hf_model_page_url(config_module.CODEX_TEST_MODEL_ALIAS),
-            f"https://huggingface.co/{config_module.CODEX_TEST_MODEL_NAME}",
-        )
-        # The Qwythos aliases resolve to the shared GGUF repo page.
-        qwythos_page = (
-            "https://huggingface.co/"
-            "huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF"
-        )
-        self.assertEqual(
-            config_module.hf_model_page_url(config_module.QWWYTHOS_9B_4BIT_MODEL_ALIAS),
-            qwythos_page,
-        )
-        self.assertEqual(
-            config_module.hf_model_page_url(config_module.QWWYTHOS_9B_8BIT_MODEL_REFERENCE),
-            qwythos_page,
-        )
-        # The runtime-verified Qwen3 aliases resolve to their exact MLX pages
-        # (issue #89), for alias, URL, and raw reference inputs.
-        for alias, repo in (
-            (config_module.QWEN3_8B_4BIT_MODEL_ALIAS, config_module.QWEN3_8B_4BIT_MODEL_REPO),
-            (config_module.QWEN3_14B_4BIT_MODEL_ALIAS, config_module.QWEN3_14B_4BIT_MODEL_REPO),
-        ):
-            page = f"https://huggingface.co/{repo}"
+        # hf_model_page_url covers every curated alias, raw reference, and HF URL.
+        for alias, reference in config_module.MODEL_ALIASES.items():
+            page = f"https://huggingface.co/{reference.rsplit('/', 1)[0] if reference.lower().endswith('.gguf') else reference}"
             self.assertEqual(config_module.hf_model_page_url(alias), page)
-            self.assertEqual(config_module.hf_model_page_url(f"https://hf.co/{repo}"), page)
-            self.assertEqual(config_module.hf_model_page_url(f"https://huggingface.co/{repo}"), page)
+            self.assertEqual(config_module.hf_model_page_url(reference), page)
+            for prefix in ("https://hf.co/", "https://huggingface.co/"):
+                self.assertEqual(config_module.hf_model_page_url(f"{prefix}{reference}"), page)
         self.assertIsNone(config_module.hf_model_page_url("gpt-4o-mini"))
         self.assertIsNone(config_module.hf_model_page_url("openai/gpt-4o"))
         self.assertIsNone(config_module.hf_model_page_url("foo.gguf"))
@@ -1131,7 +1111,7 @@ class ConfigHelperTests(unittest.TestCase):
         with patch.dict(os.environ, {}, clear=True):
             with self.assertRaisesRegex(
                 ValueError,
-                r"NEWS_MODEL='gemma-e2b-tiny' requires NEWS_MODEL_BACKEND=mlx-lm",
+                rf"NEWS_MODEL='{config_module.CODEX_TEST_MODEL_ALIAS}' requires NEWS_MODEL_BACKEND=mlx-lm",
             ):
                 config_module._configured_model_backend(config_module.CODEX_TEST_MODEL_ALIAS)
         with patch.dict(os.environ, {}, clear=True):
@@ -1160,7 +1140,7 @@ class ConfigHelperTests(unittest.TestCase):
                 environ={
                     "NEWS_MODEL": config_module.CODEX_TEST_MODEL_ALIAS,
                     "NEWS_MODEL_BACKEND": "mlx-lm",
-                    "NEWS_MODEL_ARTICLE_SUMMARY": config_module.GEMMA_4_12B_IT_4BIT_MODEL_ALIAS,
+                    "NEWS_MODEL_ARTICLE_SUMMARY": config_module.GEMMA_4_12B_IT_MLX_4BIT_MODEL_ALIAS,
                     "NEWS_MODEL_ARTICLE_SUMMARY_BASE_URL": "http://127.0.0.1:8090/v1",
                 },
                 materialize_outputs=False,
@@ -1239,8 +1219,8 @@ class ConfigHelperTests(unittest.TestCase):
             )
         # The default baseline is untouched once the custom snapshot is gone.
         self.assertEqual(
-            config_module.resolve_model_name("gemma-4-12b-it-4bit"),
-            config_module.GEMMA_4_12B_IT_4BIT_MODEL_REPO,
+            config_module.resolve_model_name(config_module.DEFAULT_MODEL_ALIAS),
+            config_module.GEMMA_4_12B_IT_MLX_4BIT_MODEL_REPO,
         )
         self.assertNotIn("my-mlx-model", config_module.MODEL_ALIASES)
 
@@ -1249,7 +1229,7 @@ class ConfigHelperTests(unittest.TestCase):
             path = Path(tmpdir) / "reserved.yaml"
             path.write_text(
                 "models:\n"
-                "  qwythos-9b-4bit:\n"
+                "  gemma-4-e2b-it-mlx-4bit:\n"
                 "    reference: mlx-community/some-model\n"
                 "    name: Collision Model\n"
                 "    backend: mlx-lm\n"
@@ -1257,17 +1237,11 @@ class ConfigHelperTests(unittest.TestCase):
                 "    description: Reserved alias collision.\n",
                 encoding="utf-8",
             )
-            # qwythos-9b-4bit is a built-in again (issue #75): the YAML
-            # identity must match the built-in entry exactly, so the
-            # redefinition fails closed at catalog load.
+            # A built-in alias must retain its identity when YAML overrides
+            # descriptive metadata.
             with self.assertRaisesRegex(ValueError, "does not match the built-in entry") as ctx:
                 model_catalog.load_model_catalog(path)
             self.assertIn("reference", str(ctx.exception))
-        # The built-in alias still resolves to its GGUF reference.
-        self.assertEqual(
-            config_module.resolve_model_name("qwythos-9b-4bit"),
-            config_module.QWWYTHOS_9B_4BIT_MODEL_REFERENCE,
-        )
 
     def test_mlx_vlm_floor_is_gemma_4_capable(self) -> None:
         """The managed mlx-vlm backend must be able to load the default
@@ -1293,29 +1267,23 @@ class ConfigHelperTests(unittest.TestCase):
         major, minor, patch = (int(x) for x in mlx_vlm["version"].split(".")[:3])
         self.assertGreaterEqual((major, minor, patch), (0, 6, 4), mlx_vlm["version"])
 
-    def test_default_model_knob_points_at_gemma_and_includes_qwythos(self) -> None:
+    def test_model_knob_only_offers_curated_gemma4_choices(self) -> None:
         registry = config_module.runtime_knob_registry()
         knob = next(k for k in registry if k["env"] == "NEWS_MODEL")
-        self.assertEqual(knob["default"], "gemma-4-12b-it-4bit")
-        self.assertIn("gemma-4-12b-it-4bit", knob["options"])
-        self.assertIn("qwythos-9b-8bit", knob["options"])
-        self.assertIn("qwythos-9b-4bit", knob["options"])
-        # Runtime-verified Qwen3 aliases appear in every model selector with
-        # their HF page links (issue #89).
-        for alias in ("qwen3-8b-4bit", "qwen3-14b-4bit"):
-            self.assertIn(alias, knob["options"])
-            self.assertEqual(
-                knob["option_links"][alias]["page"],
-                f"https://huggingface.co/{model_catalog.CATALOG_MODELS[alias].hf_repo}",
-            )
-        # prod preset now launches gemma
-        self.assertEqual(config_module.run_preset_env("prod")["NEWS_MODEL"], "gemma-4-12b-it-4bit")
-
-    def test_default_model_knob_default_matches_resolved_reference(self) -> None:
-        """DN-19: the Default-model knob's registry default and config
-        resolution agree for a clean environment. The UI derives its knob
-        labels from the resolved runtime model reference, so the registry
-        default and the resolver must share one source and never drift."""
+        self.assertEqual(knob["label"], "Model")
+        self.assertEqual(set(knob["options"]), set(config_module.MODEL_ALIASES))
+        self.assertEqual(len(knob["options"]), 10)
+        self.assertTrue(all(option.startswith("gemma-4-") for option in knob["options"]))
+        self.assertNotIn("qwythos-9b-4bit", knob["options"])
+        self.assertNotIn("qwen3-14b-4bit", knob["options"])
+        self.assertEqual(knob["default"], config_module.DEFAULT_MODEL_ALIAS)
+        self.assertEqual(set(knob["option_links"]), set(knob["options"]))
+        self.assertEqual(
+            config_module.run_preset_env("prod")["NEWS_MODEL"],
+            config_module.DEFAULT_MODEL_ALIAS,
+        )
+    def test_model_knob_default_matches_resolved_reference(self) -> None:
+        """The registry default and clean-environment resolution agree."""
         knob = next(
             k for k in config_module.runtime_knob_registry() if k["env"] == "NEWS_MODEL"
         )
@@ -1817,14 +1785,14 @@ class ConfigHelperTests(unittest.TestCase):
         )
         self.assertEqual(config_module.infer_model_backend("other-model"), "mlx-lm")
         # Raw GGUF references infer the managed llama.cpp backend (issue
-        # #75); the retained "qwythos" heuristic branch only serves non-GGUF
-        # raw ids. infer_model_backend stays model-aware for task-specific
-        # assignments even though the default backend is fixed (issue #169).
+        # #75); unlisted non-GGUF ids keep the historical MLX-LM fallback.
+        # infer_model_backend stays model-aware for task-specific assignments
+        # even though the default backend is fixed (issue #169).
         self.assertEqual(
-            config_module.infer_model_backend(config_module.QWWYTHOS_9B_4BIT_MODEL_REFERENCE),
+            config_module.infer_model_backend(config_module.GEMMA_4_E2B_IT_GGUF_MODEL_REFERENCE),
             config_module.MODEL_BACKEND_LLAMA_CPP,
         )
-        self.assertEqual(config_module.infer_model_backend("someone/qwythos-other-raw-id"), "mlx-vlm")
+        self.assertEqual(config_module.infer_model_backend("someone/gemma-4-other-raw-id"), "mlx-vlm")
 
         with patch.dict(os.environ, {config_module.PRESET_ENV_VAR: "sample"}, clear=True):
             self.assertEqual(config_module._configured_preset_id(), "sample")

@@ -229,7 +229,7 @@ class CliTests(unittest.TestCase):
         pass
         serve_unsubscribe.assert_called_once_with()
 
-    def test_codex_model_server_command_pairs_tiny_model_with_mlx_lm(self) -> None:
+    def test_codex_model_server_command_pairs_smallest_model_with_mlx_lm(self) -> None:
         with patch.dict(os.environ, {}, clear=True):
             with patch("news_pipeline.cli._print_model_server_command", return_value=0) as print_command:
                 code, stdout, stderr = self._invoke(["codex-model-server-command"])
@@ -295,38 +295,46 @@ class CliTests(unittest.TestCase):
         code, stdout, stderr = self._invoke(["models", "catalog"])
 
         self.assertEqual(code, 0)
-        self.assertIn("gemma-4-12b-it-4bit", stdout)
-        self.assertIn("gemma-e2b-tiny", stdout)
-        self.assertIn("qwythos-9b-4bit", stdout)
+        expected_aliases = {
+            "gemma-4-e2b-it-mlx-4bit",
+            "gemma-4-e2b-it-gguf-ud-q4-k-xl",
+            "gemma-4-e4b-it-mlx-4bit",
+            "gemma-4-e4b-it-gguf-ud-q4-k-xl",
+            "gemma-4-12b-it-mlx-4bit",
+            "gemma-4-12b-it-gguf-ud-q4-k-xl",
+            "gemma-4-26b-a4b-it-mlx-4bit",
+            "gemma-4-26b-a4b-it-gguf-ud-q4-k-xl",
+            "gemma-4-31b-it-mlx-4bit",
+            "gemma-4-31b-it-gguf-ud-q4-k-xl",
+        }
+        for alias in expected_aliases:
+            self.assertIn(alias, stdout)
+        self.assertNotIn("qwythos", stdout)
+        self.assertNotIn("qwen3", stdout)
         self.assertIn("llama.cpp", stdout)
         self.assertIn("huggingface.co", stdout)
-        self.assertIn("qwen3-8b-4bit", stdout)
-        self.assertIn("qwen3-14b-4bit", stdout)
         self.assertIn("mlx-lm", stdout)
 
         code, stdout, stderr = self._invoke(["models", "catalog", "--json"])
 
         self.assertEqual(code, 0)
         entries = json.loads(stdout)
-        self.assertEqual(len(entries), 6)
-        self.assertEqual(entries[0]["alias"], "gemma-4-12b-it-4bit")
+        self.assertEqual(len(entries), 10)
+        self.assertEqual(entries[0]["alias"], "gemma-4-12b-it-mlx-4bit")
         self.assertTrue(entries[0]["is_default"])
         self.assertEqual(
-            [entry["alias"] for entry in entries[-2:]],
-            ["qwen3-8b-4bit", "qwen3-14b-4bit"],
+            [entry["alias"] for entry in entries if entry["backend"] == "llama.cpp"],
+            [
+                "gemma-4-e2b-it-gguf-ud-q4-k-xl",
+                "gemma-4-e4b-it-gguf-ud-q4-k-xl",
+                "gemma-4-12b-it-gguf-ud-q4-k-xl",
+                "gemma-4-26b-a4b-it-gguf-ud-q4-k-xl",
+                "gemma-4-31b-it-gguf-ud-q4-k-xl",
+            ],
         )
-        qwen3 = {entry["alias"]: entry for entry in entries if entry["alias"].startswith("qwen3")}
-        for entry in qwen3.values():
-            self.assertEqual(entry["backend"], "mlx-lm")
-            self.assertIn(
-                entry["reference"],
-                ("mlx-community/Qwen3-8B-4bit", "mlx-community/Qwen3-14B-4bit"),
-            )
-            self.assertEqual(entry["context_length"], 40960)
-        llama_entries = [entry for entry in entries if entry["backend"] == "llama.cpp"]
         self.assertEqual(
-            [entry["alias"] for entry in llama_entries],
-            ["qwythos-9b-4bit", "qwythos-9b-8bit"],
+            {entry["backend"] for entry in entries if entry["backend"] != "llama.cpp"},
+            {"mlx-lm", "mlx-vlm"},
         )
 
     def test_models_catalog_custom_yaml_entry_offline(self) -> None:
@@ -355,12 +363,16 @@ class CliTests(unittest.TestCase):
             self.assertEqual(
                 [entry["alias"] for entry in entries],
                 [
-                    "gemma-4-12b-it-4bit",
-                    "gemma-e2b-tiny",
-                    "qwythos-9b-4bit",
-                    "qwythos-9b-8bit",
-                    "qwen3-8b-4bit",
-                    "qwen3-14b-4bit",
+                    "gemma-4-12b-it-mlx-4bit",
+                    "gemma-4-e2b-it-mlx-4bit",
+                    "gemma-4-e2b-it-gguf-ud-q4-k-xl",
+                    "gemma-4-e4b-it-mlx-4bit",
+                    "gemma-4-e4b-it-gguf-ud-q4-k-xl",
+                    "gemma-4-12b-it-gguf-ud-q4-k-xl",
+                    "gemma-4-26b-a4b-it-mlx-4bit",
+                    "gemma-4-26b-a4b-it-gguf-ud-q4-k-xl",
+                    "gemma-4-31b-it-mlx-4bit",
+                    "gemma-4-31b-it-gguf-ud-q4-k-xl",
                     "smoke-model",
                 ],
             )
@@ -378,7 +390,7 @@ class CliTests(unittest.TestCase):
                 code, stdout, stderr = self._invoke(["models", "catalog"])
             self.assertEqual(code, 0)
             self.assertIn("smoke-model", stdout)
-            self.assertIn("gemma-e2b-tiny", stdout)
+            self.assertIn("gemma-4-e2b-it-mlx-4bit", stdout)
 
     def test_models_catalog_malformed_yaml_fails_closed(self) -> None:
         """Malformed catalog YAML uses the CLI error envelope (exit 2) with a
@@ -473,13 +485,13 @@ class CliTests(unittest.TestCase):
             "news_pipeline.cli.search_huggingface_models", return_value=fake_results
         ) as search:
             code, stdout, stderr = self._invoke(
-                ["models", "search", "--query", "qwythos", "--limit=0"]
+                ["models", "search", "--query", "gemma", "--limit=0"]
             )
 
         self.assertEqual(code, 0)
         self.assertEqual(stdout, "owner/one [managed_mlx_lm] MLX language model\n")
         self.assertEqual(stderr, "")
-        search.assert_called_once_with("qwythos", pipeline_tag=None, limit=1)
+        search.assert_called_once_with("gemma", pipeline_tag=None, limit=1)
 
     def test_models_search_requires_query(self) -> None:
         code, stdout, stderr = self._invoke(["models", "search"])
@@ -529,7 +541,7 @@ class CliTests(unittest.TestCase):
             side_effect=TypeError("parser defect"),
         ):
             with self.assertRaises(TypeError):
-                self._invoke(["models", "search", "--query", "qwythos", "--json"])
+                self._invoke(["models", "search", "--query", "gemma", "--json"])
 
     def test_models_search_success(self) -> None:
         fake_results = [
@@ -546,28 +558,28 @@ class CliTests(unittest.TestCase):
         ]
         with patch("news_pipeline.cli.search_huggingface_models", return_value=fake_results) as search:
             code, stdout, stderr = self._invoke(
-                ["models", "search", "--query", "qwythos", "--task", "text-generation", "--limit", "7", "--json"]
+                ["models", "search", "--query", "gemma", "--task", "text-generation", "--limit", "7", "--json"]
             )
 
         self.assertEqual(code, 0)
         payload = json.loads(stdout)
-        self.assertEqual(payload["query"], "qwythos")
+        self.assertEqual(payload["query"], "gemma")
         self.assertEqual([item["id"] for item in payload["models"]], ["owner/one", "owner/two"])
         self.assertNotIn("error", payload)
-        search.assert_called_once_with("qwythos", pipeline_tag="text-generation", limit=7)
+        search.assert_called_once_with("gemma", pipeline_tag="text-generation", limit=7)
 
         with patch("news_pipeline.cli.search_huggingface_models", return_value=fake_results) as search:
-            code, stdout, stderr = self._invoke(["models", "search", "--query=qwythos", "--limit=999"])
+            code, stdout, stderr = self._invoke(["models", "search", "--query=gemma", "--limit=999"])
 
         self.assertEqual(code, 0)
         self.assertIn("owner/one [managed_mlx_lm] MLX language model", stdout)
         self.assertIn("owner/two [external_only]", stdout)
-        search.assert_called_once_with("qwythos", pipeline_tag=None, limit=50)
+        search.assert_called_once_with("gemma", pipeline_tag=None, limit=50)
 
     def test_models_search_rejects_bad_task_and_limit(self) -> None:
         with patch("news_pipeline.cli.search_huggingface_models") as search:
             code, stdout, stderr = self._invoke(
-                ["models", "search", "--query", "qwythos", "--task", "bogus"]
+                ["models", "search", "--query", "gemma", "--task", "bogus"]
             )
 
             self.assertEqual(code, 2)
@@ -576,15 +588,15 @@ class CliTests(unittest.TestCase):
             self.assertIn("text-generation", stderr)
 
             code, stdout, stderr = self._invoke(
-                ["models", "search", "--json", "--query", "qwythos", "--task", "bogus"]
+                ["models", "search", "--json", "--query", "gemma", "--task", "bogus"]
             )
 
             self._assert_json_search_error(
-                code, stdout, stderr, query="qwythos", fragment="Unknown search task 'bogus'"
+                code, stdout, stderr, query="gemma", fragment="Unknown search task 'bogus'"
             )
 
             code, stdout, stderr = self._invoke(
-                ["models", "search", "--query", "qwythos", "--limit", "lots"]
+                ["models", "search", "--query", "gemma", "--limit", "lots"]
             )
 
             self.assertEqual(code, 2)
@@ -592,11 +604,11 @@ class CliTests(unittest.TestCase):
             self.assertIn("--limit must be an integer", stderr)
 
             code, stdout, stderr = self._invoke(
-                ["models", "search", "--query", "qwythos", "--limit", "lots", "--json"]
+                ["models", "search", "--query", "gemma", "--limit", "lots", "--json"]
             )
 
             self._assert_json_search_error(
-                code, stdout, stderr, query="qwythos", fragment="--limit must be an integer"
+                code, stdout, stderr, query="gemma", fragment="--limit must be an integer"
             )
 
             search.assert_not_called()
@@ -605,7 +617,7 @@ class CliTests(unittest.TestCase):
         with patch(
             "news_pipeline.cli.search_huggingface_models", side_effect=ValueError("boom")
         ):
-            code, stdout, stderr = self._invoke(["models", "search", "--query", "qwythos"])
+            code, stdout, stderr = self._invoke(["models", "search", "--query", "gemma"])
 
         self.assertEqual(code, 2)
         self.assertEqual(stdout, "")
@@ -615,12 +627,12 @@ class CliTests(unittest.TestCase):
             "news_pipeline.cli.search_huggingface_models", side_effect=ValueError("boom")
         ):
             code, stdout, stderr = self._invoke(
-                ["models", "search", "--query", "qwythos", "--json"]
+                ["models", "search", "--query", "gemma", "--json"]
             )
 
         self.assertEqual(code, 2)
         payload = json.loads(stdout)
-        self.assertEqual(payload, {"query": "qwythos", "models": [], "error": "boom"})
+        self.assertEqual(payload, {"query": "gemma", "models": [], "error": "boom"})
         self.assertEqual(stderr, "boom\n")
 
     def test_unknown_command_returns_error(self) -> None:
