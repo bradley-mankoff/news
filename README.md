@@ -44,28 +44,8 @@ uv run news ui --open
 
 ## Contributing
 
-Consumer first: install above, UI and CLI and Run Settings below. Contributor
-policy (branches, draft PRs, completion records) lives in `AGENTS.md`.
-Automation glue lives under `automation/`; board policy lives outside this
-product tree.
+Contributor policy lives in `AGENTS.md`.
 
-### Local UI after develop merges
-
-News keeps a dedicated clean UI runtime worktree and can restart only the UI
-process it owns. Register the cmux-owned runner once:
-
-```bash
-python3 automation/news_ui_runtime.py register
-```
-
-Manual sync:
-
-```bash
-python3 automation/news_ui_runtime.py sync
-```
-
-This never rewrites a dirty developer checkout and never kills an unknown
-listener on the UI port.
 
 ### Security gate
 
@@ -216,8 +196,7 @@ pretending the schedule is active. Exactly one schedule at one local time is
 supported: no weekly recurrence, per-day schedules, or cron expressions, and
 launchd runs only for the logged-in user session.
 
-Product Daily Automation is distinct from the GitHub-board automation under
-`automation/`; the board automation is unchanged. See
+See
 [`docs/adr/0013-local-daily-automation-uses-launchagent.md`](docs/adr/0013-local-daily-automation-uses-launchagent.md)
 for the accepted operational decision.
 
