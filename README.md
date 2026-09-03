@@ -35,33 +35,19 @@ uv tool install news-pipeline
 
 - [ ] Verify `import news_pipeline` works and the `news` CLI is on `PATH`.
 
-## Project Automation (product facts only)
+## Quickstart
 
-This repo has automated issue/PR glue under `automation/`. Product workers do
-not manage the board. Board policy lives outside this product tree.
+```bash
+uv run news run --preset dev
+uv run news ui --open
+```
 
-### What product workers need
+## Contributing
 
-- Integration branch: `develop`. Production branch: `main`.
-- Issue branches: `archon/task-issue-<N>` in isolated worktrees.
-- Implementation PRs target `develop` and stay **draft**.
-- On develop PRs/commits use `Issue: #N` — never `Fixes` / `Closes` / `Resolves`.
-- Human-only product decisions: comment `NEEDS INPUT:` with 2–3 options, add
-  label `needs-input`, stop coding.
-- Completion records on issues must include:
-  `## What shipped`, `## Decisions`, `## Acceptance criteria`,
-  `## How to test`, `## Deferred work`.
-  The `## How to test` section separates `### Machine checks` (commands the
-  run executed, with recorded results) from `### Human checks` (steps that
-  genuinely need a person). The poller mirrors that split in the Ready for
-  Review comment, and the ready-review QA agent reuses recorded evidence
-  instead of re-running checks.
-- Create a shaped Backlog issue:
-  `python3 automation/create_issue.py "<title>" --body "<shaped markdown>"`
-- After automation/workflow install changes:
-  `automation/deploy.sh`
-- Reliable tests on this machine:
-  `.venv/bin/python3 -m pytest tests/ -q`
+Consumer first: install above, UI and CLI and Run Settings below. Contributor
+policy (branches, draft PRs, completion records) lives in `AGENTS.md`.
+Automation glue lives under `automation/`; board policy lives outside this
+product tree.
 
 ### Local UI after develop merges
 
@@ -272,8 +258,8 @@ When running from a shell, put `NEWS_` assignments on the same command line or
 export them first:
 
 ```bash
-NEWS_MODEL=gemma-e2b-tiny NEWS_MODEL_BACKEND=mlx-lm NEWS_IMAGE_ENABLED=0 uv run news run
-export NEWS_MODEL=gemma-e2b-tiny
+NEWS_MODEL=gemma-4-e2b-it-mlx-4bit NEWS_MODEL_BACKEND=mlx-lm NEWS_IMAGE_ENABLED=0 uv run news run
+export NEWS_MODEL=gemma-4-e2b-it-mlx-4bit
 export NEWS_MODEL_BACKEND=mlx-lm
 uv run news run
 ```
@@ -286,7 +272,7 @@ applies any explicit shell/UI overrides on top.
 
 ```bash
 uv run news run --preset NAME
-NEWS_MODEL=gemma-4-12b-it-4bit NEWS_IMAGE_ENABLED=1 uv run news run
+NEWS_MODEL=gemma-4-12b-it-mlx-4bit NEWS_IMAGE_ENABLED=1 uv run news run
 ```
 
 Key Run Settings:
@@ -314,13 +300,12 @@ Key Run Settings:
   clustering) so it inherits the default model. Image-enabled runs make two
   independent calls — Image Art Direction (text-free FLUX prompt) and Title
   Generation (overlay headline) — each routed to its own assignment.
-- `NEWS_MODEL_BACKEND`: optional backend override for the default model
+- `NEWS_MODEL_BACKEND`: optional backend override for the selected model
   (`mlx-lm`, `mlx-vlm`, `external`, or `llama.cpp`). When unset, the fixed
-  product default `mlx-vlm` applies — model identity never selects a
-  backend. A known model whose declared backend differs (for example
-  `gemma-e2b-tiny` needs `mlx-lm`, and the Qwythos GGUF aliases need
-  `llama.cpp`) must set this explicitly or config resolution fails with an
-  actionable message — see [Runtime Matrix](#runtime-matrix).
+  product default `mlx-vlm` applies — model identity never silently selects a
+  backend. Gemma 4 MLX variants served by `mlx-lm` and all Unsloth GGUF
+  variants served by `llama.cpp` must set their backend explicitly or config
+  resolution fails with an actionable message — see [Runtime Matrix](#runtime-matrix).
 
 ### Prompt Profiles
 
@@ -409,19 +394,26 @@ override because its renderer escapes them safely.
 
 ### Model Selection
 
+`NEWS_MODEL` is the model selector. The UI labels it **Model** and
+pre-populates the code-owned default `gemma-4-12b-it-mlx-4bit`; an explicit
+selection replaces that value. The backend remains a separate setting:
+
 ```bash
-NEWS_MODEL=gemma-e2b-tiny NEWS_MODEL_BACKEND=mlx-lm uv run news run
-NEWS_MODEL=gemma-4-12b-it-4bit uv run news run --preset NAME
+NEWS_MODEL=gemma-4-12b-it-mlx-4bit uv run news run
+NEWS_MODEL=gemma-4-e2b-it-mlx-4bit NEWS_MODEL_BACKEND=mlx-lm uv run news run
+NEWS_MODEL=gemma-4-e2b-it-gguf-ud-q4-k-xl NEWS_MODEL_BACKEND=llama.cpp uv run news run
 ```
 
-Task-specific model assignments inherit from `NEWS_MODEL` unless you set them
+Task-specific model assignments inherit from `NEWS_MODEL` unless you set them:
+
 ```bash
-NEWS_MODEL_ARTICLE_SUMMARY=gemma-e2b-tiny uv run news run
-NEWS_MODEL_STORY_DRAFTING=gemma-4-12b-it-4bit uv run news run --preset NAME
-NEWS_MODEL_STORY_SCALE_SCREENING=gemma-e2b-tiny uv run news run
-NEWS_MODEL_TITLE_GENERATION=gemma-4-12b-it-4bit uv run news run --preset NAME
-NEWS_MODEL_IMAGE_ART_DIRECTION=gemma-e2b-tiny uv run news run
+NEWS_MODEL_ARTICLE_SUMMARY=gemma-4-e2b-it-mlx-4bit NEWS_MODEL_BACKEND=mlx-lm uv run news run
+NEWS_MODEL_STORY_DRAFTING=gemma-4-31b-it-mlx-4bit NEWS_MODEL_BACKEND=mlx-lm uv run news run
+NEWS_MODEL_STORY_SCALE_SCREENING=gemma-4-12b-it-gguf-ud-q4-k-xl NEWS_MODEL_BACKEND=llama.cpp uv run news run
+NEWS_MODEL_TITLE_GENERATION=gemma-4-26b-a4b-it-mlx-4bit NEWS_MODEL_BACKEND=mlx-lm uv run news run
+NEWS_MODEL_IMAGE_ART_DIRECTION=gemma-4-e4b-it-gguf-ud-q4-k-xl NEWS_MODEL_BACKEND=llama.cpp uv run news run
 ```
+
 Every actual LLM stage has its own assignment: Article Summarization, Story
 Drafting, Story Scale Screening, Title Generation, and Image Art Direction.
 An unset image assignment inherits `NEWS_MODEL` (and the default base URL),
@@ -430,22 +422,44 @@ Direction and Title Generation as two separate, independently routed LLM
 calls; a failure in one never blocks the other. `story_discovery` has no LLM
 stage — it is algorithmic embedding/TF-IDF clustering and inherits the
 default model.
-Built-in aliases:
 
-- `gemma-e2b-tiny`: [`deadbydawn101/gemma-4-E2B-Heretic-Uncensored-mlx-4bit`](https://huggingface.co/deadbydawn101/gemma-4-E2B-Heretic-Uncensored-mlx-4bit) (Codex-safe test model)
-- `gemma-4-12b-it-4bit`: [`mlx-community/gemma-4-12B-it-4bit`](https://huggingface.co/mlx-community/gemma-4-12B-it-4bit) (default; the standard Gemma 4 12B instruction model, 256K-token context)
-- `qwythos-9b-4bit`: [`huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF`](https://huggingface.co/huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF) (legacy 9B Q4_K GGUF, managed `llama.cpp`)
-- `qwythos-9b-8bit`: [`huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF`](https://huggingface.co/huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF) (legacy 9B Q8_0 GGUF, managed `llama.cpp`)
-- `qwen3-8b-4bit`: [`mlx-community/Qwen3-8B-4bit`](https://huggingface.co/mlx-community/Qwen3-8B-4bit) (runtime-verified Qwen3 8B 4-bit MLX, managed `mlx-lm`; 40,960-token context)
-- `qwen3-14b-4bit`: [`mlx-community/Qwen3-14B-4bit`](https://huggingface.co/mlx-community/Qwen3-14B-4bit) (runtime-verified Qwen3 14B 4-bit MLX, managed `mlx-lm`; 40,960-token context)
+Built-in aliases are exactly the five official Gemma 4 instruction variants,
+each available once as the largest curated 4-bit MLX distribution and once as
+Unsloth's `UD-Q4_K_XL` GGUF:
 
-The legacy `qwythos-9b-*` aliases are supported again through the managed
-`llama.cpp` backend (issue #75): each resolves to its exact GGUF file
-reference and is served by an operator-installed `llama-server` binary. The
-default model remains the MLX Gemma 4 12B entry above.
+- `gemma-4-e2b-it-mlx-4bit` — `mlx-community/gemma-4-e2b-it-4bit`,
+  managed `mlx-lm` ([Hugging Face](https://huggingface.co/mlx-community/gemma-4-e2b-it-4bit)).
+- `gemma-4-e2b-it-gguf-ud-q4-k-xl` —
+  `unsloth/gemma-4-E2B-it-GGUF/gemma-4-E2B-it-UD-Q4_K_XL.gguf`, managed
+  `llama.cpp` ([Hugging Face](https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF)).
+- `gemma-4-e4b-it-mlx-4bit` — `mlx-community/gemma-4-e4b-it-4bit`,
+  managed `mlx-lm` ([Hugging Face](https://huggingface.co/mlx-community/gemma-4-e4b-it-4bit)).
+- `gemma-4-e4b-it-gguf-ud-q4-k-xl` —
+  `unsloth/gemma-4-E4B-it-GGUF/gemma-4-E4B-it-UD-Q4_K_XL.gguf`, managed
+  `llama.cpp` ([Hugging Face](https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF)).
+- `gemma-4-12b-it-mlx-4bit` — `mlx-community/gemma-4-12B-it-4bit`,
+  managed `mlx-vlm`, default ([Hugging Face](https://huggingface.co/mlx-community/gemma-4-12B-it-4bit)).
+- `gemma-4-12b-it-gguf-ud-q4-k-xl` —
+  `unsloth/gemma-4-12B-it-GGUF/gemma-4-12b-it-UD-Q4_K_XL.gguf`, managed
+  `llama.cpp` ([Hugging Face](https://huggingface.co/unsloth/gemma-4-12B-it-GGUF)).
+- `gemma-4-26b-a4b-it-mlx-4bit` — `mlx-community/gemma-4-26b-a4b-it-4bit`,
+  managed `mlx-lm` ([Hugging Face](https://huggingface.co/mlx-community/gemma-4-26b-a4b-it-4bit)).
+- `gemma-4-26b-a4b-it-gguf-ud-q4-k-xl` —
+  `unsloth/gemma-4-26B-A4B-it-GGUF/gemma-4-26B-A4B-it-UD-Q4_K_XL.gguf`,
+  managed `llama.cpp` ([Hugging Face](https://huggingface.co/unsloth/gemma-4-26B-A4B-it-GGUF)).
+- `gemma-4-31b-it-mlx-4bit` — `mlx-community/gemma-4-31b-it-4bit`,
+  managed `mlx-lm` ([Hugging Face](https://huggingface.co/mlx-community/gemma-4-31b-it-4bit)).
+- `gemma-4-31b-it-gguf-ud-q4-k-xl` —
+  `unsloth/gemma-4-31B-it-GGUF/gemma-4-31B-it-UD-Q4_K_XL.gguf`, managed
+  `llama.cpp` ([Hugging Face](https://huggingface.co/unsloth/gemma-4-31B-it-GGUF)).
+
+The default 12B MLX entry keeps the fixed product backend `mlx-vlm`. The
+other MLX entries require `NEWS_MODEL_BACKEND=mlx-lm`; every GGUF entry
+requires `NEWS_MODEL_BACKEND=llama.cpp`.
 
 Each model page shows Hugging Face's native Hardware Compatibility panel
-(GGUF/MLX quantizations) — the UI model picker links directly to it.
+(GGUF/MLX quantizations) — the UI model picker links directly to its
+repository page.
 
 ### Model Catalog
 
@@ -460,26 +474,22 @@ uv run news models catalog
 uv run news models search --query gemma --task text-generation --limit 5
 ```
 
-Curated models (6):
+Curated models (10):
 
-- `gemma-4-12b-it-4bit` — mlx-vlm, 256K-token context, default model
-  ([Hugging Face](https://huggingface.co/mlx-community/gemma-4-12B-it-4bit))
-- `gemma-e2b-tiny` — mlx-lm, Codex-safe test model
-  ([Hugging Face](https://huggingface.co/deadbydawn101/gemma-4-E2B-Heretic-Uncensored-mlx-4bit))
-- `qwythos-9b-4bit` — llama.cpp, legacy Q4_K GGUF (requires an installed `llama-server`)
-  ([Hugging Face](https://huggingface.co/huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF))
-- `qwythos-9b-8bit` — llama.cpp, legacy Q8_0 GGUF (requires an installed `llama-server`)
-  ([Hugging Face](https://huggingface.co/huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF))
-- `qwen3-8b-4bit` — mlx-lm, runtime-verified smaller/speed-oriented Qwen3 4-bit MLX option (40,960-token context)
-  ([Hugging Face](https://huggingface.co/mlx-community/Qwen3-8B-4bit))
-- `qwen3-14b-4bit` — mlx-lm, runtime-verified larger/quality-oriented Qwen3 4-bit MLX option (40,960-token context, host-sensitive)
-  ([Hugging Face](https://huggingface.co/mlx-community/Qwen3-14B-4bit))
+- `gemma-4-e2b-it-mlx-4bit` — `mlx-lm`, 128K-token context.
+- `gemma-4-e2b-it-gguf-ud-q4-k-xl` — `llama.cpp`, Unsloth `UD-Q4_K_XL`.
+- `gemma-4-e4b-it-mlx-4bit` — `mlx-lm`, 128K-token context.
+- `gemma-4-e4b-it-gguf-ud-q4-k-xl` — `llama.cpp`, Unsloth `UD-Q4_K_XL`.
+- `gemma-4-12b-it-mlx-4bit` — `mlx-vlm`, 256K-token context, default.
+- `gemma-4-12b-it-gguf-ud-q4-k-xl` — `llama.cpp`, Unsloth `UD-Q4_K_XL`.
+- `gemma-4-26b-a4b-it-mlx-4bit` — `mlx-lm`, 256K-token context.
+- `gemma-4-26b-a4b-it-gguf-ud-q4-k-xl` — `llama.cpp`, Unsloth `UD-Q4_K_XL`.
+- `gemma-4-31b-it-mlx-4bit` — `mlx-lm`, 256K-token context.
+- `gemma-4-31b-it-gguf-ud-q4-k-xl` — `llama.cpp`, Unsloth `UD-Q4_K_XL`.
 
-The Qwen3 MLX entries were verified by launching the exact managed server on
-Apple Silicon and exercising readiness plus bounded completions; see
-[`docs/model-runtime-verification.md`](docs/model-runtime-verification.md)
-for the recorded evidence, host, package versions, and task-contract
-results.
+The catalog is intentionally closed to these ten code-owned choices. YAML
+overlay entries remain available for advanced, user-verified additions but do
+not enter the default curated list.
 
 Hugging Face search results carry runtime-fit verdicts (`managed_mlx_lm`,
 `managed_mlx_vlm`, `managed_llama_cpp`, or `external_only`) as advisory
@@ -573,7 +583,7 @@ local `.gguf` paths (`--model`). Text-generation GGUF is supported;
 multimodal GGUF (separate `mmproj` file) is not.
 
 ```bash
-NEWS_MODEL=qwythos-9b-4bit NEWS_MODEL_BACKEND=llama.cpp uv run news run
+NEWS_MODEL=gemma-4-e2b-it-gguf-ud-q4-k-xl NEWS_MODEL_BACKEND=llama.cpp uv run news run
 NEWS_MODEL=/models/local-model.gguf NEWS_MODEL_BACKEND=llama.cpp uv run news run
 NEWS_MODEL=some-owner/some-gguf-repo NEWS_MODEL_BACKEND=llama.cpp uv run news run
 ```
@@ -582,28 +592,20 @@ Print the exact managed command without starting a server or downloading a
 model (the command is a preview only):
 
 ```bash
-NEWS_MODEL=qwythos-9b-4bit NEWS_MODEL_BACKEND=llama.cpp NEWS_LLAMA_CPP_SERVER=/opt/llama/llama-server uv run news model-server-command
-NEWS_MODEL=qwen3-8b-4bit NEWS_MODEL_BACKEND=mlx-lm uv run news model-server-command
-NEWS_MODEL=qwen3-14b-4bit NEWS_MODEL_BACKEND=mlx-lm uv run news model-server-command
-```
-
-```text
-/opt/llama/llama-server --hf-repo huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF --hf-file Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-Q4_K.gguf --alias huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-Q4_K.gguf --parallel 4 --host 127.0.0.1 --port 8080 --n-predict <max-tokens-if-configured>
+NEWS_MODEL=gemma-4-12b-it-mlx-4bit uv run news model-server-command
+NEWS_MODEL=gemma-4-e2b-it-mlx-4bit NEWS_MODEL_BACKEND=mlx-lm uv run news model-server-command
+NEWS_MODEL=gemma-4-12b-it-gguf-ud-q4-k-xl NEWS_MODEL_BACKEND=llama.cpp NEWS_LLAMA_CPP_SERVER=/opt/llama/llama-server uv run news model-server-command
 ```
 
 `NEWS_MODEL` selects model identity only; it never picks a backend. An
 unset `NEWS_MODEL_BACKEND` resolves to the fixed product default `mlx-vlm`
-(the backend of the default Gemma 4 12B model). Known catalog models whose
-declared backend differs — `gemma-e2b-tiny` (`mlx-lm`), the
-`qwythos-9b-*` GGUF aliases (`llama.cpp`), and the runtime-verified
-`qwen3-8b-4bit` / `qwen3-14b-4bit` MLX entries (`mlx-lm`) — must set
-`NEWS_MODEL_BACKEND` explicitly; config resolution fails fast with an
-actionable message naming the required value instead of silently launching
-the wrong server. Any
-other explicit value fails fast; known catalog MLX/llama.cpp mismatches
-fail fast too. To run the default model against an external
-OpenAI-compatible endpoint — no managed server is started; the pipeline waits
-for and probes the endpoint:
+(the backend of the default Gemma 4 12B MLX model). The four other MLX
+aliases require `NEWS_MODEL_BACKEND=mlx-lm`; all five GGUF aliases require
+`NEWS_MODEL_BACKEND=llama.cpp`. Config resolution fails fast with an
+actionable message instead of silently launching the wrong server.
+
+To run a model against an external OpenAI-compatible endpoint — no managed
+server is started; the pipeline waits for and probes the endpoint:
 
 ```bash
 NEWS_MODEL_BACKEND=external NEWS_MODEL_BASE_URL=https://api.example.com/v1 NEWS_MODEL=<server-model-id> uv run news run
@@ -622,38 +624,28 @@ can use caller-managed endpoints by giving that task a distinct base URL
 `NEWS_MODEL_IMAGE_ART_DIRECTION_BASE_URL`); the URL itself does not select
 ownership.
 
-Normal report runs start the matching local MLX server, wait until it is ready,
-run the pipeline, and stop the managed server when the run exits. To keep a
-server warm manually, print the matching command and run it in another terminal:
-
-```bash
-NEWS_MODEL=gemma-4-12b-it-4bit uv run news model-server-command
-```
+Normal report runs start the matching local MLX or llama.cpp server, wait until
+it is ready, run the pipeline, and stop the managed server when the run exits.
+To keep a server warm manually, print the matching command and run it in
+another terminal.
 
 If Article Summarization, Story Drafting, Story Scale Screening, Title
-Generation, or Image Art Direction uses a different model, give that
-task a matching base URL or run it on an externally managed server. A
-run owns one managed local server per distinct task base URL: each
-distinct managed endpoint is started and readiness-checked (`/models`
-plus a tiny generation probe) on demand when its task is first used,
-routed per task, and stopped with the run. Tasks sharing one canonical
-endpoint and model reuse the same process. Two tasks pointing at the
-same managed endpoint with different models are rejected at
-configuration time with guidance to set a per-task base URL or use an
-external server. Ownership follows the resolved backend, not the URL's
-appearance: assignments resolved with the `external` backend (default or
-per-task) are caller-managed and are never spawned by the application, while a
-managed backend remains application-owned even when its URL looks remote.
+Generation, or Image Art Direction uses a different model, give that task a
+matching base URL or run it on an externally managed server. A run owns one
+managed local server per distinct task base URL; tasks sharing one canonical
+endpoint and model reuse the same process. Two tasks pointing at the same
+managed endpoint with different models are rejected at configuration time.
 
 For example, one run can own three managed servers for the default,
 Article Summarization, and Story Drafting models:
 
 ```bash
-NEWS_MODEL=gemma-e2b-tiny \
-NEWS_MODEL_ARTICLE_SUMMARY=gemma-4-12b-it-4bit \
+NEWS_MODEL=gemma-4-12b-it-mlx-4bit \
+NEWS_MODEL_ARTICLE_SUMMARY=gemma-4-e2b-it-mlx-4bit \
 NEWS_MODEL_ARTICLE_SUMMARY_BASE_URL=http://127.0.0.1:8090/v1 \
-NEWS_MODEL_STORY_DRAFTING=qwythos-9b-4bit \
+NEWS_MODEL_STORY_DRAFTING=gemma-4-31b-it-gguf-ud-q4-k-xl \
 NEWS_MODEL_STORY_DRAFTING_BASE_URL=http://127.0.0.1:8091/v1 \
+NEWS_MODEL_BACKEND=mlx-vlm \
 uv run news run
 ```
 
@@ -733,7 +725,7 @@ select ownership.
 
 ```bash
 NEWS_IMAGE_ENABLED=0 uv run news run --preset NAME
-NEWS_MODEL=gemma-e2b-tiny NEWS_MODEL_BACKEND=mlx-lm NEWS_IMAGE_ENABLED=0 uv run news run
+NEWS_MODEL=gemma-4-e2b-it-mlx-4bit NEWS_MODEL_BACKEND=mlx-lm NEWS_IMAGE_ENABLED=0 uv run news run
 NEWS_IMAGE_ENABLED=1 uv run news run --preset NAME
 ```
 
@@ -870,8 +862,8 @@ uv run news run --preset dev
 
 The `dev` preset:
 
-- Uses `gemma-e2b-tiny` (the smallest model — the only one we keep for
-  local testing now that the standard Gemma 4 12B model is the default).
+- Uses `gemma-4-e2b-it-mlx-4bit` (the smallest curated model and the
+  Codex-safe local-testing choice).
 - Sets `NEWS_SOURCE_SCOPE=core` (the narrowest source pool).
 - Sets `NEWS_RECIPIENT_SCOPE=primary` (legacy scope; maps to
   `NEWS_DELIVERY_MODE=owner`, sending only to the primary/owner recipient).
@@ -882,7 +874,7 @@ For even faster runs, override the model explicitly and tighten the
 recency window:
 
 ```bash
-NEWS_MODEL=gemma-e2b-tiny NEWS_MODEL_BACKEND=mlx-lm NEWS_RECENT_WINDOW_HOURS=6 uv run news run
+NEWS_MODEL=gemma-4-e2b-it-mlx-4bit NEWS_MODEL_BACKEND=mlx-lm NEWS_RECENT_WINDOW_HOURS=6 uv run news run
 ```
 
 To preview the resolved config before launching a run, use the UI or

@@ -34,7 +34,7 @@ The supported runtime matrix is exactly:
    (`darwin` + `arm64`, matching the pyproject markers).
 2. **`mlx-vlm`** — managed local MLX vision-language-model server on Apple
    Silicon (same platform constraint). Requires `mlx-vlm>=0.6.4,<0.7.0` to
-   launch Gemma 4 models (`gemma4_unified` model type, issue #124); the upper
+   launch the default Gemma 4 12B MLX model (`gemma4_unified`, issue #124); the upper
    bound is a deliberate 0.x-semver guard — mlx-vlm is pre-1.0, so minor
    releases may break the managed-server contract, and the 0.6.10 cascade
    (`mlx>=0.32.0`, `transformers>=5.14.0`) does not resolve against the
@@ -67,11 +67,11 @@ The supported runtime matrix is exactly:
 with a `ValueError` listing the valid options. When unset, the backend is
 **not** inferred from the model reference: the fixed product default
 `DEFAULT_MODEL_BACKEND` (`mlx-vlm`, the backend of the default Gemma 4 12B
-model) applies (issue #169). A known catalog model whose declared backend
-differs from that default — for example `gemma-e2b-tiny` (`mlx-lm`) and the
-`qwythos-9b-*` GGUF aliases (`llama.cpp`) — must set `NEWS_MODEL_BACKEND`
-explicitly; config resolution fails fast with an actionable message naming
-the required value instead of silently launching the wrong managed server.
+MLX model) applies (issue #169). The four other Gemma 4 MLX aliases declare
+`mlx-lm`, and the five Unsloth GGUF aliases declare `llama.cpp`; each must set
+`NEWS_MODEL_BACKEND` explicitly when selected instead of the default. Config
+resolution fails fast with an actionable message naming the required value
+instead of silently launching the wrong managed server.
 Raw `.gguf` references likewise require an explicit
 `NEWS_MODEL_BACKEND=llama.cpp`. Explicit overrides keep the documented behavior: known catalog
 MLX/llama.cpp mismatches fail fast, `mlx-lm`/`mlx-vlm` cross-overrides keep
@@ -100,9 +100,10 @@ redefining it.
   the llama.cpp executable is checked immediately before `Popen` and only
   for the llama backend, so Runtime Config resolution and UI previews never
   require the native binary.
-- The legacy `qwythos-9b-4bit`/`qwythos-9b-8bit` aliases are supported
-  again as curated llama.cpp catalog entries (file-qualified references with
-  a bare `hf_repo` page id); the Gemma MLX default is unchanged.
+- The curated Model Catalog contains exactly ten Gemma 4 choices: one
+  `mlx-community` 4-bit MLX distribution and one Unsloth `UD-Q4_K_XL` GGUF
+  distribution for each official instruction variant. The default is the
+  Gemma 4 12B MLX entry.
 - Per-task external models continue to work via a distinct per-task base URL;
   per-task backend env vars are out of scope until a user need exists.
 - Model pickers and validation surfaces must constrain backends to the closed

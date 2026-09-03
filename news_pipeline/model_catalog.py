@@ -83,32 +83,32 @@ MODEL_TASK_LABELS: dict[str, str] = {
 
 MODEL_RECOMMENDATION_TASK_NOTES: dict[str, str] = {
     "factual_extraction": (
-        "Prioritize the default Gemma 4 12B model: its 256K-token context "
-        "keeps long source text intact for extraction."
+        "Prioritize the default Gemma 4 12B MLX model: its 256K-token "
+        "context keeps long source text intact for extraction."
     ),
     "structured_output": (
-        "The default Gemma 4 12B model is the verified structured-output "
+        "The default Gemma 4 12B MLX model is the verified structured-output "
         "pick; keep the machine-required JSON contracts intact."
     ),
     "synthesis": (
-        "The default Gemma 4 12B model is the recommended synthesis engine "
-        "for cross-source story drafting."
+        "The default Gemma 4 12B MLX model is the recommended synthesis "
+        "engine for cross-source story drafting."
     ),
     "citation_fidelity": (
-        "The default Gemma 4 12B model best preserves [[S1]]-style citation "
-        "markers across long drafts."
+        "The default Gemma 4 12B MLX model best preserves [[S1]]-style "
+        "citation markers across long drafts."
     ),
     "speed": (
-        "Prefer the smallest curated model (gemma-e2b-tiny) for fast, "
+        "Prefer the smallest curated Gemma 4 E2B MLX model for fast, "
         "Codex-safe runs; accept lower fidelity."
     ),
     "context_length": (
-        "The default Gemma 4 12B model offers 256K-token context, keeping "
-        "long source text intact across all stages."
+        "The default Gemma 4 12B MLX model offers 256K-token context, "
+        "keeping long source text intact across all stages."
     ),
 }
 
-DEFAULT_CATALOG_MODEL_ALIAS = "gemma-4-12b-it-4bit"
+DEFAULT_CATALOG_MODEL_ALIAS = "gemma-4-12b-it-mlx-4bit"
 
 
 @dataclass(frozen=True)
@@ -123,137 +123,167 @@ class CatalogModel:
     task_notes: dict[str, str]
 
 
-# Curated entries: gemma-4-12b-it-4bit / gemma-e2b-tiny (MLX) and the
-# qwythos-9b-* GGUF pair (llama.cpp), aligned with config.py constants and
-# MODEL_ALIASES. MLX entries keep reference == hf_repo (issue #92); llama.cpp
-# entries use a file-qualified reference (owner/repo/file.gguf) with a bare
-# hf_repo page id. Adding a launchable built-in requires Apple-Silicon
-# runtime verification for MLX entries (recorded in
-# docs/model-runtime-verification.md, issue #89) or an operator-installed
-# llama-server binary for GGUF entries.
+# Curated entries are the five official Gemma 4 instruction variants, each
+# offered once as a consistent mlx-community 4-bit MLX distribution and once
+# as Unsloth's UD-Q4_K_XL GGUF. MLX entries keep reference == hf_repo
+# (issue #92); llama.cpp entries use a file-qualified reference
+# (owner/repo/file.gguf) with a bare hf_repo page id.
 BUILTIN_CATALOG_MODELS: dict[str, CatalogModel] = {
-    "gemma-4-12b-it-4bit": CatalogModel(
-        alias="gemma-4-12b-it-4bit",
+    "gemma-4-12b-it-mlx-4bit": CatalogModel(
+        alias="gemma-4-12b-it-mlx-4bit",
         reference="mlx-community/gemma-4-12B-it-4bit",
-        name="Gemma 4 12B Instruct (4-bit)",
+        name="Gemma 4 12B Instruct (MLX 4-bit)",
         backend="mlx-vlm",
         hf_repo="mlx-community/gemma-4-12B-it-4bit",
         context_length=262_144,
         description=(
-            "The default model: the standard Gemma 4 12B instruction model as "
-            "the mlx-community 4-bit MLX distribution, served by the managed "
-            "mlx-vlm backend on Apple Silicon."
+            "The default Gemma 4 12B instruction model from the consistent "
+            "mlx-community 4-bit MLX distribution, served by mlx-vlm on "
+            "Apple Silicon."
         ),
         task_notes={
             "factual_extraction": MODEL_RECOMMENDATION_TASK_NOTES["factual_extraction"],
             "structured_output": MODEL_RECOMMENDATION_TASK_NOTES["structured_output"],
             "synthesis": MODEL_RECOMMENDATION_TASK_NOTES["synthesis"],
             "citation_fidelity": MODEL_RECOMMENDATION_TASK_NOTES["citation_fidelity"],
-            "context_length": (
-                "256K-token context keeps long source text intact across all "
-                "stages; the highest-fidelity curated pick."
-            ),
+            "context_length": MODEL_RECOMMENDATION_TASK_NOTES["context_length"],
         },
     ),
-    "gemma-e2b-tiny": CatalogModel(
-        alias="gemma-e2b-tiny",
-        reference="deadbydawn101/gemma-4-E2B-Heretic-Uncensored-mlx-4bit",
-        name="Gemma E2B Tiny",
+    "gemma-4-e2b-it-mlx-4bit": CatalogModel(
+        alias="gemma-4-e2b-it-mlx-4bit",
+        reference="mlx-community/gemma-4-e2b-it-4bit",
+        name="Gemma 4 E2B Instruct (MLX 4-bit)",
         backend="mlx-lm",
-        hf_repo="deadbydawn101/gemma-4-E2B-Heretic-Uncensored-mlx-4bit",
-        context_length=None,
+        hf_repo="mlx-community/gemma-4-e2b-it-4bit",
+        context_length=131_072,
         description=(
-            "Codex-safe test model: tiny 4-bit MLX Gemma for fast runs and "
-            "automated verification, served by the managed mlx-lm backend."
+            "The smallest official Gemma 4 instruction variant in the "
+            "consistent mlx-community 4-bit MLX distribution, served by "
+            "mlx-lm on Apple Silicon."
         ),
-        task_notes={
-            "speed": MODEL_RECOMMENDATION_TASK_NOTES["speed"],
-        },
+        task_notes={"speed": MODEL_RECOMMENDATION_TASK_NOTES["speed"]},
     ),
-    "qwythos-9b-4bit": CatalogModel(
-        alias="qwythos-9b-4bit",
+    "gemma-4-e2b-it-gguf-ud-q4-k-xl": CatalogModel(
+        alias="gemma-4-e2b-it-gguf-ud-q4-k-xl",
         reference=(
-            "huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF/"
-            "Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-Q4_K.gguf"
+            "unsloth/gemma-4-E2B-it-GGUF/"
+            "gemma-4-E2B-it-UD-Q4_K_XL.gguf"
         ),
-        name="Qwythos 9B (Q4_K GGUF)",
+        name="Gemma 4 E2B Instruct (GGUF UD-Q4_K_XL)",
         backend="llama.cpp",
-        hf_repo="huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF",
-        context_length=None,
+        hf_repo="unsloth/gemma-4-E2B-it-GGUF",
+        context_length=131_072,
         description=(
-            "Legacy 9B GGUF model (Q4_K), served by the managed llama.cpp "
-            "backend with an operator-installed llama-server binary (issue #75)."
+            "The smallest official Gemma 4 instruction variant as Unsloth's "
+            "UD-Q4_K_XL GGUF, served by the managed llama.cpp backend."
         ),
         task_notes={},
     ),
-    "qwythos-9b-8bit": CatalogModel(
-        alias="qwythos-9b-8bit",
-        reference=(
-            "huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF/"
-            "Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-Q8_0.gguf"
-        ),
-        name="Qwythos 9B (Q8_0 GGUF)",
-        backend="llama.cpp",
-        hf_repo="huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF",
-        context_length=None,
+    "gemma-4-e4b-it-mlx-4bit": CatalogModel(
+        alias="gemma-4-e4b-it-mlx-4bit",
+        reference="mlx-community/gemma-4-e4b-it-4bit",
+        name="Gemma 4 E4B Instruct (MLX 4-bit)",
+        backend="mlx-lm",
+        hf_repo="mlx-community/gemma-4-e4b-it-4bit",
+        context_length=131_072,
         description=(
-            "Legacy 9B GGUF model (Q8_0), served by the managed llama.cpp "
-            "backend with an operator-installed llama-server binary (issue #75)."
+            "The official Gemma 4 E4B instruction variant in the consistent "
+            "mlx-community 4-bit MLX distribution, served by mlx-lm on "
+            "Apple Silicon."
         ),
         task_notes={},
     ),
-    "qwen3-8b-4bit": CatalogModel(
-        alias="qwen3-8b-4bit",
-        reference="mlx-community/Qwen3-8B-4bit",
-        name="Qwen3 8B Instruct (4-bit)",
-        backend="mlx-lm",
-        hf_repo="mlx-community/Qwen3-8B-4bit",
-        context_length=40960,
-        description=(
-            "MLX 4-bit Qwen3 8B instruction model, served by the managed "
-            "mlx-lm backend on Apple Silicon (verification and host limits: "
-            "docs/model-runtime-verification.md)."
+    "gemma-4-e4b-it-gguf-ud-q4-k-xl": CatalogModel(
+        alias="gemma-4-e4b-it-gguf-ud-q4-k-xl",
+        reference=(
+            "unsloth/gemma-4-E4B-it-GGUF/"
+            "gemma-4-E4B-it-UD-Q4_K_XL.gguf"
         ),
-        task_notes={
-            "speed": (
-                "Verified fast Qwen3 MLX option on the recorded Apple-Silicon "
-                "host: sub-second short completions; prefer it over the 14B "
-                "entry for speed-oriented runs."
-            ),
-            "structured_output": (
-                "Verified JSON structured-output contract under the pipeline's "
-                "enable_thinking=False call shape; a faster structured-output "
-                "pick than the default Gemma 4 12B for short contracts."
-            ),
-        },
+        name="Gemma 4 E4B Instruct (GGUF UD-Q4_K_XL)",
+        backend="llama.cpp",
+        hf_repo="unsloth/gemma-4-E4B-it-GGUF",
+        context_length=131_072,
+        description=(
+            "The official Gemma 4 E4B instruction variant as Unsloth's "
+            "UD-Q4_K_XL GGUF, served by the managed llama.cpp backend."
+        ),
+        task_notes={},
     ),
-    "qwen3-14b-4bit": CatalogModel(
-        alias="qwen3-14b-4bit",
-        reference="mlx-community/Qwen3-14B-4bit",
-        name="Qwen3 14B Instruct (4-bit)",
-        backend="mlx-lm",
-        hf_repo="mlx-community/Qwen3-14B-4bit",
-        context_length=40960,
-        description=(
-            "MLX 4-bit Qwen3 14B instruction model, served by the managed "
-            "mlx-lm backend on Apple Silicon; the larger Qwen3 MLX option, "
-            "host-sensitive (verification and host limits: "
-            "docs/model-runtime-verification.md)."
+    "gemma-4-12b-it-gguf-ud-q4-k-xl": CatalogModel(
+        alias="gemma-4-12b-it-gguf-ud-q4-k-xl",
+        reference=(
+            "unsloth/gemma-4-12B-it-GGUF/"
+            "gemma-4-12b-it-UD-Q4_K_XL.gguf"
         ),
-        task_notes={
-            "factual_extraction": (
-                "Verified extraction smoke (JSON) on the recorded host; the "
-                "higher-capacity Qwen3 MLX extraction pick."
-            ),
-            "synthesis": (
-                "Verified synthesis smoke (two-fact summary) on the recorded "
-                "host; a higher-capacity Qwen3 MLX drafting pick."
-            ),
-            "citation_fidelity": (
-                "Verified citation-marker preservation ([[S1]]/[[S2]] style) "
-                "on the recorded host."
-            ),
-        },
+        name="Gemma 4 12B Instruct (GGUF UD-Q4_K_XL)",
+        backend="llama.cpp",
+        hf_repo="unsloth/gemma-4-12B-it-GGUF",
+        context_length=262_144,
+        description=(
+            "The official Gemma 4 12B instruction variant as Unsloth's "
+            "UD-Q4_K_XL GGUF, served by the managed llama.cpp backend."
+        ),
+        task_notes={},
+    ),
+    "gemma-4-26b-a4b-it-mlx-4bit": CatalogModel(
+        alias="gemma-4-26b-a4b-it-mlx-4bit",
+        reference="mlx-community/gemma-4-26b-a4b-it-4bit",
+        name="Gemma 4 26B-A4B Instruct (MLX 4-bit)",
+        backend="mlx-lm",
+        hf_repo="mlx-community/gemma-4-26b-a4b-it-4bit",
+        context_length=262_144,
+        description=(
+            "The official Gemma 4 26B-A4B instruction variant in the "
+            "consistent mlx-community 4-bit MLX distribution, served by "
+            "mlx-lm on Apple Silicon."
+        ),
+        task_notes={},
+    ),
+    "gemma-4-26b-a4b-it-gguf-ud-q4-k-xl": CatalogModel(
+        alias="gemma-4-26b-a4b-it-gguf-ud-q4-k-xl",
+        reference=(
+            "unsloth/gemma-4-26B-A4B-it-GGUF/"
+            "gemma-4-26B-A4B-it-UD-Q4_K_XL.gguf"
+        ),
+        name="Gemma 4 26B-A4B Instruct (GGUF UD-Q4_K_XL)",
+        backend="llama.cpp",
+        hf_repo="unsloth/gemma-4-26B-A4B-it-GGUF",
+        context_length=262_144,
+        description=(
+            "The official Gemma 4 26B-A4B instruction variant as Unsloth's "
+            "UD-Q4_K_XL GGUF, served by the managed llama.cpp backend."
+        ),
+        task_notes={},
+    ),
+    "gemma-4-31b-it-mlx-4bit": CatalogModel(
+        alias="gemma-4-31b-it-mlx-4bit",
+        reference="mlx-community/gemma-4-31b-it-4bit",
+        name="Gemma 4 31B Instruct (MLX 4-bit)",
+        backend="mlx-lm",
+        hf_repo="mlx-community/gemma-4-31b-it-4bit",
+        context_length=262_144,
+        description=(
+            "The largest official Gemma 4 instruction variant in the "
+            "consistent mlx-community 4-bit MLX distribution, served by "
+            "mlx-lm on Apple Silicon."
+        ),
+        task_notes={},
+    ),
+    "gemma-4-31b-it-gguf-ud-q4-k-xl": CatalogModel(
+        alias="gemma-4-31b-it-gguf-ud-q4-k-xl",
+        reference=(
+            "unsloth/gemma-4-31B-it-GGUF/"
+            "gemma-4-31B-it-UD-Q4_K_XL.gguf"
+        ),
+        name="Gemma 4 31B Instruct (GGUF UD-Q4_K_XL)",
+        backend="llama.cpp",
+        hf_repo="unsloth/gemma-4-31B-it-GGUF",
+        context_length=262_144,
+        description=(
+            "The largest official Gemma 4 instruction variant as Unsloth's "
+            "UD-Q4_K_XL GGUF, served by the managed llama.cpp backend."
+        ),
+        task_notes={},
     ),
 }
 
