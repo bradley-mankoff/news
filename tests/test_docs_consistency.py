@@ -537,7 +537,8 @@ class DocsConsistencyTests(unittest.TestCase):
             "owner`, `disabled`" in settings or "`owner` (default" in settings
         )
         # Product Daily Automation stays distinct from board automation.
-        self.assertIn("board automation", readme)
+        # Disambiguation lives in SETTINGS.md; README stays pure product.
+        self.assertIn("board automation", settings)
 
 
 if __name__ == "__main__":
