@@ -35,33 +35,19 @@ uv tool install news-pipeline
 
 - [ ] Verify `import news_pipeline` works and the `news` CLI is on `PATH`.
 
-## Project Automation (product facts only)
+## Quickstart
 
-This repo has automated issue/PR glue under `automation/`. Product workers do
-not manage the board. Board policy lives outside this product tree.
+```bash
+uv run news run --preset dev
+uv run news ui --open
+```
 
-### What product workers need
+## Contributing
 
-- Integration branch: `develop`. Production branch: `main`.
-- Issue branches: `archon/task-issue-<N>` in isolated worktrees.
-- Implementation PRs target `develop` and stay **draft**.
-- On develop PRs/commits use `Issue: #N` — never `Fixes` / `Closes` / `Resolves`.
-- Human-only product decisions: comment `NEEDS INPUT:` with 2–3 options, add
-  label `needs-input`, stop coding.
-- Completion records on issues must include:
-  `## What shipped`, `## Decisions`, `## Acceptance criteria`,
-  `## How to test`, `## Deferred work`.
-  The `## How to test` section separates `### Machine checks` (commands the
-  run executed, with recorded results) from `### Human checks` (steps that
-  genuinely need a person). The poller mirrors that split in the Ready for
-  Review comment, and the ready-review QA agent reuses recorded evidence
-  instead of re-running checks.
-- Create a shaped Backlog issue:
-  `python3 automation/create_issue.py "<title>" --body "<shaped markdown>"`
-- After automation/workflow install changes:
-  `automation/deploy.sh`
-- Reliable tests on this machine:
-  `.venv/bin/python3 -m pytest tests/ -q`
+Consumer first: install above, UI and CLI and Run Settings below. Contributor
+policy (branches, draft PRs, completion records) lives in `AGENTS.md`.
+Automation glue lives under `automation/`; board policy lives outside this
+product tree.
 
 ### Local UI after develop merges
 
