@@ -65,6 +65,7 @@ Thumbs.db
 .agent-daily-logs/
 REVIEW.md
 TO_DO_LIST.txt
+.piyaz/
 git_cheat_sheet.txt
 
 # Automation runtime state
