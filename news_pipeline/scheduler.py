@@ -6,6 +6,24 @@ lifecycle projection only: the existing Run Session, report, DuckDB/CSV
 history, OKF bundle, and Delivery Profile remain the execution and persistence
 authorities. This module never persists credentials, API keys, report text, or
 raw launchctl output, and it never calls the pipeline at import time.
+
+Cadence is computer-on: exactly one daily HH:MM in local time via
+StartCalendarInterval (macOS only); next firing is HH:MM (local time, once
+daily) and launchd does not queue a catch-up when the machine is asleep/off
+or not logged in — the next eligible daily window runs instead, or
+``news schedule run`` runs immediately. Model choice is consumer-owned:
+``gemma-4-12b-it-4bit`` (mlx-vlm, 256K, 32GB+ RAM) vs ``qwen3-8b-4bit``
+(mlx-lm, 40K, smaller) / ``qwen3-14b-4bit`` (host-sensitive) vs
+``qwythos-9b-*`` (llama.cpp GGUF + llama-server); see
+``config/model_catalog.yaml`` and each Hugging Face Hardware Compatibility
+panel, and a mismatched ``NEWS_MODEL_BACKEND`` fails fast — an mlx OOM should
+retry with a smaller alias (e.g. ``gemma-e2b-tiny`` with mlx-lm). Failure
+semantics are report vs delivery: ``skipped: not_configured`` /
+``skipped: user_disabled`` / ``failed`` never hide a report; delivery phase
+and accepted/rejected lists live in ``latest_run_details.json`` and history;
+``schedule_status`` and the Schedule tab surface enabled/launchd
+loaded/not-loaded/unavailable/last run without secrets and retry is the next
+daily firing or a manual run.
 """
 
 from __future__ import annotations

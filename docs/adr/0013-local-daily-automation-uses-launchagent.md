@@ -61,8 +61,20 @@ one atomic local JSON schedule record:
   service, no cron, no system LaunchDaemon, and no second report/history
   store. Multi-user, hosted, and non-email scheduling remain out of scope.
 - Users must accept LaunchAgent user-session semantics: launchd runs the job
-  for the logged-in user; a logged-out or asleep session may miss the
-  calendar window, and missed-run backfill is not provided.
+  for the logged-in user; a logged-out, asleep, or powered-off machine does
+  not fire and does not queue a catch-up — the next eligible daily
+  `StartCalendarInterval` window (`HH:MM` local time, once daily, shown as
+  `HH:MM (local time, once daily)` in the Schedule tab and
+  `news schedule status [--json]`) runs instead, or run
+  `news schedule run` immediately. Model choice is consumer-owned (e.g.
+  `gemma-4-12b-it-4bit` vs `qwythos-9b-*` vs `qwen3-*`; see
+  `config/model_catalog.yaml` and Hardware Compatibility panel; mismatched
+  `NEWS_MODEL_BACKEND` fails fast, OOM retries with a smaller alias) and
+  delivery outcome stays independent (`skipped: not_configured` /
+  `skipped: user_disabled` / `failed` never hide a report; delivery phase in
+  `latest_run_details.json`; Schedule tab/`status --json` surface
+  `enabled`/`loaded`/`not-loaded`/`unavailable` plus last run id/time/report/delivery
+  without secrets).
 - The schedule state and plist are operational projections, not history:
   disabling or removing a schedule never touches existing reports,
   DuckDB/CSV history, or OKF bundles.
