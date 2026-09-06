@@ -11,6 +11,7 @@ the real model pipeline with tiny deterministic child processes.
 
 from __future__ import annotations
 
+import json
 import re
 import unittest
 from unittest.mock import patch
@@ -232,6 +233,160 @@ class ReportReviewBrowserTests(unittest.TestCase):
                         self.assertIsNone(ui_module.RUN_MANAGER.active())
                     finally:
                         browser.close()
+
+    def test_model_catalog_is_closed_and_search_is_lazy_on_both_surfaces(self) -> None:
+        """The catalog stays compact until opened and search stays explicit."""
+        with ReviewFixture() as fixture:
+            with sync_playwright() as playwright:
+                browser = playwright.chromium.launch(headless=True)
+                try:
+                    for path, guided in (("?wizard=0", False), ("", True)):
+                        page = browser.new_page()
+                        search_requests: list[str] = []
+
+                        def handle_search(route) -> None:
+                            search_requests.append(route.request.url)
+                            route.fulfill(json={"models": [], "error": None})
+
+                        page.route("**/api/models/search**", handle_search)
+                        page.goto(f"{fixture.base_url}{path}", wait_until="load")
+                        if guided:
+                            page.locator("#wizardNext").click()
+                            page.locator("#wizardNext").click()
+
+                        disclosure = page.locator("#modelCatalogDisclosure")
+                        expect(disclosure).to_have_count(1)
+                        self.assertIsNone(disclosure.get_attribute("open"))
+                        expect(page.locator("#modelSearchBtn")).not_to_be_visible()
+                        self.assertEqual(search_requests, [])
+
+                        page.locator("#modelCatalogDisclosure > summary").click()
+                        expect(page.locator("#modelSearchBtn")).to_be_visible()
+                        self.assertEqual(search_requests, [])
+
+                        page.locator("#modelSearchQuery").fill("gemma")
+                        page.locator("#modelSearchBtn").click()
+                        expect(page.locator("#modelSearchResults")).to_contain_text(
+                            "No models found."
+                        )
+                        self.assertEqual(len(search_requests), 1)
+                        page.close()
+                finally:
+                    browser.close()
+
+    def test_model_catalog_handlers_survive_wizard_and_setup_rerenders(self) -> None:
+        """Search and model selection remain wired after fresh markup renders."""
+        model = {
+            "id": "owner/test-model",
+            "hf_url": "https://example.test/test-model",
+            "pipeline_tag": "text-generation",
+            "library_name": "mlx",
+            "downloads": 1,
+            "likes": 1,
+            "context_length": 4096,
+            "runtime_fit": {
+                "status": "managed_mlx_vlm",
+                "reason": "managed test model",
+            },
+        }
+        with ReviewFixture() as fixture:
+            with sync_playwright() as playwright:
+                browser = playwright.chromium.launch(headless=True)
+                try:
+                    page = browser.new_page()
+                    search_requests: list[str] = []
+
+                    def handle_search(route) -> None:
+                        search_requests.append(route.request.url)
+                        route.fulfill(json={"models": [model], "error": None})
+
+                    page.route("**/api/models/search**", handle_search)
+                    page.goto(fixture.base_url, wait_until="load")
+                    page.locator("#wizardNext").click()
+                    page.locator("#wizardNext").click()
+
+                    page.locator("#modelCatalogDisclosure > summary").click()
+                    page.locator("#modelSearchQuery").fill("gemma")
+                    page.locator("#modelSearchBtn").click()
+                    expect(page.locator("#modelSearchResults")).to_contain_text(
+                        "owner/test-model"
+                    )
+                    self.assertEqual(len(search_requests), 1)
+                    page.locator(
+                        'button[data-use-hf-model="owner/test-model"]'
+                    ).click()
+                    expect(page.locator('[data-env="NEWS_MODEL"]')).to_have_value(
+                        "owner/test-model"
+                    )
+
+                    # Next/Back replaces the wizard markup. The fresh Model
+                    # step must retain the selected model before any control
+                    # is used again.
+                    page.locator("#wizardNext").click()
+                    page.locator("#wizardBack").click()
+                    expect(page.locator('[data-env="NEWS_MODEL"]')).to_have_value(
+                        "owner/test-model"
+                    )
+
+                    # The fresh Model step must also bind both the search and
+                    # keyboard handlers.
+                    page.locator("#modelCatalogDisclosure > summary").click()
+                    page.locator("#modelSearchQuery").fill("gemma")
+                    page.locator("#modelSearchQuery").press("Enter")
+                    expect(page.locator("#modelSearchResults")).to_contain_text(
+                        "owner/test-model"
+                    )
+                    self.assertEqual(len(search_requests), 2)
+                    page.locator(
+                        'button[data-use-hf-model="owner/test-model"]'
+                    ).click()
+                    expect(page.locator('[data-env="NEWS_MODEL"]')).to_have_value(
+                        "owner/test-model"
+                    )
+
+                    # A non-wizard setup render has the same post-innerHTML
+                    # binding requirement. Reloading gives it fresh markup.
+                    legacy_page = browser.new_page()
+                    legacy_requests: list[str] = []
+
+                    def handle_legacy_search(route) -> None:
+                        legacy_requests.append(route.request.url)
+                        route.fulfill(json={"models": [model], "error": None})
+
+                    legacy_page.route("**/api/models/search**", handle_legacy_search)
+                    legacy_page.goto(f"{fixture.base_url}?wizard=0", wait_until="load")
+                    legacy_page.locator("#modelCatalogDisclosure > summary").click()
+                    legacy_page.locator("#modelSearchQuery").fill("gemma")
+                    legacy_page.locator("#modelSearchBtn").click()
+                    expect(legacy_page.locator("#modelSearchResults")).to_contain_text(
+                        "owner/test-model"
+                    )
+                    self.assertEqual(len(legacy_requests), 1)
+                    legacy_page.locator(
+                        'button[data-use-hf-model="owner/test-model"]'
+                    ).click()
+                    expect(legacy_page.locator('[data-env="NEWS_MODEL"]')).to_have_value(
+                        "owner/test-model"
+                    )
+                    legacy_page.reload(wait_until="load")
+                    legacy_page.locator("#modelCatalogDisclosure > summary").click()
+                    legacy_page.locator("#modelSearchQuery").fill("gemma")
+                    legacy_page.locator("#modelSearchQuery").press("Enter")
+                    expect(legacy_page.locator("#modelSearchResults")).to_contain_text(
+                        "owner/test-model"
+                    )
+                    self.assertEqual(len(legacy_requests), 2)
+                    legacy_page.locator(
+                        'button[data-use-hf-model="owner/test-model"]'
+                    ).click()
+                    expect(legacy_page.locator('[data-env="NEWS_MODEL"]')).to_have_value(
+                        "owner/test-model"
+                    )
+                    legacy_page.close()
+                    page.close()
+                finally:
+                    browser.close()
+
 
 
 if __name__ == "__main__":

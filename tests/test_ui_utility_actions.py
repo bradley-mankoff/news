@@ -286,6 +286,7 @@ const calls = [];
 const renderWizard = () => `<div id="wizardContent"></div>`;
 const renderPresetSummary = () => {};
 const renderStats = () => {};
+const refreshModelKnobLinks = () => {};
 const decorateEnvHints = () => {};
 const bindWizardEvents = () => {};
 const decorateUtilityHints = () => {};

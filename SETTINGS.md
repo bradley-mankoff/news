@@ -27,7 +27,7 @@ The control panel opens as a 5-step wizard (default `?wizard=1`; `?wizard=0` res
 
 1. Preset / Goal — `NEWS_PRESET` + `NEWS_PROMPT_PROFILE` editorial tone
 2. Sources — `NEWS_SOURCE_SCOPE` (`core` / `peripheral`)
-3. Model — `NEWS_MODEL` default with Resolved readout; per-task picker collapsed in `<details>`
+3. Model — `NEWS_MODEL` default with Resolved readout; a closed **Browse models** disclosure opens curated cards, task recommendations, and explicit Search/Enter Hugging Face search; per-task picker collapsed in `<details>`
 4. Delivery — `NEWS_DELIVERY_MODE` + `NEWS_PRIMARY_RECIPIENT`
 5. Review & Run — stats + preview `uv run news run` + Run button
 
