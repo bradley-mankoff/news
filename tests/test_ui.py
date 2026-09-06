@@ -6151,6 +6151,7 @@ for (const absentId of ["article_tuning_save", "article_tuning_rename", "article
         # clear active controls, and refresh durable review data.
         self.assertIn("events.close();", html)
         self.assertIn("refreshReviewData();", html)
+        self.assertIn("wizardState.step = 1;", html)
         self.assertIn("stopSpinner();", html)
         self.assertIn("TERMINAL_STATUSES.includes(payload.status)", html)
         self.assertIn("events.onerror", html)
@@ -6200,6 +6201,9 @@ const setStatus = (text, cls = "muted") => statuses.push([text, cls]);
 let reviewRefreshes = 0;
 const updateRunControls = () => {};
 const refreshReviewData = () => { reviewRefreshes += 1; };
+const syncWizardEnv = () => {};
+let runSetupRenders = 0;
+const renderRunSetup = () => { runSetupRenders += 1; };
 // Deterministic timers: intervals stay open until cleared and remember their
 // callbacks, timeouts queue so the harness decides when polling fires.
 let intervalSeq = 0;
@@ -6297,12 +6301,16 @@ startSpinner();
 appendLogEvent({ kind: "progress", stage: "write", line: "writing report" });
 const liveEvents = new EventSource("/api/runs/run-a/events");
 state.activeRun = "run-a";
+wizardState.step = 5;
 const reviewsBeforeNonTerminal = reviewRefreshes;
+const rendersBeforeNonTerminal = runSetupRenders;
 assert(finalizeRun({ status: "running", run_id: "run-a" }, liveEvents) === false, "non-terminal status must not finalize");
 assert(liveEvents.closed === false, "non-terminal status must leave the stream open");
 assert(openIntervals.length === 1, "non-terminal status must keep the spinner alive");
 assert(reviewRefreshes === reviewsBeforeNonTerminal, "non-terminal status must not refresh review data");
 assert(state.activeRun === "run-a", "non-terminal status must keep the run active");
+assert(wizardState.step === 5, "non-terminal status must leave the wizard step alone");
+assert(runSetupRenders === rendersBeforeNonTerminal, "non-terminal status must not re-render run setup");
 
 // ---- 3. Every terminal status cleans up -------------------------------------
 for (const [status, glyph] of [["completed", "✓"], ["failed", "✗"], ["stopped", "■"]]) {
@@ -6311,11 +6319,15 @@ for (const [status, glyph] of [["completed", "✓"], ["failed", "✗"], ["stoppe
   appendLogEvent({ kind: "progress", stage: "write", line: "writing report" });
   const events = new EventSource(`/api/runs/run-t/events`);
   state.activeRun = "run-t";
+  wizardState.step = 5;
   const reviewsBefore = reviewRefreshes;
+  const rendersBefore = runSetupRenders;
   assert(finalizeRun({ status, run_id: "run-t" }, events) === true, `${status} must finalize`);
   assert(events.closed, `${status} must close the stream`);
   assert(openIntervals.length === 0, `${status} must stop the spinner`);
   assert(state.activeRun === null, `${status} must release the active run`);
+  assert(wizardState.step === 1, `${status} must reset the wizard to step 1`);
+  assert(runSetupRenders === rendersBefore + 1, `${status} must re-render run setup after reset`);
   assert(reviewRefreshes === reviewsBefore + 1, `${status} must refresh durable review data`);
   assert(logState.rows.every((row) => !row.live), `${status} must clear live flags on stage rows`);
   assert(

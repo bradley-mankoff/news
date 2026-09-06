@@ -4221,6 +4221,10 @@ HTML = r"""<!doctype html>
       appendLogEvent({ line: `${terminalGlyph(payload.status)} [ui] ${payload.status}` });
       state.activeRun = null;
       updateRunControls();
+      syncWizardEnv();
+      wizardState.step = 1;
+      saveWizardState();
+      renderRunSetup();
       setStatus(`Run ${payload.run_id} ${payload.status}.`, payload.status === "failed" ? "bad" : "muted");
       events.close();
       refreshReviewData();
