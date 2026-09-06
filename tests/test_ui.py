@@ -2310,6 +2310,15 @@ assert(SURFACED_ENVS.size === 0, "missing schema must not throw and must suppres
         # drift away from the server-side guard.
         self.assertIn("A run is already active", ui_module.HTML)
         self.assertIn("updateRunControls", ui_module.HTML)
+    def test_preview_updates_snapshot_from_runtime(self) -> None:
+        # Snapshot panel must reflect preview response, not boot defaults.
+        # Pin preview() applying data.runtime plus re-rendering stats.
+        html = ui_module.HTML
+        preview = html.split("async function preview(action=", 1)[1].split("function previewWithStatus", 1)[0]
+        self.assertIn("state.schema.runtime = data.runtime", preview)
+        self.assertIn("renderStats()", preview)
+        self.assertIn("renderPresetSummary()", preview)
+        self.assertIn("Active sources", html)
 
     def test_crud_helpers_use_temp_files(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

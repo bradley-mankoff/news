@@ -3009,13 +3009,16 @@ HTML = r"""<!doctype html>
       const scaleScreening = model.story_scale_screening || assignments.story_scale_screening || {};
       const titleGeneration = model.title_generation || assignments.title_generation || {};
       const imageArtDirection = model.image_art_direction || assignments.image_art_direction || {};
+      const activeScope = runtime.source_scope || "-";
+      const activeSources = source.selected && activeScope in (source.selected || {}) ? source.selected[activeScope] : "-";
       const items = [
         ["Run preset", state.selectedRunPresetId || runtime.preset_id || "custom"],
-        ["Source scope", runtime.source_scope || "-"],
+        ["Source scope", activeScope],
         ["Recipient scope", runtime.recipient_scope || "-"],
         ["Sources", source.total ?? 0],
         ["Core selected", source.selected ? source.selected.core : "-"],
         ["Peripheral selected", source.selected ? source.selected.peripheral : "-"],
+        ["Active sources", activeSources],
         ["Recipients", `${recipients.total ?? 0} total`],
         ["Model", model.reference || "-"],
         ["Article Summarization", articleSummary.reference || "-"],
@@ -4001,6 +4004,12 @@ HTML = r"""<!doctype html>
     async function preview(action="run") {
       const data = await api("/api/preview", { method: "POST", body: JSON.stringify(requestBody(action)) });
       $("previewPane").textContent = data.command_text + (data.runtime_error ? `\n\nPreview error: ${data.runtime_error}` : "");
+      if (data && data.runtime) {
+        state.schema = state.schema || {};
+        state.schema.runtime = data.runtime;
+        renderStats();
+        renderPresetSummary();
+      }
       return data;
     }
     function previewWithStatus(action="run") {
