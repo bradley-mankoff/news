@@ -237,8 +237,8 @@ When running from a shell, put `NEWS_` assignments on the same command line or
 export them first:
 
 ```bash
-NEWS_MODEL=gemma-4-e2b-it-mlx-4bit NEWS_MODEL_BACKEND=mlx-lm NEWS_IMAGE_ENABLED=0 uv run news run
-export NEWS_MODEL=gemma-4-e2b-it-mlx-4bit
+NEWS_MODEL=minicpm5-2b-it-mlx-4bit NEWS_MODEL_BACKEND=mlx-lm NEWS_IMAGE_ENABLED=0 uv run news run
+export NEWS_MODEL=minicpm5-2b-it-mlx-4bit
 export NEWS_MODEL_BACKEND=mlx-lm
 uv run news run
 ```
@@ -282,8 +282,8 @@ Key Run Settings:
 - `NEWS_MODEL_BACKEND`: optional backend override for the selected model
   (`mlx-lm`, `mlx-vlm`, `external`, or `llama.cpp`). When unset, the fixed
   product default `mlx-vlm` applies — model identity never silently selects a
-  backend. Gemma 4 MLX variants served by `mlx-lm` and all Unsloth GGUF
-  variants served by `llama.cpp` must set their backend explicitly or config
+  backend. Non-default MLX entries served by `mlx-lm` and all GGUF entries
+  served by `llama.cpp` must set their backend explicitly or config
   resolution fails with an actionable message — see [Runtime Matrix](#runtime-matrix).
 
 ### Prompt Profiles
@@ -379,14 +379,14 @@ selection replaces that value. The backend remains a separate setting:
 
 ```bash
 NEWS_MODEL=gemma-4-12b-it-mlx-4bit uv run news run
-NEWS_MODEL=gemma-4-e2b-it-mlx-4bit NEWS_MODEL_BACKEND=mlx-lm uv run news run
-NEWS_MODEL=gemma-4-e2b-it-gguf-ud-q4-k-xl NEWS_MODEL_BACKEND=llama.cpp uv run news run
+NEWS_MODEL=minicpm5-2b-it-mlx-4bit NEWS_MODEL_BACKEND=mlx-lm uv run news run
+NEWS_MODEL=minicpm5-2b-it-gguf-q4-k-m NEWS_MODEL_BACKEND=llama.cpp uv run news run
 ```
 
 Task-specific model assignments inherit from `NEWS_MODEL` unless you set them:
 
 ```bash
-NEWS_MODEL_ARTICLE_SUMMARY=gemma-4-e2b-it-mlx-4bit NEWS_MODEL_BACKEND=mlx-lm uv run news run
+NEWS_MODEL_ARTICLE_SUMMARY=minicpm5-2b-it-mlx-4bit NEWS_MODEL_BACKEND=mlx-lm uv run news run
 NEWS_MODEL_STORY_DRAFTING=gemma-4-31b-it-mlx-4bit NEWS_MODEL_BACKEND=mlx-lm uv run news run
 NEWS_MODEL_STORY_SCALE_SCREENING=gemma-4-12b-it-gguf-ud-q4-k-xl NEWS_MODEL_BACKEND=llama.cpp uv run news run
 NEWS_MODEL_TITLE_GENERATION=gemma-4-26b-a4b-it-mlx-4bit NEWS_MODEL_BACKEND=mlx-lm uv run news run
@@ -402,15 +402,16 @@ calls; a failure in one never blocks the other. `story_discovery` has no LLM
 stage — it is algorithmic embedding/TF-IDF clustering and inherits the
 default model.
 
-Built-in aliases are exactly the five official Gemma 4 instruction variants,
-each available once as the largest curated 4-bit MLX distribution and once as
-Unsloth's `UD-Q4_K_XL` GGUF:
+Built-in aliases are the four official Gemma 4 instruction variants (each
+once as the largest curated 4-bit MLX distribution and once as Unsloth's
+`UD-Q4_K_XL` GGUF) plus MiniCPM5-2B (official openbmb 4-bit MLX and `Q4_K_M`
+GGUF) in the small/fast slot:
 
-- `gemma-4-e2b-it-mlx-4bit` — `mlx-community/gemma-4-e2b-it-4bit`,
-  managed `mlx-lm` ([Hugging Face](https://huggingface.co/mlx-community/gemma-4-e2b-it-4bit)).
-- `gemma-4-e2b-it-gguf-ud-q4-k-xl` —
-  `unsloth/gemma-4-E2B-it-GGUF/gemma-4-E2B-it-UD-Q4_K_XL.gguf`, managed
-  `llama.cpp` ([Hugging Face](https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF)).
+- `minicpm5-2b-it-mlx-4bit` — `openbmb/MiniCPM5-2B-MLX`,
+  managed `mlx-lm` ([Hugging Face](https://huggingface.co/openbmb/MiniCPM5-2B-MLX)).
+- `minicpm5-2b-it-gguf-q4-k-m` —
+  `openbmb/MiniCPM5-2B-GGUF/MiniCPM5-2B-Q4_K_M.gguf`, managed
+  `llama.cpp` ([Hugging Face](https://huggingface.co/openbmb/MiniCPM5-2B-GGUF)).
 - `gemma-4-e4b-it-mlx-4bit` — `mlx-community/gemma-4-e4b-it-4bit`,
   managed `mlx-lm` ([Hugging Face](https://huggingface.co/mlx-community/gemma-4-e4b-it-4bit)).
 - `gemma-4-e4b-it-gguf-ud-q4-k-xl` —
@@ -455,8 +456,8 @@ uv run news models search --query gemma --task text-generation --limit 5
 
 Curated models (10):
 
-- `gemma-4-e2b-it-mlx-4bit` — `mlx-lm`, 128K-token context.
-- `gemma-4-e2b-it-gguf-ud-q4-k-xl` — `llama.cpp`, Unsloth `UD-Q4_K_XL`.
+- `minicpm5-2b-it-mlx-4bit` — `mlx-lm`, 128K-token context.
+- `minicpm5-2b-it-gguf-q4-k-m` — `llama.cpp`, openbmb `Q4_K_M`.
 - `gemma-4-e4b-it-mlx-4bit` — `mlx-lm`, 128K-token context.
 - `gemma-4-e4b-it-gguf-ud-q4-k-xl` — `llama.cpp`, Unsloth `UD-Q4_K_XL`.
 - `gemma-4-12b-it-mlx-4bit` — `mlx-vlm`, 256K-token context, default.
@@ -564,7 +565,7 @@ local `.gguf` paths (`--model`). Text-generation GGUF is supported;
 multimodal GGUF (separate `mmproj` file) is not.
 
 ```bash
-NEWS_MODEL=gemma-4-e2b-it-gguf-ud-q4-k-xl NEWS_MODEL_BACKEND=llama.cpp uv run news run
+NEWS_MODEL=minicpm5-2b-it-gguf-q4-k-m NEWS_MODEL_BACKEND=llama.cpp uv run news run
 NEWS_MODEL=/models/local-model.gguf NEWS_MODEL_BACKEND=llama.cpp uv run news run
 NEWS_MODEL=some-owner/some-gguf-repo NEWS_MODEL_BACKEND=llama.cpp uv run news run
 ```
@@ -574,7 +575,7 @@ model (the command is a preview only):
 
 ```bash
 NEWS_MODEL=gemma-4-12b-it-mlx-4bit uv run news model-server-command
-NEWS_MODEL=gemma-4-e2b-it-mlx-4bit NEWS_MODEL_BACKEND=mlx-lm uv run news model-server-command
+NEWS_MODEL=minicpm5-2b-it-mlx-4bit NEWS_MODEL_BACKEND=mlx-lm uv run news model-server-command
 NEWS_MODEL=gemma-4-12b-it-gguf-ud-q4-k-xl NEWS_MODEL_BACKEND=llama.cpp NEWS_LLAMA_CPP_SERVER=/opt/llama/llama-server uv run news model-server-command
 ```
 
@@ -622,7 +623,7 @@ Article Summarization, and Story Drafting models:
 
 ```bash
 NEWS_MODEL=gemma-4-12b-it-mlx-4bit \
-NEWS_MODEL_ARTICLE_SUMMARY=gemma-4-e2b-it-mlx-4bit \
+NEWS_MODEL_ARTICLE_SUMMARY=minicpm5-2b-it-mlx-4bit \
 NEWS_MODEL_ARTICLE_SUMMARY_BASE_URL=http://127.0.0.1:8090/v1 \
 NEWS_MODEL_STORY_DRAFTING=gemma-4-31b-it-gguf-ud-q4-k-xl \
 NEWS_MODEL_STORY_DRAFTING_BASE_URL=http://127.0.0.1:8091/v1 \
@@ -706,7 +707,7 @@ select ownership.
 
 ```bash
 NEWS_IMAGE_ENABLED=0 uv run news run --preset NAME
-NEWS_MODEL=gemma-4-e2b-it-mlx-4bit NEWS_MODEL_BACKEND=mlx-lm NEWS_IMAGE_ENABLED=0 uv run news run
+NEWS_MODEL=minicpm5-2b-it-mlx-4bit NEWS_MODEL_BACKEND=mlx-lm NEWS_IMAGE_ENABLED=0 uv run news run
 NEWS_IMAGE_ENABLED=1 uv run news run --preset NAME
 ```
 
@@ -843,7 +844,7 @@ uv run news run --preset dev
 
 The `dev` preset:
 
-- Uses `gemma-4-e2b-it-mlx-4bit` (the smallest curated model and the
+- Uses `minicpm5-2b-it-mlx-4bit` (the small/fast curated model and the
   Codex-safe local-testing choice).
 - Sets `NEWS_SOURCE_SCOPE=core` (the narrowest source pool).
 - Sets `NEWS_RECIPIENT_SCOPE=primary` (legacy scope; maps to
@@ -855,7 +856,7 @@ For even faster runs, override the model explicitly and tighten the
 recency window:
 
 ```bash
-NEWS_MODEL=gemma-4-e2b-it-mlx-4bit NEWS_MODEL_BACKEND=mlx-lm NEWS_RECENT_WINDOW_HOURS=6 uv run news run
+NEWS_MODEL=minicpm5-2b-it-mlx-4bit NEWS_MODEL_BACKEND=mlx-lm NEWS_RECENT_WINDOW_HOURS=6 uv run news run
 ```
 
 To preview the resolved config before launching a run, use the UI or

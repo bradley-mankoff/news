@@ -823,8 +823,8 @@ state.schema = {
   knobs: [
     { env: "NEWS_MODEL", type: "select", default: "gemma-4-12b-it-mlx-4bit", options: [
       "gemma-4-12b-it-mlx-4bit",
-      "gemma-4-e2b-it-mlx-4bit",
-      "gemma-4-e2b-it-gguf-ud-q4-k-xl",
+      "minicpm5-2b-it-mlx-4bit",
+      "minicpm5-2b-it-gguf-q4-k-m",
       "gemma-4-e4b-it-mlx-4bit",
       "gemma-4-e4b-it-gguf-ud-q4-k-xl",
       "gemma-4-12b-it-gguf-ud-q4-k-xl",
@@ -2517,7 +2517,7 @@ assert(SURFACED_ENVS.size === 0, "missing schema must not throw and must suppres
             )
             self.assertEqual(
                 [pick["alias"] for pick in payload["model_recommendations"]["speed"]],
-                ["gemma-4-e2b-it-mlx-4bit", model_catalog.DEFAULT_CATALOG_MODEL_ALIAS],
+                ["minicpm5-2b-it-mlx-4bit", model_catalog.DEFAULT_CATALOG_MODEL_ALIAS],
             )
 
             helper_file = root / "nested" / "payload.yaml"
@@ -5595,7 +5595,7 @@ for (const absentId of ["article_tuning_save", "article_tuning_rename", "article
                 speed_picks = payload["model_recommendations"]["speed"]
                 self.assertEqual(
                     [pick["alias"] for pick in speed_picks],
-                    ["gemma-4-e2b-it-mlx-4bit", "smoke-model", model_catalog.DEFAULT_CATALOG_MODEL_ALIAS],
+                    ["minicpm5-2b-it-mlx-4bit", "smoke-model", model_catalog.DEFAULT_CATALOG_MODEL_ALIAS],
                 )
                 self.assertEqual(
                     speed_picks[1]["reason"],

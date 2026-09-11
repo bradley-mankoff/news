@@ -518,12 +518,12 @@ class ConfigHelperTests(unittest.TestCase):
                 "story_drafting": SimpleNamespace(
                     backend="mlx-lm",
                     base_url="https://api.example.com/v1",
-                    reference="gemma-4-e2b-it-mlx-4bit",
-                    name="mlx-community/gemma-4-e2b-it-4bit",
+                    reference="minicpm5-2b-it-mlx-4bit",
+                    name="openbmb/MiniCPM5-2B-MLX",
                 ),
             },
-            model_reference="gemma-4-e2b-it-mlx-4bit",
-            model_name="mlx-community/gemma-4-e2b-it-4bit",
+            model_reference="minicpm5-2b-it-mlx-4bit",
+            model_name="openbmb/MiniCPM5-2B-MLX",
             model_base_url="https://api.example.com/v1",
             model_backend="external",
         )  # no raise: an external default endpoint serves many models
@@ -540,12 +540,12 @@ class ConfigHelperTests(unittest.TestCase):
                     "story_drafting": SimpleNamespace(
                         backend="mlx-lm",
                         base_url="http://localhost:8090/v1",
-                        reference="gemma-4-e2b-it-mlx-4bit",
-                        name="mlx-community/gemma-4-e2b-it-4bit",
+                        reference="minicpm5-2b-it-mlx-4bit",
+                        name="openbmb/MiniCPM5-2B-MLX",
                     ),
                 },
-                model_reference="gemma-4-e2b-it-mlx-4bit",
-                model_name="mlx-community/gemma-4-e2b-it-4bit",
+                model_reference="minicpm5-2b-it-mlx-4bit",
+                model_name="openbmb/MiniCPM5-2B-MLX",
                 model_base_url="https://api.example.com/v1",
                 model_backend="external",
             )
@@ -706,8 +706,8 @@ class ConfigHelperTests(unittest.TestCase):
         )
         gguf_models = (
             (
-                config_module.GEMMA_4_E2B_IT_GGUF_MODEL_ALIAS,
-                config_module.GEMMA_4_E2B_IT_GGUF_MODEL_REFERENCE,
+                config_module.MINICPM5_2B_IT_GGUF_MODEL_ALIAS,
+                config_module.MINICPM5_2B_IT_GGUF_MODEL_REFERENCE,
             ),
             (
                 config_module.GEMMA_4_31B_IT_GGUF_MODEL_ALIAS,
@@ -740,7 +740,7 @@ class ConfigHelperTests(unittest.TestCase):
                 config_module.ensure_codex_safe_model_reference("bad-model")
         self.assertEqual(config_module.infer_model_backend("gemma-4-vision"), "mlx-vlm")
         self.assertEqual(
-            config_module.infer_model_backend(config_module.GEMMA_4_E2B_IT_GGUF_MODEL_REFERENCE),
+            config_module.infer_model_backend(config_module.MINICPM5_2B_IT_GGUF_MODEL_REFERENCE),
             config_module.MODEL_BACKEND_LLAMA_CPP,
         )
         self.assertEqual(
@@ -766,7 +766,7 @@ class ConfigHelperTests(unittest.TestCase):
         self.assertEqual(config_module.infer_model_backend("gemma-4-vision"), "mlx-vlm")
         # Raw GGUF references infer the managed llama.cpp backend (issue #75).
         self.assertEqual(
-            config_module.infer_model_backend(config_module.GEMMA_4_E2B_IT_GGUF_MODEL_REFERENCE),
+            config_module.infer_model_backend(config_module.MINICPM5_2B_IT_GGUF_MODEL_REFERENCE),
             config_module.MODEL_BACKEND_LLAMA_CPP,
         )
         self.assertEqual(
@@ -1229,7 +1229,7 @@ class ConfigHelperTests(unittest.TestCase):
             path = Path(tmpdir) / "reserved.yaml"
             path.write_text(
                 "models:\n"
-                "  gemma-4-e2b-it-mlx-4bit:\n"
+                "  minicpm5-2b-it-mlx-4bit:\n"
                 "    reference: mlx-community/some-model\n"
                 "    name: Collision Model\n"
                 "    backend: mlx-lm\n"
@@ -1267,13 +1267,13 @@ class ConfigHelperTests(unittest.TestCase):
         major, minor, patch = (int(x) for x in mlx_vlm["version"].split(".")[:3])
         self.assertGreaterEqual((major, minor, patch), (0, 6, 4), mlx_vlm["version"])
 
-    def test_model_knob_only_offers_curated_gemma4_choices(self) -> None:
+    def test_model_knob_only_offers_curated_catalog_choices(self) -> None:
         registry = config_module.runtime_knob_registry()
         knob = next(k for k in registry if k["env"] == "NEWS_MODEL")
         self.assertEqual(knob["label"], "Model")
         self.assertEqual(set(knob["options"]), set(config_module.MODEL_ALIASES))
         self.assertEqual(len(knob["options"]), 10)
-        self.assertTrue(all(option.startswith("gemma-4-") for option in knob["options"]))
+        self.assertTrue(all(option.startswith(("gemma-4-", "minicpm5-")) for option in knob["options"]))
         self.assertNotIn("qwythos-9b-4bit", knob["options"])
         self.assertNotIn("qwen3-14b-4bit", knob["options"])
         self.assertEqual(knob["default"], config_module.DEFAULT_MODEL_ALIAS)
@@ -1789,7 +1789,7 @@ class ConfigHelperTests(unittest.TestCase):
         # infer_model_backend stays model-aware for task-specific assignments
         # even though the default backend is fixed (issue #169).
         self.assertEqual(
-            config_module.infer_model_backend(config_module.GEMMA_4_E2B_IT_GGUF_MODEL_REFERENCE),
+            config_module.infer_model_backend(config_module.MINICPM5_2B_IT_GGUF_MODEL_REFERENCE),
             config_module.MODEL_BACKEND_LLAMA_CPP,
         )
         self.assertEqual(config_module.infer_model_backend("someone/gemma-4-other-raw-id"), "mlx-vlm")

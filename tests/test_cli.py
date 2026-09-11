@@ -296,8 +296,8 @@ class CliTests(unittest.TestCase):
 
         self.assertEqual(code, 0)
         expected_aliases = {
-            "gemma-4-e2b-it-mlx-4bit",
-            "gemma-4-e2b-it-gguf-ud-q4-k-xl",
+            "minicpm5-2b-it-mlx-4bit",
+            "minicpm5-2b-it-gguf-q4-k-m",
             "gemma-4-e4b-it-mlx-4bit",
             "gemma-4-e4b-it-gguf-ud-q4-k-xl",
             "gemma-4-12b-it-mlx-4bit",
@@ -325,7 +325,7 @@ class CliTests(unittest.TestCase):
         self.assertEqual(
             [entry["alias"] for entry in entries if entry["backend"] == "llama.cpp"],
             [
-                "gemma-4-e2b-it-gguf-ud-q4-k-xl",
+                "minicpm5-2b-it-gguf-q4-k-m",
                 "gemma-4-e4b-it-gguf-ud-q4-k-xl",
                 "gemma-4-12b-it-gguf-ud-q4-k-xl",
                 "gemma-4-26b-a4b-it-gguf-ud-q4-k-xl",
@@ -364,8 +364,8 @@ class CliTests(unittest.TestCase):
                 [entry["alias"] for entry in entries],
                 [
                     "gemma-4-12b-it-mlx-4bit",
-                    "gemma-4-e2b-it-mlx-4bit",
-                    "gemma-4-e2b-it-gguf-ud-q4-k-xl",
+                    "minicpm5-2b-it-mlx-4bit",
+                    "minicpm5-2b-it-gguf-q4-k-m",
                     "gemma-4-e4b-it-mlx-4bit",
                     "gemma-4-e4b-it-gguf-ud-q4-k-xl",
                     "gemma-4-12b-it-gguf-ud-q4-k-xl",
@@ -390,7 +390,7 @@ class CliTests(unittest.TestCase):
                 code, stdout, stderr = self._invoke(["models", "catalog"])
             self.assertEqual(code, 0)
             self.assertIn("smoke-model", stdout)
-            self.assertIn("gemma-4-e2b-it-mlx-4bit", stdout)
+            self.assertIn("minicpm5-2b-it-mlx-4bit", stdout)
 
     def test_models_catalog_malformed_yaml_fails_closed(self) -> None:
         """Malformed catalog YAML uses the CLI error envelope (exit 2) with a

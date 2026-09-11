@@ -99,7 +99,7 @@ MODEL_RECOMMENDATION_TASK_NOTES: dict[str, str] = {
         "citation markers across long drafts."
     ),
     "speed": (
-        "Prefer the smallest curated Gemma 4 E2B MLX model for fast, "
+        "Prefer the MiniCPM5-2B MLX model for fast, "
         "Codex-safe runs; accept lower fidelity."
     ),
     "context_length": (
@@ -123,11 +123,12 @@ class CatalogModel:
     task_notes: dict[str, str]
 
 
-# Curated entries are the five official Gemma 4 instruction variants, each
+# Curated entries are the four official Gemma 4 instruction variants (each
 # offered once as a consistent mlx-community 4-bit MLX distribution and once
-# as Unsloth's UD-Q4_K_XL GGUF. MLX entries keep reference == hf_repo
-# (issue #92); llama.cpp entries use a file-qualified reference
-# (owner/repo/file.gguf) with a bare hf_repo page id.
+# as Unsloth's UD-Q4_K_XL GGUF) plus MiniCPM5-2B (official openbmb 4-bit MLX
+# and Q4_K_M GGUF) in the small/fast slot (issue #327). MLX entries keep
+# reference == hf_repo (issue #92); llama.cpp entries use a file-qualified
+# reference (owner/repo/file.gguf) with a bare hf_repo page id.
 BUILTIN_CATALOG_MODELS: dict[str, CatalogModel] = {
     "gemma-4-12b-it-mlx-4bit": CatalogModel(
         alias="gemma-4-12b-it-mlx-4bit",
@@ -149,33 +150,32 @@ BUILTIN_CATALOG_MODELS: dict[str, CatalogModel] = {
             "context_length": MODEL_RECOMMENDATION_TASK_NOTES["context_length"],
         },
     ),
-    "gemma-4-e2b-it-mlx-4bit": CatalogModel(
-        alias="gemma-4-e2b-it-mlx-4bit",
-        reference="mlx-community/gemma-4-e2b-it-4bit",
-        name="Gemma 4 E2B Instruct (MLX 4-bit)",
+    "minicpm5-2b-it-mlx-4bit": CatalogModel(
+        alias="minicpm5-2b-it-mlx-4bit",
+        reference="openbmb/MiniCPM5-2B-MLX",
+        name="MiniCPM5-2B Instruct (MLX 4-bit)",
         backend="mlx-lm",
-        hf_repo="mlx-community/gemma-4-e2b-it-4bit",
+        hf_repo="openbmb/MiniCPM5-2B-MLX",
         context_length=131_072,
         description=(
-            "The smallest official Gemma 4 instruction variant in the "
-            "consistent mlx-community 4-bit MLX distribution, served by "
-            "mlx-lm on Apple Silicon."
+            "MiniCPM5-2B instruction model in the official openbmb 4-bit "
+            "MLX distribution, served by mlx-lm on Apple Silicon."
         ),
         task_notes={"speed": MODEL_RECOMMENDATION_TASK_NOTES["speed"]},
     ),
-    "gemma-4-e2b-it-gguf-ud-q4-k-xl": CatalogModel(
-        alias="gemma-4-e2b-it-gguf-ud-q4-k-xl",
+    "minicpm5-2b-it-gguf-q4-k-m": CatalogModel(
+        alias="minicpm5-2b-it-gguf-q4-k-m",
         reference=(
-            "unsloth/gemma-4-E2B-it-GGUF/"
-            "gemma-4-E2B-it-UD-Q4_K_XL.gguf"
+            "openbmb/MiniCPM5-2B-GGUF/"
+            "MiniCPM5-2B-Q4_K_M.gguf"
         ),
-        name="Gemma 4 E2B Instruct (GGUF UD-Q4_K_XL)",
+        name="MiniCPM5-2B Instruct (GGUF Q4_K_M)",
         backend="llama.cpp",
-        hf_repo="unsloth/gemma-4-E2B-it-GGUF",
+        hf_repo="openbmb/MiniCPM5-2B-GGUF",
         context_length=131_072,
         description=(
-            "The smallest official Gemma 4 instruction variant as Unsloth's "
-            "UD-Q4_K_XL GGUF, served by the managed llama.cpp backend."
+            "MiniCPM5-2B instruction model as the official openbmb Q4_K_M "
+            "GGUF, served by the managed llama.cpp backend."
         ),
         task_notes={},
     ),

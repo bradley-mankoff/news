@@ -201,7 +201,7 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
                 self.assertNotIn("mlx_vlm", config.model_server_command)
                 self.assertEqual(config.model_assignments["default"].backend, "llama.cpp")
     def test_raw_gemma4_gguf_references_require_explicit_llama_cpp(self) -> None:
-        entry = model_catalog.CATALOG_MODELS["gemma-4-e2b-it-gguf-ud-q4-k-xl"]
+        entry = model_catalog.CATALOG_MODELS["minicpm5-2b-it-gguf-q4-k-m"]
         for supported in (
             entry.reference,
             f"https://huggingface.co/{entry.reference}",
@@ -233,7 +233,7 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
         )
 
     def test_raw_gguf_without_explicit_backend_fails_fast(self) -> None:
-        entry = model_catalog.CATALOG_MODELS["gemma-4-e2b-it-gguf-ud-q4-k-xl"]
+        entry = model_catalog.CATALOG_MODELS["minicpm5-2b-it-gguf-q4-k-m"]
         for reference in (
             "/models/my model.gguf",
             entry.reference,
@@ -299,7 +299,7 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
             ),
             (
                 "mlx-lm",
-                f"https://hf.co/{model_catalog.CATALOG_MODELS['gemma-4-e2b-it-gguf-ud-q4-k-xl'].reference}",
+                f"https://hf.co/{model_catalog.CATALOG_MODELS['minicpm5-2b-it-gguf-q4-k-m'].reference}",
                 r"NEWS_MODEL_BACKEND=mlx-lm cannot serve.*llama.cpp backend",
             ),
         )
@@ -1351,7 +1351,7 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
         # backend-specific generated command. One run can own several managed
         # servers as long as each canonical endpoint serves one model.
         gguf_reference = model_catalog.CATALOG_MODELS[
-            "gemma-4-e2b-it-gguf-ud-q4-k-xl"
+            "minicpm5-2b-it-gguf-q4-k-m"
         ].reference
         config = load_runtime_config(
             environ={},
@@ -1392,7 +1392,7 @@ class RuntimeConfigResolutionTests(unittest.TestCase):
             r"from the same base URL.*Task 'story_drafting'.*Set a per-task base URL",
         ):
             gguf_reference = model_catalog.CATALOG_MODELS[
-                "gemma-4-e2b-it-gguf-ud-q4-k-xl"
+                "minicpm5-2b-it-gguf-q4-k-m"
             ].reference
             load_runtime_config(
                 environ={},

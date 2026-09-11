@@ -17,13 +17,13 @@ presets:
       NEWS_MODEL_BACKEND: mlx-vlm
   dev:
     name: Dev
-    description: Small core-source review run with the Gemma 4 E2B MLX model.
+    description: Small core-source review run with the MiniCPM5-2B MLX model.
     env:
       NEWS_SOURCE_SCOPE: core
       NEWS_RECIPIENT_SCOPE: primary
       NEWS_BLOCK_REUSED_URLS: '0'
       NEWS_IMAGE_ENABLED: '0'
-      NEWS_MODEL: gemma-4-e2b-it-mlx-4bit
+      NEWS_MODEL: minicpm5-2b-it-mlx-4bit
       NEWS_MODEL_BACKEND: mlx-lm
       NEWS_MIN_ARTICLES_PER_STORY: '2'
       NEWS_RELAX_STORY_DRAFTING_GUARDS: '1'

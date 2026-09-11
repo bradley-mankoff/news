@@ -26,15 +26,15 @@ from news_pipeline.llama_cpp_adapter import (
 class ParseModelReferenceTests(unittest.TestCase):
     def test_hf_file_qualified_reference(self) -> None:
         source = parse_llama_cpp_model_reference(
-            "unsloth/gemma-4-E2B-it-GGUF/"
-            "gemma-4-E2B-it-UD-Q4_K_XL.gguf"
+            "openbmb/MiniCPM5-2B-GGUF/"
+            "MiniCPM5-2B-Q4_K_M.gguf"
         )
         self.assertEqual(
             source,
             LlamaCppModelSource(
                 kind="hf_file",
-                hf_repo="unsloth/gemma-4-E2B-it-GGUF",
-                hf_file="gemma-4-E2B-it-UD-Q4_K_XL.gguf",
+                hf_repo="openbmb/MiniCPM5-2B-GGUF",
+                hf_file="MiniCPM5-2B-Q4_K_M.gguf",
             ),
         )
 

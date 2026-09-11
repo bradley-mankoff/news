@@ -79,8 +79,8 @@ multimodal GGUF (mmproj) is not.
 concurrency defaults. An unset `NEWS_MODEL_BACKEND` resolves to the fixed
 product default `DEFAULT_MODEL_BACKEND` (`mlx-vlm`, matching the default
 Gemma 4 12B alias), never to selected-model inference. A known catalog model
-whose declared backend differs — the four non-default Gemma 4 MLX aliases
-(`mlx-lm`) and the five Unsloth GGUF aliases (`llama.cpp`) — must set
+whose declared backend differs — the four non-default MLX aliases
+(`mlx-lm`) and the five GGUF aliases (`llama.cpp`) — must set
 `NEWS_MODEL_BACKEND` explicitly; config resolution fails fast with an actionable
 message naming the required value (raw `.gguf` references require
 `NEWS_MODEL_BACKEND=llama.cpp` the same way). Explicit backend overrides

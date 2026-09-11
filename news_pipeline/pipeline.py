@@ -11,7 +11,7 @@ Common Run Settings:
     NEWS_IMAGE_ENABLED=0|1
 
 Model selection:
-    NEWS_MODEL=gemma-4-e2b-it-mlx-4bit NEWS_MODEL_BACKEND=mlx-lm uv run news run --preset NAME
+    NEWS_MODEL=minicpm5-2b-it-mlx-4bit NEWS_MODEL_BACKEND=mlx-lm uv run news run --preset NAME
     NEWS_MODEL=gemma-4-12b-it-mlx-4bit uv run news run --preset NAME
 
     NEWS_MODEL accepts either a friendly alias above or a full model repo/name.
@@ -19,7 +19,7 @@ Model selection:
 
 Local model server:
     NEWS_MODEL=gemma-4-12b-it-mlx-4bit uv run news run --preset NAME
-    NEWS_MODEL=gemma-4-e2b-it-gguf-ud-q4-k-xl NEWS_MODEL_BACKEND=llama.cpp uv run news run --preset NAME
+    NEWS_MODEL=minicpm5-2b-it-gguf-q4-k-m NEWS_MODEL_BACKEND=llama.cpp uv run news run --preset NAME
         Starts the matching local MLX or llama.cpp server automatically, waits
         until it is ready, runs the pipeline, then shuts the managed server
         down even if the run errors. Server logs are written beside the output.
@@ -35,7 +35,7 @@ Local model server:
         token on /models and /chat/completions).
 
     uv run news codex-model-server-command
-        Prints the Codex-safe MLX server command for gemma-4-e2b-it-mlx-4bit.
+        Prints the Codex-safe MLX server command for minicpm5-2b-it-mlx-4bit.
         Codex-run model invocation is blocked unless this model is selected.
 
     NEWS_MODEL_BASE_URL=http://127.0.0.1:8080/v1 uv run news run --preset NAME

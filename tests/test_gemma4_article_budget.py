@@ -11,7 +11,8 @@ from news_pipeline.config import (
     DEFAULT_ARTICLE_TEXT_TOKEN_LIMIT,
     DEFAULT_TOTAL_ARTICLE_SUMMARY_CAP,
     GEMMA_4_12B_IT_MLX_4BIT_MODEL_ALIAS,
-    GEMMA_4_E2B_IT_GGUF_MODEL_ALIAS,
+    GEMMA_4_E4B_IT_GGUF_MODEL_ALIAS,
+    MINICPM5_2B_IT_GGUF_MODEL_ALIAS,
     is_gemma_4_model_reference,
     load_runtime_config,
 )
@@ -45,18 +46,18 @@ def _article_ids(count: int, *, prefix: str = "a") -> list[str]:
 
 class Gemma4ArticleBudgetTests(unittest.TestCase):
     def test_gemma_4_detection_and_gguf_alias(self) -> None:
-        self.assertTrue(is_gemma_4_model_reference(CODEX_TEST_MODEL_ALIAS))
-        self.assertTrue(is_gemma_4_model_reference(CODEX_TEST_MODEL_NAME))
+        self.assertFalse(is_gemma_4_model_reference(CODEX_TEST_MODEL_ALIAS))
+        self.assertFalse(is_gemma_4_model_reference(CODEX_TEST_MODEL_NAME))
         self.assertTrue(
             is_gemma_4_model_reference(
                 "mlx-community/gemma-4-26B-A4B-it-heretic-4bit"
             )
         )
-        self.assertTrue(is_gemma_4_model_reference(GEMMA_4_E2B_IT_GGUF_MODEL_ALIAS))
+        self.assertTrue(is_gemma_4_model_reference(GEMMA_4_E4B_IT_GGUF_MODEL_ALIAS))
         resolved = load_runtime_config(
             materialize_outputs=False,
             environ={
-                "NEWS_MODEL": GEMMA_4_E2B_IT_GGUF_MODEL_ALIAS,
+                "NEWS_MODEL": GEMMA_4_E4B_IT_GGUF_MODEL_ALIAS,
                 "NEWS_MODEL_BACKEND": "llama.cpp",
             },
         )
@@ -107,7 +108,7 @@ class Gemma4ArticleBudgetTests(unittest.TestCase):
         self.assertEqual(config.story_synthesis_concurrency, 4)
         self.assertEqual(config.model_concurrency, 4)
 
-    def test_tiny_gemma_uses_explicit_backend_and_fixed_stage_defaults(self) -> None:
+    def test_tiny_model_uses_explicit_backend_and_fixed_stage_defaults(self) -> None:
         with patch.dict(
             os.environ,
             {
@@ -142,13 +143,13 @@ class Gemma4ArticleBudgetTests(unittest.TestCase):
 
     def test_concurrency_defaults_are_identical_across_model_choices(self) -> None:
         # Cross-model equality (issue #169): the same fixed stage/server
-        # defaults resolve for the default Gemma, the E2B MLX model, and the
-        # E2B GGUF model.
+        # defaults resolve for the default Gemma, the MiniCPM5-2B MLX model,
+        # and the MiniCPM5-2B GGUF model.
         configs = []
         for model, backend in (
             (DEFAULT_MODEL_ALIAS, None),
             (CODEX_TEST_MODEL_ALIAS, "mlx-lm"),
-            (GEMMA_4_E2B_IT_GGUF_MODEL_ALIAS, "llama.cpp"),
+            (MINICPM5_2B_IT_GGUF_MODEL_ALIAS, "llama.cpp"),
         ):
             env = {"NEWS_MODEL": model}
             if backend:
@@ -221,8 +222,7 @@ class Gemma4ArticleBudgetTests(unittest.TestCase):
             config = load_runtime_config(
                 materialize_outputs=False,
                 environ={
-                    "NEWS_MODEL": CODEX_TEST_MODEL_ALIAS,
-                    "NEWS_MODEL_BACKEND": "mlx-lm",
+                    "NEWS_MODEL": GEMMA_4_12B_IT_MLX_4BIT_MODEL_ALIAS,
                 },
             )
 

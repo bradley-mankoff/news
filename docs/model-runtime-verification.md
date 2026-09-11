@@ -6,10 +6,12 @@ the catalog itself: code review establishes the curated identity and this
 record distinguishes entries that have passed an actual launch/completion
 probe under the repository's locked packages.
 
-Scope: the curated Gemma 4 model family: one `mlx-community` MLX
-distribution and one Unsloth `UD-Q4_K_XL` GGUF distribution per official
-instruction variant. The recorded runtime smoke below covers the smallest
-MLX entry, `gemma-4-e2b-it-mlx-4bit`.
+Scope: the curated catalog: the four official Gemma 4 instruction variants
+(one `mlx-community` MLX distribution and one Unsloth `UD-Q4_K_XL` GGUF
+distribution each) plus MiniCPM5-2B (official openbmb MLX and `Q4_K_M` GGUF)
+in the small/fast slot (issue #327). The recorded runtime smoke below covers
+the former smallest MLX entry, `gemma-4-e2b-it-mlx-4bit`; the MiniCPM5-2B
+MLX entry is pending verification per the protocol below.
 
 ## Protocol
 A candidate receives runtime-verified task notes only when it passes all of:
@@ -62,7 +64,7 @@ From the repository `uv.lock` (unchanged by this work):
 | `pyyaml` | 6.0.3 |
 | Python (venv) | 3.12.13 |
 
-## Evidence: `gemma-4-e2b-it-mlx-4bit`
+## Evidence: `gemma-4-e2b-it-mlx-4bit` (superseded by #327 — entry removed)
 
 | Field | Value |
 |-------|-------|
@@ -86,6 +88,13 @@ This entry is verified for the text-only `mlx-lm` contract used by the
 pipeline. The Hub metadata advertises `image-text-to-text`; this record does
 not claim image-input support through `mlx-lm`.
 
+## Pending: `minicpm5-2b-it-mlx-4bit`
+
+Not yet verified. Run the protocol above with
+`NEWS_MODEL=minicpm5-2b-it-mlx-4bit NEWS_MODEL_BACKEND=mlx-lm uv run news
+model-server-command`, then record the evidence table here. Until then the
+catalog entry carries its `speed` recommendation note unverified.
+
 ## Rejected candidate: LM Studio Gemma 4 E2B MLX
 
 The consistent publisher choice is `mlx-community`, not the LM Studio mirror.
@@ -107,8 +116,9 @@ special case. The selected `mlx-community` E2B repository passed the
   of universal hardware fit: memory use on smaller hosts can differ, and
   larger Gemma variants are host-sensitive. Context-length metadata is
   catalog metadata, not a throughput promise.
-- The Gemma E2B entry carries the Gemma license according to its model card;
-  re-check licenses for every variant before shipping.
+- Catalog entries carry their upstream licenses (Gemma variants: Gemma
+  license; MiniCPM5-2B: Apache-2.0); re-check licenses for every variant
+  before shipping.
 - Hugging Face repository contents can change after verification. The revision
   id and retrieval date above make future drift visible; the manual gate should
   be re-run before any later catalog change. No CI job downloads or starts

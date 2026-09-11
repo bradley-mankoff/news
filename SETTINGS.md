@@ -94,8 +94,8 @@ Built-in model aliases:
 
 | Alias | Resolved model | Hugging Face page |
 |---|---|---|
-| `gemma-4-e2b-it-mlx-4bit` | `mlx-community/gemma-4-e2b-it-4bit` (`mlx-lm`) | [mlx-community/gemma-4-e2b-it-4bit](https://huggingface.co/mlx-community/gemma-4-e2b-it-4bit) |
-| `gemma-4-e2b-it-gguf-ud-q4-k-xl` | `unsloth/gemma-4-E2B-it-GGUF/gemma-4-E2B-it-UD-Q4_K_XL.gguf` (`llama.cpp`) | [unsloth/gemma-4-E2B-it-GGUF](https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF) |
+| `minicpm5-2b-it-mlx-4bit` | `openbmb/MiniCPM5-2B-MLX` (`mlx-lm`) | [openbmb/MiniCPM5-2B-MLX](https://huggingface.co/openbmb/MiniCPM5-2B-MLX) |
+| `minicpm5-2b-it-gguf-q4-k-m` | `openbmb/MiniCPM5-2B-GGUF/MiniCPM5-2B-Q4_K_M.gguf` (`llama.cpp`) | [openbmb/MiniCPM5-2B-GGUF](https://huggingface.co/openbmb/MiniCPM5-2B-GGUF) |
 | `gemma-4-e4b-it-mlx-4bit` | `mlx-community/gemma-4-e4b-it-4bit` (`mlx-lm`) | [mlx-community/gemma-4-e4b-it-4bit](https://huggingface.co/mlx-community/gemma-4-e4b-it-4bit) |
 | `gemma-4-e4b-it-gguf-ud-q4-k-xl` | `unsloth/gemma-4-E4B-it-GGUF/gemma-4-E4B-it-UD-Q4_K_XL.gguf` (`llama.cpp`) | [unsloth/gemma-4-E4B-it-GGUF](https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF) |
 | `gemma-4-12b-it-mlx-4bit` | `mlx-community/gemma-4-12B-it-4bit` (`mlx-vlm`, default) | [mlx-community/gemma-4-12B-it-4bit](https://huggingface.co/mlx-community/gemma-4-12B-it-4bit) |
@@ -105,9 +105,10 @@ Built-in model aliases:
 | `gemma-4-31b-it-mlx-4bit` | `mlx-community/gemma-4-31b-it-4bit` (`mlx-lm`) | [mlx-community/gemma-4-31b-it-4bit](https://huggingface.co/mlx-community/gemma-4-31b-it-4bit) |
 | `gemma-4-31b-it-gguf-ud-q4-k-xl` | `unsloth/gemma-4-31B-it-GGUF/gemma-4-31B-it-UD-Q4_K_XL.gguf` (`llama.cpp`) | [unsloth/gemma-4-31B-it-GGUF](https://huggingface.co/unsloth/gemma-4-31B-it-GGUF) |
 
-These ten choices are the complete curated picker set: one consistent
-`mlx-community` MLX page and one Unsloth `UD-Q4_K_XL` GGUF page for each
-official Gemma 4 instruction variant. Custom YAML entries are advanced
+These ten choices are the complete curated picker set: the four official
+Gemma 4 instruction variants (one consistent `mlx-community` MLX page and
+one Unsloth `UD-Q4_K_XL` GGUF page each) plus MiniCPM5-2B (official openbmb
+MLX and `Q4_K_M` GGUF pages). Custom YAML entries are advanced
 overlays and are not part of the default picker.
 
 See [`docs/adr/0019-model-catalog-owns-curated-models-and-runtime-fit-verdicts.md`](docs/adr/0019-model-catalog-owns-curated-models-and-runtime-fit-verdicts.md)
@@ -133,7 +134,7 @@ Print the fully resolved local server command without running the pipeline:
 
 ```bash
 NEWS_MODEL=gemma-4-12b-it-mlx-4bit uv run news model-server-command
-NEWS_MODEL=gemma-4-e2b-it-mlx-4bit NEWS_MODEL_BACKEND=mlx-lm uv run news model-server-command
+NEWS_MODEL=minicpm5-2b-it-mlx-4bit NEWS_MODEL_BACKEND=mlx-lm uv run news model-server-command
 NEWS_MODEL=gemma-4-12b-it-gguf-ud-q4-k-xl NEWS_MODEL_BACKEND=llama.cpp NEWS_LLAMA_CPP_SERVER=/opt/llama/llama-server uv run news model-server-command
 NEWS_MODEL=gemma-4-31b-it-gguf-ud-q4-k-xl NEWS_MODEL_BACKEND=llama.cpp NEWS_LLAMA_CPP_SERVER=/opt/llama/llama-server uv run news model-server-command
 ```

@@ -76,8 +76,8 @@ class ModelCatalogTests(unittest.TestCase):
     def test_catalog_entries_are_complete(self) -> None:
         self.assertEqual(len(model_catalog.CATALOG_MODELS), 10)
         expected_aliases = {
-            "gemma-4-e2b-it-mlx-4bit",
-            "gemma-4-e2b-it-gguf-ud-q4-k-xl",
+            "minicpm5-2b-it-mlx-4bit",
+            "minicpm5-2b-it-gguf-q4-k-m",
             "gemma-4-e4b-it-mlx-4bit",
             "gemma-4-e4b-it-gguf-ud-q4-k-xl",
             "gemma-4-12b-it-mlx-4bit",
@@ -88,7 +88,7 @@ class ModelCatalogTests(unittest.TestCase):
             "gemma-4-31b-it-gguf-ud-q4-k-xl",
         }
         self.assertEqual(set(model_catalog.CATALOG_MODELS), expected_aliases)
-        self.assertTrue(all(alias.startswith("gemma-4-") for alias in expected_aliases))
+        self.assertTrue(all(alias.startswith(("gemma-4-", "minicpm5-")) for alias in expected_aliases))
         self.assertEqual(
             {entry.backend for entry in model_catalog.CATALOG_MODELS.values()},
             {"mlx-lm", "mlx-vlm", "llama.cpp"},
@@ -112,18 +112,18 @@ class ModelCatalogTests(unittest.TestCase):
             if entry.backend == "llama.cpp":
                 self.assertEqual(entry.reference.rsplit("/", 1)[0], entry.hf_repo)
                 self.assertTrue(entry.reference.lower().endswith(".gguf"))
-                self.assertIn("UD-Q4_K_XL.gguf", entry.reference)
+                self.assertTrue("UD-Q4_K_XL.gguf" in entry.reference or "Q4_K_M.gguf" in entry.reference)
                 self.assertNotIn(".gguf", entry.hf_repo.lower())
             else:
                 self.assertEqual(entry.reference, entry.hf_repo)
                 self.assertNotIn(".gguf", entry.reference.lower())
-                self.assertIn("4bit", entry.reference.lower())
+                self.assertTrue("4bit" in entry.reference.lower() or "mlx" in entry.reference.lower())
 
         mlx_entries = [
             entry for entry in model_catalog.CATALOG_MODELS.values() if entry.backend != "llama.cpp"
         ]
         self.assertEqual(len(mlx_entries), 5)
-        self.assertTrue(all(entry.hf_repo.startswith("mlx-community/") for entry in mlx_entries))
+        self.assertTrue(all(entry.hf_repo.startswith(("mlx-community/", "openbmb/")) for entry in mlx_entries))
 
     def test_default_catalog_model_is_the_default_alias(self) -> None:
         self.assertEqual(model_catalog.DEFAULT_CATALOG_MODEL_ALIAS, config.DEFAULT_MODEL_ALIAS)
@@ -141,7 +141,7 @@ class ModelCatalogTests(unittest.TestCase):
         self.assertEqual(
             {entry.alias for entry in model_catalog.CATALOG_MODELS.values() if entry.backend == "llama.cpp"},
             {
-                "gemma-4-e2b-it-gguf-ud-q4-k-xl",
+                "minicpm5-2b-it-gguf-q4-k-m",
                 "gemma-4-e4b-it-gguf-ud-q4-k-xl",
                 "gemma-4-12b-it-gguf-ud-q4-k-xl",
                 "gemma-4-26b-a4b-it-gguf-ud-q4-k-xl",
@@ -233,7 +233,7 @@ class ModelCatalogTests(unittest.TestCase):
             path = Path(tmpdir) / "override.yaml"
             path.write_text(
                 "models:\n"
-                "  gemma-4-e2b-it-mlx-4bit:\n"
+                "  minicpm5-2b-it-mlx-4bit:\n"
                 "    name: Local Tiny Wording\n"
                 "    description: Local wording for the tiny verification model.\n"
                 "    context_length: 4096\n"
@@ -244,16 +244,16 @@ class ModelCatalogTests(unittest.TestCase):
             merged = model_catalog.load_model_catalog(path)
 
         self.assertEqual(list(merged), list(model_catalog.BUILTIN_CATALOG_MODELS))
-        tiny = merged["gemma-4-e2b-it-mlx-4bit"]
+        tiny = merged["minicpm5-2b-it-mlx-4bit"]
         self.assertEqual(tiny.name, "Local Tiny Wording")
         self.assertEqual(tiny.description, "Local wording for the tiny verification model.")
         self.assertEqual(tiny.context_length, 4096)
         # Task notes merge by task key; the built-in note is replaced, other
         # built-in identity is untouched.
         self.assertEqual(tiny.task_notes, {"speed": "Use this entry for fast local checks."})
-        self.assertEqual(tiny.reference, model_catalog.BUILTIN_CATALOG_MODELS["gemma-4-e2b-it-mlx-4bit"].reference)
+        self.assertEqual(tiny.reference, model_catalog.BUILTIN_CATALOG_MODELS["minicpm5-2b-it-mlx-4bit"].reference)
         self.assertEqual(tiny.backend, "mlx-lm")
-        self.assertEqual(tiny.hf_repo, model_catalog.BUILTIN_CATALOG_MODELS["gemma-4-e2b-it-mlx-4bit"].hf_repo)
+        self.assertEqual(tiny.hf_repo, model_catalog.BUILTIN_CATALOG_MODELS["minicpm5-2b-it-mlx-4bit"].hf_repo)
         # The other built-in entry is untouched and the default is unchanged.
         self.assertEqual(merged["gemma-4-12b-it-mlx-4bit"], model_catalog.BUILTIN_CATALOG_MODELS["gemma-4-12b-it-mlx-4bit"])
         self.assertEqual(merged[model_catalog.DEFAULT_CATALOG_MODEL_ALIAS].backend, "mlx-vlm")
@@ -267,7 +267,7 @@ class ModelCatalogTests(unittest.TestCase):
             with tempfile.TemporaryDirectory() as tmpdir:
                 path = Path(tmpdir) / "identity.yaml"
                 path.write_text(
-                    f"models:\n  gemma-4-e2b-it-mlx-4bit:\n    {field}: {value}\n",
+                    f"models:\n  minicpm5-2b-it-mlx-4bit:\n    {field}: {value}\n",
                     encoding="utf-8",
                 )
                 with self.assertRaisesRegex(ValueError, "does not match the built-in entry") as ctx:
@@ -279,7 +279,7 @@ class ModelCatalogTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             path = Path(tmpdir) / "unknown_field.yaml"
             path.write_text(
-                "models:\n  gemma-4-e2b-it-mlx-4bit:\n    temperature: 0.5\n",
+                "models:\n  minicpm5-2b-it-mlx-4bit:\n    temperature: 0.5\n",
                 encoding="utf-8",
             )
             with self.assertRaisesRegex(ValueError, "unknown field") as ctx:
@@ -297,8 +297,8 @@ class ModelCatalogTests(unittest.TestCase):
             list(merged),
             [
                 "gemma-4-12b-it-mlx-4bit",
-                "gemma-4-e2b-it-mlx-4bit",
-                "gemma-4-e2b-it-gguf-ud-q4-k-xl",
+                "minicpm5-2b-it-mlx-4bit",
+                "minicpm5-2b-it-gguf-q4-k-m",
                 "gemma-4-e4b-it-mlx-4bit",
                 "gemma-4-e4b-it-gguf-ud-q4-k-xl",
                 "gemma-4-12b-it-gguf-ud-q4-k-xl",
@@ -597,7 +597,7 @@ class ModelCatalogTests(unittest.TestCase):
             picks = model_catalog.recommend_models("speed")
             self.assertEqual(
                 [pick["alias"] for pick in picks],
-                ["gemma-4-e2b-it-mlx-4bit", "my-mlx-model", model_catalog.DEFAULT_CATALOG_MODEL_ALIAS],
+                ["minicpm5-2b-it-mlx-4bit", "my-mlx-model", model_catalog.DEFAULT_CATALOG_MODEL_ALIAS],
             )
             # The default marker stays code-owned: YAML additions are never default.
             defaults = [record for record in records if record["is_default"]]
@@ -694,12 +694,12 @@ class ModelCatalogTests(unittest.TestCase):
                 self.assertIn("reason", pick)
                 self.assertTrue(pick["reason"])
 
-        # Speed: the smallest Gemma 4 MLX entry is followed by the default
+        # Speed: the MiniCPM5-2B MLX entry is followed by the default
         # model as the fallback when it is not already a pick.
         speed_picks = model_catalog.recommend_models("speed")
         self.assertEqual(
             [pick["alias"] for pick in speed_picks],
-            ["gemma-4-e2b-it-mlx-4bit", model_catalog.DEFAULT_CATALOG_MODEL_ALIAS],
+            ["minicpm5-2b-it-mlx-4bit", model_catalog.DEFAULT_CATALOG_MODEL_ALIAS],
         )
         self.assertEqual(speed_picks[-1]["alias"], model_catalog.DEFAULT_CATALOG_MODEL_ALIAS)
         # Quality tasks are covered by the default model; the default is never
@@ -741,7 +741,7 @@ class ModelCatalogTests(unittest.TestCase):
         self.assertEqual(len(records), 10)
         for record in records:
             self.assertIsInstance(record, dict)
-            self.assertTrue(record["alias"].startswith("gemma-4-"))
+            self.assertTrue(record["alias"].startswith(("gemma-4-", "minicpm5-")))
             self.assertTrue(record["hf_url"].startswith("https://huggingface.co/"))
             self.assertIn("task_notes", record)
             self.assertIn("is_default", record)
@@ -750,8 +750,8 @@ class ModelCatalogTests(unittest.TestCase):
         gguf = [record for record in records if record["backend"] == "llama.cpp"]
         self.assertEqual(len(gguf), 5)
         for record in gguf:
-            self.assertTrue(record["reference"].startswith("unsloth/"))
-            self.assertTrue(record["reference"].endswith("UD-Q4_K_XL.gguf"))
+            self.assertTrue(record["reference"].startswith(("unsloth/", "openbmb/")))
+            self.assertTrue(record["reference"].endswith(("UD-Q4_K_XL.gguf", "Q4_K_M.gguf")))
             self.assertEqual(
                 record["hf_url"],
                 f"https://huggingface.co/{record['reference'].rsplit('/', 1)[0]}",
@@ -798,9 +798,11 @@ class ModelCatalogTests(unittest.TestCase):
                 {"id": "someone/arbitrary-file.gguf", "tags": ["gguf", "mlx"], "library_name": "mlx", "pipeline_tag": "image-text-to-text"},
                 model_catalog.RUNTIME_FIT_EXTERNAL_ONLY,
             ),
+            # Removed curated entry (issue #327): no longer classified by a
+            # declared backend; the generic MLX tag heuristic verdict applies.
             (
                 {"id": "mlx-community/gemma-4-e2b-it-4bit", "tags": ["mlx", "safetensors", "gemma4", "mlx-vlm", "image-text-to-text"], "library_name": "mlx", "pipeline_tag": "image-text-to-text"},
-                model_catalog.RUNTIME_FIT_MANAGED_MLX_LM,
+                model_catalog.RUNTIME_FIT_MANAGED_MLX_VLM,
             ),
             (
                 {"id": "someone/arbitrary-gguf", "tags": ["gguf", "text-generation"], "library_name": "transformers", "pipeline_tag": "text-generation"},
@@ -852,13 +854,17 @@ class ModelCatalogTests(unittest.TestCase):
             ),
             # Org-id false positives (issue #92): a bare org id must never
             # match a curated entry, even when it is the org prefix of one.
-            # Both publisher orgs are covered by the current catalog.
+            # All three publisher orgs are covered by the current catalog.
             (
                 {"id": "unsloth", "tags": [], "library_name": "unknown", "pipeline_tag": None},
                 model_catalog.RUNTIME_FIT_EXTERNAL_ONLY,
             ),
             (
                 {"id": "mlx-community", "tags": [], "library_name": "unknown", "pipeline_tag": None},
+                model_catalog.RUNTIME_FIT_EXTERNAL_ONLY,
+            ),
+            (
+                {"id": "openbmb", "tags": [], "library_name": "unknown", "pipeline_tag": None},
                 model_catalog.RUNTIME_FIT_EXTERNAL_ONLY,
             ),
             # Prefix-collision sibling (issue #92): a repo whose name merely
