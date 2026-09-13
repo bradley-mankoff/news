@@ -1,6 +1,7 @@
 {
   "tracker": "piyaz",
   "piyaz_project": "DN",
+  "auto_merge": true,
   "max_concurrent": 3,
   "default_tactic": "oneshot",
   "allow_fusion": false,
