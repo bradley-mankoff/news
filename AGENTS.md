@@ -77,12 +77,10 @@ an assigned issue branch / issue body.
 
 ## Piyaz dispatch policy
 
-Mode B factory work (the `new-idea` chain, `FACTORY.md`) is tracked in the
-Piyaz project **DN** ("Daily News", app.piyaz.ai, Bradley's Team) and executed
-through archon workflows — not by the session agent's own hands. The
-three-layer split: piyaz owns the task graph, archon owns execution, craft
-skills own per-task process. Git/GitHub stays the code layer: a Piyaz task
-says *what*, the PR says *the diff*.
+Factory rules live in the factory (`FACTORY.md` points at the manual), not
+here. News-valued mechanics only: work is tracked in Piyaz project **DN**
+and executed through archon workflows — never by the session agent's own
+hands. A Piyaz task says *what*, the PR says *the diff*.
 
 - On any Mode B factory request (run the factory, new-idea): run the piyaz
   flow — plan/claim tasks via the piyaz MCP tools — then dispatch archon
@@ -99,14 +97,9 @@ says *what*, the PR says *the diff*.
 - **Merge target is `origin/archon/task-<branch>`**, not `<branch>`: archon
   prefixes worktree branches (`--branch feat/news-9` becomes
   `archon/task-feat/news-9`). After merging, push `develop` back to origin.
-- Workers read task context and write records through
-  `.archon/scripts/piyaz.ts` (the piyaz MCP endpoint, OAuth credential from
-  the omp agent.db; provider `pi` ignores per-node MCP, so the script is the
-  interface here — `.archon/mcp/piyaz.json` is retained for MCP-capable
-  providers). They stop at `in_review`, never `done`. The done flip is
-  judgment on record: your PR approval for taste slices, or the
-  auto-merge pass for lights-off slices with full evidence and green
-  checks. Taste waits for you; mechanical work goes home on its own.
+- Workers write records through `.archon/scripts/piyaz.ts` and stop at
+  `in_review`, never `done` — the flip follows the factory's judgment
+  rule, not a second decision here.
 - Verification battery is machine-owned: `.venv/bin/python3 -m pytest tests/ -q`
   is the repo gate workers must pass before recording a task, and
   archon-smart-pr-review / factory auto-review handle QA — the machine runs every check, the human only judges vision/taste.
