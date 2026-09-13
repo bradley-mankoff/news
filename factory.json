@@ -1,14 +1,8 @@
 {
   "tracker": "piyaz",
   "piyaz_project": "DN",
-  "auto_merge": true,
-  "max_concurrent": 3,
-  "default_tactic": "oneshot",
-  "allow_fusion": false,
-  "review_workflow": "archon-smart-pr-review",
   "base_branch": "develop",
   "gate": ".venv/bin/python3 -m pytest tests/ -q",
-  "brief_max_chars": 24000,
-  "max_run_hours": 24,
+  "max_concurrent": 3,
   "max_attempts": 3
 }
