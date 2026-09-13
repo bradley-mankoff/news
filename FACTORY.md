@@ -103,6 +103,16 @@ yourself. Lights-off slice with full evidence — do nothing; the next
 auto-merge cycle merges it and marks it **done**. Done means judgment is
 on record with evidence; confident prose is not evidence.
 
+### Never speak in ticket numbers
+
+The human does not memorize PRs, tickets, or the problem that created
+them. Every message that asks for a look, a call, or a verdict restates,
+in plain words and in this chat: what the change does, what was broken
+before it, exactly where to look and what good looks like, and the exact
+reply words that finish it. A bare PR or ticket number is never the
+message — it may ride along, but understanding must never depend on
+opening it. Review docs obey the same rule.
+
 **Wrong spec or wrong cut:** say so. Revise tickets. Do not let anyone “just add a bit” off-graph.
 
 ### What you never do
