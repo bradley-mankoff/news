@@ -103,8 +103,10 @@ says *what*, the PR says *the diff*.
   `.archon/scripts/piyaz.ts` (the piyaz MCP endpoint, OAuth credential from
   the omp agent.db; provider `pi` ignores per-node MCP, so the script is the
   interface here — `.archon/mcp/piyaz.json` is retained for MCP-capable
-  providers). They stop at `in_review`, never `done`; the human approves that
-  flip on Piyaz.
+  providers). They stop at `in_review`, never `done`. The done flip is
+  judgment on record: your PR approval for taste slices, or the
+  auto-merge pass for lights-off slices with full evidence and green
+  checks. Taste waits for you; mechanical work goes home on its own.
 - Verification battery is machine-owned: `.venv/bin/python3 -m pytest tests/ -q`
   is the repo gate workers must pass before recording a task, and
   archon-smart-pr-review / factory auto-review handle QA — the machine runs every check, the human only judges vision/taste.

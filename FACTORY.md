@@ -77,6 +77,17 @@ the task graph remains the source of truth.
 ### What happens without you
 
 Unblocked lights-off tickets get claimed. Implementers write code. If the slice has a testable seam they should use **TDD** — red, green, the test is the ticket’s acceptance, not a souvenir. You do not type `/tdd`. Before creating or pushing a draft PR, the factory runs a deterministic validation barrier that prepares declared dev dependencies with `uv sync --group dev` when uv is available, then runs `uv run python -m pytest -q`; without uv it falls back to `.venv/bin/python3 -m pytest tests/ -q`. It stages the candidate tree with `git add -A`, then checks the staged candidate diff with `git diff --cached --check` after pytest; failed validation leaves no new PR head to notify on. A **draft PR** appears only after that barrier passes. The ticket goes **in review** on a later poller cycle once the run completes successfully; if the tracker sync…
+### Approval-gated auto-merge (on)
+
+Your only per-ticket act is **judgment only you can make** — taste,
+direction, anything no checklist can settle. Everything after judgment is
+machine labor. `auto_merge` is `true` in `factory.json`, so each cycle
+marks draft PRs on in-review tickets ready, then merges every PR with
+judgment on record and no failing checks, and marks its ticket
+**done**. Judgment on record means either your approval review, or a
+fully-checked acceptance checklist where every box was checked with cited
+evidence. Lights-on slices never merge on checklist evidence alone — only
+your approval merges them.
 
 ### When something comes back
 
@@ -87,7 +98,20 @@ Open the draft PR only to judge what only you can judge:
 
 Do NOT re-run commands or re-check pytest output — the machine already recorded `Machine checks` on the issue and in the PR. The `## How to test` section on every issue separates `### Machine checks` (already executed, with recorded pass/fail) from `### Human checks` (only UI look + final output). If the machine checks are green, accept them.
 
-Then: merge, mark the ticket **done**. Done means the machine checks saw the ACs; confident prose is not evidence.
+Then: record your judgment. Taste slice — approve the PR or merge it
+yourself. Lights-off slice with full evidence — do nothing; the next
+auto-merge cycle merges it and marks it **done**. Done means judgment is
+on record with evidence; confident prose is not evidence.
+
+### Never speak in ticket numbers
+
+The human does not memorize PRs, tickets, or the problem that created
+them. Every message that asks for a look, a call, or a verdict restates,
+in plain words and in this chat: what the change does, what was broken
+before it, exactly where to look and what good looks like, and the exact
+reply words that finish it. A bare PR or ticket number is never the
+message — it may ride along, but understanding must never depend on
+opening it. Review docs obey the same rule.
 
 **Wrong spec or wrong cut:** say so. Revise tickets. Do not let anyone “just add a bit” off-graph.
 
