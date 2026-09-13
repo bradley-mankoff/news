@@ -772,7 +772,7 @@ const renderPromptTemplateEditors = () => {};
             )
             + js_function_block("function knobByEnv(env) {", "function inputForKnob")
             + js_function_block(
-                'function inputForKnob(knob, { emptyLabel, optionLabels = {}, id = "" } = {}) {',
+                'function inputForKnob(knob, { emptyLabel, optionLabels = {}, id = "", selectDefault = false } = {}) {',
                 "function knobField",
             )
             + js_function_block(
