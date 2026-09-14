@@ -7,10 +7,12 @@ import dataclasses
 import json
 import math
 import os
+import re
 import shlex
 import subprocess
 import threading
 import time
+import urllib.request
 import uuid
 import webbrowser
 from http import HTTPStatus
@@ -1138,6 +1140,186 @@ def delete_recipient(email: str) -> dict[str, Any]:
     return {"deleted": email}
 
 
+ASSISTANT_NO_MODEL_MESSAGE = (
+    "No local model is running. Start your configured local model server, "
+    "then ask again."
+)
+ASSISTANT_MODEL_STORAGE_KEY = "newsAssistantModel"
+
+_ASSISTANT_STOPWORDS = frozenset(
+    """
+    a about an and are as ask be can could do does did explain
+    for from hello hey hi how i in is it its me means my of on our please
+    setting settings control controls the tell that this to use used using
+    want what when where which who why with you your tell tells
+    """.split()
+)
+
+_ASSISTANT_LOCATION_LABELS = {
+    "run_setup": "the Run setup tab",
+    "advanced_panels": "the Advanced tab",
+    "advanced_raw": "the raw environment list on the Advanced tab",
+}
+
+
+def _assistant_tokens(text: str) -> set[str]:
+    words = re.findall(r"[a-z0-9]+", text.lower())
+    return {word for word in words if word and word not in _ASSISTANT_STOPWORDS}
+
+
+def match_assistant_control(
+    message: str, knobs: list[dict[str, Any]] | None = None
+) -> dict[str, Any] | None:
+    """Return the knob registry entry best matching a helper question."""
+    tokens = _assistant_tokens(message or "")
+    if not tokens:
+        return None
+    best: dict[str, Any] | None = None
+    best_key = (0, 0, 0, 0)
+    for knob in knobs if knobs is not None else build_knob_registry():
+        label_words = set(re.findall(r"[a-z0-9]+", str(knob.get("label") or "").lower()))
+        env_words = set(str(knob.get("env") or "").lower().split("_")) - {"news"}
+        group_words = set(re.findall(r"[a-z0-9]+", str(knob.get("group") or "").lower()))
+        label_hit = len(tokens & label_words)
+        score = 2 * label_hit + len(tokens & env_words)
+        if score <= 0 and tokens & group_words:
+            score = 1
+        exact = 1 if tokens and tokens == label_words else 0
+        key = (score, exact, label_hit, -len(env_words))
+        if score >= 2 and key > best_key:
+            best, best_key = knob, key
+    return best
+
+
+def describe_assistant_control(knob: dict[str, Any]) -> str:
+    """Explain a registered control in plain words, naming it on screen."""
+    label = str(knob.get("label") or knob.get("env"))
+    env = str(knob.get("env") or "")
+    location = _ASSISTANT_LOCATION_LABELS.get(
+        str(knob.get("ui_location") or ""), "the settings screens"
+    )
+    sentence = f'The "{label}" control (`{env}`) lives on {location}.'
+    knob_type = str(knob.get("type") or "")
+    options = [str(option) for option in (knob.get("options") or [])]
+    if knob_type == "select" and options:
+        sentence += f" In plain words: pick one of {', '.join(options)}."
+    elif knob_type == "boolean":
+        sentence += " In plain words: turn it on or leave it off."
+    elif knob_type == "number":
+        sentence += " In plain words: type a number."
+    else:
+        sentence += " In plain words: type the value you want."
+    default = knob.get("default")
+    if default not in (None, ""):
+        sentence += f" Leave it empty to use the default (`{default}`)."
+    return sentence
+
+
+def _assistant_default_model_alias(catalog: list[dict[str, Any]]) -> str:
+    for entry in catalog:
+        if entry.get("is_default"):
+            return str(entry["alias"])
+    return str(catalog[0]["alias"]) if catalog else ""
+
+
+def _assistant_chat_completion(reference: str, base_url: str, message: str) -> str:
+    """Ask the local OpenAI-compatible model server one question."""
+    payload = json.dumps(
+        {
+            "model": reference,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": (
+                        "You are the Daily News control-panel helper. "
+                        "Explain settings in plain words and name the "
+                        "matching on-screen control."
+                    ),
+                },
+                {"role": "user", "content": message},
+            ],
+        }
+    ).encode("utf-8")
+    request = urllib.request.Request(
+        f"{base_url.rstrip('/')}/chat/completions",
+        data=payload,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(request, timeout=30) as response:
+        body = json.loads(response.read().decode("utf-8") or "{}")
+    choices = body.get("choices") or []
+    text = (
+        choices[0].get("message", {}).get("content")
+        if choices and isinstance(choices[0], dict)
+        else ""
+    )
+    answer = str(text or "").strip()
+    if not answer:
+        raise OSError("The local model returned an empty answer.")
+    return answer
+
+
+def assistant_chat(
+    body: dict[str, Any],
+    *,
+    model_caller: Any | None = None,
+) -> dict[str, Any]:
+    """Answer one helper-agent question for the embedded chat panel."""
+    if not isinstance(body, dict):
+        raise ValueError("Chat request body must be an object.")
+    message = str(body.get("message") or "").strip()
+    if not message:
+        raise ValueError("Ask a question first.")
+    catalog = list_model_catalog()
+    aliases = {str(entry["alias"]): entry for entry in catalog}
+    requested = str(body.get("model") or "").strip()
+    if requested and requested not in aliases:
+        raise ValueError(
+            f"Unknown assistant model {requested!r}. "
+            "Pick one of the configured local models."
+        )
+    alias = requested or _assistant_default_model_alias(catalog)
+    knob = match_assistant_control(message)
+    if knob is not None:
+        return {
+            "answer": describe_assistant_control(knob),
+            "control": {"label": knob.get("label"), "env": knob.get("env")},
+            "model": alias,
+            "no_model": False,
+        }
+    caller = model_caller or _assistant_chat_completion
+    try:
+        if model_caller is not None:
+            answer = str(caller(aliases[alias]["reference"], message)).strip()
+        else:
+            try:
+                runtime, _ = _runtime_snapshot()
+            except Exception:
+                runtime = None
+            base_url = (
+                (runtime or {}).get("model", {}).get("base_url")
+                or os.environ.get("NEWS_MODEL_BASE_URL", "").strip()
+                or "http://127.0.0.1:8080/v1"
+            )
+            answer = caller(aliases[alias]["reference"], base_url, message).strip()
+    except Exception:
+        return {
+            "answer": ASSISTANT_NO_MODEL_MESSAGE,
+            "control": None,
+            "model": alias,
+            "no_model": True,
+        }
+    if not answer:
+        return {
+            "answer": ASSISTANT_NO_MODEL_MESSAGE,
+            "control": None,
+            "model": alias,
+            "no_model": True,
+        }
+    return {"answer": answer, "control": None, "model": alias, "no_model": False}
+
+
 def _normalize_env_overrides(raw: Any) -> dict[str, str]:
     if not isinstance(raw, dict):
         return {}
@@ -1709,6 +1891,8 @@ class NewsUIHandler(BaseHTTPRequestHandler):
                 self._send_json(upsert_source(body, append_only=True), status=HTTPStatus.CREATED)
             elif parsed.path == "/api/recipients":
                 self._send_json(upsert_recipient(body, append_only=True), status=HTTPStatus.CREATED)
+            elif parsed.path == "/api/assistant/chat":
+                self._send_json(assistant_chat(body))
             else:
                 self._send_json({"error": "Not found."}, status=HTTPStatus.NOT_FOUND)
         except Exception as exc:
@@ -2201,6 +2385,20 @@ HTML = r"""<!doctype html>
     .mode-toggle { display: flex; gap: 4px; margin-left: auto; padding: 3px; border: 1px solid var(--line); border-radius: 999px; background: #fff; flex: 0 0 auto; }
     .mode-toggle button { border-color: transparent; background: transparent; border-radius: 999px; min-height: 30px; }
     .mode-toggle button[aria-pressed="true"] { background: var(--blue); color: #fff; border-color: var(--blue); }
+    #assistantFab, #assistantPanel { display: none; }
+    body[data-ui-mode="advanced"] #assistantFab { display: flex; }
+    body[data-ui-mode="advanced"] #assistantPanel { display: flex; }
+    body[data-ui-mode="advanced"] #assistantPanel.hidden { display: none !important; }
+    #assistantFab { position: fixed; right: 16px; bottom: 16px; width: 48px; height: 48px; border-radius: 999px; align-items: center; justify-content: center; font-size: 22px; font-weight: 700; z-index: 50; box-shadow: var(--shadow); }
+    .assistant-panel { position: fixed; right: 16px; bottom: 76px; width: min(360px, calc(100vw - 32px)); max-height: min(480px, calc(100vh - 140px)); z-index: 50; flex-direction: column; gap: 8px; background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 12px; box-shadow: var(--shadow); }
+    .assistant-panel .assistant-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+    .assistant-panel .assistant-head h2 { margin: 0; font-size: 15px; }
+    .assistant-messages { overflow-y: auto; display: flex; flex-direction: column; gap: 6px; min-height: 120px; max-height: 240px; }
+    .assistant-bubble { border: 1px solid var(--line); border-radius: 10px; padding: 6px 8px; font-size: 13px; white-space: pre-wrap; }
+    .assistant-bubble-you { align-self: flex-end; background: var(--blue); color: #fff; border-color: var(--blue); max-width: 90%; }
+    .assistant-bubble-helper { align-self: flex-start; background: var(--surface); max-width: 95%; }
+    .assistant-input-row { display: flex; gap: 6px; }
+    .assistant-input-row input { flex: 1; min-width: 0; }
     .advanced-drawer { border: 1px solid var(--line); border-radius: 14px; padding: 12px; background: var(--card); }
     .advanced-drawer.hidden { display: none !important; }
     .advanced-drawer .warn { background: var(--card); border: 1px solid var(--gold); border-radius: 10px; padding: 8px 10px; }
@@ -2331,6 +2529,22 @@ HTML = r"""<!doctype html>
       </div>
     </section>
   </main>
+  <button id="assistantFab" type="button" aria-label="Open helper chat" title="Ask about a setting">?</button>
+  <section id="assistantPanel" class="assistant-panel hidden" aria-label="Helper chat">
+    <div class="assistant-head">
+      <div>
+        <p class="eyebrow">Helper agent</p>
+        <h2>Ask about a setting</h2>
+      </div>
+      <button id="assistantClose" type="button" aria-label="Close helper chat">×</button>
+    </div>
+    <label class="field"><span>Model</span><select id="assistantModel"></select></label>
+    <div id="assistantMessages" class="assistant-messages" aria-live="polite"></div>
+    <div class="assistant-input-row">
+      <input id="assistantInput" placeholder="What does Delivery mode do?">
+      <button id="assistantSend" class="primary" type="button">Send</button>
+    </div>
+  </section>
   <dialog id="runPresetDialog">
     <div class="dialog-shell">
       <div class="dialog-head">
@@ -2556,6 +2770,63 @@ HTML = r"""<!doctype html>
       renderWizardStepper();
       renderRunSetup();
       renderWizardStepper();
+      renderAssistantPanel();
+    }
+    const ASSISTANT_MODEL_STORAGE_KEY = "newsAssistantModel";
+    function assistantModels() {
+      return (state.schema && state.schema.model_catalog) || [];
+    }
+    function renderAssistantPanel() {
+      const select = $("assistantModel");
+      if (!select) return;
+      const models = assistantModels();
+      let stored = "";
+      try { stored = localStorage.getItem(ASSISTANT_MODEL_STORAGE_KEY) || ""; } catch (_err) {}
+      if (!models.some(model => model.alias === stored)) {
+        const fallback = models.find(model => model.is_default) || models[0];
+        stored = fallback ? fallback.alias : "";
+      }
+      select.innerHTML = models.map(model => `<option value="${escapeHtml(model.alias)}"${model.alias === stored ? " selected" : ""}>${escapeHtml(model.name || model.alias)}</option>`).join("");
+      try { localStorage.setItem(ASSISTANT_MODEL_STORAGE_KEY, stored); } catch (_err) {}
+    }
+    function toggleAssistantPanel(force) {
+      const panel = $("assistantPanel");
+      if (!panel) return;
+      const show = force === undefined ? panel.classList.contains("hidden") : Boolean(force);
+      panel.classList.toggle("hidden", !show);
+      if (show) {
+        renderAssistantPanel();
+        const input = $("assistantInput");
+        if (input) input.focus();
+      }
+    }
+    function appendAssistantMessage(role, text) {
+      const mount = $("assistantMessages");
+      if (!mount) return;
+      const bubble = document.createElement("div");
+      bubble.className = role === "you" ? "assistant-bubble assistant-bubble-you" : "assistant-bubble assistant-bubble-helper";
+      bubble.textContent = text;
+      mount.appendChild(bubble);
+      mount.scrollTop = mount.scrollHeight;
+    }
+    async function sendAssistantMessage() {
+      const input = $("assistantInput");
+      const select = $("assistantModel");
+      const message = input ? String(input.value || "").trim() : "";
+      if (!message) return;
+      appendAssistantMessage("you", message);
+      if (input) input.value = "";
+      appendAssistantMessage("helper", "Thinking\u2026");
+      const mount = $("assistantMessages");
+      const thinking = mount ? mount.lastChild : null;
+      try {
+        const data = await api("/api/assistant/chat", { method: "POST", body: JSON.stringify({ message, model: select ? select.value : "" }) });
+        if (thinking && thinking.parentNode) thinking.remove();
+        appendAssistantMessage("helper", data.answer || "No answer.");
+      } catch (err) {
+        if (thinking && thinking.parentNode) thinking.remove();
+        appendAssistantMessage("helper", err instanceof Error ? err.message : String(err));
+      }
     }
     function wizardEnabled() {
       try {
@@ -5316,6 +5587,11 @@ HTML = r"""<!doctype html>
     }
     function wireEvents() {
       if ($("themeToggle")) $("themeToggle").onclick = () => toggleTheme();
+      if ($("assistantFab")) $("assistantFab").onclick = () => toggleAssistantPanel();
+      if ($("assistantClose")) $("assistantClose").onclick = () => toggleAssistantPanel(false);
+      if ($("assistantSend")) $("assistantSend").onclick = () => sendAssistantMessage().catch(err => setStatus(err.message, "bad"));
+      if ($("assistantInput")) $("assistantInput").onkeydown = (event) => { if (event.key === "Enter") sendAssistantMessage().catch(err => setStatus(err.message, "bad")); };
+      if ($("assistantModel")) $("assistantModel").onchange = () => { try { localStorage.setItem(ASSISTANT_MODEL_STORAGE_KEY, $("assistantModel").value); } catch (_err) {} };
       if ($("previewBtn")) $("previewBtn").onclick = () => previewWithStatus("run");
       if ($("runBtn")) $("runBtn").onclick = () => runAction("run").catch(err => setStatus(err.message, "bad"));
       bindUtilityEvents();
@@ -5418,6 +5694,7 @@ HTML = r"""<!doctype html>
       }
       updateRunControls();
       renderModeToggle();
+      renderAssistantPanel();
       renderTabs();
       renderWizardStepper();
       renderRunSetup();
