@@ -163,17 +163,18 @@ class UITests(unittest.TestCase):
         node = _find_node()
         if node is None:
             self.skipTest("Node.js is required for the embedded UI syntax check")
-        match = re.search(r"<script>([\s\S]*)</script>", ui_module.HTML)
-        self.assertIsNotNone(match, "UI HTML must contain its browser script")
-        result = subprocess.run(
-            [node, "--check"],
-            input=match.group(1),
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=30,
-        )
-        self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
+        match = re.findall(r"<script>([\s\S]*?)</script>", ui_module.HTML)
+        self.assertTrue(match, "UI HTML must contain its browser script")
+        for script in match:
+            result = subprocess.run(
+                [node, "--check"],
+                input=script,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=30,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
 
     def test_env_info_tooltips_are_focusable_and_announced(self) -> None:
         html = ui_module.HTML

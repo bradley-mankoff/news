@@ -1809,8 +1809,40 @@ HTML = r"""<!doctype html>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>News Control Panel</title>
+  <script>
+    // DN-82: apply the persisted theme before first paint; dark is the default.
+    try {
+      var __newsTheme = localStorage.getItem("news-theme");
+      if (__newsTheme !== "light" && __newsTheme !== "dark") { __newsTheme = "dark"; }
+      document.documentElement.dataset.theme = __newsTheme;
+      document.documentElement.style.colorScheme = __newsTheme;
+    } catch (_err) {
+      document.documentElement.dataset.theme = "dark";
+    }
+  </script>
   <style>
     :root {
+      color-scheme: dark;
+      --bg: #12151c;
+      --surface: #1a202c;
+      --line: #2f3746;
+      --ink: #e9edf6;
+      --muted: #a7b0c2;
+      --blue: #7fa9e8;
+      --green: #4cc39a;
+      --gold: #d9a94f;
+      --red: #e08080;
+      --focus: #56c8ea;
+      --shadow: 0 18px 50px rgba(0, 0, 0, 0.45);
+      --card: #1e2532;
+      --input-bg: #151b26;
+      --header-bg: rgba(18, 21, 28, 0.92);
+      --nav-bg: rgba(26, 32, 44, 0.96);
+      --hover: #222b3c;
+      --banner-bg: linear-gradient(135deg, rgba(30, 37, 50, 0.98), rgba(24, 29, 40, 0.98));
+      --selected: #22304a;
+    }
+    :root[data-theme="light"] {
       color-scheme: light;
       --bg: #f1ebe1;
       --surface: #fffdf8;
@@ -1823,6 +1855,13 @@ HTML = r"""<!doctype html>
       --red: #b33f3f;
       --focus: #0f7a9f;
       --shadow: 0 18px 50px rgba(36, 44, 60, 0.08);
+      --card: #ffffff;
+      --input-bg: #ffffff;
+      --header-bg: rgba(255, 253, 248, 0.88);
+      --nav-bg: rgba(236, 240, 245, 0.92);
+      --hover: #fafcff;
+      --banner-bg: linear-gradient(135deg, rgba(255,255,255,0.95), rgba(248,240,224,0.96));
+      --selected: #f3f7fb;
     }
     * { box-sizing: border-box; }
     body {
@@ -1842,20 +1881,22 @@ HTML = r"""<!doctype html>
       gap: 16px;
       padding: 14px 18px;
       border-bottom: 1px solid var(--line);
-      background: rgba(255, 253, 248, 0.88);
+      background: var(--header-bg);
       backdrop-filter: blur(12px);
       position: sticky;
       top: 0;
       z-index: 4;
       box-shadow: 0 1px 0 rgba(255, 255, 255, 0.8) inset;
     }
+    .header-actions { display: flex; align-items: center; gap: 12px; }
+    .theme-toggle { white-space: nowrap; }
     h1 { font-size: 18px; margin: 0; letter-spacing: 0; }
     h2 { font-size: 15px; margin: 0 0 12px; letter-spacing: 0; }
     h3 { font-size: 13px; margin: 18px 0 8px; color: var(--muted); letter-spacing: 0; }
     button, select, input, textarea {
       font: inherit;
       border: 1px solid var(--line);
-      background: #fff;
+      background: var(--input-bg);
       color: var(--ink);
       border-radius: 6px;
     }
@@ -1863,7 +1904,7 @@ HTML = r"""<!doctype html>
       min-height: 34px;
       padding: 6px 10px;
       cursor: pointer;
-      background: linear-gradient(180deg, #fff, #f5f0e7);
+      background: var(--input-bg);
       transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
     }
     button:hover { transform: translateY(-1px); box-shadow: 0 8px 18px rgba(36, 44, 60, 0.08); }
@@ -1875,7 +1916,7 @@ HTML = r"""<!doctype html>
       min-height: 34px;
       padding: 7px 9px;
       border-radius: 10px;
-      background: #fff;
+      background: var(--input-bg);
       border: 1px solid var(--line);
     }
     textarea { min-height: 76px; resize: vertical; }
@@ -1883,7 +1924,7 @@ HTML = r"""<!doctype html>
     body.nav-collapsed main { grid-template-columns: 58px 1fr; }
     nav {
       border-right: 1px solid var(--line);
-      background: rgba(236, 240, 245, 0.92);
+      background: var(--nav-bg);
       padding: 12px;
       position: sticky;
       top: 63px;
@@ -1902,7 +1943,7 @@ HTML = r"""<!doctype html>
       overflow: hidden;
       text-overflow: ellipsis;
     }
-    nav button.active { background: #fff; border-color: var(--line); color: var(--blue); }
+    nav button.active { background: var(--card); border-color: var(--line); color: var(--blue); }
     nav svg { width: 18px; height: 18px; flex: 0 0 18px; stroke: currentColor; }
     .nav-toggle {
       justify-content: center;
@@ -1914,6 +1955,7 @@ HTML = r"""<!doctype html>
       color: var(--muted);
       border-radius: 999px;
     }
+    :root[data-theme="dark"] .nav-toggle { background: rgba(30, 37, 50, 0.8); }
     .nav-toggle:hover { color: var(--blue); }
     body:not(.nav-collapsed) .expand-icon { display: none; }
     body.nav-collapsed .collapse-icon { display: none; }
@@ -1936,17 +1978,17 @@ HTML = r"""<!doctype html>
       box-shadow: var(--shadow);
     }
     .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
-    .stat { border-left: 4px solid var(--blue); padding: 8px 10px; background: #fff; border-radius: 12px; box-shadow: 0 6px 18px rgba(36, 44, 60, 0.06); }
+    .stat { border-left: 4px solid var(--blue); padding: 8px 10px; background: var(--card); border-radius: 12px; box-shadow: 0 6px 18px rgba(36, 44, 60, 0.06); }
     .stat strong { display: block; font-size: 20px; }
     .row { display: grid; grid-template-columns: minmax(120px, 190px) 1fr; gap: 10px; align-items: center; margin-bottom: 10px; }
     .row label { color: var(--muted); }
     .toolbar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 12px; }
     .toolbar > * { width: auto; }
-    .table-wrap { overflow: auto; border: 1px solid var(--line); border-radius: 8px; background: #fff; }
+    .table-wrap { overflow: auto; border: 1px solid var(--line); border-radius: 8px; background: var(--card); }
     table { border-collapse: collapse; width: 100%; min-width: 760px; }
     th, td { border-bottom: 1px solid var(--line); padding: 8px; text-align: left; vertical-align: top; }
-    th { position: sticky; top: 0; background: #f3f5f8; z-index: 1; }
-    tr:hover td { background: #fafcff; }
+    th { position: sticky; top: 0; background: var(--card); z-index: 1; }
+    tr:hover td { background: var(--hover); }
     .muted { color: var(--muted); }
     .warn { color: var(--gold); }
     .bad { color: var(--red); }
@@ -1958,8 +2000,7 @@ HTML = r"""<!doctype html>
       font-size: 12px;
       font-weight: 600;
       border: 1px solid var(--line);
-      background: #fff;
-      color: var(--muted);
+      background: var(--card);
       white-space: nowrap;
     }
     .badge.good { color: var(--green); border-color: #b9d8cf; background: #f2faf7; }
@@ -1970,7 +2011,7 @@ HTML = r"""<!doctype html>
     .review-report {
       min-height: 200px;
       max-height: 60vh;
-      background: #fffdf8;
+      background: var(--surface);
       color: var(--ink);
       border: 1px solid var(--line);
       border-radius: 8px;
@@ -1999,7 +2040,7 @@ HTML = r"""<!doctype html>
     }
     .knob-group { margin-bottom: 18px; }
     .knobs { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 10px; }
-    .knob { border: 1px solid var(--line); border-radius: 14px; padding: 10px; background: #fff; box-shadow: 0 6px 16px rgba(36, 44, 60, 0.05); }
+    .knob { border: 1px solid var(--line); border-radius: 14px; padding: 10px; background: var(--card); box-shadow: 0 6px 16px rgba(36, 44, 60, 0.05); }
     .knob label { display: flex; gap: 6px; align-items: center; font-weight: 600; margin-bottom: 4px; }
     .knob code { display: none; }
     .knob-links { margin-top: 6px; display: flex; gap: 10px; flex-wrap: wrap; font-size: 12px; }
@@ -2023,7 +2064,7 @@ HTML = r"""<!doctype html>
       font-size: 11px;
       line-height: 1;
       cursor: help;
-      background: #fff;
+      background: var(--card);
     }
     .env-info:focus-visible {
       outline: 2px solid var(--blue);
@@ -2096,7 +2137,7 @@ HTML = r"""<!doctype html>
       position: sticky;
       top: 66px;
       z-index: 3;
-      background: linear-gradient(135deg, rgba(255,255,255,0.95), rgba(248,240,224,0.96));
+      background: var(--banner-bg);
       border-color: rgba(216, 207, 192, 0.9);
     }
     .banner-copy h2 { margin-bottom: 6px; font-size: 20px; }
@@ -2109,7 +2150,7 @@ HTML = r"""<!doctype html>
       border: 1px solid var(--line);
       border-radius: 14px;
       padding: 10px 12px;
-      background: #fcfbf7;
+      background: var(--card);
     }
     .details > summary { cursor: pointer; font-weight: 700; color: var(--blue); }
     .details[open] > summary { margin-bottom: 12px; }
@@ -2130,7 +2171,7 @@ HTML = r"""<!doctype html>
     }
     .dialog-head { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; margin-bottom: 14px; }
     .dialog-grid { display: grid; grid-template-columns: 1.1fr 0.9fr; gap: 14px; }
-    .selected td { background: #f3f7fb; }
+    .selected td { background: var(--selected); }
     .selected td:first-child { box-shadow: inset 3px 0 0 var(--blue); }
     @media (max-width: 780px) {
       main { grid-template-columns: 1fr; }
@@ -2160,18 +2201,34 @@ HTML = r"""<!doctype html>
     .mode-toggle { display: flex; gap: 4px; margin-left: auto; padding: 3px; border: 1px solid var(--line); border-radius: 999px; background: #fff; flex: 0 0 auto; }
     .mode-toggle button { border-color: transparent; background: transparent; border-radius: 999px; min-height: 30px; }
     .mode-toggle button[aria-pressed="true"] { background: var(--blue); color: #fff; border-color: var(--blue); }
-    .advanced-drawer { border: 1px solid var(--line); border-radius: 14px; padding: 12px; background: #fcfbf7; }
+    .advanced-drawer { border: 1px solid var(--line); border-radius: 14px; padding: 12px; background: var(--card); }
     .advanced-drawer.hidden { display: none !important; }
-    .advanced-drawer .warn { background: #fdf8ec; border: 1px solid #e2cf9f; border-radius: 10px; padding: 8px 10px; }
+    .advanced-drawer .warn { background: var(--card); border: 1px solid var(--gold); border-radius: 10px; padding: 8px 10px; }
+    :root[data-theme="dark"] body {
+      background:
+        radial-gradient(circle at top left, rgba(127, 169, 232, 0.12), transparent 28%),
+        radial-gradient(circle at top right, rgba(217, 169, 79, 0.10), transparent 24%),
+        linear-gradient(180deg, #171c26 0%, var(--bg) 42%, #0d1118 100%);
+    }
+    :root[data-theme="dark"] header { box-shadow: 0 1px 0 rgba(255, 255, 255, 0.06) inset; }
+    :root[data-theme="dark"] button.primary { color: #0e1522; }
+    :root[data-theme="dark"] .utility-action-button[aria-pressed="true"] { color: #0e1522; }
+    :root[data-theme="dark"] .badge.good { border-color: #245c4c; background: rgba(76, 195, 154, 0.14); }
+    :root[data-theme="dark"] .badge.warn { border-color: #6b5320; background: rgba(217, 169, 79, 0.14); }
+    :root[data-theme="dark"] .badge.bad { border-color: #6e3535; background: rgba(224, 128, 128, 0.14); }
+    :root[data-theme="dark"] .badge.blue { border-color: #33517a; background: rgba(127, 169, 232, 0.14); }
   </style>
 </head>
 <body>
   <header>
     <h1>News Control Panel</h1>
-    <div id="status" class="muted">Loading...</div>
-    <div id="modeToggle" class="mode-toggle" role="group" aria-label="Interface mode">
-      <button type="button" data-ui-mode="basic" aria-pressed="true">Basic</button>
-      <button type="button" data-ui-mode="advanced" aria-pressed="false">Advanced</button>
+    <div class="header-actions">
+      <div id="status" class="muted">Loading...</div>
+      <div id="modeToggle" class="mode-toggle" role="group" aria-label="Interface mode">
+        <button type="button" data-ui-mode="basic" aria-pressed="true">Basic</button>
+        <button type="button" data-ui-mode="advanced" aria-pressed="false">Advanced</button>
+      </div>
+      <button id="themeToggle" class="theme-toggle" type="button" aria-label="Switch to light theme" aria-pressed="true">☀️ Light</button>
     </div>
   </header>
   <main>
@@ -2323,6 +2380,40 @@ HTML = r"""<!doctype html>
           SURFACED_ENVS.add(knob.env);
         }
       });
+    }
+    const THEME_STORAGE_KEY = "news-theme";
+    function getStoredTheme() {
+      try {
+        const raw = (typeof localStorage !== "undefined" && localStorage.getItem(THEME_STORAGE_KEY)) || "";
+        if (raw === "light" || raw === "dark") return raw;
+      } catch (_err) { /* storage unavailable: fall through to default */ }
+      return "dark";
+    }
+    function applyTheme(theme) {
+      const next = theme === "light" ? "light" : "dark";
+      try {
+        if (typeof document !== "undefined" && document.documentElement) {
+          document.documentElement.dataset.theme = next;
+          document.documentElement.style.colorScheme = next;
+        }
+      } catch (_err) { /* document unavailable in harness */ }
+      try {
+        if (typeof localStorage !== "undefined") localStorage.setItem(THEME_STORAGE_KEY, next);
+      } catch (_err) { /* ignore persistence failures */ }
+      const toggle = (typeof document !== "undefined" && document.getElementById) ? document.getElementById("themeToggle") : null;
+      if (toggle) {
+        const isDark = next === "dark";
+        toggle.textContent = isDark ? "☀️ Light" : "🌙 Dark";
+        toggle.setAttribute("aria-label", isDark ? "Switch to light theme" : "Switch to dark theme");
+        toggle.setAttribute("aria-pressed", isDark ? "true" : "false");
+      }
+      return next;
+    }
+    function toggleTheme() {
+      return applyTheme(getStoredTheme() === "dark" ? "light" : "dark");
+    }
+    function initTheme() {
+      return applyTheme(getStoredTheme());
     }
     const TASK_CONFIG = {
       article_summary: {
@@ -5224,6 +5315,7 @@ HTML = r"""<!doctype html>
         : `<p class="muted">No differences from balanced.</p>`;
     }
     function wireEvents() {
+      if ($("themeToggle")) $("themeToggle").onclick = () => toggleTheme();
       if ($("previewBtn")) $("previewBtn").onclick = () => previewWithStatus("run");
       if ($("runBtn")) $("runBtn").onclick = () => runAction("run").catch(err => setStatus(err.message, "bad"));
       bindUtilityEvents();
@@ -5306,6 +5398,7 @@ HTML = r"""<!doctype html>
       renderRunPresetDrawer();
     }
     async function init() {
+      initTheme();
       state.schema = await api("/api/schema");
       syncSurfacedEnvs();
       loadWizardState();
