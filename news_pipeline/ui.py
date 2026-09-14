@@ -2198,7 +2198,7 @@ HTML = r"""<!doctype html>
     .wizard-progress-fill { height: 100%; background: var(--blue); transition: width 0.2s ease; }
     .wizard-step { background: var(--surface); border: 1px solid var(--line); border-radius: 18px; padding: 16px; box-shadow: var(--shadow); }
     .wizard-nav { display: flex; gap: 8px; justify-content: flex-end; }
-    .mode-toggle { display: flex; gap: 4px; margin-left: auto; padding: 3px; border: 1px solid var(--line); border-radius: 999px; background: #fff; flex: 0 0 auto; }
+    .mode-toggle { display: flex; gap: 4px; margin-left: auto; padding: 3px; border: 1px solid var(--line); border-radius: 999px; background: var(--card); flex: 0 0 auto; }
     .mode-toggle button { border-color: transparent; background: transparent; border-radius: 999px; min-height: 30px; }
     .mode-toggle button[aria-pressed="true"] { background: var(--blue); color: #fff; border-color: var(--blue); }
     .advanced-drawer { border: 1px solid var(--line); border-radius: 14px; padding: 12px; background: var(--card); }
