@@ -2157,6 +2157,9 @@ HTML = r"""<!doctype html>
     .wizard-progress-fill { height: 100%; background: var(--blue); transition: width 0.2s ease; }
     .wizard-step { background: var(--surface); border: 1px solid var(--line); border-radius: 18px; padding: 16px; box-shadow: var(--shadow); }
     .wizard-nav { display: flex; gap: 8px; justify-content: flex-end; }
+    .mode-toggle { display: flex; gap: 4px; margin-left: auto; padding: 3px; border: 1px solid var(--line); border-radius: 999px; background: #fff; flex: 0 0 auto; }
+    .mode-toggle button { border-color: transparent; background: transparent; border-radius: 999px; min-height: 30px; }
+    .mode-toggle button[aria-pressed="true"] { background: var(--blue); color: #fff; border-color: var(--blue); }
     .advanced-drawer { border: 1px solid var(--line); border-radius: 14px; padding: 12px; background: #fcfbf7; }
     .advanced-drawer.hidden { display: none !important; }
     .advanced-drawer .warn { background: #fdf8ec; border: 1px solid #e2cf9f; border-radius: 10px; padding: 8px 10px; }
@@ -2166,6 +2169,10 @@ HTML = r"""<!doctype html>
   <header>
     <h1>News Control Panel</h1>
     <div id="status" class="muted">Loading...</div>
+    <div id="modeToggle" class="mode-toggle" role="group" aria-label="Interface mode">
+      <button type="button" data-ui-mode="basic" aria-pressed="true">Basic</button>
+      <button type="button" data-ui-mode="advanced" aria-pressed="false">Advanced</button>
+    </div>
   </header>
   <main>
     <nav id="tabs"></nav>
@@ -2433,12 +2440,39 @@ HTML = r"""<!doctype html>
     ];
     const WIZARD_STORAGE_KEY = "wizardStateDraft";
     let wizardState = { step: 1, values: {} };
+    const UI_MODE_STORAGE_KEY = "newsUiMode";
+    function getUiMode() {
+      try {
+        return localStorage.getItem(UI_MODE_STORAGE_KEY) === "advanced" ? "advanced" : "basic";
+      } catch (_err) {
+        return "basic";
+      }
+    }
+    function renderModeToggle() {
+      const mode = getUiMode();
+      document.querySelectorAll("#modeToggle [data-ui-mode]").forEach(btn => {
+        btn.setAttribute("aria-pressed", String(btn.dataset.uiMode === mode));
+      });
+      try { document.body.dataset.uiMode = mode; } catch (_err) {}
+    }
+    function setUiMode(mode) {
+      const next = mode === "advanced" ? "advanced" : "basic";
+      try {
+        localStorage.setItem(UI_MODE_STORAGE_KEY, next);
+      } catch (_err) {}
+      renderModeToggle();
+      renderTabs();
+      renderWizardStepper();
+      renderRunSetup();
+      renderWizardStepper();
+    }
     function wizardEnabled() {
       try {
-        return new URLSearchParams(window.location.search).get("wizard") !== "0";
-      } catch (_err) {
-        return true;
-      }
+        const override = new URLSearchParams(window.location.search).get("wizard");
+        if (override === "0") return false;
+        if (override === "1") return true;
+      } catch (_err) {}
+      return getUiMode() !== "advanced";
     }
     function loadWizardState() {
       let draft = {};
@@ -2690,7 +2724,14 @@ HTML = r"""<!doctype html>
       { id: "review", title: "Review & Run", preview: true, description: "Check snapshot, preview command, and run." }
     ];
     // W1 owns the persisted wizardState; W2 adds curated step content.
-    function isWizardEnabled() { return new URLSearchParams(window.location.search).get("wizard") !== "0"; }
+    function isWizardEnabled() {
+      try {
+        const override = new URLSearchParams(window.location.search).get("wizard");
+        if (override === "0") return false;
+        if (override === "1") return true;
+      } catch (_err) {}
+      return getUiMode() !== "advanced";
+    }
     function wizardHint(env) { return KNOB_HINTS[env] || ""; }
     const sourceFields = ["key","name","language","tier","region","nations","url","homepage","provider_type","intended_role","weight","can_enrich_coverage","strict_source_match","source_match_mode","source_match_aliases","notes"];
 
@@ -5283,6 +5324,7 @@ HTML = r"""<!doctype html>
         bootWarning = `Active run status unavailable: ${message}`;
       }
       updateRunControls();
+      renderModeToggle();
       renderTabs();
       renderWizardStepper();
       renderRunSetup();
@@ -5294,6 +5336,10 @@ HTML = r"""<!doctype html>
       renderPresetSummary();
       renderModelTuningPanels();
       wireEvents();
+      document.querySelectorAll("#modeToggle [data-ui-mode]").forEach(btn => {
+        btn.onclick = () => setUiMode(btn.dataset.uiMode);
+      });
+      renderModeToggle();
       document.addEventListener("change", (event) => {
         const el = event.target;
         if (el && el.matches && el.matches("select[data-env]")) {

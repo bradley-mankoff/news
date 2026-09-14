@@ -6764,7 +6764,7 @@ assert(logState.rows[logState.rows.length - 1].text === "■ [ui] stopped", "rec
         self.assertIn('state.schema.current_env', html)
         self.assertIn('wizardState.values', html)
         self.assertIn('get("wizard")', html)
-        self.assertIn('!== "0"', html)
+        self.assertIn('=== "0"', html)
         self.assertIn('wizardEnabled()', html)
         boot = html.split("async function init()")[1].split("init().catch")[0]
         self.assertIn("loadWizardState();", boot)
@@ -6893,6 +6893,41 @@ for (let i=1;i<=5;i++) { wizardState.step=i; renderWizardStepper(); const h=docu
             self.skipTest("Node.js is required for the embedded UI renderer harness")
         result = subprocess.run([node, "--input-type=module", "-"], input=js, capture_output=True, text=True, timeout=30)
         self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
+
+    def test_basic_advanced_mode_toggle(self) -> None:
+        html = ui_module.HTML
+        # Toggle lives top-right in the sticky header with both choices.
+        header = html.split("<header>")[1].split("</header>")[0]
+        self.assertIn('id="modeToggle"', header)
+        self.assertIn('data-ui-mode="basic"', header)
+        self.assertIn('data-ui-mode="advanced"', header)
+        self.assertIn('aria-label="Interface mode"', header)
+        # Basic is selected on first load.
+        self.assertIn('data-ui-mode="basic" aria-pressed="true"', html)
+        self.assertIn('data-ui-mode="advanced" aria-pressed="false"', html)
+        # Mode state persists across reload via localStorage.
+        self.assertIn('const UI_MODE_STORAGE_KEY = "newsUiMode"', html)
+        self.assertIn("function getUiMode()", html)
+        self.assertIn("function setUiMode(", html)
+        self.assertIn("function renderModeToggle()", html)
+        self.assertIn("localStorage.getItem(UI_MODE_STORAGE_KEY)", html)
+        self.assertIn("localStorage.setItem(UI_MODE_STORAGE_KEY", html)
+        # Both wizard gates follow the mode state; ?wizard stays as override.
+        self.assertIn('return getUiMode() !== "advanced"', html)
+        self.assertIn('if (override === "0") return false;', html)
+        # Flipping re-renders the whole app immediately.
+        setter = html.split("function setUiMode(")[1].split("function wizardEnabled()")[0]
+        self.assertIn("renderModeToggle();", setter)
+        self.assertIn("renderTabs();", setter)
+        self.assertIn("renderWizardStepper();", setter)
+        self.assertIn("renderRunSetup();", setter)
+        # Downstream hook: mode is exposed on the body for the sidebar/chat.
+        self.assertIn("document.body.dataset.uiMode", html)
+        # Boot renders the toggle and wires clicks.
+        boot = html.split("async function init()")[1].split("init().catch")[0]
+        self.assertIn("renderModeToggle();", boot)
+        self.assertIn('#modeToggle [data-ui-mode]', boot)
+        self.assertIn("setUiMode(btn.dataset.uiMode)", boot)
 
 
 if __name__ == "__main__":
