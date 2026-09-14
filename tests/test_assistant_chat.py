@@ -96,6 +96,17 @@ class AssistantChatPanelTests(unittest.TestCase):
         assert model_knob is not None
         self.assertEqual(model_knob["env"], "NEWS_MODEL")
 
+    def test_setting_answer_is_long_plain_words(self) -> None:
+        knob = ui_module.match_assistant_control("What does delivery mode do?")
+        assert knob is not None
+        answer = ui_module.describe_assistant_control(knob)
+        sentences = [part for part in answer.split(". ") if part.strip()]
+        self.assertGreaterEqual(len(sentences), 5)
+        self.assertIn("You'll find it", answer)
+        self.assertIn("next preview and run", answer)
+        self.assertIn("setting name is", answer)
+        self.assertNotIn("`", answer)
+
     def test_no_model_running_message(self) -> None:
         def _down(_reference: str, _message: str) -> str:
             raise OSError("connection refused")
