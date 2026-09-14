@@ -1191,27 +1191,45 @@ def match_assistant_control(
     return best
 
 
+_ASSISTANT_GROUP_VERBS = {
+    "Pipeline Budget": "sets a limit the pipeline sticks to while building your report",
+    "Run Settings": "changes how a run behaves",
+    "Model Selection": "chooses which model does the work",
+    "Model Tuning": "fine-tunes how the model behaves",
+    "Model Server Settings": "configures how the app reaches the model server",
+}
+
+
 def describe_assistant_control(knob: dict[str, Any]) -> str:
-    """Explain a registered control in plain words, naming it on screen."""
+    """Explain a registered control at length, in plain words."""
     label = str(knob.get("label") or knob.get("env"))
     env = str(knob.get("env") or "")
     location = _ASSISTANT_LOCATION_LABELS.get(
         str(knob.get("ui_location") or ""), "the settings screens"
     )
-    sentence = f'The "{label}" control (`{env}`) lives on {location}.'
+    verb = _ASSISTANT_GROUP_VERBS.get(str(knob.get("group") or ""), "controls part of your newsletter setup")
+    sentence = f"{label} {verb}. You'll find it on {location}."
     knob_type = str(knob.get("type") or "")
     options = [str(option) for option in (knob.get("options") or [])]
     if knob_type == "select" and options:
         sentence += f" In plain words: pick one of {', '.join(options)}."
     elif knob_type == "boolean":
-        sentence += " In plain words: turn it on or leave it off."
+        sentence += " It's either on or off — flip it to what you want."
     elif knob_type == "number":
-        sentence += " In plain words: type a number."
+        minimum = knob.get("min")
+        maximum = knob.get("max")
+        if minimum is not None and maximum is not None:
+            sentence += f" Type a number between {minimum} and {maximum}."
+        else:
+            sentence += " Type a number."
     else:
-        sentence += " In plain words: type the value you want."
+        sentence += " Type the text you want it to use."
     default = knob.get("default")
     if default not in (None, ""):
-        sentence += f" Leave it empty to use the default (`{default}`)."
+        sentence += f" Leave it blank and it uses {default}."
+    sentence += " It takes effect on your next preview and run."
+    if env:
+        sentence += f" Its setting name is {env} if you ever spot it in files."
     return sentence
 
 
