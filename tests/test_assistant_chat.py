@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import unittest
 from io import BytesIO
 from typing import Any
@@ -120,6 +121,50 @@ class AssistantChatPanelTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             ui_module.assistant_chat({"message": "   "})
 
+class AssistantTooltipParityTests(unittest.TestCase):
+    def test_schema_descriptions_come_from_describe_function(self) -> None:
+        payload = ui_module.schema_payload()
+        knobs = payload["knobs"]
+        self.assertTrue(knobs)
+        for knob in knobs:
+            self.assertEqual(
+                knob.get("description"),
+                ui_module.describe_assistant_control(knob),
+                knob.get("env"),
+            )
+
+    def test_tooltip_and_chat_share_one_text(self) -> None:
+        knob = ui_module.match_assistant_control("What does delivery mode do?")
+        assert knob is not None
+        description = ui_module.describe_assistant_control(knob)
+        result = ui_module.assistant_chat({"message": "What does delivery mode do?"})
+        self.assertEqual(result["answer"], description)
+        schema_knob = next(
+            item
+            for item in ui_module.schema_payload()["knobs"]
+            if item["env"] == knob["env"]
+        )
+        self.assertEqual(schema_knob["description"], description)
+
+    def test_no_second_copy_of_knob_hints_in_js(self) -> None:
+        html = ui_module.HTML
+        # The old duplicated dictionary is gone; hover tooltips resolve
+        # through the schema-provided knob.description at render time.
+        self.assertNotIn("KNOB_HINTS", html)
+        self.assertIn("knob.description", html)
+        # Re-adding any registry env to the static JS hints fails this
+        # test: STATIC_HINTS may only name codes with no registry knob.
+        block = html.split("const STATIC_HINTS = {", 1)[1].split("};", 1)[0]
+        static_keys = set(
+            re.findall(r"^\s*([A-Za-z0-9_\-]+)\s*:", block, re.MULTILINE)
+        )
+        self.assertTrue(static_keys)
+        registry_envs = {
+            knob["env"] for knob in ui_module.build_knob_registry()
+        }
+        self.assertEqual(static_keys & registry_envs, set())
+
+class AssistantChatRouteTests(unittest.TestCase):
     def test_chat_route(self) -> None:
         status, body = _invoke(
             "do_POST", "/api/assistant/chat", body=json.dumps({"message": "What does delivery mode do?"})

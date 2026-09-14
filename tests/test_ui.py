@@ -235,9 +235,16 @@ class UITests(unittest.TestCase):
 
     def test_env_info_tooltips_cover_run_setup_and_advanced_settings(self) -> None:
         html = ui_module.HTML
-        # Exact explanatory text for one Run Setup setting and one Advanced-only setting.
-        self.assertIn('NEWS_DELIVERY_MODE: "Chooses the delivery policy: no delivery, owner only (default), or explicit configured recipients. Legacy NEWS_RECIPIENT_SCOPE still maps to this mode when set."', html)
-        self.assertIn('NEWS_MAX_STORIES: "Maximum number of final stories selected for the report."', html)
+        # Single source (DN-83): hover tooltips read the schema description
+        # built by describe_assistant_control(), never a JS-side copy.
+        self.assertIn("knob.description", html)
+        self.assertNotIn("const KNOB_HINTS", html)
+        # No registry knob keeps a JS-side hint: spot-check one Run Setup
+        # setting and one Advanced-only setting.
+        self.assertNotIn('NEWS_DELIVERY_MODE: "Chooses the delivery policy', html)
+        self.assertNotIn('NEWS_MAX_STORIES: "Maximum number of final stories', html)
+        # Long chat-length text stays readable at narrow widths.
+        self.assertIn("overflow-wrap: anywhere;", html)
         # All three surfaces run the decorator.
         self.assertIn('decorateEnvHints($("runSetupMount"))', html)
         self.assertIn('decorateEnvHints($("advancedPanels"))', html)

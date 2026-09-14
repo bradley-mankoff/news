@@ -110,7 +110,13 @@ MODEL_TUNING_PRESET_HEADER = """# Saved model tuning presets for the daily news 
 
 
 def build_knob_registry() -> list[dict[str, Any]]:
-    return runtime_knob_registry()
+    knobs = runtime_knob_registry()
+    for knob in knobs:
+        # Single source for the long explanation: the helper chat and every
+        # settings hover tooltip both read this field, so the two surfaces
+        # can never drift apart (DN-83).
+        knob["description"] = describe_assistant_control(knob)
+    return knobs
 
 
 def _config_path_from_env(name: str, default: str) -> Path:
@@ -2282,6 +2288,10 @@ HTML = r"""<!doctype html>
       /* Tall hints stay readable on short viewports. */
       max-height: calc(100vh - 16px);
       overflow-y: auto;
+      /* Long chat-length explanations must wrap at narrow widths instead
+         of overflowing: break long tokens (env names, URLs) anywhere. */
+      overflow-wrap: anywhere;
+      white-space: normal;
       padding: 8px 10px;
       background: #111827;
       color: #e8edf7;
@@ -3029,61 +3039,14 @@ HTML = r"""<!doctype html>
       const link = $("showAdvancedLink");
       if (link) link.textContent = drawer.classList.contains("hidden") ? `Show advanced (+${advancedDrawerCount()} advanced)` : "Hide advanced";
     }
-    const KNOB_HINTS = {
+    // Static hints for codes with no registry knob (and hence no chat
+    // explanation): the preset picker, preset fields, and source-utility
+    // flags. Every registry knob's hover text comes from its
+    // schema-provided `description`, which the server builds with the single
+    // describe_assistant_control() function — the same text the helper chat
+    // answers with — so tooltips and chat can never drift apart (DN-83).
+    const STATIC_HINTS = {
       NEWS_PRESET: "Saved run preset selecting stored Run Settings; explicit shell/UI overrides win over preset values.",
-      NEWS_PROMPT_PROFILE: "Editorial tone profile for the five LLM prompt stages (balanced, playful, facts-only, etc.).",
-      NEWS_PRIMARY_RECIPIENT: "Owner email address used when delivery mode is owner or recipients.",
-      NEWS_DELIVERY_MODE: "Chooses the delivery policy: no delivery, owner only (default), or explicit configured recipients. Legacy NEWS_RECIPIENT_SCOPE still maps to this mode when set.",
-      NEWS_RECIPIENT_SCOPE: "Legacy migration value for NEWS_DELIVERY_MODE (primary -> owner, all -> recipients); prefer the delivery mode control.",
-      NEWS_SOURCE_SCOPE: "Chooses the source pool: core sources only, or the full source list.",
-      NEWS_MODEL: "Default local model alias used when a task-specific model is not set.",
-      NEWS_MODEL_ARTICLE_SUMMARY: "Model used for article summarization before story drafting.",
-      NEWS_MODEL_STORY_DRAFTING: "Model used for writing the final story drafts.",
-      NEWS_MODEL_STORY_SCALE_SCREENING: "Model used for global story scale screening before story selection.",
-      NEWS_MODEL_TITLE_GENERATION: "Model used for the title generation call (overlay headline).",
-      NEWS_MODEL_TUNING_PRESET: "Default saved tuning overlay applied before direct tuning overrides.",
-      NEWS_MODEL_ARTICLE_SUMMARY_TUNING_PRESET: "Saved tuning overlay for the article summarization model.",
-      NEWS_MODEL_STORY_DRAFTING_TUNING_PRESET: "Saved tuning overlay for the story writing model.",
-      NEWS_MODEL_STORY_SCALE_SCREENING_TUNING_PRESET: "Saved tuning overlay for the story scale screening model.",
-      NEWS_MODEL_TITLE_GENERATION_TUNING_PRESET: "Saved tuning overlay for the title generation model.",
-      NEWS_MODEL_IMAGE_ART_DIRECTION: "Model used for the image art direction call (text-free FLUX prompt).",
-      NEWS_MODEL_IMAGE_ART_DIRECTION_TUNING_PRESET: "Saved tuning overlay for the image art direction model.",
-      NEWS_MODEL_MAX_INPUT_TOKENS: "Shared input token cap sent to model calls.",
-      NEWS_ARTICLE_SUMMARY_MAX_TOKENS: "Maximum generated tokens for each article summary.",
-      NEWS_STORY_DRAFTING_MAX_TOKENS: "Maximum generated tokens for each final story draft.",
-      NEWS_STORY_SCALE_SCREENING_MAX_TOKENS: "Maximum generated tokens for each story scale screening call.",
-      NEWS_TITLE_GENERATION_MAX_TOKENS: "Maximum generated tokens for the title generation call.",
-      NEWS_IMAGE_ART_DIRECTION_MAX_TOKENS: "Maximum generated tokens for the image art direction call.",
-      NEWS_ARTICLE_TEXT_TOKEN_LIMIT: "Article text trimmed to this token budget before summarization.",
-      NEWS_TOTAL_ARTICLE_SUMMARY_CAP: "Upper bound on article summaries kept for story synthesis.",
-      NEWS_RECENT_WINDOW_HOURS: "How far back source collection looks for recent articles.",
-      NEWS_MAX_ARTICLES_PER_SOURCE: "Maximum articles retained from each source in one run.",
-      NEWS_MIN_ARTICLES_PER_STORY: "Minimum article count required before a story cluster is kept.",
-      NEWS_MAX_STORIES: "Maximum number of final stories selected for the report.",
-      NEWS_STORY_CLUSTER_SIMILARITY_THRESHOLD: "Embedding similarity needed to group articles into a story cluster.",
-      NEWS_STORY_SELECTION_OVERLAP_THRESHOLD: "Overlap limit used to avoid selecting near-duplicate story candidates.",
-      NEWS_STORY_DEDUP_THRESHOLD: "Embedding similarity threshold for dropping duplicate story drafts.",
-      NEWS_STORY_BACKFILL_BATCH_MULTIPLIER: "How many extra candidate clusters to inspect when backfilling weak story slots.",
-      NEWS_SOURCE_COLLECTION_CONCURRENCY: "Parallelism for source fetching during collection.",
-      NEWS_ARTICLE_SUMMARY_CONCURRENCY: "Parallelism for article summarization model calls.",
-      NEWS_STORY_SYNTHESIS_CONCURRENCY: "Parallelism for story synthesis and drafting work.",
-      NEWS_MODEL_CONCURRENCY: "Concurrency passed to the local model server command.",
-      NEWS_BLOCK_REUSED_URLS: "Blocks URLs already seen in history from appearing in later runs.",
-      NEWS_IMAGE_ENABLED: "Turns report image generation on or off.",
-      NEWS_STORY_SCALE_SCREENING_ENABLED: "Runs an extra screen to reject story clusters that are too small or narrow.",
-      NEWS_RELAX_STORY_DRAFTING_GUARDS: "Loosens story drafting guardrails for debugging or recovery runs.",
-      NEWS_EMBEDDING_MODEL: "Sentence embedding model used for clustering and deduplication.",
-      NEWS_TOKEN_ENCODING: "Tokenizer name used for local token counting.",
-      NEWS_MODEL_BASE_URL: "Default OpenAI-compatible model server endpoint.",
-      NEWS_MODEL_ARTICLE_SUMMARY_BASE_URL: "Model server endpoint for article summarization calls.",
-      NEWS_MODEL_STORY_DRAFTING_BASE_URL: "Model server endpoint for story writing calls.",
-      NEWS_MODEL_STORY_SCALE_SCREENING_BASE_URL: "Model server endpoint for story scale screening calls.",
-      NEWS_MODEL_TITLE_GENERATION_BASE_URL: "Model server endpoint for title generation calls.",
-      NEWS_MODEL_IMAGE_ART_DIRECTION_BASE_URL: "Model server endpoint for image art direction calls.",
-      NEWS_MODEL_SERVER_PREFILL_STEP_SIZE: "Prefill step size passed to the local MLX model server.",
-      NEWS_MODEL_SERVER_PROMPT_CACHE_SIZE: "Prompt cache item count passed to the local model server.",
-      NEWS_MODEL_SERVER_PROMPT_CACHE_BYTES: "Prompt cache memory budget passed to the local model server.",
-      NEWS_MODEL_SERVER_MAX_TOKENS: "Server-side maximum token setting for the local model process.",
       id: "YAML key for this saved preset.",
       name: "Human-facing display name stored with this preset.",
       description: "Optional note stored with this preset.",
@@ -3112,7 +3075,11 @@ HTML = r"""<!doctype html>
       } catch (_err) {}
       return getUiMode() !== "advanced";
     }
-    function wizardHint(env) { return KNOB_HINTS[env] || ""; }
+    function knobDescription(env) {
+      const knob = knobByEnv(env);
+      return (knob && knob.description) || "";
+    }
+    function wizardHint(env) { return knobDescription(env) || STATIC_HINTS[env] || ""; }
     const sourceFields = ["key","name","language","tier","region","nations","url","homepage","provider_type","intended_role","weight","can_enrich_coverage","strict_source_match","source_match_mode","source_match_aliases","notes"];
 
     function $(id) { return document.getElementById(id); }
@@ -3224,13 +3191,12 @@ HTML = r"""<!doctype html>
       return `<label class="field"><span>${escapeHtml(label)}</span>${inputForKnob(knob, options)}<code>${escapeHtml(env)}</code></label>`;
     }
     function knobHint(name) {
-      if (KNOB_HINTS[name]) return KNOB_HINTS[name];
-      if (name.endsWith("_TEMPERATURE")) return "Sampling temperature. Higher values make model output more varied.";
-      if (name.endsWith("_TOP_P")) return "Nucleus sampling cutoff. Lower values narrow the token pool.";
-      if (name.endsWith("_TOP_K")) return "Top-k sampling cutoff. Lower values restrict candidate tokens.";
-      if (name.endsWith("_MIN_P")) return "Minimum probability sampling cutoff for filtering very unlikely tokens.";
-      if (name.endsWith("_PRESENCE_PENALTY")) return "Penalty for repeating already mentioned concepts.";
-      if (name.endsWith("_REPETITION_PENALTY")) return "Penalty for repeated token patterns in model output.";
+      // Single source (DN-83): registry knobs use the schema description
+      // built by describe_assistant_control() — the exact text the chat
+      // gives — so hover tooltips and chat answers stay identical.
+      const knob = knobByEnv(name);
+      if (knob && knob.description) return knob.description;
+      if (STATIC_HINTS[name]) return STATIC_HINTS[name];
       return "Runtime setting passed through to the pipeline or local utility command.";
     }
     let envTipSeq = 0; // document-unique tooltip ids across all decorator runs
