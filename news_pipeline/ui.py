@@ -3379,7 +3379,8 @@ HTML = r"""<!doctype html>
       renderModelBackendHint(requiredBackendForSelectedModel());
     }
     function renderTabs() {
-      const visibleTabs = wizardEnabled() ? tabs.filter(([id]) => id !== "advanced" && id !== "modelTuning") : tabs;
+      const showAllTabs = typeof getUiMode === "function" && getUiMode() !== "basic";
+      const visibleTabs = (wizardEnabled() && !showAllTabs) ? tabs.filter(([id]) => id !== "advanced" && id !== "modelTuning") : tabs;
       $("tabs").innerHTML = `<button id="navToggle" class="nav-toggle" title="Collapse navigation" aria-label="Collapse navigation"><span class="collapse-icon">${icons.chevronLeft}</span><span class="expand-icon">${icons.chevronRight}</span></button>` +
         visibleTabs.map(([id, label, icon]) => `<button class="tab-button" data-tab="${id}" title="${escapeHtml(label)}">${icons[icon]}<span class="tab-text">${escapeHtml(label)}</span></button>`).join("");
       $("navToggle").onclick = () => {

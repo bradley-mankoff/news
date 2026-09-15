@@ -838,7 +838,7 @@ assert(advancedPanels.innerHTML.includes('data-env="NEWS_BRAND_NEW_PERIPHERAL_KN
 assert(!advancedPanels.innerHTML.includes("undefined"), "undefined markup leaked into Advanced Settings");
 """
         )
-        node = shutil.which("node")
+        node = _find_node()
         if node is None:
             self.skipTest("Node.js is required for the embedded UI renderer harness")
         timeout_seconds = 30
@@ -6929,6 +6929,186 @@ for (let i=1;i<=5;i++) { wizardState.step=i; renderWizardStepper(); const h=docu
         self.assertIn("renderModeToggle();", boot)
         self.assertIn('#modeToggle [data-ui-mode]', boot)
         self.assertIn("setUiMode(btn.dataset.uiMode)", boot)
+
+    def test_advanced_mode_restores_full_sidebar(self) -> None:
+        """Advanced mode shows all seven sidebar entries; basic keeps five.
+
+        DN-79 executes the production renderTabs() under both newsUiMode
+        states: basic (first-load default) keeps the five-tab wizard flow
+        untouched, while advanced brings back Advanced Settings and Model
+        Tuning alongside the existing five views. DN-78 pins the toggle
+        itself; this pins the sidebar contract that follows it.
+        """
+        html = ui_module.HTML
+
+        def js_function_block(start: str, end: str) -> str:
+            return html[html.index(start) : html.index(end, html.index(start))]
+
+        # The sidebar registry declares every entry exactly once.
+        tabs_src = html.split("    const tabs = [")[1].split("    function advancedDrawerCount")[0]
+        entries = re.findall(r'\["([^"]+)", "([^"]+)"', tabs_src)
+        self.assertEqual(
+            [entry[0] for entry in entries],
+            ["runSetup", "review", "schedule", "advanced", "modelTuning", "sources", "recipients"],
+        )
+        self.assertIn('["advanced", "Advanced Settings"', tabs_src)
+        self.assertIn('["modelTuning", "Model Tuning"', tabs_src)
+        # Wizard mode hides exactly the two power-user entries.
+        render_tabs = html.split("function renderTabs()")[1].split("function selectedRunPreset")[0]
+        self.assertIn('tabs.filter(([id]) => id !== "advanced" && id !== "modelTuning")', render_tabs)
+        self.assertIn("wizardEnabled()", render_tabs)
+
+        js = (
+            r"""
+const assert = (condition, message) => {
+  if (!condition) throw new Error(message);
+};
+// setUiMode() persists the choice then re-renders the tabs (pinned by the
+// DN-78 toggle test), so the harness drives the same path the toggle does:
+// write the mode state, then run the production sidebar renderer.
+const store = {};
+const localStorage = {
+  getItem: (key) => (key in store ? store[key] : null),
+  setItem: (key, value) => { store[key] = value; },
+  removeItem: (key) => { delete store[key]; }
+};
+const window = { location: { search: "" } };
+const elements = {};
+const makeEl = (id) => ({
+  id, innerHTML: "", onclick: null, title: "", dataset: {},
+  classList: { add() {}, remove() {}, toggle() {}, contains() { return false; } },
+  setAttribute() {}
+});
+const document = {
+  getElementById: (id) => (elements[id] || (elements[id] = makeEl(id))),
+  querySelectorAll: () => [],
+  body: { dataset: {}, classList: { toggle() {}, contains() { return false; } } }
+};
+const $ = (id) => document.getElementById(id);
+"""
+            + js_function_block('    const UI_MODE_STORAGE_KEY = "', "    function loadWizardState")
+            + js_function_block("    const icons = {", "    const tabs = [")
+            + js_function_block("    const tabs = [", "    function advancedDrawerCount")
+            + js_function_block("function escapeHtml(text) {", "function formatDefault")
+            + js_function_block("function showTab(id) {", "function escapeHtml")
+            + js_function_block("function renderTabs() {", "function selectedRunPreset")
+            + r"""
+const tabIds = () => [...document.getElementById("tabs").innerHTML.matchAll(/data-tab="([^"]+)"/g)].map((m) => m[1]);
+// Basic (first-load default) keeps the five-tab wizard flow untouched.
+delete store[UI_MODE_STORAGE_KEY];
+renderTabs();
+const basicIds = tabIds();
+assert(JSON.stringify(basicIds) === JSON.stringify(["runSetup", "review", "schedule", "sources", "recipients"]), "basic mode must keep the five-tab wizard flow, got " + JSON.stringify(basicIds));
+const basicHtml = document.getElementById("tabs").innerHTML;
+assert(!basicHtml.includes("Advanced Settings"), "basic sidebar leaked Advanced Settings");
+assert(!basicHtml.includes("Model Tuning"), "basic sidebar leaked Model Tuning");
+// Advanced brings back the full seven-entry sidebar.
+store[UI_MODE_STORAGE_KEY] = "advanced";
+renderTabs();
+const advancedIds = tabIds();
+assert(JSON.stringify(advancedIds) === JSON.stringify(["runSetup", "review", "schedule", "advanced", "modelTuning", "sources", "recipients"]), "advanced mode must show all seven sidebar entries, got " + JSON.stringify(advancedIds));
+const advancedHtml = document.getElementById("tabs").innerHTML;
+assert(advancedHtml.includes("Advanced Settings"), "advanced sidebar missing Advanced Settings");
+assert(advancedHtml.includes("Model Tuning"), "advanced sidebar missing Model Tuning");
+assert(new Set(advancedIds).size === advancedIds.length, "duplicate sidebar entries in advanced mode");
+"""
+        )
+        node = _find_node()
+        if node is None:
+            self.skipTest("Node.js is required for the embedded UI renderer harness")
+        result = subprocess.run([node, "--input-type=module", "-"], input=js, capture_output=True, text=True, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
+
+    def test_advanced_settings_panels_render_exactly_once(self) -> None:
+        """Advanced Settings shows Budgets + Peripheral with no duplicates.
+
+        DN-79 executes the production renderAdvancedPanels() and
+        renderAdvancedKnobs() against a synthetic registry schema: the
+        Budgets and Peripheral families render their knobs, dedicated
+        task-card envs live in their own cards, and nothing leaks into
+        (or vanishes from) the raw override list — each control
+        exactly once.
+        """
+        html = ui_module.HTML
+
+        def js_function_block(start: str, end: str) -> str:
+            return html[html.index(start) : html.index(end, html.index(start))]
+
+        js = (
+            r"""
+const assert = (condition, message) => {
+  if (!condition) throw new Error(message);
+};
+// inputForKnob reads current values through document.querySelector; the
+// harness has no DOM controls, so every lookup falls back to
+// state.schema.current_env, mirroring a schema-driven initial render.
+const document = { querySelector() { return null; }, querySelectorAll() { return []; } };
+const advancedPanels = { innerHTML: "" };
+const knobContainer = { innerHTML: "" };
+const knobSearch = { value: "" };
+const $ = (id) => id === "advancedPanels" ? advancedPanels : id === "knobContainer" ? knobContainer : id === "knobSearch" ? knobSearch : null;
+const decorateEnvHints = () => {};
+const refreshModelKnobLinks = () => {};
+const renderPromptProfilePanel = () => {};
+const renderPromptTemplateEditors = () => {};
+"""
+            + js_function_block("    const TASK_CONFIG = {", "    const state = {")
+            + js_function_block("    const state = {", "    const icons = {")
+            + js_function_block("    const TASK_MAX_TOKENS_LABELS = {", "    const SAMPLING_FIELDS = [")
+            + js_function_block("    const SAMPLING_FIELDS = [", "    function samplingFields(prefix) {")
+            + js_function_block("const SURFACED_ENVS = new Set();", "    const TASK_CONFIG")
+            + js_function_block("function escapeHtml(text) {", "function formatDefault")
+            + js_function_block('function formatDefault(value, fallback="none") {', "function currentControlValue")
+            + js_function_block("function currentControlValue(env) {", "function setControlValue")
+            + js_function_block("function knobByEnv(env) {", "function inputForKnob")
+            + js_function_block(
+                'function inputForKnob(knob, { emptyLabel, optionLabels = {}, id = "", selectDefault = false } = {}) {',
+                "function knobField",
+            )
+            + js_function_block("function knobField(env, label, options={}) {", "function knobHint")
+            + js_function_block("function value(id) {", "function checked(id) {")
+            + js_function_block("function samplingFields(prefix) {", "function modelTuningPanel")
+            + js_function_block("function modelTuningPanel(task) {", "function renderAdvancedPanels")
+            + js_function_block("    const PROMPT_OVERRIDE_ENVS = {", "    function selectedPromptProfile")
+            + js_function_block("    function promptTemplateEnvMap() {", "    function promptTemplateRecord")
+            + js_function_block("function renderAdvancedPanels() {", "function renderAdvancedKnobs")
+            + js_function_block("function renderAdvancedKnobs() {", "function collectModelTuningPresetBody")
+            + r"""
+state.schema = {
+  current_env: {},
+  runtime: {},
+  prompt_templates: [],
+  knobs: [
+    { env: "NEWS_MAX_STORIES", group: "Pipeline Budget", label: "Max stories", type: "number", min: 1, step: 1, default: 10, ui_location: "advanced_panels" },
+    { env: "NEWS_BLOCK_REUSED_URLS", group: "Run Settings", label: "Block reused URLs", type: "bool", default: false, ui_location: "advanced_panels" },
+    { env: "NEWS_MODEL_ARTICLE_SUMMARY_BASE_URL", group: "Model Server Settings", label: "Article writing base URL", type: "text", default: "", ui_location: "advanced_panels" },
+    { env: "NEWS_DELIVERY_MODE", group: "Delivery", label: "Delivery mode", type: "select", options: ["owner"], default: "owner", ui_location: "run_setup" },
+    { env: "NEWS_EMBEDDING_MODEL", group: "Run Settings", label: "Embedding model", type: "text", default: "all-mpnet-base-v2", ui_location: "advanced_raw" }
+  ]
+};
+syncSurfacedEnvs();
+renderAdvancedPanels();
+renderAdvancedKnobs();
+const panelsHtml = advancedPanels.innerHTML;
+const rawHtml = knobContainer.innerHTML;
+assert(panelsHtml.includes("<h2>Run budgets and quotas</h2>"), "Budgets section heading missing from Advanced Settings");
+assert(panelsHtml.includes("<h2>Optional run settings</h2>"), "Peripheral section heading missing from Advanced Settings");
+const count = (markup, env) => (markup.match(new RegExp('data-env="' + env + '"', 'g')) || []).length;
+const total = (env) => count(panelsHtml, env) + count(rawHtml, env);
+assert(total("NEWS_MAX_STORIES") === 1, "budget control must render exactly once");
+assert(total("NEWS_BLOCK_REUSED_URLS") === 1, "peripheral control must render exactly once");
+assert(count(panelsHtml, "NEWS_MODEL_ARTICLE_SUMMARY_BASE_URL") === 1, "dedicated task-card control must render in its own card");
+assert(count(rawHtml, "NEWS_MODEL_ARTICLE_SUMMARY_BASE_URL") === 0, "dedicated task-card control leaked into raw overrides");
+assert(count(rawHtml, "NEWS_DELIVERY_MODE") === 0, "run_setup control leaked into raw overrides");
+assert(total("NEWS_EMBEDDING_MODEL") === 1, "raw control must render exactly once in raw overrides");
+assert(!panelsHtml.includes("undefined"), "undefined markup leaked into Advanced Settings");
+"""
+        )
+        node = _find_node()
+        if node is None:
+            self.skipTest("Node.js is required for the embedded UI renderer harness")
+        result = subprocess.run([node, "--input-type=module", "-"], input=js, capture_output=True, text=True, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
 
 
 if __name__ == "__main__":
