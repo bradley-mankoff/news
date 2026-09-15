@@ -54,9 +54,12 @@ class UIThemeTests(unittest.TestCase):
         html = ui_module.HTML
         self.assertIn('id="themeToggle"', html)
         self.assertIn('class="header-actions"', html)
-        # Visible switch has an accessible name and a sensible default label.
-        self.assertIn('aria-label="Switch to light theme"', html)
+        # Segmented control mirrors the mode pill: two options, pressed state.
+        self.assertIn('aria-label="Color theme"', html)
+        self.assertIn('data-theme-value="light"', html)
+        self.assertIn('data-theme-value="dark"', html)
         self.assertIn('☀️ Light', html)
+        self.assertIn('🌙 Dark', html)
         # Persistence contract: storage key + read/write + wiring.
         self.assertIn('const THEME_STORAGE_KEY = "news-theme";', html)
         self.assertIn('function getStoredTheme()', html)
@@ -64,7 +67,8 @@ class UIThemeTests(unittest.TestCase):
         self.assertIn('function toggleTheme()', html)
         self.assertIn('function initTheme()', html)
         self.assertIn('localStorage.setItem(THEME_STORAGE_KEY', html)
-        self.assertIn('$("themeToggle")) $("themeToggle").onclick', html)
+        self.assertIn('const themeGroup = $("themeToggle")', html)
+        self.assertIn('querySelectorAll("[data-theme-value]")', html)
         self.assertIn('initTheme();', html)
 
     def test_dark_palette_stays_readable(self) -> None:
@@ -112,22 +116,24 @@ class UIThemeTests(unittest.TestCase):
             "  setItem: (k, v) => { store[k] = String(v); },\n"
             "};\n"
             "const attrs = {};\n"
-            "const toggleEl = { textContent: '', _attrs: {},\n"
-            "  setAttribute(k, v) { this._attrs[k] = String(v); },\n"
-            "  getAttribute(k) { return this._attrs[k]; } };\n"
+            "const mkBtn = (value) => ({ dataset: { themeValue: value }, _attrs: {},\n"
+            "  setAttribute(k, v) { this._attrs[k] = String(v); } });\n"
+            "const groupEl = { _btns: [mkBtn('light'), mkBtn('dark')],\n"
+            "  querySelectorAll(sel) { return sel.includes('data-theme-value') ? this._btns : []; } };\n"
             "globalThis.document = { documentElement: { dataset: {}, style: {} },\n"
-            "  getElementById: (id) => (id === 'themeToggle' ? toggleEl : null) };\n"
+            "  getElementById: (id) => (id === 'themeToggle' ? groupEl : null) };\n"
             + theme_js + "\n"
             "const assert = (cond, msg) => { if (!cond) { console.error('FAIL: ' + msg); process.exit(1); } };\n"
+            "const pressed = (v) => groupEl._btns.find((b) => b.dataset.themeValue === v)._attrs['aria-pressed'];\n"
             "assert(getStoredTheme() === 'dark', 'fresh load must default to dark');\n"
             "assert(applyTheme(getStoredTheme()) === 'dark', 'applyTheme returns dark');\n"
             "assert(document.documentElement.dataset.theme === 'dark', 'dataset.theme is dark');\n"
             "assert(store['news-theme'] === 'dark', 'dark choice persists');\n"
-            "assert(toggleEl.textContent.includes('Light'), 'dark toggle offers Light');\n"
+            "assert(pressed('dark') === 'true' && pressed('light') === 'false', 'dark segment pressed, light not');\n"
             "assert(toggleTheme() === 'light', 'toggle flips to light');\n"
             "assert(store['news-theme'] === 'light', 'light choice persists');\n"
             "assert(document.documentElement.dataset.theme === 'light', 'dataset.theme is light');\n"
-            "assert(toggleEl.textContent.includes('Dark'), 'light toggle offers Dark');\n"
+            "assert(pressed('light') === 'true' && pressed('dark') === 'false', 'light segment pressed, dark not');\n"
             "assert(getStoredTheme() === 'light', 'stored light survives reload');\n"
             "console.log('theme harness ok');\n"
         )

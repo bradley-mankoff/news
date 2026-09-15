@@ -2265,7 +2265,7 @@ HTML = r"""<!doctype html>
       box-shadow: 0 1px 0 rgba(255, 255, 255, 0.8) inset;
     }
     .header-actions { display: flex; align-items: center; gap: 12px; }
-    .theme-toggle { white-space: nowrap; }
+    #themeToggle button { white-space: nowrap; }
     h1 { font-size: 18px; margin: 0; letter-spacing: 0; }
     h2 { font-size: 15px; margin: 0 0 12px; letter-spacing: 0; }
     h3 { font-size: 13px; margin: 18px 0 8px; color: var(--muted); letter-spacing: 0; }
@@ -2622,7 +2622,10 @@ HTML = r"""<!doctype html>
         <button type="button" data-ui-mode="basic" aria-pressed="true">Basic</button>
         <button type="button" data-ui-mode="advanced" aria-pressed="false">Advanced</button>
       </div>
-      <button id="themeToggle" class="theme-toggle" type="button" aria-label="Switch to light theme" aria-pressed="true">☀️ Light</button>
+      <div id="themeToggle" class="mode-toggle" role="group" aria-label="Color theme">
+        <button type="button" data-theme-value="light" aria-pressed="false">☀️ Light</button>
+        <button type="button" data-theme-value="dark" aria-pressed="true">🌙 Dark</button>
+      </div>
     </div>
   </header>
   <main>
@@ -2810,12 +2813,11 @@ HTML = r"""<!doctype html>
       try {
         if (typeof localStorage !== "undefined") localStorage.setItem(THEME_STORAGE_KEY, next);
       } catch (_err) { /* ignore persistence failures */ }
-      const toggle = (typeof document !== "undefined" && document.getElementById) ? document.getElementById("themeToggle") : null;
-      if (toggle) {
-        const isDark = next === "dark";
-        toggle.textContent = isDark ? "☀️ Light" : "🌙 Dark";
-        toggle.setAttribute("aria-label", isDark ? "Switch to light theme" : "Switch to dark theme");
-        toggle.setAttribute("aria-pressed", isDark ? "true" : "false");
+      const group = (typeof document !== "undefined" && document.getElementById) ? document.getElementById("themeToggle") : null;
+      if (group && typeof group.querySelectorAll === "function") {
+        group.querySelectorAll("[data-theme-value]").forEach(btn => {
+          btn.setAttribute("aria-pressed", String(btn.dataset.themeValue === next));
+        });
       }
       return next;
     }
@@ -5748,7 +5750,8 @@ HTML = r"""<!doctype html>
         : `<p class="muted">No differences from balanced.</p>`;
     }
     function wireEvents() {
-      if ($("themeToggle")) $("themeToggle").onclick = () => toggleTheme();
+      const themeGroup = $("themeToggle");
+      if (themeGroup) themeGroup.querySelectorAll("[data-theme-value]").forEach(btn => { btn.onclick = () => applyTheme(btn.dataset.themeValue); });
       if ($("assistantFab")) $("assistantFab").onclick = () => toggleAssistantPanel();
       if ($("assistantClose")) $("assistantClose").onclick = () => toggleAssistantPanel(false);
       if ($("assistantSend")) $("assistantSend").onclick = () => sendAssistantMessage().catch(err => setStatus(err.message, "bad"));
