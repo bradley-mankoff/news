@@ -1233,6 +1233,141 @@ def describe_assistant_control(knob: dict[str, Any]) -> str:
     return sentence
 
 
+def parse_assistant_setting_change(
+    message: str, knobs: list[dict[str, Any]] | None = None
+) -> dict[str, Any] | None:
+    """Parse a spoken settings-change request into a validated backend change.
+
+    Returns None when the message is not a change request (a plain question
+    for the describe/LLM paths). Otherwise returns a dict with either
+    ``{"knob": knob, "value": normalized}`` on success,
+    ``{"knob": knob, "error": help, "raw": raw}`` when the value is
+    invalid, or ``{"knob": None, ...}`` when no registered control matches.
+    Value normalization is backend-owned so the panel never invents values.
+    """
+    text = (message or "").strip()
+    if len(text) < 3:
+        return None
+    lowered = text.lower()
+    verbs = ("set", "change", "switch", "update", "turn", "enable", "disable", "use", "make", "put")
+    if not any(re.search(rf"\b{verb}\b", lowered) for verb in verbs):
+        return None
+    # Plain questions stay on the describe path even if they mention a verb
+    # inside an explanation request ("what does ... do?").
+    if re.match(r"\s*(what|which|how|explain|describe|tell|show)\b", lowered) and "?" in text:
+        return None
+    control_text: str | None = None
+    raw_value: str | None = None
+    turn_match = re.search(r"\bturn\b(.*)\b(on|off)\b\s*[.?!]*$", text, re.IGNORECASE | re.DOTALL)
+    if turn_match:
+        control_text, raw_value = turn_match.group(1), turn_match.group(2)
+    else:
+        toggle_match = re.match(r"\s*(enable|disable)\b(.*)$", text, re.IGNORECASE | re.DOTALL)
+        if toggle_match:
+            raw_value = "on" if toggle_match.group(1).lower() == "enable" else "off"
+            control_text = toggle_match.group(2)
+        else:
+            # Last "to"/"as" delimiter wins so control names containing
+            # those words still split at the value boundary.
+            delimiter = re.search(r"\s+(?:to|as)\s+", text, re.IGNORECASE)
+            if delimiter:
+                parts = re.split(r"\s+(?:to|as)\s+", text, flags=re.IGNORECASE)
+                if len(parts) >= 2:
+                    raw_value = parts[-1]
+                    control_text = " ".join(parts[:-1])
+            elif "=" in text:
+                before, _, after = text.partition("=")
+                control_text, raw_value = before, after
+    if control_text is None or raw_value is None:
+        return None
+    raw = raw_value.strip().strip("\"'").strip()
+    raw = re.sub(r"[.?!;]+$", "", raw).strip()
+    control_text = control_text.strip()
+    if not raw or not control_text:
+        return None
+    registry = knobs if knobs is not None else build_knob_registry()
+    knob = match_assistant_control(control_text, registry)
+    if knob is None:
+        knob = match_assistant_control(text, registry)
+    if knob is None:
+        return {"knob": None, "control_text": control_text, "raw": raw}
+    normalized, error = _normalize_assistant_value(knob, raw)
+    if error is not None:
+        return {"knob": knob, "error": error, "raw": raw}
+    return {"knob": knob, "value": normalized, "raw": raw}
+
+
+def _normalize_assistant_value(knob: dict[str, Any], raw: str) -> tuple[str | None, str | None]:
+    """Normalize a spoken value against one knob registry entry."""
+    knob_type = str(knob.get("type") or "text").strip().lower()
+    label = str(knob.get("label") or knob.get("env"))
+    env = str(knob.get("env") or "")
+    cleaned = raw.strip().strip("\"'").strip()
+    cleaned = re.sub(r"[.?!;]+$", "", cleaned).strip()
+    if knob_type == "select":
+        options = [str(option) for option in (knob.get("options") or [])]
+        by_lower = {option.lower(): option for option in options}
+        low = cleaned.lower().strip()
+        aliases = dict(_ASSISTANT_SELECT_ALIASES.get(env, {}))
+        if env == "NEWS_SOURCE_SCOPE":
+            aliases.setdefault("all", "peripheral")
+            aliases.setdefault("full", "peripheral")
+        if low in aliases and aliases[low] in by_lower:
+            return aliases[low], None
+        if low in by_lower:
+            return by_lower[low], None
+        # Match spoken display labels ("All" for peripheral, "No delivery"
+        # for disabled) without teaching the panel new values.
+        compact = re.sub(r"\s+", " ", low)
+        for spoken, option in aliases.items():
+            if compact == spoken and option in by_lower:
+                return option, None
+        valid = ", ".join(options) if options else "no options"
+        return None, f'"{label}" accepts one of: {valid}. You said "{raw}".'
+    if knob_type in ("bool", "boolean"):
+        low = cleaned.lower().strip()
+        if low in ("on", "true", "1", "yes", "y", "enable", "enabled"):
+            return "1", None
+        if low in ("off", "false", "0", "no", "n", "disable", "disabled"):
+            return "0", None
+        return None, f'"{label}" is on or off. You said "{raw}".'
+    if knob_type == "number":
+        match = re.search(r"[-+]?\d+(?:\.\d+)?", cleaned)
+        if not match:
+            return None, f'"{label}" needs a number. You said "{raw}".'
+        value = match.group(0)
+        try:
+            number = float(value)
+        except ValueError:
+            return None, f'"{label}" needs a number. You said "{raw}".'
+        minimum = knob.get("min")
+        maximum = knob.get("max")
+        if minimum is not None and number < float(minimum):
+            return None, f'"{label}" must be at least {minimum}. You said "{raw}".'
+        if maximum is not None and number > float(maximum):
+            return None, f'"{label}" must be at most {maximum}. You said "{raw}".'
+        return value, None
+    if not cleaned:
+        return None, f'"{label}" needs a value. You said "{raw}".'
+    return cleaned, None
+
+
+_ASSISTANT_SELECT_ALIASES: dict[str, dict[str, str]] = {
+    "NEWS_SOURCE_SCOPE": {"all": "peripheral", "full": "peripheral", "everything": "peripheral", "core": "core"},
+    "NEWS_DELIVERY_MODE": {
+        "none": "disabled",
+        "off": "disabled",
+        "no delivery": "disabled",
+        "owner": "owner",
+        "owner only": "owner",
+        "recipients": "recipients",
+        "configured recipients": "recipients",
+        "all recipients": "recipients",
+    },
+    "NEWS_RECIPIENT_SCOPE": {"all": "all", "everyone": "all", "full": "all", "primary": "primary"},
+}
+
+
 def _assistant_default_model_alias(catalog: list[dict[str, Any]]) -> str:
     for entry in catalog:
         if entry.get("is_default"):
@@ -1298,11 +1433,42 @@ def assistant_chat(
             "Pick one of the configured local models."
         )
     alias = requested or _assistant_default_model_alias(catalog)
+    change = parse_assistant_setting_change(message)
+    if change is not None:
+        knob = change.get("knob")
+        if knob is None:
+            return {
+                "answer": "I don't recognize that setting. Ask what a control does first, then tell me which one to change.",
+                "control": None,
+                "change": None,
+                "model": alias,
+                "no_model": False,
+            }
+        control = {"label": knob.get("label"), "env": knob.get("env")}
+        if change.get("error"):
+            return {
+                "answer": str(change["error"]),
+                "control": control,
+                "change": None,
+                "model": alias,
+                "no_model": False,
+            }
+        value = str(change["value"])
+        label = str(knob.get("label") or knob.get("env"))
+        env = str(knob.get("env") or "")
+        return {
+            "answer": f'Done \u2014 set "{label}" (`{env}`) to `{value}`. The control now shows the new value with no reload.',
+            "control": control,
+            "change": {"env": env, "value": value, "label": label},
+            "model": alias,
+            "no_model": False,
+        }
     knob = match_assistant_control(message)
     if knob is not None:
         return {
             "answer": describe_assistant_control(knob),
             "control": {"label": knob.get("label"), "env": knob.get("env")},
+            "change": None,
             "model": alias,
             "no_model": False,
         }
@@ -1325,6 +1491,7 @@ def assistant_chat(
         return {
             "answer": ASSISTANT_NO_MODEL_MESSAGE,
             "control": None,
+            "change": None,
             "model": alias,
             "no_model": True,
         }
@@ -1332,10 +1499,11 @@ def assistant_chat(
         return {
             "answer": ASSISTANT_NO_MODEL_MESSAGE,
             "control": None,
+            "change": None,
             "model": alias,
             "no_model": True,
         }
-    return {"answer": answer, "control": None, "model": alias, "no_model": False}
+    return {"answer": answer, "control": None, "change": None, "model": alias, "no_model": False}
 
 
 def _normalize_env_overrides(raw: Any) -> dict[str, str]:
@@ -2841,6 +3009,15 @@ HTML = r"""<!doctype html>
         const data = await api("/api/assistant/chat", { method: "POST", body: JSON.stringify({ message, model: select ? select.value : "" }) });
         if (thinking && thinking.parentNode) thinking.remove();
         appendAssistantMessage("helper", data.answer || "No answer.");
+        // Backend-validated change only: the chat route normalizes env/value
+        // against the knob registry, then the panel assigns the matching
+        // control directly with no reload and no simulated clicks.
+        if (data && data.change && data.change.env) {
+          try {
+            setControlValue(data.change.env, data.change.value);
+            if (state.schema && state.schema.current_env) state.schema.current_env[data.change.env] = String(data.change.value ?? "");
+          } catch (_applyErr) {}
+        }
       } catch (err) {
         if (thinking && thinking.parentNode) thinking.remove();
         appendAssistantMessage("helper", err instanceof Error ? err.message : String(err));

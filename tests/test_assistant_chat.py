@@ -134,6 +134,70 @@ class AssistantChatPanelTests(unittest.TestCase):
         self.assertEqual(status, 400)
         self.assertIn("Ask a question", json.loads(body)["error"])
 
+    def test_spoken_source_list_change_is_backend_validated(self) -> None:
+        # DN-81 AC: "set source list to All" validates backend-side with no LLM.
+        def _boom(_reference: str, _message: str) -> str:
+            raise AssertionError("change path must not call the model")
+
+        result = ui_module.assistant_chat(
+            {"message": "set source list to All"}, model_caller=_boom
+        )
+        self.assertFalse(result["no_model"])
+        self.assertEqual(result["control"], {"label": "Source scope", "env": "NEWS_SOURCE_SCOPE"})
+        self.assertEqual(
+            result["change"],
+            {"env": "NEWS_SOURCE_SCOPE", "value": "peripheral", "label": "Source scope"},
+        )
+        self.assertIn("Source scope", result["answer"])
+        self.assertIn("peripheral", result["answer"])
+        # Direct parser agrees: spoken "All" normalizes to the stored value.
+        parsed = ui_module.parse_assistant_setting_change("set source list to All")
+        assert parsed is not None and parsed.get("knob") is not None
+        self.assertEqual(parsed["knob"]["env"], "NEWS_SOURCE_SCOPE")
+        self.assertEqual(parsed["value"], "peripheral")
+        # Plain questions are not changes.
+        self.assertIsNone(ui_module.parse_assistant_setting_change("What does delivery mode do?"))
+        # Route carries the backend-validated change payload.
+        status, body = _invoke(
+            "do_POST", "/api/assistant/chat", body=json.dumps({"message": "set source list to All"})
+        )
+        self.assertEqual(status, 200)
+        payload = json.loads(body)
+        self.assertEqual(payload["change"]["env"], "NEWS_SOURCE_SCOPE")
+        self.assertEqual(payload["change"]["value"], "peripheral")
+
+    def test_spoken_change_applies_through_backend_route_without_clicks(self) -> None:
+        html = ui_module.HTML
+        sender = html.split("async function sendAssistantMessage()")[1].split("function wizardEnabled()")[0]
+        # Every change travels through the chat backend route.
+        self.assertIn('api("/api/assistant/chat"', sender)
+        # The panel assigns the backend-validated env/value directly.
+        self.assertIn("data.change", sender)
+        self.assertIn("setControlValue(data.change.env, data.change.value)", sender)
+        # No simulated clicks anywhere on the apply path; no page reload.
+        self.assertNotIn(".click(", sender)
+        self.assertNotIn("dispatchEvent", sender)
+        self.assertNotIn("location.reload", sender)
+        self.assertNotIn("window.location", sender)
+        # No value mapping lives in the panel: "All" -> "peripheral" is backend-owned.
+        self.assertNotIn("peripheral", sender)
+
+    def test_spoken_change_fail_closed_and_other_types(self) -> None:
+        # Unknown values fail closed with valid options and no change payload.
+        result = ui_module.assistant_chat({"message": "set source list to banana"})
+        self.assertIsNone(result["change"])
+        self.assertEqual(result["control"], {"label": "Source scope", "env": "NEWS_SOURCE_SCOPE"})
+        self.assertIn("core", result["answer"])
+        self.assertIn("peripheral", result["answer"])
+        # Boolean knobs accept spoken on/off.
+        on_result = ui_module.assistant_chat({"message": "turn image generation on"})
+        self.assertEqual(on_result["change"], {"env": "NEWS_IMAGE_ENABLED", "value": "1", "label": "Image generation"})
+        off_result = ui_module.assistant_chat({"message": "disable image generation"})
+        self.assertEqual(off_result["change"]["value"], "0")
+        # Number knobs extract the spoken number.
+        num_result = ui_module.assistant_chat({"message": "set max stories to 5"})
+        self.assertEqual(num_result["change"], {"env": "NEWS_MAX_STORIES", "value": "5", "label": "Max stories"})
+
 
 if __name__ == "__main__":
     unittest.main()
